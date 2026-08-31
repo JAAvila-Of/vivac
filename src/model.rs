@@ -109,6 +109,12 @@ pub struct Arbol {
     pub vivacs: Vec<Vivac>,
     pub siguiente_vivac: u64,
     pub seq: u64,
+    /// Seq del ultimo evento que **cambio algo**, y del ultimo vivac. Con los
+    /// dos se sabe si desde la parada anterior paso algo o no, que es lo que
+    /// separa una parada util de cuarenta paradas identicas: el hook de `Stop`
+    /// de Claude Code corre en cada turno, no al cerrar la sesion (`f35`).
+    pub seq_cambio: u64,
+    pub seq_vivac: u64,
     pub siguiente_num: u64,
     pub lineas_rotas: usize,
 }
@@ -135,6 +141,11 @@ impl Arbol {
     /// mentira pequeña que hace que despues no te fies del resto.
     pub fn aplicar(&mut self, seq: u64, ts: &str, cuerpo: &Cuerpo) {
         self.seq = self.seq.max(seq);
+        if matches!(cuerpo, Cuerpo::VivacCreado { .. }) {
+            self.seq_vivac = self.seq_vivac.max(seq);
+        } else {
+            self.seq_cambio = self.seq_cambio.max(seq);
+        }
         match cuerpo {
             Cuerpo::NodoCreado {
                 nodo,

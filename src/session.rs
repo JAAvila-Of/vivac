@@ -44,6 +44,16 @@ pub fn end(ctx: &mut crate::ops::Ctx, a: &Args) -> R {
         }
         return Ok(());
     }
+    // Y sin nada nuevo tampoco. El hook de `Stop` de Claude Code corre **en
+    // cada turno**, no al cerrar la sesion: no hay evento de fin de sesion
+    // (`f35`). Sin esta guarda serian cuarenta paradas identicas al dia, y
+    // una parada que se repite no es una parada, es log.
+    if ctx.arbol.seq_cambio <= ctx.arbol.seq_vivac {
+        if !a.tiene("hook") {
+            println!("  Nada cambio desde la ultima parada.");
+        }
+        return Ok(());
+    }
     let luego = a.opt_o("luego");
     let num = ctx.arbol.siguiente_vivac.max(1);
     crate::ops::vivac_auto(ctx, VivacKind::Auto, &luego)?;

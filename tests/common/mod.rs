@@ -12,6 +12,20 @@ const BIN: &str = env!("CARGO_BIN_EXE_vivac");
 pub struct Caja(pub PathBuf);
 
 impl Caja {
+    /// Un directorio sin `.vivac/`. Para probar que la herramienta calla
+    /// donde no la han sembrado.
+    pub fn vacia(nombre: &str) -> Caja {
+        let d = std::env::temp_dir().join(format!(
+            "vivac-v-{nombre}-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&d).unwrap();
+        Caja(d)
+    }
+
     pub fn nueva(nombre: &str) -> Caja {
         let d = std::env::temp_dir().join(format!(
             "vivac-t-{nombre}-{}",

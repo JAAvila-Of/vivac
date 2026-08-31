@@ -144,7 +144,7 @@ definición: **seguridad veta, rendimiento presupuesta, DX juzga.**
 
 **Tier 0 completo.** El árbol, las dos aristas, la regla de cierre, la guarda de
 redacción, el `brief` con presupuesto de tokens, los hooks de sesión, los vivacs
-y el `Anchor` con implementaciones `Git` y `Null`. 53 tests, de los que 11 son el
+y el `Anchor` con implementaciones `Git` y `Null`. 58 tests, de los que 11 son el
 contrato de la especificación del brief ejecutado sobre el binario.
 
 El `brief` es determinista por contrato: mismo log, mismo `--now`, mismos bytes.
@@ -173,7 +173,9 @@ vivac hooks     imprime lo que hay que pegar en .claude/settings.json
 ```
 
 `SessionStart` inyecta el brief en el contexto del agente; `Stop` deja una parada
-automática. Los dos callan y salen con 0 donde no hay `.vivac/`, así que se
+automática. `Stop` corre **en cada turno**, no al cerrar la sesión —no hay un evento
+de fin de sesión—, así que la parada sólo se guarda si el árbol cambió desde la
+anterior: una parada que se repite idéntica no es una parada, es log. Los dos callan y salen con 0 donde no hay `.vivac/`, así que se
 pueden dejar en la configuración global sin molestar en otros proyectos.
 
 ## Instalación
