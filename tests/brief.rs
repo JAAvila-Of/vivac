@@ -316,3 +316,39 @@ fn una_decision_no_es_un_frente() {
         "open la desaparecio sin decirlo:\n{o}"
     );
 }
+
+/// `q26` — cerrar un padre no puede hacer invisibles a sus hijos abiertos.
+///
+/// El caso salio del arbol del propio proyecto: `t8` cerro con `t9`, `t10` y
+/// `f21` abiertos por debajo, y el brief mostro 3 de los 6 frentes. Listarlos
+/// seria traer el arbol entero; contarlos no.
+#[test]
+fn lo_abierto_bajo_un_cerrado_se_cuenta() {
+    let c = Caja::nueva("hondo");
+    c.ok(&["push", "La meta", "--por", "hace falta"]);
+    c.ok(&["push", "Una rama", "--por", "la meta la necesita"]);
+    c.ok(&[
+        "add",
+        "Un hallazgo",
+        "--padre",
+        "2",
+        "--por",
+        "salio al pasar",
+    ]);
+    // Cierra con un hijo abierto que no bloquea: es correcto, y es el caso.
+    c.ok(&["pop", "rama terminada"]);
+
+    let b = c.ok(&["brief", "--budget", "5000", "--now", "2026-09-15T10:00:00Z"]);
+    assert!(
+        b.contains("+ 1 mas abajo"),
+        "no aviso de lo que quedo debajo:\n{b}"
+    );
+    assert!(
+        !b.contains("Un hallazgo"),
+        "lo listo en vez de contarlo; eso trae el arbol entero:\n{b}"
+    );
+    assert!(
+        b.contains("vivac open"),
+        "conto sin decir donde mirar:\n{b}"
+    );
+}

@@ -217,9 +217,10 @@ pub fn a_texto(
     ]));
     s.push(Seccion::fija(espina(&camino)));
 
-    // 3. Foco: lo que cuelga de el sin cerrar. Una decision vigente no es
-    //    un hijo pendiente: tiene su propia seccion (8).
-    let hijos: Vec<String> = a
+    // 3. Foco: lo que cuelga de el sin cerrar. Las decisiones vigentes no
+    //    entran --no son trabajo pendiente y tienen su propia seccion (8)--,
+    //    y lo que cuelga mas abajo se cuenta sin listarse.
+    let mut hijos: Vec<String> = a
         .hijos(&foco.id)
         .into_iter()
         .filter(|c| c.es_frente())
@@ -232,6 +233,23 @@ pub fn a_texto(
             )
         })
         .collect();
+    // Cerrar un padre no puede hacer invisibles a sus hijos abiertos. Se
+    // cuentan y se dice donde mirar; listarlos aqui seria traer el arbol
+    // entero, que es exactamente el ruido que el foco existe para dejar
+    // fuera.
+    let directos: std::collections::HashSet<&str> =
+        a.hijos(&foco.id).iter().map(|c| c.id.as_str()).collect();
+    let hondos = a
+        .descendientes(&foco.id)
+        .into_iter()
+        .filter(|n| n.es_frente() && !directos.contains(n.id.as_str()))
+        .filter(|n| !a.hijos(&n.id).iter().any(|c| c.es_frente()))
+        .count();
+    if hondos > 0 {
+        hijos.push(format!(
+            "    + {hondos} mas abajo, fuera de este nivel   vivac open"
+        ));
+    }
     s.push(Seccion::fija(encabezado("NACIO DE AQUI", hijos)));
 
     // 4. Invariantes.
