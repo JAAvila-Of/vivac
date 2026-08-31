@@ -10,7 +10,7 @@ use crate::anchor::{self, Anchor};
 use crate::args::Args;
 use crate::event::{Bandera, Cuerpo, Estado, Tipo, VivacKind};
 use crate::fallo::{Fallo, R};
-use crate::model::{plegar, Arbol};
+use crate::model::{plegar, Arbol, Nodo};
 use crate::store::Store;
 use crate::{id, redact};
 
@@ -439,6 +439,13 @@ pub fn promote(ctx: &mut Ctx, a: &Args) -> R {
 /// La cascada **no** es el defecto. `MODEL.md` §6 la quiere con confirmacion y
 /// lista delante, y una CLI no interactiva no puede confirmar nada: lo que
 /// hace es enseñar lo que caeria y pedir `--cascada` explicito.
+///
+/// **Rescatar no reparenta** (`d33`). `MODEL.md` §6 decia re-parentar el
+/// descendiente a un ancestro vivo; eso reescribe el nacimiento, y la
+/// invariante 11 dice que una cosa nace de un sitio. Un nodo rescatado se
+/// queda donde nacio: vivo, bajo un padre abandonado. Es la misma forma que un
+/// hallazgo abierto bajo un lote cerrado, que el arbol ya sabe representar y
+/// el brief ya sabe contar.
 pub fn abandon(ctx: &mut Ctx, a: &Args) -> R {
     let n = match a.libre(0).and_then(|s| ctx.arbol.resolver(s)) {
         Some(n) => n.clone(),
@@ -456,26 +463,59 @@ pub fn abandon(ctx: &mut Ctx, a: &Args) -> R {
     let motivo = motivo.map(|s| s.as_str()).unwrap_or("");
     guardar_texto(&[("motivo", motivo)])?;
 
-    let vivos: Vec<_> = ctx
+    // Rescatar un nodo rescata su descendencia. Salvar al padre y dejar morir
+    // a los hijos seria un rescate a medias que nadie pidio, y dejaria huerfano
+    // justo lo que se queria conservar.
+    let mut rescatados: std::collections::HashSet<String> = Default::default();
+    for s in a.lista("rescatar") {
+        let r = ctx
+            .arbol
+            .resolver(&s)
+            .ok_or_else(|| Fallo::uso(format!("no existe ese nodo: {s}")))?;
+        let (rid, ralias) = (r.id.clone(), r.alias());
+        if rid == n.id {
+            return Err(Fallo::uso(format!(
+                "{ralias} es el que se abandona; no se rescata de si mismo"
+            )));
+        }
+        if !ctx.arbol.descendientes(&n.id).iter().any(|d| d.id == rid) {
+            return Err(Fallo::uso(format!(
+                "{ralias} no cuelga de {}: no hay nada de lo que rescatarlo",
+                n.alias()
+            )));
+        }
+        rescatados.insert(rid.clone());
+        for d in ctx.arbol.descendientes(&rid) {
+            rescatados.insert(d.id.clone());
+        }
+    }
+
+    let (caen, salvados): (Vec<&Nodo>, Vec<&Nodo>) = ctx
         .arbol
         .descendientes(&n.id)
         .into_iter()
         .filter(|d| d.estado.abierto())
-        .collect();
-    if !vivos.is_empty() && !a.tiene("cascada") {
+        .partition(|d| !rescatados.contains(&d.id));
+
+    // Solo hace falta confirmar lo que cae sin haberse nombrado. Si se
+    // rescataron todos, no queda nada que confirmar.
+    if !caen.is_empty() && !a.tiene("cascada") {
         let mut m = format!(
-            "  {} tiene {} descendiente(s) abierto(s):\n",
+            "  {}  {}\n  tiene {} descendiente(s) abierto(s) sin rescatar:\n",
             n.alias(),
-            vivos.len()
+            n.titulo,
+            caen.len()
         );
-        for d in &vivos {
+        for d in &caen {
             m.push_str(&format!("\n      {:<6} {}", d.alias(), d.titulo));
         }
-        m.push_str(&format!(
-            "\n\n  Abandonarlo todo:        vivac abandon {} --cascada\n  \
-             Salvar algo primero:     vivac promote <id>",
-            n.num
-        ));
+        m.push_str("\n\n  Abandonarlo todo:      vivac abandon ");
+        m.push_str(&n.num.to_string());
+        m.push_str(" --cascada");
+        m.push_str("\n  Salvar alguno:         vivac abandon ");
+        m.push_str(&n.num.to_string());
+        m.push_str(" --rescatar <id>");
+        m.push_str("\n  Salvarlo como meta:    vivac promote <id>");
         return Err(Fallo::Modelo(m));
     }
 
@@ -485,25 +525,44 @@ pub fn abandon(ctx: &mut Ctx, a: &Args) -> R {
         resultado: motivo.to_string(),
         forzado: false,
     }];
-    if ctx.arbol.pila.contains(&n.id) {
-        evs.push(Cuerpo::Desapilado { nodo: n.id.clone() });
-    }
-    let caen = vivos.len();
-    for d in vivos {
+    let cuantos_caen = caen.len();
+    let salvados_dice: Vec<(String, String)> = salvados
+        .iter()
+        .map(|d| (d.alias(), d.titulo.clone()))
+        .collect();
+    for d in caen {
         evs.push(Cuerpo::EstadoCambiado {
             nodo: d.id.clone(),
             estado: Estado::Abandoned,
             resultado: format!("en cascada desde {}", n.alias()),
             forzado: false,
         });
-        if ctx.arbol.pila.contains(&d.id) {
-            evs.push(Cuerpo::Desapilado { nodo: d.id.clone() });
+    }
+    // La pila es el camino al foco y no puede cruzar un nodo abandonado, asi
+    // que sale de ella todo lo que cuelga del abandonado --tambien lo
+    // rescatado, que sigue vivo pero deja de estar en el camino--.
+    let mut fuera: Vec<String> = vec![n.id.clone()];
+    fuera.extend(ctx.arbol.descendientes(&n.id).iter().map(|d| d.id.clone()));
+    for id in fuera {
+        if ctx.arbol.pila.contains(&id) {
+            evs.push(Cuerpo::Desapilado { nodo: id });
         }
     }
+
     ctx.emitir(evs)?;
     println!("  {}  {}  -> abandonado", n.alias(), n.titulo);
-    if caen > 0 {
-        println!("        y {caen} descendiente(s) con el");
+    if cuantos_caen > 0 {
+        println!("        y {cuantos_caen} descendiente(s) con el");
+    }
+    if !salvados_dice.is_empty() {
+        println!();
+        println!("  Rescatados, y siguen naciendo de {}:", n.alias());
+        for (alias, titulo) in &salvados_dice {
+            println!("      {alias:<6} {titulo}");
+        }
+        println!();
+        println!("  Su linaje cruza un nodo abandonado a proposito: de donde");
+        println!("  nacieron no cambia porque se haya descartado.");
     }
     Ok(())
 }

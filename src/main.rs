@@ -43,6 +43,8 @@ const USO: &str = r#"vivac - procedencia del trabajo
     vivac park [<id>] ["<motivo>"]            aparca: alimenta NO TOCAR AHORA
     vivac promote [<id>]                      el foco pasa a ser meta propia
     vivac abandon [<id>] ["<motivo>"] [--cascada]
+          [--rescatar <id>]  lo salva a el y a los suyos; sigue naciendo
+                             de donde nacio, no se reparenta
 
   Sin tocar la pila
 
@@ -177,7 +179,7 @@ fn despachar(cmd: &str, a: &Args) -> Result<i32, Fallo> {
         "session" => &["hook", "luego", "budget", "now"],
         "add" => &["padre", "por", "tipo", "bloquea", "ref", "governs"],
         "done" => &["forzar"],
-        "abandon" => &["cascada"],
+        "abandon" => &["cascada", "rescatar"],
         "focus" => &["reabrir"],
         "block" => &["off"],
         "tree" => &["todo", "all", "json"],
