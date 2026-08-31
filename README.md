@@ -181,9 +181,11 @@ pueden dejar en la configuración global sin molestar en otros proyectos.
 ## Instalación
 
 ```sh
-cargo install --path .
+cargo install vivac
 vivac init
 ```
+
+Desde el fuente, `cargo install --path .` dentro del repo.
 
 Sin demonio, sin servidor y sin red. El almacén es `.vivac/`, dos archivos.
 
