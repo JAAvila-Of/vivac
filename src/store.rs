@@ -159,6 +159,24 @@ impl Store {
     }
 }
 
+impl Store {
+    /// Escribe eventos ya construidos, con su instante original. Solo lo usa
+    /// `import`: un arbol que viene de otro sitio conserva sus fechas, porque
+    /// si no la migracion aplasta la unica linea de tiempo que tenia.
+    pub fn escribir_crudo(&self, eventos: &[crate::event::Evento]) -> std::io::Result<()> {
+        let mut buf = String::with_capacity(256 * eventos.len());
+        for e in eventos {
+            buf.push_str(&serde_json::to_string(e).map_err(std::io::Error::other)?);
+            buf.push('\n');
+        }
+        let mut f = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.log())?;
+        f.write_all(buf.as_bytes())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -186,23 +204,5 @@ mod tests {
         std::env::var("USERNAME")
             .or_else(|_| std::env::var("USER"))
             .unwrap_or_default()
-    }
-}
-
-impl Store {
-    /// Escribe eventos ya construidos, con su instante original. Solo lo usa
-    /// `import`: un arbol que viene de otro sitio conserva sus fechas, porque
-    /// si no la migracion aplasta la unica linea de tiempo que tenia.
-    pub fn escribir_crudo(&self, eventos: &[crate::event::Evento]) -> std::io::Result<()> {
-        let mut buf = String::with_capacity(256 * eventos.len());
-        for e in eventos {
-            buf.push_str(&serde_json::to_string(e).map_err(std::io::Error::other)?);
-            buf.push('\n');
-        }
-        let mut f = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(self.log())?;
-        f.write_all(buf.as_bytes())
     }
 }

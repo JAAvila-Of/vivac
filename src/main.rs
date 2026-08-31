@@ -117,6 +117,44 @@ fn despachar(cmd: &str, a: &Args) -> Result<i32, Fallo> {
         return check::check(&ctx.arbol, a);
     }
 
+    // Opciones validas por comando. Una que no este aqui es un error, no un
+    // silencio: ver `Args::desconocidas`.
+    const COMUNES: &[&str] = &["json"];
+    let permitidas: &[&str] = match cmd {
+        "push" => &["por", "tipo", "bloquea", "ref", "governs"],
+        "add" => &["padre", "por", "tipo", "bloquea", "ref", "governs"],
+        "pop" | "done" => &["forzar"],
+        "abandon" => &["cascada"],
+        "focus" => &["reabrir"],
+        "block" => &["off"],
+        "tree" => &["todo", "all", "json"],
+        "park" | "promote" | "note" | "import" => &[],
+        _ => COMUNES,
+    };
+    let desconocidas = a.desconocidas(&[permitidas, COMUNES].concat());
+    if !desconocidas.is_empty() {
+        let validas = if permitidas.is_empty() {
+            "ninguna".to_string()
+        } else {
+            permitidas
+                .iter()
+                .map(|o| format!("--{o}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        return Err(Fallo::uso(format!(
+            "{} no acepta {}.
+
+  Acepta: {validas}",
+            cmd,
+            desconocidas
+                .iter()
+                .map(|o| format!("--{o}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        )));
+    }
+
     let r: fallo::R = match cmd {
         "focus" => ops::focus(&mut ctx, a),
         "push" => ops::push(&mut ctx, a),

@@ -60,6 +60,23 @@ impl Args {
     pub fn libre(&self, i: usize) -> Option<&str> {
         self.libres.get(i).map(|s| s.as_str())
     }
+
+    /// Opciones que este comando no conoce.
+    ///
+    /// Ignorarlas en silencio es el peor fallo posible en la mitad de la
+    /// interfaz que usa el agente: se escribe `--kind finding`, la CLI no dice
+    /// nada, y el nodo queda con el tipo por defecto. Nadie se entera hasta
+    /// que mira el arbol. Encontrado exactamente asi, usandolo.
+    pub fn desconocidas(&self, permitidas: &[&str]) -> Vec<&str> {
+        let mut v: Vec<&str> = self
+            .opts
+            .keys()
+            .map(|k| k.as_str())
+            .filter(|k| !permitidas.contains(k))
+            .collect();
+        v.sort_unstable();
+        v
+    }
 }
 
 #[cfg(test)]
@@ -86,6 +103,13 @@ mod tests {
         assert!(a.tiene("bloquea"));
         assert_eq!(a.opt("bloquea"), None);
         assert_eq!(a.opt("por"), Some("x"));
+    }
+
+    #[test]
+    fn una_opcion_que_no_existe_no_pasa_en_silencio() {
+        let a = p("x --kind finding --tipo task");
+        assert_eq!(a.desconocidas(&["tipo", "por"]), vec!["kind"]);
+        assert!(a.desconocidas(&["tipo", "kind"]).is_empty());
     }
 
     #[test]
