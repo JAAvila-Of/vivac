@@ -75,6 +75,7 @@ vivac tree          el árbol, con los cierres falsos marcados
 vivac open          los frentes abiertos, cada uno con su linaje
 vivac stack         la pila de foco
 vivac parked        NO TOCAR AHORA
+vivac triage        que se puede podar, y con que comando
 ```
 
 **Y hay paradas seguras.** Un vivac es la parada a mitad de ascensión: estado
@@ -143,7 +144,7 @@ definición: **seguridad veta, rendimiento presupuesta, DX juzga.**
 
 **Tier 0 completo.** El árbol, las dos aristas, la regla de cierre, la guarda de
 redacción, el `brief` con presupuesto de tokens, los hooks de sesión, los vivacs
-y el `Anchor` con implementaciones `Git` y `Null`. 46 tests, de los que 11 son el
+y el `Anchor` con implementaciones `Git` y `Null`. 53 tests, de los que 11 son el
 contrato de la especificación del brief ejecutado sobre el binario.
 
 El `brief` es determinista por contrato: mismo log, mismo `--now`, mismos bytes.

@@ -161,7 +161,7 @@ fn espina(camino: &[&Nodo]) -> Vec<String> {
 /// Corta por palabra sin pasarse de `n`, **contando los puntos suspensivos**.
 /// Presupuestarlos importa: si no, el corte se pasa de largo justo en las
 /// lineas mas apretadas del brief, que son las que se truncan.
-fn corta(s: &str, n: usize) -> String {
+pub(crate) fn corta(s: &str, n: usize) -> String {
     if s.chars().count() <= n {
         return s.to_string();
     }
@@ -461,7 +461,8 @@ fn emitir(
         o.push_str(&format!(
             "
  ! el brief excede el presupuesto ({gastados}/{presupuesto}).
-                La espina no se trunca nunca: lo que sobra es arbol, no render.
+   La espina no se trunca nunca: lo que sobra es arbol, no render.
+   Que se puede podar:  vivac triage
 "
         ));
     } else if pedidos > presupuesto {

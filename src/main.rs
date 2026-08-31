@@ -70,6 +70,7 @@ const USO: &str = r#"vivac - procedencia del trabajo
     vivac open                                frentes abiertos y su linaje
     vivac stack                               donde estas ahora
     vivac parked                              NO TOCAR AHORA
+    vivac triage                              que se puede podar, y con que
     vivac stats                               cifras
     vivac check                               invariantes; va en CI
 
@@ -240,6 +241,7 @@ fn despachar(cmd: &str, a: &Args) -> Result<i32, Fallo> {
         "open" => render::open(&ctx.arbol, a),
         "stack" => render::stack(&ctx.arbol, a),
         "parked" => render::parked(&ctx.arbol, a),
+        "triage" => render::triage(&ctx.arbol, a),
         "stats" => render::stats(&ctx.arbol, a),
         otro => {
             print!("{USO}");

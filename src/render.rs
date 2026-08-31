@@ -10,6 +10,7 @@
 //! audiencia: el agente necesita salida parseable, no un arbol dibujado.
 
 use crate::args::Args;
+use crate::brief::corta;
 use crate::event::{Estado, Tipo};
 use crate::fallo::{Fallo, R};
 use crate::model::{Agregados, Arbol, Nodo};
@@ -336,6 +337,158 @@ pub fn open(a: &Arbol, args: &Args) -> R {
         };
         println!();
         println!("  + {frase}   vivac brief");
+    }
+    println!();
+    Ok(())
+}
+
+/// `triage` — que se puede podar, y con que comando.
+///
+/// El brief que se pasa de presupuesto **no debe mentir por omision**
+/// (`BRIEF-SPEC.md` §4): la senal es que el grafo necesita poda, y esta es la
+/// vista que dice por donde. `MODEL.md` §6.1 le manda ademas los nodos hondos,
+/// porque una pila profunda casi nunca es indisciplina: es que el objetivo
+/// raiz cambio y nadie volvio a enraizar.
+pub fn triage(a: &Arbol, args: &Args) -> R {
+    let ag = &a.agregados();
+
+    let mut aparcados: Vec<&Nodo> = a
+        .todos()
+        .filter(|n| n.estado == Estado::Suspended)
+        .collect();
+
+    // `MODEL.md` §6.1: a partir de 6 aparece aqui, y nunca bloquea.
+    let mut hondos: Vec<(&Nodo, usize)> = a
+        .todos()
+        .filter(|n| n.es_frente())
+        .map(|n| (n, a.ancestros(&n.id).len()))
+        .filter(|(_, d)| *d >= 6)
+        .collect();
+
+    // Vivos colgando de algo descartado. Los produce el rescate de `abandon`,
+    // que **no** reparenta a proposito (`d33`): el nodo se queda donde nacio.
+    // Por eso hay que volver a mirarlos cada tanto, y por eso estan aqui y no
+    // en `check`: no es corrupcion del almacen, es trabajo que perdio el
+    // motivo por el que nacio.
+    let mut descolgados: Vec<(&Nodo, &Nodo)> = a
+        .todos()
+        .filter(|n| n.es_frente())
+        .filter_map(|n| {
+            let p = a.nodo(n.padre.as_deref()?)?;
+            (p.estado == Estado::Abandoned).then_some((n, p))
+        })
+        .collect();
+
+    // Invariante 10. `check` los reporta para CI; aqui se actua sobre ellos,
+    // y con la misma exencion: un cierre **forzado** fue una decision, tiene
+    // su rastro y el arbol lo marca. Repetirlo aqui cada dia seria pedir que
+    // se vuelva a decidir lo ya decidido. Lo que si llega aqui es el cierre
+    // que se volvio falso despues, al colgarle un bloqueante a algo ya
+    // cerrado: ese es el caso que tardo 26 dias en detectarse.
+    let mut falsos: Vec<&Nodo> = a
+        .todos()
+        .filter(|n| n.estado == Estado::Done && !n.cierre_forzado && ag.bloqueantes(&n.id) > 0)
+        .collect();
+
+    aparcados.sort_by_key(|n| n.num);
+    hondos.sort_by_key(|(n, _)| n.num);
+    descolgados.sort_by_key(|(n, _)| n.num);
+    falsos.sort_by_key(|n| n.num);
+
+    if args.tiene("json") {
+        return imprimir_json(json!({
+            "aparcados": aparcados.iter().map(|n| json_nodo(a, ag, n)).collect::<Vec<_>>(),
+            "hondos": hondos.iter().map(|(n, d)| {
+                let mut v = json_nodo(a, ag, n);
+                v["profundidad"] = json!(d);
+                v
+            }).collect::<Vec<_>>(),
+            "descolgados": descolgados.iter().map(|(n, p)| {
+                let mut v = json_nodo(a, ag, n);
+                v["descartado"] = json!(p.alias());
+                v["descartado_por"] = json!(p.resultado);
+                v
+            }).collect::<Vec<_>>(),
+            "cierres_falsos": falsos.iter().map(|n| json_nodo(a, ag, n)).collect::<Vec<_>>(),
+        }));
+    }
+
+    let total = aparcados.len() + hondos.len() + descolgados.len() + falsos.len();
+    if total == 0 {
+        println!("  Nada que podar.");
+        return Ok(());
+    }
+    println!();
+    println!("  TRIAGE - {total} cosa(s) que mirar");
+
+    if !aparcados.is_empty() {
+        println!();
+        println!(
+            "  APARCADOS ({})                    focus <id>  |  abandon <id>",
+            aparcados.len()
+        );
+        for n in &aparcados {
+            println!("    {:<6} {}", n.alias(), n.titulo);
+            for l in envolver(&n.resultado, ANCHO, "           ") {
+                println!("{l}");
+            }
+        }
+    }
+
+    if !hondos.is_empty() {
+        println!();
+        println!(
+            "  A 6 O MAS DE LA RAIZ ({})         promote <id>",
+            hondos.len()
+        );
+        for (n, d) in &hondos {
+            println!(
+                "    {:<6} {:<40} profundidad {d}",
+                n.alias(),
+                corta(&n.titulo, 40)
+            );
+            let v: Vec<String> = a
+                .ancestros(&n.id)
+                .iter()
+                .rev()
+                .skip(1)
+                .rev()
+                .map(|p| p.alias())
+                .collect();
+            println!("           via {}", v.join(" > "));
+        }
+    }
+
+    if !descolgados.is_empty() {
+        println!();
+        println!(
+            "  SOBREVIVIERON A UN DESCARTE ({})  abandon <id>  |  promote <id>",
+            descolgados.len()
+        );
+        for (n, p) in &descolgados {
+            println!("    {:<6} {}", n.alias(), n.titulo);
+            println!(
+                "           nacio de {}, descartado: {}",
+                p.alias(),
+                corta(&p.resultado, 36)
+            );
+        }
+    }
+
+    if !falsos.is_empty() {
+        println!();
+        println!(
+            "  CIERRES FALSOS ({})               cerrar lo que falta, o --forzar",
+            falsos.len()
+        );
+        for n in &falsos {
+            println!(
+                "    {:<6} {:<40} {} bloqueante(s)",
+                n.alias(),
+                corta(&n.titulo, 40),
+                ag.bloqueantes(&n.id)
+            );
+        }
     }
     println!();
     Ok(())
