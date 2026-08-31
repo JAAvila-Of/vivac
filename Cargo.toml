@@ -5,7 +5,7 @@ edition = "2021"
 rust-version = "1.75"
 description = "Arbol de procedencia del trabajo: cada nodo sabe de cual nacio"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/jaavila/vivac"
+repository = "https://github.com/JAAvila-Of/vivac"
 keywords = ["provenance", "agentic", "cli", "context"]
 categories = ["command-line-utilities", "development-tools"]
 
