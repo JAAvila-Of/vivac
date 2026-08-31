@@ -1,195 +1,201 @@
 # vivac
 
-**Un árbol donde cada nodo sabe de cuál nació.** Sirve para contestar *«¿por qué
-estamos acá?»* meses después, cuando ya nadie se acuerda.
+**A tree where every node knows which node it was born from.** It exists to
+answer *"why are we here?"* months later, when nobody remembers any more.
 
 ```
 $ vivac why 11
 
-  Por que estamos aca  ->  t11
+  Why we are here  ->  t11
   ------------------------------------------------------------------
 
-  g1    vivac 0.1 publicable
-        Un sistema de procedencia del trabajo que conteste "por que
-        estamos aca" meses despues.
-        (7 abiertos / 4 cerrados por debajo)
+  g1    vivac 0.1 publishable
+        A provenance system for work that can answer "why are we
+        here" months later.
+        (7 open / 4 closed below)
         |
         v
-  t8    Portar a Rust en el repo publico
-        Cuando el formato deje de moverse, no antes.
-        (3 abiertos por debajo)
+  t8    Port to Rust in the public repo
+        When the format stops moving, not before.
+        (3 open below)
         |
         v
-  t11   Guarda de redaccion al escribir
-        Pilar de seguridad. Va ANTES de cualquier modo cloud.
+  t11   Redaction guard on write
+        Security pillar. Goes BEFORE any cloud mode.
 
-        ^^^ estas aca
+        ^^^ you are here
 
-  En paralelo, sin cerrar (2):
-      t9     TUI para el mantenedor
-      t10    Migrar de JSON a SQLite
+  In parallel, still open (2):
+      t9     TUI for the maintainer
+      t10    Migrate from JSON to SQLite
 
-  t8 no cierra hasta que cierren (1):
-      t11    Guarda de redaccion al escribir
+  t8 does not close until these close (1):
+      t11    Redaction guard on write
 ```
 
-## El problema
+## The problem
 
-Al desarrollar con una IA agéntica, el trabajo engendra más trabajo. A los tres
-saltos perdiste el hilo de lo que ibas a hacer originalmente.
+When you develop with an agentic AI, work spawns more work. Three hops in, you
+have lost the thread of what you originally set out to do.
 
-No es falta de memoria: normalmente está todo escrito. **Es falta de
-procedencia.** Lo escrito no dice *de qué* nació, y sin esa arista no hay forma
-de reconstruir por qué estás donde estás.
+It is not a memory problem: usually everything is written down. **It is a
+provenance problem.** What is written does not say what it was born *from*,
+and without that edge there is no way to reconstruct why you are where you
+are.
 
-Medido en un compilador real: el camino entre la meta y el trabajo del día tenía
-**seis niveles**, repartidos en un tracker de 8 853 líneas ordenado
-cronológicamente, 52 documentos de plan y 21 issues. La estructura era temporal,
-que es exactamente lo contrario de la procedencia.
+Measured on a real compiler: the path between the goal and the day's work was
+**six levels deep**, spread across a chronologically ordered 8,853-line
+tracker, 52 planning documents and 21 issues. The structure was temporal,
+which is exactly the opposite of provenance.
 
-Las bitácoras, las ADR y las issues guardan el **nodo**. Ninguna guarda la
-**arista**. Por eso podés tenerlo todo escrito y aun así no poder contestar de
-dónde salió una cosa.
+Logbooks, ADRs and issues all store the **node**. None of them stores the
+**edge**. That is how you can have everything written down and still not be
+able to say where something came from.
 
-## Cómo se usa
+## How it is used
 
-Hay dos audiencias, y la herramienta se parte en dos por ellas.
+There are two audiences, and the tool splits in two because of them.
 
-**El agente escribe.** La captura se cuelga de las costuras del trabajo: abrís
-un nodo cuando empezás, lo cerrás cuando terminás. La arista de procedencia se
-crea sola, sin que nadie tenga que acordarse de declararla.
+**The agent writes.** Capture hangs off the seams of the work: you open a node
+when you start, you close it when you finish. The provenance edge is created
+on its own, with nobody having to remember to declare it.
 
 ```sh
-vivac push "Arreglar el adaptador de cache" --por "el bug de sesiones lo necesita"
-vivac push "Falta un test de expiración" --por "no hay como reproducir el bug" --bloquea
-vivac pop "reproducido: expira a los 300s, no a los 3600"
-vivac pop "adaptador arreglado"
+vivac push "Fix the cache adapter" --why "the session bug needs it"
+vivac push "No test for expiry" --why "no way to reproduce the bug" --blocks
+vivac pop "reproduced: expires at 300s, not 3600"
+vivac pop "adapter fixed"
 ```
 
-**El mantenedor lee.**
+**The maintainer reads.**
 
 ```sh
-vivac brief         dónde estás, qué gobierna este punto y qué NO tocar ahora
-vivac why 11        el camino desde la raíz, narrado
-vivac tree          el árbol, con los cierres falsos marcados
-vivac open          los frentes abiertos, cada uno con su linaje
-vivac stack         la pila de foco
-vivac parked        NO TOCAR AHORA
-vivac triage        que se puede podar, y con que comando
+vivac brief         where you are, what governs this point, what NOT to touch
+vivac why 11        the path from the root, narrated
+vivac tree          the tree, with false closes marked
+vivac open          the open fronts, each with its lineage
+vivac stack         the focus stack
+vivac parked        DO NOT TOUCH NOW
+vivac triage        what can be pruned, and with which command
 ```
 
-**Y hay paradas seguras.** Un vivac es la parada a mitad de ascensión: estado
-coherente, con la pila congelada y la identidad del código en ese momento.
-`push`, `pop` y `park` dejan una sin que se la pida nadie.
+**And there are safe stops.** A vivac is the bivouac partway up a climb: a
+coherent state, with the stack frozen and the identity of the code at that
+moment. `push`, `pop` and `park` leave one without anybody asking.
 
 ```sh
-vivac save "antes de tocar el adaptador" --luego "extraer el validador"
-vivac restore v14   reconstruye la pila y dice qué cambió desde entonces
+vivac save "before touching the adapter" --next "extract the validator"
+vivac restore v14   rebuilds the stack and says what changed since
 ```
 
-`restore` **no toca el árbol de trabajo, nunca**. Mezclar navegación de contexto
-con manipulación del árbol da un gestor de ramas peor que git.
+`restore` **never touches the working tree**. Mixing context navigation with
+tree manipulation gives you a branch manager worse than git.
 
-Todo lo que el agente necesita hacer se puede hacer sin interfaz interactiva, y
-todos los comandos de lectura aceptan `--json`.
+Everything the agent needs to do can be done with no interactive interface,
+and every read command accepts `--json`.
 
-## Las dos aristas
+Flags carry an English name and keep their original Spanish one as an alias:
+`--parent` and `--padre` are the same flag.
 
-Es la distinción que sostiene el modelo, y salió de sembrar dos árboles reales y
-ponerlos uno al lado del otro:
+## The two edges
 
-|                | Pregunta que contesta | Cuándo se crea |
+It is the distinction that holds the model up, and it came out of seeding two
+real trees and putting them side by side:
+
+|                | Question it answers | When it is created |
 |---|---|---|
-| **nació de**   | ¿de dónde salió esto? | sola, en cada `push` |
-| **`--bloquea`**| ¿esto impide cerrar a su padre? | explícita |
+| **born from**  | where did this come from? | on its own, at every `push` |
+| **`--blocks`** | does this stop its parent from closing? | explicitly |
 
-Un lote de issues cerrado con un hallazgo abierto debajo es **correcto**: el lote
-terminó y el hallazgo es otra cosa. Una auditoría marcada `DONE` con sus
-hallazgos abiertos es un **marcador falso** — uno así tardó 26 días en
-detectarse. Misma forma, veredicto opuesto.
+A closed batch of issues with an open finding underneath is **correct**: the
+batch finished and the finding is another thing. An audit marked `DONE` with
+its findings open is a **false marker** — one of those took 26 days to be
+spotted. Same shape, opposite verdict.
 
-Por eso `vivac done` **rehúsa** cerrar con condiciones abiertas y lista lo que
-falta. Es la única regla del modelo que rechaza una operación, y se gana ese
-privilegio porque el caso que previene está medido.
+That is why `vivac done` **refuses** to close with open conditions and lists
+what is missing. It is the only rule in the model that rejects an operation,
+and it earns that privilege because the case it prevents is measured.
 
 ```
 $ vivac done 8
 
-  t8 NO puede cerrar: 1 condicion(es) de cierre abierta(s)
+  t8 CANNOT close: 1 open closure condition(s)
 
-      t11    Guarda de redaccion al escribir
+      t11    Redaction guard on write
 
-  Una corrida cierra con sus hallazgos, no con su informe.
-  Cerrarlo igual deja rastro:  vivac done 8 --forzar
+  A run closes with its findings, not with its report.
+  Closing it anyway leaves a trace:  vivac done 8 --force
 ```
 
-## Lo que nunca guarda
+## What it never stores
 
-Un árbol de procedencia es un mapa de dónde un sistema es débil y todavía no
-está arreglado. Eso obliga a algunas cosas, y no son negociables:
+A provenance tree is a map of where a system is weak and not yet fixed. That
+forces a few things, and they are not negotiable:
 
-- **Ni claves ni secretos.** Hay una guarda de redacción en el momento de
-  escribir. Ante la duda rechaza y dice por qué; nunca guarda callando.
-- **Ni datos personales.** Ni correo, ni nombre, ni ruta de casa. El `actor` de
-  cada evento es un identificador opaco.
-- **Ni el contenido de los archivos.** Sólo rutas, referencias y prosa sobre lo
-  que se decidió. Acota el radio de daño de una fuga a *qué se estaba haciendo*,
-  nunca a *cuál es el código*.
-- **Nada de telemetría.** El binario no llama a casa.
+- **No keys and no secrets.** There is a redaction guard at write time. In
+  doubt it refuses and says why; it never stores in silence.
+- **No personal data.** No email, no name, no home path. The `actor` on every
+  event is an opaque identifier.
+- **No file contents.** Only paths, references and prose about what was
+  decided. It bounds the blast radius of a leak to *what was being worked on*,
+  never to *what the code is*.
+- **No telemetry.** The binary does not phone home.
 
-Las tres reglas salen de los [pilares](docs/PILARES.md), que gobiernan por
-definición: **seguridad veta, rendimiento presupuesta, DX juzga.**
+These rules come from the [pillars](docs/PILLARS.md), which govern by
+definition: **security vetoes, performance budgets, DX judges.**
 
-## Estado
+## Status
 
-**Tier 0 completo.** El árbol, las dos aristas, la regla de cierre, la guarda de
-redacción, el `brief` con presupuesto de tokens, los hooks de sesión, los vivacs
-y el `Anchor` con implementaciones `Git` y `Null`. 58 tests, de los que 11 son el
-contrato de la especificación del brief ejecutado sobre el binario.
+**Tier 0 complete.** The tree, the two edges, the closure rule, the redaction
+guard, the `brief` with its token budget, the session hooks, the vivacs and the
+`Anchor` with its `Git` and `Null` implementations. 63 tests, of which 11 are
+the brief specification's contract executed against the real binary.
 
-El `brief` es determinista por contrato: mismo log, mismo `--now`, mismos bytes.
-La espina —el camino de la raíz al foco— **nunca se trunca**: si no cabe en el
-presupuesto, sale igual y el aviso dice que lo que sobra es árbol, no render.
+The `brief` is deterministic by contract: same log, same `--now`, same bytes.
+The spine — the path from the root to the focus — is **never truncated**: if it
+does not fit the budget it comes out anyway, and the warning says that what is
+left over is tree, not render.
 
-Medido en esta máquina, descontando el arranque del proceso:
+Measured on this machine, excluding process startup:
 
-| nodos | `push` | `brief` | `tree` |
+| nodes | `push` | `brief` | `tree` |
 |---|---|---|---|
 | 100 | ~5 ms | ~5 ms | ~5 ms |
-| 1 000 | ~11 ms | ~10 ms | ~13 ms |
-| 10 000 | ~54 ms | ~63 ms | ~95 ms |
+| 1,000 | ~11 ms | ~10 ms | ~13 ms |
+| 10,000 | ~54 ms | ~63 ms | ~95 ms |
 
-El presupuesto de escritura es p99 < 5 ms y el de lectura < 50 ms sobre 10 000
-nodos. En el orden del centenar de nodos se cumple, y de ahí para arriba se
-degrada linealmente con el tamaño del log, que se lee entero en cada llamada.
-**Ahí entra SQLite**, y ahora tiene un número en vez de una corazonada.
+The write budget is p99 < 5 ms and the read budget < 50 ms over 10,000 nodes.
+In the low hundreds of nodes it holds, and from there up it degrades linearly
+with the size of the log, which is read whole on every call. **That is where
+SQLite comes in**, and now it has a number instead of a hunch.
 
-No están todavía: TUI, búsqueda, invalidación en cascada, modo equipo.
+Not there yet: TUI, search, cascading invalidation, team mode.
 
 ## Hooks
 
 ```sh
-vivac hooks     imprime lo que hay que pegar en .claude/settings.json
+vivac hooks     prints what to paste into .claude/settings.json
 ```
 
-`SessionStart` inyecta el brief en el contexto del agente; `Stop` deja una parada
-automática. `Stop` corre **en cada turno**, no al cerrar la sesión —no hay un evento
-de fin de sesión—, así que la parada sólo se guarda si el árbol cambió desde la
-anterior: una parada que se repite idéntica no es una parada, es log. Los dos callan y salen con 0 donde no hay `.vivac/`, así que se
-pueden dejar en la configuración global sin molestar en otros proyectos.
+`SessionStart` injects the brief into the agent's context; `Stop` leaves an
+automatic stop. `Stop` runs **on every turn**, not at session close — there is
+no end-of-session event — so the stop is only saved if the tree changed since
+the previous one: a stop that repeats identically is not a stop, it is a log.
+Both stay quiet and exit 0 where there is no `.vivac/`, so they can be left in
+the global configuration without getting in the way of other projects.
 
-## Instalación
+## Install
 
 ```sh
 cargo install vivac
 vivac init
 ```
 
-Desde el fuente, `cargo install --path .` dentro del repo.
+From source, `cargo install --path .` inside the repo.
 
-Sin demonio, sin servidor y sin red. El almacén es `.vivac/`, dos archivos.
+No daemon, no server and no network. The store is `.vivac/`, two files.
 
-## Licencia
+## Licence
 
-`MIT OR Apache-2.0`, a elección de quien lo use. El texto de cada una está en
-[`LICENSE-MIT`](LICENSE-MIT) y [`LICENSE-APACHE`](LICENSE-APACHE).
+`MIT OR Apache-2.0`, at the option of whoever uses it. The text of each is in
+[`LICENSE-MIT`](LICENSE-MIT) and [`LICENSE-APACHE`](LICENSE-APACHE).
