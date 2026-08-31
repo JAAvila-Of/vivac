@@ -405,7 +405,7 @@ pub fn block(ctx: &mut Ctx, a: &Args) -> R {
         node: n.id.clone(),
         blocks,
     }])?;
-    let verb = if blocks { "blocks" } else { "ya no blocks" };
+    let verb = if blocks { "blocks" } else { "no longer blocks" };
     println!("  {} {} the close of {pa}  {pt}", n.alias(), verb);
     Ok(())
 }
