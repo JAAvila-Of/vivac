@@ -1,0 +1,7 @@
+# Los finales de linea los fija el repositorio, no la maquina que clona.
+#
+# Sin esto, con `core.autocrlf=true` --el valor por defecto del instalador de
+# git para Windows-- un clon deja CRLF en disco, `cargo package` empaqueta CRLF
+# y cualquier parche por texto contra el arbol de trabajo deja de encajar sin
+# decir por que. Paso: un `git stash` de ida y vuelta convirtio tres archivos.
+* text=auto eol=lf
