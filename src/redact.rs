@@ -19,7 +19,7 @@ pub struct Finding {
     pub rule: &'static str,
     pub field: String,
     pub sample: String,
-    pub consejo: &'static str,
+    pub advice: &'static str,
 }
 
 /// Prefixes published by whoever issues the credential. Zero ambiguity: if
@@ -58,12 +58,12 @@ const PREFIJOS: &[(&str, usize)] = &[
 /// AWS access keys: fixed prefix and an exact length of 20.
 const AWS: &[&str] = &["AKIA", "ASIA", "AIDA", "AROA", "AGPA", "ANPA", "ANVA"];
 
-const CONSEJO_CLAVE: &str = "Escribi which credencial era y where_at vive, nunca su valor. \
-     Ej: rotar el token de CI, esta en el secreto SONAR_TOKEN.";
-const CONSEJO_PII: &str = "Referencia el rol, no a la persona ni su path_arg. \
-     Ej: el revisor del PR, la carpeta del usuario.";
-const CONSEJO_ENTROPIA: &str = "Si no es una clave, dale un name en vez de pegar el valor. \
-     Si lo es, no entra: guard where_at vive, no cual es.";
+const ADVICE_KEY: &str = "Write down which credential it was and where it lives, never \
+     its value. E.g.: rotate the CI token, it is in the SONAR_TOKEN secret.";
+const ADVICE_PII: &str = "Refer to the role, not to the person nor to their path. \
+     E.g.: the PR reviewer, the user home directory.";
+const ADVICE_ENTROPY: &str = "If it is not a key, give it a name instead of pasting the \
+     value. If it is one, it does not get in: store where it lives, not what it is.";
 
 /// Checks one field. `None` means it may be written.
 pub fn check_field(field: &str, text: &str) -> Option<Finding> {
@@ -72,7 +72,7 @@ pub fn check_field(field: &str, text: &str) -> Option<Finding> {
             rule: "private key in PEM format",
             field: field.to_string(),
             sample: "-----BEGIN ... PRIVATE KEY-----".into(),
-            consejo: CONSEJO_CLAVE,
+            advice: ADVICE_KEY,
         });
     }
     tokens(text).find_map(|tok| revisar_token(field, tok))
@@ -85,18 +85,18 @@ pub fn check_fields(fields: &[(&str, &str)]) -> Option<Finding> {
 }
 
 fn revisar_token(field: &str, tok: &str) -> Option<Finding> {
-    let hallazgo = |rule, consejo| {
+    let finding = |rule, advice| {
         Some(Finding {
             rule,
             field: field.to_string(),
             sample: mask(tok),
-            consejo,
+            advice,
         })
     };
 
     for (p, min) in PREFIJOS {
         if tok.starts_with(p) && tok.len() >= p.len() + min {
-            return hallazgo("prefix de credencial conocido", CONSEJO_CLAVE);
+            return finding("known credential prefix", ADVICE_KEY);
         }
     }
     if tok.len() == 20
@@ -105,24 +105,24 @@ fn revisar_token(field: &str, tok: &str) -> Option<Finding> {
             .bytes()
             .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
     {
-        return hallazgo("clave de acceso de AWS", CONSEJO_CLAVE);
+        return finding("AWS access key", ADVICE_KEY);
     }
     if is_jwt(tok) {
-        return hallazgo("JSON Web Token", CONSEJO_CLAVE);
+        return finding("JSON Web Token", ADVICE_KEY);
     }
     if is_email(tok) {
-        return hallazgo("direccion de correo (dato personal)", CONSEJO_PII);
+        return finding("email address (personal data)", ADVICE_PII);
     }
     if is_home_path(tok) {
-        return hallazgo(
-            "path_arg del directorio de un usuario (dato personal)",
-            CONSEJO_PII,
+        return finding(
+            "path to a user home directory (personal data)",
+            ADVICE_PII,
         );
     }
     if suspicious_entropy(tok) {
-        return hallazgo(
+        return finding(
             "high-entropy string with no known shape",
-            CONSEJO_ENTROPIA,
+            ADVICE_ENTROPY,
         );
     }
     None
@@ -150,13 +150,13 @@ fn is_jwt(tok: &str) -> bool {
 }
 
 fn is_email(tok: &str) -> bool {
-    let Some((usuario, dominio)) = tok.split_once('@') else {
+    let Some((user, domain)) = tok.split_once('@') else {
         return false;
     };
-    if usuario.is_empty() {
+    if user.is_empty() {
         return false;
     }
-    let Some((host, tld)) = dominio.rsplit_once('.') else {
+    let Some((host, tld)) = domain.rsplit_once('.') else {
         return false;
     };
     !host.is_empty()
@@ -252,16 +252,16 @@ fn shannon(s: &str) -> f64 {
 /// Shows what it is without reproducing it. It goes to the screen, which is
 /// already less bad than storing it, but there is no need to show it whole.
 fn mask(tok: &str) -> String {
-    let visibles: String = tok.chars().take(4).collect();
-    format!("{visibles}******** ({} caracteres)", tok.chars().count())
+    let visible: String = tok.chars().take(4).collect();
+    format!("{visible}******** ({} characters)", tok.chars().count())
 }
 
 impl std::fmt::Display for Finding {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "  Rechazado: {}\n\n      field     {}\n      encontro  {}\n\n  {}",
-            self.rule, self.field, self.sample, self.consejo
+            "  Refused: {}\n\n      field   {}\n      found   {}\n\n  {}",
+            self.rule, self.field, self.sample, self.advice
         )
     }
 }
@@ -298,7 +298,7 @@ mod tests {
     #[test]
     fn personal_data() {
         assert!(refuses("preguntarle a alguien@ejemplo.com"));
-        assert!(refuses("vive en C:\\Users\\unnombre\\proyectos"));
+        assert!(refuses("it lives in C:\\Users\\somename\\projects"));
         assert!(refuses("/home/unnombre/.config/vivac"));
         assert!(refuses("/Users/unnombre/Library"));
     }
