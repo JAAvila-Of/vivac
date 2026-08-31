@@ -63,6 +63,16 @@ impl Nodo {
     pub fn alias(&self) -> String {
         format!("{}{}", self.tipo.prefijo(), self.num)
     }
+
+    /// Un frente es trabajo abierto que alguien puede ponerse a hacer.
+    ///
+    /// Una decision vigente esta abierta y **no** es un frente: no se ejecuta,
+    /// gobierna, y se cierra sola cuando otra la supera. Listarla junto al
+    /// trabajo pendiente hace que el brief se llene de cosas que no hay que
+    /// hacer, que es justo lo contrario de para lo que existe.
+    pub fn es_frente(&self) -> bool {
+        self.estado.abierto() && self.tipo != Tipo::Decision
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy)]

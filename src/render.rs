@@ -10,7 +10,7 @@
 //! audiencia: el agente necesita salida parseable, no un arbol dibujado.
 
 use crate::args::Args;
-use crate::event::Estado;
+use crate::event::{Estado, Tipo};
 use crate::fallo::{Fallo, R};
 use crate::model::{Agregados, Arbol, Nodo};
 use serde_json::json;
@@ -279,9 +279,13 @@ pub fn open(a: &Arbol, args: &Args) -> R {
     let ag = &a.agregados();
     let mut hojas: Vec<&Nodo> = a
         .todos()
-        .filter(|n| n.estado.abierto() && !a.hijos(&n.id).iter().any(|c| c.estado.abierto()))
+        .filter(|n| n.es_frente() && !a.hijos(&n.id).iter().any(|c| c.es_frente()))
         .collect();
     hojas.sort_by_key(|n| n.num);
+    let vigentes = a
+        .todos()
+        .filter(|n| n.tipo == Tipo::Decision && n.estado.abierto())
+        .count();
     if args.tiene("json") {
         return imprimir_json(json!(hojas
             .iter()
@@ -299,12 +303,17 @@ pub fn open(a: &Arbol, args: &Args) -> R {
             })
             .collect::<Vec<_>>()));
     }
-    if hojas.is_empty() {
+    if hojas.is_empty() && vigentes == 0 {
         println!("  Nada abierto.");
         return Ok(());
     }
     println!();
-    println!("  {} frentes abiertos", hojas.len());
+    println!(
+        "  {} frente{} abierto{}",
+        hojas.len(),
+        if hojas.len() == 1 { "" } else { "s" },
+        if hojas.len() == 1 { "" } else { "s" }
+    );
     println!();
     for n in hojas {
         println!("  {:<6} {}", n.alias(), n.titulo);
@@ -316,6 +325,17 @@ pub fn open(a: &Arbol, args: &Args) -> R {
                 .collect();
             println!("         via {}", v.join(" > "));
         }
+    }
+    // No son frentes, pero desaparecerlas de aqui sin decirlo seria omitir
+    // en silencio: se cuentan y se dice donde estan.
+    if vigentes > 0 {
+        let frase = if vigentes == 1 {
+            "1 decision vigente, que no se hace".to_string()
+        } else {
+            format!("{vigentes} decisiones vigentes, que no se hacen")
+        };
+        println!();
+        println!("  + {frase}   vivac brief");
     }
     println!();
     Ok(())

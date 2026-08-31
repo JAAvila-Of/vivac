@@ -217,11 +217,12 @@ pub fn a_texto(
     ]));
     s.push(Seccion::fija(espina(&camino)));
 
-    // 3. Foco: lo que cuelga de el sin cerrar.
+    // 3. Foco: lo que cuelga de el sin cerrar. Una decision vigente no es
+    //    un hijo pendiente: tiene su propia seccion (8).
     let hijos: Vec<String> = a
         .hijos(&foco.id)
         .into_iter()
-        .filter(|c| c.estado.abierto())
+        .filter(|c| c.es_frente())
         .map(|c| {
             format!(
                 "  {} {:<6} {}",

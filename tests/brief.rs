@@ -285,3 +285,34 @@ fn la_guarda_cubre_las_operaciones_nuevas() {
     let (_, cod) = c.correr(&["flag", "1", "review", "--por", "ver /home/unnombre/.config"]);
     assert_eq!(cod, 3, "flag dejo pasar una ruta personal");
 }
+
+/// `f30` — una decision vigente no es un hijo pendiente. Sale en su seccion y
+/// en ninguna otra: listarla dos veces llena el brief de cosas que no hay que
+/// hacer, que es lo contrario de para lo que existe.
+#[test]
+fn una_decision_no_es_un_frente() {
+    let c = poblado("dec");
+    let b = c.ok(&["brief", "--budget", "5000", "--now", "2026-09-15T10:00:00Z"]);
+    assert_eq!(
+        b.matches("Usar token store distribuido").count(),
+        1,
+        "la decision sale mas de una vez:\n{b}"
+    );
+
+    // Y esa unica vez esta debajo de DECISIONES VIGENTES, no de NACIO DE AQUI.
+    let hasta = b.find("DECISIONES VIGENTES").expect("falta la seccion");
+    assert!(
+        b.find("Usar token store distribuido").unwrap() > hasta,
+        "sale antes de su seccion, o sea como hijo pendiente:\n{b}"
+    );
+
+    let o = c.ok(&["open"]);
+    assert!(
+        !o.contains("Usar token store distribuido"),
+        "open la lista como frente:\n{o}"
+    );
+    assert!(
+        o.contains("1 decision vigente"),
+        "open la desaparecio sin decirlo:\n{o}"
+    );
+}
