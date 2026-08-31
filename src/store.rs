@@ -133,11 +133,7 @@ impl Store {
     /// That is why there is no `fsync` --on Windows it costs more than the
     /// whole budget-- and why it opens in `append` mode, which makes each
     /// single-line write atomic and removes the need for a lock.
-    pub fn append(
-        &self,
-        cuerpo: Vec<crate::event::Body>,
-        desde_seq: u64,
-    ) -> std::io::Result<()> {
+    pub fn append(&self, cuerpo: Vec<crate::event::Body>, desde_seq: u64) -> std::io::Result<()> {
         let mut buf = String::with_capacity(256 * cuerpo.len());
         for (i, c) in cuerpo.into_iter().enumerate() {
             let e = crate::event::Event {

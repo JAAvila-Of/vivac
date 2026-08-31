@@ -10,7 +10,7 @@
 //! `ts`. The alternative was flattening the whole timeline onto today.
 
 use crate::args::Args;
-use crate::event::{Body, State, Event, Kind};
+use crate::event::{Body, Event, Kind, State};
 use crate::failure::{Failure, R};
 use crate::ops::Ctx;
 use crate::{id, redact};
@@ -174,10 +174,7 @@ pub fn import(ctx: &mut Ctx, args: &Args) -> R {
     let total = nodes.len();
     ctx.store.write_raw(&eventos)?;
     println!("  {total} nodes imported from {path_arg}");
-    println!(
-        "        {} events written to .vivac/events",
-        eventos.len()
-    );
+    println!("        {} events written to .vivac/events", eventos.len());
     println!();
     println!("  Review what the spike could not see:  vivac check");
     Ok(())

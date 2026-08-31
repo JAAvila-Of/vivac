@@ -192,7 +192,11 @@ impl Anchor for Git {
             .map(|(path_arg, times)| Change { path_arg, times })
             .collect();
         // Most-touched first; ties broken by path. Deterministic.
-        v.sort_by(|a, b| b.times.cmp(&a.times).then_with(|| a.path_arg.cmp(&b.path_arg)));
+        v.sort_by(|a, b| {
+            b.times
+                .cmp(&a.times)
+                .then_with(|| a.path_arg.cmp(&b.path_arg))
+        });
         v
     }
 }
@@ -225,6 +229,9 @@ mod tests {
             kind: "git".into(),
             id: "0000000000000000000000000000000000000000".into(),
         };
-        assert!(g.changed_since(&falsa).iter().all(|c| !c.path_arg.is_empty()));
+        assert!(g
+            .changed_since(&falsa)
+            .iter()
+            .all(|c| !c.path_arg.is_empty()));
     }
 }

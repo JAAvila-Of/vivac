@@ -8,9 +8,9 @@
 
 use crate::anchor::{self, Anchor};
 use crate::args::Args;
-use crate::event::{Flag, Body, State, Kind, VivacKind};
+use crate::event::{Body, Flag, Kind, State, VivacKind};
 use crate::failure::{Failure, R};
-use crate::model::{fold, Tree, Node};
+use crate::model::{fold, Node, Tree};
 use crate::store::Store;
 use crate::{id, redact};
 
@@ -314,11 +314,7 @@ fn close_node(
         "  {}  {}  -> {}",
         n.alias(),
         n.title,
-        if forzar {
-            "closed BY FORCE"
-        } else {
-            "closed"
-        }
+        if forzar { "closed BY FORCE" } else { "closed" }
     );
     if forzar {
         println!("        recorded as a false close in every render");
@@ -526,10 +522,8 @@ pub fn abandon(ctx: &mut Ctx, a: &Args) -> R {
         forced: false,
     }];
     let falling_count = falling.len();
-    let salvados_dice: Vec<(String, String)> = saved
-        .iter()
-        .map(|d| (d.alias(), d.title.clone()))
-        .collect();
+    let salvados_dice: Vec<(String, String)> =
+        saved.iter().map(|d| (d.alias(), d.title.clone())).collect();
     for d in falling {
         evs.push(Body::StateChanged {
             node: d.id.clone(),
@@ -642,12 +636,8 @@ pub fn flag(ctx: &mut Ctx, a: &Args) -> R {
         ));
     };
     let n = ctx.resolve(sid)?.clone();
-    let flag = Flag::parse(sb).ok_or_else(|| {
-        Failure::usage(format!(
-            "Unknown flag: {sb}. They are: {}",
-            Flag::TODAS
-        ))
-    })?;
+    let flag = Flag::parse(sb)
+        .ok_or_else(|| Failure::usage(format!("Unknown flag: {sb}. They are: {}", Flag::TODAS)))?;
 
     if a.has("off") {
         ctx.emit(vec![Body::FlagCleared {
@@ -733,11 +723,7 @@ pub fn save(ctx: &mut Ctx, a: &Args) -> R {
     let anchoring = ctx.anchor.snapshot();
     println!(
         "  v{num}  {}",
-        if label.is_empty() {
-            "no label"
-        } else {
-            label
-        }
+        if label.is_empty() { "no label" } else { label }
     );
     if !anchoring.is_empty_tree() {
         println!("        anchored to {}", anchoring.corto());
@@ -823,7 +809,11 @@ pub fn restore(ctx: &mut Ctx, a: &Args) -> R {
     } else {
         let touching: Vec<&crate::anchor::Change> = changes
             .iter()
-            .filter(|c| v.working_set.iter().any(|g| crate::glob::covers(g, &c.path_arg)))
+            .filter(|c| {
+                v.working_set
+                    .iter()
+                    .any(|g| crate::glob::covers(g, &c.path_arg))
+            })
             .collect();
         println!(
             "  {} changes since {}{}",

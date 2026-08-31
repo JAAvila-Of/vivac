@@ -114,16 +114,10 @@ fn revisar_token(field: &str, tok: &str) -> Option<Finding> {
         return finding("email address (personal data)", ADVICE_PII);
     }
     if is_home_path(tok) {
-        return finding(
-            "path to a user home directory (personal data)",
-            ADVICE_PII,
-        );
+        return finding("path to a user home directory (personal data)", ADVICE_PII);
     }
     if suspicious_entropy(tok) {
-        return finding(
-            "high-entropy string with no known shape",
-            ADVICE_ENTROPY,
-        );
+        return finding("high-entropy string with no known shape", ADVICE_ENTROPY);
     }
     None
 }
@@ -135,8 +129,7 @@ fn tokens(text: &str) -> impl Iterator<Item = &str> {
         ',', ';', '"', '\'', '(', ')', '[', ']', '{', '}', '<', '>', '`',
     ];
     const BORDES: &[char] = &['.', ':', '!', '?'];
-    text
-        .split(|c: char| c.is_whitespace() || CORTES.contains(&c))
+    text.split(|c: char| c.is_whitespace() || CORTES.contains(&c))
         .map(|t| t.trim_matches(|c: char| BORDES.contains(&c)))
         .filter(|t| !t.is_empty())
 }
@@ -310,9 +303,7 @@ mod tests {
         assert!(!refuses(
             "csharpsquid:S1192 literals duplicados entre archivos"
         ));
-        assert!(!refuses(
-            "PermissionServiceAdapter.cs:278 is out of scope"
-        ));
+        assert!(!refuses("PermissionServiceAdapter.cs:278 is out of scope"));
         // Technical references that look random and are not secrets.
         assert!(!refuses("commit e90b4832f1a4c6d8b0e2f4a6c8d0e2f4a6c8d0e2"));
         assert!(!refuses("node 01j8xq2m4k7pabcdefghijklmn"));

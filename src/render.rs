@@ -11,9 +11,9 @@
 
 use crate::args::Args;
 use crate::brief::clip;
-use crate::event::{State, Kind};
+use crate::event::{Kind, State};
 use crate::failure::{Failure, R};
-use crate::model::{Aggregates, Tree, Node};
+use crate::model::{Aggregates, Node, Tree};
 use serde_json::json;
 
 const WIDTH: usize = 62;
@@ -441,11 +441,7 @@ pub fn triage(a: &Tree, args: &Args) -> R {
             deep.len()
         );
         for (n, d) in &deep {
-            println!(
-                "    {:<6} {:<40} depth {d}",
-                n.alias(),
-                clip(&n.title, 40)
-            );
+            println!("    {:<6} {:<40} depth {d}", n.alias(), clip(&n.title, 40));
             let v: Vec<String> = a
                 .ancestors(&n.id)
                 .iter()

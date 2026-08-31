@@ -11,8 +11,18 @@ use common::Sandbox;
 /// g1 > t2 > t3 > t4. Abandoning t2 puts the other three in play.
 fn branch(name: &str) -> Sandbox {
     let c = Sandbox::new_seeded(name);
-    c.ok(&["push", "Migrate authentication", "--why", "the provider is shutting down"]);
-    c.ok(&["push", "Pick a cache backend", "--why", "the token store needs one"]);
+    c.ok(&[
+        "push",
+        "Migrate authentication",
+        "--why",
+        "the provider is shutting down",
+    ]);
+    c.ok(&[
+        "push",
+        "Pick a cache backend",
+        "--why",
+        "the token store needs one",
+    ]);
     c.ok(&[
         "add",
         "Serialization benchmark",
@@ -40,13 +50,19 @@ fn without_cascade_nothing_falls() {
     let (s, code) = c.run(&["abandon", "2", "the backend no longer applies"]);
     assert_eq!(code, 1, "it had to refuse:\n{s}");
     for t in ["Pick a cache backend", "benchmark", "Drop dead imports"] {
-        assert!(s.to_lowercase().contains(&t.to_lowercase()), "it did not list {t}:\n{s}");
+        assert!(
+            s.to_lowercase().contains(&t.to_lowercase()),
+            "it did not list {t}:\n{s}"
+        );
     }
     assert!(s.contains("--rescue"), "it did not offer the rescue:\n{s}");
 
     // And nothing moved.
     let t = c.ok(&["tree", "--all"]);
-    assert!(!t.contains("[!]"), "it abandoned something without confirmation:\n{t}");
+    assert!(
+        !t.contains("[!]"),
+        "it abandoned something without confirmation:\n{t}"
+    );
 }
 
 /// Rescuing a node rescues its descendants. Saving the parent and letting the
@@ -54,13 +70,22 @@ fn without_cascade_nothing_falls() {
 #[test]
 fn a_rescue_drags_the_descendants_along() {
     let c = branch("drags");
-    let s = c.ok(&["abandon", "2", "the backend no longer applies", "--rescue", "3"]);
+    let s = c.ok(&[
+        "abandon",
+        "2",
+        "the backend no longer applies",
+        "--rescue",
+        "3",
+    ]);
     assert!(s.contains("Rescued"), "{s}");
 
     let t = c.ok(&["tree", "--all"]);
     assert!(t.contains("[!] t2"), "t2 had to fall:\n{t}");
     assert!(t.contains("[ ] t3"), "t3 had to survive:\n{t}");
-    assert!(t.contains("[ ] t4"), "t4 fell with its rescued parent:\n{t}");
+    assert!(
+        t.contains("[ ] t4"),
+        "t4 fell with its rescued parent:\n{t}"
+    );
 }
 
 /// If everything open gets rescued there is nothing left to confirm, and
@@ -78,11 +103,23 @@ fn rescuing_everything_needs_no_cascade() {
 #[test]
 fn the_rescued_node_is_still_born_where_it_was_born() {
     let c = branch("lineage");
-    c.ok(&["abandon", "2", "the backend no longer applies", "--rescue", "3"]);
+    c.ok(&[
+        "abandon",
+        "2",
+        "the backend no longer applies",
+        "--rescue",
+        "3",
+    ]);
 
     let w = c.ok(&["why", "3"]);
-    assert!(w.contains("Pick a cache backend"), "it erased the origin:\n{w}");
-    assert!(w.contains("abandoned"), "it does not say the origin fell:\n{w}");
+    assert!(
+        w.contains("Pick a cache backend"),
+        "it erased the origin:\n{w}"
+    );
+    assert!(
+        w.contains("abandoned"),
+        "it does not say the origin fell:\n{w}"
+    );
     assert!(
         w.contains("the backend no longer applies"),
         "it lost the reason for the abandonment:\n{w}"

@@ -63,7 +63,10 @@ fn a_false_close_comes_out_with_its_count() {
     let s = c.ok(&["triage"]);
     assert!(section(&s, "FALSE CLOSES"), "{s}");
     assert!(s.contains("Permissions audit"), "{s}");
-    assert!(s.contains("1 blocker"), "it did not say how many are left: {s}");
+    assert!(
+        s.contains("1 blocker"),
+        "it did not say how many are left: {s}"
+    );
 }
 
 /// A **forced** close does not come back here. It was a decision, it leaves a
@@ -96,7 +99,10 @@ fn a_forced_close_does_not_come_back_to_triage() {
 
     // But the tree still marks it: it is not hidden, it just stops repeating.
     let t = c.ok(&["tree", "--all"]);
-    assert!(t.contains("FALSE CLOSE"), "the tree stopped marking it: {t}");
+    assert!(
+        t.contains("FALSE CLOSE"),
+        "the tree stopped marking it: {t}"
+    );
 }
 
 /// Whatever survives an abandonment stays alive under something discarded on
@@ -114,7 +120,13 @@ fn the_rescued_node_comes_back_past_the_eye() {
         "--why",
         "it has to be measured first",
     ]);
-    c.ok(&["abandon", "2", "the backend no longer applies", "--rescue", "3"]);
+    c.ok(&[
+        "abandon",
+        "2",
+        "the backend no longer applies",
+        "--rescue",
+        "3",
+    ]);
 
     let s = c.ok(&["triage"]);
     assert!(section(&s, "SURVIVED A DISCARD"), "{s}");
@@ -135,7 +147,10 @@ fn the_rescued_node_comes_back_past_the_eye() {
         "it hangs there",
     ]);
     let s = c.ok(&["triage"]);
-    assert!(!s.contains("Grandchild"), "it listed the whole branch:\n{s}");
+    assert!(
+        !s.contains("Grandchild"),
+        "it listed the whole branch:\n{s}"
+    );
 }
 
 /// `MODEL.md` §6.1: from 6 on it shows up in triage, with `promote` as the way

@@ -28,7 +28,10 @@ pub fn check(a: &Tree, args: &Args) -> Result<i32, crate::failure::Failure> {
         // can break here is the parent not existing.
         if let Some(p) = &n.parent {
             if a.node(p).is_none() {
-                almacen.push(format!("{} points at a parent that does not exist", n.alias()));
+                almacen.push(format!(
+                    "{} points at a parent that does not exist",
+                    n.alias()
+                ));
             }
         }
         // Invariant 1: acyclic. If the path to the root does not end at a node
@@ -52,10 +55,7 @@ pub fn check(a: &Tree, args: &Args) -> Result<i32, crate::failure::Failure> {
         // --a lane being abandoned-- and what was asked was that they be a
         // decision and not an oversight. The trace is in the event and the
         // render still marks it; what it does not do is break CI every day.
-        if n.state == State::Done
-            && !n.cierre_forzado
-            && !a.open_blockers(&n.id).is_empty()
-        {
+        if n.state == State::Done && !n.cierre_forzado && !a.open_blockers(&n.id).is_empty() {
             let pending_count = a.open_blockers(&n.id);
             let quienes: Vec<String> = pending_count.iter().map(|c| c.alias()).collect();
             project.push(format!(

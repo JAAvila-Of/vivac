@@ -95,7 +95,10 @@ fn a_spanish_log_still_reads_whole() {
         "the label got lost:\n{v}"
     );
     let r = c.ok(&["restore", "v1"]);
-    assert!(r.contains("seguir por aqui"), "the next_intent got lost:\n{r}");
+    assert!(
+        r.contains("seguir por aqui"),
+        "the next_intent got lost:\n{r}"
+    );
 }
 
 /// And what gets appended from now on is English, in the same file, without

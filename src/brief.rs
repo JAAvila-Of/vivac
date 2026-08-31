@@ -17,9 +17,9 @@
 
 use crate::anchor::Anchor;
 use crate::args::Args;
-use crate::event::{State, Kind};
+use crate::event::{Kind, State};
 use crate::failure::R;
-use crate::model::{Tree, Node};
+use crate::model::{Node, Tree};
 
 const PRESUPUESTO: usize = 1500;
 /// The whole brief is pure ASCII.
@@ -237,8 +237,11 @@ pub fn to_text(
     // counted and the place to look is named; listing them here would drag in
     // the whole tree, which is exactly the noise the focus exists to keep
     // out.
-    let directos: std::collections::HashSet<&str> =
-        a.children(&focus.id).iter().map(|c| c.id.as_str()).collect();
+    let directos: std::collections::HashSet<&str> = a
+        .children(&focus.id)
+        .iter()
+        .map(|c| c.id.as_str())
+        .collect();
     let deep = a
         .descendants(&focus.id)
         .into_iter()
@@ -256,11 +259,7 @@ pub fn to_text(
     let invariants: Vec<String> = constraints(a, &camino)
         .iter()
         .map(|c| {
-            let riesgo = if c.flags.is_empty() {
-                ""
-            } else {
-                "   AT RISK"
-            };
+            let riesgo = if c.flags.is_empty() { "" } else { "   AT RISK" };
             format!("  {:<6} {}{riesgo}", c.alias(), c.title)
         })
         .collect();
@@ -298,12 +297,7 @@ pub fn to_text(
         .iter()
         .flat_map(|n| {
             n.flags.iter().map(move |(b, reason)| {
-                format!(
-                    "  {:<6} {:<10} {}",
-                    n.alias(),
-                    b.word(),
-                    clip(reason, 44)
-                )
+                format!("  {:<6} {:<10} {}", n.alias(), b.word(), clip(reason, 44))
             })
         })
         .collect();
@@ -393,7 +387,10 @@ pub fn to_text(
                 }
             )];
             if !v.next_intent.is_empty() {
-                l.push(format!("         you were about to: {}", clip(&v.next_intent, 52)));
+                l.push(format!(
+                    "         you were about to: {}",
+                    clip(&v.next_intent, 52)
+                ));
             }
             // With no anchor no diff lines are invented: they are omitted, and
             // the date above stands in, which is the plain age there really is.
@@ -402,7 +399,11 @@ pub fn to_text(
                 if !changes.is_empty() {
                     let touching = changes
                         .iter()
-                        .filter(|c| v.working_set.iter().any(|g| crate::glob::covers(g, &c.path_arg)))
+                        .filter(|c| {
+                            v.working_set
+                                .iter()
+                                .any(|g| crate::glob::covers(g, &c.path_arg))
+                        })
                         .count();
                     l.push(format!(
                         "         {} changes since, {touching} touching what it governs",
@@ -430,11 +431,7 @@ pub fn to_text(
 /// dropped from the bottom up until it fits; if it still does not fit, it is
 /// emitted anyway with a warning. Going over budget is a sign the tree needs
 /// pruning, not that the brief should lie by silent omission.
-fn emit(
-    mut s: Vec<Section>,
-    budget: usize,
-    a: &Tree,
-) -> Result<String, crate::failure::Failure> {
+fn emit(mut s: Vec<Section>, budget: usize, a: &Tree) -> Result<String, crate::failure::Failure> {
     let requested = tokens_of(&s);
     while tokens_of(&s) > budget {
         match s.iter().rposition(|x| x.truncable && !x.lines.is_empty()) {
@@ -449,7 +446,10 @@ fn emit(
         o.push_str(l);
         o.push('\n');
     }
-    let parked_nodes = a.nodes_iter().filter(|n| n.state == State::Suspended).count();
+    let parked_nodes = a
+        .nodes_iter()
+        .filter(|n| n.state == State::Suspended)
+        .count();
     o.push_str(&format!(
         "
 {RULE}

@@ -53,7 +53,10 @@ mod tests {
         assert!(covers("src/main.rs", "src/main.rs"));
         assert!(!covers("src/main.rs", "src/other.rs"));
         assert!(covers("src/*.rs", "src/main.rs"));
-        assert!(!covers("src/*.rs", "src/auth/main.rs"), "* does not cross slashes");
+        assert!(
+            !covers("src/*.rs", "src/auth/main.rs"),
+            "* does not cross slashes"
+        );
         assert!(covers("src/**", "src/auth/token.rs"));
         assert!(covers("src/**/*.rs", "src/auth/token.rs"));
         assert!(covers("**/*.rs", "a/b/c.rs"));

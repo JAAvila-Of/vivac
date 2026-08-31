@@ -97,7 +97,12 @@ fn assert_reads_as_english(label: &str, out: &str) {
 fn seeded() -> Sandbox {
     let c = Sandbox::new_seeded("english");
     c.ok(&["push", "Ship the release", "--why", "the build is stale"]);
-    c.ok(&["push", "Fix the cache adapter", "--why", "sessions expire early"]);
+    c.ok(&[
+        "push",
+        "Fix the cache adapter",
+        "--why",
+        "sessions expire early",
+    ]);
     c.ok(&[
         "push",
         "No test covers expiry",
@@ -107,7 +112,12 @@ fn seeded() -> Sandbox {
     ]);
     c.ok(&["pop", "reproduced: it expires at 300s"]);
     c.ok(&["pop", "adapter fixed"]);
-    c.ok(&["decide", "Ship from a tag", "--reason", "the tag is the anchor"]);
+    c.ok(&[
+        "decide",
+        "Ship from a tag",
+        "--reason",
+        "the tag is the anchor",
+    ]);
     c.ok(&["add", "Write the announcement", "--why", "nobody knows yet"]);
     c.ok(&["park", "6", "the wording waits for the release"]);
     c.ok(&["flag", "4", "review", "--why", "the reason may be stale"]);
@@ -149,7 +159,13 @@ fn nothing_the_tool_prints_is_in_spanish() {
 fn the_refusals_read_as_english_too() {
     let c = Sandbox::new_seeded("refusals");
     c.ok(&["push", "Permissions audit", "--why", "it is due"]);
-    c.ok(&["push", "Two roles ignore the guard", "--why", "found in the audit", "--blocks"]);
+    c.ok(&[
+        "push",
+        "Two roles ignore the guard",
+        "--why",
+        "found in the audit",
+        "--blocks",
+    ]);
     c.ok(&["focus", "1"]);
 
     // The closure rule: the one refusal the model makes on its own.

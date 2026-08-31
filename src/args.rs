@@ -58,7 +58,10 @@ impl Args {
                         n.clone()
                     })
                 });
-                a.opts.entry(canonical(k).to_string()).or_default().extend(val);
+                a.opts
+                    .entry(canonical(k).to_string())
+                    .or_default()
+                    .extend(val);
             } else {
                 a.positionals.push(v[i].clone());
             }
@@ -160,7 +163,9 @@ mod tests {
         assert_eq!(a.opt("next"), Some("x"));
 
         // And it is genuinely the same key, not a second one.
-        assert!(a.unknown(&["why", "blocks", "parent", "force", "next"]).is_empty());
+        assert!(a
+            .unknown(&["why", "blocks", "parent", "force", "next"])
+            .is_empty());
 
         // An unknown flag is not in the table, so it is quoted back verbatim.
         assert_eq!(p("--inventada 1").unknown(&["why"]), vec!["inventada"]);
@@ -174,8 +179,18 @@ mod tests {
     #[test]
     fn no_alias_translated_itself_away() {
         for es in [
-            "por", "tipo", "bloquea", "forzar", "luego", "padre", "cascada",
-            "rescatar", "reabrir", "todo", "razon", "alternativa",
+            "por",
+            "tipo",
+            "bloquea",
+            "forzar",
+            "luego",
+            "padre",
+            "cascada",
+            "rescatar",
+            "reabrir",
+            "todo",
+            "razon",
+            "alternativa",
         ] {
             let en = canonical(es);
             assert_ne!(en, es, "the alias for --{es} was lost");

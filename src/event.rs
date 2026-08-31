@@ -44,8 +44,7 @@ impl Kind {
         })
     }
 
-    pub const ALL: &'static str =
-        "goal, task, decision, question, constraint, finding, assumption";
+    pub const ALL: &'static str = "goal, task, decision, question, constraint, finding, assumption";
 }
 
 /// Canonical states.

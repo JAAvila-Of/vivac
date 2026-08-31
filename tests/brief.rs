@@ -109,7 +109,10 @@ fn the_spine_is_never_truncated() {
             b.contains("Migrate authentication to OIDC"),
             "the root is missing:\n{b}"
         );
-        assert!(b.contains("Pick a cache backend"), "the focus is missing:\n{b}");
+        assert!(
+            b.contains("Pick a cache backend"),
+            "the focus is missing:\n{b}"
+        );
         assert!(b.contains("<== HERE"), "the marker is missing:\n{b}");
     };
 
@@ -251,7 +254,9 @@ fn a_decision_is_not_a_front() {
     );
 
     // And that single time is under STANDING DECISIONS, not BORN FROM HERE.
-    let hasta = b.find("STANDING DECISIONS").expect("the section is missing");
+    let hasta = b
+        .find("STANDING DECISIONS")
+        .expect("the section is missing");
     assert!(
         b.find("Use a distributed token store").unwrap() > hasta,
         "it shows up before its section, i.e. as a pending child:\n{b}"
@@ -298,5 +303,8 @@ fn what_is_open_under_a_closed_node_gets_counted() {
         !b.contains("A finding"),
         "it listed it instead of counting it; that drags in the whole tree:\n{b}"
     );
-    assert!(b.contains("vivac open"), "it counted without saying where to look:\n{b}");
+    assert!(
+        b.contains("vivac open"),
+        "it counted without saying where to look:\n{b}"
+    );
 }

@@ -8,7 +8,7 @@
 //! they start to hurt.
 
 use crate::anchor::AnchorRef;
-use crate::event::{Flag, Body, State, Event, Kind, VivacKind};
+use crate::event::{Body, Event, Flag, Kind, State, VivacKind};
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 
@@ -186,7 +186,11 @@ impl Tree {
                 self.por_num.insert(*num, node.clone());
                 self.siguiente_num = self.siguiente_num.max(*num + 1);
                 match parent {
-                    Some(p) => self.children.entry(p.clone()).or_default().push(node.clone()),
+                    Some(p) => self
+                        .children
+                        .entry(p.clone())
+                        .or_default()
+                        .push(node.clone()),
                     None => self.roots.push(node.clone()),
                 }
             }
@@ -227,11 +231,7 @@ impl Tree {
             Body::Popped { node } => {
                 self.stack.retain(|x| x != node);
             }
-            Body::FlagRaised {
-                node,
-                flag,
-                reason,
-            } => {
+            Body::FlagRaised { node, flag, reason } => {
                 if let Some(n) = self.nodes.get_mut(node) {
                     n.flags.insert(*flag, reason.clone());
                 }
