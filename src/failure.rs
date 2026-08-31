@@ -5,56 +5,56 @@
 //! to be able to tell "cannot close yet" from "you typed the command wrong"
 //! without reading the prose.
 
-use crate::redact::Hallazgo;
+use crate::redact::Finding;
 
-pub enum Fallo {
+pub enum Failure {
     /// The model refuses the operation. There is only one such rule today:
     /// closing with open blockers. `MODEL.md` §7.
-    Modelo(String),
+    Model(String),
     /// The command is malformed.
-    Uso(String),
+    Usage(String),
     /// The redaction guard. Security pillar.
-    Redaccion(Box<Hallazgo>),
+    Redaction(Box<Finding>),
     /// There is no `.vivac/` here or further up.
-    SinStore,
+    NoStore,
     Io(std::io::Error),
 }
 
-pub type R = Result<(), Fallo>;
+pub type R = Result<(), Failure>;
 
-impl Fallo {
-    pub fn codigo(&self) -> i32 {
+impl Failure {
+    pub fn code(&self) -> i32 {
         match self {
-            Fallo::Modelo(_) => 1,
-            Fallo::Uso(_) => 2,
-            Fallo::Redaccion(_) => 3,
-            Fallo::SinStore => 4,
-            Fallo::Io(_) => 5,
+            Failure::Model(_) => 1,
+            Failure::Usage(_) => 2,
+            Failure::Redaction(_) => 3,
+            Failure::NoStore => 4,
+            Failure::Io(_) => 5,
         }
     }
 
-    pub fn imprimir(&self) {
+    pub fn print_to_stderr(&self) {
         eprintln!();
         match self {
-            Fallo::Modelo(m) | Fallo::Uso(m) => eprintln!("{m}"),
-            Fallo::Redaccion(h) => eprintln!("{h}"),
-            Fallo::SinStore => {
+            Failure::Model(m) | Failure::Usage(m) => eprintln!("{m}"),
+            Failure::Redaction(h) => eprintln!("{h}"),
+            Failure::NoStore => {
                 eprintln!("  No .vivac/ here or further up.");
                 eprintln!();
                 eprintln!("  Plant the tree:  vivac init");
             }
-            Fallo::Io(e) => eprintln!("  Input/output error: {e}"),
+            Failure::Io(e) => eprintln!("  Input/output error: {e}"),
         }
         eprintln!();
     }
 
-    pub fn uso(m: impl Into<String>) -> Fallo {
-        Fallo::Uso(format!("  {}", m.into()))
+    pub fn usage(m: impl Into<String>) -> Failure {
+        Failure::Usage(format!("  {}", m.into()))
     }
 }
 
-impl From<std::io::Error> for Fallo {
-    fn from(e: std::io::Error) -> Fallo {
-        Fallo::Io(e)
+impl From<std::io::Error> for Failure {
+    fn from(e: std::io::Error) -> Failure {
+        Failure::Io(e)
     }
 }

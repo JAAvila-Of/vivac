@@ -9,38 +9,38 @@ use std::process::Command;
 
 const BIN: &str = env!("CARGO_BIN_EXE_vivac");
 
-pub struct Caja(pub PathBuf);
+pub struct Sandbox(pub PathBuf);
 
-impl Caja {
+impl Sandbox {
     /// A directory with no `.vivac/`. For proving the tool stays quiet where
     /// nobody planted it.
-    pub fn vacia(nombre: &str) -> Caja {
+    pub fn new_empty(name: &str) -> Sandbox {
         let d = std::env::temp_dir().join(format!(
-            "vivac-v-{nombre}-{}",
+            "vivac-v-{name}-{}",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_nanos()
         ));
         std::fs::create_dir_all(&d).unwrap();
-        Caja(d)
+        Sandbox(d)
     }
 
-    pub fn nueva(nombre: &str) -> Caja {
+    pub fn new_seeded(name: &str) -> Sandbox {
         let d = std::env::temp_dir().join(format!(
-            "vivac-t-{nombre}-{}",
+            "vivac-t-{name}-{}",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_nanos()
         ));
         std::fs::create_dir_all(&d).unwrap();
-        let c = Caja(d);
+        let c = Sandbox(d);
         c.ok(&["init"]);
         c
     }
 
-    pub fn correr(&self, args: &[&str]) -> (String, i32) {
+    pub fn run(&self, args: &[&str]) -> (String, i32) {
         let o = Command::new(BIN)
             .current_dir(&self.0)
             .args(args)
@@ -53,13 +53,13 @@ impl Caja {
     }
 
     pub fn ok(&self, args: &[&str]) -> String {
-        let (s, c) = self.correr(args);
+        let (s, c) = self.run(args);
         assert_eq!(c, 0, "`vivac {}` failed with {c}:\n{s}", args.join(" "));
         s
     }
 }
 
-impl Drop for Caja {
+impl Drop for Sandbox {
     fn drop(&mut self) {
         std::fs::remove_dir_all(&self.0).ok();
     }

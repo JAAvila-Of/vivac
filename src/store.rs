@@ -32,7 +32,7 @@ pub struct Config {
 }
 
 impl Config {
-    fn nueva() -> Config {
+    fn new_seeded() -> Config {
         Config {
             version: 1,
             project_id: id::ulid(),
@@ -42,14 +42,14 @@ impl Config {
 }
 
 pub struct Store {
-    pub raiz: PathBuf,
+    pub root: PathBuf,
     pub config: Config,
 }
 
-/// Walks up from `desde` looking for a `.vivac/`. No daemon and no environment
+/// Walks up from `from_dir` looking for a `.vivac/`. No daemon and no environment
 /// variable: the same rule as git, already in everyone's fingers.
-pub fn buscar_raiz(desde: &Path) -> Option<PathBuf> {
-    let mut d = desde.to_path_buf();
+pub fn find_root(from_dir: &Path) -> Option<PathBuf> {
+    let mut d = from_dir.to_path_buf();
     loop {
         if d.join(DIR).is_dir() {
             return Some(d);
@@ -61,43 +61,43 @@ pub fn buscar_raiz(desde: &Path) -> Option<PathBuf> {
 }
 
 impl Store {
-    pub fn abrir(raiz: PathBuf) -> std::io::Result<Store> {
-        let p = raiz.join(DIR).join(CONFIG);
+    pub fn abrir(root: PathBuf) -> std::io::Result<Store> {
+        let p = root.join(DIR).join(CONFIG);
         let config = match fs::read_to_string(&p) {
             Ok(s) => serde_json::from_str(&s).map_err(std::io::Error::other)?,
             Err(_) => {
                 // A `.vivac/` with no config comes from an earlier version or a
                 // half-finished delete. Fill it in rather than fail: the tree,
                 // which is what matters, lives in `events`.
-                let c = Config::nueva();
-                escribir_config(&raiz, &c)?;
+                let c = Config::new_seeded();
+                write_config(&root, &c)?;
                 c
             }
         };
-        Ok(Store { raiz, config })
+        Ok(Store { root, config })
     }
 
-    pub fn crear(raiz: &Path) -> std::io::Result<Store> {
-        let d = raiz.join(DIR);
+    pub fn create(root: &Path) -> std::io::Result<Store> {
+        let d = root.join(DIR);
         fs::create_dir_all(&d)?;
-        let config = Config::nueva();
-        escribir_config(raiz, &config)?;
+        let config = Config::new_seeded();
+        write_config(root, &config)?;
         if !d.join(LOG).exists() {
             File::create(d.join(LOG))?;
         }
         Ok(Store {
-            raiz: raiz.to_path_buf(),
+            root: root.to_path_buf(),
             config,
         })
     }
 
     pub fn log(&self) -> PathBuf {
-        self.raiz.join(DIR).join(LOG)
+        self.root.join(DIR).join(LOG)
     }
 }
 
-fn escribir_config(raiz: &Path, c: &Config) -> std::io::Result<()> {
-    let mut f = File::create(raiz.join(DIR).join(CONFIG))?;
+fn write_config(root: &Path, c: &Config) -> std::io::Result<()> {
+    let mut f = File::create(root.join(DIR).join(CONFIG))?;
     f.write_all(serde_json::to_string_pretty(c)?.as_bytes())?;
     f.write_all(b"\n")
 }
@@ -106,7 +106,7 @@ impl Store {
     /// Reads the whole log. An unreadable line **does not abort**: it is
     /// counted and skipped. A half-written log has to stay readable, or the
     /// tool that keeps the thread becomes the one that loses it.
-    pub fn leer(&self) -> std::io::Result<(Vec<crate::event::Evento>, usize)> {
+    pub fn read_all(&self) -> std::io::Result<(Vec<crate::event::Event>, usize)> {
         let f = match File::open(self.log()) {
             Ok(f) => f,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((vec![], 0)),
@@ -114,12 +114,12 @@ impl Store {
         };
         let mut eventos = Vec::new();
         let mut rotas = 0usize;
-        for linea in BufReader::new(f).lines() {
-            let linea = linea?;
-            if linea.trim().is_empty() {
+        for line in BufReader::new(f).lines() {
+            let line = line?;
+            if line.trim().is_empty() {
                 continue;
             }
-            match serde_json::from_str(&linea) {
+            match serde_json::from_str(&line) {
                 Ok(e) => eventos.push(e),
                 Err(_) => rotas += 1,
             }
@@ -133,14 +133,14 @@ impl Store {
     /// That is why there is no `fsync` --on Windows it costs more than the
     /// whole budget-- and why it opens in `append` mode, which makes each
     /// single-line write atomic and removes the need for a lock.
-    pub fn escribir(
+    pub fn append(
         &self,
-        cuerpo: Vec<crate::event::Cuerpo>,
+        cuerpo: Vec<crate::event::Body>,
         desde_seq: u64,
     ) -> std::io::Result<()> {
         let mut buf = String::with_capacity(256 * cuerpo.len());
         for (i, c) in cuerpo.into_iter().enumerate() {
-            let e = crate::event::Evento {
+            let e = crate::event::Event {
                 seq: desde_seq + i as u64 + 1,
                 id: id::ulid(),
                 ts: clock::now_rfc3339(),
@@ -163,7 +163,7 @@ impl Store {
     /// Writes already-built events, keeping their original timestamp. Only
     /// `import` uses it: a tree from elsewhere keeps its dates, because
     /// otherwise the migration flattens the only timeline it had.
-    pub fn escribir_crudo(&self, eventos: &[crate::event::Evento]) -> std::io::Result<()> {
+    pub fn write_raw(&self, eventos: &[crate::event::Event]) -> std::io::Result<()> {
         let mut buf = String::with_capacity(256 * eventos.len());
         for e in eventos {
             buf.push_str(&serde_json::to_string(e).map_err(std::io::Error::other)?);
@@ -182,19 +182,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn busca_hacia_arriba() {
+    fn search_upward() {
         let tmp = std::env::temp_dir().join(format!("vivac-t-{}", id::ulid()));
-        let hondo = tmp.join("a").join("b").join("c");
-        fs::create_dir_all(&hondo).unwrap();
-        assert!(buscar_raiz(&hondo).is_none());
-        Store::crear(&tmp).unwrap();
-        assert_eq!(buscar_raiz(&hondo).unwrap(), tmp);
+        let depth_of = tmp.join("a").join("b").join("c");
+        fs::create_dir_all(&depth_of).unwrap();
+        assert!(find_root(&depth_of).is_none());
+        Store::create(&tmp).unwrap();
+        assert_eq!(find_root(&depth_of).unwrap(), tmp);
         fs::remove_dir_all(&tmp).ok();
     }
 
     #[test]
-    fn el_actor_no_lleva_datos_personales() {
-        let c = Config::nueva();
+    fn the_actor_carries_no_personal_data() {
+        let c = Config::new_seeded();
         assert!(c.actor.starts_with("a_"));
         assert!(!c.actor.contains('@'));
         assert_ne!(c.actor, whoami_ish());

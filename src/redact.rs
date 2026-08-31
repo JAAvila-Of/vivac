@@ -15,10 +15,10 @@
 
 /// What the guard found. It never carries the whole secret.
 #[derive(Debug)]
-pub struct Hallazgo {
-    pub regla: &'static str,
-    pub campo: String,
-    pub muestra: String,
+pub struct Finding {
+    pub rule: &'static str,
+    pub field: String,
+    pub sample: String,
     pub consejo: &'static str,
 }
 
@@ -58,45 +58,45 @@ const PREFIJOS: &[(&str, usize)] = &[
 /// AWS access keys: fixed prefix and an exact length of 20.
 const AWS: &[&str] = &["AKIA", "ASIA", "AIDA", "AROA", "AGPA", "ANPA", "ANVA"];
 
-const CONSEJO_CLAVE: &str = "Escribi que credencial era y donde vive, nunca su valor. \
+const CONSEJO_CLAVE: &str = "Escribi which credencial era y where_at vive, nunca su valor. \
      Ej: rotar el token de CI, esta en el secreto SONAR_TOKEN.";
-const CONSEJO_PII: &str = "Referencia el rol, no a la persona ni su ruta. \
+const CONSEJO_PII: &str = "Referencia el rol, no a la persona ni su path_arg. \
      Ej: el revisor del PR, la carpeta del usuario.";
-const CONSEJO_ENTROPIA: &str = "Si no es una clave, dale un nombre en vez de pegar el valor. \
-     Si lo es, no entra: guarda donde vive, no cual es.";
+const CONSEJO_ENTROPIA: &str = "Si no es una clave, dale un name en vez de pegar el valor. \
+     Si lo es, no entra: guard where_at vive, no cual es.";
 
 /// Checks one field. `None` means it may be written.
-pub fn revisar(campo: &str, texto: &str) -> Option<Hallazgo> {
-    if texto.contains("-----BEGIN") && texto.contains("PRIVATE KEY") {
-        return Some(Hallazgo {
-            regla: "private key in PEM format",
-            campo: campo.to_string(),
-            muestra: "-----BEGIN ... PRIVATE KEY-----".into(),
+pub fn check_field(field: &str, text: &str) -> Option<Finding> {
+    if text.contains("-----BEGIN") && text.contains("PRIVATE KEY") {
+        return Some(Finding {
+            rule: "private key in PEM format",
+            field: field.to_string(),
+            sample: "-----BEGIN ... PRIVATE KEY-----".into(),
             consejo: CONSEJO_CLAVE,
         });
     }
-    tokens(texto).find_map(|tok| revisar_token(campo, tok))
+    tokens(text).find_map(|tok| revisar_token(field, tok))
 }
 
 /// Checks several fields at once. Returns the first that fails, which is all
 /// that is needed: the operation is refused whole.
-pub fn revisar_campos(campos: &[(&str, &str)]) -> Option<Hallazgo> {
-    campos.iter().find_map(|(c, t)| revisar(c, t))
+pub fn check_fields(fields: &[(&str, &str)]) -> Option<Finding> {
+    fields.iter().find_map(|(c, t)| check_field(c, t))
 }
 
-fn revisar_token(campo: &str, tok: &str) -> Option<Hallazgo> {
-    let hallazgo = |regla, consejo| {
-        Some(Hallazgo {
-            regla,
-            campo: campo.to_string(),
-            muestra: enmascarar(tok),
+fn revisar_token(field: &str, tok: &str) -> Option<Finding> {
+    let hallazgo = |rule, consejo| {
+        Some(Finding {
+            rule,
+            field: field.to_string(),
+            sample: mask(tok),
             consejo,
         })
     };
 
     for (p, min) in PREFIJOS {
         if tok.starts_with(p) && tok.len() >= p.len() + min {
-            return hallazgo("prefijo de credencial conocido", CONSEJO_CLAVE);
+            return hallazgo("prefix de credencial conocido", CONSEJO_CLAVE);
         }
     }
     if tok.len() == 20
@@ -107,19 +107,19 @@ fn revisar_token(campo: &str, tok: &str) -> Option<Hallazgo> {
     {
         return hallazgo("clave de acceso de AWS", CONSEJO_CLAVE);
     }
-    if es_jwt(tok) {
+    if is_jwt(tok) {
         return hallazgo("JSON Web Token", CONSEJO_CLAVE);
     }
-    if es_correo(tok) {
+    if is_email(tok) {
         return hallazgo("direccion de correo (dato personal)", CONSEJO_PII);
     }
-    if es_ruta_de_casa(tok) {
+    if is_home_path(tok) {
         return hallazgo(
-            "ruta del directorio de un usuario (dato personal)",
+            "path_arg del directorio de un usuario (dato personal)",
             CONSEJO_PII,
         );
     }
-    if entropia_sospechosa(tok) {
+    if suspicious_entropy(tok) {
         return hallazgo(
             "high-entropy string with no known shape",
             CONSEJO_ENTROPIA,
@@ -130,18 +130,18 @@ fn revisar_token(campo: &str, tok: &str) -> Option<Hallazgo> {
 
 /// Splits on whitespace and on the signs that are never part of a
 /// credential. Dashes, dots, slashes and underscores are kept, because they are.
-fn tokens(texto: &str) -> impl Iterator<Item = &str> {
+fn tokens(text: &str) -> impl Iterator<Item = &str> {
     const CORTES: &[char] = &[
         ',', ';', '"', '\'', '(', ')', '[', ']', '{', '}', '<', '>', '`',
     ];
     const BORDES: &[char] = &['.', ':', '!', '?'];
-    texto
+    text
         .split(|c: char| c.is_whitespace() || CORTES.contains(&c))
         .map(|t| t.trim_matches(|c: char| BORDES.contains(&c)))
         .filter(|t| !t.is_empty())
 }
 
-fn es_jwt(tok: &str) -> bool {
+fn is_jwt(tok: &str) -> bool {
     if !tok.starts_with("eyJ") {
         return false;
     }
@@ -149,7 +149,7 @@ fn es_jwt(tok: &str) -> bool {
     partes.len() == 3 && partes.iter().all(|p| p.len() >= 8) && partes[1].starts_with("eyJ")
 }
 
-fn es_correo(tok: &str) -> bool {
+fn is_email(tok: &str) -> bool {
     let Some((usuario, dominio)) = tok.split_once('@') else {
         return false;
     };
@@ -169,7 +169,7 @@ fn es_correo(tok: &str) -> bool {
 
 /// A home path carries the name of whoever owns it, which is personal data.
 /// `~` does not: it resolves on the reader's machine and identifies nobody.
-fn es_ruta_de_casa(tok: &str) -> bool {
+fn is_home_path(tok: &str) -> bool {
     let bajo = tok.to_ascii_lowercase().replace('\\', "/");
     ["/users/", "/home/"].iter().any(|p| {
         bajo.find(p)
@@ -192,22 +192,22 @@ fn es_ruta_de_casa(tok: &str) -> bool {
 ///   somebody wrote to be read, 35 % or more. It is the cheapest
 ///   discriminant that separates `MeetingV2PolicyMaskCalculator` from
 ///   `Xk7fQ2mZp9RtLw4sVb8N`.
-fn entropia_sospechosa(tok: &str) -> bool {
-    if !(24..=512).contains(&tok.len()) || forma_conocida(tok) || !alfabeto_de_credencial(tok) {
+fn suspicious_entropy(tok: &str) -> bool {
+    if !(24..=512).contains(&tok.len()) || known_shape(tok) || !credential_alphabet(tok) {
         return false;
     }
     let digito = tok.bytes().any(|b| b.is_ascii_digit());
     let minus = tok.bytes().any(|b| b.is_ascii_lowercase());
     let mayus = tok.bytes().any(|b| b.is_ascii_uppercase());
-    digito && minus && mayus && vocales(tok) < 0.26 && shannon(tok) >= 3.8
+    digito && minus && mayus && vowels(tok) < 0.26 && shannon(tok) >= 3.8
 }
 
-fn alfabeto_de_credencial(tok: &str) -> bool {
+fn credential_alphabet(tok: &str) -> bool {
     tok.bytes()
         .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'+' | b'=' | b'~'))
 }
 
-fn vocales(tok: &str) -> f64 {
+fn vowels(tok: &str) -> f64 {
     let n = tok.bytes().filter(|b| b.is_ascii_alphabetic()).count();
     if n == 0 {
         return 0.0;
@@ -218,7 +218,7 @@ fn vocales(tok: &str) -> f64 {
 
 /// Long random-looking things that are not secrets and turn up constantly in
 /// a real provenance tree: SHAs, UUIDs, ULIDs, paths and URLs.
-fn forma_conocida(tok: &str) -> bool {
+fn known_shape(tok: &str) -> bool {
     let sin_guiones: String = tok.chars().filter(|c| *c != '-').collect();
     if !sin_guiones.is_empty() && sin_guiones.bytes().all(|b| b.is_ascii_hexdigit()) {
         return true; // SHA, checksum, UUID
@@ -234,12 +234,12 @@ fn forma_conocida(tok: &str) -> bool {
 }
 
 fn shannon(s: &str) -> f64 {
-    let mut cuenta = [0u32; 256];
+    let mut count = [0u32; 256];
     for b in s.as_bytes() {
-        cuenta[*b as usize] += 1;
+        count[*b as usize] += 1;
     }
     let n = s.len() as f64;
-    -cuenta
+    -count
         .iter()
         .filter(|c| **c > 0)
         .map(|c| {
@@ -251,17 +251,17 @@ fn shannon(s: &str) -> f64 {
 
 /// Shows what it is without reproducing it. It goes to the screen, which is
 /// already less bad than storing it, but there is no need to show it whole.
-fn enmascarar(tok: &str) -> String {
+fn mask(tok: &str) -> String {
     let visibles: String = tok.chars().take(4).collect();
     format!("{visibles}******** ({} caracteres)", tok.chars().count())
 }
 
-impl std::fmt::Display for Hallazgo {
+impl std::fmt::Display for Finding {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "  Rechazado: {}\n\n      campo     {}\n      encontro  {}\n\n  {}",
-            self.regla, self.campo, self.muestra, self.consejo
+            "  Rechazado: {}\n\n      field     {}\n      encontro  {}\n\n  {}",
+            self.rule, self.field, self.sample, self.consejo
         )
     }
 }
@@ -270,84 +270,84 @@ impl std::fmt::Display for Hallazgo {
 mod tests {
     use super::*;
 
-    fn rechaza(t: &str) -> bool {
-        revisar("title", t).is_some()
+    fn refuses(t: &str) -> bool {
+        check_field("title", t).is_some()
     }
 
     #[test]
-    fn claves_conocidas() {
-        assert!(rechaza(
+    fn known_keys() {
+        assert!(refuses(
             "the token is sqa_9f3c1d7e5b2a48c6d0e1f2a3b4c5d6e7f8091a2b"
         ));
-        assert!(rechaza("ghp_16C7e42F292c6912E7710c838347Ae178B4a"));
-        assert!(rechaza(
+        assert!(refuses("ghp_16C7e42F292c6912E7710c838347Ae178B4a"));
+        assert!(refuses(
             "usar sk-ant-api03-abcdefghijklmnopqrstuvwxyz012345"
         ));
-        assert!(rechaza("AKIAIOSFODNN7EXAMPLE"));
-        assert!(rechaza("xoxb-2444-8172-abcdefghijkl"));
-        assert!(rechaza("-----BEGIN RSA PRIVATE KEY-----"));
+        assert!(refuses("AKIAIOSFODNN7EXAMPLE"));
+        assert!(refuses("xoxb-2444-8172-abcdefghijkl"));
+        assert!(refuses("-----BEGIN RSA PRIVATE KEY-----"));
     }
 
     #[test]
     fn jwt() {
-        assert!(rechaza(
+        assert!(refuses(
             "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r"
         ));
     }
 
     #[test]
-    fn datos_personales() {
-        assert!(rechaza("preguntarle a alguien@ejemplo.com"));
-        assert!(rechaza("vive en C:\\Users\\unnombre\\proyectos"));
-        assert!(rechaza("/home/unnombre/.config/vivac"));
-        assert!(rechaza("/Users/unnombre/Library"));
+    fn personal_data() {
+        assert!(refuses("preguntarle a alguien@ejemplo.com"));
+        assert!(refuses("vive en C:\\Users\\unnombre\\proyectos"));
+        assert!(refuses("/home/unnombre/.config/vivac"));
+        assert!(refuses("/Users/unnombre/Library"));
     }
 
     #[test]
-    fn lo_que_tiene_que_pasar() {
+    fn what_has_to_get_through() {
         // Ordinary prose from a real tree.
-        assert!(!rechaza("Port to Rust in the public vivac/ repo"));
-        assert!(!rechaza(
-            "csharpsquid:S1192 literales duplicados entre archivos"
+        assert!(!refuses("Port to Rust in the public vivac/ repo"));
+        assert!(!refuses(
+            "csharpsquid:S1192 literals duplicados entre archivos"
         ));
-        assert!(!rechaza(
+        assert!(!refuses(
             "PermissionServiceAdapter.cs:278 is out of scope"
         ));
         // Technical references that look random and are not secrets.
-        assert!(!rechaza("commit e90b4832f1a4c6d8b0e2f4a6c8d0e2f4a6c8d0e2"));
-        assert!(!rechaza("node 01j8xq2m4k7pabcdefghijklmn"));
-        assert!(!rechaza("id 550e8400-e29b-41d4-a716-446655440000"));
-        assert!(!rechaza(
+        assert!(!refuses("commit e90b4832f1a4c6d8b0e2f4a6c8d0e2f4a6c8d0e2"));
+        assert!(!refuses("node 01j8xq2m4k7pabcdefghijklmn"));
+        assert!(!refuses("id 550e8400-e29b-41d4-a716-446655440000"));
+        assert!(!refuses(
             "ver https://github.com/rust-lang/rust/issues/12345"
         ));
         // The tilde identifies nobody: it resolves on the reading machine.
-        assert!(!rechaza("the hook lives in ~/.claude/settings.json"));
+        assert!(!refuses("the hook lives in ~/.claude/settings.json"));
         // Long camelCase names, the likeliest source of a false positive.
-        assert!(!rechaza("MeetingPolicyMaskCalculatorFactoryProvider"));
-        assert!(!rechaza("ApplyVisibilityPolicyPerMeetingHandler"));
-        assert!(!rechaza("ReunionV2PolicyMaskCalculatorFactory"));
+        assert!(!refuses("MeetingPolicyMaskCalculatorFactoryProvider"));
+        assert!(!refuses("ApplyVisibilityPolicyPerMeetingHandler"));
+        assert!(!refuses("ReunionV2PolicyMaskCalculatorFactory"));
     }
 
     #[test]
-    fn el_heuristico_de_entropia_sigue_cazando() {
+    fn the_entropy_heuristic_still_hunts() {
         // No known prefix: only the shape is left. These have to fall.
-        assert!(rechaza("Xk7fQ2mZp9RtLw4sVb8NcJ3hGd6y"));
-        assert!(rechaza("p8KdReQvXnLYtSbGmZwHfJcT3x9Wq2Vz"));
+        assert!(refuses("Xk7fQ2mZp9RtLw4sVb8NcJ3hGd6y"));
+        assert!(refuses("p8KdReQvXnLYtSbGmZwHfJcT3x9Wq2Vz"));
     }
 
     #[test]
-    fn la_muestra_no_lleva_el_secreto() {
-        let h = revisar("titulo", "sqa_9f3c1d7e5b2a48c6d0e1f2a3b4c5d6e7f8091a2b").unwrap();
-        assert!(!h.muestra.contains("9f3c1d7e"));
-        assert!(h.muestra.starts_with("sqa_"));
+    fn the_sample_does_not_carry_the_secret() {
+        let h = check_field("title", "sqa_9f3c1d7e5b2a48c6d0e1f2a3b4c5d6e7f8091a2b").unwrap();
+        assert!(!h.sample.contains("9f3c1d7e"));
+        assert!(h.sample.starts_with("sqa_"));
     }
 
     #[test]
-    fn devuelve_el_primer_campo_que_falla() {
-        let h = revisar_campos(&[
+    fn it_returns_the_first_field_that_fails() {
+        let h = check_fields(&[
             ("title", "all fine"),
-            ("por", "ghp_16C7e42F292c6912E7710c838347Ae178B4a"),
+            ("why", "ghp_16C7e42F292c6912E7710c838347Ae178B4a"),
         ]);
-        assert_eq!(h.unwrap().campo, "por");
+        assert_eq!(h.unwrap().field, "why");
     }
 }

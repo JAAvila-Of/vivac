@@ -7,41 +7,41 @@
 //! --this belongs in CI-- but they are not counted together.
 
 use crate::args::Args;
-use crate::event::Estado;
-use crate::model::Arbol;
+use crate::event::State;
+use crate::model::Tree;
 
-pub fn check(a: &Arbol, args: &Args) -> Result<i32, crate::fallo::Fallo> {
+pub fn check(a: &Tree, args: &Args) -> Result<i32, crate::failure::Failure> {
     let mut almacen: Vec<String> = Vec::new();
-    let mut proyecto: Vec<String> = Vec::new();
+    let mut project: Vec<String> = Vec::new();
 
-    if a.lineas_rotas > 0 {
+    if a.broken_lines > 0 {
         almacen.push(format!(
             "{} unreadable line(s) in .vivac/events (skipped while reading)",
-            a.lineas_rotas
+            a.broken_lines
         ));
     }
 
     let mut nums = std::collections::HashMap::new();
-    for n in a.todos() {
+    for n in a.nodes_iter() {
         // Invariant 11: provenance is a tree. The schema already rules out two
         // parents --`spawns` travels inside the node-- so the only thing that
         // can break here is the parent not existing.
-        if let Some(p) = &n.padre {
-            if a.nodo(p).is_none() {
+        if let Some(p) = &n.parent {
+            if a.node(p).is_none() {
                 almacen.push(format!("{} points at a parent that does not exist", n.alias()));
             }
         }
         // Invariant 1: acyclic. If the path to the root does not end at a node
         // with no parent, it is going in circles.
-        let camino = a.ancestros(&n.id);
-        if camino.first().is_some_and(|r| r.padre.is_some()) {
+        let camino = a.ancestors(&n.id);
+        if camino.first().is_some_and(|r| r.parent.is_some()) {
             almacen.push(format!("{} sits in a provenance cycle", n.alias()));
         }
-        if let Some(otro) = nums.insert(n.num, n.alias()) {
+        if let Some(other) = nums.insert(n.num, n.alias()) {
             almacen.push(format!(
                 "number {} repeated: {} and {}",
                 n.num,
-                otro,
+                other,
                 n.alias()
             ));
         }
@@ -52,36 +52,36 @@ pub fn check(a: &Arbol, args: &Args) -> Result<i32, crate::fallo::Fallo> {
         // --a lane being abandoned-- and what was asked was that they be a
         // decision and not an oversight. The trace is in the event and the
         // render still marks it; what it does not do is break CI every day.
-        if n.estado == Estado::Done
+        if n.state == State::Done
             && !n.cierre_forzado
-            && !a.bloqueantes_abiertos(&n.id).is_empty()
+            && !a.open_blockers(&n.id).is_empty()
         {
-            let pend = a.bloqueantes_abiertos(&n.id);
-            let quienes: Vec<String> = pend.iter().map(|c| c.alias()).collect();
-            proyecto.push(format!(
+            let pending_count = a.open_blockers(&n.id);
+            let quienes: Vec<String> = pending_count.iter().map(|c| c.alias()).collect();
+            project.push(format!(
                 "{} is closed with {} open condition(s): {}",
                 n.alias(),
-                pend.len(),
+                pending_count.len(),
                 quienes.join(", ")
             ));
         }
     }
     almacen.sort();
-    proyecto.sort();
+    project.sort();
 
-    if args.tiene("json") {
+    if args.has("json") {
         println!(
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
                 "store": almacen,
-                "project": proyecto,
-                "ok": almacen.is_empty() && proyecto.is_empty(),
+                "project": project,
+                "ok": almacen.is_empty() && project.is_empty(),
             }))
             .map_err(std::io::Error::other)?
         );
     } else {
         println!();
-        if almacen.is_empty() && proyecto.is_empty() {
+        if almacen.is_empty() && project.is_empty() {
             println!("  No findings. {} nodes checked.", a.total());
             println!();
         }
@@ -96,13 +96,13 @@ pub fn check(a: &Arbol, args: &Args) -> Result<i32, crate::fallo::Fallo> {
             }
             println!();
         }
-        if !proyecto.is_empty() {
+        if !project.is_empty() {
             println!(
                 "  PROJECT ({})  <- the store is fine; the work is not",
-                proyecto.len()
+                project.len()
             );
             println!();
-            for m in &proyecto {
+            for m in &project {
                 println!("      {m}");
             }
             println!();
@@ -111,5 +111,5 @@ pub fn check(a: &Arbol, args: &Args) -> Result<i32, crate::fallo::Fallo> {
             println!();
         }
     }
-    Ok(i32::from(!(almacen.is_empty() && proyecto.is_empty())))
+    Ok(i32::from(!(almacen.is_empty() && project.is_empty())))
 }

@@ -9,37 +9,37 @@
 
 use crate::args::Args;
 use crate::event::VivacKind;
-use crate::fallo::{Fallo, R};
+use crate::failure::{Failure, R};
 
 /// Wraps text in the envelope Claude Code injects into the context. It is a
 /// single JSON line, with no external dependency and no `jq` in between: a
 /// hook with a pipe is a hook that breaks on the first different machine.
-fn sobre(evento: &str, texto: &str) -> String {
+fn envelope(evento: &str, text: &str) -> String {
     serde_json::json!({
         "hookSpecificOutput": {
             "hookEventName": evento,
-            "additionalContext": texto,
+            "additionalContext": text,
         }
     })
     .to_string()
 }
 
-pub fn start(ctx: &crate::ops::Ctx, a: &Args, proyecto: &str) -> R {
-    if !a.tiene("hook") {
-        return crate::brief::brief(&ctx.arbol, ctx.anchor.as_ref(), a, proyecto);
+pub fn start(ctx: &crate::ops::Ctx, a: &Args, project: &str) -> R {
+    if !a.has("hook") {
+        return crate::brief::brief(&ctx.tree, ctx.anchor.as_ref(), a, project);
     }
     // In hook mode the brief is captured and emitted inside the envelope. No
     // loose noise on stdout: what is not in the envelope, the agent never sees.
-    let texto = crate::brief::a_texto(&ctx.arbol, ctx.anchor.as_ref(), a, proyecto)?;
-    println!("{}", sobre("SessionStart", &texto));
+    let text = crate::brief::to_text(&ctx.tree, ctx.anchor.as_ref(), a, project)?;
+    println!("{}", envelope("SessionStart", &text));
     Ok(())
 }
 
 pub fn end(ctx: &mut crate::ops::Ctx, a: &Args) -> R {
     // With no stack there is no thread to close, and an empty vivac is just
     // noise to be pruned later.
-    if ctx.arbol.pila.is_empty() {
-        if !a.tiene("hook") {
+    if ctx.tree.stack.is_empty() {
+        if !a.has("hook") {
             println!("  Empty stack: no stop worth saving.");
         }
         return Ok(());
@@ -48,26 +48,26 @@ pub fn end(ctx: &mut crate::ops::Ctx, a: &Args) -> R {
     // not when the session closes: there is no end-of-session event (`f35`).
     // Without this guard it would be forty identical stops a day, and a stop
     // that repeats is not a stop, it is a log.
-    if ctx.arbol.seq_cambio <= ctx.arbol.seq_vivac {
-        if !a.tiene("hook") {
+    if ctx.tree.seq_change <= ctx.tree.seq_vivac {
+        if !a.has("hook") {
             println!("  Nothing changed since the last stop.");
         }
         return Ok(());
     }
-    let luego = a.opt_o("next");
-    let num = ctx.arbol.siguiente_vivac.max(1);
-    crate::ops::vivac_auto(ctx, VivacKind::Auto, &luego)?;
-    if !a.tiene("hook") {
+    let luego = a.opt_or("next");
+    let num = ctx.tree.next_vivac_num.max(1);
+    crate::ops::auto_vivac(ctx, VivacKind::Auto, &luego)?;
+    if !a.has("hook") {
         println!("  v{num}  automatic stop at session close");
     }
     Ok(())
 }
 
-pub fn despachar(ctx: &mut crate::ops::Ctx, a: &Args, proyecto: &str) -> R {
-    match a.libre(0) {
-        Some("start") | Some("inicio") => start(ctx, a, proyecto),
+pub fn dispatch(ctx: &mut crate::ops::Ctx, a: &Args, project: &str) -> R {
+    match a.positional(0) {
+        Some("start") | Some("inicio") => start(ctx, a, project),
         Some("end") | Some("fin") => end(ctx, a),
-        _ => Err(Fallo::uso("usage: vivac session start|end [--hook]")),
+        _ => Err(Failure::usage("usage: vivac session start|end [--hook]")),
     }
 }
 

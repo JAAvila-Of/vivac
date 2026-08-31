@@ -5,11 +5,11 @@
 //! would make execution order matter.
 
 mod common;
-use common::Caja;
+use common::Sandbox;
 
 /// A tree with one of everything, so that no section comes out empty.
-fn poblado(nombre: &str) -> Caja {
-    let c = Caja::nueva(nombre);
+fn populated(name: &str) -> Sandbox {
+    let c = Sandbox::new_seeded(name);
     c.ok(&[
         "push",
         "Migrate authentication to OIDC",
@@ -82,14 +82,14 @@ fn poblado(nombre: &str) -> Caja {
     c
 }
 
-fn seccion(brief: &str, titulo: &str) -> bool {
-    brief.lines().any(|l| l.trim() == titulo)
+fn section(brief: &str, title: &str) -> bool {
+    brief.lines().any(|l| l.trim() == title)
 }
 
 /// §10.1 — Same log, same `--now`, two runs, same bytes.
 #[test]
 fn determinism() {
-    let c = poblado("det");
+    let c = populated("det");
     let a = c.ok(&["brief", "--now", "2026-09-15T10:00:00Z"]);
     let b = c.ok(&["brief", "--now", "2026-09-15T10:00:00Z"]);
     assert_eq!(a, b);
@@ -103,8 +103,8 @@ fn determinism() {
 /// question 1 and has no reason to exist.
 #[test]
 fn the_spine_is_never_truncated() {
-    let c = poblado("spine");
-    let espina = |b: &str| {
+    let c = populated("spine");
+    let spine = |b: &str| {
         assert!(
             b.contains("Migrate authentication to OIDC"),
             "the root is missing:\n{b}"
@@ -115,14 +115,14 @@ fn the_spine_is_never_truncated() {
 
     // Tight but reachable: it fits by trimming, and it says so.
     let b = c.ok(&["brief", "--budget", "200", "--now", "2026-09-15T10:00:00Z"]);
-    espina(&b);
+    spine(&b);
     assert!(b.contains("trimmed"), "it trimmed without saying so:\n{b}");
 
     // Impossible: it does not fit even with everything truncatable gone. The
     // spine comes out anyway, and the warning says what is left over is tree,
     // not render.
     let b = c.ok(&["brief", "--budget", "40", "--now", "2026-09-15T10:00:00Z"]);
-    espina(&b);
+    spine(&b);
     assert!(b.contains("over budget"), "it did not warn:\n{b}");
 }
 
@@ -130,28 +130,28 @@ fn the_spine_is_never_truncated() {
 /// skipping.
 #[test]
 fn truncation_order() {
-    let c = poblado("trunc");
-    let entero = c.ok(&["brief", "--budget", "5000", "--now", "2026-09-15T10:00:00Z"]);
-    assert!(seccion(&entero, "LAST VIVAC"), "{entero}");
-    assert!(seccion(&entero, "DO NOT TOUCH NOW"), "{entero}");
-    assert!(seccion(&entero, "FLAGGED"), "{entero}");
+    let c = populated("trunc");
+    let whole = c.ok(&["brief", "--budget", "5000", "--now", "2026-09-15T10:00:00Z"]);
+    assert!(section(&whole, "LAST VIVAC"), "{whole}");
+    assert!(section(&whole, "DO NOT TOUCH NOW"), "{whole}");
+    assert!(section(&whole, "FLAGGED"), "{whole}");
 
     // The vivac is section 9 and falls before 7 and 6.
-    let apretado = c.ok(&["brief", "--budget", "150", "--now", "2026-09-15T10:00:00Z"]);
+    let tight = c.ok(&["brief", "--budget", "150", "--now", "2026-09-15T10:00:00Z"]);
     assert!(
-        !seccion(&apretado, "LAST VIVAC"),
-        "it should have fallen:\n{apretado}"
+        !section(&tight, "LAST VIVAC"),
+        "it should have fallen:\n{tight}"
     );
 
     // And the non-truncatable ones hold: invariants and blocking questions.
-    assert!(seccion(&apretado, "INVARIANTS"), "{apretado}");
-    assert!(seccion(&apretado, "BLOCKS"), "{apretado}");
+    assert!(section(&tight, "INVARIANTS"), "{tight}");
+    assert!(section(&tight, "BLOCKS"), "{tight}");
 }
 
 /// §10.5 — A superseded decision is never rendered.
 #[test]
 fn superseded_is_absent() {
-    let c = poblado("sup");
+    let c = populated("sup");
     c.ok(&[
         "decide",
         "Use database-backed sessions",
@@ -171,7 +171,7 @@ fn superseded_is_absent() {
 /// §10.7 — An empty stack produces §8, never empty output.
 #[test]
 fn initial_state() {
-    let c = Caja::nueva("initial");
+    let c = Sandbox::new_seeded("initial");
     let b = c.ok(&["brief"]);
     assert!(b.contains("No active focus"), "{b}");
     assert!(b.contains("vivac push"), "no concrete action:\n{b}");
@@ -186,7 +186,7 @@ fn initial_state() {
 /// §10.8 — No empty section emits a heading.
 #[test]
 fn no_hollow_headings() {
-    let c = Caja::nueva("hollow");
+    let c = Sandbox::new_seeded("hollow");
     c.ok(&["push", "Alone", "--why", "nothing hangs off it"]);
     let b = c.ok(&["brief"]);
     for t in [
@@ -196,7 +196,7 @@ fn no_hollow_headings() {
         "FLAGGED",
         "STANDING DECISIONS",
     ] {
-        assert!(!seccion(&b, t), "{t} came out empty:\n{b}");
+        assert!(!section(&b, t), "{t} came out empty:\n{b}");
     }
 }
 
@@ -204,17 +204,17 @@ fn no_hollow_headings() {
 /// without one.
 #[test]
 fn reason_is_mandatory() {
-    let c = Caja::nueva("reason");
+    let c = Sandbox::new_seeded("reason");
     c.ok(&["push", "Something", "--why", "it is needed"]);
-    let (s, cod) = c.correr(&["flag", "1", "suspect"]);
-    assert_eq!(cod, 2, "a flag with no reason has to fail:\n{s}");
+    let (s, code) = c.run(&["flag", "1", "suspect"]);
+    assert_eq!(code, 2, "a flag with no reason has to fail:\n{s}");
     assert!(s.contains("--why"), "{s}");
 }
 
 /// §10.6 — With no version control there are no diff lines, and it says so.
 #[test]
 fn degradation_without_an_anchor() {
-    let c = poblado("null");
+    let c = populated("null");
     let s = c.ok(&["restore", "v1"]);
     assert!(s.contains("No anchor"), "{s}");
     assert!(!s.contains("changes since"), "it invented a diff:\n{s}");
@@ -224,17 +224,17 @@ fn degradation_without_an_anchor() {
 /// or through `flag`.
 #[test]
 fn the_guard_covers_the_new_operations() {
-    let c = Caja::nueva("guard");
+    let c = Sandbox::new_seeded("guard");
     c.ok(&["push", "Something", "--why", "it is needed"]);
-    let (_, cod) = c.correr(&[
+    let (_, code) = c.run(&[
         "decide",
         "Rotate",
         "--reason",
         "use ghp_16C7e42F292c6912E7710c838347Ae178B4a",
     ]);
-    assert_eq!(cod, 3, "decide let a credential through");
-    let (_, cod) = c.correr(&["flag", "1", "review", "--why", "see /home/someone/.config"]);
-    assert_eq!(cod, 3, "flag let a personal path through");
+    assert_eq!(code, 3, "decide let a credential through");
+    let (_, code) = c.run(&["flag", "1", "review", "--why", "see /home/someone/.config"]);
+    assert_eq!(code, 3, "flag let a personal path through");
 }
 
 /// `f30` — a standing decision is not a pending child. It shows up in its own
@@ -242,7 +242,7 @@ fn the_guard_covers_the_new_operations() {
 /// to do, which is the opposite of what it exists for.
 #[test]
 fn a_decision_is_not_a_front() {
-    let c = poblado("dec");
+    let c = populated("dec");
     let b = c.ok(&["brief", "--budget", "5000", "--now", "2026-09-15T10:00:00Z"]);
     assert_eq!(
         b.matches("Use a distributed token store").count(),
@@ -275,7 +275,7 @@ fn a_decision_is_not_a_front() {
 /// them would drag in the whole tree; counting them does not.
 #[test]
 fn what_is_open_under_a_closed_node_gets_counted() {
-    let c = Caja::nueva("deep");
+    let c = Sandbox::new_seeded("deep");
     c.ok(&["push", "The goal", "--why", "it is needed"]);
     c.ok(&["push", "A branch", "--why", "the goal needs it"]);
     c.ok(&[

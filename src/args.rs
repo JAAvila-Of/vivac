@@ -10,7 +10,7 @@ use std::collections::HashMap;
 
 #[derive(Debug, Default)]
 pub struct Args {
-    pub libres: Vec<String>,
+    pub positionals: Vec<String>,
     opts: HashMap<String, Vec<String>>,
 }
 
@@ -22,8 +22,8 @@ pub struct Args {
 /// name, the help teaches only English, and the alias costs one match arm.
 ///
 /// An unknown flag is not in this table, so it comes out exactly as it was
-/// typed and `desconocidas` can quote it back.
-fn canonico(k: &str) -> &str {
+/// typed and `unknown` can quote it back.
+fn canonical(k: &str) -> &str {
     match k {
         "alternativa" => "alternative",
         "bloquea" => "blocks",
@@ -37,7 +37,7 @@ fn canonico(k: &str) -> &str {
         "rescatar" => "rescue",
         "tipo" => "type",
         "todo" => "all",
-        otro => otro,
+        other => other,
     }
 }
 
@@ -58,16 +58,16 @@ impl Args {
                         n.clone()
                     })
                 });
-                a.opts.entry(canonico(k).to_string()).or_default().extend(val);
+                a.opts.entry(canonical(k).to_string()).or_default().extend(val);
             } else {
-                a.libres.push(v[i].clone());
+                a.positionals.push(v[i].clone());
             }
             i += 1;
         }
         a
     }
 
-    pub fn tiene(&self, k: &str) -> bool {
+    pub fn has(&self, k: &str) -> bool {
         self.opts.contains_key(k)
     }
 
@@ -75,17 +75,17 @@ impl Args {
         self.opts.get(k).and_then(|v| v.last()).map(|s| s.as_str())
     }
 
-    pub fn opt_o(&self, k: &str) -> String {
+    pub fn opt_or(&self, k: &str) -> String {
         self.opt(k).unwrap_or_default().to_string()
     }
 
     /// Repeatable: `--ref a --ref b`.
-    pub fn lista(&self, k: &str) -> Vec<String> {
+    pub fn list(&self, k: &str) -> Vec<String> {
         self.opts.get(k).cloned().unwrap_or_default()
     }
 
-    pub fn libre(&self, i: usize) -> Option<&str> {
-        self.libres.get(i).map(|s| s.as_str())
+    pub fn positional(&self, i: usize) -> Option<&str> {
+        self.positionals.get(i).map(|s| s.as_str())
     }
 
     /// Options this command does not know.
@@ -94,7 +94,7 @@ impl Args {
     /// interface the agent uses: you type `--kind finding`, the CLI says
     /// nothing, and the node keeps the default type. Nobody notices until
     /// they look at the tree. Found exactly that way, while using it.
-    pub fn desconocidas(&self, permitidas: &[&str]) -> Vec<&str> {
+    pub fn unknown(&self, permitidas: &[&str]) -> Vec<&str> {
         let mut v: Vec<&str> = self
             .opts
             .keys()
@@ -117,17 +117,17 @@ mod tests {
     #[test]
     fn positionals_and_options() {
         let a = p("title --why reason --blocks --ref one --ref two");
-        assert_eq!(a.libre(0), Some("title"));
+        assert_eq!(a.positional(0), Some("title"));
         assert_eq!(a.opt("why"), Some("reason"));
-        assert!(a.tiene("blocks"));
-        assert_eq!(a.lista("ref"), vec!["one", "two"]);
+        assert!(a.has("blocks"));
+        assert_eq!(a.list("ref"), vec!["one", "two"]);
     }
 
     #[test]
     fn a_flag_next_to_another_flag() {
         // `--blocks --why x`: `--blocks` does not eat the `--why`.
         let a = p("--blocks --why x");
-        assert!(a.tiene("blocks"));
+        assert!(a.has("blocks"));
         assert_eq!(a.opt("blocks"), None);
         assert_eq!(a.opt("why"), Some("x"));
     }
@@ -135,8 +135,8 @@ mod tests {
     #[test]
     fn an_option_that_does_not_exist_does_not_pass_in_silence() {
         let a = p("x --kind finding --type task");
-        assert_eq!(a.desconocidas(&["type", "why"]), vec!["kind"]);
-        assert!(a.desconocidas(&["type", "kind"]).is_empty());
+        assert_eq!(a.unknown(&["type", "why"]), vec!["kind"]);
+        assert!(a.unknown(&["type", "kind"]).is_empty());
     }
 
     #[test]
@@ -152,17 +152,34 @@ mod tests {
     /// nothing downstream ever sees two names for one thing.
     #[test]
     fn the_spanish_alias_resolves_to_the_english_name() {
-        let a = p("t --por motivo --bloquea --padre 3 --forzar --luego x");
-        assert_eq!(a.opt("why"), Some("motivo"));
-        assert!(a.tiene("blocks"));
+        let a = p("t --por reason --bloquea --padre 3 --forzar --luego x");
+        assert_eq!(a.opt("why"), Some("reason"));
+        assert!(a.has("blocks"));
         assert_eq!(a.opt("parent"), Some("3"));
-        assert!(a.tiene("force"));
+        assert!(a.has("force"));
         assert_eq!(a.opt("next"), Some("x"));
 
         // And it is genuinely the same key, not a second one.
-        assert!(a.desconocidas(&["why", "blocks", "parent", "force", "next"]).is_empty());
+        assert!(a.unknown(&["why", "blocks", "parent", "force", "next"]).is_empty());
 
         // An unknown flag is not in the table, so it is quoted back verbatim.
-        assert_eq!(p("--inventada 1").desconocidas(&["why"]), vec!["inventada"]);
+        assert_eq!(p("--inventada 1").unknown(&["why"]), vec!["inventada"]);
+    }
+
+    /// Every Spanish name in the alias table maps to a different English one.
+    ///
+    /// The table is the one place in the crate where a Spanish string is load
+    /// bearing, so a global rename can translate it and break nothing at
+    /// compile time. This test is the thing that notices.
+    #[test]
+    fn no_alias_translated_itself_away() {
+        for es in [
+            "por", "tipo", "bloquea", "forzar", "luego", "padre", "cascada",
+            "rescatar", "reabrir", "todo", "razon", "alternativa",
+        ] {
+            let en = canonical(es);
+            assert_ne!(en, es, "the alias for --{es} was lost");
+            assert_eq!(canonical(en), en, "--{en} is not canonical");
+        }
     }
 }

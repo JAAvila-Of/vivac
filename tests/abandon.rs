@@ -6,11 +6,11 @@
 //! under an abandoned parent. These tests are what holds that promise up.
 
 mod common;
-use common::Caja;
+use common::Sandbox;
 
 /// g1 > t2 > t3 > t4. Abandoning t2 puts the other three in play.
-fn rama(nombre: &str) -> Caja {
-    let c = Caja::nueva(nombre);
+fn branch(name: &str) -> Sandbox {
+    let c = Sandbox::new_seeded(name);
     c.ok(&["push", "Migrate authentication", "--why", "the provider is shutting down"]);
     c.ok(&["push", "Pick a cache backend", "--why", "the token store needs one"]);
     c.ok(&[
@@ -36,9 +36,9 @@ fn rama(nombre: &str) -> Caja {
 /// out whole. Abandoning has to cost the same as `pop`, but not in silence.
 #[test]
 fn without_cascade_nothing_falls() {
-    let c = rama("nocascade");
-    let (s, cod) = c.correr(&["abandon", "2", "the backend no longer applies"]);
-    assert_eq!(cod, 1, "it had to refuse:\n{s}");
+    let c = branch("nocascade");
+    let (s, code) = c.run(&["abandon", "2", "the backend no longer applies"]);
+    assert_eq!(code, 1, "it had to refuse:\n{s}");
     for t in ["Pick a cache backend", "benchmark", "Drop dead imports"] {
         assert!(s.to_lowercase().contains(&t.to_lowercase()), "it did not list {t}:\n{s}");
     }
@@ -53,7 +53,7 @@ fn without_cascade_nothing_falls() {
 /// children die would be a half rescue nobody asked for.
 #[test]
 fn a_rescue_drags_the_descendants_along() {
-    let c = rama("drags");
+    let c = branch("drags");
     let s = c.ok(&["abandon", "2", "the backend no longer applies", "--rescue", "3"]);
     assert!(s.contains("Rescued"), "{s}");
 
@@ -67,9 +67,9 @@ fn a_rescue_drags_the_descendants_along() {
 /// `--cascade` stops being needed: only what falls unnamed is confirmed.
 #[test]
 fn rescuing_everything_needs_no_cascade() {
-    let c = rama("all");
-    let (_, cod) = c.correr(&["abandon", "2", "no longer applies", "--rescue", "3"]);
-    assert_eq!(cod, 0, "it asked for a cascade with nothing to take down");
+    let c = branch("all");
+    let (_, code) = c.run(&["abandon", "2", "no longer applies", "--rescue", "3"]);
+    assert_eq!(code, 0, "it asked for a cascade with nothing to take down");
 }
 
 /// **The product's promise.** The rescued node is still born from an abandoned
@@ -77,7 +77,7 @@ fn rescuing_everything_needs_no_cascade() {
 /// this path lie.
 #[test]
 fn the_rescued_node_is_still_born_where_it_was_born() {
-    let c = rama("lineage");
+    let c = branch("lineage");
     c.ok(&["abandon", "2", "the backend no longer applies", "--rescue", "3"]);
 
     let w = c.ok(&["why", "3"]);
@@ -90,15 +90,15 @@ fn the_rescued_node_is_still_born_where_it_was_born() {
 
     // And the store stays healthy: something alive under something abandoned
     // is a legitimate shape of the tree, not corruption.
-    let (_, cod) = c.correr(&["check"]);
-    assert_eq!(cod, 0, "check took it for broken");
+    let (_, code) = c.run(&["check"]);
+    assert_eq!(code, 0, "check took it for broken");
 }
 
 /// The stack is the path to the focus and it cannot cross an abandoned node.
 /// The rescued node stays alive, but off the path.
 #[test]
 fn the_stack_does_not_cross_an_abandoned_node() {
-    let c = rama("stack");
+    let c = branch("stack");
     c.ok(&["focus", "3"]);
     c.ok(&["abandon", "2", "no longer applies", "--rescue", "3"]);
     let s = c.ok(&["stack"]);
@@ -117,8 +117,8 @@ fn the_stack_does_not_cross_an_abandoned_node() {
 /// ignores nothing.
 #[test]
 fn what_does_not_hang_off_it_cannot_be_rescued() {
-    let c = rama("foreign");
-    let (s, cod) = c.correr(&[
+    let c = branch("foreign");
+    let (s, code) = c.run(&[
         "abandon",
         "2",
         "no longer applies",
@@ -126,10 +126,10 @@ fn what_does_not_hang_off_it_cannot_be_rescued() {
         "--rescue",
         "1",
     ]);
-    assert_eq!(cod, 2, "it let an impossible rescue through:\n{s}");
+    assert_eq!(code, 2, "it let an impossible rescue through:\n{s}");
     assert!(s.contains("does not hang off"), "{s}");
 
-    let (s, cod) = c.correr(&[
+    let (s, code) = c.run(&[
         "abandon",
         "2",
         "no longer applies",
@@ -137,5 +137,5 @@ fn what_does_not_hang_off_it_cannot_be_rescued() {
         "--rescue",
         "2",
     ]);
-    assert_eq!(cod, 2, "it rescued itself from itself:\n{s}");
+    assert_eq!(code, 2, "it rescued itself from itself:\n{s}");
 }

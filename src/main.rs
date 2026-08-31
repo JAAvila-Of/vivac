@@ -16,7 +16,7 @@ mod brief;
 mod check;
 mod clock;
 mod event;
-mod fallo;
+mod failure;
 mod glob;
 mod id;
 mod import;
@@ -28,9 +28,9 @@ mod session;
 mod store;
 
 use args::Args;
-use fallo::Fallo;
+use failure::Failure;
 
-const USO: &str = r#"vivac - provenance of work
+const USAGE: &str = r#"vivac - provenance of work
 
   The agent writes (the stack carries the tree on its own)
 
@@ -90,17 +90,17 @@ const USO: &str = r#"vivac - provenance of work
 "#;
 
 fn main() {
-    std::process::exit(correr());
+    std::process::exit(run());
 }
 
-fn correr() -> i32 {
+fn run() -> i32 {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let Some(cmd) = argv.first().cloned() else {
-        print!("{USO}");
+        print!("{USAGE}");
         return 0;
     };
     if matches!(cmd.as_str(), "-h" | "--help" | "help" | "ayuda") {
-        print!("{USO}");
+        print!("{USAGE}");
         return 0;
     }
     if matches!(cmd.as_str(), "-V" | "--version" | "version") {
@@ -109,29 +109,29 @@ fn correr() -> i32 {
     }
     let a = Args::parse(argv.into_iter().skip(1));
 
-    match despachar(&cmd, &a) {
-        Ok(codigo) => codigo,
+    match dispatch(&cmd, &a) {
+        Ok(code) => code,
         Err(e) => {
-            let c = e.codigo();
-            e.imprimir();
+            let c = e.code();
+            e.print_to_stderr();
             c
         }
     }
 }
 
-fn nombre_proyecto(ctx: &ops::Ctx) -> String {
+fn project_name(ctx: &ops::Ctx) -> String {
     ctx.store
-        .raiz
+        .root
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "-".into())
 }
 
-fn despachar(cmd: &str, a: &Args) -> Result<i32, Fallo> {
-    let cwd = std::env::current_dir().map_err(Fallo::Io)?;
+fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
+    let cwd = std::env::current_dir().map_err(Failure::Io)?;
 
     if cmd == "init" {
-        let s = store::Store::crear(&cwd)?;
+        let s = store::Store::create(&cwd)?;
         println!("  vivac planted in {}", cwd.display());
         println!("        project {}", s.config.project_id);
         println!();
@@ -143,26 +143,26 @@ fn despachar(cmd: &str, a: &Args) -> Result<i32, Fallo> {
         return session::hooks().map(|_| 0);
     }
 
-    let Some(raiz) = store::buscar_raiz(&cwd) else {
+    let Some(root) = store::find_root(&cwd) else {
         // The hooks stay quiet where there is no tree. One that fails in
         // every unrelated directory gets switched off within two days, and
         // the two that matter go with it.
-        if cmd == "session" && a.tiene("hook") {
+        if cmd == "session" && a.has("hook") {
             return Ok(0);
         }
-        return Err(Fallo::SinStore);
+        return Err(Failure::NoStore);
     };
-    let mut ctx = ops::Ctx::cargar(store::Store::abrir(raiz)?)?;
+    let mut ctx = ops::Ctx::load(store::Store::abrir(root)?)?;
 
     // `check` is the only one with an exit code of its own: it separates
     // store corruption from a finding about the project.
     if cmd == "check" {
-        return check::check(&ctx.arbol, a);
+        return check::check(&ctx.tree, a);
     }
 
     // Valid options per command. One that is not here is an error, not
-    // silencio: ver `Args::desconocidas`.
-    const COMUNES: &[&str] = &["json"];
+    // silencio: ver `Args::unknown`.
+    const COMMON: &[&str] = &["json"];
     let permitidas: &[&str] = match cmd {
         "push" => &["why", "type", "blocks", "ref", "governs"],
         "pop" => &["force", "next"],
@@ -185,10 +185,10 @@ fn despachar(cmd: &str, a: &Args) -> Result<i32, Fallo> {
         "block" => &["off"],
         "tree" => &["all", "json"],
         "park" | "promote" | "note" | "import" | "restore" | "vivacs" => &[],
-        _ => COMUNES,
+        _ => COMMON,
     };
-    let desconocidas = a.desconocidas(&[permitidas, COMUNES].concat());
-    if !desconocidas.is_empty() {
+    let unknown = a.unknown(&[permitidas, COMMON].concat());
+    if !unknown.is_empty() {
         let validas = if permitidas.is_empty() {
             "ninguna".to_string()
         } else {
@@ -198,12 +198,12 @@ fn despachar(cmd: &str, a: &Args) -> Result<i32, Fallo> {
                 .collect::<Vec<_>>()
                 .join(" ")
         };
-        return Err(Fallo::uso(format!(
+        return Err(Failure::usage(format!(
             "{} no acepta {}.
 
   Acepta: {validas}",
             cmd,
-            desconocidas
+            unknown
                 .iter()
                 .map(|o| format!("--{o}"))
                 .collect::<Vec<_>>()
@@ -211,7 +211,7 @@ fn despachar(cmd: &str, a: &Args) -> Result<i32, Fallo> {
         )));
     }
 
-    let r: fallo::R = match cmd {
+    let r: failure::R = match cmd {
         "focus" => ops::focus(&mut ctx, a),
         "decide" => ops::decide(&mut ctx, a),
         "flag" => ops::flag(&mut ctx, a),
@@ -228,24 +228,24 @@ fn despachar(cmd: &str, a: &Args) -> Result<i32, Fallo> {
         "block" => ops::block(&mut ctx, a),
         "import" => import::import(&mut ctx, a),
         "brief" => {
-            let proyecto = nombre_proyecto(&ctx);
-            brief::brief(&ctx.arbol, ctx.anchor.as_ref(), a, &proyecto)
+            let project = project_name(&ctx);
+            brief::brief(&ctx.tree, ctx.anchor.as_ref(), a, &project)
         }
-        "vivacs" => render::vivacs(&ctx.arbol, a),
+        "vivacs" => render::vivacs(&ctx.tree, a),
         "session" => {
-            let proyecto = nombre_proyecto(&ctx);
-            session::despachar(&mut ctx, a, &proyecto)
+            let project = project_name(&ctx);
+            session::dispatch(&mut ctx, a, &project)
         }
-        "why" => render::why(&ctx.arbol, a),
-        "tree" => render::tree(&ctx.arbol, a),
-        "open" => render::open(&ctx.arbol, a),
-        "stack" => render::stack(&ctx.arbol, a),
-        "parked" => render::parked(&ctx.arbol, a),
-        "triage" => render::triage(&ctx.arbol, a),
-        "stats" => render::stats(&ctx.arbol, a),
-        otro => {
-            print!("{USO}");
-            return Err(Fallo::uso(format!("Comando desconocido: {otro}")));
+        "why" => render::why(&ctx.tree, a),
+        "tree" => render::tree(&ctx.tree, a),
+        "open" => render::open(&ctx.tree, a),
+        "stack" => render::stack(&ctx.tree, a),
+        "parked" => render::parked(&ctx.tree, a),
+        "triage" => render::triage(&ctx.tree, a),
+        "stats" => render::stats(&ctx.tree, a),
+        other => {
+            print!("{USAGE}");
+            return Err(Failure::usage(format!("Comando desconocido: {other}")));
         }
     };
     r.map(|_| 0)

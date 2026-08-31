@@ -24,7 +24,7 @@ pub struct AnchorRef {
 }
 
 impl AnchorRef {
-    pub fn vacio(&self) -> bool {
+    pub fn is_empty_tree(&self) -> bool {
         self.id.is_empty()
     }
 
@@ -36,14 +36,14 @@ impl AnchorRef {
 }
 
 #[derive(Debug, Clone)]
-pub struct Cambio {
-    pub ruta: String,
-    pub veces: usize,
+pub struct Change {
+    pub path_arg: String,
+    pub times: usize,
 }
 
 pub trait Anchor {
     fn snapshot(&self) -> AnchorRef;
-    fn changed_since(&self, r: &AnchorRef) -> Vec<Cambio>;
+    fn changed_since(&self, r: &AnchorRef) -> Vec<Change>;
 }
 
 /// No version control.
@@ -64,31 +64,31 @@ impl Anchor for Null {
         }
     }
 
-    fn changed_since(&self, _r: &AnchorRef) -> Vec<Cambio> {
+    fn changed_since(&self, _r: &AnchorRef) -> Vec<Change> {
         vec![]
     }
 }
 
 pub struct Git {
-    raiz: PathBuf,
+    root: PathBuf,
     gitdir: PathBuf,
 }
 
-/// Picks an implementation by looking for a usable `.git` from `raiz`.
-pub fn detectar(raiz: &Path) -> Box<dyn Anchor> {
-    match Git::nuevo(raiz) {
+/// Picks an implementation by looking for a usable `.git` from `root`.
+pub fn detectar(root: &Path) -> Box<dyn Anchor> {
+    match Git::nuevo(root) {
         Some(g) => Box::new(g),
         None => Box::new(Null),
     }
 }
 
 impl Git {
-    fn nuevo(raiz: &Path) -> Option<Git> {
-        let mut d = raiz.to_path_buf();
+    fn nuevo(root: &Path) -> Option<Git> {
+        let mut d = root.to_path_buf();
         loop {
             let g = d.join(".git");
             if g.is_dir() {
-                return Some(Git { raiz: d, gitdir: g });
+                return Some(Git { root: d, gitdir: g });
             }
             if g.is_file() {
                 // Worktree or submodule: .git is a file holding `gitdir: <path>`.
@@ -100,7 +100,7 @@ impl Git {
                     d.join(p)
                 };
                 return Some(Git {
-                    raiz: d,
+                    root: d,
                     gitdir: abs,
                 });
             }
@@ -116,25 +116,25 @@ impl Git {
         let h = std::fs::read_to_string(self.gitdir.join("HEAD")).ok()?;
         let h = h.trim();
         let Some(refname) = h.strip_prefix("ref:").map(str::trim) else {
-            return es_sha(h).then(|| h.to_string());
+            return is_sha(h).then(|| h.to_string());
         };
         if let Ok(s) = std::fs::read_to_string(self.gitdir.join(refname)) {
             let s = s.trim().to_string();
-            if es_sha(&s) {
+            if is_sha(&s) {
                 return Some(s);
             }
         }
         let packed = std::fs::read_to_string(self.gitdir.join("packed-refs")).ok()?;
         packed.lines().find_map(|l| {
-            let (sha, nombre) = l.split_once(' ')?;
-            (nombre.trim() == refname && es_sha(sha)).then(|| sha.to_string())
+            let (sha, name) = l.split_once(' ')?;
+            (name.trim() == refname && is_sha(sha)).then(|| sha.to_string())
         })
     }
 
     fn git(&self, args: &[&str]) -> Option<String> {
         let s = std::process::Command::new("git")
             .arg("-C")
-            .arg(&self.raiz)
+            .arg(&self.root)
             .args(args)
             .output()
             .ok()?;
@@ -144,7 +144,7 @@ impl Git {
     }
 }
 
-fn es_sha(s: &str) -> bool {
+fn is_sha(s: &str) -> bool {
     s.len() >= 7 && s.len() <= 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
@@ -156,11 +156,11 @@ impl Anchor for Git {
         }
     }
 
-    fn changed_since(&self, r: &AnchorRef) -> Vec<Cambio> {
-        if r.vacio() || r.kind != "git" {
+    fn changed_since(&self, r: &AnchorRef) -> Vec<Change> {
+        if r.is_empty_tree() || r.kind != "git" {
             return vec![];
         }
-        let mut cuenta: std::collections::BTreeMap<String, usize> = Default::default();
+        let mut count: std::collections::BTreeMap<String, usize> = Default::default();
         // Commits since the anchor. If the sha is gone --rebase, deleted
         // branch-- git fails and this returns empty: better to say nothing
         // than to say a false number.
@@ -171,28 +171,28 @@ impl Anchor for Git {
             &format!("{}..HEAD", r.id),
         ]) {
             for l in out.lines().map(str::trim).filter(|l| !l.is_empty()) {
-                *cuenta.entry(l.to_string()).or_default() += 1;
+                *count.entry(l.to_string()).or_default() += 1;
             }
         }
         // And whatever is uncommitted, which counts as a change.
         if let Some(out) = self.git(&["status", "--porcelain"]) {
             for l in out.lines() {
-                if let Some(ruta) = l.get(3..) {
-                    let ruta = ruta.rsplit(" -> ").next().unwrap_or(ruta).trim();
-                    if !ruta.is_empty() {
-                        *cuenta
-                            .entry(ruta.trim_matches('"').to_string())
+                if let Some(path_arg) = l.get(3..) {
+                    let path_arg = path_arg.rsplit(" -> ").next().unwrap_or(path_arg).trim();
+                    if !path_arg.is_empty() {
+                        *count
+                            .entry(path_arg.trim_matches('"').to_string())
                             .or_default() += 1;
                     }
                 }
             }
         }
-        let mut v: Vec<Cambio> = cuenta
+        let mut v: Vec<Change> = count
             .into_iter()
-            .map(|(ruta, veces)| Cambio { ruta, veces })
+            .map(|(path_arg, times)| Change { path_arg, times })
             .collect();
         // Most-touched first; ties broken by path. Deterministic.
-        v.sort_by(|a, b| b.veces.cmp(&a.veces).then_with(|| a.ruta.cmp(&b.ruta)));
+        v.sort_by(|a, b| b.times.cmp(&a.times).then_with(|| a.path_arg.cmp(&b.path_arg)));
         v
     }
 }
@@ -202,29 +202,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn null_no_inventa_precision() {
+    fn null_invents_no_precision() {
         let n = Null;
-        assert!(n.snapshot().vacio());
+        assert!(n.snapshot().is_empty_tree());
         assert!(n.changed_since(&AnchorRef::default()).is_empty());
     }
 
     #[test]
-    fn head_se_lee_sin_lanzar_git() {
+    fn head_is_read_without_spawning_git() {
         // This very repository serves as the substrate.
         let g = Git::nuevo(Path::new(".")).expect("vivac/ es un repo git");
         let s = g.snapshot();
         assert_eq!(s.kind, "git");
-        assert!(es_sha(&s.id), "HEAD did not resolve: {:?}", s.id);
+        assert!(is_sha(&s.id), "HEAD did not resolve: {:?}", s.id);
         assert_eq!(s.corto().len(), 7);
     }
 
     #[test]
-    fn un_ancla_de_otro_mundo_no_da_cambios() {
+    fn an_anchor_from_another_world_gives_no_changes() {
         let g = Git::nuevo(Path::new(".")).unwrap();
         let falsa = AnchorRef {
             kind: "git".into(),
             id: "0000000000000000000000000000000000000000".into(),
         };
-        assert!(g.changed_since(&falsa).iter().all(|c| !c.ruta.is_empty()));
+        assert!(g.changed_since(&falsa).iter().all(|c| !c.path_arg.is_empty()));
     }
 }

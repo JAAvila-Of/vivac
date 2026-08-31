@@ -6,16 +6,16 @@
 //! discarded parent on purpose.
 
 mod common;
-use common::Caja;
+use common::Sandbox;
 
-fn seccion(s: &str, titulo: &str) -> bool {
-    s.lines().any(|l| l.trim_start().starts_with(titulo))
+fn section(s: &str, title: &str) -> bool {
+    s.lines().any(|l| l.trim_start().starts_with(title))
 }
 
 /// A healthy tree has nothing to prune, and says so without empty sections.
 #[test]
 fn nothing_to_prune() {
-    let c = Caja::nueva("healthy");
+    let c = Sandbox::new_seeded("healthy");
     c.ok(&["push", "A goal", "--why", "it is needed"]);
     let s = c.ok(&["triage"]);
     assert!(s.contains("Nothing to prune"), "{s}");
@@ -28,12 +28,12 @@ fn nothing_to_prune() {
 /// nothing can be decided, which is what the view exists for.
 #[test]
 fn parked_nodes_come_out_with_their_reason() {
-    let c = Caja::nueva("parked");
+    let c = Sandbox::new_seeded("parked");
     c.ok(&["push", "A goal", "--why", "it is needed"]);
     c.ok(&["push", "A detour", "--why", "spotted along the way"]);
     c.ok(&["park", "the backend had to be decided first"]);
     let s = c.ok(&["triage"]);
-    assert!(seccion(&s, "PARKED"), "{s}");
+    assert!(section(&s, "PARKED"), "{s}");
     assert!(s.contains("A detour"), "{s}");
     assert!(
         s.contains("the backend had to be decided"),
@@ -48,7 +48,7 @@ fn parked_nodes_come_out_with_their_reason() {
 /// not exist yet.
 #[test]
 fn a_false_close_comes_out_with_its_count() {
-    let c = Caja::nueva("false");
+    let c = Sandbox::new_seeded("false");
     c.ok(&["push", "Permissions audit", "--why", "it is due for review"]);
     c.ok(&["pop", "report delivered"]);
     c.ok(&[
@@ -61,7 +61,7 @@ fn a_false_close_comes_out_with_its_count() {
         "came out of the audit, late",
     ]);
     let s = c.ok(&["triage"]);
-    assert!(seccion(&s, "FALSE CLOSES"), "{s}");
+    assert!(section(&s, "FALSE CLOSES"), "{s}");
     assert!(s.contains("Permissions audit"), "{s}");
     assert!(s.contains("1 blocker"), "it did not say how many are left: {s}");
 }
@@ -71,7 +71,7 @@ fn a_false_close_comes_out_with_its_count() {
 /// what was already decided to be decided again. Same exemption `check` makes.
 #[test]
 fn a_forced_close_does_not_come_back_to_triage() {
-    let c = Caja::nueva("forced");
+    let c = Sandbox::new_seeded("forced");
     c.ok(&["push", "Permissions audit", "--why", "it is due for review"]);
     c.ok(&[
         "add",
@@ -103,7 +103,7 @@ fn a_forced_close_does_not_come_back_to_triage() {
 /// purpose (`d33`), so it has to be looked at again. This is where.
 #[test]
 fn the_rescued_node_comes_back_past_the_eye() {
-    let c = Caja::nueva("rescued");
+    let c = Sandbox::new_seeded("rescued");
     c.ok(&["push", "A goal", "--why", "it is needed"]);
     c.ok(&["push", "Pick a backend", "--why", "the store needs one"]);
     c.ok(&[
@@ -117,7 +117,7 @@ fn the_rescued_node_comes_back_past_the_eye() {
     c.ok(&["abandon", "2", "the backend no longer applies", "--rescue", "3"]);
 
     let s = c.ok(&["triage"]);
-    assert!(seccion(&s, "SURVIVED A DISCARD"), "{s}");
+    assert!(section(&s, "SURVIVED A DISCARD"), "{s}");
     assert!(s.contains("Benchmark"), "{s}");
     assert!(
         s.contains("the backend no longer applies"),
@@ -142,7 +142,7 @@ fn the_rescued_node_comes_back_past_the_eye() {
 /// out. A deep stack is almost never lack of discipline.
 #[test]
 fn from_six_deep_onward() {
-    let c = Caja::nueva("deep");
+    let c = Sandbox::new_seeded("deep");
     for i in 1..=5 {
         c.ok(&["push", &format!("Level {i}"), "--why", "still going down"]);
     }
@@ -151,7 +151,7 @@ fn from_six_deep_onward() {
 
     c.ok(&["push", "Level 6", "--why", "one more"]);
     let s = c.ok(&["triage"]);
-    assert!(seccion(&s, "6 OR MORE FROM THE ROOT"), "{s}");
+    assert!(section(&s, "6 OR MORE FROM THE ROOT"), "{s}");
     assert!(s.contains("promote <id>"), "no way out offered:\n{s}");
     assert!(s.contains("depth 6"), "{s}");
 }
@@ -161,7 +161,7 @@ fn from_six_deep_onward() {
 /// or the basket is empty.
 #[test]
 fn the_json_carries_the_four_baskets() {
-    let c = Caja::nueva("json");
+    let c = Sandbox::new_seeded("json");
     c.ok(&["push", "A goal", "--why", "it is needed"]);
     let s = c.ok(&["triage", "--json"]);
     for k in ["parked", "deep", "orphaned_by_discard", "false_closes"] {

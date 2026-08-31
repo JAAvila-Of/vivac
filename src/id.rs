@@ -42,20 +42,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn longitud_y_alfabeto() {
+    fn length_and_alphabet() {
         let u = ulid();
         assert_eq!(u.len(), 26);
         assert!(u.bytes().all(|b| CROCKFORD.contains(&b)));
     }
 
     #[test]
-    fn no_repite() {
+    fn it_does_not_repeat() {
         let a: std::collections::HashSet<String> = (0..1000).map(|_| ulid()).collect();
         assert_eq!(a.len(), 1000);
     }
 
     #[test]
-    fn ordena_por_tiempo() {
+    fn they_sort_by_time() {
         let a = ulid();
         std::thread::sleep(std::time::Duration::from_millis(2));
         let b = ulid();

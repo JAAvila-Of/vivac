@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 /// Node types. `MODEL.md` §4.2.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Tipo {
+pub enum Kind {
     Goal,
     Task,
     Decision,
@@ -17,34 +17,34 @@ pub enum Tipo {
     Assumption,
 }
 
-impl Tipo {
+impl Kind {
     /// Alias prefix. `MODEL.md` §3.6.
-    pub fn prefijo(self) -> char {
+    pub fn prefix(self) -> char {
         match self {
-            Tipo::Goal => 'g',
-            Tipo::Task => 't',
-            Tipo::Decision => 'd',
-            Tipo::Question => 'q',
-            Tipo::Constraint => 'c',
-            Tipo::Finding => 'f',
-            Tipo::Assumption => 'a',
+            Kind::Goal => 'g',
+            Kind::Task => 't',
+            Kind::Decision => 'd',
+            Kind::Question => 'q',
+            Kind::Constraint => 'c',
+            Kind::Finding => 'f',
+            Kind::Assumption => 'a',
         }
     }
 
-    pub fn desde(s: &str) -> Option<Tipo> {
+    pub fn parse(s: &str) -> Option<Kind> {
         Some(match s {
-            "goal" | "meta" => Tipo::Goal,
-            "task" | "tarea" => Tipo::Task,
-            "decision" => Tipo::Decision,
-            "question" | "pregunta" => Tipo::Question,
-            "constraint" | "restriccion" => Tipo::Constraint,
-            "finding" | "hallazgo" => Tipo::Finding,
-            "assumption" | "asuncion" => Tipo::Assumption,
+            "goal" | "meta" => Kind::Goal,
+            "task" | "tarea" => Kind::Task,
+            "decision" => Kind::Decision,
+            "question" | "pregunta" => Kind::Question,
+            "constraint" | "restriccion" => Kind::Constraint,
+            "finding" | "hallazgo" => Kind::Finding,
+            "assumption" | "asuncion" => Kind::Assumption,
             _ => return None,
         })
     }
 
-    pub const TODOS: &'static str =
+    pub const ALL: &'static str =
         "goal, task, decision, question, constraint, finding, assumption";
 }
 
@@ -56,7 +56,7 @@ impl Tipo {
 /// stored the synonym, every query would have to know all seven types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Estado {
+pub enum State {
     Active,
     Done,
     Suspended,
@@ -64,34 +64,34 @@ pub enum Estado {
     Superseded,
 }
 
-impl Estado {
-    pub fn abierto(self) -> bool {
-        self == Estado::Active
+impl State {
+    pub fn is_open(self) -> bool {
+        self == State::Active
     }
 
     /// The word this state goes by for this type.
-    pub fn palabra(self, tipo: Tipo) -> &'static str {
-        match (self, tipo) {
-            (Estado::Active, Tipo::Decision) => "standing",
-            (Estado::Active, _) => "open",
-            (Estado::Done, Tipo::Goal) => "achieved",
-            (Estado::Done, Tipo::Question) => "answered",
-            (Estado::Done, _) => "closed",
-            (Estado::Suspended, _) => "parked",
-            (Estado::Abandoned, _) => "abandoned",
-            (Estado::Superseded, _) => "superseded",
+    pub fn word(self, kind: Kind) -> &'static str {
+        match (self, kind) {
+            (State::Active, Kind::Decision) => "standing",
+            (State::Active, _) => "open",
+            (State::Done, Kind::Goal) => "achieved",
+            (State::Done, Kind::Question) => "answered",
+            (State::Done, _) => "closed",
+            (State::Suspended, _) => "parked",
+            (State::Abandoned, _) => "abandoned",
+            (State::Superseded, _) => "superseded",
         }
     }
 
     /// A one-letter mark. Meaning is never encoded in colour alone: this is
     /// read in black and white and over ssh.
-    pub fn marca(self) -> char {
+    pub fn mark(self) -> char {
         match self {
-            Estado::Active => ' ',
-            Estado::Done => 'x',
-            Estado::Suspended => '~',
-            Estado::Abandoned => '!',
-            Estado::Superseded => '-',
+            State::Active => ' ',
+            State::Done => 'x',
+            State::Suspended => '~',
+            State::Abandoned => '!',
+            State::Superseded => '-',
         }
     }
 }
@@ -101,7 +101,7 @@ impl Estado {
 /// cartesian product.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Bandera {
+pub enum Flag {
     /// Something it depends on fell over. Always carries a reason.
     Suspect,
     /// Worth a look, without claiming it is wrong.
@@ -110,21 +110,21 @@ pub enum Bandera {
     Stale,
 }
 
-impl Bandera {
-    pub fn desde(s: &str) -> Option<Bandera> {
+impl Flag {
+    pub fn parse(s: &str) -> Option<Flag> {
         Some(match s {
-            "suspect" | "sospechoso" => Bandera::Suspect,
-            "review" | "revisar" => Bandera::Review,
-            "stale" | "viejo" => Bandera::Stale,
+            "suspect" | "sospechoso" => Flag::Suspect,
+            "review" | "revisar" => Flag::Review,
+            "stale" | "old" => Flag::Stale,
             _ => return None,
         })
     }
 
-    pub fn palabra(self) -> &'static str {
+    pub fn word(self) -> &'static str {
         match self {
-            Bandera::Suspect => "suspect",
-            Bandera::Review => "review",
-            Bandera::Stale => "stale",
+            Flag::Suspect => "suspect",
+            Flag::Review => "review",
+            Flag::Stale => "stale",
         }
     }
 
@@ -145,7 +145,7 @@ pub enum VivacKind {
 }
 
 impl VivacKind {
-    pub fn palabra(self) -> &'static str {
+    pub fn word(self) -> &'static str {
         match self {
             VivacKind::Push => "push",
             VivacKind::Pop => "pop",
@@ -158,7 +158,7 @@ impl VivacKind {
 
 /// One event from the log. `MODEL.md` §3.2.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Evento {
+pub struct Event {
     pub seq: u64,
     pub id: String,
     pub ts: String,
@@ -173,72 +173,113 @@ pub struct Evento {
     /// is paid on every startup, which here means every call because there is
     /// no daemon. Besides, `MODEL.md` §3.2 already said `payload`: flattening
     /// it was a convenience of mine, not a decision of the model.
-    pub payload: Cuerpo,
+    pub payload: Body,
 }
 
+/// The event body.
+///
+/// Every field carries a `serde(alias)` with the name it had while the tool
+/// was written in Spanish. New events are written in English; the logs that
+/// already exist keep being read. The log is the source of truth and it is
+/// append-only, so a rename that could not read backwards would not be a
+/// rename, it would be a data loss.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
-pub enum Cuerpo {
+pub enum Body {
     /// The `spawns` edge travels **inside** the node, not as a separate event.
     /// That way invariant 11 of `MODEL.md` §9 --at most one incoming `spawns`,
     /// provenance is a tree and not a DAG-- is held up by the schema and not
     /// by a check somebody can forget.
     #[serde(rename = "node.created")]
-    NodoCreado {
-        nodo: String,
+    NodeCreated {
+        #[serde(alias = "nodo")]
+        node: String,
         num: u64,
-        tipo: Tipo,
-        titulo: String,
-        #[serde(default)]
-        por: String,
-        #[serde(default)]
-        padre: Option<String>,
-        #[serde(default)]
-        bloquea: bool,
+        // Not `type`: that name is taken by the enum tag above.
+        #[serde(alias = "tipo")]
+        kind: Kind,
+        #[serde(alias = "titulo")]
+        title: String,
+        #[serde(default, alias = "por")]
+        why: String,
+        #[serde(default, alias = "padre")]
+        parent: Option<String>,
+        #[serde(default, alias = "bloquea")]
+        blocks: bool,
         #[serde(default)]
         refs: Vec<String>,
         #[serde(default)]
         governs: Vec<String>,
     },
     #[serde(rename = "state.changed")]
-    EstadoCambiado {
-        nodo: String,
-        estado: Estado,
-        #[serde(default)]
-        resultado: String,
+    StateChanged {
+        #[serde(alias = "nodo")]
+        node: String,
+        #[serde(alias = "estado")]
+        state: State,
+        #[serde(default, alias = "resultado")]
+        outcome: String,
         /// A forced close is legitimate, but it has to be a decision and not
         /// an oversight: that is why it leaves a trace here. `MODEL.md` §7.
-        #[serde(default)]
-        forzado: bool,
+        #[serde(default, alias = "forzado")]
+        forced: bool,
     },
     #[serde(rename = "node.noted")]
-    NodoAnotado { nodo: String, nota: String },
+    NodeNoted {
+        #[serde(alias = "nodo")]
+        node: String,
+        #[serde(alias = "nota")]
+        note: String,
+    },
     #[serde(rename = "edge.blocks")]
-    BloqueoCambiado { nodo: String, bloquea: bool },
+    BlockChanged {
+        #[serde(alias = "nodo")]
+        node: String,
+        #[serde(alias = "bloquea")]
+        blocks: bool,
+    },
     #[serde(rename = "stack.pushed")]
-    Apilado { nodo: String },
+    Pushed {
+        #[serde(alias = "nodo")]
+        node: String,
+    },
     #[serde(rename = "stack.popped")]
-    Desapilado { nodo: String },
+    Popped {
+        #[serde(alias = "nodo")]
+        node: String,
+    },
     #[serde(rename = "stack.promoted")]
-    Promovido { nodo: String },
+    Promoted {
+        #[serde(alias = "nodo")]
+        node: String,
+    },
     /// The reason is mandatory: `BRIEF-SPEC.md` §10 tests it, because a flag
     /// with no reason informs nobody and is only noise.
     #[serde(rename = "flag.raised")]
-    BanderaAlzada {
-        nodo: String,
-        bandera: Bandera,
-        motivo: String,
+    FlagRaised {
+        #[serde(alias = "nodo")]
+        node: String,
+        #[serde(alias = "bandera")]
+        flag: Flag,
+        #[serde(alias = "motivo")]
+        reason: String,
     },
     #[serde(rename = "flag.cleared")]
-    BanderaBajada { nodo: String, bandera: Bandera },
+    FlagCleared {
+        #[serde(alias = "nodo")]
+        node: String,
+        #[serde(alias = "bandera")]
+        flag: Flag,
+    },
     #[serde(rename = "vivac.created")]
-    VivacCreado {
+    VivacCreated {
         vivac: String,
         num: u64,
         kind: VivacKind,
         /// Frozen stack with titles: a vivac has to stay readable even after
         /// the nodes have changed.
-        pila: Vec<(String, String)>,
+        #[serde(alias = "pila")]
+        stack: Vec<(String, String)>,
         /// Paths of the pitch. Not measured --that would need `post_tool`, which
         /// is not in Tier 0-- but derived from the `governs` the stack declares.
         working_set: Vec<String>,
@@ -248,7 +289,7 @@ pub enum Cuerpo {
         anchor: crate::anchor::AnchorRef,
         #[serde(default)]
         node_ref: Option<String>,
-        #[serde(default)]
-        etiqueta: String,
+        #[serde(default, alias = "etiqueta")]
+        label: String,
     },
 }

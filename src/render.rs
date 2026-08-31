@@ -10,23 +10,23 @@
 //! audience: the agent needs parseable output, not a drawn tree.
 
 use crate::args::Args;
-use crate::brief::corta;
-use crate::event::{Estado, Tipo};
-use crate::fallo::{Fallo, R};
-use crate::model::{Agregados, Arbol, Nodo};
+use crate::brief::clip;
+use crate::event::{State, Kind};
+use crate::failure::{Failure, R};
+use crate::model::{Aggregates, Tree, Node};
 use serde_json::json;
 
-const ANCHO: usize = 62;
+const WIDTH: usize = 62;
 
-fn envolver(texto: &str, ancho: usize, sangria: &str) -> Vec<String> {
-    if texto.trim().is_empty() {
+fn wrap(text: &str, ancho: usize, sangria: &str) -> Vec<String> {
+    if text.trim().is_empty() {
         return vec![];
     }
-    let mut lineas = Vec::new();
+    let mut lines = Vec::new();
     let mut cur = String::new();
-    for p in texto.split_whitespace() {
+    for p in text.split_whitespace() {
         if !cur.is_empty() && cur.chars().count() + 1 + p.chars().count() > ancho {
-            lineas.push(format!("{sangria}{cur}"));
+            lines.push(format!("{sangria}{cur}"));
             cur = p.to_string();
         } else {
             if !cur.is_empty() {
@@ -36,43 +36,43 @@ fn envolver(texto: &str, ancho: usize, sangria: &str) -> Vec<String> {
         }
     }
     if !cur.is_empty() {
-        lineas.push(format!("{sangria}{cur}"));
+        lines.push(format!("{sangria}{cur}"));
     }
-    lineas
+    lines
 }
 
-fn etiqueta(n: &Nodo) -> String {
-    match n.estado {
-        Estado::Active => n.titulo.clone(),
-        e => format!("{}  [{}]", n.titulo, e.palabra(n.tipo)),
+fn label(n: &Node) -> String {
+    match n.state {
+        State::Active => n.title.clone(),
+        e => format!("{}  [{}]", n.title, e.word(n.kind)),
     }
 }
 
-fn json_nodo(a: &Arbol, ag: &Agregados, n: &Nodo) -> serde_json::Value {
-    let r = ag.recuento(&n.id);
+fn json_node(a: &Tree, ag: &Aggregates, n: &Node) -> serde_json::Value {
+    let r = ag.counts(&n.id);
     json!({
         "id": n.id,
         "alias": n.alias(),
         "num": n.num,
-        "type": n.tipo,
-        "title": n.titulo,
-        "why": n.por,
-        "state": n.estado,
-        "blocks": n.bloquea,
-        "parent": n.padre.as_ref().and_then(|p| a.nodo(p).map(|x| x.alias())),
-        "note": n.nota,
-        "outcome": n.resultado,
+        "kind": n.kind,
+        "title": n.title,
+        "why": n.why,
+        "state": n.state,
+        "blocks": n.blocks,
+        "parent": n.parent.as_ref().and_then(|p| a.node(p).map(|x| x.alias())),
+        "note": n.note,
+        "outcome": n.outcome,
         "refs": n.refs,
         "governs": n.governs,
-        "opened": n.abierto,
-        "closed": n.cerrado,
-        "false_close": n.estado == Estado::Done && ag.bloqueantes(&n.id) > 0,
-        "open_below": r.abiertos,
+        "opened": n.opened,
+        "closed": n.closed,
+        "false_close": n.state == State::Done && ag.blockers(&n.id) > 0,
+        "open_below": r.open_count,
         "total_below": r.total,
     })
 }
 
-fn imprimir_json(v: serde_json::Value) -> R {
+fn print_json(v: serde_json::Value) -> R {
     println!(
         "{}",
         serde_json::to_string_pretty(&v).map_err(std::io::Error::other)?
@@ -85,34 +85,34 @@ fn imprimir_json(v: serde_json::Value) -> R {
 /// It narrates the path from the root and then answers the three questions
 /// that come next: what was left open in parallel, what was born here, and
 /// what keeps each step of the path from closing.
-pub fn why(a: &Arbol, args: &Args) -> R {
+pub fn why(a: &Tree, args: &Args) -> R {
     let ag = &a.agregados();
     let s = args
-        .libre(0)
-        .ok_or_else(|| Fallo::uso("usage: vivac why <id>"))?;
+        .positional(0)
+        .ok_or_else(|| Failure::usage("usage: vivac why <id>"))?;
     let n = a
-        .resolver(s)
-        .ok_or_else(|| Fallo::uso(format!("No such node: {s}.")))?;
-    let camino = a.ancestros(&n.id);
+        .resolve(s)
+        .ok_or_else(|| Failure::usage(format!("No such node: {s}.")))?;
+    let camino = a.ancestors(&n.id);
 
-    if args.tiene("json") {
-        let hermanos: Vec<_> = n
-            .padre
+    if args.has("json") {
+        let siblings: Vec<_> = n
+            .parent
             .as_ref()
-            .map(|p| a.hijos(p))
+            .map(|p| a.children(p))
             .unwrap_or_default()
             .into_iter()
-            .filter(|c| c.id != n.id && c.estado.abierto())
-            .map(|c| json_nodo(a, ag, c))
+            .filter(|c| c.id != n.id && c.state.is_open())
+            .map(|c| json_node(a, ag, c))
             .collect();
-        return imprimir_json(json!({
-            "node": json_nodo(a, ag, n),
-            "path": camino.iter().map(|x| json_nodo(a, ag, x)).collect::<Vec<_>>(),
-            "en_paralelo": hermanos,
-            "born_here": a.hijos(&n.id).iter().filter(|c| c.estado.abierto())
-                .map(|c| json_nodo(a, ag, c)).collect::<Vec<_>>(),
-            "blockers": a.bloqueantes_abiertos(&n.id).iter()
-                .map(|c| json_nodo(a, ag, c)).collect::<Vec<_>>(),
+        return print_json(json!({
+            "node": json_node(a, ag, n),
+            "path": camino.iter().map(|x| json_node(a, ag, x)).collect::<Vec<_>>(),
+            "en_paralelo": siblings,
+            "born_here": a.children(&n.id).iter().filter(|c| c.state.is_open())
+                .map(|c| json_node(a, ag, c)).collect::<Vec<_>>(),
+            "blockers": a.open_blockers(&n.id).iter()
+                .map(|c| json_node(a, ag, c)).collect::<Vec<_>>(),
         }));
     }
 
@@ -121,23 +121,23 @@ pub fn why(a: &Arbol, args: &Args) -> R {
     println!("  {}", "-".repeat(66));
     println!();
     for (i, p) in camino.iter().enumerate() {
-        let ultimo = i == camino.len() - 1;
-        println!("  {:<6}{}", p.alias(), etiqueta(p));
-        for l in envolver(&p.por, ANCHO, "        ") {
+        let is_last = i == camino.len() - 1;
+        println!("  {:<6}{}", p.alias(), label(p));
+        for l in wrap(&p.why, WIDTH, "        ") {
             println!("{l}");
         }
-        for l in envolver(&format!("! {}", p.nota), ANCHO, "        ") {
-            if !p.nota.is_empty() {
+        for l in wrap(&format!("! {}", p.note), WIDTH, "        ") {
+            if !p.note.is_empty() {
                 println!("{l}");
             }
         }
-        for l in envolver(&format!("= {}", p.resultado), ANCHO, "        ") {
-            if !p.resultado.is_empty() {
+        for l in wrap(&format!("= {}", p.outcome), WIDTH, "        ") {
+            if !p.outcome.is_empty() {
                 println!("{l}");
             }
         }
-        if !ultimo {
-            let f = ag.recuento(&p.id).frase();
+        if !is_last {
+            let f = ag.counts(&p.id).phrase();
             if !f.is_empty() {
                 println!("        ({f} below)");
             }
@@ -151,49 +151,49 @@ pub fn why(a: &Arbol, args: &Args) -> R {
     println!();
 
     // "we had ten things to review, we are on the first"
-    if let Some(padre) = n.padre.as_ref() {
-        let hermanos: Vec<_> = a
-            .hijos(padre)
+    if let Some(parent) = n.parent.as_ref() {
+        let siblings: Vec<_> = a
+            .children(parent)
             .into_iter()
-            .filter(|c| c.id != n.id && c.estado.abierto())
+            .filter(|c| c.id != n.id && c.state.is_open())
             .collect();
-        if !hermanos.is_empty() {
-            println!("  In parallel, still open ({}):", hermanos.len());
-            for c in hermanos {
-                println!("      {:<6} {}", c.alias(), c.titulo);
+        if !siblings.is_empty() {
+            println!("  In parallel, still open ({}):", siblings.len());
+            for c in siblings {
+                println!("      {:<6} {}", c.alias(), c.title);
             }
             println!();
         }
     }
 
     let kids: Vec<_> = a
-        .hijos(&n.id)
+        .children(&n.id)
         .into_iter()
-        .filter(|c| c.estado.abierto())
+        .filter(|c| c.state.is_open())
         .collect();
     if !kids.is_empty() {
         println!("  Born here and still open ({}):", kids.len());
         for c in kids {
             println!(
                 "    {} {:<6} {}",
-                if c.bloquea { '*' } else { ' ' },
+                if c.blocks { '*' } else { ' ' },
                 c.alias(),
-                c.titulo
+                c.title
             );
         }
         println!();
     }
 
     for p in &camino {
-        let pend = a.bloqueantes_abiertos(&p.id);
-        if !pend.is_empty() && p.estado.abierto() {
+        let pending_count = a.open_blockers(&p.id);
+        if !pending_count.is_empty() && p.state.is_open() {
             println!(
                 "  {} does not close until these close ({}):",
                 p.alias(),
-                pend.len()
+                pending_count.len()
             );
-            for c in pend {
-                println!("      {:<6} {}", c.alias(), c.titulo);
+            for c in pending_count {
+                println!("      {:<6} {}", c.alias(), c.title);
             }
             println!();
         }
@@ -201,70 +201,70 @@ pub fn why(a: &Arbol, args: &Args) -> R {
     Ok(())
 }
 
-fn rama(a: &Arbol, ag: &Agregados, n: &Nodo, prefijo: &str, ultimo: bool, todo: bool) {
-    let f = ag.recuento(&n.id).frase();
-    let mut cola = if f.is_empty() {
+fn branch(a: &Tree, ag: &Aggregates, n: &Node, prefix: &str, is_last: bool, todo: bool) {
+    let f = ag.counts(&n.id).phrase();
+    let mut tail = if f.is_empty() {
         String::new()
     } else {
         format!("   ({f})")
     };
-    let pend = ag.bloqueantes(&n.id);
-    if n.estado == Estado::Done && pend > 0 {
-        cola.push_str(&format!(
-            "   <== FALSE CLOSE: {pend} open condition(s)"
+    let pending_count = ag.blockers(&n.id);
+    if n.state == State::Done && pending_count > 0 {
+        tail.push_str(&format!(
+            "   <== FALSE CLOSE: {pending_count} open condition(s)"
         ));
     }
-    let marca = if n.bloquea { "* " } else { "" };
+    let mark = if n.blocks { "* " } else { "" };
     println!(
-        "{prefijo}{}[{}] {:<6} {marca}{}{cola}",
-        if ultimo { "`-- " } else { "|-- " },
-        n.estado.marca(),
+        "{prefix}{}[{}] {:<6} {mark}{}{tail}",
+        if is_last { "`-- " } else { "|-- " },
+        n.state.mark(),
         n.alias(),
-        n.titulo
+        n.title
     );
-    let sig = format!("{prefijo}{}", if ultimo { "    " } else { "|   " });
-    let hijos: Vec<_> = a
-        .hijos(&n.id)
+    let sig = format!("{prefix}{}", if is_last { "    " } else { "|   " });
+    let children: Vec<_> = a
+        .children(&n.id)
         .into_iter()
-        .filter(|h| todo || h.estado.abierto() || ag.recuento(&h.id).abiertos > 0)
+        .filter(|h| todo || h.state.is_open() || ag.counts(&h.id).open_count > 0)
         .collect();
-    for (i, h) in hijos.iter().enumerate() {
-        rama(a, ag, h, &sig, i == hijos.len() - 1, todo);
+    for (i, h) in children.iter().enumerate() {
+        branch(a, ag, h, &sig, i == children.len() - 1, todo);
     }
 }
 
-fn subarbol_json(a: &Arbol, ag: &Agregados, n: &Nodo) -> serde_json::Value {
-    let mut v = json_nodo(a, ag, n);
+fn subtree_json(a: &Tree, ag: &Aggregates, n: &Node) -> serde_json::Value {
+    let mut v = json_node(a, ag, n);
     v["children"] = json!(a
-        .hijos(&n.id)
+        .children(&n.id)
         .iter()
-        .map(|h| subarbol_json(a, ag, h))
+        .map(|h| subtree_json(a, ag, h))
         .collect::<Vec<_>>());
     v
 }
 
-pub fn tree(a: &Arbol, args: &Args) -> R {
+pub fn tree(a: &Tree, args: &Args) -> R {
     let ag = &a.agregados();
-    let raices: Vec<&Nodo> = match args.libre(0) {
+    let roots: Vec<&Node> = match args.positional(0) {
         Some(s) => vec![a
-            .resolver(s)
-            .ok_or_else(|| Fallo::uso(format!("No such node: {s}.")))?],
-        None => a.raices(),
+            .resolve(s)
+            .ok_or_else(|| Failure::usage(format!("No such node: {s}.")))?],
+        None => a.roots(),
     };
-    if args.tiene("json") {
-        return imprimir_json(json!(raices
+    if args.has("json") {
+        return print_json(json!(roots
             .iter()
-            .map(|n| subarbol_json(a, ag, n))
+            .map(|n| subtree_json(a, ag, n))
             .collect::<Vec<_>>()));
     }
-    if a.vacio() {
+    if a.is_empty_tree() {
         println!("  Empty tree.  vivac push \"<title>\" --why \"<reason>\"");
         return Ok(());
     }
-    let todo = args.tiene("all") || args.tiene("all");
+    let todo = args.has("all") || args.has("all");
     println!();
-    for (i, n) in raices.iter().enumerate() {
-        rama(a, ag, n, "  ", i == raices.len() - 1, todo);
+    for (i, n) in roots.iter().enumerate() {
+        branch(a, ag, n, "  ", i == roots.len() - 1, todo);
     }
     println!();
     if !todo {
@@ -276,24 +276,24 @@ pub fn tree(a: &Arbol, args: &Args) -> R {
 
 /// `open` — the open fronts, each with its lineage compressed. It is the
 /// "where was I" view for the start of the day.
-pub fn open(a: &Arbol, args: &Args) -> R {
+pub fn open(a: &Tree, args: &Args) -> R {
     let ag = &a.agregados();
-    let mut hojas: Vec<&Nodo> = a
-        .todos()
-        .filter(|n| n.es_frente() && !a.hijos(&n.id).iter().any(|c| c.es_frente()))
+    let mut hojas: Vec<&Node> = a
+        .nodes_iter()
+        .filter(|n| n.is_front() && !a.children(&n.id).iter().any(|c| c.is_front()))
         .collect();
     hojas.sort_by_key(|n| n.num);
-    let vigentes = a
-        .todos()
-        .filter(|n| n.tipo == Tipo::Decision && n.estado.abierto())
+    let standing = a
+        .nodes_iter()
+        .filter(|n| n.kind == Kind::Decision && n.state.is_open())
         .count();
-    if args.tiene("json") {
-        return imprimir_json(json!(hojas
+    if args.has("json") {
+        return print_json(json!(hojas
             .iter()
             .map(|n| {
-                let mut v = json_nodo(a, ag, n);
+                let mut v = json_node(a, ag, n);
                 v["lineage"] = json!(a
-                    .ancestros(&n.id)
+                    .ancestors(&n.id)
                     .iter()
                     .rev()
                     .skip(1)
@@ -304,21 +304,21 @@ pub fn open(a: &Arbol, args: &Args) -> R {
             })
             .collect::<Vec<_>>()));
     }
-    if hojas.is_empty() && vigentes == 0 {
+    if hojas.is_empty() && standing == 0 {
         println!("  Nothing open.");
         return Ok(());
     }
     println!();
     println!(
-        "  {} frente{} abierto{}",
+        "  {} frente{} opened{}",
         hojas.len(),
         if hojas.len() == 1 { "" } else { "s" },
         if hojas.len() == 1 { "" } else { "s" }
     );
     println!();
     for n in hojas {
-        println!("  {:<6} {}", n.alias(), n.titulo);
-        let camino = a.ancestros(&n.id);
+        println!("  {:<6} {}", n.alias(), n.title);
+        let camino = a.ancestors(&n.id);
         if camino.len() > 1 {
             let v: Vec<String> = camino[..camino.len() - 1]
                 .iter()
@@ -329,14 +329,14 @@ pub fn open(a: &Arbol, args: &Args) -> R {
     }
     // They are not fronts, but making them vanish without saying so would be
     // omitting in silence: they get counted and located.
-    if vigentes > 0 {
-        let frase = if vigentes == 1 {
+    if standing > 0 {
+        let phrase = if standing == 1 {
             "1 standing decision, which is not work".to_string()
         } else {
-            format!("{vigentes} standing decisions, which are not work")
+            format!("{standing} standing decisions, which are not work")
         };
         println!();
-        println!("  + {frase}   vivac brief");
+        println!("  + {phrase}   vivac brief");
     }
     println!();
     Ok(())
@@ -349,19 +349,19 @@ pub fn open(a: &Arbol, args: &Args) -> R {
 /// where. `MODEL.md` §6.1 also sends it the deep nodes, because a deep stack
 /// is almost never lack of discipline: it is that the root goal moved and
 /// nobody re-rooted.
-pub fn triage(a: &Arbol, args: &Args) -> R {
+pub fn triage(a: &Tree, args: &Args) -> R {
     let ag = &a.agregados();
 
-    let mut aparcados: Vec<&Nodo> = a
-        .todos()
-        .filter(|n| n.estado == Estado::Suspended)
+    let mut parked_nodes: Vec<&Node> = a
+        .nodes_iter()
+        .filter(|n| n.state == State::Suspended)
         .collect();
 
     // `MODEL.md` §6.1: from 6 on it shows up here, and it never blocks.
-    let mut hondos: Vec<(&Nodo, usize)> = a
-        .todos()
-        .filter(|n| n.es_frente())
-        .map(|n| (n, a.ancestros(&n.id).len()))
+    let mut deep: Vec<(&Node, usize)> = a
+        .nodes_iter()
+        .filter(|n| n.is_front())
+        .map(|n| (n, a.ancestors(&n.id).len()))
         .filter(|(_, d)| *d >= 6)
         .collect();
 
@@ -370,12 +370,12 @@ pub fn triage(a: &Arbol, args: &Args) -> R {
     // where it was born. That is why they need revisiting now and then, and
     // why they are here and not in `check`: it is not store corruption, it is
     // work that lost the reason it was born for.
-    let mut descolgados: Vec<(&Nodo, &Nodo)> = a
-        .todos()
-        .filter(|n| n.es_frente())
+    let mut orphaned: Vec<(&Node, &Node)> = a
+        .nodes_iter()
+        .filter(|n| n.is_front())
         .filter_map(|n| {
-            let p = a.nodo(n.padre.as_deref()?)?;
-            (p.estado == Estado::Abandoned).then_some((n, p))
+            let p = a.node(n.parent.as_deref()?)?;
+            (p.state == State::Abandoned).then_some((n, p))
         })
         .collect();
 
@@ -385,35 +385,35 @@ pub fn triage(a: &Arbol, args: &Args) -> R {
     // for what was already decided to be decided again. What does land here is
     // the close that turned false later, when a blocker got hung on something
     // already closed: that is the case that took 26 days to spot.
-    let mut falsos: Vec<&Nodo> = a
-        .todos()
-        .filter(|n| n.estado == Estado::Done && !n.cierre_forzado && ag.bloqueantes(&n.id) > 0)
+    let mut false_closes: Vec<&Node> = a
+        .nodes_iter()
+        .filter(|n| n.state == State::Done && !n.cierre_forzado && ag.blockers(&n.id) > 0)
         .collect();
 
-    aparcados.sort_by_key(|n| n.num);
-    hondos.sort_by_key(|(n, _)| n.num);
-    descolgados.sort_by_key(|(n, _)| n.num);
-    falsos.sort_by_key(|n| n.num);
+    parked_nodes.sort_by_key(|n| n.num);
+    deep.sort_by_key(|(n, _)| n.num);
+    orphaned.sort_by_key(|(n, _)| n.num);
+    false_closes.sort_by_key(|n| n.num);
 
-    if args.tiene("json") {
-        return imprimir_json(json!({
-            "parked": aparcados.iter().map(|n| json_nodo(a, ag, n)).collect::<Vec<_>>(),
-            "deep": hondos.iter().map(|(n, d)| {
-                let mut v = json_nodo(a, ag, n);
+    if args.has("json") {
+        return print_json(json!({
+            "parked": parked_nodes.iter().map(|n| json_node(a, ag, n)).collect::<Vec<_>>(),
+            "deep": deep.iter().map(|(n, d)| {
+                let mut v = json_node(a, ag, n);
                 v["depth"] = json!(d);
                 v
             }).collect::<Vec<_>>(),
-            "orphaned_by_discard": descolgados.iter().map(|(n, p)| {
-                let mut v = json_nodo(a, ag, n);
+            "orphaned_by_discard": orphaned.iter().map(|(n, p)| {
+                let mut v = json_node(a, ag, n);
                 v["discarded"] = json!(p.alias());
-                v["discarded_because"] = json!(p.resultado);
+                v["discarded_because"] = json!(p.outcome);
                 v
             }).collect::<Vec<_>>(),
-            "false_closes": falsos.iter().map(|n| json_nodo(a, ag, n)).collect::<Vec<_>>(),
+            "false_closes": false_closes.iter().map(|n| json_node(a, ag, n)).collect::<Vec<_>>(),
         }));
     }
 
-    let total = aparcados.len() + hondos.len() + descolgados.len() + falsos.len();
+    let total = parked_nodes.len() + deep.len() + orphaned.len() + false_closes.len();
     if total == 0 {
         println!("  Nothing to prune.");
         return Ok(());
@@ -421,34 +421,34 @@ pub fn triage(a: &Arbol, args: &Args) -> R {
     println!();
     println!("  TRIAGE - {total} thing(s) to look at");
 
-    if !aparcados.is_empty() {
+    if !parked_nodes.is_empty() {
         println!();
         println!(
             "  PARKED ({})                       focus <id>  |  abandon <id>",
-            aparcados.len()
+            parked_nodes.len()
         );
-        for n in &aparcados {
-            println!("    {:<6} {}", n.alias(), n.titulo);
-            for l in envolver(&n.resultado, ANCHO, "           ") {
+        for n in &parked_nodes {
+            println!("    {:<6} {}", n.alias(), n.title);
+            for l in wrap(&n.outcome, WIDTH, "           ") {
                 println!("{l}");
             }
         }
     }
 
-    if !hondos.is_empty() {
+    if !deep.is_empty() {
         println!();
         println!(
             "  6 OR MORE FROM THE ROOT ({})      promote <id>",
-            hondos.len()
+            deep.len()
         );
-        for (n, d) in &hondos {
+        for (n, d) in &deep {
             println!(
                 "    {:<6} {:<40} depth {d}",
                 n.alias(),
-                corta(&n.titulo, 40)
+                clip(&n.title, 40)
             );
             let v: Vec<String> = a
-                .ancestros(&n.id)
+                .ancestors(&n.id)
                 .iter()
                 .rev()
                 .skip(1)
@@ -459,34 +459,34 @@ pub fn triage(a: &Arbol, args: &Args) -> R {
         }
     }
 
-    if !descolgados.is_empty() {
+    if !orphaned.is_empty() {
         println!();
         println!(
             "  SURVIVED A DISCARD ({})           abandon <id>  |  promote <id>",
-            descolgados.len()
+            orphaned.len()
         );
-        for (n, p) in &descolgados {
-            println!("    {:<6} {}", n.alias(), n.titulo);
+        for (n, p) in &orphaned {
+            println!("    {:<6} {}", n.alias(), n.title);
             println!(
                 "           born from {}, discarded: {}",
                 p.alias(),
-                corta(&p.resultado, 36)
+                clip(&p.outcome, 36)
             );
         }
     }
 
-    if !falsos.is_empty() {
+    if !false_closes.is_empty() {
         println!();
         println!(
             "  FALSE CLOSES ({})                 close what is left, or --force",
-            falsos.len()
+            false_closes.len()
         );
-        for n in &falsos {
+        for n in &false_closes {
             println!(
                 "    {:<6} {:<40} {} blocker(s)",
                 n.alias(),
-                corta(&n.titulo, 40),
-                ag.bloqueantes(&n.id)
+                clip(&n.title, 40),
+                ag.blockers(&n.id)
             );
         }
     }
@@ -497,17 +497,17 @@ pub fn triage(a: &Arbol, args: &Args) -> R {
 /// `parked` — DO NOT TOUCH NOW. It is the section no other tool emits: every
 /// memory tool dumps what is relevant, and the problem in agentic development
 /// is the opposite one, bounding.
-pub fn parked(a: &Arbol, args: &Args) -> R {
+pub fn parked(a: &Tree, args: &Args) -> R {
     let ag = &a.agregados();
-    let mut ps: Vec<&Nodo> = a
-        .todos()
-        .filter(|n| n.estado == Estado::Suspended)
+    let mut ps: Vec<&Node> = a
+        .nodes_iter()
+        .filter(|n| n.state == State::Suspended)
         .collect();
     ps.sort_by_key(|n| n.num);
-    if args.tiene("json") {
-        return imprimir_json(json!(ps
+    if args.has("json") {
+        return print_json(json!(ps
             .iter()
-            .map(|n| json_nodo(a, ag, n))
+            .map(|n| json_node(a, ag, n))
             .collect::<Vec<_>>()));
     }
     if ps.is_empty() {
@@ -518,8 +518,8 @@ pub fn parked(a: &Arbol, args: &Args) -> R {
     println!("  DO NOT TOUCH NOW ({})", ps.len());
     println!();
     for n in ps {
-        println!("  {:<6} {}", n.alias(), n.titulo);
-        for l in envolver(&n.resultado, ANCHO, "         ") {
+        println!("  {:<6} {}", n.alias(), n.title);
+        for l in wrap(&n.outcome, WIDTH, "         ") {
             println!("{l}");
         }
     }
@@ -528,33 +528,33 @@ pub fn parked(a: &Arbol, args: &Args) -> R {
 }
 
 /// `stack` — where you are right now, from the root to the focus.
-pub fn stack(a: &Arbol, args: &Args) -> R {
+pub fn stack(a: &Tree, args: &Args) -> R {
     let ag = &a.agregados();
-    let pila: Vec<&Nodo> = a.pila.iter().filter_map(|id| a.nodo(id)).collect();
-    if args.tiene("json") {
-        return imprimir_json(json!({
-            "depth": pila.len(),
-            "stack": pila.iter().map(|n| json_nodo(a, ag, n)).collect::<Vec<_>>(),
+    let stack: Vec<&Node> = a.stack.iter().filter_map(|id| a.node(id)).collect();
+    if args.has("json") {
+        return print_json(json!({
+            "depth": stack.len(),
+            "stack": stack.iter().map(|n| json_node(a, ag, n)).collect::<Vec<_>>(),
         }));
     }
-    if pila.is_empty() {
+    if stack.is_empty() {
         println!("  Empty stack.  vivac push \"<title>\" --why \"<reason>\"");
         return Ok(());
     }
     println!();
-    for (i, n) in pila.iter().enumerate() {
-        let foco = if i == pila.len() - 1 {
+    for (i, n) in stack.iter().enumerate() {
+        let focus = if i == stack.len() - 1 {
             "   <- focus"
         } else {
             ""
         };
-        println!("  {}{:<6} {}{foco}", "  ".repeat(i), n.alias(), n.titulo);
+        println!("  {}{:<6} {}{focus}", "  ".repeat(i), n.alias(), n.title);
     }
     println!();
-    if pila.len() >= 6 {
+    if stack.len() >= 6 {
         println!(
             "  Stack {} levels deep. Almost never lack of discipline: usually",
-            pila.len()
+            stack.len()
         );
         println!("  the root goal moved and nobody re-rooted.  vivac promote");
         println!();
@@ -562,32 +562,32 @@ pub fn stack(a: &Arbol, args: &Args) -> R {
     Ok(())
 }
 
-pub fn stats(a: &Arbol, args: &Args) -> R {
+pub fn stats(a: &Tree, args: &Args) -> R {
     let ag = &a.agregados();
     let mut por_estado = std::collections::BTreeMap::new();
-    let mut huerfanos = 0usize;
-    let mut falsos = Vec::new();
-    for n in a.todos() {
-        *por_estado.entry(n.estado.palabra(n.tipo)).or_insert(0usize) += 1;
-        if n.padre.as_ref().is_some_and(|p| a.nodo(p).is_none()) {
-            huerfanos += 1;
+    let mut orphans = 0usize;
+    let mut false_closes = Vec::new();
+    for n in a.nodes_iter() {
+        *por_estado.entry(n.state.word(n.kind)).or_insert(0usize) += 1;
+        if n.parent.as_ref().is_some_and(|p| a.node(p).is_none()) {
+            orphans += 1;
         }
-        if n.estado == Estado::Done && ag.bloqueantes(&n.id) > 0 {
-            falsos.push(n);
+        if n.state == State::Done && ag.blockers(&n.id) > 0 {
+            false_closes.push(n);
         }
     }
-    let hondo = ag.profundidad_max;
-    falsos.sort_by_key(|n| n.num);
-    if args.tiene("json") {
-        return imprimir_json(json!({
+    let depth_of = ag.profundidad_max;
+    false_closes.sort_by_key(|n| n.num);
+    if args.has("json") {
+        return print_json(json!({
             "nodes": a.total(),
             "by_state": por_estado,
-            "depth": hondo,
-            "roots": a.raices().len(),
-            "stack": a.profundidad_pila(),
-            "orphans": huerfanos,
-            "broken_lines": a.lineas_rotas,
-            "false_closes": falsos.iter().map(|n| json_nodo(a, ag, n)).collect::<Vec<_>>(),
+            "depth": depth_of,
+            "roots": a.roots().len(),
+            "stack": a.stack_depth(),
+            "orphans": orphans,
+            "broken_lines": a.broken_lines,
+            "false_closes": false_closes.iter().map(|n| json_node(a, ag, n)).collect::<Vec<_>>(),
         }));
     }
     println!();
@@ -595,20 +595,20 @@ pub fn stats(a: &Arbol, args: &Args) -> R {
     for (k, v) in &por_estado {
         println!("  {k:<14} {v}");
     }
-    println!("  depth          {hondo}");
-    println!("  roots          {}", a.raices().len());
-    println!("  stack          {}", a.profundidad_pila());
-    if huerfanos > 0 {
-        println!("  ORPHANS        {huerfanos}  <- broken provenance");
+    println!("  depth          {depth_of}");
+    println!("  roots          {}", a.roots().len());
+    println!("  stack          {}", a.stack_depth());
+    if orphans > 0 {
+        println!("  ORPHANS        {orphans}  <- broken provenance");
     }
-    if a.lineas_rotas > 0 {
-        println!("  broken lines   {}  <- in .vivac/events", a.lineas_rotas);
+    if a.broken_lines > 0 {
+        println!("  broken lines   {}  <- in .vivac/events", a.broken_lines);
     }
-    if !falsos.is_empty() {
+    if !false_closes.is_empty() {
         println!();
-        println!("  FALSE CLOSES ({})", falsos.len());
-        for n in falsos {
-            println!("      {:<6} {}", n.alias(), n.titulo);
+        println!("  FALSE CLOSES ({})", false_closes.len());
+        for n in false_closes {
+            println!("      {:<6} {}", n.alias(), n.title);
         }
     }
     println!();
@@ -616,22 +616,22 @@ pub fn stats(a: &Arbol, args: &Args) -> R {
 }
 
 /// `vivacs` — the safe stops, latest first.
-pub fn vivacs(a: &Arbol, args: &Args) -> R {
-    if args.tiene("json") {
-        return imprimir_json(json!(a
+pub fn vivacs(a: &Tree, args: &Args) -> R {
+    if args.has("json") {
+        return print_json(json!(a
             .vivacs
             .iter()
             .rev()
             .map(|v| json!({
                 "id": v.id,
                 "alias": v.alias(),
-                "node_ref": v.node_ref.as_ref().and_then(|r| a.nodo(r).map(|n| n.alias())),
-                "kind": v.kind.palabra(),
+                "node_ref": v.node_ref.as_ref().and_then(|r| a.node(r).map(|n| n.alias())),
+                "kind": v.kind.word(),
                 "ts": v.ts,
-                "label": v.etiqueta,
+                "label": v.label,
                 "next_intent": v.next_intent,
                 "anchor": v.anchor,
-                "stack": v.pila.iter().map(|(al, t)| json!({"alias": al, "title": t}))
+                "stack": v.stack.iter().map(|(al, t)| json!({"alias": al, "title": t}))
                     .collect::<Vec<_>>(),
                 "working_set": v.working_set,
             }))
@@ -644,19 +644,19 @@ pub fn vivacs(a: &Arbol, args: &Args) -> R {
     println!();
     for v in a.vivacs.iter().rev().take(20) {
         let cima = v
-            .pila
+            .stack
             .last()
             .map(|(al, t)| format!("{al}  {t}"))
             .unwrap_or_else(|| "empty stack".into());
         println!(
             "  {:<5} {:<7} {}  {}",
             v.alias(),
-            v.kind.palabra(),
+            v.kind.word(),
             crate::clock::date_of(&v.ts),
             cima
         );
-        if !v.etiqueta.is_empty() {
-            println!("           {}", v.etiqueta);
+        if !v.label.is_empty() {
+            println!("           {}", v.label);
         }
         if !v.next_intent.is_empty() {
             println!("           you were about to: {}", v.next_intent);

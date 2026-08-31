@@ -59,12 +59,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn epoch_es_1970() {
+    fn epoch_is_1970() {
         assert_eq!(civil_from_days(0), (1970, 1, 1));
     }
 
     #[test]
-    fn fechas_conocidas() {
+    fn known_dates() {
         // 2026-08-31 is 20696 days since epoch.
         assert_eq!(civil_from_days(20_696), (2026, 8, 31));
         // A 29th of February, which is where naive implementations break.

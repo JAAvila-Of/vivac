@@ -8,46 +8,46 @@
 
 use crate::anchor::{self, Anchor};
 use crate::args::Args;
-use crate::event::{Bandera, Cuerpo, Estado, Tipo, VivacKind};
-use crate::fallo::{Fallo, R};
-use crate::model::{plegar, Arbol, Nodo};
+use crate::event::{Flag, Body, State, Kind, VivacKind};
+use crate::failure::{Failure, R};
+use crate::model::{fold, Tree, Node};
 use crate::store::Store;
 use crate::{id, redact};
 
 pub struct Ctx {
     pub store: Store,
-    pub arbol: Arbol,
+    pub tree: Tree,
     pub anchor: Box<dyn Anchor>,
 }
 
 impl Ctx {
-    pub fn cargar(store: Store) -> Result<Ctx, Fallo> {
-        let (eventos, rotas) = store.leer()?;
-        let arbol = plegar(&eventos, rotas);
-        let anchor = anchor::detectar(&store.raiz);
+    pub fn load(store: Store) -> Result<Ctx, Failure> {
+        let (eventos, rotas) = store.read_all()?;
+        let tree = fold(&eventos, rotas);
+        let anchor = anchor::detectar(&store.root);
         Ok(Ctx {
             store,
-            arbol,
+            tree,
             anchor,
         })
     }
 
     /// Writes and **then applies in memory**, so that whatever gets printed
     /// next is the state after the operation and not the one before it.
-    fn emitir(&mut self, cuerpos: Vec<Cuerpo>) -> R {
-        self.store.escribir(cuerpos.clone(), self.arbol.seq)?;
+    fn emit(&mut self, cuerpos: Vec<Body>) -> R {
+        self.store.append(cuerpos.clone(), self.tree.seq)?;
         let ts = crate::clock::now_rfc3339();
         for c in &cuerpos {
-            let seq = self.arbol.seq + 1;
-            self.arbol.aplicar(seq, &ts, c);
+            let seq = self.tree.seq + 1;
+            self.tree.apply(seq, &ts, c);
         }
         Ok(())
     }
 
-    fn resolver(&self, s: &str) -> Result<&crate::model::Nodo, Fallo> {
-        self.arbol
-            .resolver(s)
-            .ok_or_else(|| Fallo::uso(format!("No such node: {s}.")))
+    fn resolve(&self, s: &str) -> Result<&crate::model::Node, Failure> {
+        self.tree
+            .resolve(s)
+            .ok_or_else(|| Failure::usage(format!("No such node: {s}.")))
     }
 }
 
@@ -62,133 +62,133 @@ fn vivac(
     kind: VivacKind,
     next_intent: &str,
     node_ref: Option<String>,
-    etiqueta: &str,
-) -> Cuerpo {
-    let pila: Vec<(String, String)> = ctx
-        .arbol
-        .pila
+    label: &str,
+) -> Body {
+    let stack: Vec<(String, String)> = ctx
+        .tree
+        .stack
         .iter()
-        .filter_map(|id| ctx.arbol.nodo(id))
-        .map(|n| (n.alias(), n.titulo.clone()))
+        .filter_map(|id| ctx.tree.node(id))
+        .map(|n| (n.alias(), n.title.clone()))
         .collect();
     let mut working_set: Vec<String> = ctx
-        .arbol
-        .pila
+        .tree
+        .stack
         .iter()
-        .filter_map(|id| ctx.arbol.nodo(id))
+        .filter_map(|id| ctx.tree.node(id))
         .flat_map(|n| n.governs.iter().cloned())
         .collect();
     working_set.sort();
     working_set.dedup();
-    Cuerpo::VivacCreado {
+    Body::VivacCreated {
         vivac: id::ulid(),
-        num: ctx.arbol.siguiente_vivac.max(1),
+        num: ctx.tree.next_vivac_num.max(1),
         kind,
-        pila,
+        stack,
         working_set,
         next_intent: next_intent.to_string(),
         anchor: ctx.anchor.snapshot(),
         node_ref,
-        etiqueta: etiqueta.to_string(),
+        label: label.to_string(),
     }
 }
 
 /// No text reaches the log without coming through here.
-fn guardar_texto(campos: &[(&str, &str)]) -> R {
-    match redact::revisar_campos(campos) {
-        Some(h) => Err(Fallo::Redaccion(Box::new(h))),
+fn guard_text(fields: &[(&str, &str)]) -> R {
+    match redact::check_fields(fields) {
+        Some(h) => Err(Failure::Redaction(Box::new(h))),
         None => Ok(()),
     }
 }
 
-fn tipo_de(a: &Args, por_defecto: Tipo) -> Result<Tipo, Fallo> {
+fn tipo_de(a: &Args, por_defecto: Kind) -> Result<Kind, Failure> {
     match a.opt("type") {
         None => Ok(por_defecto),
-        Some(s) => Tipo::desde(s)
-            .ok_or_else(|| Fallo::uso(format!("Unknown type: {s}. They are: {}", Tipo::TODOS))),
+        Some(s) => Kind::parse(s)
+            .ok_or_else(|| Failure::usage(format!("Unknown type: {s}. They are: {}", Kind::ALL))),
     }
 }
 
 /// Creates a node. Returns the event and the alias number assigned.
-fn nacer(
+fn born(
     ctx: &Ctx,
-    titulo: &str,
-    por: &str,
-    tipo: Tipo,
-    padre: Option<String>,
+    title: &str,
+    why: &str,
+    kind: Kind,
+    parent: Option<String>,
     a: &Args,
-) -> Result<(Cuerpo, u64, String), Fallo> {
-    let refs = a.lista("ref");
-    let governs = a.lista("governs");
-    let mut campos: Vec<(&str, &str)> = vec![("titulo", titulo), ("por", por)];
-    campos.extend(refs.iter().map(|r| ("ref", r.as_str())));
-    campos.extend(governs.iter().map(|g| ("governs", g.as_str())));
-    guardar_texto(&campos)?;
+) -> Result<(Body, u64, String), Failure> {
+    let refs = a.list("ref");
+    let governs = a.list("governs");
+    let mut fields: Vec<(&str, &str)> = vec![("title", title), ("why", why)];
+    fields.extend(refs.iter().map(|r| ("ref", r.as_str())));
+    fields.extend(governs.iter().map(|g| ("governs", g.as_str())));
+    guard_text(&fields)?;
 
-    let nodo = id::ulid();
-    let num = ctx.arbol.siguiente_num.max(1);
+    let node = id::ulid();
+    let num = ctx.tree.siguiente_num.max(1);
     Ok((
-        Cuerpo::NodoCreado {
-            nodo: nodo.clone(),
+        Body::NodeCreated {
+            node: node.clone(),
             num,
-            tipo,
-            titulo: titulo.to_string(),
-            por: por.to_string(),
-            padre,
-            bloquea: a.tiene("blocks"),
+            kind,
+            title: title.to_string(),
+            why: why.to_string(),
+            parent,
+            blocks: a.has("blocks"),
             refs,
             governs,
         },
         num,
-        nodo,
+        node,
     ))
 }
 
 /// `push` — open a detour. It is **the** operation: the provenance edge is
 /// created here on its own, with nobody having to remember to declare it.
 pub fn push(ctx: &mut Ctx, a: &Args) -> R {
-    let titulo = a
-        .libre(0)
-        .ok_or_else(|| Fallo::uso("usage: vivac push \"<title>\" --why \"<reason>\""))?;
-    let por = a.opt("why").ok_or_else(|| {
-        Fallo::uso(
+    let title = a
+        .positional(0)
+        .ok_or_else(|| Failure::usage("usage: vivac push \"<title>\" --why \"<reason>\""))?;
+    let why = a.opt("why").ok_or_else(|| {
+        Failure::usage(
             "Missing --why. A detour with no reason is exactly the failure this\n  \
              exists to attack: in a month nobody will know why.",
         )
     })?;
 
-    let padre = ctx.arbol.foco().map(|n| n.id.clone());
-    let tipo = tipo_de(
+    let parent = ctx.tree.focus().map(|n| n.id.clone());
+    let kind = tipo_de(
         a,
-        if padre.is_none() {
-            Tipo::Goal
+        if parent.is_none() {
+            Kind::Goal
         } else {
-            Tipo::Task
+            Kind::Task
         },
     )?;
-    let (ev, num, nodo) = nacer(ctx, titulo, por, tipo, padre.clone(), a)?;
+    let (ev, num, node) = born(ctx, title, why, kind, parent.clone(), a)?;
     // The vivac goes **before** the push: it freezes the stack at the moment
     // of the fork, which is the belay where you make yourself safe before
     // setting off. The `next_intent` is the child being opened, because that
-    let v = vivac(ctx, VivacKind::Push, titulo, padre, "");
-    ctx.emitir(vec![v, ev, Cuerpo::Apilado { nodo }])?;
+    let v = vivac(ctx, VivacKind::Push, title, parent, "");
+    ctx.emit(vec![v, ev, Body::Pushed { node }])?;
 
-    // `emitir` already applied the push in memory, so the stack includes the
+    // `emit` already applied the push in memory, so the stack includes the
     // new node and there is no need to add one.
-    let hondo = ctx.arbol.profundidad_pila();
-    println!("  {}{}  {}", tipo.prefijo(), num, titulo);
-    if a.tiene("blocks") {
+    let depth_of = ctx.tree.stack_depth();
+    println!("  {}{}  {}", kind.prefix(), num, title);
+    if a.has("blocks") {
         println!("        blocks its parent from closing");
     }
     // §6.1: intervene, never block. A deep stack is almost never lack of
     // discipline: the root goal moved and nobody re-rooted.
-    if hondo >= 4 {
-        if let Some(raiz) = ctx.arbol.raices().first() {
+    if depth_of >= 4 {
+        if let Some(root) = ctx.tree.roots().first() {
             println!();
             println!(
-                "  You are {hondo} levels away from {} \"{}\".",
-                raiz.alias(),
-                raiz.titulo
+                "  You are {depth_of} levels away from {} \"{}\".",
+                root.alias(),
+                root.title
             );
             println!("  Is this still a detour, or did the real goal move?");
             println!("  If it moved:  vivac promote");
@@ -199,26 +199,26 @@ pub fn push(ctx: &mut Ctx, a: &Args) -> R {
 
 /// `pop` — close the focus and come back to the parent with context.
 pub fn pop(ctx: &mut Ctx, a: &Args) -> R {
-    let foco = ctx
-        .arbol
-        .foco()
+    let focus = ctx
+        .tree
+        .focus()
         .ok_or_else(|| {
-            Fallo::uso(
+            Failure::usage(
                 "The stack is empty. Open something:  vivac push \"<title>\" --why \"<reason>\"",
             )
         })?
         .clone();
-    let resultado = a.libre(0).unwrap_or("");
-    let luego = a.opt("next").unwrap_or(resultado);
-    guardar_texto(&[("outcome", resultado), ("next", luego)])?;
-    let v = vivac(ctx, VivacKind::Pop, luego, Some(foco.id.clone()), "");
-    cerrar(ctx, &foco, resultado, a.tiene("force"), true)?;
-    ctx.emitir(vec![v])?;
-    match ctx.arbol.nodo(foco.padre.as_deref().unwrap_or("")) {
+    let outcome = a.positional(0).unwrap_or("");
+    let luego = a.opt("next").unwrap_or(outcome);
+    guard_text(&[("outcome", outcome), ("next", luego)])?;
+    let v = vivac(ctx, VivacKind::Pop, luego, Some(focus.id.clone()), "");
+    close_node(ctx, &focus, outcome, a.has("force"), true)?;
+    ctx.emit(vec![v])?;
+    match ctx.tree.node(focus.parent.as_deref().unwrap_or("")) {
         Some(p) => {
-            let r = ctx.arbol.recuento(&p.id);
-            println!("  back to {}  {}", p.alias(), p.titulo);
-            let f = r.frase();
+            let r = ctx.tree.counts(&p.id);
+            println!("  back to {}  {}", p.alias(), p.title);
+            let f = r.phrase();
             if !f.is_empty() {
                 println!("        ({f} below it)");
             }
@@ -232,38 +232,38 @@ pub fn pop(ctx: &mut Ctx, a: &Args) -> R {
 /// comes out empty. The closure rule does not stop it: parking claims nothing
 /// finished, and if parking cost more than ignoring, nobody would park.
 pub fn park(ctx: &mut Ctx, a: &Args) -> R {
-    let (nodo, motivo) = match a.libre(0).and_then(|s| ctx.arbol.resolver(s)) {
-        Some(n) => (n.clone(), a.libre(1).unwrap_or("")),
+    let (node, reason) = match a.positional(0).and_then(|s| ctx.tree.resolve(s)) {
+        Some(n) => (n.clone(), a.positional(1).unwrap_or("")),
         None => {
             let f = ctx
-                .arbol
-                .foco()
-                .ok_or_else(|| Fallo::uso("usage: vivac park [<id>] [\"<reason>\"]"))?
+                .tree
+                .focus()
+                .ok_or_else(|| Failure::usage("usage: vivac park [<id>] [\"<reason>\"]"))?
                 .clone();
-            (f, a.libre(0).unwrap_or(""))
+            (f, a.positional(0).unwrap_or(""))
         }
     };
-    guardar_texto(&[("reason", motivo)])?;
+    guard_text(&[("reason", reason)])?;
     let mut evs = vec![vivac(
         ctx,
         VivacKind::Park,
-        motivo,
-        Some(nodo.id.clone()),
+        reason,
+        Some(node.id.clone()),
         "",
     )];
-    evs.push(Cuerpo::EstadoCambiado {
-        nodo: nodo.id.clone(),
-        estado: Estado::Suspended,
-        resultado: motivo.to_string(),
-        forzado: false,
+    evs.push(Body::StateChanged {
+        node: node.id.clone(),
+        state: State::Suspended,
+        outcome: reason.to_string(),
+        forced: false,
     });
-    if ctx.arbol.pila.contains(&nodo.id) {
-        evs.push(Cuerpo::Desapilado {
-            nodo: nodo.id.clone(),
+    if ctx.tree.stack.contains(&node.id) {
+        evs.push(Body::Popped {
+            node: node.id.clone(),
         });
     }
-    ctx.emitir(evs)?;
-    println!("  {}  {}  -> parked", nodo.alias(), nodo.titulo);
+    ctx.emit(evs)?;
+    println!("  {}  {}  -> parked", node.alias(), node.title);
     println!("        shows up in:  vivac parked");
     Ok(())
 }
@@ -274,46 +274,46 @@ pub fn park(ctx: &mut Ctx, a: &Args) -> R {
 /// It earns that privilege because the case it prevents is measured: an
 /// audit marked DONE with its findings open took 26 days to be spotted.
 /// Without this, the model lets the same mistake happen again.
-fn cerrar(
+fn close_node(
     ctx: &mut Ctx,
-    n: &crate::model::Nodo,
-    resultado: &str,
+    n: &crate::model::Node,
+    outcome: &str,
     forzar: bool,
     desapilar: bool,
 ) -> R {
     if !forzar {
-        let pend = ctx.arbol.bloqueantes_abiertos(&n.id);
-        if !pend.is_empty() {
+        let pending_count = ctx.tree.open_blockers(&n.id);
+        if !pending_count.is_empty() {
             let mut m = format!(
                 "  {} CANNOT close: {} open closure condition(s)\n",
                 n.alias(),
-                pend.len()
+                pending_count.len()
             );
-            for c in &pend {
-                m.push_str(&format!("\n      {:<6} {}", c.alias(), c.titulo));
+            for c in &pending_count {
+                m.push_str(&format!("\n      {:<6} {}", c.alias(), c.title));
             }
             m.push_str(&format!(
                 "\n\n  A run closes with its findings, not with its report.\n  \
                  Closing it anyway leaves a trace:  vivac done {} --force",
                 n.num
             ));
-            return Err(Fallo::Modelo(m));
+            return Err(Failure::Model(m));
         }
     }
-    let mut evs = vec![Cuerpo::EstadoCambiado {
-        nodo: n.id.clone(),
-        estado: Estado::Done,
-        resultado: resultado.to_string(),
-        forzado: forzar,
+    let mut evs = vec![Body::StateChanged {
+        node: n.id.clone(),
+        state: State::Done,
+        outcome: outcome.to_string(),
+        forced: forzar,
     }];
-    if desapilar && ctx.arbol.pila.contains(&n.id) {
-        evs.push(Cuerpo::Desapilado { nodo: n.id.clone() });
+    if desapilar && ctx.tree.stack.contains(&n.id) {
+        evs.push(Body::Popped { node: n.id.clone() });
     }
-    ctx.emitir(evs)?;
+    ctx.emit(evs)?;
     println!(
         "  {}  {}  -> {}",
         n.alias(),
-        n.titulo,
+        n.title,
         if forzar {
             "closed BY FORCE"
         } else {
@@ -328,61 +328,61 @@ fn cerrar(
 
 pub fn done(ctx: &mut Ctx, a: &Args) -> R {
     let s = a
-        .libre(0)
-        .ok_or_else(|| Fallo::uso("usage: vivac done <id> [\"<outcome>\"] [--force]"))?;
-    let n = ctx.resolver(s)?.clone();
-    let resultado = a.libre(1).unwrap_or("");
-    guardar_texto(&[("outcome", resultado)])?;
-    cerrar(ctx, &n, resultado, a.tiene("force"), true)
+        .positional(0)
+        .ok_or_else(|| Failure::usage("usage: vivac done <id> [\"<outcome>\"] [--force]"))?;
+    let n = ctx.resolve(s)?.clone();
+    let outcome = a.positional(1).unwrap_or("");
+    guard_text(&[("outcome", outcome)])?;
+    close_node(ctx, &n, outcome, a.has("force"), true)
 }
 
 /// `add` — a node without touching the stack. It is how a tree that already
 /// existed elsewhere gets in, and how a finding hangs off something that is
 pub fn add(ctx: &mut Ctx, a: &Args) -> R {
-    let titulo = a.libre(0).ok_or_else(|| {
-        Fallo::uso("usage: vivac add \"<title>\" [--parent N] [--why \"<reason>\"]")
+    let title = a.positional(0).ok_or_else(|| {
+        Failure::usage("usage: vivac add \"<title>\" [--parent N] [--why \"<reason>\"]")
     })?;
-    let padre = match a.opt("parent") {
-        Some(p) => Some(ctx.resolver(p)?.id.clone()),
-        None => ctx.arbol.foco().map(|n| n.id.clone()),
+    let parent = match a.opt("parent") {
+        Some(p) => Some(ctx.resolve(p)?.id.clone()),
+        None => ctx.tree.focus().map(|n| n.id.clone()),
     };
-    let tipo = tipo_de(
+    let kind = tipo_de(
         a,
-        if padre.is_none() {
-            Tipo::Goal
+        if parent.is_none() {
+            Kind::Goal
         } else {
-            Tipo::Task
+            Kind::Task
         },
     )?;
-    let (ev, num, _) = nacer(ctx, titulo, &a.opt_o("why"), tipo, padre.clone(), a)?;
-    ctx.emitir(vec![ev])?;
-    let donde = match padre.and_then(|p| ctx.arbol.nodo(&p).map(|n| n.alias())) {
+    let (ev, num, _) = born(ctx, title, &a.opt_or("why"), kind, parent.clone(), a)?;
+    ctx.emit(vec![ev])?;
+    let where_at = match parent.and_then(|p| ctx.tree.node(&p).map(|n| n.alias())) {
         Some(al) => format!(" under {al}"),
         None => " (root)".into(),
     };
-    println!("  {}{}  {}{}", tipo.prefijo(), num, titulo, donde);
-    if a.tiene("blocks") {
+    println!("  {}{}  {}{}", kind.prefix(), num, title, where_at);
+    if a.has("blocks") {
         println!("        blocks its parent from closing");
     }
     Ok(())
 }
 
 pub fn note(ctx: &mut Ctx, a: &Args) -> R {
-    let (n, nota) = match (a.libre(0), a.libre(1)) {
-        (Some(s), Some(t)) => (ctx.resolver(s)?.clone(), t),
+    let (n, note) = match (a.positional(0), a.positional(1)) {
+        (Some(s), Some(t)) => (ctx.resolve(s)?.clone(), t),
         (Some(t), None) => {
             let f = ctx
-                .arbol
-                .foco()
-                .ok_or_else(|| Fallo::uso("usage: vivac note [<id>] \"<note>\""))?;
+                .tree
+                .focus()
+                .ok_or_else(|| Failure::usage("usage: vivac note [<id>] \"<note>\""))?;
             (f.clone(), t)
         }
-        _ => return Err(Fallo::uso("usage: vivac note [<id>] \"<note>\"")),
+        _ => return Err(Failure::usage("usage: vivac note [<id>] \"<note>\"")),
     };
-    guardar_texto(&[("note", nota)])?;
-    ctx.emitir(vec![Cuerpo::NodoAnotado {
-        nodo: n.id.clone(),
-        nota: nota.to_string(),
+    guard_text(&[("note", note)])?;
+    ctx.emit(vec![Body::NodeNoted {
+        node: n.id.clone(),
+        note: note.to_string(),
     }])?;
     println!("  {} noted", n.alias());
     Ok(())
@@ -390,23 +390,23 @@ pub fn note(ctx: &mut Ctx, a: &Args) -> R {
 
 pub fn block(ctx: &mut Ctx, a: &Args) -> R {
     let s = a
-        .libre(0)
-        .ok_or_else(|| Fallo::uso("usage: vivac block <id> [--off]"))?;
-    let n = ctx.resolver(s)?.clone();
-    let Some(padre) = n.padre.as_ref().and_then(|p| ctx.arbol.nodo(p)) else {
-        return Err(Fallo::uso(format!(
+        .positional(0)
+        .ok_or_else(|| Failure::usage("usage: vivac block <id> [--off]"))?;
+    let n = ctx.resolve(s)?.clone();
+    let Some(parent) = n.parent.as_ref().and_then(|p| ctx.tree.node(p)) else {
+        return Err(Failure::usage(format!(
             "{} is the root: there is no parent to block.",
             n.alias()
         )));
     };
-    let bloquea = !a.tiene("off");
-    let (pa, pt) = (padre.alias(), padre.titulo.clone());
-    ctx.emitir(vec![Cuerpo::BloqueoCambiado {
-        nodo: n.id.clone(),
-        bloquea,
+    let blocks = !a.has("off");
+    let (pa, pt) = (parent.alias(), parent.title.clone());
+    ctx.emit(vec![Body::BlockChanged {
+        node: n.id.clone(),
+        blocks,
     }])?;
-    let verbo = if bloquea { "bloquea" } else { "ya no bloquea" };
-    println!("  {} {} the close of {pa}  {pt}", n.alias(), verbo);
+    let verb = if blocks { "blocks" } else { "ya no blocks" };
+    println!("  {} {} the close of {pa}  {pt}", n.alias(), verb);
     Ok(())
 }
 
@@ -416,18 +416,18 @@ pub fn block(ctx: &mut Ctx, a: &Args) -> R {
 /// because its rank did. Without this operation, the depth warning has no way
 /// out and ends up being ignored.
 pub fn promote(ctx: &mut Ctx, a: &Args) -> R {
-    let n = match a.libre(0) {
-        Some(s) => ctx.resolver(s)?.clone(),
+    let n = match a.positional(0) {
+        Some(s) => ctx.resolve(s)?.clone(),
         None => ctx
-            .arbol
-            .foco()
-            .ok_or_else(|| Fallo::uso("usage: vivac promote [<id>]"))?
+            .tree
+            .focus()
+            .ok_or_else(|| Failure::usage("usage: vivac promote [<id>]"))?
             .clone(),
     };
-    ctx.emitir(vec![Cuerpo::Promovido { nodo: n.id.clone() }])?;
-    println!("  {}  {}  -> a goal of its own", n.alias(), n.titulo);
-    if let Some(p) = n.padre.as_ref().and_then(|p| ctx.arbol.nodo(p)) {
-        println!("        still born from {}  {}", p.alias(), p.titulo);
+    ctx.emit(vec![Body::Promoted { node: n.id.clone() }])?;
+    println!("  {}  {}  -> a goal of its own", n.alias(), n.title);
+    if let Some(p) = n.parent.as_ref().and_then(|p| ctx.tree.node(p)) {
+        println!("        still born from {}  {}", p.alias(), p.title);
     }
     Ok(())
 }
@@ -447,67 +447,67 @@ pub fn promote(ctx: &mut Ctx, a: &Args) -> R {
 /// finding under a closed batch, which the tree already knows how to show and
 /// the brief already knows how to count.
 pub fn abandon(ctx: &mut Ctx, a: &Args) -> R {
-    let n = match a.libre(0).and_then(|s| ctx.arbol.resolver(s)) {
+    let n = match a.positional(0).and_then(|s| ctx.tree.resolve(s)) {
         Some(n) => n.clone(),
         None => ctx
-            .arbol
-            .foco()
-            .ok_or_else(|| Fallo::uso("usage: vivac abandon [<id>] \"<reason>\""))?
+            .tree
+            .focus()
+            .ok_or_else(|| Failure::usage("usage: vivac abandon [<id>] \"<reason>\""))?
             .clone(),
     };
-    let motivo = a
-        .libres
+    let reason = a
+        .positionals
         .iter()
         .rev()
-        .find(|s| ctx.arbol.resolver(s).is_none());
-    let motivo = motivo.map(|s| s.as_str()).unwrap_or("");
-    guardar_texto(&[("reason", motivo)])?;
+        .find(|s| ctx.tree.resolve(s).is_none());
+    let reason = reason.map(|s| s.as_str()).unwrap_or("");
+    guard_text(&[("reason", reason)])?;
 
     // Rescuing a node rescues its descendants. Saving the parent and letting
     // the children die would be a half rescue nobody asked for, and would
     // orphan exactly what was meant to be kept.
-    let mut rescatados: std::collections::HashSet<String> = Default::default();
-    for s in a.lista("rescue") {
+    let mut rescued: std::collections::HashSet<String> = Default::default();
+    for s in a.list("rescue") {
         let r = ctx
-            .arbol
-            .resolver(&s)
-            .ok_or_else(|| Fallo::uso(format!("no such node: {s}")))?;
+            .tree
+            .resolve(&s)
+            .ok_or_else(|| Failure::usage(format!("no such node: {s}")))?;
         let (rid, ralias) = (r.id.clone(), r.alias());
         if rid == n.id {
-            return Err(Fallo::uso(format!(
+            return Err(Failure::usage(format!(
                 "{ralias} is the one being abandoned; it cannot be rescued from itself"
             )));
         }
-        if !ctx.arbol.descendientes(&n.id).iter().any(|d| d.id == rid) {
-            return Err(Fallo::uso(format!(
+        if !ctx.tree.descendants(&n.id).iter().any(|d| d.id == rid) {
+            return Err(Failure::usage(format!(
                 "{ralias} does not hang off {}: there is nothing to rescue it from",
                 n.alias()
             )));
         }
-        rescatados.insert(rid.clone());
-        for d in ctx.arbol.descendientes(&rid) {
-            rescatados.insert(d.id.clone());
+        rescued.insert(rid.clone());
+        for d in ctx.tree.descendants(&rid) {
+            rescued.insert(d.id.clone());
         }
     }
 
-    let (caen, salvados): (Vec<&Nodo>, Vec<&Nodo>) = ctx
-        .arbol
-        .descendientes(&n.id)
+    let (falling, saved): (Vec<&Node>, Vec<&Node>) = ctx
+        .tree
+        .descendants(&n.id)
         .into_iter()
-        .filter(|d| d.estado.abierto())
-        .partition(|d| !rescatados.contains(&d.id));
+        .filter(|d| d.state.is_open())
+        .partition(|d| !rescued.contains(&d.id));
 
     // Only what falls unnamed needs confirming. If everything was rescued,
     // there is nothing left to confirm.
-    if !caen.is_empty() && !a.tiene("cascade") {
+    if !falling.is_empty() && !a.has("cascade") {
         let mut m = format!(
             "  {}  {}\n  has {} open descendant(s) with no rescue:\n",
             n.alias(),
-            n.titulo,
-            caen.len()
+            n.title,
+            falling.len()
         );
-        for d in &caen {
-            m.push_str(&format!("\n      {:<6} {}", d.alias(), d.titulo));
+        for d in &falling {
+            m.push_str(&format!("\n      {:<6} {}", d.alias(), d.title));
         }
         m.push_str("\n\n  Abandon all of it:     vivac abandon ");
         m.push_str(&n.num.to_string());
@@ -516,49 +516,49 @@ pub fn abandon(ctx: &mut Ctx, a: &Args) -> R {
         m.push_str(&n.num.to_string());
         m.push_str(" --rescue <id>");
         m.push_str("\n  Save it as a goal:     vivac promote <id>");
-        return Err(Fallo::Modelo(m));
+        return Err(Failure::Model(m));
     }
 
-    let mut evs = vec![Cuerpo::EstadoCambiado {
-        nodo: n.id.clone(),
-        estado: Estado::Abandoned,
-        resultado: motivo.to_string(),
-        forzado: false,
+    let mut evs = vec![Body::StateChanged {
+        node: n.id.clone(),
+        state: State::Abandoned,
+        outcome: reason.to_string(),
+        forced: false,
     }];
-    let cuantos_caen = caen.len();
-    let salvados_dice: Vec<(String, String)> = salvados
+    let cuantos_caen = falling.len();
+    let salvados_dice: Vec<(String, String)> = saved
         .iter()
-        .map(|d| (d.alias(), d.titulo.clone()))
+        .map(|d| (d.alias(), d.title.clone()))
         .collect();
-    for d in caen {
-        evs.push(Cuerpo::EstadoCambiado {
-            nodo: d.id.clone(),
-            estado: Estado::Abandoned,
-            resultado: format!("cascaded from {}", n.alias()),
-            forzado: false,
+    for d in falling {
+        evs.push(Body::StateChanged {
+            node: d.id.clone(),
+            state: State::Abandoned,
+            outcome: format!("cascaded from {}", n.alias()),
+            forced: false,
         });
     }
     // The stack is the path to the focus and cannot cross an abandoned node,
     // so everything hanging off the abandoned one leaves it --the rescued
     // included, which stays alive but stops being on the path--.
     let mut fuera: Vec<String> = vec![n.id.clone()];
-    fuera.extend(ctx.arbol.descendientes(&n.id).iter().map(|d| d.id.clone()));
+    fuera.extend(ctx.tree.descendants(&n.id).iter().map(|d| d.id.clone()));
     for id in fuera {
-        if ctx.arbol.pila.contains(&id) {
-            evs.push(Cuerpo::Desapilado { nodo: id });
+        if ctx.tree.stack.contains(&id) {
+            evs.push(Body::Popped { node: id });
         }
     }
 
-    ctx.emitir(evs)?;
-    println!("  {}  {}  -> abandoned", n.alias(), n.titulo);
+    ctx.emit(evs)?;
+    println!("  {}  {}  -> abandoned", n.alias(), n.title);
     if cuantos_caen > 0 {
         println!("        and {cuantos_caen} descendant(s) with it");
     }
     if !salvados_dice.is_empty() {
         println!();
         println!("  Rescued, and still born from {}:", n.alias());
-        for (alias, titulo) in &salvados_dice {
-            println!("      {alias:<6} {titulo}");
+        for (alias, title) in &salvados_dice {
+            println!("      {alias:<6} {title}");
         }
         println!();
         println!("  Their lineage crosses an abandoned node on purpose: where they");
@@ -576,57 +576,57 @@ pub fn abandon(ctx: &mut Ctx, a: &Args) -> R {
 /// is what working on it means.
 pub fn focus(ctx: &mut Ctx, a: &Args) -> R {
     let s = a
-        .libre(0)
-        .ok_or_else(|| Fallo::uso("usage: vivac focus <id> [--reopen]"))?;
-    let n = ctx.resolver(s)?.clone();
+        .positional(0)
+        .ok_or_else(|| Failure::usage("usage: vivac focus <id> [--reopen]"))?;
+    let n = ctx.resolve(s)?.clone();
 
-    if !n.estado.abierto() && !a.tiene("reopen") {
+    if !n.state.is_open() && !a.has("reopen") {
         // Parking says "maybe I will be back", so returning is the normal
         // operation and asks no permission. Closing claims something finished:
         // undoing that has to be deliberate.
-        if n.estado != Estado::Suspended {
-            return Err(Fallo::Modelo(format!(
+        if n.state != State::Suspended {
+            return Err(Failure::Model(format!(
                 "  {} is {}. Going back into it undoes that claim.\n\n  \
                  If it really was not finished:  vivac focus {} --reopen",
                 n.alias(),
-                n.estado.palabra(n.tipo),
+                n.state.word(n.kind),
                 n.num
             )));
         }
     }
 
     let camino: Vec<String> = ctx
-        .arbol
-        .ancestros(&n.id)
+        .tree
+        .ancestors(&n.id)
         .iter()
         .map(|p| p.id.clone())
         .collect();
-    let mut evs: Vec<Cuerpo> = ctx
-        .arbol
-        .pila
+    let mut evs: Vec<Body> = ctx
+        .tree
+        .stack
         .iter()
         .filter(|id| !camino.contains(id))
-        .map(|id| Cuerpo::Desapilado { nodo: id.clone() })
+        .map(|id| Body::Popped { node: id.clone() })
         .collect();
-    if !n.estado.abierto() {
-        evs.push(Cuerpo::EstadoCambiado {
-            nodo: n.id.clone(),
-            estado: Estado::Active,
-            resultado: String::new(),
-            forzado: false,
+    if !n.state.is_open() {
+        evs.push(Body::StateChanged {
+            node: n.id.clone(),
+            state: State::Active,
+            outcome: String::new(),
+            forced: false,
         });
     }
     for id in &camino {
-        if !ctx.arbol.pila.contains(id) {
-            evs.push(Cuerpo::Apilado { nodo: id.clone() });
+        if !ctx.tree.stack.contains(id) {
+            evs.push(Body::Pushed { node: id.clone() });
         }
     }
-    let revivido = !n.estado.abierto();
-    ctx.emitir(evs)?;
+    let revivido = !n.state.is_open();
+    ctx.emit(evs)?;
     if revivido {
         println!("  {} is open again", n.alias());
     }
-    crate::render::stack(&ctx.arbol, a)
+    crate::render::stack(&ctx.tree, a)
 }
 
 /// `flag <id> <flag> --why <reason>` — raise or clear a flag.
@@ -635,42 +635,42 @@ pub fn focus(ctx: &mut Ctx, a: &Args) -> R {
 /// as a contract: a flag with no reason informs nobody, it only adds noise to
 /// the brief, and within a week they all get ignored.
 pub fn flag(ctx: &mut Ctx, a: &Args) -> R {
-    let (Some(sid), Some(sb)) = (a.libre(0), a.libre(1)) else {
-        return Err(Fallo::uso(
+    let (Some(sid), Some(sb)) = (a.positional(0), a.positional(1)) else {
+        return Err(Failure::usage(
             "usage: vivac flag <id> <flag> --why \"<reason>\"  |  --off\n\n  \
              Flags: suspect, review, stale",
         ));
     };
-    let n = ctx.resolver(sid)?.clone();
-    let bandera = Bandera::desde(sb).ok_or_else(|| {
-        Fallo::uso(format!(
+    let n = ctx.resolve(sid)?.clone();
+    let flag = Flag::parse(sb).ok_or_else(|| {
+        Failure::usage(format!(
             "Unknown flag: {sb}. They are: {}",
-            Bandera::TODAS
+            Flag::TODAS
         ))
     })?;
 
-    if a.tiene("off") {
-        ctx.emitir(vec![Cuerpo::BanderaBajada {
-            nodo: n.id.clone(),
-            bandera,
+    if a.has("off") {
+        ctx.emit(vec![Body::FlagCleared {
+            node: n.id.clone(),
+            flag,
         }])?;
-        println!("  {}  is no longer {}", n.alias(), bandera.palabra());
+        println!("  {}  is no longer {}", n.alias(), flag.word());
         return Ok(());
     }
-    let motivo = a.opt("why").ok_or_else(|| {
-        Fallo::uso(
+    let reason = a.opt("why").ok_or_else(|| {
+        Failure::usage(
             "Missing --why. A flag with no reason informs nobody: in two weeks\n  \
              nobody will know what needed looking at, and they all get ignored.",
         )
     })?;
-    guardar_texto(&[("reason", motivo)])?;
-    ctx.emitir(vec![Cuerpo::BanderaAlzada {
-        nodo: n.id.clone(),
-        bandera,
-        motivo: motivo.to_string(),
+    guard_text(&[("reason", reason)])?;
+    ctx.emit(vec![Body::FlagRaised {
+        node: n.id.clone(),
+        flag,
+        reason: reason.to_string(),
     }])?;
-    println!("  {}  {}  -> {}", n.alias(), n.titulo, bandera.palabra());
-    println!("        {motivo}");
+    println!("  {}  {}  -> {}", n.alias(), n.title, flag.word());
+    println!("        {reason}");
     Ok(())
 }
 
@@ -680,43 +680,43 @@ pub fn flag(ctx: &mut Ctx, a: &Args) -> R {
 /// practice: without them, in a month the agent proposes again what you
 /// already rejected.
 pub fn decide(ctx: &mut Ctx, a: &Args) -> R {
-    let titulo = a.libre(0).ok_or_else(|| {
-        Fallo::uso(
+    let title = a.positional(0).ok_or_else(|| {
+        Failure::usage(
             "usage: vivac decide \"<title>\" --reason \"<r>\" [--alternative X] [--supersedes d9]",
         )
     })?;
     let razon = a.opt("reason").ok_or_else(|| {
-        Fallo::uso("Missing --reason. A decision with no reason is a datum, not a decision.")
+        Failure::usage("Missing --reason. A decision with no reason is a datum, not a decision.")
     })?;
-    let alternativas = a.lista("alternative");
+    let alternatives = a.list("alternative");
     let superada = match a.opt("supersedes") {
-        Some(s) => Some(ctx.resolver(s)?.clone()),
+        Some(s) => Some(ctx.resolve(s)?.clone()),
         None => None,
     };
 
     let mut cuerpo = razon.to_string();
-    if !alternativas.is_empty() {
-        cuerpo.push_str(&format!("  |  discarded: {}", alternativas.join("; ")));
+    if !alternatives.is_empty() {
+        cuerpo.push_str(&format!("  |  discarded: {}", alternatives.join("; ")));
     }
-    let padre = ctx.arbol.foco().map(|n| n.id.clone());
-    let (ev, num, _) = nacer(ctx, titulo, &cuerpo, Tipo::Decision, padre, a)?;
+    let parent = ctx.tree.focus().map(|n| n.id.clone());
+    let (ev, num, _) = born(ctx, title, &cuerpo, Kind::Decision, parent, a)?;
 
     let mut evs = vec![ev];
     if let Some(v) = &superada {
         // `supersedes` forms a chain: the old one becomes superseded, not deleted.
-        evs.push(Cuerpo::EstadoCambiado {
-            nodo: v.id.clone(),
-            estado: Estado::Superseded,
-            resultado: format!("superseded by d{num}"),
-            forzado: false,
+        evs.push(Body::StateChanged {
+            node: v.id.clone(),
+            state: State::Superseded,
+            outcome: format!("superseded by d{num}"),
+            forced: false,
         });
     }
-    ctx.emitir(evs)?;
-    println!("  d{num}  {titulo}");
+    ctx.emit(evs)?;
+    println!("  d{num}  {title}");
     if let Some(v) = superada {
         println!("        {} becomes superseded", v.alias());
     }
-    if alternativas.is_empty() {
+    if alternatives.is_empty() {
         println!("        no alternatives recorded: in a month they get proposed again");
     }
     Ok(())
@@ -724,23 +724,23 @@ pub fn decide(ctx: &mut Ctx, a: &Args) -> R {
 
 /// `save [label]` — a safe stop on purpose.
 pub fn save(ctx: &mut Ctx, a: &Args) -> R {
-    let etiqueta = a.libre(0).unwrap_or("");
-    let luego = a.opt_o("next");
-    guardar_texto(&[("label", etiqueta), ("next", &luego)])?;
-    let v = vivac(ctx, VivacKind::Manual, &luego, None, etiqueta);
-    let num = ctx.arbol.siguiente_vivac.max(1);
-    ctx.emitir(vec![v])?;
-    let anclaje = ctx.anchor.snapshot();
+    let label = a.positional(0).unwrap_or("");
+    let luego = a.opt_or("next");
+    guard_text(&[("label", label), ("next", &luego)])?;
+    let v = vivac(ctx, VivacKind::Manual, &luego, None, label);
+    let num = ctx.tree.next_vivac_num.max(1);
+    ctx.emit(vec![v])?;
+    let anchoring = ctx.anchor.snapshot();
     println!(
         "  v{num}  {}",
-        if etiqueta.is_empty() {
+        if label.is_empty() {
             "no label"
         } else {
-            etiqueta
+            label
         }
     );
-    if !anclaje.vacio() {
-        println!("        anchored to {}", anclaje.corto());
+    if !anchoring.is_empty_tree() {
+        println!("        anchored to {}", anchoring.corto());
     } else {
         // With no VCS no precision is faked: the vivac is worth the same, but
         // restoring it will only give plain age, not a diff.
@@ -759,96 +759,96 @@ pub fn save(ctx: &mut Ctx, a: &Args) -> R {
 /// git. It rebuilds the stack and presents the diff.
 pub fn restore(ctx: &mut Ctx, a: &Args) -> R {
     let s = a
-        .libre(0)
-        .ok_or_else(|| Fallo::uso("usage: vivac restore <v>"))?;
+        .positional(0)
+        .ok_or_else(|| Failure::usage("usage: vivac restore <v>"))?;
     let v = ctx
-        .arbol
+        .tree
         .vivac(s)
-        .ok_or_else(|| Fallo::uso(format!("No such vivac: {s}.")))?
+        .ok_or_else(|| Failure::usage(format!("No such vivac: {s}.")))?
         .clone();
 
     // The vivac's stack is frozen by alias. Nodes that no longer exist or are
     // closed get skipped and named: restoring resurrects nothing.
     let mut camino = Vec::new();
-    let mut perdidos = Vec::new();
-    for (alias, titulo) in &v.pila {
-        match ctx.arbol.resolver(alias) {
-            Some(n) if n.estado.abierto() => camino.push(n.id.clone()),
-            Some(n) => perdidos.push(format!("{alias} {titulo} [{}]", n.estado.palabra(n.tipo))),
-            None => perdidos.push(format!("{alias} {titulo} [gone]")),
+    let mut lost = Vec::new();
+    for (alias, title) in &v.stack {
+        match ctx.tree.resolve(alias) {
+            Some(n) if n.state.is_open() => camino.push(n.id.clone()),
+            Some(n) => lost.push(format!("{alias} {title} [{}]", n.state.word(n.kind))),
+            None => lost.push(format!("{alias} {title} [gone]")),
         }
     }
-    let mut evs: Vec<Cuerpo> = ctx
-        .arbol
-        .pila
+    let mut evs: Vec<Body> = ctx
+        .tree
+        .stack
         .iter()
         .filter(|id| !camino.contains(id))
-        .map(|id| Cuerpo::Desapilado { nodo: id.clone() })
+        .map(|id| Body::Popped { node: id.clone() })
         .collect();
     for id in &camino {
-        if !ctx.arbol.pila.contains(id) {
-            evs.push(Cuerpo::Apilado { nodo: id.clone() });
+        if !ctx.tree.stack.contains(id) {
+            evs.push(Body::Pushed { node: id.clone() });
         }
     }
-    let cambios = ctx.anchor.changed_since(&v.anchor);
-    ctx.emitir(evs)?;
+    let changes = ctx.anchor.changed_since(&v.anchor);
+    ctx.emit(evs)?;
 
     println!();
     println!(
         "  {} · {} · {}",
         v.alias(),
-        v.kind.palabra(),
+        v.kind.word(),
         crate::clock::date_of(&v.ts)
     );
-    if !v.etiqueta.is_empty() {
-        println!("  {}", v.etiqueta);
+    if !v.label.is_empty() {
+        println!("  {}", v.label);
     }
     println!();
     if !v.next_intent.is_empty() {
         println!("  you were about to:  {}", v.next_intent);
         println!();
     }
-    for p in &perdidos {
+    for p in &lost {
         println!("  no longer on the stack:  {p}");
     }
-    if !perdidos.is_empty() {
+    if !lost.is_empty() {
         println!();
     }
-    if v.anchor.vacio() {
+    if v.anchor.is_empty_tree() {
         println!("  No anchor: there is no diff to show, only the date above.");
         println!();
-    } else if cambios.is_empty() {
+    } else if changes.is_empty() {
         println!("  Nothing changed since {}.", v.anchor.corto());
         println!();
     } else {
-        let tocan: Vec<&crate::anchor::Cambio> = cambios
+        let touching: Vec<&crate::anchor::Change> = changes
             .iter()
-            .filter(|c| v.working_set.iter().any(|g| crate::glob::cubre(g, &c.ruta)))
+            .filter(|c| v.working_set.iter().any(|g| crate::glob::covers(g, &c.path_arg)))
             .collect();
         println!(
             "  {} changes since {}{}",
-            cambios.len(),
+            changes.len(),
             v.anchor.corto(),
             if v.working_set.is_empty() {
                 String::new()
             } else {
-                format!(", {} of them touch what the stack governed", tocan.len())
+                format!(", {} of them touch what the stack governed", touching.len())
             }
         );
-        for c in cambios.iter().take(6) {
-            println!("      {:<52} ({})", c.ruta, c.veces);
+        for c in changes.iter().take(6) {
+            println!("      {:<52} ({})", c.path_arg, c.times);
         }
-        if cambios.len() > 6 {
-            println!("      ... and {} more", cambios.len() - 6);
+        if changes.len() > 6 {
+            println!("      ... and {} more", changes.len() - 6);
         }
         println!();
     }
-    crate::render::stack(&ctx.arbol, a)
+    crate::render::stack(&ctx.tree, a)
 }
 
 /// An automatic stop, for the end-of-session hook.
-pub fn vivac_auto(ctx: &mut Ctx, kind: VivacKind, luego: &str) -> R {
-    guardar_texto(&[("next", luego)])?;
+pub fn auto_vivac(ctx: &mut Ctx, kind: VivacKind, luego: &str) -> R {
+    guard_text(&[("next", luego)])?;
     let v = vivac(ctx, kind, luego, None, "");
-    ctx.emitir(vec![v])
+    ctx.emit(vec![v])
 }
