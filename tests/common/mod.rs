@@ -14,6 +14,10 @@ pub struct Sandbox(pub PathBuf);
 impl Sandbox {
     /// A directory with no `.vivac/`. For proving the tool stays quiet where
     /// nobody planted it.
+    ///
+    /// `mod common` is compiled once per test binary, so the ones that do not
+    /// use this see it as dead. It is not.
+    #[allow(dead_code)]
     pub fn new_empty(name: &str) -> Sandbox {
         let d = std::env::temp_dir().join(format!(
             "vivac-v-{name}-{}",
