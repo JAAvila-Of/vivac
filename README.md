@@ -186,4 +186,5 @@ Sin demonio, sin servidor y sin red. El almacén es `.vivac/`, dos archivos.
 
 ## Licencia
 
-`MIT OR Apache-2.0`.
+`MIT OR Apache-2.0`, a elección de quien lo use. El texto de cada una está en
+[`LICENSE-MIT`](LICENSE-MIT) y [`LICENSE-APACHE`](LICENSE-APACHE).
