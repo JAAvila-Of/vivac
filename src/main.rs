@@ -10,17 +10,21 @@
 //! verdad es que una operacion que pide un juicio de relevancia no se llama
 //! nunca bajo carga.
 
+mod anchor;
 mod args;
+mod brief;
 mod check;
 mod clock;
 mod event;
 mod fallo;
+mod glob;
 mod id;
 mod import;
 mod model;
 mod ops;
 mod redact;
 mod render;
+mod session;
 mod store;
 
 use args::Args;
@@ -35,7 +39,7 @@ const USO: &str = r#"vivac - procedencia del trabajo
           [--tipo goal|task|decision|question|constraint|finding|assumption]
           [--bloquea]        su padre no cierra hasta que este cierre
           [--ref R] [--governs G]
-    vivac pop ["<resultado>"]                 cierra el foco, vuelve al padre
+    vivac pop ["<resultado>"] [--luego "<...>"]   cierra el foco, vuelve al padre
     vivac park [<id>] ["<motivo>"]            aparca: alimenta NO TOCAR AHORA
     vivac promote [<id>]                      el foco pasa a ser meta propia
     vivac abandon [<id>] ["<motivo>"] [--cascada]
@@ -46,9 +50,19 @@ const USO: &str = r#"vivac - procedencia del trabajo
     vivac done <id> ["<resultado>"] [--forzar]
     vivac note [<id>] "<nota>"
     vivac block <id> [--off]
+    vivac decide "<titulo>" --razon "<r>" [--alternativa X] [--supersedes d9]
+    vivac flag <id> suspect|review|stale --por "<motivo>"  [--off]
+
+  Paradas seguras
+
+    vivac save ["<etiqueta>"] [--luego "<que ibas a hacer>"]
+    vivac restore <v>                         reconstruye la pila y da el diff
+    vivac vivacs                              las paradas, de la ultima atras
 
   El mantenedor lee            (todos aceptan --json)
 
+    vivac brief [--budget 1500] [--now <fecha>]
+                                              donde estas y que NO tocar ahora
     vivac why <id>                            POR QUE ESTAMOS ACA
     vivac tree [id] [--todo]                  el arbol, con cierres falsos
     vivac open                                frentes abiertos y su linaje
@@ -56,6 +70,12 @@ const USO: &str = r#"vivac - procedencia del trabajo
     vivac parked                              NO TOCAR AHORA
     vivac stats                               cifras
     vivac check                               invariantes; va en CI
+
+  Sesion
+
+    vivac session start [--hook]              el brief, para inyectarlo
+    vivac session end   [--hook]              parada automatica al cerrar
+    vivac hooks                               que pegar en settings.json
 
   Empezar
 
@@ -96,6 +116,14 @@ fn correr() -> i32 {
     }
 }
 
+fn nombre_proyecto(ctx: &ops::Ctx) -> String {
+    ctx.store
+        .raiz
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "-".into())
+}
+
 fn despachar(cmd: &str, a: &Args) -> Result<i32, Fallo> {
     let cwd = std::env::current_dir().map_err(Fallo::Io)?;
 
@@ -108,7 +136,19 @@ fn despachar(cmd: &str, a: &Args) -> Result<i32, Fallo> {
         return Ok(0);
     }
 
-    let raiz = store::buscar_raiz(&cwd).ok_or(Fallo::SinStore)?;
+    if cmd == "hooks" {
+        return session::hooks().map(|_| 0);
+    }
+
+    let Some(raiz) = store::buscar_raiz(&cwd) else {
+        // Los hooks callan donde no hay arbol. Uno que falla en cada
+        // directorio ajeno se desactiva a los dos dias, y con el se pierden
+        // los dos que si importan.
+        if cmd == "session" && a.tiene("hook") {
+            return Ok(0);
+        }
+        return Err(Fallo::SinStore);
+    };
     let mut ctx = ops::Ctx::cargar(store::Store::abrir(raiz)?)?;
 
     // `check` es el unico que devuelve un codigo propio: distingue la
@@ -122,13 +162,26 @@ fn despachar(cmd: &str, a: &Args) -> Result<i32, Fallo> {
     const COMUNES: &[&str] = &["json"];
     let permitidas: &[&str] = match cmd {
         "push" => &["por", "tipo", "bloquea", "ref", "governs"],
+        "pop" => &["forzar", "luego"],
+        "decide" => &[
+            "razon",
+            "alternativa",
+            "supersedes",
+            "ref",
+            "governs",
+            "bloquea",
+        ],
+        "flag" => &["por", "off"],
+        "save" => &["luego"],
+        "brief" => &["budget", "now", "json"],
+        "session" => &["hook", "luego", "budget", "now"],
         "add" => &["padre", "por", "tipo", "bloquea", "ref", "governs"],
-        "pop" | "done" => &["forzar"],
+        "done" => &["forzar"],
         "abandon" => &["cascada"],
         "focus" => &["reabrir"],
         "block" => &["off"],
         "tree" => &["todo", "all", "json"],
-        "park" | "promote" | "note" | "import" => &[],
+        "park" | "promote" | "note" | "import" | "restore" | "vivacs" => &[],
         _ => COMUNES,
     };
     let desconocidas = a.desconocidas(&[permitidas, COMUNES].concat());
@@ -157,6 +210,10 @@ fn despachar(cmd: &str, a: &Args) -> Result<i32, Fallo> {
 
     let r: fallo::R = match cmd {
         "focus" => ops::focus(&mut ctx, a),
+        "decide" => ops::decide(&mut ctx, a),
+        "flag" => ops::flag(&mut ctx, a),
+        "save" => ops::save(&mut ctx, a),
+        "restore" => ops::restore(&mut ctx, a),
         "push" => ops::push(&mut ctx, a),
         "pop" => ops::pop(&mut ctx, a),
         "park" => ops::park(&mut ctx, a),
@@ -167,6 +224,15 @@ fn despachar(cmd: &str, a: &Args) -> Result<i32, Fallo> {
         "note" => ops::note(&mut ctx, a),
         "block" => ops::block(&mut ctx, a),
         "import" => import::import(&mut ctx, a),
+        "brief" => {
+            let proyecto = nombre_proyecto(&ctx);
+            brief::brief(&ctx.arbol, ctx.anchor.as_ref(), a, &proyecto)
+        }
+        "vivacs" => render::vivacs(&ctx.arbol, a),
+        "session" => {
+            let proyecto = nombre_proyecto(&ctx);
+            session::despachar(&mut ctx, a, &proyecto)
+        }
         "why" => render::why(&ctx.arbol, a),
         "tree" => render::tree(&ctx.arbol, a),
         "open" => render::open(&ctx.arbol, a),

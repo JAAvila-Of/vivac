@@ -96,6 +96,66 @@ impl Estado {
     }
 }
 
+/// Banderas ortogonales al estado. `MODEL.md` §4.2: un `task` puede estar
+/// `active` y `suspect` a la vez, y modelarlas como estados daria un producto
+/// cartesiano insostenible.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Bandera {
+    /// Algo de lo que depende cayo. Lleva motivo siempre.
+    Suspect,
+    /// Hay que mirarlo, sin afirmar que este mal.
+    Review,
+    /// Viejo: sin tocar mientras lo suyo cambiaba.
+    Stale,
+}
+
+impl Bandera {
+    pub fn desde(s: &str) -> Option<Bandera> {
+        Some(match s {
+            "suspect" | "sospechoso" => Bandera::Suspect,
+            "review" | "revisar" => Bandera::Review,
+            "stale" | "viejo" => Bandera::Stale,
+            _ => return None,
+        })
+    }
+
+    pub fn palabra(self) -> &'static str {
+        match self {
+            Bandera::Suspect => "sospechoso",
+            Bandera::Review => "revisar",
+            Bandera::Stale => "viejo",
+        }
+    }
+
+    pub const TODAS: &'static str = "suspect, review, stale";
+}
+
+/// Un vivac: parada segura a mitad de ascension. `MODEL.md` §4.7 lo llama
+/// **primitiva unica con tres usos**: `push`, `pop` y el fin de sesion
+/// generan vivacs, no son mecanismos distintos.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum VivacKind {
+    Push,
+    Pop,
+    Park,
+    Manual,
+    Auto,
+}
+
+impl VivacKind {
+    pub fn palabra(self) -> &'static str {
+        match self {
+            VivacKind::Push => "push",
+            VivacKind::Pop => "pop",
+            VivacKind::Park => "park",
+            VivacKind::Manual => "manual",
+            VivacKind::Auto => "auto",
+        }
+    }
+}
+
 /// Un evento del log. `MODEL.md` §3.2.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Evento {
@@ -161,4 +221,34 @@ pub enum Cuerpo {
     Desapilado { nodo: String },
     #[serde(rename = "stack.promoted")]
     Promovido { nodo: String },
+    /// El motivo es obligatorio: `BRIEF-SPEC.md` §10 lo prueba, porque una
+    /// bandera sin motivo no informa de nada y solo hace ruido.
+    #[serde(rename = "flag.raised")]
+    BanderaAlzada {
+        nodo: String,
+        bandera: Bandera,
+        motivo: String,
+    },
+    #[serde(rename = "flag.cleared")]
+    BanderaBajada { nodo: String, bandera: Bandera },
+    #[serde(rename = "vivac.created")]
+    VivacCreado {
+        vivac: String,
+        num: u64,
+        kind: VivacKind,
+        /// Pila congelada con titulos: el vivac tiene que poder leerse aunque
+        /// los nodos hayan cambiado despues.
+        pila: Vec<(String, String)>,
+        /// Rutas del largo. No se miden --haria falta `post_tool`, que no esta
+        /// en Tier 0-- sino que se derivan del `governs` que la pila declara.
+        working_set: Vec<String>,
+        /// El resume payload: que ibas a hacer a continuacion.
+        next_intent: String,
+        #[serde(default)]
+        anchor: crate::anchor::AnchorRef,
+        #[serde(default)]
+        node_ref: Option<String>,
+        #[serde(default)]
+        etiqueta: String,
+    },
 }

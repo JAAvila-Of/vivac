@@ -441,3 +441,58 @@ pub fn stats(a: &Arbol, args: &Args) -> R {
     println!();
     Ok(())
 }
+
+/// `vivacs` — las paradas seguras, de la ultima hacia atras.
+pub fn vivacs(a: &Arbol, args: &Args) -> R {
+    if args.tiene("json") {
+        return imprimir_json(json!(a
+            .vivacs
+            .iter()
+            .rev()
+            .map(|v| json!({
+                "id": v.id,
+                "alias": v.alias(),
+                "node_ref": v.node_ref.as_ref().and_then(|r| a.nodo(r).map(|n| n.alias())),
+                "kind": v.kind.palabra(),
+                "ts": v.ts,
+                "etiqueta": v.etiqueta,
+                "next_intent": v.next_intent,
+                "anchor": v.anchor,
+                "pila": v.pila.iter().map(|(al, t)| json!({"alias": al, "titulo": t}))
+                    .collect::<Vec<_>>(),
+                "working_set": v.working_set,
+            }))
+            .collect::<Vec<_>>()));
+    }
+    if a.vivacs.is_empty() {
+        println!("  Ninguna parada todavia.  vivac save \"<etiqueta>\"");
+        return Ok(());
+    }
+    println!();
+    for v in a.vivacs.iter().rev().take(20) {
+        let cima = v
+            .pila
+            .last()
+            .map(|(al, t)| format!("{al}  {t}"))
+            .unwrap_or_else(|| "pila vacia".into());
+        println!(
+            "  {:<5} {:<7} {}  {}",
+            v.alias(),
+            v.kind.palabra(),
+            crate::clock::date_of(&v.ts),
+            cima
+        );
+        if !v.etiqueta.is_empty() {
+            println!("           {}", v.etiqueta);
+        }
+        if !v.next_intent.is_empty() {
+            println!("           ibas a: {}", v.next_intent);
+        }
+    }
+    if a.vivacs.len() > 20 {
+        println!();
+        println!("  ... y {} mas", a.vivacs.len() - 20);
+    }
+    println!();
+    Ok(())
+}

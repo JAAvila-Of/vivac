@@ -7,7 +7,9 @@
 //! render en cuadratico. Los indices se piensan desde el modelo, no se
 //! agregan cuando duele.
 
-use crate::event::{Cuerpo, Estado, Evento, Tipo};
+use crate::anchor::AnchorRef;
+use crate::event::{Bandera, Cuerpo, Estado, Evento, Tipo, VivacKind};
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
@@ -31,6 +33,30 @@ pub struct Nodo {
     pub abierto: String,
     pub cerrado: Option<String>,
     pub cierre_forzado: bool,
+    /// Bandera -> motivo. Ortogonales al estado: un nodo puede estar `active`
+    /// y `suspect` a la vez.
+    pub banderas: BTreeMap<Bandera, String>,
+}
+
+/// Parada segura. Inmutable: no hay evento que lo modifique.
+#[derive(Debug, Clone)]
+pub struct Vivac {
+    pub id: String,
+    pub num: u64,
+    pub kind: VivacKind,
+    pub pila: Vec<(String, String)>,
+    pub working_set: Vec<String>,
+    pub next_intent: String,
+    pub anchor: AnchorRef,
+    pub node_ref: Option<String>,
+    pub etiqueta: String,
+    pub ts: String,
+}
+
+impl Vivac {
+    pub fn alias(&self) -> String {
+        format!("v{}", self.num)
+    }
 }
 
 impl Nodo {
@@ -70,6 +96,8 @@ pub struct Arbol {
     por_num: HashMap<u64, String>,
     pub raices: Vec<String>,
     pub pila: Vec<String>,
+    pub vivacs: Vec<Vivac>,
+    pub siguiente_vivac: u64,
     pub seq: u64,
     pub siguiente_num: u64,
     pub lineas_rotas: usize,
@@ -131,6 +159,7 @@ impl Arbol {
                         abierto: crate::clock::date_of(ts).to_string(),
                         cerrado: None,
                         cierre_forzado: false,
+                        banderas: BTreeMap::new(),
                     },
                 );
                 self.por_num.insert(*num, nodo.clone());
@@ -176,6 +205,45 @@ impl Arbol {
             }
             Cuerpo::Desapilado { nodo } => {
                 self.pila.retain(|x| x != nodo);
+            }
+            Cuerpo::BanderaAlzada {
+                nodo,
+                bandera,
+                motivo,
+            } => {
+                if let Some(n) = self.nodos.get_mut(nodo) {
+                    n.banderas.insert(*bandera, motivo.clone());
+                }
+            }
+            Cuerpo::BanderaBajada { nodo, bandera } => {
+                if let Some(n) = self.nodos.get_mut(nodo) {
+                    n.banderas.remove(bandera);
+                }
+            }
+            Cuerpo::VivacCreado {
+                vivac,
+                num,
+                kind,
+                pila,
+                working_set,
+                next_intent,
+                anchor,
+                node_ref,
+                etiqueta,
+            } => {
+                self.siguiente_vivac = self.siguiente_vivac.max(*num + 1);
+                self.vivacs.push(Vivac {
+                    id: vivac.clone(),
+                    num: *num,
+                    kind: *kind,
+                    pila: pila.clone(),
+                    working_set: working_set.clone(),
+                    next_intent: next_intent.clone(),
+                    anchor: anchor.clone(),
+                    node_ref: node_ref.clone(),
+                    etiqueta: etiqueta.clone(),
+                    ts: ts.to_string(),
+                });
             }
             Cuerpo::Promovido { nodo } => {
                 if let Some(n) = self.nodos.get_mut(nodo) {
@@ -314,6 +382,17 @@ impl Arbol {
             cerrados: d.iter().filter(|n| n.estado == Estado::Done).count(),
             aparcados: d.iter().filter(|n| n.estado == Estado::Suspended).count(),
         }
+    }
+
+    /// El vivac mas reciente. Los vivacs se aniaden en orden de evento, asi
+    /// que el ultimo del vector es el ultimo en el tiempo.
+    pub fn ultimo_vivac(&self) -> Option<&Vivac> {
+        self.vivacs.last()
+    }
+
+    pub fn vivac(&self, s: &str) -> Option<&Vivac> {
+        let n: u64 = s.trim().trim_start_matches(['#', 'v']).parse().ok()?;
+        self.vivacs.iter().find(|v| v.num == n)
     }
 
     pub fn foco(&self) -> Option<&Nodo> {

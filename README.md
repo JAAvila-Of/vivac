@@ -69,12 +69,25 @@ vivac pop "adaptador arreglado"
 **El mantenedor lee.**
 
 ```sh
-vivac why 11        # el camino desde la raíz, narrado
-vivac tree          # el árbol, con los cierres falsos marcados
-vivac open          # los frentes abiertos, cada uno con su linaje
-vivac stack         # dónde estás ahora
-vivac parked        # NO TOCAR AHORA
+vivac brief         dónde estás, qué gobierna este punto y qué NO tocar ahora
+vivac why 11        el camino desde la raíz, narrado
+vivac tree          el árbol, con los cierres falsos marcados
+vivac open          los frentes abiertos, cada uno con su linaje
+vivac stack         la pila de foco
+vivac parked        NO TOCAR AHORA
 ```
+
+**Y hay paradas seguras.** Un vivac es la parada a mitad de ascensión: estado
+coherente, con la pila congelada y la identidad del código en ese momento.
+`push`, `pop` y `park` dejan una sin que se la pida nadie.
+
+```sh
+vivac save "antes de tocar el adaptador" --luego "extraer el validador"
+vivac restore v14   reconstruye la pila y dice qué cambió desde entonces
+```
+
+`restore` **no toca el árbol de trabajo, nunca**. Mezclar navegación de contexto
+con manipulación del árbol da un gestor de ramas peor que git.
 
 Todo lo que el agente necesita hacer se puede hacer sin interfaz interactiva, y
 todos los comandos de lectura aceptan `--json`.
@@ -128,25 +141,39 @@ definición: **seguridad veta, rendimiento presupuesta, DX juzga.**
 
 ## Estado
 
-**v0.1, y es un primer corte honesto.** Funciona, está probado contra tres
-árboles reales y contra sus propios presupuestos, pero le falta bastante de lo
-que el diseño ya tiene escrito.
+**Tier 0 completo.** El árbol, las dos aristas, la regla de cierre, la guarda de
+redacción, el `brief` con presupuesto de tokens, los hooks de sesión, los vivacs
+y el `Anchor` con implementaciones `Git` y `Null`. 38 tests, de los que 9 son el
+contrato de la especificación del brief ejecutado sobre el binario.
+
+El `brief` es determinista por contrato: mismo log, mismo `--now`, mismos bytes.
+La espina —el camino de la raíz al foco— **nunca se trunca**: si no cabe en el
+presupuesto, sale igual y el aviso dice que lo que sobra es árbol, no render.
 
 Medido en esta máquina, descontando el arranque del proceso:
 
-| nodos | `add` | `tree` | `why` |
+| nodos | `push` | `brief` | `tree` |
 |---|---|---|---|
-| 100 | ~4 ms | ~4 ms | ~3 ms |
-| 1 000 | ~8 ms | ~10 ms | ~8 ms |
-| 10 000 | ~50 ms | ~85 ms | ~66 ms |
+| 100 | ~5 ms | ~5 ms | ~5 ms |
+| 1 000 | ~11 ms | ~10 ms | ~13 ms |
+| 10 000 | ~54 ms | ~63 ms | ~95 ms |
 
 El presupuesto de escritura es p99 < 5 ms y el de lectura < 50 ms sobre 10 000
-nodos. El primero aguanta hasta el orden del millar; el segundo se pasa por poco
-en el extremo. El almacén es un log append-only que se pliega entero en cada
-llamada, así que el costo es del tamaño del log. **Ahí entra SQLite**, y ahora
-tiene un número en vez de una corazonada.
+nodos. En el orden del centenar de nodos se cumple, y de ahí para arriba se
+degrada linealmente con el tamaño del log, que se lee entero en cada llamada.
+**Ahí entra SQLite**, y ahora tiene un número en vez de una corazonada.
 
 No están todavía: TUI, búsqueda, invalidación en cascada, modo equipo.
+
+## Hooks
+
+```sh
+vivac hooks     imprime lo que hay que pegar en .claude/settings.json
+```
+
+`SessionStart` inyecta el brief en el contexto del agente; `Stop` deja una parada
+automática. Los dos callan y salen con 0 donde no hay `.vivac/`, así que se
+pueden dejar en la configuración global sin molestar en otros proyectos.
 
 ## Instalación
 

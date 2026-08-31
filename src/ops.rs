@@ -6,8 +6,9 @@
 //! llamaron nueve veces, y la operacion que preguntaba "¿esto merece
 //! guardarse?" se llamo cero, con un protocolo declarado obligatorio.
 
+use crate::anchor::{self, Anchor};
 use crate::args::Args;
-use crate::event::{Cuerpo, Estado, Tipo};
+use crate::event::{Bandera, Cuerpo, Estado, Tipo, VivacKind};
 use crate::fallo::{Fallo, R};
 use crate::model::{plegar, Arbol};
 use crate::store::Store;
@@ -16,13 +17,19 @@ use crate::{id, redact};
 pub struct Ctx {
     pub store: Store,
     pub arbol: Arbol,
+    pub anchor: Box<dyn Anchor>,
 }
 
 impl Ctx {
     pub fn cargar(store: Store) -> Result<Ctx, Fallo> {
         let (eventos, rotas) = store.leer()?;
         let arbol = plegar(&eventos, rotas);
-        Ok(Ctx { store, arbol })
+        let anchor = anchor::detectar(&store.raiz);
+        Ok(Ctx {
+            store,
+            arbol,
+            anchor,
+        })
     }
 
     /// Escribe y **despues aplica en memoria**, para que lo que se imprima a
@@ -41,6 +48,48 @@ impl Ctx {
         self.arbol
             .resolver(s)
             .ok_or_else(|| Fallo::uso(format!("No existe el nodo {s}.")))
+    }
+}
+
+/// Construye un vivac de la pila de ahora mismo.
+///
+/// El `working_set` **no se mide**: medir que archivos toco el largo pediria
+/// un hook `post_tool`, que no esta en Tier 0. Se deriva del `governs` que la
+/// pila declara, que es lo que hay, y el `brief` lo dice asi en vez de fingir
+/// que lo observo.
+fn vivac(
+    ctx: &Ctx,
+    kind: VivacKind,
+    next_intent: &str,
+    node_ref: Option<String>,
+    etiqueta: &str,
+) -> Cuerpo {
+    let pila: Vec<(String, String)> = ctx
+        .arbol
+        .pila
+        .iter()
+        .filter_map(|id| ctx.arbol.nodo(id))
+        .map(|n| (n.alias(), n.titulo.clone()))
+        .collect();
+    let mut working_set: Vec<String> = ctx
+        .arbol
+        .pila
+        .iter()
+        .filter_map(|id| ctx.arbol.nodo(id))
+        .flat_map(|n| n.governs.iter().cloned())
+        .collect();
+    working_set.sort();
+    working_set.dedup();
+    Cuerpo::VivacCreado {
+        vivac: id::ulid(),
+        num: ctx.arbol.siguiente_vivac.max(1),
+        kind,
+        pila,
+        working_set,
+        next_intent: next_intent.to_string(),
+        anchor: ctx.anchor.snapshot(),
+        node_ref,
+        etiqueta: etiqueta.to_string(),
     }
 }
 
@@ -117,10 +166,16 @@ pub fn push(ctx: &mut Ctx, a: &Args) -> R {
             Tipo::Task
         },
     )?;
-    let (ev, num, nodo) = nacer(ctx, titulo, por, tipo, padre, a)?;
-    ctx.emitir(vec![ev, Cuerpo::Apilado { nodo }])?;
+    let (ev, num, nodo) = nacer(ctx, titulo, por, tipo, padre.clone(), a)?;
+    // El vivac va **antes** del push: congela la pila del momento en que se
+    // bifurca, que es la reunion donde te aseguras antes de salir. El
+    // `next_intent` es el hijo que se abre, porque eso es lo que ibas a hacer.
+    let v = vivac(ctx, VivacKind::Push, titulo, padre, "");
+    ctx.emitir(vec![v, ev, Cuerpo::Apilado { nodo }])?;
 
-    let hondo = ctx.arbol.profundidad_pila() + 1;
+    // `emitir` ya aplico el apilado en memoria, asi que la pila incluye el
+    // nodo nuevo y no hay que sumarle uno.
+    let hondo = ctx.arbol.profundidad_pila();
     println!("  {}{}  {}", tipo.prefijo(), num, titulo);
     if a.tiene("bloquea") {
         println!("        bloquea el cierre de su padre");
@@ -154,8 +209,11 @@ pub fn pop(ctx: &mut Ctx, a: &Args) -> R {
         })?
         .clone();
     let resultado = a.libre(0).unwrap_or("");
-    guardar_texto(&[("resultado", resultado)])?;
+    let luego = a.opt("luego").unwrap_or(resultado);
+    guardar_texto(&[("resultado", resultado), ("luego", luego)])?;
+    let v = vivac(ctx, VivacKind::Pop, luego, Some(foco.id.clone()), "");
     cerrar(ctx, &foco, resultado, a.tiene("forzar"), true)?;
+    ctx.emitir(vec![v])?;
     match ctx.arbol.nodo(foco.padre.as_deref().unwrap_or("")) {
         Some(p) => {
             let r = ctx.arbol.recuento(&p.id);
@@ -186,12 +244,19 @@ pub fn park(ctx: &mut Ctx, a: &Args) -> R {
         }
     };
     guardar_texto(&[("motivo", motivo)])?;
-    let mut evs = vec![Cuerpo::EstadoCambiado {
+    let mut evs = vec![vivac(
+        ctx,
+        VivacKind::Park,
+        motivo,
+        Some(nodo.id.clone()),
+        "",
+    )];
+    evs.push(Cuerpo::EstadoCambiado {
         nodo: nodo.id.clone(),
         estado: Estado::Suspended,
         resultado: motivo.to_string(),
         forzado: false,
-    }];
+    });
     if ctx.arbol.pila.contains(&nodo.id) {
         evs.push(Cuerpo::Desapilado {
             nodo: nodo.id.clone(),
@@ -503,4 +568,228 @@ pub fn focus(ctx: &mut Ctx, a: &Args) -> R {
         println!("  {} vuelve a estar abierto", n.alias());
     }
     crate::render::stack(&ctx.arbol, a)
+}
+
+/// `flag <id> <bandera> --por <motivo>` — levantar o bajar una bandera.
+///
+/// El motivo es **obligatorio** al levantarla. `BRIEF-SPEC.md` §10 lo prueba
+/// como contrato: una bandera sin motivo no informa de nada, solo mete ruido
+/// en el brief, y a la semana se ignoran todas.
+pub fn flag(ctx: &mut Ctx, a: &Args) -> R {
+    let (Some(sid), Some(sb)) = (a.libre(0), a.libre(1)) else {
+        return Err(Fallo::uso(
+            "uso: vivac flag <id> <bandera> --por \"<motivo>\"  |  --off\n\n  \
+             Banderas: suspect, review, stale",
+        ));
+    };
+    let n = ctx.resolver(sid)?.clone();
+    let bandera = Bandera::desde(sb).ok_or_else(|| {
+        Fallo::uso(format!(
+            "Bandera desconocida: {sb}. Son: {}",
+            Bandera::TODAS
+        ))
+    })?;
+
+    if a.tiene("off") {
+        ctx.emitir(vec![Cuerpo::BanderaBajada {
+            nodo: n.id.clone(),
+            bandera,
+        }])?;
+        println!("  {}  ya no esta {}", n.alias(), bandera.palabra());
+        return Ok(());
+    }
+    let motivo = a.opt("por").ok_or_else(|| {
+        Fallo::uso(
+            "Falta --por. Una bandera sin motivo no informa: dentro de dos\n  \
+             semanas nadie sabra que habia que mirar, y se ignoraran todas.",
+        )
+    })?;
+    guardar_texto(&[("motivo", motivo)])?;
+    ctx.emitir(vec![Cuerpo::BanderaAlzada {
+        nodo: n.id.clone(),
+        bandera,
+        motivo: motivo.to_string(),
+    }])?;
+    println!("  {}  {}  -> {}", n.alias(), n.titulo, bandera.palabra());
+    println!("        {motivo}");
+    Ok(())
+}
+
+/// `decide` — registrar una decision.
+///
+/// Las alternativas descartadas son opcionales en el esquema y obligatorias
+/// en la practica: sin ellas, en un mes el agente vuelve a proponer lo que ya
+/// rechazaste.
+pub fn decide(ctx: &mut Ctx, a: &Args) -> R {
+    let titulo = a.libre(0).ok_or_else(|| {
+        Fallo::uso(
+            "uso: vivac decide \"<titulo>\" --razon \"<r>\" [--alternativa X] [--supersedes d9]",
+        )
+    })?;
+    let razon = a.opt("razon").ok_or_else(|| {
+        Fallo::uso("Falta --razon. Una decision sin razon es un dato, no una decision.")
+    })?;
+    let alternativas = a.lista("alternativa");
+    let superada = match a.opt("supersedes") {
+        Some(s) => Some(ctx.resolver(s)?.clone()),
+        None => None,
+    };
+
+    let mut cuerpo = razon.to_string();
+    if !alternativas.is_empty() {
+        cuerpo.push_str(&format!("  |  descartadas: {}", alternativas.join("; ")));
+    }
+    let padre = ctx.arbol.foco().map(|n| n.id.clone());
+    let (ev, num, _) = nacer(ctx, titulo, &cuerpo, Tipo::Decision, padre, a)?;
+
+    let mut evs = vec![ev];
+    if let Some(v) = &superada {
+        // `supersedes` forma cadena: la vieja pasa a superada, no se borra.
+        evs.push(Cuerpo::EstadoCambiado {
+            nodo: v.id.clone(),
+            estado: Estado::Superseded,
+            resultado: format!("superada por d{num}"),
+            forzado: false,
+        });
+    }
+    ctx.emitir(evs)?;
+    println!("  d{num}  {titulo}");
+    if let Some(v) = superada {
+        println!("        {} pasa a superada", v.alias());
+    }
+    if alternativas.is_empty() {
+        println!("        sin alternativas anotadas: en un mes se volveran a proponer");
+    }
+    Ok(())
+}
+
+/// `save [etiqueta]` — una parada segura a proposito.
+pub fn save(ctx: &mut Ctx, a: &Args) -> R {
+    let etiqueta = a.libre(0).unwrap_or("");
+    let luego = a.opt_o("luego");
+    guardar_texto(&[("etiqueta", etiqueta), ("luego", &luego)])?;
+    let v = vivac(ctx, VivacKind::Manual, &luego, None, etiqueta);
+    let num = ctx.arbol.siguiente_vivac.max(1);
+    ctx.emitir(vec![v])?;
+    let anclaje = ctx.anchor.snapshot();
+    println!(
+        "  v{num}  {}",
+        if etiqueta.is_empty() {
+            "sin etiqueta"
+        } else {
+            etiqueta
+        }
+    );
+    if !anclaje.vacio() {
+        println!("        anclado a {}", anclaje.corto());
+    } else {
+        // Sin VCS no se finge precision: el vivac vale igual, pero al
+        // restaurarlo solo habra antiguedad temporal, no diff.
+        println!("        sin ancla: no hay control de versiones aqui");
+    }
+    if luego.is_empty() {
+        println!("        sin --luego: al volver no habra nada que retomar");
+    }
+    Ok(())
+}
+
+/// `restore <v>` — volver a un vivac.
+///
+/// **No toca el arbol de trabajo, nunca.** Mezclar navegacion de contexto con
+/// manipulacion del arbol convierte una herramienta de atencion en un gestor
+/// de ramas peor que git. Reconstruye la pila y presenta el diff.
+pub fn restore(ctx: &mut Ctx, a: &Args) -> R {
+    let s = a
+        .libre(0)
+        .ok_or_else(|| Fallo::uso("uso: vivac restore <v>"))?;
+    let v = ctx
+        .arbol
+        .vivac(s)
+        .ok_or_else(|| Fallo::uso(format!("No existe el vivac {s}.")))?
+        .clone();
+
+    // La pila del vivac esta congelada por alias. Los nodos que ya no existan
+    // o esten cerrados se saltan y se dicen: restaurar no resucita nada.
+    let mut camino = Vec::new();
+    let mut perdidos = Vec::new();
+    for (alias, titulo) in &v.pila {
+        match ctx.arbol.resolver(alias) {
+            Some(n) if n.estado.abierto() => camino.push(n.id.clone()),
+            Some(n) => perdidos.push(format!("{alias} {titulo} [{}]", n.estado.palabra(n.tipo))),
+            None => perdidos.push(format!("{alias} {titulo} [ya no existe]")),
+        }
+    }
+    let mut evs: Vec<Cuerpo> = ctx
+        .arbol
+        .pila
+        .iter()
+        .filter(|id| !camino.contains(id))
+        .map(|id| Cuerpo::Desapilado { nodo: id.clone() })
+        .collect();
+    for id in &camino {
+        if !ctx.arbol.pila.contains(id) {
+            evs.push(Cuerpo::Apilado { nodo: id.clone() });
+        }
+    }
+    let cambios = ctx.anchor.changed_since(&v.anchor);
+    ctx.emitir(evs)?;
+
+    println!();
+    println!(
+        "  {} · {} · {}",
+        v.alias(),
+        v.kind.palabra(),
+        crate::clock::date_of(&v.ts)
+    );
+    if !v.etiqueta.is_empty() {
+        println!("  {}", v.etiqueta);
+    }
+    println!();
+    if !v.next_intent.is_empty() {
+        println!("  ibas a:  {}", v.next_intent);
+        println!();
+    }
+    for p in &perdidos {
+        println!("  ya no en la pila:  {p}");
+    }
+    if !perdidos.is_empty() {
+        println!();
+    }
+    if v.anchor.vacio() {
+        println!("  Sin ancla: no hay diff que enseñar, solo la fecha de arriba.");
+        println!();
+    } else if cambios.is_empty() {
+        println!("  Nada cambio desde {}.", v.anchor.corto());
+        println!();
+    } else {
+        let tocan: Vec<&crate::anchor::Cambio> = cambios
+            .iter()
+            .filter(|c| v.working_set.iter().any(|g| crate::glob::cubre(g, &c.ruta)))
+            .collect();
+        println!(
+            "  {} cambios desde {}{}",
+            cambios.len(),
+            v.anchor.corto(),
+            if v.working_set.is_empty() {
+                String::new()
+            } else {
+                format!(", {} tocan lo que la pila gobernaba", tocan.len())
+            }
+        );
+        for c in cambios.iter().take(6) {
+            println!("      {:<52} ({})", c.ruta, c.veces);
+        }
+        if cambios.len() > 6 {
+            println!("      ... y {} mas", cambios.len() - 6);
+        }
+        println!();
+    }
+    crate::render::stack(&ctx.arbol, a)
+}
+
+/// Una parada automatica, para el hook de fin de sesion.
+pub fn vivac_auto(ctx: &mut Ctx, kind: VivacKind, luego: &str) -> R {
+    guardar_texto(&[("luego", luego)])?;
+    let v = vivac(ctx, kind, luego, None, "");
+    ctx.emitir(vec![v])
 }
