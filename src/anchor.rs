@@ -29,7 +29,7 @@ impl AnchorRef {
     }
 
     /// Short prefix, the way git does it.
-    pub fn corto(&self) -> &str {
+    pub fn short(&self) -> &str {
         let n = self.id.len().min(7);
         &self.id[..n]
     }
@@ -37,7 +37,7 @@ impl AnchorRef {
 
 #[derive(Debug, Clone)]
 pub struct Change {
-    pub path_arg: String,
+    pub file_path: String,
     pub times: usize,
 }
 
@@ -75,15 +75,15 @@ pub struct Git {
 }
 
 /// Picks an implementation by looking for a usable `.git` from `root`.
-pub fn detectar(root: &Path) -> Box<dyn Anchor> {
-    match Git::nuevo(root) {
+pub fn detect(root: &Path) -> Box<dyn Anchor> {
+    match Git::new(root) {
         Some(g) => Box::new(g),
         None => Box::new(Null),
     }
 }
 
 impl Git {
-    fn nuevo(root: &Path) -> Option<Git> {
+    fn new(root: &Path) -> Option<Git> {
         let mut d = root.to_path_buf();
         loop {
             let g = d.join(".git");
@@ -177,11 +177,11 @@ impl Anchor for Git {
         // And whatever is uncommitted, which counts as a change.
         if let Some(out) = self.git(&["status", "--porcelain"]) {
             for l in out.lines() {
-                if let Some(path_arg) = l.get(3..) {
-                    let path_arg = path_arg.rsplit(" -> ").next().unwrap_or(path_arg).trim();
-                    if !path_arg.is_empty() {
+                if let Some(file_path) = l.get(3..) {
+                    let file_path = file_path.rsplit(" -> ").next().unwrap_or(file_path).trim();
+                    if !file_path.is_empty() {
                         *count
-                            .entry(path_arg.trim_matches('"').to_string())
+                            .entry(file_path.trim_matches('"').to_string())
                             .or_default() += 1;
                     }
                 }
@@ -189,13 +189,13 @@ impl Anchor for Git {
         }
         let mut v: Vec<Change> = count
             .into_iter()
-            .map(|(path_arg, times)| Change { path_arg, times })
+            .map(|(file_path, times)| Change { file_path, times })
             .collect();
         // Most-touched first; ties broken by path. Deterministic.
         v.sort_by(|a, b| {
             b.times
                 .cmp(&a.times)
-                .then_with(|| a.path_arg.cmp(&b.path_arg))
+                .then_with(|| a.file_path.cmp(&b.file_path))
         });
         v
     }
@@ -215,23 +215,23 @@ mod tests {
     #[test]
     fn head_is_read_without_spawning_git() {
         // This very repository serves as the substrate.
-        let g = Git::nuevo(Path::new(".")).expect("vivac/ es un repo git");
+        let g = Git::new(Path::new(".")).expect("vivac/ is a git repo");
         let s = g.snapshot();
         assert_eq!(s.kind, "git");
         assert!(is_sha(&s.id), "HEAD did not resolve: {:?}", s.id);
-        assert_eq!(s.corto().len(), 7);
+        assert_eq!(s.short().len(), 7);
     }
 
     #[test]
     fn an_anchor_from_another_world_gives_no_changes() {
-        let g = Git::nuevo(Path::new(".")).unwrap();
-        let falsa = AnchorRef {
+        let g = Git::new(Path::new(".")).unwrap();
+        let bogus = AnchorRef {
             kind: "git".into(),
             id: "0000000000000000000000000000000000000000".into(),
         };
         assert!(g
-            .changed_since(&falsa)
+            .changed_since(&bogus)
             .iter()
-            .all(|c| !c.path_arg.is_empty()));
+            .all(|c| !c.file_path.is_empty()));
     }
 }

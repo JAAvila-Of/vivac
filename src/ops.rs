@@ -24,7 +24,7 @@ impl Ctx {
     pub fn load(store: Store) -> Result<Ctx, Failure> {
         let (eventos, rotas) = store.read_all()?;
         let tree = fold(&eventos, rotas);
-        let anchor = anchor::detectar(&store.root);
+        let anchor = anchor::detect(&store.root);
         Ok(Ctx {
             store,
             tree,
@@ -126,7 +126,7 @@ fn born(
     guard_text(&fields)?;
 
     let node = id::ulid();
-    let num = ctx.tree.siguiente_num.max(1);
+    let num = ctx.tree.next_num.max(1);
     Ok((
         Body::NodeCreated {
             node: node.clone(),
@@ -279,7 +279,7 @@ fn close_node(
     n: &crate::model::Node,
     outcome: &str,
     forzar: bool,
-    desapilar: bool,
+    unstack: bool,
 ) -> R {
     if !forzar {
         let pending_count = ctx.tree.open_blockers(&n.id);
@@ -306,7 +306,7 @@ fn close_node(
         outcome: outcome.to_string(),
         forced: forzar,
     }];
-    if desapilar && ctx.tree.stack.contains(&n.id) {
+    if unstack && ctx.tree.stack.contains(&n.id) {
         evs.push(Body::Popped { node: n.id.clone() });
     }
     ctx.emit(evs)?;
@@ -535,9 +535,9 @@ pub fn abandon(ctx: &mut Ctx, a: &Args) -> R {
     // The stack is the path to the focus and cannot cross an abandoned node,
     // so everything hanging off the abandoned one leaves it --the rescued
     // included, which stays alive but stops being on the path--.
-    let mut fuera: Vec<String> = vec![n.id.clone()];
-    fuera.extend(ctx.tree.descendants(&n.id).iter().map(|d| d.id.clone()));
-    for id in fuera {
+    let mut out_of_scope: Vec<String> = vec![n.id.clone()];
+    out_of_scope.extend(ctx.tree.descendants(&n.id).iter().map(|d| d.id.clone()));
+    for id in out_of_scope {
         if ctx.tree.stack.contains(&id) {
             evs.push(Body::Popped { node: id });
         }
@@ -589,7 +589,7 @@ pub fn focus(ctx: &mut Ctx, a: &Args) -> R {
         }
     }
 
-    let camino: Vec<String> = ctx
+    let lineage: Vec<String> = ctx
         .tree
         .ancestors(&n.id)
         .iter()
@@ -599,7 +599,7 @@ pub fn focus(ctx: &mut Ctx, a: &Args) -> R {
         .tree
         .stack
         .iter()
-        .filter(|id| !camino.contains(id))
+        .filter(|id| !lineage.contains(id))
         .map(|id| Body::Popped { node: id.clone() })
         .collect();
     if !n.state.is_open() {
@@ -610,7 +610,7 @@ pub fn focus(ctx: &mut Ctx, a: &Args) -> R {
             forced: false,
         });
     }
-    for id in &camino {
+    for id in &lineage {
         if !ctx.tree.stack.contains(id) {
             evs.push(Body::Pushed { node: id.clone() });
         }
@@ -675,24 +675,24 @@ pub fn decide(ctx: &mut Ctx, a: &Args) -> R {
             "usage: vivac decide \"<title>\" --reason \"<r>\" [--alternative X] [--supersedes d9]",
         )
     })?;
-    let razon = a.opt("reason").ok_or_else(|| {
+    let reason = a.opt("reason").ok_or_else(|| {
         Failure::usage("Missing --reason. A decision with no reason is a datum, not a decision.")
     })?;
     let alternatives = a.list("alternative");
-    let superada = match a.opt("supersedes") {
+    let superseded = match a.opt("supersedes") {
         Some(s) => Some(ctx.resolve(s)?.clone()),
         None => None,
     };
 
-    let mut cuerpo = razon.to_string();
+    let mut body = reason.to_string();
     if !alternatives.is_empty() {
-        cuerpo.push_str(&format!("  |  discarded: {}", alternatives.join("; ")));
+        body.push_str(&format!("  |  discarded: {}", alternatives.join("; ")));
     }
     let parent = ctx.tree.focus().map(|n| n.id.clone());
-    let (ev, num, _) = born(ctx, title, &cuerpo, Kind::Decision, parent, a)?;
+    let (ev, num, _) = born(ctx, title, &body, Kind::Decision, parent, a)?;
 
     let mut evs = vec![ev];
-    if let Some(v) = &superada {
+    if let Some(v) = &superseded {
         // `supersedes` forms a chain: the old one becomes superseded, not deleted.
         evs.push(Body::StateChanged {
             node: v.id.clone(),
@@ -703,7 +703,7 @@ pub fn decide(ctx: &mut Ctx, a: &Args) -> R {
     }
     ctx.emit(evs)?;
     println!("  d{num}  {title}");
-    if let Some(v) = superada {
+    if let Some(v) = superseded {
         println!("        {} becomes superseded", v.alias());
     }
     if alternatives.is_empty() {
@@ -726,7 +726,7 @@ pub fn save(ctx: &mut Ctx, a: &Args) -> R {
         if label.is_empty() { "no label" } else { label }
     );
     if !anchoring.is_empty_tree() {
-        println!("        anchored to {}", anchoring.corto());
+        println!("        anchored to {}", anchoring.short());
     } else {
         // With no VCS no precision is faked: the vivac is worth the same, but
         // restoring it will only give plain age, not a diff.
@@ -755,11 +755,11 @@ pub fn restore(ctx: &mut Ctx, a: &Args) -> R {
 
     // The vivac's stack is frozen by alias. Nodes that no longer exist or are
     // closed get skipped and named: restoring resurrects nothing.
-    let mut camino = Vec::new();
+    let mut lineage = Vec::new();
     let mut lost = Vec::new();
     for (alias, title) in &v.stack {
         match ctx.tree.resolve(alias) {
-            Some(n) if n.state.is_open() => camino.push(n.id.clone()),
+            Some(n) if n.state.is_open() => lineage.push(n.id.clone()),
             Some(n) => lost.push(format!("{alias} {title} [{}]", n.state.word(n.kind))),
             None => lost.push(format!("{alias} {title} [gone]")),
         }
@@ -768,10 +768,10 @@ pub fn restore(ctx: &mut Ctx, a: &Args) -> R {
         .tree
         .stack
         .iter()
-        .filter(|id| !camino.contains(id))
+        .filter(|id| !lineage.contains(id))
         .map(|id| Body::Popped { node: id.clone() })
         .collect();
-    for id in &camino {
+    for id in &lineage {
         if !ctx.tree.stack.contains(id) {
             evs.push(Body::Pushed { node: id.clone() });
         }
@@ -804,7 +804,7 @@ pub fn restore(ctx: &mut Ctx, a: &Args) -> R {
         println!("  No anchor: there is no diff to show, only the date above.");
         println!();
     } else if changes.is_empty() {
-        println!("  Nothing changed since {}.", v.anchor.corto());
+        println!("  Nothing changed since {}.", v.anchor.short());
         println!();
     } else {
         let touching: Vec<&crate::anchor::Change> = changes
@@ -812,13 +812,13 @@ pub fn restore(ctx: &mut Ctx, a: &Args) -> R {
             .filter(|c| {
                 v.working_set
                     .iter()
-                    .any(|g| crate::glob::covers(g, &c.path_arg))
+                    .any(|g| crate::glob::covers(g, &c.file_path))
             })
             .collect();
         println!(
             "  {} changes since {}{}",
             changes.len(),
-            v.anchor.corto(),
+            v.anchor.short(),
             if v.working_set.is_empty() {
                 String::new()
             } else {
@@ -826,7 +826,7 @@ pub fn restore(ctx: &mut Ctx, a: &Args) -> R {
             }
         );
         for c in changes.iter().take(6) {
-            println!("      {:<52} ({})", c.path_arg, c.times);
+            println!("      {:<52} ({})", c.file_path, c.times);
         }
         if changes.len() > 6 {
             println!("      ... and {} more", changes.len() - 6);

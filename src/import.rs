@@ -57,7 +57,7 @@ fn tipo_de(kind: &str) -> Kind {
     }
 }
 
-fn estado_de(status: &str) -> State {
+fn state_of(status: &str) -> State {
     match status {
         "done" => State::Done,
         "parked" => State::Suspended,
@@ -75,7 +75,7 @@ fn instant(date: &str) -> String {
 }
 
 pub fn import(ctx: &mut Ctx, args: &Args) -> R {
-    let path_arg = args
+    let file_path = args
         .positional(0)
         .ok_or_else(|| Failure::usage("usage: vivac import <path to tree.json>"))?;
     if !ctx.tree.is_empty_tree() {
@@ -85,9 +85,9 @@ pub fn import(ctx: &mut Ctx, args: &Args) -> R {
             ctx.tree.total()
         )));
     }
-    let crudo = std::fs::read_to_string(path_arg)?;
+    let crudo = std::fs::read_to_string(file_path)?;
     let old: Old = serde_json::from_str(&crudo)
-        .map_err(|e| Failure::usage(format!("{path_arg} is not a spike tree.json: {e}")))?;
+        .map_err(|e| Failure::usage(format!("{file_path} is not a spike tree.json: {e}")))?;
 
     let mut nodes: Vec<&OldNode> = old.nodes.values().collect();
     nodes.sort_by_key(|n| n.id);
@@ -115,7 +115,7 @@ pub fn import(ctx: &mut Ctx, args: &Args) -> R {
     let mut eventos = Vec::new();
     let mut seq = 0u64;
     let actor = ctx.store.config.actor.clone();
-    let mut empujar = |cuerpo: Body, ts: String| {
+    let mut push_event = |body: Body, ts: String| {
         seq += 1;
         eventos.push(Event {
             seq,
@@ -123,12 +123,12 @@ pub fn import(ctx: &mut Ctx, args: &Args) -> R {
             ts,
             actor: actor.clone(),
             lane: "main".into(),
-            payload: cuerpo,
+            payload: body,
         });
     };
 
     for n in &nodes {
-        empujar(
+        push_event(
             Body::NodeCreated {
                 node: ulids[&n.id].clone(),
                 num: n.id,
@@ -145,7 +145,7 @@ pub fn import(ctx: &mut Ctx, args: &Args) -> R {
     }
     for n in &nodes {
         if !n.note.is_empty() {
-            empujar(
+            push_event(
                 Body::NodeNoted {
                     node: ulids[&n.id].clone(),
                     note: n.note.clone(),
@@ -153,9 +153,9 @@ pub fn import(ctx: &mut Ctx, args: &Args) -> R {
                 instant(&n.opened),
             );
         }
-        let state = estado_de(&n.status);
+        let state = state_of(&n.status);
         if state != State::Active {
-            empujar(
+            push_event(
                 Body::StateChanged {
                     node: ulids[&n.id].clone(),
                     state,
@@ -173,7 +173,7 @@ pub fn import(ctx: &mut Ctx, args: &Args) -> R {
 
     let total = nodes.len();
     ctx.store.write_raw(&eventos)?;
-    println!("  {total} nodes imported from {path_arg}");
+    println!("  {total} nodes imported from {file_path}");
     println!("        {} events written to .vivac/events", eventos.len());
     println!();
     println!("  Review what the spike could not see:  vivac check");

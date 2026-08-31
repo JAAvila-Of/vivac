@@ -32,7 +32,7 @@ pub struct Node {
     pub governs: Vec<String>,
     pub opened: String,
     pub closed: Option<String>,
-    pub cierre_forzado: bool,
+    pub forced_close: bool,
     /// Flag -> reason. Orthogonal to state: a node can be `active` and
     /// `suspect` at the same time.
     pub flags: BTreeMap<Flag, String>,
@@ -115,7 +115,7 @@ pub struct Tree {
     /// Claude Code's `Stop` hook runs every turn, not at session close (`f35`).
     pub seq_change: u64,
     pub seq_vivac: u64,
-    pub siguiente_num: u64,
+    pub next_num: u64,
     pub broken_lines: usize,
 }
 
@@ -139,14 +139,14 @@ impl Tree {
     /// print the count from **before** doing it --"back to the parent, 1 open
     /// below" for the node you just closed-- which is the kind of small lie
     /// that makes you stop trusting the rest.
-    pub fn apply(&mut self, seq: u64, ts: &str, cuerpo: &Body) {
+    pub fn apply(&mut self, seq: u64, ts: &str, body: &Body) {
         self.seq = self.seq.max(seq);
-        if matches!(cuerpo, Body::VivacCreated { .. }) {
+        if matches!(body, Body::VivacCreated { .. }) {
             self.seq_vivac = self.seq_vivac.max(seq);
         } else {
             self.seq_change = self.seq_change.max(seq);
         }
-        match cuerpo {
+        match body {
             Body::NodeCreated {
                 node,
                 num,
@@ -179,12 +179,12 @@ impl Tree {
                         governs: governs.clone(),
                         opened: crate::clock::date_of(ts).to_string(),
                         closed: None,
-                        cierre_forzado: false,
+                        forced_close: false,
                         flags: BTreeMap::new(),
                     },
                 );
                 self.por_num.insert(*num, node.clone());
-                self.siguiente_num = self.siguiente_num.max(*num + 1);
+                self.next_num = self.next_num.max(*num + 1);
                 match parent {
                     Some(p) => self
                         .children
@@ -205,7 +205,7 @@ impl Tree {
                     if !outcome.is_empty() {
                         n.outcome = outcome.clone();
                     }
-                    n.cierre_forzado = *forced;
+                    n.forced_close = *forced;
                     n.closed = if state.is_open() {
                         None
                     } else {
@@ -351,18 +351,18 @@ impl Tree {
     /// The `seen` set is not paranoia: a hand-edited log can hold a cycle,
     /// and hanging would be worse than giving a short path.
     pub fn ancestors(&self, id: &str) -> Vec<&Node> {
-        let mut camino = Vec::new();
+        let mut lineage = Vec::new();
         let mut seen = std::collections::HashSet::new();
         let mut cur = self.nodes.get(id);
         while let Some(n) = cur {
             if !seen.insert(&n.id) {
                 break;
             }
-            camino.push(n);
+            lineage.push(n);
             cur = n.parent.as_deref().and_then(|p| self.nodes.get(p));
         }
-        camino.reverse();
-        camino
+        lineage.reverse();
+        lineage
     }
 
     pub fn descendants(&self, id: &str) -> Vec<&Node> {
@@ -439,7 +439,7 @@ impl Tree {
 pub struct Aggregates {
     counts: HashMap<String, Counts>,
     blockers: HashMap<String, usize>,
-    pub profundidad_max: usize,
+    pub max_depth: usize,
 }
 
 impl Aggregates {
@@ -453,13 +453,13 @@ impl Aggregates {
 }
 
 impl Tree {
-    pub fn agregados(&self) -> Aggregates {
+    pub fn aggregates(&self) -> Aggregates {
         let mut ag = Aggregates::default();
 
         // Orphans hang off no root. They get walked anyway: a broken tree has
         // to stay inspectable, which is what `check` is for.
-        let mut entradas: Vec<&String> = self.roots.iter().collect();
-        entradas.extend(
+        let mut entries: Vec<&String> = self.roots.iter().collect();
+        entries.extend(
             self.nodes
                 .values()
                 .filter(|n| {
@@ -471,13 +471,13 @@ impl Tree {
         );
 
         let mut order: Vec<(&String, usize)> = Vec::with_capacity(self.nodes.len());
-        let mut stack: Vec<(&String, usize)> = entradas.into_iter().map(|id| (id, 1)).collect();
+        let mut stack: Vec<(&String, usize)> = entries.into_iter().map(|id| (id, 1)).collect();
         let mut seen = std::collections::HashSet::new();
         while let Some((id, depth_of)) = stack.pop() {
             if !seen.insert(id) {
                 continue;
             }
-            ag.profundidad_max = ag.profundidad_max.max(depth_of);
+            ag.max_depth = ag.max_depth.max(depth_of);
             order.push((id, depth_of));
             if let Some(hs) = self.children.get(id) {
                 stack.extend(hs.iter().map(|h| (h, depth_of + 1)));

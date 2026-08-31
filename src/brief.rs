@@ -79,14 +79,14 @@ fn trim_list(mut v: Vec<String>, n: usize, which: &str) -> Vec<String> {
     v
 }
 
-fn heading(title: &str, cuerpo: Vec<String>) -> Vec<String> {
+fn heading(title: &str, body: Vec<String>) -> Vec<String> {
     // Empty sections are omitted whole, heading included: a brief with nothing
     // parked does not say "DO NOT TOUCH NOW: (empty)".
-    if cuerpo.is_empty() {
+    if body.is_empty() {
         return vec![];
     }
     let mut v = vec![String::new(), format!(" {title}")];
-    v.extend(cuerpo);
+    v.extend(body);
     v
 }
 
@@ -95,22 +95,23 @@ fn heading(title: &str, cuerpo: Vec<String>) -> Vec<String> {
 /// **By `spawns` only.** Inheriting through `depends_on` as well would turn
 /// the computation from O(depth) into O(graph), and would lose the property
 /// that inheritance is legible by looking at the stack on screen.
-fn constraints<'a>(a: &'a Tree, camino: &[&Node]) -> Vec<&'a Node> {
-    let en_camino: std::collections::HashSet<&str> = camino.iter().map(|n| n.id.as_str()).collect();
+fn constraints<'a>(a: &'a Tree, lineage: &[&Node]) -> Vec<&'a Node> {
+    let on_lineage: std::collections::HashSet<&str> =
+        lineage.iter().map(|n| n.id.as_str()).collect();
     let mut v: Vec<&Node> = a
         .nodes_iter()
         .filter(|n| n.kind == Kind::Constraint && n.state.is_open())
         .filter(|n| {
             // Project-wide (hangs off a root), or reachable from the path.
-            let del_proyecto = n
+            let project_wide = n
                 .parent
                 .as_ref()
                 .and_then(|p| a.node(p))
                 .is_some_and(|p| p.parent.is_none());
-            del_proyecto
+            project_wide
                 || a.ancestors(&n.id)
                     .iter()
-                    .any(|p| en_camino.contains(p.id.as_str()))
+                    .any(|p| on_lineage.contains(p.id.as_str()))
         })
         .collect();
     // At risk first --the ones carrying a flag-- and then by alias.
@@ -118,15 +119,15 @@ fn constraints<'a>(a: &'a Tree, camino: &[&Node]) -> Vec<&'a Node> {
     v
 }
 
-fn spine(camino: &[&Node]) -> Vec<String> {
+fn spine(lineage: &[&Node]) -> Vec<String> {
     let mut v = Vec::new();
-    for (i, n) in camino.iter().enumerate() {
-        let primero = i == 0;
-        let is_last = i == camino.len() - 1;
+    for (i, n) in lineage.iter().enumerate() {
+        let first = i == 0;
+        let is_last = i == lineage.len() - 1;
         // Continuation: the trunk carries on while anything is left below.
         let cont = if is_last { "        " } else { "  |     " };
 
-        let branch = if primero {
+        let branch = if first {
             " GOAL ".to_string()
         } else if is_last {
             "  `-- ".to_string()
@@ -145,7 +146,7 @@ fn spine(camino: &[&Node]) -> Vec<String> {
             n.alias(),
             clip(&n.title, 44)
         ));
-        if !primero && !n.why.is_empty() {
+        if !first && !n.why.is_empty() {
             v.push(format!("{cont}why: {}", clip(&n.why, 52)));
         }
         if !n.governs.is_empty() {
@@ -197,15 +198,15 @@ pub fn to_text(
         .and_then(|s| s.parse().ok())
         .unwrap_or(PRESUPUESTO);
 
-    let camino: Vec<&Node> = match a.stack.last() {
+    let lineage: Vec<&Node> = match a.stack.last() {
         Some(id) => a.ancestors(id),
         None => vec![],
     };
 
-    if camino.is_empty() {
+    if lineage.is_empty() {
         return no_focus(a, project, &date);
     }
-    let focus = camino[camino.len() - 1];
+    let focus = lineage[lineage.len() - 1];
 
     let mut s: Vec<Section> = Vec::new();
 
@@ -215,7 +216,7 @@ pub fn to_text(
         RULE.to_string(),
         String::new(),
     ]));
-    s.push(Section::fixed(spine(&camino)));
+    s.push(Section::fixed(spine(&lineage)));
 
     // 3. Focus: what hangs off it unclosed. Standing decisions do not go in
     //    --they are not pending work and they have their own section (8)--,
@@ -256,24 +257,25 @@ pub fn to_text(
     s.push(Section::fixed(heading("BORN FROM HERE", children)));
 
     // 4. Invariants.
-    let invariants: Vec<String> = constraints(a, &camino)
+    let invariants: Vec<String> = constraints(a, &lineage)
         .iter()
         .map(|c| {
-            let riesgo = if c.flags.is_empty() { "" } else { "   AT RISK" };
-            format!("  {:<6} {}{riesgo}", c.alias(), c.title)
+            let risk = if c.flags.is_empty() { "" } else { "   AT RISK" };
+            format!("  {:<6} {}{risk}", c.alias(), c.title)
         })
         .collect();
     s.push(Section::fixed(heading("INVARIANTS", invariants)));
 
     // 5. Blocking questions: all of them, untruncated.
-    let en_camino: std::collections::HashSet<&str> = camino.iter().map(|n| n.id.as_str()).collect();
+    let on_lineage: std::collections::HashSet<&str> =
+        lineage.iter().map(|n| n.id.as_str()).collect();
     let questions: Vec<String> = a
         .nodes_iter()
         .filter(|n| n.kind == Kind::Question && n.state.is_open() && n.blocks)
         .filter(|n| {
             a.ancestors(&n.id)
                 .iter()
-                .any(|p| en_camino.contains(p.id.as_str()))
+                .any(|p| on_lineage.contains(p.id.as_str()))
         })
         .map(|n| format!("  {:<6} {}", n.alias(), n.title))
         .collect();
@@ -282,18 +284,18 @@ pub fn to_text(
     s.push(Section::fixed(heading("BLOCKS", questions)));
 
     // 6. Flags on the path, or one hop off it.
-    let mut marcados: Vec<&Node> = a
+    let mut flagged: Vec<&Node> = a
         .nodes_iter()
         .filter(|n| !n.flags.is_empty())
         .filter(|n| {
-            en_camino.contains(n.id.as_str())
+            on_lineage.contains(n.id.as_str())
                 || n.parent
                     .as_ref()
-                    .is_some_and(|p| en_camino.contains(p.as_str()))
+                    .is_some_and(|p| on_lineage.contains(p.as_str()))
         })
         .collect();
-    marcados.sort_by_key(|n| n.num);
-    let flag_lines: Vec<String> = marcados
+    flagged.sort_by_key(|n| n.num);
+    let flag_lines: Vec<String> = flagged
         .iter()
         .flat_map(|n| {
             n.flags.iter().map(move |(b, reason)| {
@@ -316,21 +318,21 @@ pub fn to_text(
                 .iter()
                 .rev()
                 .skip(1)
-                .any(|p| en_camino.contains(p.id.as_str()))
+                .any(|p| on_lineage.contains(p.id.as_str()))
         })
         .collect();
     parked_nodes.sort_by_key(|n| n.num);
-    let fuera: Vec<String> = parked_nodes
+    let out_of_scope: Vec<String> = parked_nodes
         .iter()
         .flat_map(|n| {
-            let colgado = n
+            let hangs_off = n
                 .parent
                 .as_ref()
                 .and_then(|p| a.node(p))
                 .map(|p| format!("hangs off {}", p.alias()))
                 .unwrap_or_default();
             let mut v = vec![format!(
-                "  {:<6} {:<40} {colgado}",
+                "  {:<6} {:<40} {hangs_off}",
                 n.alias(),
                 clip(&n.title, 40)
             )];
@@ -342,7 +344,7 @@ pub fn to_text(
         .collect();
     s.push(Section::loose(heading(
         "DO NOT TOUCH NOW",
-        trim_list(fuera, 6, "parked"),
+        trim_list(out_of_scope, 6, "parked"),
     )));
 
     // 8. Standing decisions: on the path, or with a `governs` overlapping the
@@ -351,10 +353,10 @@ pub fn to_text(
         .nodes_iter()
         .filter(|n| n.kind == Kind::Decision && n.state.is_open())
         .filter(|n| {
-            en_camino.contains(n.id.as_str())
+            on_lineage.contains(n.id.as_str())
                 || n.parent
                     .as_ref()
-                    .is_some_and(|p| en_camino.contains(p.as_str()))
+                    .is_some_and(|p| on_lineage.contains(p.as_str()))
                 || n.governs
                     .iter()
                     .any(|g| focus.governs.iter().any(|f| crate::glob::covers(g, f)))
@@ -383,7 +385,7 @@ pub fn to_text(
                 if v.anchor.is_empty_tree() {
                     String::new()
                 } else {
-                    format!(" · {}", v.anchor.corto())
+                    format!(" · {}", v.anchor.short())
                 }
             )];
             if !v.next_intent.is_empty() {
@@ -402,7 +404,7 @@ pub fn to_text(
                         .filter(|c| {
                             v.working_set
                                 .iter()
-                                .any(|g| crate::glob::covers(g, &c.path_arg))
+                                .any(|g| crate::glob::covers(g, &c.file_path))
                         })
                         .count();
                     l.push(format!(
@@ -417,7 +419,7 @@ pub fn to_text(
     s.push(Section::loose(heading("LAST VIVAC", vv)));
 
     // 10. Freshness.
-    let stale_ones: Vec<String> = camino
+    let stale_ones: Vec<String> = lineage
         .iter()
         .filter(|n| n.flags.contains_key(&crate::event::Flag::Stale))
         .map(|n| format!("  {:<6} {}", n.alias(), n.title))

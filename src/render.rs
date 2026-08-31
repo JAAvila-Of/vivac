@@ -18,15 +18,15 @@ use serde_json::json;
 
 const WIDTH: usize = 62;
 
-fn wrap(text: &str, ancho: usize, sangria: &str) -> Vec<String> {
+fn wrap(text: &str, width: usize, indent: &str) -> Vec<String> {
     if text.trim().is_empty() {
         return vec![];
     }
     let mut lines = Vec::new();
     let mut cur = String::new();
     for p in text.split_whitespace() {
-        if !cur.is_empty() && cur.chars().count() + 1 + p.chars().count() > ancho {
-            lines.push(format!("{sangria}{cur}"));
+        if !cur.is_empty() && cur.chars().count() + 1 + p.chars().count() > width {
+            lines.push(format!("{indent}{cur}"));
             cur = p.to_string();
         } else {
             if !cur.is_empty() {
@@ -36,7 +36,7 @@ fn wrap(text: &str, ancho: usize, sangria: &str) -> Vec<String> {
         }
     }
     if !cur.is_empty() {
-        lines.push(format!("{sangria}{cur}"));
+        lines.push(format!("{indent}{cur}"));
     }
     lines
 }
@@ -86,14 +86,14 @@ fn print_json(v: serde_json::Value) -> R {
 /// that come next: what was left open in parallel, what was born here, and
 /// what keeps each step of the path from closing.
 pub fn why(a: &Tree, args: &Args) -> R {
-    let ag = &a.agregados();
+    let ag = &a.aggregates();
     let s = args
         .positional(0)
         .ok_or_else(|| Failure::usage("usage: vivac why <id>"))?;
     let n = a
         .resolve(s)
         .ok_or_else(|| Failure::usage(format!("No such node: {s}.")))?;
-    let camino = a.ancestors(&n.id);
+    let lineage = a.ancestors(&n.id);
 
     if args.has("json") {
         let siblings: Vec<_> = n
@@ -107,7 +107,7 @@ pub fn why(a: &Tree, args: &Args) -> R {
             .collect();
         return print_json(json!({
             "node": json_node(a, ag, n),
-            "path": camino.iter().map(|x| json_node(a, ag, x)).collect::<Vec<_>>(),
+            "path": lineage.iter().map(|x| json_node(a, ag, x)).collect::<Vec<_>>(),
             "en_paralelo": siblings,
             "born_here": a.children(&n.id).iter().filter(|c| c.state.is_open())
                 .map(|c| json_node(a, ag, c)).collect::<Vec<_>>(),
@@ -120,8 +120,8 @@ pub fn why(a: &Tree, args: &Args) -> R {
     println!("  Why we are here  ->  {}", n.alias());
     println!("  {}", "-".repeat(66));
     println!();
-    for (i, p) in camino.iter().enumerate() {
-        let is_last = i == camino.len() - 1;
+    for (i, p) in lineage.iter().enumerate() {
+        let is_last = i == lineage.len() - 1;
         println!("  {:<6}{}", p.alias(), label(p));
         for l in wrap(&p.why, WIDTH, "        ") {
             println!("{l}");
@@ -184,7 +184,7 @@ pub fn why(a: &Tree, args: &Args) -> R {
         println!();
     }
 
-    for p in &camino {
+    for p in &lineage {
         let pending_count = a.open_blockers(&p.id);
         if !pending_count.is_empty() && p.state.is_open() {
             println!(
@@ -244,7 +244,7 @@ fn subtree_json(a: &Tree, ag: &Aggregates, n: &Node) -> serde_json::Value {
 }
 
 pub fn tree(a: &Tree, args: &Args) -> R {
-    let ag = &a.agregados();
+    let ag = &a.aggregates();
     let roots: Vec<&Node> = match args.positional(0) {
         Some(s) => vec![a
             .resolve(s)
@@ -277,7 +277,7 @@ pub fn tree(a: &Tree, args: &Args) -> R {
 /// `open` — the open fronts, each with its lineage compressed. It is the
 /// "where was I" view for the start of the day.
 pub fn open(a: &Tree, args: &Args) -> R {
-    let ag = &a.agregados();
+    let ag = &a.aggregates();
     let mut leaves: Vec<&Node> = a
         .nodes_iter()
         .filter(|n| n.is_front() && !a.children(&n.id).iter().any(|c| c.is_front()))
@@ -317,9 +317,9 @@ pub fn open(a: &Tree, args: &Args) -> R {
     println!();
     for n in leaves {
         println!("  {:<6} {}", n.alias(), n.title);
-        let camino = a.ancestors(&n.id);
-        if camino.len() > 1 {
-            let v: Vec<String> = camino[..camino.len() - 1]
+        let lineage = a.ancestors(&n.id);
+        if lineage.len() > 1 {
+            let v: Vec<String> = lineage[..lineage.len() - 1]
                 .iter()
                 .map(|p| p.alias())
                 .collect();
@@ -349,7 +349,7 @@ pub fn open(a: &Tree, args: &Args) -> R {
 /// is almost never lack of discipline: it is that the root goal moved and
 /// nobody re-rooted.
 pub fn triage(a: &Tree, args: &Args) -> R {
-    let ag = &a.agregados();
+    let ag = &a.aggregates();
 
     let mut parked_nodes: Vec<&Node> = a
         .nodes_iter()
@@ -386,7 +386,7 @@ pub fn triage(a: &Tree, args: &Args) -> R {
     // already closed: that is the case that took 26 days to spot.
     let mut false_closes: Vec<&Node> = a
         .nodes_iter()
-        .filter(|n| n.state == State::Done && !n.cierre_forzado && ag.blockers(&n.id) > 0)
+        .filter(|n| n.state == State::Done && !n.forced_close && ag.blockers(&n.id) > 0)
         .collect();
 
     parked_nodes.sort_by_key(|n| n.num);
@@ -493,7 +493,7 @@ pub fn triage(a: &Tree, args: &Args) -> R {
 /// memory tool dumps what is relevant, and the problem in agentic development
 /// is the opposite one, bounding.
 pub fn parked(a: &Tree, args: &Args) -> R {
-    let ag = &a.agregados();
+    let ag = &a.aggregates();
     let mut ps: Vec<&Node> = a
         .nodes_iter()
         .filter(|n| n.state == State::Suspended)
@@ -524,7 +524,7 @@ pub fn parked(a: &Tree, args: &Args) -> R {
 
 /// `stack` — where you are right now, from the root to the focus.
 pub fn stack(a: &Tree, args: &Args) -> R {
-    let ag = &a.agregados();
+    let ag = &a.aggregates();
     let stack: Vec<&Node> = a.stack.iter().filter_map(|id| a.node(id)).collect();
     if args.has("json") {
         return print_json(json!({
@@ -558,12 +558,12 @@ pub fn stack(a: &Tree, args: &Args) -> R {
 }
 
 pub fn stats(a: &Tree, args: &Args) -> R {
-    let ag = &a.agregados();
-    let mut por_estado = std::collections::BTreeMap::new();
+    let ag = &a.aggregates();
+    let mut by_state = std::collections::BTreeMap::new();
     let mut orphans = 0usize;
     let mut false_closes = Vec::new();
     for n in a.nodes_iter() {
-        *por_estado.entry(n.state.word(n.kind)).or_insert(0usize) += 1;
+        *by_state.entry(n.state.word(n.kind)).or_insert(0usize) += 1;
         if n.parent.as_ref().is_some_and(|p| a.node(p).is_none()) {
             orphans += 1;
         }
@@ -571,12 +571,12 @@ pub fn stats(a: &Tree, args: &Args) -> R {
             false_closes.push(n);
         }
     }
-    let depth_of = ag.profundidad_max;
+    let depth_of = ag.max_depth;
     false_closes.sort_by_key(|n| n.num);
     if args.has("json") {
         return print_json(json!({
             "nodes": a.total(),
-            "by_state": por_estado,
+            "by_state": by_state,
             "depth": depth_of,
             "roots": a.roots().len(),
             "stack": a.stack_depth(),
@@ -587,7 +587,7 @@ pub fn stats(a: &Tree, args: &Args) -> R {
     }
     println!();
     println!("  nodes          {}", a.total());
-    for (k, v) in &por_estado {
+    for (k, v) in &by_state {
         println!("  {k:<14} {v}");
     }
     println!("  depth          {depth_of}");

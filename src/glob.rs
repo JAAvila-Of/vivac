@@ -5,12 +5,12 @@
 
 /// Does the pattern cover the path? Slashes are normalized, so a `governs`
 /// written on Windows holds on Linux and the other way round.
-pub fn covers(patron: &str, path_arg: &str) -> bool {
+pub fn covers(patron: &str, file_path: &str) -> bool {
     if patron.is_empty() {
         return false;
     }
     let p: Vec<char> = patron.replace('\\', "/").chars().collect();
-    let r: Vec<char> = path_arg.replace('\\', "/").chars().collect();
+    let r: Vec<char> = file_path.replace('\\', "/").chars().collect();
     matches_at(&p, &r)
 }
 
@@ -21,19 +21,19 @@ fn matches_at(p: &[char], r: &[char]) -> bool {
     if p[0] == '*' {
         // `**` crosses slashes; `*` stays inside one segment.
         if p.len() > 1 && p[1] == '*' {
-            let resto = if p.len() > 2 && p[2] == '/' {
+            let rest = if p.len() > 2 && p[2] == '/' {
                 &p[3..]
             } else {
                 &p[2..]
             };
-            if resto.is_empty() {
+            if rest.is_empty() {
                 return true;
             }
-            return (0..=r.len()).any(|i| matches_at(resto, &r[i..]));
+            return (0..=r.len()).any(|i| matches_at(rest, &r[i..]));
         }
-        let resto = &p[1..];
+        let rest = &p[1..];
         let hasta = r.iter().position(|c| *c == '/').unwrap_or(r.len());
-        return (0..=hasta).any(|i| matches_at(resto, &r[i..]));
+        return (0..=hasta).any(|i| matches_at(rest, &r[i..]));
     }
     if r.is_empty() {
         return false;

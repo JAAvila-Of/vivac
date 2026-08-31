@@ -11,11 +11,11 @@ use crate::event::State;
 use crate::model::Tree;
 
 pub fn check(a: &Tree, args: &Args) -> Result<i32, crate::failure::Failure> {
-    let mut almacen: Vec<String> = Vec::new();
+    let mut store: Vec<String> = Vec::new();
     let mut project: Vec<String> = Vec::new();
 
     if a.broken_lines > 0 {
-        almacen.push(format!(
+        store.push(format!(
             "{} unreadable line(s) in .vivac/events (skipped while reading)",
             a.broken_lines
         ));
@@ -28,7 +28,7 @@ pub fn check(a: &Tree, args: &Args) -> Result<i32, crate::failure::Failure> {
         // can break here is the parent not existing.
         if let Some(p) = &n.parent {
             if a.node(p).is_none() {
-                almacen.push(format!(
+                store.push(format!(
                     "{} points at a parent that does not exist",
                     n.alias()
                 ));
@@ -36,12 +36,12 @@ pub fn check(a: &Tree, args: &Args) -> Result<i32, crate::failure::Failure> {
         }
         // Invariant 1: acyclic. If the path to the root does not end at a node
         // with no parent, it is going in circles.
-        let camino = a.ancestors(&n.id);
-        if camino.first().is_some_and(|r| r.parent.is_some()) {
-            almacen.push(format!("{} sits in a provenance cycle", n.alias()));
+        let lineage = a.ancestors(&n.id);
+        if lineage.first().is_some_and(|r| r.parent.is_some()) {
+            store.push(format!("{} sits in a provenance cycle", n.alias()));
         }
         if let Some(other) = nums.insert(n.num, n.alias()) {
-            almacen.push(format!(
+            store.push(format!(
                 "number {} repeated: {} and {}",
                 n.num,
                 other,
@@ -55,7 +55,7 @@ pub fn check(a: &Tree, args: &Args) -> Result<i32, crate::failure::Failure> {
         // --a lane being abandoned-- and what was asked was that they be a
         // decision and not an oversight. The trace is in the event and the
         // render still marks it; what it does not do is break CI every day.
-        if n.state == State::Done && !n.cierre_forzado && !a.open_blockers(&n.id).is_empty() {
+        if n.state == State::Done && !n.forced_close && !a.open_blockers(&n.id).is_empty() {
             let pending_count = a.open_blockers(&n.id);
             let quienes: Vec<String> = pending_count.iter().map(|c| c.alias()).collect();
             project.push(format!(
@@ -66,32 +66,32 @@ pub fn check(a: &Tree, args: &Args) -> Result<i32, crate::failure::Failure> {
             ));
         }
     }
-    almacen.sort();
+    store.sort();
     project.sort();
 
     if args.has("json") {
         println!(
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
-                "store": almacen,
+                "store": store,
                 "project": project,
-                "ok": almacen.is_empty() && project.is_empty(),
+                "ok": store.is_empty() && project.is_empty(),
             }))
             .map_err(std::io::Error::other)?
         );
     } else {
         println!();
-        if almacen.is_empty() && project.is_empty() {
+        if store.is_empty() && project.is_empty() {
             println!("  No findings. {} nodes checked.", a.total());
             println!();
         }
-        if !almacen.is_empty() {
+        if !store.is_empty() {
             println!(
                 "  STORE ({})  <- the tool is lying; it needs fixing",
-                almacen.len()
+                store.len()
             );
             println!();
-            for m in &almacen {
+            for m in &store {
                 println!("      {m}");
             }
             println!();
@@ -111,5 +111,5 @@ pub fn check(a: &Tree, args: &Args) -> Result<i32, crate::failure::Failure> {
             println!();
         }
     }
-    Ok(i32::from(!(almacen.is_empty() && project.is_empty())))
+    Ok(i32::from(!(store.is_empty() && project.is_empty())))
 }

@@ -61,7 +61,7 @@ pub fn find_root(from_dir: &Path) -> Option<PathBuf> {
 }
 
 impl Store {
-    pub fn abrir(root: PathBuf) -> std::io::Result<Store> {
+    pub fn open(root: PathBuf) -> std::io::Result<Store> {
         let p = root.join(DIR).join(CONFIG);
         let config = match fs::read_to_string(&p) {
             Ok(s) => serde_json::from_str(&s).map_err(std::io::Error::other)?,
@@ -133,11 +133,11 @@ impl Store {
     /// That is why there is no `fsync` --on Windows it costs more than the
     /// whole budget-- and why it opens in `append` mode, which makes each
     /// single-line write atomic and removes the need for a lock.
-    pub fn append(&self, cuerpo: Vec<crate::event::Body>, desde_seq: u64) -> std::io::Result<()> {
-        let mut buf = String::with_capacity(256 * cuerpo.len());
-        for (i, c) in cuerpo.into_iter().enumerate() {
+    pub fn append(&self, body: Vec<crate::event::Body>, from_seq: u64) -> std::io::Result<()> {
+        let mut buf = String::with_capacity(256 * body.len());
+        for (i, c) in body.into_iter().enumerate() {
             let e = crate::event::Event {
-                seq: desde_seq + i as u64 + 1,
+                seq: from_seq + i as u64 + 1,
                 id: id::ulid(),
                 ts: clock::now_rfc3339(),
                 actor: self.config.actor.clone(),

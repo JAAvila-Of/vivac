@@ -152,7 +152,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         }
         return Err(Failure::NoStore);
     };
-    let mut ctx = ops::Ctx::load(store::Store::abrir(root)?)?;
+    let mut ctx = ops::Ctx::load(store::Store::open(root)?)?;
 
     // `check` is the only one with an exit code of its own: it separates
     // store corruption from a finding about the project.
