@@ -87,13 +87,13 @@ impl Counts {
     pub fn phrase(&self) -> String {
         let mut p = Vec::new();
         if self.open_count > 0 {
-            p.push(format!("{} open_count", self.open_count));
+            p.push(format!("{} open", self.open_count));
         }
         if self.closed_count > 0 {
-            p.push(format!("{} closed_count", self.closed_count));
+            p.push(format!("{} closed", self.closed_count));
         }
         if self.parked_nodes > 0 {
-            p.push(format!("{} parked_nodes", self.parked_nodes));
+            p.push(format!("{} parked", self.parked_nodes));
         }
         p.join(" / ")
     }

@@ -73,7 +73,7 @@ fn a_spanish_log_still_reads_whole() {
     let (s, code) = c.run(&["done", "1"]);
     assert_eq!(code, 1, "the blocking edge got lost:\n{s}");
 
-    // `estado`, `resultado` and `forzado`: a forced close keeps its trace, so
+    // `estado`, `resultado` and `forced`: a forced close keeps its trace, so
     // it stays marked in the tree and stays out of triage.
     assert!(
         c.ok(&["why", "3"]).contains("terminada a la fuerza"),

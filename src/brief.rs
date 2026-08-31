@@ -253,7 +253,7 @@ pub fn to_text(
     s.push(Section::fixed(heading("BORN FROM HERE", children)));
 
     // 4. Invariants.
-    let inv: Vec<String> = constraints(a, &camino)
+    let invariants: Vec<String> = constraints(a, &camino)
         .iter()
         .map(|c| {
             let riesgo = if c.flags.is_empty() {
@@ -264,11 +264,11 @@ pub fn to_text(
             format!("  {:<6} {}{riesgo}", c.alias(), c.title)
         })
         .collect();
-    s.push(Section::fixed(heading("INVARIANTS", inv)));
+    s.push(Section::fixed(heading("INVARIANTS", invariants)));
 
     // 5. Blocking questions: all of them, untruncated.
     let en_camino: std::collections::HashSet<&str> = camino.iter().map(|n| n.id.as_str()).collect();
-    let preg: Vec<String> = a
+    let questions: Vec<String> = a
         .nodes_iter()
         .filter(|n| n.kind == Kind::Question && n.state.is_open() && n.blocks)
         .filter(|n| {
@@ -278,9 +278,9 @@ pub fn to_text(
         })
         .map(|n| format!("  {:<6} {}", n.alias(), n.title))
         .collect();
-    let mut preg = preg;
-    preg.sort();
-    s.push(Section::fixed(heading("BLOCKS", preg)));
+    let mut questions = questions;
+    questions.sort();
+    s.push(Section::fixed(heading("BLOCKS", questions)));
 
     // 6. Flags on the path, or one hop off it.
     let mut marcados: Vec<&Node> = a
@@ -294,7 +294,7 @@ pub fn to_text(
         })
         .collect();
     marcados.sort_by_key(|n| n.num);
-    let ban: Vec<String> = marcados
+    let flag_lines: Vec<String> = marcados
         .iter()
         .flat_map(|n| {
             n.flags.iter().map(move |(b, reason)| {
@@ -309,7 +309,7 @@ pub fn to_text(
         .collect();
     s.push(Section::loose(heading(
         "FLAGGED",
-        trim_list(ban, 3, "stats"),
+        trim_list(flag_lines, 3, "stats"),
     )));
 
     // 7. Out of scope. **This is the product's differentiator**, and it only
@@ -367,13 +367,13 @@ pub fn to_text(
         })
         .collect();
     dec.sort_by_key(|n| n.num);
-    let decs: Vec<String> = dec
+    let decisions: Vec<String> = dec
         .iter()
         .map(|n| format!("  {:<6} {}", n.alias(), clip(&n.title, 52)))
         .collect();
     s.push(Section::loose(heading(
         "STANDING DECISIONS",
-        trim_list(decs, 3, "tree"),
+        trim_list(decisions, 3, "tree"),
     )));
 
     // 9. Last vivac. Restoring is always restore + diff: a vivac is never
@@ -416,12 +416,12 @@ pub fn to_text(
     s.push(Section::loose(heading("LAST VIVAC", vv)));
 
     // 10. Freshness.
-    let viejos: Vec<String> = camino
+    let stale_ones: Vec<String> = camino
         .iter()
         .filter(|n| n.flags.contains_key(&crate::event::Flag::Stale))
         .map(|n| format!("  {:<6} {}", n.alias(), n.title))
         .collect();
-    s.push(Section::loose(heading("UNTOUCHED FOR A WHILE", viejos)));
+    s.push(Section::loose(heading("UNTOUCHED FOR A WHILE", stale_ones)));
 
     emit(s, budget, a)
 }

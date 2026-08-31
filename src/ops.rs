@@ -525,7 +525,7 @@ pub fn abandon(ctx: &mut Ctx, a: &Args) -> R {
         outcome: reason.to_string(),
         forced: false,
     }];
-    let cuantos_caen = falling.len();
+    let falling_count = falling.len();
     let salvados_dice: Vec<(String, String)> = saved
         .iter()
         .map(|d| (d.alias(), d.title.clone()))
@@ -551,8 +551,8 @@ pub fn abandon(ctx: &mut Ctx, a: &Args) -> R {
 
     ctx.emit(evs)?;
     println!("  {}  {}  -> abandoned", n.alias(), n.title);
-    if cuantos_caen > 0 {
-        println!("        and {cuantos_caen} descendant(s) with it");
+    if falling_count > 0 {
+        println!("        and {falling_count} descendant(s) with it");
     }
     if !salvados_dice.is_empty() {
         println!();

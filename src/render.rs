@@ -278,17 +278,17 @@ pub fn tree(a: &Tree, args: &Args) -> R {
 /// "where was I" view for the start of the day.
 pub fn open(a: &Tree, args: &Args) -> R {
     let ag = &a.agregados();
-    let mut hojas: Vec<&Node> = a
+    let mut leaves: Vec<&Node> = a
         .nodes_iter()
         .filter(|n| n.is_front() && !a.children(&n.id).iter().any(|c| c.is_front()))
         .collect();
-    hojas.sort_by_key(|n| n.num);
+    leaves.sort_by_key(|n| n.num);
     let standing = a
         .nodes_iter()
         .filter(|n| n.kind == Kind::Decision && n.state.is_open())
         .count();
     if args.has("json") {
-        return print_json(json!(hojas
+        return print_json(json!(leaves
             .iter()
             .map(|n| {
                 let mut v = json_node(a, ag, n);
@@ -304,19 +304,18 @@ pub fn open(a: &Tree, args: &Args) -> R {
             })
             .collect::<Vec<_>>()));
     }
-    if hojas.is_empty() && standing == 0 {
+    if leaves.is_empty() && standing == 0 {
         println!("  Nothing open.");
         return Ok(());
     }
     println!();
     println!(
-        "  {} frente{} opened{}",
-        hojas.len(),
-        if hojas.len() == 1 { "" } else { "s" },
-        if hojas.len() == 1 { "" } else { "s" }
+        "  {} open front{}",
+        leaves.len(),
+        if leaves.len() == 1 { "" } else { "s" },
     );
     println!();
-    for n in hojas {
+    for n in leaves {
         println!("  {:<6} {}", n.alias(), n.title);
         let camino = a.ancestors(&n.id);
         if camino.len() > 1 {
