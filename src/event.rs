@@ -1,10 +1,10 @@
-//! El evento. `ROADMAP.md` §4 lo deja en un solo archivo append-only y el
-//! arbol se obtiene plegandolo: si el log es la verdad, la pila se calcula.
-//! Dos sedes del mismo estado contradicen el principio 1 de `MODEL.md`.
+//! The event. `ROADMAP.md` §4 keeps it in a single append-only file and the
+//! tree comes from folding it: if the log is the truth, the stack is computed.
+//! Two homes for the same state contradict principle 1 of `MODEL.md`.
 
 use serde::{Deserialize, Serialize};
 
-/// Tipos de nodo. `MODEL.md` §4.2.
+/// Node types. `MODEL.md` §4.2.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Tipo {
@@ -18,7 +18,7 @@ pub enum Tipo {
 }
 
 impl Tipo {
-    /// Prefijo del alias. `MODEL.md` §3.6.
+    /// Alias prefix. `MODEL.md` §3.6.
     pub fn prefijo(self) -> char {
         match self {
             Tipo::Goal => 'g',
@@ -48,12 +48,12 @@ impl Tipo {
         "goal, task, decision, question, constraint, finding, assumption";
 }
 
-/// Estados canonicos.
+/// Canonical states.
 ///
-/// `MODEL.md` §4.2 da nombres distintos por tipo --un `goal` se `achieved`,
-/// una `decision` esta `standing`-- pero la maquina de estados es la misma en
-/// los cinco casos. Se guardan canonicos y se traducen al presentar: si el
-/// log guardara el sinonimo, cada consulta tendria que conocer los siete tipos.
+/// `MODEL.md` §4.2 gives different names per type --a `goal` is `achieved`, a
+/// `decision` is `standing`-- but the state machine is the same in all five
+/// cases. They are stored canonical and translated for display: if the log
+/// stored the synonym, every query would have to know all seven types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Estado {
@@ -69,22 +69,22 @@ impl Estado {
         self == Estado::Active
     }
 
-    /// La palabra que le corresponde a este estado en este tipo.
+    /// The word this state goes by for this type.
     pub fn palabra(self, tipo: Tipo) -> &'static str {
         match (self, tipo) {
-            (Estado::Active, Tipo::Decision) => "vigente",
-            (Estado::Active, _) => "abierto",
-            (Estado::Done, Tipo::Goal) => "alcanzado",
-            (Estado::Done, Tipo::Question) => "contestado",
-            (Estado::Done, _) => "cerrado",
-            (Estado::Suspended, _) => "aparcado",
-            (Estado::Abandoned, _) => "abandonado",
-            (Estado::Superseded, _) => "superado",
+            (Estado::Active, Tipo::Decision) => "standing",
+            (Estado::Active, _) => "open",
+            (Estado::Done, Tipo::Goal) => "achieved",
+            (Estado::Done, Tipo::Question) => "answered",
+            (Estado::Done, _) => "closed",
+            (Estado::Suspended, _) => "parked",
+            (Estado::Abandoned, _) => "abandoned",
+            (Estado::Superseded, _) => "superseded",
         }
     }
 
-    /// Marca de una letra. El significado nunca se codifica solo en color:
-    /// esto se lee en blanco y negro y por ssh.
+    /// A one-letter mark. Meaning is never encoded in colour alone: this is
+    /// read in black and white and over ssh.
     pub fn marca(self) -> char {
         match self {
             Estado::Active => ' ',
@@ -96,17 +96,17 @@ impl Estado {
     }
 }
 
-/// Banderas ortogonales al estado. `MODEL.md` §4.2: un `task` puede estar
-/// `active` y `suspect` a la vez, y modelarlas como estados daria un producto
-/// cartesiano insostenible.
+/// Flags orthogonal to state. `MODEL.md` §4.2: a `task` can be `active` and
+/// `suspect` at once, and modelling them as states would give an untenable
+/// cartesian product.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Bandera {
-    /// Algo de lo que depende cayo. Lleva motivo siempre.
+    /// Something it depends on fell over. Always carries a reason.
     Suspect,
-    /// Hay que mirarlo, sin afirmar que este mal.
+    /// Worth a look, without claiming it is wrong.
     Review,
-    /// Viejo: sin tocar mientras lo suyo cambiaba.
+    /// Stale: untouched while what it covers was changing.
     Stale,
 }
 
@@ -122,18 +122,18 @@ impl Bandera {
 
     pub fn palabra(self) -> &'static str {
         match self {
-            Bandera::Suspect => "sospechoso",
-            Bandera::Review => "revisar",
-            Bandera::Stale => "viejo",
+            Bandera::Suspect => "suspect",
+            Bandera::Review => "review",
+            Bandera::Stale => "stale",
         }
     }
 
     pub const TODAS: &'static str = "suspect, review, stale";
 }
 
-/// Un vivac: parada segura a mitad de ascension. `MODEL.md` §4.7 lo llama
-/// **primitiva unica con tres usos**: `push`, `pop` y el fin de sesion
-/// generan vivacs, no son mecanismos distintos.
+/// A vivac: a safe stop partway up. `MODEL.md` §4.7 calls it a **single
+/// primitive with three uses**: `push`, `pop` and session end all generate
+/// vivacs, they are not different mechanisms.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum VivacKind {
@@ -156,33 +156,33 @@ impl VivacKind {
     }
 }
 
-/// Un evento del log. `MODEL.md` §3.2.
+/// One event from the log. `MODEL.md` §3.2.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Evento {
     pub seq: u64,
     pub id: String,
     pub ts: String,
-    /// Identificador opaco de quien lo origino. **Nunca correo ni nombre**:
-    /// `MODEL.md` §3.4 proponia `git config user.email` y el pilar de
-    /// seguridad lo veta. Se genera en `init` y vive en `config`.
+    /// Opaque identifier of whoever originated it. **Never email or name**:
+    /// `MODEL.md` §3.4 proposed `git config user.email` and the security
+    /// pillar vetoes it. Generated at `init` and kept in `config`.
     pub actor: String,
     pub lane: String,
-    /// El cuerpo va **anidado**, no aplanado.
+    /// The body is **nested**, not flattened.
     ///
-    /// `#[serde(flatten)]` obliga a serde a pasar por un mapa intermedio y
-    /// eso se paga en cada arranque, que aqui es cada llamada porque no hay
-    /// demonio. Ademas `MODEL.md` §3.2 ya decia `payload`: aplanarlo fue una
-    /// comodidad mia, no una decision del modelo.
+    /// `#[serde(flatten)]` forces serde through an intermediate map, and that
+    /// is paid on every startup, which here means every call because there is
+    /// no daemon. Besides, `MODEL.md` §3.2 already said `payload`: flattening
+    /// it was a convenience of mine, not a decision of the model.
     pub payload: Cuerpo,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum Cuerpo {
-    /// La arista `spawns` viaja **dentro** del nodo, no como evento aparte.
-    /// Asi la invariante 11 de `MODEL.md` §9 --a lo sumo un `spawns` entrante,
-    /// la procedencia es un arbol y no un DAG-- la sostiene el esquema y no
-    /// un chequeo que se pueda olvidar.
+    /// The `spawns` edge travels **inside** the node, not as a separate event.
+    /// That way invariant 11 of `MODEL.md` §9 --at most one incoming `spawns`,
+    /// provenance is a tree and not a DAG-- is held up by the schema and not
+    /// by a check somebody can forget.
     #[serde(rename = "node.created")]
     NodoCreado {
         nodo: String,
@@ -206,8 +206,8 @@ pub enum Cuerpo {
         estado: Estado,
         #[serde(default)]
         resultado: String,
-        /// Un cierre a la fuerza es legitimo, pero tiene que ser una decision
-        /// y no un descuido: por eso deja rastro aqui. `MODEL.md` §7.
+        /// A forced close is legitimate, but it has to be a decision and not
+        /// an oversight: that is why it leaves a trace here. `MODEL.md` §7.
         #[serde(default)]
         forzado: bool,
     },
@@ -221,8 +221,8 @@ pub enum Cuerpo {
     Desapilado { nodo: String },
     #[serde(rename = "stack.promoted")]
     Promovido { nodo: String },
-    /// El motivo es obligatorio: `BRIEF-SPEC.md` §10 lo prueba, porque una
-    /// bandera sin motivo no informa de nada y solo hace ruido.
+    /// The reason is mandatory: `BRIEF-SPEC.md` §10 tests it, because a flag
+    /// with no reason informs nobody and is only noise.
     #[serde(rename = "flag.raised")]
     BanderaAlzada {
         nodo: String,
@@ -236,13 +236,13 @@ pub enum Cuerpo {
         vivac: String,
         num: u64,
         kind: VivacKind,
-        /// Pila congelada con titulos: el vivac tiene que poder leerse aunque
-        /// los nodos hayan cambiado despues.
+        /// Frozen stack with titles: a vivac has to stay readable even after
+        /// the nodes have changed.
         pila: Vec<(String, String)>,
-        /// Rutas del largo. No se miden --haria falta `post_tool`, que no esta
-        /// en Tier 0-- sino que se derivan del `governs` que la pila declara.
+        /// Paths of the pitch. Not measured --that would need `post_tool`, which
+        /// is not in Tier 0-- but derived from the `governs` the stack declares.
         working_set: Vec<String>,
-        /// El resume payload: que ibas a hacer a continuacion.
+        /// The resume payload: what you were about to do next.
         next_intent: String,
         #[serde(default)]
         anchor: crate::anchor::AnchorRef,

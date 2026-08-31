@@ -1,21 +1,21 @@
-//! Fallos y codigos de salida.
+//! Failures and exit codes.
 //!
-//! El pilar de DX parte la audiencia en dos y esta es la mitad del agente:
-//! CLI silenciosa, scriptable, con codigos de salida distintos por motivo. Un
-//! script tiene que poder distinguir "no puede cerrar todavia" de "escribiste
-//! mal el comando" sin leer la prosa.
+//! The DX pillar splits the audience in two, and this is the agent's half: a
+//! quiet, scriptable CLI with a different exit code per reason. A script has
+//! to be able to tell "cannot close yet" from "you typed the command wrong"
+//! without reading the prose.
 
 use crate::redact::Hallazgo;
 
 pub enum Fallo {
-    /// El modelo rechaza la operacion. Hoy solo hay una regla asi: el cierre
-    /// con bloqueantes abiertos. `MODEL.md` §7.
+    /// The model refuses the operation. There is only one such rule today:
+    /// closing with open blockers. `MODEL.md` §7.
     Modelo(String),
-    /// El comando esta mal escrito.
+    /// The command is malformed.
     Uso(String),
-    /// La guarda de redaccion. Pilar de seguridad.
+    /// The redaction guard. Security pillar.
     Redaccion(Box<Hallazgo>),
-    /// No hay `.vivac/` aqui ni mas arriba.
+    /// There is no `.vivac/` here or further up.
     SinStore,
     Io(std::io::Error),
 }
@@ -39,11 +39,11 @@ impl Fallo {
             Fallo::Modelo(m) | Fallo::Uso(m) => eprintln!("{m}"),
             Fallo::Redaccion(h) => eprintln!("{h}"),
             Fallo::SinStore => {
-                eprintln!("  No hay .vivac/ aqui ni mas arriba.");
+                eprintln!("  No .vivac/ here or further up.");
                 eprintln!();
-                eprintln!("  Sembrar el arbol:  vivac init");
+                eprintln!("  Plant the tree:  vivac init");
             }
-            Fallo::Io(e) => eprintln!("  Error de entrada/salida: {e}"),
+            Fallo::Io(e) => eprintln!("  Input/output error: {e}"),
         }
         eprintln!();
     }

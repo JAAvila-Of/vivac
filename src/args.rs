@@ -1,10 +1,10 @@
-//! Analisis de argumentos a mano.
+//! Argument parsing by hand.
 //!
-//! No entra `clap`. El pilar de seguridad quiere pocas dependencias que
-//! auditar y el de rendimiento paga el arranque del proceso en cada llamada
-//! --no hay demonio-- asi que la superficie es esta: posicionales, `--clave
-//! valor` y banderas. Cabe en cuarenta lineas y el texto de ayuda se escribe
-//! en castellano sin pelearse con nadie.
+//! No `clap`. The security pillar wants few dependencies to audit and the
+//! performance one pays for process startup on every call --there is no
+//! daemon-- so the surface is this: positionals, `--key value` and flags.
+//! It fits in forty lines, and every flag can carry a Spanish alias without
+//! anyone having to know about it.
 
 use std::collections::HashMap;
 
@@ -12,6 +12,33 @@ use std::collections::HashMap;
 pub struct Args {
     pub libres: Vec<String>,
     opts: HashMap<String, Vec<String>>,
+}
+
+/// English is canonical; the Spanish name of every flag keeps working.
+///
+/// The tool was written in Spanish and three real trees were seeded with those
+/// flags already in the fingers. Renaming them outright would have broken
+/// scripts for nothing: normalizing here means everything downstream sees one
+/// name, the help teaches only English, and the alias costs one match arm.
+///
+/// An unknown flag is not in this table, so it comes out exactly as it was
+/// typed and `desconocidas` can quote it back.
+fn canonico(k: &str) -> &str {
+    match k {
+        "alternativa" => "alternative",
+        "bloquea" => "blocks",
+        "cascada" => "cascade",
+        "forzar" => "force",
+        "luego" => "next",
+        "padre" => "parent",
+        "por" => "why",
+        "razon" => "reason",
+        "reabrir" => "reopen",
+        "rescatar" => "rescue",
+        "tipo" => "type",
+        "todo" => "all",
+        otro => otro,
+    }
 }
 
 impl Args {
@@ -31,7 +58,7 @@ impl Args {
                         n.clone()
                     })
                 });
-                a.opts.entry(k.to_string()).or_default().extend(val);
+                a.opts.entry(canonico(k).to_string()).or_default().extend(val);
             } else {
                 a.libres.push(v[i].clone());
             }
@@ -52,7 +79,7 @@ impl Args {
         self.opt(k).unwrap_or_default().to_string()
     }
 
-    /// Repetible: `--ref a --ref b`.
+    /// Repeatable: `--ref a --ref b`.
     pub fn lista(&self, k: &str) -> Vec<String> {
         self.opts.get(k).cloned().unwrap_or_default()
     }
@@ -61,12 +88,12 @@ impl Args {
         self.libres.get(i).map(|s| s.as_str())
     }
 
-    /// Opciones que este comando no conoce.
+    /// Options this command does not know.
     ///
-    /// Ignorarlas en silencio es el peor fallo posible en la mitad de la
-    /// interfaz que usa el agente: se escribe `--kind finding`, la CLI no dice
-    /// nada, y el nodo queda con el tipo por defecto. Nadie se entera hasta
-    /// que mira el arbol. Encontrado exactamente asi, usandolo.
+    /// Swallowing them is the worst possible failure on the half of the
+    /// interface the agent uses: you type `--kind finding`, the CLI says
+    /// nothing, and the node keeps the default type. Nobody notices until
+    /// they look at the tree. Found exactly that way, while using it.
     pub fn desconocidas(&self, permitidas: &[&str]) -> Vec<&str> {
         let mut v: Vec<&str> = self
             .opts
@@ -88,33 +115,54 @@ mod tests {
     }
 
     #[test]
-    fn posicionales_y_opciones() {
-        let a = p("titulo --por motivo --bloquea --ref uno --ref dos");
-        assert_eq!(a.libre(0), Some("titulo"));
-        assert_eq!(a.opt("por"), Some("motivo"));
-        assert!(a.tiene("bloquea"));
-        assert_eq!(a.lista("ref"), vec!["uno", "dos"]);
+    fn positionals_and_options() {
+        let a = p("title --why reason --blocks --ref one --ref two");
+        assert_eq!(a.libre(0), Some("title"));
+        assert_eq!(a.opt("why"), Some("reason"));
+        assert!(a.tiene("blocks"));
+        assert_eq!(a.lista("ref"), vec!["one", "two"]);
     }
 
     #[test]
-    fn bandera_pegada_a_otra_bandera() {
-        // `--bloquea --por x`: `--bloquea` no se come el `--por`.
-        let a = p("--bloquea --por x");
-        assert!(a.tiene("bloquea"));
-        assert_eq!(a.opt("bloquea"), None);
-        assert_eq!(a.opt("por"), Some("x"));
+    fn a_flag_next_to_another_flag() {
+        // `--blocks --why x`: `--blocks` does not eat the `--why`.
+        let a = p("--blocks --why x");
+        assert!(a.tiene("blocks"));
+        assert_eq!(a.opt("blocks"), None);
+        assert_eq!(a.opt("why"), Some("x"));
     }
 
     #[test]
-    fn una_opcion_que_no_existe_no_pasa_en_silencio() {
-        let a = p("x --kind finding --tipo task");
-        assert_eq!(a.desconocidas(&["tipo", "por"]), vec!["kind"]);
-        assert!(a.desconocidas(&["tipo", "kind"]).is_empty());
+    fn an_option_that_does_not_exist_does_not_pass_in_silence() {
+        let a = p("x --kind finding --type task");
+        assert_eq!(a.desconocidas(&["type", "why"]), vec!["kind"]);
+        assert!(a.desconocidas(&["type", "kind"]).is_empty());
     }
 
     #[test]
-    fn igual() {
-        let a = p("--tipo=decision");
-        assert_eq!(a.opt("tipo"), Some("decision"));
+    fn equals_sign() {
+        let a = p("--type=decision");
+        assert_eq!(a.opt("type"), Some("decision"));
+    }
+
+    /// The Spanish name of a flag still works, and lands on the English one.
+    ///
+    /// Three real trees were seeded with those flags in the fingers. Dropping
+    /// them would break scripts for nothing, so they normalize at the door and
+    /// nothing downstream ever sees two names for one thing.
+    #[test]
+    fn the_spanish_alias_resolves_to_the_english_name() {
+        let a = p("t --por motivo --bloquea --padre 3 --forzar --luego x");
+        assert_eq!(a.opt("why"), Some("motivo"));
+        assert!(a.tiene("blocks"));
+        assert_eq!(a.opt("parent"), Some("3"));
+        assert!(a.tiene("force"));
+        assert_eq!(a.opt("next"), Some("x"));
+
+        // And it is genuinely the same key, not a second one.
+        assert!(a.desconocidas(&["why", "blocks", "parent", "force", "next"]).is_empty());
+
+        // An unknown flag is not in the table, so it is quoted back verbatim.
+        assert_eq!(p("--inventada 1").desconocidas(&["why"]), vec!["inventada"]);
     }
 }

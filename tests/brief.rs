@@ -1,83 +1,83 @@
-//! El contrato de test de `BRIEF-SPEC.md` §10, sobre el binario de verdad.
+//! The test contract from `BRIEF-SPEC.md` §10, against the real binary.
 //!
-//! No usa ninguna dependencia: `CARGO_BIN_EXE_vivac` lo da cargo, y el store
-//! es un directorio temporal. Cada prueba siembra su propio arbol, porque un
-//! arbol compartido haria que el orden de ejecucion importara.
+//! No dependencies: `CARGO_BIN_EXE_vivac` comes from cargo, and the store is a
+//! temporary directory. Every test seeds its own tree, because a shared one
+//! would make execution order matter.
 
 mod common;
 use common::Caja;
 
-/// Un arbol con una de cada cosa, para que ninguna seccion salga vacia.
+/// A tree with one of everything, so that no section comes out empty.
 fn poblado(nombre: &str) -> Caja {
     let c = Caja::nueva(nombre);
     c.ok(&[
         "push",
-        "Migrar autenticacion a OIDC",
-        "--por",
-        "el proveedor viejo cierra",
+        "Migrate authentication to OIDC",
+        "--why",
+        "the old provider is shutting down",
     ]);
     c.ok(&[
         "add",
-        "Sin dependencias con licencia contagiosa",
-        "--padre",
+        "No dependencies under a copyleft licence",
+        "--parent",
         "1",
-        "--tipo",
+        "--type",
         "constraint",
-        "--por",
-        "politica de la empresa",
+        "--why",
+        "company policy",
     ]);
     c.ok(&[
         "push",
-        "Elegir backend de cache",
-        "--por",
-        "el token store lo necesita",
+        "Pick a cache backend",
+        "--why",
+        "the token store needs one",
         "--governs",
         "src/cache/**",
     ]);
     c.ok(&[
         "decide",
-        "Usar token store distribuido",
-        "--razon",
-        "un solo nodo no aguanta",
-        "--alternativa",
-        "JWT sin revocacion",
+        "Use a distributed token store",
+        "--reason",
+        "a single node will not hold",
+        "--alternative",
+        "JWT with no revocation",
     ]);
     c.ok(&[
         "add",
-        "El volumen de tokens cabe en un nodo?",
-        "--padre",
+        "Does the token volume fit in one node?",
+        "--parent",
         "3",
-        "--tipo",
+        "--type",
         "question",
-        "--bloquea",
-        "--por",
-        "decide el backend",
+        "--blocks",
+        "--why",
+        "it decides the backend",
     ]);
     c.ok(&[
         "add",
-        "Actualizar tests de integracion",
-        "--padre",
+        "Update the integration tests",
+        "--parent",
         "3",
-        "--por",
-        "el backend cambia lo que hay que montar",
+        "--why",
+        "the backend changes what has to be stood up",
     ]);
     c.ok(&[
         "park",
         "6",
-        "faltaba decidir el backend antes de tocar los tests",
+        "the backend had to be decided before touching the tests",
     ]);
     c.ok(&[
         "flag",
         "4",
         "suspect",
-        "--por",
-        "asumia Redis, y no hay Redis en staging",
+        "--why",
+        "it assumed Redis, and there is no Redis in staging",
     ]);
     c.ok(&[
         "save",
-        "antes de tocar el adaptador",
-        "--luego",
-        "extraer el validador",
+        "before touching the adapter",
+        "--next",
+        "extract the validator",
     ]);
     c
 }
@@ -86,225 +86,217 @@ fn seccion(brief: &str, titulo: &str) -> bool {
     brief.lines().any(|l| l.trim() == titulo)
 }
 
-/// §10.1 — Mismo log, mismo `--now`, dos ejecuciones, mismos bytes.
+/// §10.1 — Same log, same `--now`, two runs, same bytes.
 #[test]
-fn determinismo() {
+fn determinism() {
     let c = poblado("det");
     let a = c.ok(&["brief", "--now", "2026-09-15T10:00:00Z"]);
     let b = c.ok(&["brief", "--now", "2026-09-15T10:00:00Z"]);
     assert_eq!(a, b);
-    assert!(
-        a.contains("2026-09-15"),
-        "el --now manda sobre el reloj:\n{a}"
-    );
+    assert!(a.contains("2026-09-15"), "--now overrides the clock:\n{a}");
 }
 
-/// §10.2 — Con el presupuesto apretado, la espina sale entera y avisa.
+/// §10.2 — With the budget squeezed, the spine comes out whole and says so.
 ///
-/// Es la regla mas dura de la especificacion: si la espina no cabe, el
-/// presupuesto esta mal, no el brief. Sin ella el brief no responde la
-/// pregunta 1 y no tiene razon de existir.
+/// It is the hardest rule in the specification: if the spine does not fit, the
+/// budget is wrong, not the brief. Without it the brief does not answer
+/// question 1 and has no reason to exist.
 #[test]
-fn la_espina_nunca_se_trunca() {
-    let c = poblado("espina");
+fn the_spine_is_never_truncated() {
+    let c = poblado("spine");
     let espina = |b: &str| {
         assert!(
-            b.contains("Migrar autenticacion a OIDC"),
-            "falta la raiz:\n{b}"
+            b.contains("Migrate authentication to OIDC"),
+            "the root is missing:\n{b}"
         );
-        assert!(b.contains("Elegir backend de cache"), "falta el foco:\n{b}");
-        assert!(b.contains("<== AQUI"), "falta el marcador:\n{b}");
+        assert!(b.contains("Pick a cache backend"), "the focus is missing:\n{b}");
+        assert!(b.contains("<== HERE"), "the marker is missing:\n{b}");
     };
 
-    // Apretado pero alcanzable: cabe recortando, y lo dice.
+    // Tight but reachable: it fits by trimming, and it says so.
     let b = c.ok(&["brief", "--budget", "200", "--now", "2026-09-15T10:00:00Z"]);
     espina(&b);
-    assert!(b.contains("recortados"), "recorto sin decirlo:\n{b}");
+    assert!(b.contains("trimmed"), "it trimmed without saying so:\n{b}");
 
-    // Imposible: ni quitando todo lo truncable cabe. La espina sale igual, y
-    // el aviso dice que lo que sobra es arbol, no render.
+    // Impossible: it does not fit even with everything truncatable gone. The
+    // spine comes out anyway, and the warning says what is left over is tree,
+    // not render.
     let b = c.ok(&["brief", "--budget", "40", "--now", "2026-09-15T10:00:00Z"]);
     espina(&b);
-    assert!(b.contains("excede el presupuesto"), "no aviso:\n{b}");
+    assert!(b.contains("over budget"), "it did not warn:\n{b}");
 }
 
-/// §10.3 — Al bajar el presupuesto las secciones caen de abajo arriba, nunca
-/// salteado.
+/// §10.3 — As the budget drops, sections fall from the bottom up, never
+/// skipping.
 #[test]
-fn orden_de_truncado() {
+fn truncation_order() {
     let c = poblado("trunc");
     let entero = c.ok(&["brief", "--budget", "5000", "--now", "2026-09-15T10:00:00Z"]);
-    assert!(seccion(&entero, "ULTIMO VIVAC"), "{entero}");
-    assert!(seccion(&entero, "NO TOCAR AHORA"), "{entero}");
-    assert!(seccion(&entero, "MARCADO"), "{entero}");
+    assert!(seccion(&entero, "LAST VIVAC"), "{entero}");
+    assert!(seccion(&entero, "DO NOT TOUCH NOW"), "{entero}");
+    assert!(seccion(&entero, "FLAGGED"), "{entero}");
 
-    // El vivac es la seccion 9 y cae antes que la 7 y la 6.
+    // The vivac is section 9 and falls before 7 and 6.
     let apretado = c.ok(&["brief", "--budget", "150", "--now", "2026-09-15T10:00:00Z"]);
     assert!(
-        !seccion(&apretado, "ULTIMO VIVAC"),
-        "deberia haber caido:\n{apretado}"
+        !seccion(&apretado, "LAST VIVAC"),
+        "it should have fallen:\n{apretado}"
     );
 
-    // Y las no truncables aguantan: invariantes y preguntas bloqueantes.
-    assert!(seccion(&apretado, "INVARIANTES"), "{apretado}");
-    assert!(seccion(&apretado, "BLOQUEA"), "{apretado}");
+    // And the non-truncatable ones hold: invariants and blocking questions.
+    assert!(seccion(&apretado, "INVARIANTS"), "{apretado}");
+    assert!(seccion(&apretado, "BLOCKS"), "{apretado}");
 }
 
-/// §10.5 — Una decision superada no se renderiza nunca.
+/// §10.5 — A superseded decision is never rendered.
 #[test]
-fn superada_ausente() {
+fn superseded_is_absent() {
     let c = poblado("sup");
     c.ok(&[
         "decide",
-        "Usar sesiones en base de datos",
-        "--razon",
-        "mas simple",
+        "Use database-backed sessions",
+        "--reason",
+        "simpler",
         "--supersedes",
         "4",
     ]);
     let b = c.ok(&["brief", "--budget", "5000", "--now", "2026-09-15T10:00:00Z"]);
-    assert!(b.contains("Usar sesiones en base de datos"), "{b}");
+    assert!(b.contains("Use database-backed sessions"), "{b}");
     assert!(
-        !b.contains("Usar token store distribuido"),
-        "la superada sigue ahi:\n{b}"
+        !b.contains("Use a distributed token store"),
+        "the superseded one is still there:\n{b}"
     );
 }
 
-/// §10.7 — Pila vacia produce §8, nunca una salida vacia.
+/// §10.7 — An empty stack produces §8, never empty output.
 #[test]
-fn estado_inicial() {
-    let c = Caja::nueva("inicial");
+fn initial_state() {
+    let c = Caja::nueva("initial");
     let b = c.ok(&["brief"]);
-    assert!(b.contains("Sin foco activo"), "{b}");
-    assert!(b.contains("vivac push"), "sin accion concreta:\n{b}");
+    assert!(b.contains("No active focus"), "{b}");
+    assert!(b.contains("vivac push"), "no concrete action:\n{b}");
 
-    c.ok(&["push", "Una meta", "--por", "hace falta"]);
-    c.ok(&["park", "sin terminar"]);
+    c.ok(&["push", "A goal", "--why", "it is needed"]);
+    c.ok(&["park", "unfinished"]);
     let b = c.ok(&["brief"]);
-    assert!(b.contains("Sin foco activo"), "{b}");
-    assert!(
-        b.contains("OBJETIVOS ABIERTOS") || b.contains("focus"),
-        "{b}"
-    );
+    assert!(b.contains("No active focus"), "{b}");
+    assert!(b.contains("OPEN GOALS") || b.contains("focus"), "{b}");
 }
 
-/// §10.8 — Ninguna seccion vacia emite encabezado.
+/// §10.8 — No empty section emits a heading.
 #[test]
-fn sin_encabezados_huecos() {
-    let c = Caja::nueva("hueco");
-    c.ok(&["push", "Sola", "--por", "no cuelga nada de ella"]);
+fn no_hollow_headings() {
+    let c = Caja::nueva("hollow");
+    c.ok(&["push", "Alone", "--why", "nothing hangs off it"]);
     let b = c.ok(&["brief"]);
     for t in [
-        "INVARIANTES",
-        "BLOQUEA",
-        "NO TOCAR AHORA",
-        "MARCADO",
-        "DECISIONES VIGENTES",
+        "INVARIANTS",
+        "BLOCKS",
+        "DO NOT TOUCH NOW",
+        "FLAGGED",
+        "STANDING DECISIONS",
     ] {
-        assert!(!seccion(&b, t), "salio {t} vacia:\n{b}");
+        assert!(!seccion(&b, t), "{t} came out empty:\n{b}");
     }
 }
 
-/// §10.9 — Ninguna bandera se renderiza sin su motivo, porque no se puede
-/// levantar sin el.
+/// §10.9 — No flag is rendered without its reason, because it cannot be raised
+/// without one.
 #[test]
-fn motivo_obligatorio() {
-    let c = Caja::nueva("motivo");
-    c.ok(&["push", "Algo", "--por", "hace falta"]);
+fn reason_is_mandatory() {
+    let c = Caja::nueva("reason");
+    c.ok(&["push", "Something", "--why", "it is needed"]);
     let (s, cod) = c.correr(&["flag", "1", "suspect"]);
-    assert_eq!(cod, 2, "una bandera sin motivo tiene que fallar:\n{s}");
-    assert!(s.contains("--por"), "{s}");
+    assert_eq!(cod, 2, "a flag with no reason has to fail:\n{s}");
+    assert!(s.contains("--why"), "{s}");
 }
 
-/// §10.6 — Sin control de versiones no hay lineas de diff, y se dice.
+/// §10.6 — With no version control there are no diff lines, and it says so.
 #[test]
-fn degradacion_sin_ancla() {
+fn degradation_without_an_anchor() {
     let c = poblado("null");
     let s = c.ok(&["restore", "v1"]);
-    assert!(s.contains("Sin ancla"), "{s}");
-    assert!(!s.contains("cambios desde"), "invento un diff:\n{s}");
+    assert!(s.contains("No anchor"), "{s}");
+    assert!(!s.contains("changes since"), "it invented a diff:\n{s}");
 }
 
-/// La guarda de redaccion vale tambien aqui: no hay puerta trasera por
-/// `decide` ni por `flag`.
+/// The redaction guard holds here too: there is no back door through `decide`
+/// or through `flag`.
 #[test]
-fn la_guarda_cubre_las_operaciones_nuevas() {
-    let c = Caja::nueva("guarda");
-    c.ok(&["push", "Algo", "--por", "hace falta"]);
+fn the_guard_covers_the_new_operations() {
+    let c = Caja::nueva("guard");
+    c.ok(&["push", "Something", "--why", "it is needed"]);
     let (_, cod) = c.correr(&[
         "decide",
-        "Rotar",
-        "--razon",
-        "usar ghp_16C7e42F292c6912E7710c838347Ae178B4a",
+        "Rotate",
+        "--reason",
+        "use ghp_16C7e42F292c6912E7710c838347Ae178B4a",
     ]);
-    assert_eq!(cod, 3, "decide dejo pasar una credencial");
-    let (_, cod) = c.correr(&["flag", "1", "review", "--por", "ver /home/unnombre/.config"]);
-    assert_eq!(cod, 3, "flag dejo pasar una ruta personal");
+    assert_eq!(cod, 3, "decide let a credential through");
+    let (_, cod) = c.correr(&["flag", "1", "review", "--why", "see /home/someone/.config"]);
+    assert_eq!(cod, 3, "flag let a personal path through");
 }
 
-/// `f30` — una decision vigente no es un hijo pendiente. Sale en su seccion y
-/// en ninguna otra: listarla dos veces llena el brief de cosas que no hay que
-/// hacer, que es lo contrario de para lo que existe.
+/// `f30` — a standing decision is not a pending child. It shows up in its own
+/// section and nowhere else: listing it twice fills the brief with things not
+/// to do, which is the opposite of what it exists for.
 #[test]
-fn una_decision_no_es_un_frente() {
+fn a_decision_is_not_a_front() {
     let c = poblado("dec");
     let b = c.ok(&["brief", "--budget", "5000", "--now", "2026-09-15T10:00:00Z"]);
     assert_eq!(
-        b.matches("Usar token store distribuido").count(),
+        b.matches("Use a distributed token store").count(),
         1,
-        "la decision sale mas de una vez:\n{b}"
+        "the decision shows up more than once:\n{b}"
     );
 
-    // Y esa unica vez esta debajo de DECISIONES VIGENTES, no de NACIO DE AQUI.
-    let hasta = b.find("DECISIONES VIGENTES").expect("falta la seccion");
+    // And that single time is under STANDING DECISIONS, not BORN FROM HERE.
+    let hasta = b.find("STANDING DECISIONS").expect("the section is missing");
     assert!(
-        b.find("Usar token store distribuido").unwrap() > hasta,
-        "sale antes de su seccion, o sea como hijo pendiente:\n{b}"
+        b.find("Use a distributed token store").unwrap() > hasta,
+        "it shows up before its section, i.e. as a pending child:\n{b}"
     );
 
     let o = c.ok(&["open"]);
     assert!(
-        !o.contains("Usar token store distribuido"),
-        "open la lista como frente:\n{o}"
+        !o.contains("Use a distributed token store"),
+        "open lists it as a front:\n{o}"
     );
     assert!(
-        o.contains("1 decision vigente"),
-        "open la desaparecio sin decirlo:\n{o}"
+        o.contains("1 standing decision"),
+        "open made it vanish without saying so:\n{o}"
     );
 }
 
-/// `q26` — cerrar un padre no puede hacer invisibles a sus hijos abiertos.
+/// `q26` — closing a parent cannot make its open children invisible.
 ///
-/// El caso salio del arbol del propio proyecto: `t8` cerro con `t9`, `t10` y
-/// `f21` abiertos por debajo, y el brief mostro 3 de los 6 frentes. Listarlos
-/// seria traer el arbol entero; contarlos no.
+/// The case came out of the project's own tree: `t8` closed with `t9`, `t10`
+/// and `f21` open below it, and the brief showed 3 of the 6 fronts. Listing
+/// them would drag in the whole tree; counting them does not.
 #[test]
-fn lo_abierto_bajo_un_cerrado_se_cuenta() {
-    let c = Caja::nueva("hondo");
-    c.ok(&["push", "La meta", "--por", "hace falta"]);
-    c.ok(&["push", "Una rama", "--por", "la meta la necesita"]);
+fn what_is_open_under_a_closed_node_gets_counted() {
+    let c = Caja::nueva("deep");
+    c.ok(&["push", "The goal", "--why", "it is needed"]);
+    c.ok(&["push", "A branch", "--why", "the goal needs it"]);
     c.ok(&[
         "add",
-        "Un hallazgo",
-        "--padre",
+        "A finding",
+        "--parent",
         "2",
-        "--por",
-        "salio al pasar",
+        "--why",
+        "spotted along the way",
     ]);
-    // Cierra con un hijo abierto que no bloquea: es correcto, y es el caso.
-    c.ok(&["pop", "rama terminada"]);
+    // Closes with an open child that does not block: correct, and the case.
+    c.ok(&["pop", "branch finished"]);
 
     let b = c.ok(&["brief", "--budget", "5000", "--now", "2026-09-15T10:00:00Z"]);
     assert!(
-        b.contains("+ 1 mas abajo"),
-        "no aviso de lo que quedo debajo:\n{b}"
+        b.contains("+ 1 further down"),
+        "it did not warn about what was left below:\n{b}"
     );
     assert!(
-        !b.contains("Un hallazgo"),
-        "lo listo en vez de contarlo; eso trae el arbol entero:\n{b}"
+        !b.contains("A finding"),
+        "it listed it instead of counting it; that drags in the whole tree:\n{b}"
     );
-    assert!(
-        b.contains("vivac open"),
-        "conto sin decir donde mirar:\n{b}"
-    );
+    assert!(b.contains("vivac open"), "it counted without saying where to look:\n{b}");
 }

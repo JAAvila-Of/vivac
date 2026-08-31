@@ -1,8 +1,8 @@
-//! La caja de arena que comparten los tests de integracion.
+//! The sandbox the integration tests share.
 //!
-//! Sin dependencias: `CARGO_BIN_EXE_vivac` lo da cargo y el store es un
-//! directorio temporal. Cada prueba siembra su propio arbol, porque uno
-//! compartido haria que el orden de ejecucion importara.
+//! No dependencies: `CARGO_BIN_EXE_vivac` comes from cargo and the store is a
+//! temporary directory. Every test seeds its own tree, because a shared one
+//! would make execution order matter.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -12,8 +12,8 @@ const BIN: &str = env!("CARGO_BIN_EXE_vivac");
 pub struct Caja(pub PathBuf);
 
 impl Caja {
-    /// Un directorio sin `.vivac/`. Para probar que la herramienta calla
-    /// donde no la han sembrado.
+    /// A directory with no `.vivac/`. For proving the tool stays quiet where
+    /// nobody planted it.
     pub fn vacia(nombre: &str) -> Caja {
         let d = std::env::temp_dir().join(format!(
             "vivac-v-{nombre}-{}",
@@ -54,7 +54,7 @@ impl Caja {
 
     pub fn ok(&self, args: &[&str]) -> String {
         let (s, c) = self.correr(args);
-        assert_eq!(c, 0, "`vivac {}` fallo con {c}:\n{s}", args.join(" "));
+        assert_eq!(c, 0, "`vivac {}` failed with {c}:\n{s}", args.join(" "));
         s
     }
 }

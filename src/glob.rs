@@ -1,10 +1,10 @@
-//! Coincidencia de globs, lo justo para `governs`.
+//! Glob matching, just enough for `governs`.
 //!
-//! `src/auth/**`, `*.rs`, `src/?ain.rs`. Sin dependencias: el pilar de
-//! seguridad prefiere poco que auditar, y esto son cuarenta lineas.
+//! `src/auth/**`, `*.rs`, `src/?ain.rs`. No dependencies: the security pillar
+//! prefers little to audit, and this is forty lines.
 
-/// ¿El patron cubre la ruta? Las barras se normalizan, asi que un `governs`
-/// escrito en Windows vale en Linux y al reves.
+/// Does the pattern cover the path? Slashes are normalized, so a `governs`
+/// written on Windows holds on Linux and the other way round.
 pub fn cubre(patron: &str, ruta: &str) -> bool {
     if patron.is_empty() {
         return false;
@@ -19,7 +19,7 @@ fn casa(p: &[char], r: &[char]) -> bool {
         return r.is_empty();
     }
     if p[0] == '*' {
-        // `**` cruza barras; `*` se queda dentro de un segmento.
+        // `**` crosses slashes; `*` stays inside one segment.
         if p.len() > 1 && p[1] == '*' {
             let resto = if p.len() > 2 && p[2] == '/' {
                 &p[3..]
@@ -53,7 +53,7 @@ mod tests {
         assert!(cubre("src/main.rs", "src/main.rs"));
         assert!(!cubre("src/main.rs", "src/other.rs"));
         assert!(cubre("src/*.rs", "src/main.rs"));
-        assert!(!cubre("src/*.rs", "src/auth/main.rs"), "* no cruza barras");
+        assert!(!cubre("src/*.rs", "src/auth/main.rs"), "* does not cross slashes");
         assert!(cubre("src/**", "src/auth/token.rs"));
         assert!(cubre("src/**/*.rs", "src/auth/token.rs"));
         assert!(cubre("**/*.rs", "a/b/c.rs"));

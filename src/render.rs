@@ -1,13 +1,13 @@
-//! Lo que lee el mantenedor.
+//! What the maintainer reads.
 //!
-//! Todo en ASCII y sin una sola secuencia de color. El pilar de DX es
-//! explicito: **el significado nunca se codifica solo en color**, y esto tiene
-//! que degradar sin romperse --sin tty, por ssh, y en cmd.exe ademas de
-//! Windows Terminal--. `[x]`, `[~]`, `*` y `<== CIERRE FALSO` se leen en
-//! blanco y negro. El color, cuando llegue, refuerza; no informa.
+//! All ASCII and not one colour escape. The DX pillar is explicit: **meaning
+//! is never encoded in colour alone**, and this has to degrade without
+//! breaking --with no tty, over ssh, and in cmd.exe as well as Windows
+//! Terminal--. `[x]`, `[~]`, `*` and `<== FALSE CLOSE` read in black and
+//! white. Colour, when it lands, reinforces; it does not inform.
 //!
-//! Cada render tiene su gemelo en `--json`, que es la otra mitad de la
-//! audiencia: el agente necesita salida parseable, no un arbol dibujado.
+//! Every render has its `--json` twin, which is the other half of the
+//! audience: the agent needs parseable output, not a drawn tree.
 
 use crate::args::Args;
 use crate::brief::corta;
@@ -54,21 +54,21 @@ fn json_nodo(a: &Arbol, ag: &Agregados, n: &Nodo) -> serde_json::Value {
         "id": n.id,
         "alias": n.alias(),
         "num": n.num,
-        "tipo": n.tipo,
-        "titulo": n.titulo,
-        "por": n.por,
-        "estado": n.estado,
-        "bloquea": n.bloquea,
-        "padre": n.padre.as_ref().and_then(|p| a.nodo(p).map(|x| x.alias())),
-        "nota": n.nota,
-        "resultado": n.resultado,
+        "type": n.tipo,
+        "title": n.titulo,
+        "why": n.por,
+        "state": n.estado,
+        "blocks": n.bloquea,
+        "parent": n.padre.as_ref().and_then(|p| a.nodo(p).map(|x| x.alias())),
+        "note": n.nota,
+        "outcome": n.resultado,
         "refs": n.refs,
         "governs": n.governs,
-        "abierto": n.abierto,
-        "cerrado": n.cerrado,
-        "cierre_falso": n.estado == Estado::Done && ag.bloqueantes(&n.id) > 0,
-        "abiertos_debajo": r.abiertos,
-        "total_debajo": r.total,
+        "opened": n.abierto,
+        "closed": n.cerrado,
+        "false_close": n.estado == Estado::Done && ag.bloqueantes(&n.id) > 0,
+        "open_below": r.abiertos,
+        "total_below": r.total,
     })
 }
 
@@ -80,19 +80,19 @@ fn imprimir_json(v: serde_json::Value) -> R {
     Ok(())
 }
 
-/// `why` — por que estamos aca. Es la operacion que define el producto.
+/// `why` — why we are here. It is the operation that defines the product.
 ///
-/// Narra el camino desde la raiz y despues contesta las tres preguntas que
-/// vienen detras: que quedo en paralelo sin cerrar, que nacio de aca, y que
-/// impide cerrar cada escalon del camino.
+/// It narrates the path from the root and then answers the three questions
+/// that come next: what was left open in parallel, what was born here, and
+/// what keeps each step of the path from closing.
 pub fn why(a: &Arbol, args: &Args) -> R {
     let ag = &a.agregados();
     let s = args
         .libre(0)
-        .ok_or_else(|| Fallo::uso("uso: vivac why <id>"))?;
+        .ok_or_else(|| Fallo::uso("usage: vivac why <id>"))?;
     let n = a
         .resolver(s)
-        .ok_or_else(|| Fallo::uso(format!("No existe el nodo {s}.")))?;
+        .ok_or_else(|| Fallo::uso(format!("No such node: {s}.")))?;
     let camino = a.ancestros(&n.id);
 
     if args.tiene("json") {
@@ -106,18 +106,18 @@ pub fn why(a: &Arbol, args: &Args) -> R {
             .map(|c| json_nodo(a, ag, c))
             .collect();
         return imprimir_json(json!({
-            "nodo": json_nodo(a, ag, n),
-            "camino": camino.iter().map(|x| json_nodo(a, ag, x)).collect::<Vec<_>>(),
+            "node": json_nodo(a, ag, n),
+            "path": camino.iter().map(|x| json_nodo(a, ag, x)).collect::<Vec<_>>(),
             "en_paralelo": hermanos,
-            "nacio_de_aca": a.hijos(&n.id).iter().filter(|c| c.estado.abierto())
+            "born_here": a.hijos(&n.id).iter().filter(|c| c.estado.abierto())
                 .map(|c| json_nodo(a, ag, c)).collect::<Vec<_>>(),
-            "bloqueantes": a.bloqueantes_abiertos(&n.id).iter()
+            "blockers": a.bloqueantes_abiertos(&n.id).iter()
                 .map(|c| json_nodo(a, ag, c)).collect::<Vec<_>>(),
         }));
     }
 
     println!();
-    println!("  Por que estamos aca  ->  {}", n.alias());
+    println!("  Why we are here  ->  {}", n.alias());
     println!("  {}", "-".repeat(66));
     println!();
     for (i, p) in camino.iter().enumerate() {
@@ -139,18 +139,18 @@ pub fn why(a: &Arbol, args: &Args) -> R {
         if !ultimo {
             let f = ag.recuento(&p.id).frase();
             if !f.is_empty() {
-                println!("        ({f} por debajo)");
+                println!("        ({f} below)");
             }
             println!("        |");
             println!("        v");
         } else {
             println!();
-            println!("        ^^^ estas aca");
+            println!("        ^^^ you are here");
         }
     }
     println!();
 
-    // "teniamos que revisar estas diez cosas, vamos por la primera"
+    // "we had ten things to review, we are on the first"
     if let Some(padre) = n.padre.as_ref() {
         let hermanos: Vec<_> = a
             .hijos(padre)
@@ -158,7 +158,7 @@ pub fn why(a: &Arbol, args: &Args) -> R {
             .filter(|c| c.id != n.id && c.estado.abierto())
             .collect();
         if !hermanos.is_empty() {
-            println!("  En paralelo, sin cerrar ({}):", hermanos.len());
+            println!("  In parallel, still open ({}):", hermanos.len());
             for c in hermanos {
                 println!("      {:<6} {}", c.alias(), c.titulo);
             }
@@ -172,7 +172,7 @@ pub fn why(a: &Arbol, args: &Args) -> R {
         .filter(|c| c.estado.abierto())
         .collect();
     if !kids.is_empty() {
-        println!("  Nacio de aca y sigue abierto ({}):", kids.len());
+        println!("  Born here and still open ({}):", kids.len());
         for c in kids {
             println!(
                 "    {} {:<6} {}",
@@ -188,7 +188,7 @@ pub fn why(a: &Arbol, args: &Args) -> R {
         let pend = a.bloqueantes_abiertos(&p.id);
         if !pend.is_empty() && p.estado.abierto() {
             println!(
-                "  {} no cierra hasta que cierren ({}):",
+                "  {} does not close until these close ({}):",
                 p.alias(),
                 pend.len()
             );
@@ -211,7 +211,7 @@ fn rama(a: &Arbol, ag: &Agregados, n: &Nodo, prefijo: &str, ultimo: bool, todo: 
     let pend = ag.bloqueantes(&n.id);
     if n.estado == Estado::Done && pend > 0 {
         cola.push_str(&format!(
-            "   <== CIERRE FALSO: {pend} condicion(es) abierta(s)"
+            "   <== FALSE CLOSE: {pend} open condition(s)"
         ));
     }
     let marca = if n.bloquea { "* " } else { "" };
@@ -235,7 +235,7 @@ fn rama(a: &Arbol, ag: &Agregados, n: &Nodo, prefijo: &str, ultimo: bool, todo: 
 
 fn subarbol_json(a: &Arbol, ag: &Agregados, n: &Nodo) -> serde_json::Value {
     let mut v = json_nodo(a, ag, n);
-    v["hijos"] = json!(a
+    v["children"] = json!(a
         .hijos(&n.id)
         .iter()
         .map(|h| subarbol_json(a, ag, h))
@@ -248,7 +248,7 @@ pub fn tree(a: &Arbol, args: &Args) -> R {
     let raices: Vec<&Nodo> = match args.libre(0) {
         Some(s) => vec![a
             .resolver(s)
-            .ok_or_else(|| Fallo::uso(format!("No existe el nodo {s}.")))?],
+            .ok_or_else(|| Fallo::uso(format!("No such node: {s}.")))?],
         None => a.raices(),
     };
     if args.tiene("json") {
@@ -258,24 +258,24 @@ pub fn tree(a: &Arbol, args: &Args) -> R {
             .collect::<Vec<_>>()));
     }
     if a.vacio() {
-        println!("  Arbol vacio.  vivac push \"<titulo>\" --por \"<motivo>\"");
+        println!("  Empty tree.  vivac push \"<title>\" --why \"<reason>\"");
         return Ok(());
     }
-    let todo = args.tiene("todo") || args.tiene("all");
+    let todo = args.tiene("all") || args.tiene("all");
     println!();
     for (i, n) in raices.iter().enumerate() {
         rama(a, ag, n, "  ", i == raices.len() - 1, todo);
     }
     println!();
     if !todo {
-        println!("  (cerrados sin descendencia abierta ocultos; --todo los muestra)");
+        println!("  (closed nodes with no open descendants hidden; --all shows them)");
         println!();
     }
     Ok(())
 }
 
-/// `open` — los frentes abiertos, cada uno con su linaje comprimido. Es la
-/// vista de "por donde iba" al empezar el dia.
+/// `open` — the open fronts, each with its lineage compressed. It is the
+/// "where was I" view for the start of the day.
 pub fn open(a: &Arbol, args: &Args) -> R {
     let ag = &a.agregados();
     let mut hojas: Vec<&Nodo> = a
@@ -292,7 +292,7 @@ pub fn open(a: &Arbol, args: &Args) -> R {
             .iter()
             .map(|n| {
                 let mut v = json_nodo(a, ag, n);
-                v["linaje"] = json!(a
+                v["lineage"] = json!(a
                     .ancestros(&n.id)
                     .iter()
                     .rev()
@@ -305,7 +305,7 @@ pub fn open(a: &Arbol, args: &Args) -> R {
             .collect::<Vec<_>>()));
     }
     if hojas.is_empty() && vigentes == 0 {
-        println!("  Nada abierto.");
+        println!("  Nothing open.");
         return Ok(());
     }
     println!();
@@ -327,13 +327,13 @@ pub fn open(a: &Arbol, args: &Args) -> R {
             println!("         via {}", v.join(" > "));
         }
     }
-    // No son frentes, pero desaparecerlas de aqui sin decirlo seria omitir
-    // en silencio: se cuentan y se dice donde estan.
+    // They are not fronts, but making them vanish without saying so would be
+    // omitting in silence: they get counted and located.
     if vigentes > 0 {
         let frase = if vigentes == 1 {
-            "1 decision vigente, que no se hace".to_string()
+            "1 standing decision, which is not work".to_string()
         } else {
-            format!("{vigentes} decisiones vigentes, que no se hacen")
+            format!("{vigentes} standing decisions, which are not work")
         };
         println!();
         println!("  + {frase}   vivac brief");
@@ -342,13 +342,13 @@ pub fn open(a: &Arbol, args: &Args) -> R {
     Ok(())
 }
 
-/// `triage` — que se puede podar, y con que comando.
+/// `triage` — what can be pruned, and with which command.
 ///
-/// El brief que se pasa de presupuesto **no debe mentir por omision**
-/// (`BRIEF-SPEC.md` §4): la senal es que el grafo necesita poda, y esta es la
-/// vista que dice por donde. `MODEL.md` §6.1 le manda ademas los nodos hondos,
-/// porque una pila profunda casi nunca es indisciplina: es que el objetivo
-/// raiz cambio y nadie volvio a enraizar.
+/// A brief over budget **must not lie by omission** (`BRIEF-SPEC.md` §4):
+/// the signal is that the graph needs pruning, and this is the view that says
+/// where. `MODEL.md` §6.1 also sends it the deep nodes, because a deep stack
+/// is almost never lack of discipline: it is that the root goal moved and
+/// nobody re-rooted.
 pub fn triage(a: &Arbol, args: &Args) -> R {
     let ag = &a.agregados();
 
@@ -357,7 +357,7 @@ pub fn triage(a: &Arbol, args: &Args) -> R {
         .filter(|n| n.estado == Estado::Suspended)
         .collect();
 
-    // `MODEL.md` §6.1: a partir de 6 aparece aqui, y nunca bloquea.
+    // `MODEL.md` §6.1: from 6 on it shows up here, and it never blocks.
     let mut hondos: Vec<(&Nodo, usize)> = a
         .todos()
         .filter(|n| n.es_frente())
@@ -365,11 +365,11 @@ pub fn triage(a: &Arbol, args: &Args) -> R {
         .filter(|(_, d)| *d >= 6)
         .collect();
 
-    // Vivos colgando de algo descartado. Los produce el rescate de `abandon`,
-    // que **no** reparenta a proposito (`d33`): el nodo se queda donde nacio.
-    // Por eso hay que volver a mirarlos cada tanto, y por eso estan aqui y no
-    // en `check`: no es corrupcion del almacen, es trabajo que perdio el
-    // motivo por el que nacio.
+    // Alive, hanging off something discarded. `abandon`'s rescue produces
+    // them, and it does **not** reparent on purpose (`d33`): the node stays
+    // where it was born. That is why they need revisiting now and then, and
+    // why they are here and not in `check`: it is not store corruption, it is
+    // work that lost the reason it was born for.
     let mut descolgados: Vec<(&Nodo, &Nodo)> = a
         .todos()
         .filter(|n| n.es_frente())
@@ -379,12 +379,12 @@ pub fn triage(a: &Arbol, args: &Args) -> R {
         })
         .collect();
 
-    // Invariante 10. `check` los reporta para CI; aqui se actua sobre ellos,
-    // y con la misma exencion: un cierre **forzado** fue una decision, tiene
-    // su rastro y el arbol lo marca. Repetirlo aqui cada dia seria pedir que
-    // se vuelva a decidir lo ya decidido. Lo que si llega aqui es el cierre
-    // que se volvio falso despues, al colgarle un bloqueante a algo ya
-    // cerrado: ese es el caso que tardo 26 dias en detectarse.
+    // Invariant 10. `check` reports them for CI; here they get acted on, and
+    // with the same exemption: a **forced** close was a decision, it has its
+    // trace and the tree marks it. Repeating it here every day would be asking
+    // for what was already decided to be decided again. What does land here is
+    // the close that turned false later, when a blocker got hung on something
+    // already closed: that is the case that took 26 days to spot.
     let mut falsos: Vec<&Nodo> = a
         .todos()
         .filter(|n| n.estado == Estado::Done && !n.cierre_forzado && ag.bloqueantes(&n.id) > 0)
@@ -397,34 +397,34 @@ pub fn triage(a: &Arbol, args: &Args) -> R {
 
     if args.tiene("json") {
         return imprimir_json(json!({
-            "aparcados": aparcados.iter().map(|n| json_nodo(a, ag, n)).collect::<Vec<_>>(),
-            "hondos": hondos.iter().map(|(n, d)| {
+            "parked": aparcados.iter().map(|n| json_nodo(a, ag, n)).collect::<Vec<_>>(),
+            "deep": hondos.iter().map(|(n, d)| {
                 let mut v = json_nodo(a, ag, n);
-                v["profundidad"] = json!(d);
+                v["depth"] = json!(d);
                 v
             }).collect::<Vec<_>>(),
-            "descolgados": descolgados.iter().map(|(n, p)| {
+            "orphaned_by_discard": descolgados.iter().map(|(n, p)| {
                 let mut v = json_nodo(a, ag, n);
-                v["descartado"] = json!(p.alias());
-                v["descartado_por"] = json!(p.resultado);
+                v["discarded"] = json!(p.alias());
+                v["discarded_because"] = json!(p.resultado);
                 v
             }).collect::<Vec<_>>(),
-            "cierres_falsos": falsos.iter().map(|n| json_nodo(a, ag, n)).collect::<Vec<_>>(),
+            "false_closes": falsos.iter().map(|n| json_nodo(a, ag, n)).collect::<Vec<_>>(),
         }));
     }
 
     let total = aparcados.len() + hondos.len() + descolgados.len() + falsos.len();
     if total == 0 {
-        println!("  Nada que podar.");
+        println!("  Nothing to prune.");
         return Ok(());
     }
     println!();
-    println!("  TRIAGE - {total} cosa(s) que mirar");
+    println!("  TRIAGE - {total} thing(s) to look at");
 
     if !aparcados.is_empty() {
         println!();
         println!(
-            "  APARCADOS ({})                    focus <id>  |  abandon <id>",
+            "  PARKED ({})                       focus <id>  |  abandon <id>",
             aparcados.len()
         );
         for n in &aparcados {
@@ -438,12 +438,12 @@ pub fn triage(a: &Arbol, args: &Args) -> R {
     if !hondos.is_empty() {
         println!();
         println!(
-            "  A 6 O MAS DE LA RAIZ ({})         promote <id>",
+            "  6 OR MORE FROM THE ROOT ({})      promote <id>",
             hondos.len()
         );
         for (n, d) in &hondos {
             println!(
-                "    {:<6} {:<40} profundidad {d}",
+                "    {:<6} {:<40} depth {d}",
                 n.alias(),
                 corta(&n.titulo, 40)
             );
@@ -462,13 +462,13 @@ pub fn triage(a: &Arbol, args: &Args) -> R {
     if !descolgados.is_empty() {
         println!();
         println!(
-            "  SOBREVIVIERON A UN DESCARTE ({})  abandon <id>  |  promote <id>",
+            "  SURVIVED A DISCARD ({})           abandon <id>  |  promote <id>",
             descolgados.len()
         );
         for (n, p) in &descolgados {
             println!("    {:<6} {}", n.alias(), n.titulo);
             println!(
-                "           nacio de {}, descartado: {}",
+                "           born from {}, discarded: {}",
                 p.alias(),
                 corta(&p.resultado, 36)
             );
@@ -478,12 +478,12 @@ pub fn triage(a: &Arbol, args: &Args) -> R {
     if !falsos.is_empty() {
         println!();
         println!(
-            "  CIERRES FALSOS ({})               cerrar lo que falta, o --forzar",
+            "  FALSE CLOSES ({})                 close what is left, or --force",
             falsos.len()
         );
         for n in &falsos {
             println!(
-                "    {:<6} {:<40} {} bloqueante(s)",
+                "    {:<6} {:<40} {} blocker(s)",
                 n.alias(),
                 corta(&n.titulo, 40),
                 ag.bloqueantes(&n.id)
@@ -494,9 +494,9 @@ pub fn triage(a: &Arbol, args: &Args) -> R {
     Ok(())
 }
 
-/// `parked` — NO TOCAR AHORA. Es la seccion que ninguna otra herramienta
-/// emite: toda herramienta de memoria vuelca lo relevante, y el problema del
-/// desarrollo agentico es el contrario, acotar.
+/// `parked` — DO NOT TOUCH NOW. It is the section no other tool emits: every
+/// memory tool dumps what is relevant, and the problem in agentic development
+/// is the opposite one, bounding.
 pub fn parked(a: &Arbol, args: &Args) -> R {
     let ag = &a.agregados();
     let mut ps: Vec<&Nodo> = a
@@ -511,11 +511,11 @@ pub fn parked(a: &Arbol, args: &Args) -> R {
             .collect::<Vec<_>>()));
     }
     if ps.is_empty() {
-        println!("  Nada aparcado.");
+        println!("  Nothing parked.");
         return Ok(());
     }
     println!();
-    println!("  NO TOCAR AHORA ({})", ps.len());
+    println!("  DO NOT TOUCH NOW ({})", ps.len());
     println!();
     for n in ps {
         println!("  {:<6} {}", n.alias(), n.titulo);
@@ -527,24 +527,24 @@ pub fn parked(a: &Arbol, args: &Args) -> R {
     Ok(())
 }
 
-/// `stack` — donde estas ahora mismo, de la raiz al foco.
+/// `stack` — where you are right now, from the root to the focus.
 pub fn stack(a: &Arbol, args: &Args) -> R {
     let ag = &a.agregados();
     let pila: Vec<&Nodo> = a.pila.iter().filter_map(|id| a.nodo(id)).collect();
     if args.tiene("json") {
         return imprimir_json(json!({
-            "profundidad": pila.len(),
-            "pila": pila.iter().map(|n| json_nodo(a, ag, n)).collect::<Vec<_>>(),
+            "depth": pila.len(),
+            "stack": pila.iter().map(|n| json_nodo(a, ag, n)).collect::<Vec<_>>(),
         }));
     }
     if pila.is_empty() {
-        println!("  Pila vacia.  vivac push \"<titulo>\" --por \"<motivo>\"");
+        println!("  Empty stack.  vivac push \"<title>\" --why \"<reason>\"");
         return Ok(());
     }
     println!();
     for (i, n) in pila.iter().enumerate() {
         let foco = if i == pila.len() - 1 {
-            "   <- foco"
+            "   <- focus"
         } else {
             ""
         };
@@ -553,10 +553,10 @@ pub fn stack(a: &Arbol, args: &Args) -> R {
     println!();
     if pila.len() >= 6 {
         println!(
-            "  Pila a {} niveles. Casi nunca es indisciplina: suele ser que",
+            "  Stack {} levels deep. Almost never lack of discipline: usually",
             pila.len()
         );
-        println!("  el objetivo raiz cambio y nadie volvio a enraizar.  vivac promote");
+        println!("  the root goal moved and nobody re-rooted.  vivac promote");
         println!();
     }
     Ok(())
@@ -580,33 +580,33 @@ pub fn stats(a: &Arbol, args: &Args) -> R {
     falsos.sort_by_key(|n| n.num);
     if args.tiene("json") {
         return imprimir_json(json!({
-            "nodos": a.total(),
-            "por_estado": por_estado,
-            "profundidad": hondo,
-            "raices": a.raices().len(),
-            "pila": a.profundidad_pila(),
-            "huerfanos": huerfanos,
-            "lineas_rotas": a.lineas_rotas,
-            "cierres_falsos": falsos.iter().map(|n| json_nodo(a, ag, n)).collect::<Vec<_>>(),
+            "nodes": a.total(),
+            "by_state": por_estado,
+            "depth": hondo,
+            "roots": a.raices().len(),
+            "stack": a.profundidad_pila(),
+            "orphans": huerfanos,
+            "broken_lines": a.lineas_rotas,
+            "false_closes": falsos.iter().map(|n| json_nodo(a, ag, n)).collect::<Vec<_>>(),
         }));
     }
     println!();
-    println!("  nodos          {}", a.total());
+    println!("  nodes          {}", a.total());
     for (k, v) in &por_estado {
         println!("  {k:<14} {v}");
     }
-    println!("  profundidad    {hondo}");
-    println!("  raices         {}", a.raices().len());
-    println!("  pila           {}", a.profundidad_pila());
+    println!("  depth          {hondo}");
+    println!("  roots          {}", a.raices().len());
+    println!("  stack          {}", a.profundidad_pila());
     if huerfanos > 0 {
-        println!("  HUERFANOS      {huerfanos}  <- procedencia rota");
+        println!("  ORPHANS        {huerfanos}  <- broken provenance");
     }
     if a.lineas_rotas > 0 {
-        println!("  lineas rotas   {}  <- en .vivac/events", a.lineas_rotas);
+        println!("  broken lines   {}  <- in .vivac/events", a.lineas_rotas);
     }
     if !falsos.is_empty() {
         println!();
-        println!("  CIERRES FALSOS ({})", falsos.len());
+        println!("  FALSE CLOSES ({})", falsos.len());
         for n in falsos {
             println!("      {:<6} {}", n.alias(), n.titulo);
         }
@@ -615,7 +615,7 @@ pub fn stats(a: &Arbol, args: &Args) -> R {
     Ok(())
 }
 
-/// `vivacs` — las paradas seguras, de la ultima hacia atras.
+/// `vivacs` — the safe stops, latest first.
 pub fn vivacs(a: &Arbol, args: &Args) -> R {
     if args.tiene("json") {
         return imprimir_json(json!(a
@@ -628,17 +628,17 @@ pub fn vivacs(a: &Arbol, args: &Args) -> R {
                 "node_ref": v.node_ref.as_ref().and_then(|r| a.nodo(r).map(|n| n.alias())),
                 "kind": v.kind.palabra(),
                 "ts": v.ts,
-                "etiqueta": v.etiqueta,
+                "label": v.etiqueta,
                 "next_intent": v.next_intent,
                 "anchor": v.anchor,
-                "pila": v.pila.iter().map(|(al, t)| json!({"alias": al, "titulo": t}))
+                "stack": v.pila.iter().map(|(al, t)| json!({"alias": al, "title": t}))
                     .collect::<Vec<_>>(),
                 "working_set": v.working_set,
             }))
             .collect::<Vec<_>>()));
     }
     if a.vivacs.is_empty() {
-        println!("  Ninguna parada todavia.  vivac save \"<etiqueta>\"");
+        println!("  No stops yet.  vivac save \"<label>\"");
         return Ok(());
     }
     println!();
@@ -647,7 +647,7 @@ pub fn vivacs(a: &Arbol, args: &Args) -> R {
             .pila
             .last()
             .map(|(al, t)| format!("{al}  {t}"))
-            .unwrap_or_else(|| "pila vacia".into());
+            .unwrap_or_else(|| "empty stack".into());
         println!(
             "  {:<5} {:<7} {}  {}",
             v.alias(),
@@ -659,12 +659,12 @@ pub fn vivacs(a: &Arbol, args: &Args) -> R {
             println!("           {}", v.etiqueta);
         }
         if !v.next_intent.is_empty() {
-            println!("           ibas a: {}", v.next_intent);
+            println!("           you were about to: {}", v.next_intent);
         }
     }
     if a.vivacs.len() > 20 {
         println!();
-        println!("  ... y {} mas", a.vivacs.len() - 20);
+        println!("  ... and {} more", a.vivacs.len() - 20);
     }
     println!();
     Ok(())

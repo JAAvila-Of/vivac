@@ -1,16 +1,16 @@
-//! El almacen: un directorio, dos archivos.
+//! The store: one directory, two files.
 //!
 //! ```text
 //! .vivac/
-//!   events    log append-only, JSON por linea   <- FUENTE DE VERDAD
-//!   config    project_id y actor opaco
+//!   events    append-only log, one JSON per line   <- SOURCE OF TRUTH
+//!   config    project_id and opaque actor
 //! ```
 //!
-//! No hay `index.db` y no hay `state`. `ROADMAP.md` §4 los deja fuera de
-//! Tier 0 a proposito: con decenas de nodos plegar el log en memoria es
-//! instantaneo, y SQLite entra cuando el pilar de rendimiento lo pida --diez
-//! mil nodos, FTS5-- no antes. Guardar la pila aparte seria la segunda sede
-//! del mismo estado.
+//! There is no `index.db` and no `state`. `ROADMAP.md` §4 leaves them out of
+//! Tier 0 on purpose: with dozens of nodes, folding the log in memory is
+//! instant, and SQLite lands when the performance pillar asks for it --ten
+//! thousand nodes, FTS5-- not before. Storing the stack apart would be the
+//! second home of the same state.
 
 use crate::{clock, id};
 use serde::{Deserialize, Serialize};
@@ -26,8 +26,8 @@ pub const CONFIG: &str = "config";
 pub struct Config {
     pub version: u32,
     pub project_id: String,
-    /// Identificador opaco de esta instalacion. **No lleva correo ni nombre**:
-    /// el pilar de seguridad lo prohibe, y veta a `MODEL.md` §3.4.
+    /// Opaque identifier for this install. **It carries no email and no name**:
+    /// the security pillar forbids it, and vetoes `MODEL.md` §3.4.
     pub actor: String,
 }
 
@@ -46,8 +46,8 @@ pub struct Store {
     pub config: Config,
 }
 
-/// Sube desde `desde` buscando un `.vivac/`. Sin demonio y sin variable de
-/// entorno: la misma regla que git, que ya esta en los dedos de todo el mundo.
+/// Walks up from `desde` looking for a `.vivac/`. No daemon and no environment
+/// variable: the same rule as git, already in everyone's fingers.
 pub fn buscar_raiz(desde: &Path) -> Option<PathBuf> {
     let mut d = desde.to_path_buf();
     loop {
@@ -66,9 +66,9 @@ impl Store {
         let config = match fs::read_to_string(&p) {
             Ok(s) => serde_json::from_str(&s).map_err(std::io::Error::other)?,
             Err(_) => {
-                // Un `.vivac/` sin config es de una version anterior o de un
-                // borrado a medias. Se completa en vez de fallar: el arbol,
-                // que es lo que importa, esta en `events`.
+                // A `.vivac/` with no config comes from an earlier version or a
+                // half-finished delete. Fill it in rather than fail: the tree,
+                // which is what matters, lives in `events`.
                 let c = Config::nueva();
                 escribir_config(&raiz, &c)?;
                 c
@@ -103,9 +103,9 @@ fn escribir_config(raiz: &Path, c: &Config) -> std::io::Result<()> {
 }
 
 impl Store {
-    /// Lee el log entero. Una linea ilegible **no aborta**: se cuenta y se
-    /// sigue. Un log a medio escribir tiene que poder leerse, porque si no la
-    /// herramienta que guarda el hilo es la que lo pierde.
+    /// Reads the whole log. An unreadable line **does not abort**: it is
+    /// counted and skipped. A half-written log has to stay readable, or the
+    /// tool that keeps the thread becomes the one that loses it.
     pub fn leer(&self) -> std::io::Result<(Vec<crate::event::Evento>, usize)> {
         let f = match File::open(self.log()) {
             Ok(f) => f,
@@ -127,12 +127,12 @@ impl Store {
         Ok((eventos, rotas))
     }
 
-    /// Añade eventos al final. Una linea por evento, sin reescribir nada.
+    /// Appends events at the end. One line per event, rewriting nothing.
     ///
-    /// Es el camino critico del turno del agente: presupuesto p99 < 5 ms.
-    /// Por eso no hay `fsync` --en Windows cuesta mas que el presupuesto
-    /// entero-- y por eso se abre en modo `append`, que hace atomica cada
-    /// escritura de una linea y quita la necesidad de un cerrojo.
+    /// This is the critical path of the agent's turn: a p99 < 5 ms budget.
+    /// That is why there is no `fsync` --on Windows it costs more than the
+    /// whole budget-- and why it opens in `append` mode, which makes each
+    /// single-line write atomic and removes the need for a lock.
     pub fn escribir(
         &self,
         cuerpo: Vec<crate::event::Cuerpo>,
@@ -160,9 +160,9 @@ impl Store {
 }
 
 impl Store {
-    /// Escribe eventos ya construidos, con su instante original. Solo lo usa
-    /// `import`: un arbol que viene de otro sitio conserva sus fechas, porque
-    /// si no la migracion aplasta la unica linea de tiempo que tenia.
+    /// Writes already-built events, keeping their original timestamp. Only
+    /// `import` uses it: a tree from elsewhere keeps its dates, because
+    /// otherwise the migration flattens the only timeline it had.
     pub fn escribir_crudo(&self, eventos: &[crate::event::Evento]) -> std::io::Result<()> {
         let mut buf = String::with_capacity(256 * eventos.len());
         for e in eventos {

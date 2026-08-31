@@ -1,10 +1,10 @@
-//! Las operaciones que escriben. Todas pasan por la guarda de redaccion.
+//! The operations that write. Every one goes through the redaction guard.
 //!
-//! La captura se cuelga de las costuras del trabajo, nunca de un juicio de
-//! relevancia. Es lo unico que se midio de verdad: en 170 minutos reales,
-//! `push`/`pop` --que no se pueden evitar sin dejar el trabajo a medias-- se
-//! llamaron nueve veces, y la operacion que preguntaba "¿esto merece
-//! guardarse?" se llamo cero, con un protocolo declarado obligatorio.
+//! Capture hangs off the seams of the work, never off a judgement of
+//! relevance. That is the one thing actually measured: over 170 real minutes,
+//! `push`/`pop` --which cannot be skipped without leaving the work half done--
+//! were called nine times, and the operation that asked "is this worth
+//! keeping?" was called zero times, under a protocol declared mandatory.
 
 use crate::anchor::{self, Anchor};
 use crate::args::Args;
@@ -32,8 +32,8 @@ impl Ctx {
         })
     }
 
-    /// Escribe y **despues aplica en memoria**, para que lo que se imprima a
-    /// continuacion sea el estado de despues de la operacion y no el de antes.
+    /// Writes and **then applies in memory**, so that whatever gets printed
+    /// next is the state after the operation and not the one before it.
     fn emitir(&mut self, cuerpos: Vec<Cuerpo>) -> R {
         self.store.escribir(cuerpos.clone(), self.arbol.seq)?;
         let ts = crate::clock::now_rfc3339();
@@ -47,16 +47,16 @@ impl Ctx {
     fn resolver(&self, s: &str) -> Result<&crate::model::Nodo, Fallo> {
         self.arbol
             .resolver(s)
-            .ok_or_else(|| Fallo::uso(format!("No existe el nodo {s}.")))
+            .ok_or_else(|| Fallo::uso(format!("No such node: {s}.")))
     }
 }
 
-/// Construye un vivac de la pila de ahora mismo.
+/// Builds a vivac out of the stack as it stands right now.
 ///
-/// El `working_set` **no se mide**: medir que archivos toco el largo pediria
-/// un hook `post_tool`, que no esta en Tier 0. Se deriva del `governs` que la
-/// pila declara, que es lo que hay, y el `brief` lo dice asi en vez de fingir
-/// que lo observo.
+/// The `working_set` is **not measured**: measuring which files the pitch
+/// touched would need a `post_tool` hook, which is not in Tier 0. It is
+/// derived from the `governs` the stack declares, which is what there is, and
+/// the `brief` says so rather than pretending it observed it.
 fn vivac(
     ctx: &Ctx,
     kind: VivacKind,
@@ -93,7 +93,7 @@ fn vivac(
     }
 }
 
-/// Ningun texto llega al log sin pasar por aqui.
+/// No text reaches the log without coming through here.
 fn guardar_texto(campos: &[(&str, &str)]) -> R {
     match redact::revisar_campos(campos) {
         Some(h) => Err(Fallo::Redaccion(Box::new(h))),
@@ -102,14 +102,14 @@ fn guardar_texto(campos: &[(&str, &str)]) -> R {
 }
 
 fn tipo_de(a: &Args, por_defecto: Tipo) -> Result<Tipo, Fallo> {
-    match a.opt("tipo") {
+    match a.opt("type") {
         None => Ok(por_defecto),
         Some(s) => Tipo::desde(s)
-            .ok_or_else(|| Fallo::uso(format!("Tipo desconocido: {s}. Son: {}", Tipo::TODOS))),
+            .ok_or_else(|| Fallo::uso(format!("Unknown type: {s}. They are: {}", Tipo::TODOS))),
     }
 }
 
-/// Crea un nodo. Devuelve el evento y el numero de alias asignado.
+/// Creates a node. Returns the event and the alias number assigned.
 fn nacer(
     ctx: &Ctx,
     titulo: &str,
@@ -135,7 +135,7 @@ fn nacer(
             titulo: titulo.to_string(),
             por: por.to_string(),
             padre,
-            bloquea: a.tiene("bloquea"),
+            bloquea: a.tiene("blocks"),
             refs,
             governs,
         },
@@ -144,16 +144,16 @@ fn nacer(
     ))
 }
 
-/// `push` — abrir un desvio. Es **la** operacion: la arista de procedencia se
-/// crea aqui sola, sin que nadie tenga que acordarse de declararla.
+/// `push` — open a detour. It is **the** operation: the provenance edge is
+/// created here on its own, with nobody having to remember to declare it.
 pub fn push(ctx: &mut Ctx, a: &Args) -> R {
     let titulo = a
         .libre(0)
-        .ok_or_else(|| Fallo::uso("uso: vivac push \"<titulo>\" --por \"<motivo>\""))?;
-    let por = a.opt("por").ok_or_else(|| {
+        .ok_or_else(|| Fallo::uso("usage: vivac push \"<title>\" --why \"<reason>\""))?;
+    let por = a.opt("why").ok_or_else(|| {
         Fallo::uso(
-            "Falta --por. Un desvio sin motivo es exactamente el fallo que\n  \
-             esto existe para atacar: dentro de un mes nadie sabra por que.",
+            "Missing --why. A detour with no reason is exactly the failure this\n  \
+             exists to attack: in a month nobody will know why.",
         )
     })?;
 
@@ -167,70 +167,70 @@ pub fn push(ctx: &mut Ctx, a: &Args) -> R {
         },
     )?;
     let (ev, num, nodo) = nacer(ctx, titulo, por, tipo, padre.clone(), a)?;
-    // El vivac va **antes** del push: congela la pila del momento en que se
-    // bifurca, que es la reunion donde te aseguras antes de salir. El
-    // `next_intent` es el hijo que se abre, porque eso es lo que ibas a hacer.
+    // The vivac goes **before** the push: it freezes the stack at the moment
+    // of the fork, which is the belay where you make yourself safe before
+    // setting off. The `next_intent` is the child being opened, because that
     let v = vivac(ctx, VivacKind::Push, titulo, padre, "");
     ctx.emitir(vec![v, ev, Cuerpo::Apilado { nodo }])?;
 
-    // `emitir` ya aplico el apilado en memoria, asi que la pila incluye el
-    // nodo nuevo y no hay que sumarle uno.
+    // `emitir` already applied the push in memory, so the stack includes the
+    // new node and there is no need to add one.
     let hondo = ctx.arbol.profundidad_pila();
     println!("  {}{}  {}", tipo.prefijo(), num, titulo);
-    if a.tiene("bloquea") {
-        println!("        bloquea el cierre de su padre");
+    if a.tiene("blocks") {
+        println!("        blocks its parent from closing");
     }
-    // §6.1: intervencion, nunca bloqueo. Una pila honda casi nunca es
-    // indisciplina: es que el objetivo raiz cambio y nadie volvio a enraizar.
+    // §6.1: intervene, never block. A deep stack is almost never lack of
+    // discipline: the root goal moved and nobody re-rooted.
     if hondo >= 4 {
         if let Some(raiz) = ctx.arbol.raices().first() {
             println!();
             println!(
-                "  Estas a {hondo} niveles de {} \"{}\".",
+                "  You are {hondo} levels away from {} \"{}\".",
                 raiz.alias(),
                 raiz.titulo
             );
-            println!("  ¿Sigue siendo un desvio, o el objetivo real cambio?");
-            println!("  Si cambio:  vivac promote");
+            println!("  Is this still a detour, or did the real goal move?");
+            println!("  If it moved:  vivac promote");
         }
     }
     Ok(())
 }
 
-/// `pop` — cerrar el foco y volver al padre con contexto.
+/// `pop` — close the focus and come back to the parent with context.
 pub fn pop(ctx: &mut Ctx, a: &Args) -> R {
     let foco = ctx
         .arbol
         .foco()
         .ok_or_else(|| {
             Fallo::uso(
-                "La pila esta vacia. Abrir algo:  vivac push \"<titulo>\" --por \"<motivo>\"",
+                "The stack is empty. Open something:  vivac push \"<title>\" --why \"<reason>\"",
             )
         })?
         .clone();
     let resultado = a.libre(0).unwrap_or("");
-    let luego = a.opt("luego").unwrap_or(resultado);
-    guardar_texto(&[("resultado", resultado), ("luego", luego)])?;
+    let luego = a.opt("next").unwrap_or(resultado);
+    guardar_texto(&[("outcome", resultado), ("next", luego)])?;
     let v = vivac(ctx, VivacKind::Pop, luego, Some(foco.id.clone()), "");
-    cerrar(ctx, &foco, resultado, a.tiene("forzar"), true)?;
+    cerrar(ctx, &foco, resultado, a.tiene("force"), true)?;
     ctx.emitir(vec![v])?;
     match ctx.arbol.nodo(foco.padre.as_deref().unwrap_or("")) {
         Some(p) => {
             let r = ctx.arbol.recuento(&p.id);
-            println!("  volves a {}  {}", p.alias(), p.titulo);
+            println!("  back to {}  {}", p.alias(), p.titulo);
             let f = r.frase();
             if !f.is_empty() {
-                println!("        ({f} por debajo)");
+                println!("        ({f} below it)");
             }
         }
-        None => println!("  pila vacia"),
+        None => println!("  empty stack"),
     }
     Ok(())
 }
 
-/// `park` — lo que produce NO TOCAR AHORA, y sin ello esa seccion sale
-/// siempre vacia. No lo frena la regla de cierre: aparcar no afirma que algo
-/// termino, y si aparcar costara mas que ignorar, nadie aparcaria.
+/// `park` — what produces DO NOT TOUCH NOW; without it that section always
+/// comes out empty. The closure rule does not stop it: parking claims nothing
+/// finished, and if parking cost more than ignoring, nobody would park.
 pub fn park(ctx: &mut Ctx, a: &Args) -> R {
     let (nodo, motivo) = match a.libre(0).and_then(|s| ctx.arbol.resolver(s)) {
         Some(n) => (n.clone(), a.libre(1).unwrap_or("")),
@@ -238,12 +238,12 @@ pub fn park(ctx: &mut Ctx, a: &Args) -> R {
             let f = ctx
                 .arbol
                 .foco()
-                .ok_or_else(|| Fallo::uso("uso: vivac park [<id>] [\"<motivo>\"]"))?
+                .ok_or_else(|| Fallo::uso("usage: vivac park [<id>] [\"<reason>\"]"))?
                 .clone();
             (f, a.libre(0).unwrap_or(""))
         }
     };
-    guardar_texto(&[("motivo", motivo)])?;
+    guardar_texto(&[("reason", motivo)])?;
     let mut evs = vec![vivac(
         ctx,
         VivacKind::Park,
@@ -263,17 +263,17 @@ pub fn park(ctx: &mut Ctx, a: &Args) -> R {
         });
     }
     ctx.emitir(evs)?;
-    println!("  {}  {}  -> aparcado", nodo.alias(), nodo.titulo);
-    println!("        aparece en:  vivac parked");
+    println!("  {}  {}  -> parked", nodo.alias(), nodo.titulo);
+    println!("        shows up in:  vivac parked");
     Ok(())
 }
 
-/// La regla de cierre. `MODEL.md` §7, y es la **unica** regla del modelo que
-/// rechaza una operacion del usuario.
+/// The closure rule. `MODEL.md` §7, and the **only** rule in the model that
+/// refuses a user operation.
 ///
-/// Se gana ese privilegio porque el caso que previene esta medido: una
-/// auditoria marcada DONE con sus hallazgos abiertos tardo 26 dias en
-/// detectarse. Sin esto, el modelo deja cometer el mismo error otra vez.
+/// It earns that privilege because the case it prevents is measured: an
+/// audit marked DONE with its findings open took 26 days to be spotted.
+/// Without this, the model lets the same mistake happen again.
 fn cerrar(
     ctx: &mut Ctx,
     n: &crate::model::Nodo,
@@ -285,7 +285,7 @@ fn cerrar(
         let pend = ctx.arbol.bloqueantes_abiertos(&n.id);
         if !pend.is_empty() {
             let mut m = format!(
-                "  {} NO puede cerrar: {} condicion(es) de cierre abierta(s)\n",
+                "  {} CANNOT close: {} open closure condition(s)\n",
                 n.alias(),
                 pend.len()
             );
@@ -293,8 +293,8 @@ fn cerrar(
                 m.push_str(&format!("\n      {:<6} {}", c.alias(), c.titulo));
             }
             m.push_str(&format!(
-                "\n\n  Una corrida cierra con sus hallazgos, no con su informe.\n  \
-                 Cerrarlo igual deja rastro:  vivac done {} --forzar",
+                "\n\n  A run closes with its findings, not with its report.\n  \
+                 Closing it anyway leaves a trace:  vivac done {} --force",
                 n.num
             ));
             return Err(Fallo::Modelo(m));
@@ -315,13 +315,13 @@ fn cerrar(
         n.alias(),
         n.titulo,
         if forzar {
-            "cerrado A LA FUERZA"
+            "closed BY FORCE"
         } else {
-            "cerrado"
+            "closed"
         }
     );
     if forzar {
-        println!("        queda registrado como cierre falso en todo render");
+        println!("        recorded as a false close in every render");
     }
     Ok(())
 }
@@ -329,20 +329,20 @@ fn cerrar(
 pub fn done(ctx: &mut Ctx, a: &Args) -> R {
     let s = a
         .libre(0)
-        .ok_or_else(|| Fallo::uso("uso: vivac done <id> [\"<resultado>\"] [--forzar]"))?;
+        .ok_or_else(|| Fallo::uso("usage: vivac done <id> [\"<outcome>\"] [--force]"))?;
     let n = ctx.resolver(s)?.clone();
     let resultado = a.libre(1).unwrap_or("");
-    guardar_texto(&[("resultado", resultado)])?;
-    cerrar(ctx, &n, resultado, a.tiene("forzar"), true)
+    guardar_texto(&[("outcome", resultado)])?;
+    cerrar(ctx, &n, resultado, a.tiene("force"), true)
 }
 
-/// `add` — un nodo sin tocar la pila. Es como entra un arbol que ya existia
-/// en otra parte, y como se cuelga un hallazgo de algo que no es el foco.
+/// `add` — a node without touching the stack. It is how a tree that already
+/// existed elsewhere gets in, and how a finding hangs off something that is
 pub fn add(ctx: &mut Ctx, a: &Args) -> R {
     let titulo = a.libre(0).ok_or_else(|| {
-        Fallo::uso("uso: vivac add \"<titulo>\" [--padre N] [--por \"<motivo>\"]")
+        Fallo::uso("usage: vivac add \"<title>\" [--parent N] [--why \"<reason>\"]")
     })?;
-    let padre = match a.opt("padre") {
+    let padre = match a.opt("parent") {
         Some(p) => Some(ctx.resolver(p)?.id.clone()),
         None => ctx.arbol.foco().map(|n| n.id.clone()),
     };
@@ -354,15 +354,15 @@ pub fn add(ctx: &mut Ctx, a: &Args) -> R {
             Tipo::Task
         },
     )?;
-    let (ev, num, _) = nacer(ctx, titulo, &a.opt_o("por"), tipo, padre.clone(), a)?;
+    let (ev, num, _) = nacer(ctx, titulo, &a.opt_o("why"), tipo, padre.clone(), a)?;
     ctx.emitir(vec![ev])?;
     let donde = match padre.and_then(|p| ctx.arbol.nodo(&p).map(|n| n.alias())) {
-        Some(al) => format!(" bajo {al}"),
-        None => " (raiz)".into(),
+        Some(al) => format!(" under {al}"),
+        None => " (root)".into(),
     };
     println!("  {}{}  {}{}", tipo.prefijo(), num, titulo, donde);
-    if a.tiene("bloquea") {
-        println!("        bloquea el cierre de su padre");
+    if a.tiene("blocks") {
+        println!("        blocks its parent from closing");
     }
     Ok(())
 }
@@ -374,28 +374,28 @@ pub fn note(ctx: &mut Ctx, a: &Args) -> R {
             let f = ctx
                 .arbol
                 .foco()
-                .ok_or_else(|| Fallo::uso("uso: vivac note [<id>] \"<nota>\""))?;
+                .ok_or_else(|| Fallo::uso("usage: vivac note [<id>] \"<note>\""))?;
             (f.clone(), t)
         }
-        _ => return Err(Fallo::uso("uso: vivac note [<id>] \"<nota>\"")),
+        _ => return Err(Fallo::uso("usage: vivac note [<id>] \"<note>\"")),
     };
-    guardar_texto(&[("nota", nota)])?;
+    guardar_texto(&[("note", nota)])?;
     ctx.emitir(vec![Cuerpo::NodoAnotado {
         nodo: n.id.clone(),
         nota: nota.to_string(),
     }])?;
-    println!("  {} anotado", n.alias());
+    println!("  {} noted", n.alias());
     Ok(())
 }
 
 pub fn block(ctx: &mut Ctx, a: &Args) -> R {
     let s = a
         .libre(0)
-        .ok_or_else(|| Fallo::uso("uso: vivac block <id> [--off]"))?;
+        .ok_or_else(|| Fallo::uso("usage: vivac block <id> [--off]"))?;
     let n = ctx.resolver(s)?.clone();
     let Some(padre) = n.padre.as_ref().and_then(|p| ctx.arbol.nodo(p)) else {
         return Err(Fallo::uso(format!(
-            "{} es raiz: no hay padre al que bloquear.",
+            "{} is the root: there is no parent to block.",
             n.alias()
         )));
     };
@@ -406,53 +406,53 @@ pub fn block(ctx: &mut Ctx, a: &Args) -> R {
         bloquea,
     }])?;
     let verbo = if bloquea { "bloquea" } else { "ya no bloquea" };
-    println!("  {} {} el cierre de {pa}  {pt}", n.alias(), verbo);
+    println!("  {} {} the close of {pa}  {pt}", n.alias(), verbo);
     Ok(())
 }
 
-/// `promote` — el foco pasa a ser meta propia y la pila se corta ahi.
+/// `promote` — the focus becomes a goal of its own and the stack is cut there.
 ///
-/// La cadena de procedencia **se conserva**: de donde nacio no cambia porque
-/// haya cambiado de rango. Sin esta operacion, la advertencia de profundidad
-/// no tiene salida y se acaba ignorando.
+/// The provenance chain is **kept**: where it was born does not change just
+/// because its rank did. Without this operation, the depth warning has no way
+/// out and ends up being ignored.
 pub fn promote(ctx: &mut Ctx, a: &Args) -> R {
     let n = match a.libre(0) {
         Some(s) => ctx.resolver(s)?.clone(),
         None => ctx
             .arbol
             .foco()
-            .ok_or_else(|| Fallo::uso("uso: vivac promote [<id>]"))?
+            .ok_or_else(|| Fallo::uso("usage: vivac promote [<id>]"))?
             .clone(),
     };
     ctx.emitir(vec![Cuerpo::Promovido { nodo: n.id.clone() }])?;
-    println!("  {}  {}  -> meta propia", n.alias(), n.titulo);
+    println!("  {}  {}  -> a goal of its own", n.alias(), n.titulo);
     if let Some(p) = n.padre.as_ref().and_then(|p| ctx.arbol.nodo(p)) {
-        println!("        sigue naciendo de {}  {}", p.alias(), p.titulo);
+        println!("        still born from {}  {}", p.alias(), p.titulo);
     }
     Ok(())
 }
 
-/// `abandon` — descartar. Cuesta lo mismo que `pop` a proposito: si abandonar
-/// fuera mas caro que ignorar, nadie abandonaria y a los tres meses el arbol
-/// seria ruido.
+/// `abandon` — discard. It costs the same as `pop` on purpose: if abandoning
+/// were dearer than ignoring, nobody would abandon and in three months the
+/// tree would be noise.
 ///
-/// La cascada **no** es el defecto. `MODEL.md` §6 la quiere con confirmacion y
-/// lista delante, y una CLI no interactiva no puede confirmar nada: lo que
-/// hace es enseñar lo que caeria y pedir `--cascada` explicito.
+/// The cascade is **not** the default. `MODEL.md` §6 wants it with a
+/// confirmation and the list up front, and a non-interactive CLI cannot
+/// confirm anything: it shows what would fall and asks for an explicit
 ///
-/// **Rescatar no reparenta** (`d33`). `MODEL.md` §6 decia re-parentar el
-/// descendiente a un ancestro vivo; eso reescribe el nacimiento, y la
-/// invariante 11 dice que una cosa nace de un sitio. Un nodo rescatado se
-/// queda donde nacio: vivo, bajo un padre abandonado. Es la misma forma que un
-/// hallazgo abierto bajo un lote cerrado, que el arbol ya sabe representar y
-/// el brief ya sabe contar.
+/// **Rescue does not reparent** (`d33`). `MODEL.md` §6 said to re-parent the
+/// descendant onto a living ancestor; that rewrites the birth, and invariant
+/// 11 says a thing is born in one place. A rescued node stays where it was
+/// born: alive, under an abandoned parent. It is the same shape as an open
+/// finding under a closed batch, which the tree already knows how to show and
+/// the brief already knows how to count.
 pub fn abandon(ctx: &mut Ctx, a: &Args) -> R {
     let n = match a.libre(0).and_then(|s| ctx.arbol.resolver(s)) {
         Some(n) => n.clone(),
         None => ctx
             .arbol
             .foco()
-            .ok_or_else(|| Fallo::uso("uso: vivac abandon [<id>] \"<motivo>\""))?
+            .ok_or_else(|| Fallo::uso("usage: vivac abandon [<id>] \"<reason>\""))?
             .clone(),
     };
     let motivo = a
@@ -461,26 +461,26 @@ pub fn abandon(ctx: &mut Ctx, a: &Args) -> R {
         .rev()
         .find(|s| ctx.arbol.resolver(s).is_none());
     let motivo = motivo.map(|s| s.as_str()).unwrap_or("");
-    guardar_texto(&[("motivo", motivo)])?;
+    guardar_texto(&[("reason", motivo)])?;
 
-    // Rescatar un nodo rescata su descendencia. Salvar al padre y dejar morir
-    // a los hijos seria un rescate a medias que nadie pidio, y dejaria huerfano
-    // justo lo que se queria conservar.
+    // Rescuing a node rescues its descendants. Saving the parent and letting
+    // the children die would be a half rescue nobody asked for, and would
+    // orphan exactly what was meant to be kept.
     let mut rescatados: std::collections::HashSet<String> = Default::default();
-    for s in a.lista("rescatar") {
+    for s in a.lista("rescue") {
         let r = ctx
             .arbol
             .resolver(&s)
-            .ok_or_else(|| Fallo::uso(format!("no existe ese nodo: {s}")))?;
+            .ok_or_else(|| Fallo::uso(format!("no such node: {s}")))?;
         let (rid, ralias) = (r.id.clone(), r.alias());
         if rid == n.id {
             return Err(Fallo::uso(format!(
-                "{ralias} es el que se abandona; no se rescata de si mismo"
+                "{ralias} is the one being abandoned; it cannot be rescued from itself"
             )));
         }
         if !ctx.arbol.descendientes(&n.id).iter().any(|d| d.id == rid) {
             return Err(Fallo::uso(format!(
-                "{ralias} no cuelga de {}: no hay nada de lo que rescatarlo",
+                "{ralias} does not hang off {}: there is nothing to rescue it from",
                 n.alias()
             )));
         }
@@ -497,11 +497,11 @@ pub fn abandon(ctx: &mut Ctx, a: &Args) -> R {
         .filter(|d| d.estado.abierto())
         .partition(|d| !rescatados.contains(&d.id));
 
-    // Solo hace falta confirmar lo que cae sin haberse nombrado. Si se
-    // rescataron todos, no queda nada que confirmar.
-    if !caen.is_empty() && !a.tiene("cascada") {
+    // Only what falls unnamed needs confirming. If everything was rescued,
+    // there is nothing left to confirm.
+    if !caen.is_empty() && !a.tiene("cascade") {
         let mut m = format!(
-            "  {}  {}\n  tiene {} descendiente(s) abierto(s) sin rescatar:\n",
+            "  {}  {}\n  has {} open descendant(s) with no rescue:\n",
             n.alias(),
             n.titulo,
             caen.len()
@@ -509,13 +509,13 @@ pub fn abandon(ctx: &mut Ctx, a: &Args) -> R {
         for d in &caen {
             m.push_str(&format!("\n      {:<6} {}", d.alias(), d.titulo));
         }
-        m.push_str("\n\n  Abandonarlo todo:      vivac abandon ");
+        m.push_str("\n\n  Abandon all of it:     vivac abandon ");
         m.push_str(&n.num.to_string());
-        m.push_str(" --cascada");
-        m.push_str("\n  Salvar alguno:         vivac abandon ");
+        m.push_str(" --cascade");
+        m.push_str("\n  Save some of it:       vivac abandon ");
         m.push_str(&n.num.to_string());
-        m.push_str(" --rescatar <id>");
-        m.push_str("\n  Salvarlo como meta:    vivac promote <id>");
+        m.push_str(" --rescue <id>");
+        m.push_str("\n  Save it as a goal:     vivac promote <id>");
         return Err(Fallo::Modelo(m));
     }
 
@@ -534,13 +534,13 @@ pub fn abandon(ctx: &mut Ctx, a: &Args) -> R {
         evs.push(Cuerpo::EstadoCambiado {
             nodo: d.id.clone(),
             estado: Estado::Abandoned,
-            resultado: format!("en cascada desde {}", n.alias()),
+            resultado: format!("cascaded from {}", n.alias()),
             forzado: false,
         });
     }
-    // La pila es el camino al foco y no puede cruzar un nodo abandonado, asi
-    // que sale de ella todo lo que cuelga del abandonado --tambien lo
-    // rescatado, que sigue vivo pero deja de estar en el camino--.
+    // The stack is the path to the focus and cannot cross an abandoned node,
+    // so everything hanging off the abandoned one leaves it --the rescued
+    // included, which stays alive but stops being on the path--.
     let mut fuera: Vec<String> = vec![n.id.clone()];
     fuera.extend(ctx.arbol.descendientes(&n.id).iter().map(|d| d.id.clone()));
     for id in fuera {
@@ -550,44 +550,44 @@ pub fn abandon(ctx: &mut Ctx, a: &Args) -> R {
     }
 
     ctx.emitir(evs)?;
-    println!("  {}  {}  -> abandonado", n.alias(), n.titulo);
+    println!("  {}  {}  -> abandoned", n.alias(), n.titulo);
     if cuantos_caen > 0 {
-        println!("        y {cuantos_caen} descendiente(s) con el");
+        println!("        and {cuantos_caen} descendant(s) with it");
     }
     if !salvados_dice.is_empty() {
         println!();
-        println!("  Rescatados, y siguen naciendo de {}:", n.alias());
+        println!("  Rescued, and still born from {}:", n.alias());
         for (alias, titulo) in &salvados_dice {
             println!("      {alias:<6} {titulo}");
         }
         println!();
-        println!("  Su linaje cruza un nodo abandonado a proposito: de donde");
-        println!("  nacieron no cambia porque se haya descartado.");
+        println!("  Their lineage crosses an abandoned node on purpose: where they");
+        println!("  were born does not change because it got discarded.");
     }
     Ok(())
 }
 
-/// `focus` — volver a entrar en un nodo que ya existe.
+/// `focus` — step back into a node that already exists.
 ///
-/// Sin esto la pila solo sirve dentro de una sesion: al dia siguiente el log
-/// tiene el arbol entero y la pila vacia, y no hay forma de decir "estoy en
-/// esto" sin abrir un nodo nuevo, que es justo la basura que se quiere evitar.
-/// La pila pasa a ser el camino desde la raiz hasta el nodo, que es lo que
-/// significa estar trabajando en el.
+/// Without this the stack only works inside one session: the next day the log
+/// holds the whole tree and the stack is empty, and there is no way to say "I
+/// am on this" without opening a new node, which is exactly the litter to be
+/// avoided. The stack becomes the path from the root down to the node, which
+/// is what working on it means.
 pub fn focus(ctx: &mut Ctx, a: &Args) -> R {
     let s = a
         .libre(0)
-        .ok_or_else(|| Fallo::uso("uso: vivac focus <id> [--reabrir]"))?;
+        .ok_or_else(|| Fallo::uso("usage: vivac focus <id> [--reopen]"))?;
     let n = ctx.resolver(s)?.clone();
 
-    if !n.estado.abierto() && !a.tiene("reabrir") {
-        // Aparcar es "quiza vuelva", asi que volver es la operacion normal y
-        // no pide permiso. Cerrar afirma que algo termino: deshacerlo tiene
-        // que ser deliberado.
+    if !n.estado.abierto() && !a.tiene("reopen") {
+        // Parking says "maybe I will be back", so returning is the normal
+        // operation and asks no permission. Closing claims something finished:
+        // undoing that has to be deliberate.
         if n.estado != Estado::Suspended {
             return Err(Fallo::Modelo(format!(
-                "  {} esta {}. Volver a el deshace esa afirmacion.\n\n  \
-                 Si de verdad no estaba terminado:  vivac focus {} --reabrir",
+                "  {} is {}. Going back into it undoes that claim.\n\n  \
+                 If it really was not finished:  vivac focus {} --reopen",
                 n.alias(),
                 n.estado.palabra(n.tipo),
                 n.num
@@ -624,27 +624,27 @@ pub fn focus(ctx: &mut Ctx, a: &Args) -> R {
     let revivido = !n.estado.abierto();
     ctx.emitir(evs)?;
     if revivido {
-        println!("  {} vuelve a estar abierto", n.alias());
+        println!("  {} is open again", n.alias());
     }
     crate::render::stack(&ctx.arbol, a)
 }
 
-/// `flag <id> <bandera> --por <motivo>` — levantar o bajar una bandera.
+/// `flag <id> <flag> --why <reason>` — raise or clear a flag.
 ///
-/// El motivo es **obligatorio** al levantarla. `BRIEF-SPEC.md` §10 lo prueba
-/// como contrato: una bandera sin motivo no informa de nada, solo mete ruido
-/// en el brief, y a la semana se ignoran todas.
+/// The reason is **mandatory** when raising it. `BRIEF-SPEC.md` §10 tests it
+/// as a contract: a flag with no reason informs nobody, it only adds noise to
+/// the brief, and within a week they all get ignored.
 pub fn flag(ctx: &mut Ctx, a: &Args) -> R {
     let (Some(sid), Some(sb)) = (a.libre(0), a.libre(1)) else {
         return Err(Fallo::uso(
-            "uso: vivac flag <id> <bandera> --por \"<motivo>\"  |  --off\n\n  \
-             Banderas: suspect, review, stale",
+            "usage: vivac flag <id> <flag> --why \"<reason>\"  |  --off\n\n  \
+             Flags: suspect, review, stale",
         ));
     };
     let n = ctx.resolver(sid)?.clone();
     let bandera = Bandera::desde(sb).ok_or_else(|| {
         Fallo::uso(format!(
-            "Bandera desconocida: {sb}. Son: {}",
+            "Unknown flag: {sb}. They are: {}",
             Bandera::TODAS
         ))
     })?;
@@ -654,16 +654,16 @@ pub fn flag(ctx: &mut Ctx, a: &Args) -> R {
             nodo: n.id.clone(),
             bandera,
         }])?;
-        println!("  {}  ya no esta {}", n.alias(), bandera.palabra());
+        println!("  {}  is no longer {}", n.alias(), bandera.palabra());
         return Ok(());
     }
-    let motivo = a.opt("por").ok_or_else(|| {
+    let motivo = a.opt("why").ok_or_else(|| {
         Fallo::uso(
-            "Falta --por. Una bandera sin motivo no informa: dentro de dos\n  \
-             semanas nadie sabra que habia que mirar, y se ignoraran todas.",
+            "Missing --why. A flag with no reason informs nobody: in two weeks\n  \
+             nobody will know what needed looking at, and they all get ignored.",
         )
     })?;
-    guardar_texto(&[("motivo", motivo)])?;
+    guardar_texto(&[("reason", motivo)])?;
     ctx.emitir(vec![Cuerpo::BanderaAlzada {
         nodo: n.id.clone(),
         bandera,
@@ -674,21 +674,21 @@ pub fn flag(ctx: &mut Ctx, a: &Args) -> R {
     Ok(())
 }
 
-/// `decide` — registrar una decision.
+/// `decide` — record a decision.
 ///
-/// Las alternativas descartadas son opcionales en el esquema y obligatorias
-/// en la practica: sin ellas, en un mes el agente vuelve a proponer lo que ya
-/// rechazaste.
+/// The discarded alternatives are optional in the schema and mandatory in
+/// practice: without them, in a month the agent proposes again what you
+/// already rejected.
 pub fn decide(ctx: &mut Ctx, a: &Args) -> R {
     let titulo = a.libre(0).ok_or_else(|| {
         Fallo::uso(
-            "uso: vivac decide \"<titulo>\" --razon \"<r>\" [--alternativa X] [--supersedes d9]",
+            "usage: vivac decide \"<title>\" --reason \"<r>\" [--alternative X] [--supersedes d9]",
         )
     })?;
-    let razon = a.opt("razon").ok_or_else(|| {
-        Fallo::uso("Falta --razon. Una decision sin razon es un dato, no una decision.")
+    let razon = a.opt("reason").ok_or_else(|| {
+        Fallo::uso("Missing --reason. A decision with no reason is a datum, not a decision.")
     })?;
-    let alternativas = a.lista("alternativa");
+    let alternativas = a.lista("alternative");
     let superada = match a.opt("supersedes") {
         Some(s) => Some(ctx.resolver(s)?.clone()),
         None => None,
@@ -696,37 +696,37 @@ pub fn decide(ctx: &mut Ctx, a: &Args) -> R {
 
     let mut cuerpo = razon.to_string();
     if !alternativas.is_empty() {
-        cuerpo.push_str(&format!("  |  descartadas: {}", alternativas.join("; ")));
+        cuerpo.push_str(&format!("  |  discarded: {}", alternativas.join("; ")));
     }
     let padre = ctx.arbol.foco().map(|n| n.id.clone());
     let (ev, num, _) = nacer(ctx, titulo, &cuerpo, Tipo::Decision, padre, a)?;
 
     let mut evs = vec![ev];
     if let Some(v) = &superada {
-        // `supersedes` forma cadena: la vieja pasa a superada, no se borra.
+        // `supersedes` forms a chain: the old one becomes superseded, not deleted.
         evs.push(Cuerpo::EstadoCambiado {
             nodo: v.id.clone(),
             estado: Estado::Superseded,
-            resultado: format!("superada por d{num}"),
+            resultado: format!("superseded by d{num}"),
             forzado: false,
         });
     }
     ctx.emitir(evs)?;
     println!("  d{num}  {titulo}");
     if let Some(v) = superada {
-        println!("        {} pasa a superada", v.alias());
+        println!("        {} becomes superseded", v.alias());
     }
     if alternativas.is_empty() {
-        println!("        sin alternativas anotadas: en un mes se volveran a proponer");
+        println!("        no alternatives recorded: in a month they get proposed again");
     }
     Ok(())
 }
 
-/// `save [etiqueta]` — una parada segura a proposito.
+/// `save [label]` — a safe stop on purpose.
 pub fn save(ctx: &mut Ctx, a: &Args) -> R {
     let etiqueta = a.libre(0).unwrap_or("");
-    let luego = a.opt_o("luego");
-    guardar_texto(&[("etiqueta", etiqueta), ("luego", &luego)])?;
+    let luego = a.opt_o("next");
+    guardar_texto(&[("label", etiqueta), ("next", &luego)])?;
     let v = vivac(ctx, VivacKind::Manual, &luego, None, etiqueta);
     let num = ctx.arbol.siguiente_vivac.max(1);
     ctx.emitir(vec![v])?;
@@ -734,48 +734,48 @@ pub fn save(ctx: &mut Ctx, a: &Args) -> R {
     println!(
         "  v{num}  {}",
         if etiqueta.is_empty() {
-            "sin etiqueta"
+            "no label"
         } else {
             etiqueta
         }
     );
     if !anclaje.vacio() {
-        println!("        anclado a {}", anclaje.corto());
+        println!("        anchored to {}", anclaje.corto());
     } else {
-        // Sin VCS no se finge precision: el vivac vale igual, pero al
-        // restaurarlo solo habra antiguedad temporal, no diff.
-        println!("        sin ancla: no hay control de versiones aqui");
+        // With no VCS no precision is faked: the vivac is worth the same, but
+        // restoring it will only give plain age, not a diff.
+        println!("        no anchor: there is no version control here");
     }
     if luego.is_empty() {
-        println!("        sin --luego: al volver no habra nada que retomar");
+        println!("        no --next: coming back there will be nothing to pick up");
     }
     Ok(())
 }
 
-/// `restore <v>` — volver a un vivac.
+/// `restore <v>` — go back to a vivac.
 ///
-/// **No toca el arbol de trabajo, nunca.** Mezclar navegacion de contexto con
-/// manipulacion del arbol convierte una herramienta de atencion en un gestor
-/// de ramas peor que git. Reconstruye la pila y presenta el diff.
+/// **It never touches the working tree.** Mixing context navigation with tree
+/// manipulation turns a tool for attention into a branch manager worse than
+/// git. It rebuilds the stack and presents the diff.
 pub fn restore(ctx: &mut Ctx, a: &Args) -> R {
     let s = a
         .libre(0)
-        .ok_or_else(|| Fallo::uso("uso: vivac restore <v>"))?;
+        .ok_or_else(|| Fallo::uso("usage: vivac restore <v>"))?;
     let v = ctx
         .arbol
         .vivac(s)
-        .ok_or_else(|| Fallo::uso(format!("No existe el vivac {s}.")))?
+        .ok_or_else(|| Fallo::uso(format!("No such vivac: {s}.")))?
         .clone();
 
-    // La pila del vivac esta congelada por alias. Los nodos que ya no existan
-    // o esten cerrados se saltan y se dicen: restaurar no resucita nada.
+    // The vivac's stack is frozen by alias. Nodes that no longer exist or are
+    // closed get skipped and named: restoring resurrects nothing.
     let mut camino = Vec::new();
     let mut perdidos = Vec::new();
     for (alias, titulo) in &v.pila {
         match ctx.arbol.resolver(alias) {
             Some(n) if n.estado.abierto() => camino.push(n.id.clone()),
             Some(n) => perdidos.push(format!("{alias} {titulo} [{}]", n.estado.palabra(n.tipo))),
-            None => perdidos.push(format!("{alias} {titulo} [ya no existe]")),
+            None => perdidos.push(format!("{alias} {titulo} [gone]")),
         }
     }
     let mut evs: Vec<Cuerpo> = ctx
@@ -805,20 +805,20 @@ pub fn restore(ctx: &mut Ctx, a: &Args) -> R {
     }
     println!();
     if !v.next_intent.is_empty() {
-        println!("  ibas a:  {}", v.next_intent);
+        println!("  you were about to:  {}", v.next_intent);
         println!();
     }
     for p in &perdidos {
-        println!("  ya no en la pila:  {p}");
+        println!("  no longer on the stack:  {p}");
     }
     if !perdidos.is_empty() {
         println!();
     }
     if v.anchor.vacio() {
-        println!("  Sin ancla: no hay diff que enseñar, solo la fecha de arriba.");
+        println!("  No anchor: there is no diff to show, only the date above.");
         println!();
     } else if cambios.is_empty() {
-        println!("  Nada cambio desde {}.", v.anchor.corto());
+        println!("  Nothing changed since {}.", v.anchor.corto());
         println!();
     } else {
         let tocan: Vec<&crate::anchor::Cambio> = cambios
@@ -826,29 +826,29 @@ pub fn restore(ctx: &mut Ctx, a: &Args) -> R {
             .filter(|c| v.working_set.iter().any(|g| crate::glob::cubre(g, &c.ruta)))
             .collect();
         println!(
-            "  {} cambios desde {}{}",
+            "  {} changes since {}{}",
             cambios.len(),
             v.anchor.corto(),
             if v.working_set.is_empty() {
                 String::new()
             } else {
-                format!(", {} tocan lo que la pila gobernaba", tocan.len())
+                format!(", {} of them touch what the stack governed", tocan.len())
             }
         );
         for c in cambios.iter().take(6) {
             println!("      {:<52} ({})", c.ruta, c.veces);
         }
         if cambios.len() > 6 {
-            println!("      ... y {} mas", cambios.len() - 6);
+            println!("      ... and {} more", cambios.len() - 6);
         }
         println!();
     }
     crate::render::stack(&ctx.arbol, a)
 }
 
-/// Una parada automatica, para el hook de fin de sesion.
+/// An automatic stop, for the end-of-session hook.
 pub fn vivac_auto(ctx: &mut Ctx, kind: VivacKind, luego: &str) -> R {
-    guardar_texto(&[("luego", luego)])?;
+    guardar_texto(&[("next", luego)])?;
     let v = vivac(ctx, kind, luego, None, "");
     ctx.emitir(vec![v])
 }

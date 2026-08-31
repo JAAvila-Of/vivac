@@ -1,11 +1,11 @@
-//! El pliegue: de la lista de eventos al arbol.
+//! The fold: from the list of events to the tree.
 //!
-//! El indice de hijos se construye **aqui**, durante el pliegue, y no se busca
-//! recorriendo todos los nodos en cada consulta. Con el spike en Python daba
-//! igual; con el presupuesto del pilar de rendimiento --`why` y `tree` sobre
-//! diez mil nodos por debajo de 50 ms-- un `hijos()` lineal convierte un
-//! render en cuadratico. Los indices se piensan desde el modelo, no se
-//! agregan cuando duele.
+//! The child index is built **here**, during the fold, not looked up by
+//! walking every node on each query. With the Python spike it made no
+//! difference; under the performance pillar's budget --`why` and `tree` over
+//! ten thousand nodes below 50 ms-- a linear `hijos()` turns a render
+//! quadratic. Indexes are thought out from the model, not bolted on when
+//! they start to hurt.
 
 use crate::anchor::AnchorRef;
 use crate::event::{Bandera, Cuerpo, Estado, Evento, Tipo, VivacKind};
@@ -18,13 +18,13 @@ pub struct Nodo {
     pub num: u64,
     pub tipo: Tipo,
     pub titulo: String,
-    /// Por que nacio. `push` lo exige: un desvio sin motivo es el fallo que
-    /// este proyecto ataca.
+    /// Why it was born. `push` demands it: a detour with no reason is the
+    /// very failure this project attacks.
     pub por: String,
     pub estado: Estado,
     pub padre: Option<String>,
-    /// Condicion de cierre del padre. Explicita, y por defecto **no** bloquea:
-    /// forzarlo deja padres que no cierran nunca. `MODEL.md` §5.
+    /// The parent's closure condition. Explicit, and by default it does **not**
+    /// block: forcing it leaves parents that never close. `MODEL.md` §5.
     pub bloquea: bool,
     pub nota: String,
     pub resultado: String,
@@ -33,12 +33,12 @@ pub struct Nodo {
     pub abierto: String,
     pub cerrado: Option<String>,
     pub cierre_forzado: bool,
-    /// Bandera -> motivo. Ortogonales al estado: un nodo puede estar `active`
-    /// y `suspect` a la vez.
+    /// Flag -> reason. Orthogonal to state: a node can be `active` and
+    /// `suspect` at the same time.
     pub banderas: BTreeMap<Bandera, String>,
 }
 
-/// Parada segura. Inmutable: no hay evento que lo modifique.
+/// A safe stop. Immutable: there is no event that modifies one.
 #[derive(Debug, Clone)]
 pub struct Vivac {
     pub id: String,
@@ -64,12 +64,12 @@ impl Nodo {
         format!("{}{}", self.tipo.prefijo(), self.num)
     }
 
-    /// Un frente es trabajo abierto que alguien puede ponerse a hacer.
+    /// A front is open work somebody can sit down and do.
     ///
-    /// Una decision vigente esta abierta y **no** es un frente: no se ejecuta,
-    /// gobierna, y se cierra sola cuando otra la supera. Listarla junto al
-    /// trabajo pendiente hace que el brief se llene de cosas que no hay que
-    /// hacer, que es justo lo contrario de para lo que existe.
+    /// A standing decision is open and is **not** a front: you do not execute
+    /// it, it governs, and it closes itself when another supersedes it.
+    /// Listing it beside pending work fills the brief with things not to do,
+    /// which is exactly the opposite of what it exists for.
     pub fn es_frente(&self) -> bool {
         self.estado.abierto() && self.tipo != Tipo::Decision
     }
@@ -109,10 +109,10 @@ pub struct Arbol {
     pub vivacs: Vec<Vivac>,
     pub siguiente_vivac: u64,
     pub seq: u64,
-    /// Seq del ultimo evento que **cambio algo**, y del ultimo vivac. Con los
-    /// dos se sabe si desde la parada anterior paso algo o no, que es lo que
-    /// separa una parada util de cuarenta paradas identicas: el hook de `Stop`
-    /// de Claude Code corre en cada turno, no al cerrar la sesion (`f35`).
+    /// Seq of the last event that **changed something**, and of the last
+    /// vivac. Together they tell whether anything happened since the previous
+    /// stop, which is what separates a useful stop from forty identical ones:
+    /// Claude Code's `Stop` hook runs every turn, not at session close (`f35`).
     pub seq_cambio: u64,
     pub seq_vivac: u64,
     pub siguiente_num: u64,
@@ -132,13 +132,13 @@ pub fn plegar(eventos: &[Evento], rotas: usize) -> Arbol {
 }
 
 impl Arbol {
-    /// Aplica un evento.
+    /// Applies one event.
     ///
-    /// Lo usa el pliegue al arrancar y tambien `emitir` justo despues de
-    /// escribir. Si el arbol en memoria no siguiera al log, cada operacion
-    /// imprimiria el recuento de **antes** de hacerla --"vuelves al padre, 1
-    /// abierto por debajo" del nodo que acabas de cerrar-- que es la clase de
-    /// mentira pequeña que hace que despues no te fies del resto.
+    /// The fold uses it at startup and so does `emitir`, right after writing.
+    /// If the in-memory tree did not follow the log, every operation would
+    /// print the count from **before** doing it --"back to the parent, 1 open
+    /// below" for the node you just closed-- which is the kind of small lie
+    /// that makes you stop trusting the rest.
     pub fn aplicar(&mut self, seq: u64, ts: &str, cuerpo: &Cuerpo) {
         self.seq = self.seq.max(seq);
         if matches!(cuerpo, Cuerpo::VivacCreado { .. }) {
@@ -159,7 +159,7 @@ impl Arbol {
                 governs,
             } => {
                 if self.nodos.contains_key(nodo) {
-                    // Creacion repetida: conmutativa, gana la primera.
+                    // Repeated creation: commutative, the first one wins.
                     return;
                 }
                 self.nodos.insert(
@@ -270,9 +270,9 @@ impl Arbol {
                 if let Some(n) = self.nodos.get_mut(nodo) {
                     n.tipo = Tipo::Goal;
                 }
-                // La pila se corta en el promovido: pasa a ser raiz de la
-                // suya. La cadena de procedencia no se toca: de donde nacio
-                // no cambia porque haya cambiado de rango.
+                // The stack is cut at the promoted node: it becomes the root
+                // of its own. The provenance chain is untouched: where it was
+                // born does not change because its rank did.
                 if let Some(i) = self.pila.iter().position(|x| x == nodo) {
                     self.pila.drain(..i);
                 }
@@ -280,10 +280,10 @@ impl Arbol {
         }
     }
 
-    /// Orden estable por numero: dos renders del mismo log son identicos.
+    /// Stable order by number: two renders of the same log are identical.
     ///
-    /// Solo hace falta al plegar. En caliente los nodos nacen con numero
-    /// creciente, asi que añadir al final ya deja el orden bueno.
+    /// Only needed while folding. Live, nodes are born with an increasing
+    /// number, so appending at the end already leaves the right order.
     pub fn ordenar(&mut self) {
         let nums: std::collections::HashMap<String, u64> =
             self.nodos.iter().map(|(k, n)| (k.clone(), n.num)).collect();
@@ -312,9 +312,9 @@ impl Arbol {
         self.nodos.values()
     }
 
-    /// Resuelve lo que escriba el usuario: `7`, `t7` o el ULID entero.
-    /// Solo con el numero funciona a proposito --`vivac why 7`-- porque
-    /// obligar a recordar el prefijo es coste de captura sin nada a cambio.
+    /// Resolves whatever the user types: `7`, `t7` or the whole ULID.
+    /// The bare number works on purpose --`vivac why 7`-- because forcing
+    /// anyone to recall the prefix is capture cost with nothing in return.
     pub fn resolver(&self, s: &str) -> Option<&Nodo> {
         let limpio = s.trim().trim_start_matches('#');
         if let Ok(n) = limpio.parse::<u64>() {
@@ -347,9 +347,9 @@ impl Arbol {
             .collect()
     }
 
-    /// Del nodo a la raiz, invertido: raiz primero. Es el camino de `why`.
-    /// El `visto` no es paranoia: un log manipulado a mano puede tener un
-    /// ciclo, y colgarse seria peor que dar un camino corto.
+    /// Node to root, reversed: root first. This is the path `why` walks.
+    /// The `visto` set is not paranoia: a hand-edited log can hold a cycle,
+    /// and hanging would be worse than giving a short path.
     pub fn ancestros(&self, id: &str) -> Vec<&Nodo> {
         let mut camino = Vec::new();
         let mut visto = std::collections::HashSet::new();
@@ -383,11 +383,11 @@ impl Arbol {
         out
     }
 
-    /// Descendientes abiertos marcados como condicion de cierre.
+    /// Open descendants marked as a closure condition.
     ///
-    /// **Transitivo a proposito**: un nieto bloqueante bloquea al abuelo. Sin
-    /// eso basta interponer un nodo intermedio para saltarse la guarda sin
-    /// querer, que es exactamente como se cuela un cierre falso.
+    /// **Transitive on purpose**: a blocking grandchild blocks the grandparent.
+    /// Without that, slipping one node in between is enough to skip the guard
+    /// by accident, which is exactly how a false close gets in.
     pub fn bloqueantes_abiertos(&self, id: &str) -> Vec<&Nodo> {
         self.descendientes(id)
             .into_iter()
@@ -405,8 +405,8 @@ impl Arbol {
         }
     }
 
-    /// El vivac mas reciente. Los vivacs se aniaden en orden de evento, asi
-    /// que el ultimo del vector es el ultimo en el tiempo.
+    /// The most recent vivac. Vivacs are appended in event order, so the last
+    /// one in the vector is the last one in time.
     pub fn ultimo_vivac(&self) -> Option<&Vivac> {
         self.vivacs.last()
     }
@@ -425,16 +425,16 @@ impl Arbol {
     }
 }
 
-/// Recuentos de subarbol para todos los nodos, calculados de una vez.
+/// Subtree counts for every node, computed in one go.
 ///
-/// Pedirle el recuento a cada nodo por separado recorre su subarbol entero, y
-/// hacerlo para todo el arbol lo vuelve cuadratico: medido, `tree` sobre diez
-/// mil nodos pasaba de 79 ms en un subarbol a 242 ms en el arbol completo, y
-/// los 163 ms de diferencia eran esto y no el log.
+/// Asking each node for its own count walks its whole subtree, and doing
+/// that for the whole tree makes it quadratic: measured, `tree` over ten
+/// thousand nodes went from 79 ms on a subtree to 242 ms on the full tree,
+/// and the 163 ms of difference were this, not the log.
 ///
-/// Una sola pasada en post-orden deja lo mismo en tiempo lineal. Es la clase
-/// de indice que el pilar de rendimiento manda pensar desde el modelo en vez
-/// de agregar cuando duele.
+/// A single post-order pass gets the same answer in linear time. It is the
+/// kind of index the performance pillar demands be thought out from the
+/// model instead of bolted on when it hurts.
 #[derive(Debug, Default)]
 pub struct Agregados {
     recuento: HashMap<String, Recuento>,
@@ -456,8 +456,8 @@ impl Arbol {
     pub fn agregados(&self) -> Agregados {
         let mut ag = Agregados::default();
 
-        // Los huerfanos no cuelgan de ninguna raiz. Se recorren igual: un
-        // arbol roto tiene que poder mirarse, que para eso esta `check`.
+        // Orphans hang off no root. They get walked anyway: a broken tree has
+        // to stay inspectable, which is what `check` is for.
         let mut entradas: Vec<&String> = self.raices.iter().collect();
         entradas.extend(
             self.nodos
@@ -484,8 +484,8 @@ impl Arbol {
             }
         }
 
-        // De las hojas hacia arriba: cada padre suma lo de sus hijos mas los
-        // hijos mismos.
+        // From the leaves upward: each parent sums what its children have plus
+        // the children themselves.
         for (id, _) in orden.iter().rev() {
             let mut r = Recuento::default();
             let mut b = 0usize;

@@ -1,13 +1,13 @@
-//! `import` — trae el `tree.json` del spike en Python.
+//! `import` — brings in the `tree.json` from the Python spike.
 //!
-//! Existen tres arboles sembrados con el spike y llenos a mano contra
-//! proyectos reales. Rehacerlos seria tirar la unica materia prima que tiene
-//! este proyecto, asi que la migracion es parte del port, no un extra.
+//! Three trees were seeded with the spike and filled in by hand against real
+//! projects. Redoing them would throw away the only raw material this
+//! project has, so the migration is part of the port, not an extra.
 //!
-//! Dos cosas se conservan a proposito: **el numero del nodo** --los documentos
-//! de diseño citan `#8` y `#11`, y si el numero cambiara las referencias
-//! dejarian de resolver-- y **la fecha original**, que se escribe en el `ts`
-//! del evento. La alternativa era aplastar toda la linea de tiempo a hoy.
+//! Two things are preserved on purpose: **the node number** --the design
+//! documents cite `#8` and `#11`, and if the number changed those references
+//! would stop resolving-- and **the original date**, written into the event's
+//! `ts`. The alternative was flattening the whole timeline onto today.
 
 use crate::args::Args;
 use crate::event::{Cuerpo, Estado, Evento, Tipo};
@@ -50,9 +50,9 @@ fn tipo_de(kind: &str) -> Tipo {
         "goal" => Tipo::Goal,
         "decision" => Tipo::Decision,
         "finding" => Tipo::Finding,
-        // `run` e `issue` eran subtipos de trabajo en el spike. El modelo no
-        // los distingue: `MODEL.md` §4.2 deja `task` como unica entidad de
-        // trabajo, y `finding` cabe como campo, no como estado.
+        // `run` and `issue` were work subtypes in the spike. The model does
+        // not distinguish them: `MODEL.md` §4.2 leaves `task` as the only work
+        // entity, and `finding` fits as a field, not as a state.
         _ => Tipo::Task,
     }
 }
@@ -77,36 +77,36 @@ fn instante(fecha: &str) -> String {
 pub fn import(ctx: &mut Ctx, args: &Args) -> R {
     let ruta = args
         .libre(0)
-        .ok_or_else(|| Fallo::uso("uso: vivac import <ruta a tree.json>"))?;
+        .ok_or_else(|| Fallo::uso("usage: vivac import <path to tree.json>"))?;
     if !ctx.arbol.vacio() {
         return Err(Fallo::Modelo(format!(
-            "  El arbol ya tiene {} nodos. Importar encima duplicaria numeros.\n\n  \
-             Importa en un .vivac/ recien creado.",
+            "  The tree already has {} nodes. Importing on top would duplicate numbers.\n\n  \
+             Import into a freshly created .vivac/.",
             ctx.arbol.total()
         )));
     }
     let crudo = std::fs::read_to_string(ruta)?;
     let viejo: Viejo = serde_json::from_str(&crudo)
-        .map_err(|e| Fallo::uso(format!("{ruta} no es un tree.json del spike: {e}")))?;
+        .map_err(|e| Fallo::uso(format!("{ruta} is not a spike tree.json: {e}")))?;
 
     let mut nodos: Vec<&NodoViejo> = viejo.nodes.values().collect();
     nodos.sort_by_key(|n| n.id);
 
-    // La guarda de redaccion corre **antes** de escribir nada. Un arbol que
-    // viene de fuera es justo el caso en que puede haberse colado una clave.
+    // The redaction guard runs **before** anything is written. A tree coming
+    // from outside is exactly the case where a key may have slipped in.
     for n in &nodos {
         let campos: Vec<(&str, &str)> = vec![
-            ("titulo", &n.title),
-            ("por", &n.why),
-            ("resultado", &n.outcome),
-            ("nota", &n.note),
+            ("title", &n.title),
+            ("why", &n.why),
+            ("outcome", &n.outcome),
+            ("note", &n.note),
         ];
         if let Some(mut h) = redact::revisar_campos(&campos) {
-            h.campo = format!("nodo #{} ({})", n.id, h.campo);
+            h.campo = format!("node #{} ({})", n.id, h.campo);
             return Err(Fallo::Redaccion(Box::new(h)));
         }
         if let Some(mut h) = n.refs.iter().find_map(|r| redact::revisar("ref", r)) {
-            h.campo = format!("nodo #{} (ref)", n.id);
+            h.campo = format!("node #{} (ref)", n.id);
             return Err(Fallo::Redaccion(Box::new(h)));
         }
     }
@@ -160,10 +160,10 @@ pub fn import(ctx: &mut Ctx, args: &Args) -> R {
                     nodo: ulids[&n.id].clone(),
                     estado,
                     resultado: n.outcome.clone(),
-                    // El spike no tenia regla de cierre, asi que no puede
-                    // saberse si un cierre fue deliberado. Se importan sin
-                    // forzar: los que resulten falsos tienen que salir en
-                    // `check`, que es exactamente lo que hay que ver.
+                    // The spike had no closure rule, so there is no way to
+                    // know whether a close was deliberate. They import
+                    // unforced: the ones that turn out false have to show up
+                    // in `check`, which is exactly what needs to be seen.
                     forzado: false,
                 },
                 instante(n.closed.as_deref().unwrap_or(&n.opened)),
@@ -173,12 +173,12 @@ pub fn import(ctx: &mut Ctx, args: &Args) -> R {
 
     let total = nodos.len();
     ctx.store.escribir_crudo(&eventos)?;
-    println!("  {total} nodos importados desde {ruta}");
+    println!("  {total} nodes imported from {ruta}");
     println!(
-        "        {} eventos escritos en .vivac/events",
+        "        {} events written to .vivac/events",
         eventos.len()
     );
     println!();
-    println!("  Revisa lo que el spike no podia ver:  vivac check");
+    println!("  Review what the spike could not see:  vivac check");
     Ok(())
 }

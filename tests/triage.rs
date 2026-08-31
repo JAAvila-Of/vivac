@@ -1,9 +1,9 @@
-//! `triage` — la vista de poda.
+//! `triage` — the pruning view.
 //!
-//! `BRIEF-SPEC.md` §4 la nombra: un brief que se pasa de presupuesto no debe
-//! mentir por omision, la senal es que el grafo necesita poda. `MODEL.md`
-//! §6.1 le manda los nodos hondos. Y `d33` le manda los rescatados, que se
-//! quedan colgando de un descartado a proposito.
+//! `BRIEF-SPEC.md` §4 names it: a brief over budget must not lie by omission,
+//! the signal is that the graph needs pruning. `MODEL.md` §6.1 sends it the
+//! deep nodes. And `d33` sends it the rescued ones, which stay hanging off a
+//! discarded parent on purpose.
 
 mod common;
 use common::Caja;
@@ -12,156 +12,159 @@ fn seccion(s: &str, titulo: &str) -> bool {
     s.lines().any(|l| l.trim_start().starts_with(titulo))
 }
 
-/// Un arbol sano no tiene nada que podar, y lo dice sin secciones vacias.
+/// A healthy tree has nothing to prune, and says so without empty sections.
 #[test]
-fn nada_que_podar() {
-    let c = Caja::nueva("sano");
-    c.ok(&["push", "Una meta", "--por", "hace falta"]);
+fn nothing_to_prune() {
+    let c = Caja::nueva("healthy");
+    c.ok(&["push", "A goal", "--why", "it is needed"]);
     let s = c.ok(&["triage"]);
-    assert!(s.contains("Nada que podar"), "{s}");
-    for t in ["APARCADOS", "CIERRES FALSOS", "SOBREVIVIERON"] {
-        assert!(!s.contains(t), "emitio {t} vacia:\n{s}");
+    assert!(s.contains("Nothing to prune"), "{s}");
+    for t in ["PARKED", "FALSE CLOSES", "SURVIVED"] {
+        assert!(!s.contains(t), "it emitted an empty {t}:\n{s}");
     }
 }
 
-/// Un aparcado sale con el motivo por el que se aparco. Sin el no se puede
-/// decidir nada, que es para lo que existe la vista.
+/// A parked node comes out with the reason it was parked for. Without it
+/// nothing can be decided, which is what the view exists for.
 #[test]
-fn los_aparcados_salen_con_su_motivo() {
-    let c = Caja::nueva("aparcados");
-    c.ok(&["push", "Una meta", "--por", "hace falta"]);
-    c.ok(&["push", "Un desvio", "--por", "salio al pasar"]);
-    c.ok(&["park", "faltaba decidir el backend antes"]);
+fn parked_nodes_come_out_with_their_reason() {
+    let c = Caja::nueva("parked");
+    c.ok(&["push", "A goal", "--why", "it is needed"]);
+    c.ok(&["push", "A detour", "--why", "spotted along the way"]);
+    c.ok(&["park", "the backend had to be decided first"]);
     let s = c.ok(&["triage"]);
-    assert!(seccion(&s, "APARCADOS"), "{s}");
-    assert!(s.contains("Un desvio"), "{s}");
-    assert!(s.contains("faltaba decidir el backend"), "sin motivo:\n{s}");
-    assert!(s.contains("focus <id>"), "sin la accion concreta:\n{s}");
+    assert!(seccion(&s, "PARKED"), "{s}");
+    assert!(s.contains("A detour"), "{s}");
+    assert!(
+        s.contains("the backend had to be decided"),
+        "no reason:\n{s}"
+    );
+    assert!(s.contains("focus <id>"), "no concrete action:\n{s}");
 }
 
-/// El cierre que se vuelve falso **despues**, al colgarle un bloqueante a algo
-/// ya cerrado. Es el caso medido que tardo 26 dias en detectarse, y el unico
-/// que la regla de cierre no puede prevenir: cuando `done` corrio, el hallazgo
-/// todavia no existia.
+/// The close that turns false **later**, when a blocker gets hung on something
+/// already closed. It is the measured case that took 26 days to spot, and the
+/// only one the closure rule cannot prevent: when `done` ran, the finding did
+/// not exist yet.
 #[test]
-fn un_cierre_falso_sale_con_su_cuenta() {
-    let c = Caja::nueva("falso");
-    c.ok(&["push", "Auditoria de permisos", "--por", "toca revisarla"]);
-    c.ok(&["pop", "informe entregado"]);
+fn a_false_close_comes_out_with_its_count() {
+    let c = Caja::nueva("false");
+    c.ok(&["push", "Permissions audit", "--why", "it is due for review"]);
+    c.ok(&["pop", "report delivered"]);
     c.ok(&[
         "add",
-        "Hallazgo sin arreglar",
-        "--padre",
+        "Unfixed finding",
+        "--parent",
         "1",
-        "--bloquea",
-        "--por",
-        "salio de la auditoria, tarde",
+        "--blocks",
+        "--why",
+        "came out of the audit, late",
     ]);
     let s = c.ok(&["triage"]);
-    assert!(seccion(&s, "CIERRES FALSOS"), "{s}");
-    assert!(s.contains("Auditoria de permisos"), "{s}");
-    assert!(s.contains("1 bloqueante"), "no dijo cuantos faltan: {s}");
+    assert!(seccion(&s, "FALSE CLOSES"), "{s}");
+    assert!(s.contains("Permissions audit"), "{s}");
+    assert!(s.contains("1 blocker"), "it did not say how many are left: {s}");
 }
 
-/// Un cierre **forzado** no vuelve aqui. Fue una decision, deja rastro y el
-/// arbol lo marca; repetirlo cada dia seria pedir que se vuelva a decidir lo
-/// ya decidido. Es la misma exencion que hace `check`.
+/// A **forced** close does not come back here. It was a decision, it leaves a
+/// trace and the tree marks it; repeating it every day would be asking for
+/// what was already decided to be decided again. Same exemption `check` makes.
 #[test]
-fn un_cierre_forzado_no_vuelve_al_triage() {
-    let c = Caja::nueva("forzado");
-    c.ok(&["push", "Auditoria de permisos", "--por", "toca revisarla"]);
+fn a_forced_close_does_not_come_back_to_triage() {
+    let c = Caja::nueva("forced");
+    c.ok(&["push", "Permissions audit", "--why", "it is due for review"]);
     c.ok(&[
         "add",
-        "Hallazgo sin arreglar",
-        "--padre",
+        "Unfixed finding",
+        "--parent",
         "1",
-        "--bloquea",
-        "--por",
-        "salio de la auditoria",
+        "--blocks",
+        "--why",
+        "came out of the audit",
     ]);
     c.ok(&[
         "done",
         "1",
-        "se cierra igual, el hallazgo va aparte",
-        "--forzar",
+        "closing anyway, the finding stands on its own",
+        "--force",
     ]);
     let s = c.ok(&["triage"]);
     assert!(
-        !s.contains("CIERRES FALSOS"),
-        "insiste con lo ya decidido: {s}"
+        !s.contains("FALSE CLOSES"),
+        "it insists on what was already decided: {s}"
     );
 
-    // Pero el arbol lo sigue marcando: no se esconde, se deja de repetir.
-    let t = c.ok(&["tree", "--todo"]);
-    assert!(t.contains("CIERRE FALSO"), "el arbol dejo de marcarlo: {t}");
+    // But the tree still marks it: it is not hidden, it just stops repeating.
+    let t = c.ok(&["tree", "--all"]);
+    assert!(t.contains("FALSE CLOSE"), "the tree stopped marking it: {t}");
 }
 
-/// Lo que sobrevive a un abandono queda vivo bajo un descartado a proposito
-/// (`d33`), asi que hay que volver a mirarlo. Aqui es donde se mira.
+/// Whatever survives an abandonment stays alive under something discarded on
+/// purpose (`d33`), so it has to be looked at again. This is where.
 #[test]
-fn el_rescatado_vuelve_a_pasar_por_delante() {
-    let c = Caja::nueva("rescatado");
-    c.ok(&["push", "Una meta", "--por", "hace falta"]);
-    c.ok(&["push", "Elegir backend", "--por", "el store lo necesita"]);
+fn the_rescued_node_comes_back_past_the_eye() {
+    let c = Caja::nueva("rescued");
+    c.ok(&["push", "A goal", "--why", "it is needed"]);
+    c.ok(&["push", "Pick a backend", "--why", "the store needs one"]);
     c.ok(&[
         "add",
         "Benchmark",
-        "--padre",
+        "--parent",
         "2",
-        "--por",
-        "hay que medir antes",
+        "--why",
+        "it has to be measured first",
     ]);
-    c.ok(&["abandon", "2", "el backend ya no aplica", "--rescatar", "3"]);
+    c.ok(&["abandon", "2", "the backend no longer applies", "--rescue", "3"]);
 
     let s = c.ok(&["triage"]);
-    assert!(seccion(&s, "SOBREVIVIERON A UN DESCARTE"), "{s}");
+    assert!(seccion(&s, "SURVIVED A DISCARD"), "{s}");
     assert!(s.contains("Benchmark"), "{s}");
     assert!(
-        s.contains("el backend ya no aplica"),
-        "no dice por que cayo su padre:\n{s}"
+        s.contains("the backend no longer applies"),
+        "it does not say why its parent fell:\n{s}"
     );
 
-    // Solo el borde, no la rama entera: lo que cuelga del rescatado no se
-    // repite, o la vista de poda seria el arbol otra vez.
+    // Only the boundary, not the whole branch: what hangs off the rescued node
+    // is not repeated, or the pruning view would be the tree all over again.
     c.ok(&[
         "add",
-        "Nieto del rescatado",
-        "--padre",
+        "Grandchild of the rescued node",
+        "--parent",
         "3",
-        "--por",
-        "cuelga",
+        "--why",
+        "it hangs there",
     ]);
     let s = c.ok(&["triage"]);
-    assert!(!s.contains("Nieto"), "listo la rama entera:\n{s}");
+    assert!(!s.contains("Grandchild"), "it listed the whole branch:\n{s}");
 }
 
-/// `MODEL.md` §6.1: a partir de 6 aparece en el triage, con `promote` como
-/// salida. Una pila honda casi nunca es indisciplina.
+/// `MODEL.md` §6.1: from 6 on it shows up in triage, with `promote` as the way
+/// out. A deep stack is almost never lack of discipline.
 #[test]
-fn a_partir_de_seis_de_profundidad() {
-    let c = Caja::nueva("hondo");
+fn from_six_deep_onward() {
+    let c = Caja::nueva("deep");
     for i in 1..=5 {
-        c.ok(&["push", &format!("Nivel {i}"), "--por", "sigue bajando"]);
+        c.ok(&["push", &format!("Level {i}"), "--why", "still going down"]);
     }
     let s = c.ok(&["triage"]);
-    assert!(!s.contains("A 6 O MAS"), "aviso a los cinco:\n{s}");
+    assert!(!s.contains("6 OR MORE"), "it warned at five:\n{s}");
 
-    c.ok(&["push", "Nivel 6", "--por", "uno mas"]);
+    c.ok(&["push", "Level 6", "--why", "one more"]);
     let s = c.ok(&["triage"]);
-    assert!(seccion(&s, "A 6 O MAS DE LA RAIZ"), "{s}");
-    assert!(s.contains("promote <id>"), "sin la salida:\n{s}");
-    assert!(s.contains("profundidad 6"), "{s}");
+    assert!(seccion(&s, "6 OR MORE FROM THE ROOT"), "{s}");
+    assert!(s.contains("promote <id>"), "no way out offered:\n{s}");
+    assert!(s.contains("depth 6"), "{s}");
 }
 
-/// La otra mitad de la audiencia. `--json` lleva las cuatro cestas, tambien
-/// las vacias: un consumidor no deberia adivinar si falta una clave o si esta
-/// vacia.
+/// The other half of the audience. `--json` carries the four baskets, empty
+/// ones included: a consumer should not have to guess whether a key is missing
+/// or the basket is empty.
 #[test]
-fn el_json_lleva_las_cuatro_cestas() {
+fn the_json_carries_the_four_baskets() {
     let c = Caja::nueva("json");
-    c.ok(&["push", "Una meta", "--por", "hace falta"]);
+    c.ok(&["push", "A goal", "--why", "it is needed"]);
     let s = c.ok(&["triage", "--json"]);
-    for k in ["aparcados", "hondos", "descolgados", "cierres_falsos"] {
-        assert!(s.contains(k), "falta la cesta {k}:\n{s}");
+    for k in ["parked", "deep", "orphaned_by_discard", "false_closes"] {
+        assert!(s.contains(k), "the {k} basket is missing:\n{s}");
     }
 }

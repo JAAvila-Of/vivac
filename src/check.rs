@@ -1,10 +1,10 @@
-//! `check` — las invariantes de `MODEL.md` §9 que aplican a Tier 0.
+//! `check` — the `MODEL.md` §9 invariants that apply to Tier 0.
 //!
-//! Separa dos cosas que se parecen y no lo son. Un ciclo o un huerfano es
-//! **corrupcion del almacen**: la herramienta miente. Un cierre falso es un
-//! **hallazgo sobre el proyecto**: el almacen esta bien y lo que esta mal es
-//! el trabajo, que se dio por terminado sin estarlo. Las dos salen con codigo
-//! distinto de cero --esto va en CI-- pero no se cuentan juntas.
+//! It separates two things that look alike and are not. A cycle or an orphan
+//! is **store corruption**: the tool is lying. A false close is a **finding
+//! about the project**: the store is fine and what is wrong is the work,
+//! which was called finished without being finished. Both exit non-zero
+//! --this belongs in CI-- but they are not counted together.
 
 use crate::args::Args;
 use crate::event::Estado;
@@ -16,42 +16,42 @@ pub fn check(a: &Arbol, args: &Args) -> Result<i32, crate::fallo::Fallo> {
 
     if a.lineas_rotas > 0 {
         almacen.push(format!(
-            "{} linea(s) ilegibles en .vivac/events (se saltaron al leer)",
+            "{} unreadable line(s) in .vivac/events (skipped while reading)",
             a.lineas_rotas
         ));
     }
 
     let mut nums = std::collections::HashMap::new();
     for n in a.todos() {
-        // Invariante 11: la procedencia es un arbol. El esquema ya impide dos
-        // padres --el `spawns` viaja dentro del nodo-- asi que lo unico que
-        // puede romperse aqui es que el padre no exista.
+        // Invariant 11: provenance is a tree. The schema already rules out two
+        // parents --`spawns` travels inside the node-- so the only thing that
+        // can break here is the parent not existing.
         if let Some(p) = &n.padre {
             if a.nodo(p).is_none() {
-                almacen.push(format!("{} apunta a un padre que no existe", n.alias()));
+                almacen.push(format!("{} points at a parent that does not exist", n.alias()));
             }
         }
-        // Invariante 1: aciclica. Si el camino a la raiz no termina en un nodo
-        // sin padre, es que da vueltas.
+        // Invariant 1: acyclic. If the path to the root does not end at a node
+        // with no parent, it is going in circles.
         let camino = a.ancestros(&n.id);
         if camino.first().is_some_and(|r| r.padre.is_some()) {
-            almacen.push(format!("{} esta en un ciclo de procedencia", n.alias()));
+            almacen.push(format!("{} sits in a provenance cycle", n.alias()));
         }
         if let Some(otro) = nums.insert(n.num, n.alias()) {
             almacen.push(format!(
-                "numero {} repetido: {} y {}",
+                "number {} repeated: {} and {}",
                 n.num,
                 otro,
                 n.alias()
             ));
         }
-        // Invariante 10: cierre falso.
+        // Invariant 10: false close.
         //
-        // Un cierre **forzado** no cuenta como violacion: `MODEL.md` §9 lo
-        // exime a proposito porque hay cierres legitimos a la fuerza --un
-        // carril que se abandona-- y lo que se pedia era que fuesen una
-        // decision y no un descuido. El rastro esta en el evento y el render
-        // lo sigue marcando; lo que no hace es romper CI todos los dias.
+        // A **forced** close does not count as a violation: `MODEL.md` §9
+        // exempts it on purpose, because there are legitimate forced closes
+        // --a lane being abandoned-- and what was asked was that they be a
+        // decision and not an oversight. The trace is in the event and the
+        // render still marks it; what it does not do is break CI every day.
         if n.estado == Estado::Done
             && !n.cierre_forzado
             && !a.bloqueantes_abiertos(&n.id).is_empty()
@@ -59,7 +59,7 @@ pub fn check(a: &Arbol, args: &Args) -> Result<i32, crate::fallo::Fallo> {
             let pend = a.bloqueantes_abiertos(&n.id);
             let quienes: Vec<String> = pend.iter().map(|c| c.alias()).collect();
             proyecto.push(format!(
-                "{} esta cerrado con {} condicion(es) abierta(s): {}",
+                "{} is closed with {} open condition(s): {}",
                 n.alias(),
                 pend.len(),
                 quienes.join(", ")
@@ -73,8 +73,8 @@ pub fn check(a: &Arbol, args: &Args) -> Result<i32, crate::fallo::Fallo> {
         println!(
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
-                "almacen": almacen,
-                "proyecto": proyecto,
+                "store": almacen,
+                "project": proyecto,
                 "ok": almacen.is_empty() && proyecto.is_empty(),
             }))
             .map_err(std::io::Error::other)?
@@ -82,12 +82,12 @@ pub fn check(a: &Arbol, args: &Args) -> Result<i32, crate::fallo::Fallo> {
     } else {
         println!();
         if almacen.is_empty() && proyecto.is_empty() {
-            println!("  Sin hallazgos. {} nodos revisados.", a.total());
+            println!("  No findings. {} nodes checked.", a.total());
             println!();
         }
         if !almacen.is_empty() {
             println!(
-                "  ALMACEN ({})  <- la herramienta miente, hay que arreglarla",
+                "  STORE ({})  <- the tool is lying; it needs fixing",
                 almacen.len()
             );
             println!();
@@ -98,7 +98,7 @@ pub fn check(a: &Arbol, args: &Args) -> Result<i32, crate::fallo::Fallo> {
         }
         if !proyecto.is_empty() {
             println!(
-                "  PROYECTO ({})  <- el almacen esta bien; el trabajo no",
+                "  PROJECT ({})  <- the store is fine; the work is not",
                 proyecto.len()
             );
             println!();
@@ -106,8 +106,8 @@ pub fn check(a: &Arbol, args: &Args) -> Result<i32, crate::fallo::Fallo> {
                 println!("      {m}");
             }
             println!();
-            println!("  Un cierre falso no se repara editando el arbol: se reabre lo");
-            println!("  que quedo abierto, o se cierra a conciencia con --forzar.");
+            println!("  A false close is not repaired by editing the tree: reopen what");
+            println!("  stayed open, or close it deliberately with --force.");
             println!();
         }
     }

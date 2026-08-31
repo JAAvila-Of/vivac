@@ -1,14 +1,14 @@
-//! `vivac` — procedencia del trabajo.
+//! `vivac` — provenance of work.
 //!
-//! Un arbol donde cada nodo sabe de cual nacio, para poder contestar "¿por que
-//! estamos aca?" meses despues.
+//! A tree where every node knows which node it was born from, so that "why
+//! are we here?" can still be answered months later.
 //!
-//! No detecta nada y no adivina nada. Esa era la tesis anterior y fallo sus
-//! dos puertas de decision: lo que se detectaba no era el hilo perdido. La
-//! captura es explicita y se apoya en las costuras del trabajo --se abre un
-//! nodo al empezar, se cierra al terminar-- porque lo unico que se midio de
-//! verdad es que una operacion que pide un juicio de relevancia no se llama
-//! nunca bajo carga.
+//! It detects nothing and guesses nothing. That was the earlier thesis and it
+//! failed both of its decision gates: what got detected was not the lost
+//! thread. Capture is explicit and hangs off the seams of the work --a node
+//! is opened when you start, closed when you finish-- because the one thing
+//! actually measured is that an operation asking for a judgement of relevance
+//! never gets called under load.
 
 mod anchor;
 mod args;
@@ -30,63 +30,63 @@ mod store;
 use args::Args;
 use fallo::Fallo;
 
-const USO: &str = r#"vivac - procedencia del trabajo
+const USO: &str = r#"vivac - provenance of work
 
-  El agente escribe (la pila lleva el arbol sola)
+  The agent writes (the stack carries the tree on its own)
 
-    vivac focus <id> [--reabrir]              vuelve a entrar en un nodo
-    vivac push "<titulo>" --por "<motivo>"    abre un nodo y lo apila
-          [--tipo goal|task|decision|question|constraint|finding|assumption]
-          [--bloquea]        su padre no cierra hasta que este cierre
+    vivac focus <id> [--reopen]               step back into a node
+    vivac push "<title>" --why "<reason>"     open a node and stack it
+          [--type goal|task|decision|question|constraint|finding|assumption]
+          [--blocks]         its parent cannot close until this one closes
           [--ref R] [--governs G]
-    vivac pop ["<resultado>"] [--luego "<...>"]   cierra el foco, vuelve al padre
-    vivac park [<id>] ["<motivo>"]            aparca: alimenta NO TOCAR AHORA
-    vivac promote [<id>]                      el foco pasa a ser meta propia
-    vivac abandon [<id>] ["<motivo>"] [--cascada]
-          [--rescatar <id>]  lo salva a el y a los suyos; sigue naciendo
-                             de donde nacio, no se reparenta
+    vivac pop ["<outcome>"] [--next "<...>"]  close the focus, back to the parent
+    vivac park [<id>] ["<reason>"]            park it: feeds DO NOT TOUCH NOW
+    vivac promote [<id>]                      the focus becomes a goal of its own
+    vivac abandon [<id>] ["<reason>"] [--cascade]
+          [--rescue <id>]    saves it and its own; it still hangs where it
+                             was born, nothing is reparented
 
-  Sin tocar la pila
+  Without touching the stack
 
-    vivac add "<titulo>" [--padre N] [--por "<motivo>"] [--bloquea]
-    vivac done <id> ["<resultado>"] [--forzar]
-    vivac note [<id>] "<nota>"
+    vivac add "<title>" [--parent N] [--why "<reason>"] [--blocks]
+    vivac done <id> ["<outcome>"] [--force]
+    vivac note [<id>] "<note>"
     vivac block <id> [--off]
-    vivac decide "<titulo>" --razon "<r>" [--alternativa X] [--supersedes d9]
-    vivac flag <id> suspect|review|stale --por "<motivo>"  [--off]
+    vivac decide "<title>" --reason "<r>" [--alternative X] [--supersedes d9]
+    vivac flag <id> suspect|review|stale --why "<reason>"  [--off]
 
-  Paradas seguras
+  Safe stops
 
-    vivac save ["<etiqueta>"] [--luego "<que ibas a hacer>"]
-    vivac restore <v>                         reconstruye la pila y da el diff
-    vivac vivacs                              las paradas, de la ultima atras
+    vivac save ["<label>"] [--next "<what you were about to do>"]
+    vivac restore <v>                         rebuilds the stack, gives the diff
+    vivac vivacs                              the stops, latest first
 
-  El mantenedor lee            (todos aceptan --json)
+  The maintainer reads          (all of them accept --json)
 
-    vivac brief [--budget 1500] [--now <fecha>]
-                                              donde estas y que NO tocar ahora
-    vivac why <id>                            POR QUE ESTAMOS ACA
-    vivac tree [id] [--todo]                  el arbol, con cierres falsos
-    vivac open                                frentes abiertos y su linaje
-    vivac stack                               donde estas ahora
-    vivac parked                              NO TOCAR AHORA
-    vivac triage                              que se puede podar, y con que
-    vivac stats                               cifras
-    vivac check                               invariantes; va en CI
+    vivac brief [--budget 1500] [--now <date>]
+                                              where you are and what NOT to touch
+    vivac why <id>                            WHY WE ARE HERE
+    vivac tree [id] [--all]                   the tree, with false closes marked
+    vivac open                                open fronts and their lineage
+    vivac stack                               where you are right now
+    vivac parked                              DO NOT TOUCH NOW
+    vivac triage                              what can be pruned, and with what
+    vivac stats                               numbers
+    vivac check                               invariants; belongs in CI
 
-  Sesion
+  Session
 
-    vivac session start [--hook]              el brief, para inyectarlo
-    vivac session end   [--hook]              parada automatica al cerrar
-    vivac hooks                               que pegar en settings.json
+    vivac session start [--hook]              the brief, ready to inject
+    vivac session end   [--hook]              automatic stop at close
+    vivac hooks                               what to paste into settings.json
 
-  Empezar
+  Getting started
 
-    vivac init                                siembra .vivac/ aca
-    vivac import <tree.json>                  trae un arbol del spike
+    vivac init                                plant .vivac/ here
+    vivac import <tree.json>                  bring in a tree from the spike
 
-  Codigos de salida
-    0 bien   1 el modelo rechaza   2 uso   3 guarda de redaccion   4 sin .vivac
+  Exit codes
+    0 fine   1 the model refuses   2 usage   3 redaction guard   4 no .vivac
 "#;
 
 fn main() {
@@ -132,10 +132,10 @@ fn despachar(cmd: &str, a: &Args) -> Result<i32, Fallo> {
 
     if cmd == "init" {
         let s = store::Store::crear(&cwd)?;
-        println!("  vivac sembrado en {}", cwd.display());
-        println!("        proyecto {}", s.config.project_id);
+        println!("  vivac planted in {}", cwd.display());
+        println!("        project {}", s.config.project_id);
         println!();
-        println!("  Primer nodo:  vivac push \"<titulo>\" --por \"<motivo>\"");
+        println!("  First node:  vivac push \"<title>\" --why \"<reason>\"");
         return Ok(0);
     }
 
@@ -144,9 +144,9 @@ fn despachar(cmd: &str, a: &Args) -> Result<i32, Fallo> {
     }
 
     let Some(raiz) = store::buscar_raiz(&cwd) else {
-        // Los hooks callan donde no hay arbol. Uno que falla en cada
-        // directorio ajeno se desactiva a los dos dias, y con el se pierden
-        // los dos que si importan.
+        // The hooks stay quiet where there is no tree. One that fails in
+        // every unrelated directory gets switched off within two days, and
+        // the two that matter go with it.
         if cmd == "session" && a.tiene("hook") {
             return Ok(0);
         }
@@ -154,36 +154,36 @@ fn despachar(cmd: &str, a: &Args) -> Result<i32, Fallo> {
     };
     let mut ctx = ops::Ctx::cargar(store::Store::abrir(raiz)?)?;
 
-    // `check` es el unico que devuelve un codigo propio: distingue la
-    // corrupcion del almacen de un hallazgo sobre el proyecto.
+    // `check` is the only one with an exit code of its own: it separates
+    // store corruption from a finding about the project.
     if cmd == "check" {
         return check::check(&ctx.arbol, a);
     }
 
-    // Opciones validas por comando. Una que no este aqui es un error, no un
+    // Valid options per command. One that is not here is an error, not
     // silencio: ver `Args::desconocidas`.
     const COMUNES: &[&str] = &["json"];
     let permitidas: &[&str] = match cmd {
-        "push" => &["por", "tipo", "bloquea", "ref", "governs"],
-        "pop" => &["forzar", "luego"],
+        "push" => &["why", "type", "blocks", "ref", "governs"],
+        "pop" => &["force", "next"],
         "decide" => &[
-            "razon",
-            "alternativa",
+            "reason",
+            "alternative",
             "supersedes",
             "ref",
             "governs",
-            "bloquea",
+            "blocks",
         ],
-        "flag" => &["por", "off"],
-        "save" => &["luego"],
+        "flag" => &["why", "off"],
+        "save" => &["next"],
         "brief" => &["budget", "now", "json"],
-        "session" => &["hook", "luego", "budget", "now"],
-        "add" => &["padre", "por", "tipo", "bloquea", "ref", "governs"],
-        "done" => &["forzar"],
-        "abandon" => &["cascada", "rescatar"],
-        "focus" => &["reabrir"],
+        "session" => &["hook", "next", "budget", "now"],
+        "add" => &["parent", "why", "type", "blocks", "ref", "governs"],
+        "done" => &["force"],
+        "abandon" => &["cascade", "rescue"],
+        "focus" => &["reopen"],
         "block" => &["off"],
-        "tree" => &["todo", "all", "json"],
+        "tree" => &["all", "json"],
         "park" | "promote" | "note" | "import" | "restore" | "vivacs" => &[],
         _ => COMUNES,
     };

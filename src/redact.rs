@@ -1,19 +1,19 @@
-//! La guarda de redaccion. Pilar de seguridad, y tiene veto.
+//! The redaction guard. Security pillar, and it holds a veto.
 //!
-//! Este arbol es un mapa de donde un sistema es debil y todavia no esta
-//! arreglado. Lo que no entra, no se filtra. Tres cosas no entran nunca:
-//! claves, datos personales y contenido de archivos.
+//! This tree is a map of where a system is weak and not yet fixed. What
+//! never gets in never leaks. Three things never get in: keys, personal
+//! data, and file contents.
 //!
-//! De las tres, la ultima no se comprueba aqui --se comprueba no teniendo
-//! ninguna operacion que acepte el cuerpo de un archivo-- asi que este modulo
-//! cubre las dos primeras.
+//! Of the three, the last is not checked here --it is enforced by having no
+//! operation at all that accepts a file body-- so this module covers the
+//! first two.
 //!
-//! **Ante la duda se rechaza y se dice por que. Nunca se guarda callando.**
-//! No hay `--force`: si la guarda se equivoca, se reformula la frase. Un
-//! escape a mano seria el camino por el que acabaria entrando justo lo que
-//! esto existe para dejar fuera.
+//! **In doubt it refuses and says why. It never stores in silence.**
+//! There is no `--force`: if the guard gets it wrong, reword the sentence.
+//! A manual escape hatch would be the road by which the very thing this
+//! exists to keep out would eventually get in.
 
-/// Lo que la guarda encontro. Nunca lleva el secreto entero.
+/// What the guard found. It never carries the whole secret.
 #[derive(Debug)]
 pub struct Hallazgo {
     pub regla: &'static str,
@@ -22,9 +22,9 @@ pub struct Hallazgo {
     pub consejo: &'static str,
 }
 
-/// Prefijos publicados por quien emite la credencial. Cero ambiguedad: si
-/// aparecen, es una clave. El numero es el minimo de caracteres que tiene que
-/// seguir al prefijo para que cuente.
+/// Prefixes published by whoever issues the credential. Zero ambiguity: if
+/// they show up, it is a key. The number is the minimum count of characters
+/// that must follow the prefix for it to count.
 const PREFIJOS: &[(&str, usize)] = &[
     ("sqa_", 20),
     ("squ_", 20),
@@ -55,7 +55,7 @@ const PREFIJOS: &[(&str, usize)] = &[
     ("SG.", 30),
 ];
 
-/// Claves de acceso de AWS: prefijo fijo y longitud exacta de 20.
+/// AWS access keys: fixed prefix and an exact length of 20.
 const AWS: &[&str] = &["AKIA", "ASIA", "AIDA", "AROA", "AGPA", "ANPA", "ANVA"];
 
 const CONSEJO_CLAVE: &str = "Escribi que credencial era y donde vive, nunca su valor. \
@@ -65,11 +65,11 @@ const CONSEJO_PII: &str = "Referencia el rol, no a la persona ni su ruta. \
 const CONSEJO_ENTROPIA: &str = "Si no es una clave, dale un nombre en vez de pegar el valor. \
      Si lo es, no entra: guarda donde vive, no cual es.";
 
-/// Revisa un campo. `None` significa que puede escribirse.
+/// Checks one field. `None` means it may be written.
 pub fn revisar(campo: &str, texto: &str) -> Option<Hallazgo> {
     if texto.contains("-----BEGIN") && texto.contains("PRIVATE KEY") {
         return Some(Hallazgo {
-            regla: "clave privada en formato PEM",
+            regla: "private key in PEM format",
             campo: campo.to_string(),
             muestra: "-----BEGIN ... PRIVATE KEY-----".into(),
             consejo: CONSEJO_CLAVE,
@@ -78,8 +78,8 @@ pub fn revisar(campo: &str, texto: &str) -> Option<Hallazgo> {
     tokens(texto).find_map(|tok| revisar_token(campo, tok))
 }
 
-/// Revisa varios campos de una vez. Devuelve el primero que falle, que es lo
-/// que hace falta: la operacion se rechaza entera.
+/// Checks several fields at once. Returns the first that fails, which is all
+/// that is needed: the operation is refused whole.
 pub fn revisar_campos(campos: &[(&str, &str)]) -> Option<Hallazgo> {
     campos.iter().find_map(|(c, t)| revisar(c, t))
 }
@@ -121,15 +121,15 @@ fn revisar_token(campo: &str, tok: &str) -> Option<Hallazgo> {
     }
     if entropia_sospechosa(tok) {
         return hallazgo(
-            "cadena de entropia alta sin forma conocida",
+            "high-entropy string with no known shape",
             CONSEJO_ENTROPIA,
         );
     }
     None
 }
 
-/// Parte por espacios y por los signos que nunca forman parte de una
-/// credencial. Guiones, puntos, barras y bajos se conservan porque si forman.
+/// Splits on whitespace and on the signs that are never part of a
+/// credential. Dashes, dots, slashes and underscores are kept, because they are.
 fn tokens(texto: &str) -> impl Iterator<Item = &str> {
     const CORTES: &[char] = &[
         ',', ';', '"', '\'', '(', ')', '[', ']', '{', '}', '<', '>', '`',
@@ -167,8 +167,8 @@ fn es_correo(tok: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
 }
 
-/// La ruta de casa lleva el nombre de quien la tiene, que es dato personal.
-/// `~` no: se resuelve en la maquina de quien lo lee y no identifica a nadie.
+/// A home path carries the name of whoever owns it, which is personal data.
+/// `~` does not: it resolves on the reader's machine and identifies nobody.
 fn es_ruta_de_casa(tok: &str) -> bool {
     let bajo = tok.to_ascii_lowercase().replace('\\', "/");
     ["/users/", "/home/"].iter().any(|p| {
@@ -178,19 +178,19 @@ fn es_ruta_de_casa(tok: &str) -> bool {
     })
 }
 
-/// El heuristico incierto, y por eso el mas conservador de los cinco.
+/// The uncertain heuristic, and for that reason the most conservative of the five.
 ///
-/// La entropia sola no separa un secreto de un identificador largo:
-/// `PermisoServiceAdapter.cs:278` da casi la misma cifra que una clave de la
-/// misma longitud. Hacen falta dos filtros mas, y los dos salieron de que un
-/// test de esta misma tanda los reclamara:
+/// Entropy alone does not separate a secret from a long identifier:
+/// `PermissionServiceAdapter.cs:278` scores almost the same as a key of the
+/// same length. Two more filters are needed, and both came out of a test in
+/// this very batch demanding them:
 ///
-/// - **alfabeto de credencial**: las credenciales se escriben en base64 o
-///   hexadecimal, sin puntos ni dos puntos. Un `Archivo.cs:278` queda fuera
-///   por la forma, sin mirar la entropia.
-/// - **proporcion de vocales**: en una cadena aleatoria las vocales rondan el
-///   16 %; en algo que alguien escribio para leerlo, el 35 % o mas. Es el
-///   discriminante mas barato que separa `ReunionV2PolicyMaskCalculator` de
+/// - **credential alphabet**: credentials are written in base64 or hex, with
+///   no dots and no colons. A `File.cs:278` is ruled out by shape alone,
+///   without looking at entropy.
+/// - **vowel ratio**: in a random string vowels sit around 16 %; in something
+///   somebody wrote to be read, 35 % or more. It is the cheapest
+///   discriminant that separates `MeetingV2PolicyMaskCalculator` from
 ///   `Xk7fQ2mZp9RtLw4sVb8N`.
 fn entropia_sospechosa(tok: &str) -> bool {
     if !(24..=512).contains(&tok.len()) || forma_conocida(tok) || !alfabeto_de_credencial(tok) {
@@ -216,8 +216,8 @@ fn vocales(tok: &str) -> f64 {
     v as f64 / n as f64
 }
 
-/// Cosas largas y aleatorias que no son secretos y aparecen todo el tiempo en
-/// un arbol de procedencia real: SHAs, UUIDs, ULIDs, rutas y URLs.
+/// Long random-looking things that are not secrets and turn up constantly in
+/// a real provenance tree: SHAs, UUIDs, ULIDs, paths and URLs.
 fn forma_conocida(tok: &str) -> bool {
     let sin_guiones: String = tok.chars().filter(|c| *c != '-').collect();
     if !sin_guiones.is_empty() && sin_guiones.bytes().all(|b| b.is_ascii_hexdigit()) {
@@ -249,8 +249,8 @@ fn shannon(s: &str) -> f64 {
         .sum::<f64>()
 }
 
-/// Deja ver de que se trata sin reproducirlo. Se imprime en pantalla, que ya
-/// es menos malo que guardarlo, pero tampoco hace falta enseñarlo entero.
+/// Shows what it is without reproducing it. It goes to the screen, which is
+/// already less bad than storing it, but there is no need to show it whole.
 fn enmascarar(tok: &str) -> String {
     let visibles: String = tok.chars().take(4).collect();
     format!("{visibles}******** ({} caracteres)", tok.chars().count())
@@ -271,13 +271,13 @@ mod tests {
     use super::*;
 
     fn rechaza(t: &str) -> bool {
-        revisar("titulo", t).is_some()
+        revisar("title", t).is_some()
     }
 
     #[test]
     fn claves_conocidas() {
         assert!(rechaza(
-            "el token es sqa_9f3c1d7e5b2a48c6d0e1f2a3b4c5d6e7f8091a2b"
+            "the token is sqa_9f3c1d7e5b2a48c6d0e1f2a3b4c5d6e7f8091a2b"
         ));
         assert!(rechaza("ghp_16C7e42F292c6912E7710c838347Ae178B4a"));
         assert!(rechaza(
@@ -305,32 +305,32 @@ mod tests {
 
     #[test]
     fn lo_que_tiene_que_pasar() {
-        // Prosa normal de un arbol real.
-        assert!(!rechaza("Portar a Rust en el repo publico vivac/"));
+        // Ordinary prose from a real tree.
+        assert!(!rechaza("Port to Rust in the public vivac/ repo"));
         assert!(!rechaza(
             "csharpsquid:S1192 literales duplicados entre archivos"
         ));
         assert!(!rechaza(
-            "PermisoServiceAdapter.cs:278 esta fuera de alcance"
+            "PermissionServiceAdapter.cs:278 is out of scope"
         ));
-        // Referencias tecnicas que parecen aleatorias y no son secretos.
+        // Technical references that look random and are not secrets.
         assert!(!rechaza("commit e90b4832f1a4c6d8b0e2f4a6c8d0e2f4a6c8d0e2"));
-        assert!(!rechaza("nodo 01j8xq2m4k7pabcdefghijklmn"));
+        assert!(!rechaza("node 01j8xq2m4k7pabcdefghijklmn"));
         assert!(!rechaza("id 550e8400-e29b-41d4-a716-446655440000"));
         assert!(!rechaza(
             "ver https://github.com/rust-lang/rust/issues/12345"
         ));
-        // El tilde no identifica a nadie: se resuelve en la maquina que lee.
-        assert!(!rechaza("el hook vive en ~/.claude/settings.json"));
-        // Nombres largos en camelCase, que es lo que mas falso positivo daria.
-        assert!(!rechaza("ReunionPolicyMaskCalculatorFactoryProvider"));
-        assert!(!rechaza("AplicarPoliticaDeVisibilidadPorReunionHandler"));
+        // The tilde identifies nobody: it resolves on the reading machine.
+        assert!(!rechaza("the hook lives in ~/.claude/settings.json"));
+        // Long camelCase names, the likeliest source of a false positive.
+        assert!(!rechaza("MeetingPolicyMaskCalculatorFactoryProvider"));
+        assert!(!rechaza("ApplyVisibilityPolicyPerMeetingHandler"));
         assert!(!rechaza("ReunionV2PolicyMaskCalculatorFactory"));
     }
 
     #[test]
     fn el_heuristico_de_entropia_sigue_cazando() {
-        // Sin prefijo conocido: solo queda la forma. Estas tienen que caer.
+        // No known prefix: only the shape is left. These have to fall.
         assert!(rechaza("Xk7fQ2mZp9RtLw4sVb8NcJ3hGd6y"));
         assert!(rechaza("p8KdReQvXnLYtSbGmZwHfJcT3x9Wq2Vz"));
     }
@@ -345,7 +345,7 @@ mod tests {
     #[test]
     fn devuelve_el_primer_campo_que_falla() {
         let h = revisar_campos(&[
-            ("titulo", "todo bien"),
+            ("title", "all fine"),
             ("por", "ghp_16C7e42F292c6912E7710c838347Ae178B4a"),
         ]);
         assert_eq!(h.unwrap().campo, "por");

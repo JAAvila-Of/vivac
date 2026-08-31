@@ -1,22 +1,22 @@
-//! `Anchor` — identidad estable del estado del arbol, y que cambio desde ella.
+//! `Anchor` — a stable identity for the tree's state, and what changed since.
 //!
-//! El modelo no depende de git: necesita dos primitivas y nada mas. Las
-//! implementaciones son `Git` y `Null`, y **`Null` define el suelo del
-//! producto**, no es un relleno: sin control de versiones el arbol, la pila,
-//! los vivacs y `why` siguen funcionando enteros. Lo unico que se pierde es la
-//! precision por cambios, y el `brief` la sustituye por antiguedad temporal en
-//! vez de inventar una precision que no tiene.
+//! The model does not depend on git: it needs two primitives and nothing
+//! else. The implementations are `Git` and `Null`, and **`Null` defines the
+//! floor of the product**, it is not filler: with no version control the
+//! tree, the stack, the vivacs and `why` all keep working whole. The only
+//! thing lost is precision by change, and the `brief` swaps in plain age
+//! rather than inventing precision it does not have.
 //!
-//! **`snapshot` no lanza un subproceso.** `push` crea un vivac y un vivac
-//! necesita ancla, asi que esto cae en el camino de escritura, cuyo
-//! presupuesto son 5 ms; arrancar `git` en Windows cuesta entre 15 y 30. Se
-//! lee `.git/HEAD` y se resuelve la referencia a mano. `changed_since` si
-//! lanza git, porque solo se usa al leer.
+//! **`snapshot` spawns no subprocess.** `push` creates a vivac and a vivac
+//! needs an anchor, so this falls on the write path, whose budget is 5 ms;
+//! starting `git` on Windows costs between 15 and 30. `.git/HEAD` is read
+//! and the reference resolved by hand. `changed_since` does shell out to
+//! git, because it only runs on reads.
 
 use std::path::{Path, PathBuf};
 
-/// Identidad del estado del arbol en un momento. Vacia significa "no hay",
-/// que es un estado legitimo y no un error.
+/// Identity of the tree state at a moment. Empty means "there is none",
+/// which is a legitimate state and not an error.
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct AnchorRef {
     pub kind: String,
@@ -28,7 +28,7 @@ impl AnchorRef {
         self.id.is_empty()
     }
 
-    /// Prefijo corto, como git.
+    /// Short prefix, the way git does it.
     pub fn corto(&self) -> &str {
         let n = self.id.len().min(7);
         &self.id[..n]
@@ -46,14 +46,14 @@ pub trait Anchor {
     fn changed_since(&self, r: &AnchorRef) -> Vec<Cambio>;
 }
 
-/// Sin control de versiones.
+/// No version control.
 ///
-/// `MODEL.md` §8 proponia un merkle del working set. **No entra en v0.1**: el
-/// working set no tiene cota, y hashearlo esta en el camino de escritura, que
-/// tiene 5 ms de presupuesto. El pilar de rendimiento fija un techo que la
-/// funcionalidad debe respetar para existir, y esta no lo respetaba. Queda
-/// como ancla sin identidad, que es exactamente la degradacion que
-/// `BRIEF-SPEC.md` §6 ya especifica.
+/// `MODEL.md` §8 proposed a merkle of the working set. **Not in v0.1**: the
+/// working set has no bound, and hashing it sits on the write path, which
+/// has a 5 ms budget. The performance pillar sets a ceiling a feature must
+/// respect in order to exist, and this one did not. It stays an anchor with
+/// no identity, which is exactly the degradation `BRIEF-SPEC.md` §6 already
+/// specifies.
 pub struct Null;
 
 impl Anchor for Null {
@@ -74,7 +74,7 @@ pub struct Git {
     gitdir: PathBuf,
 }
 
-/// Elige implementacion mirando si hay un `.git` utilizable desde `raiz`.
+/// Picks an implementation by looking for a usable `.git` from `raiz`.
 pub fn detectar(raiz: &Path) -> Box<dyn Anchor> {
     match Git::nuevo(raiz) {
         Some(g) => Box::new(g),
@@ -91,7 +91,7 @@ impl Git {
                 return Some(Git { raiz: d, gitdir: g });
             }
             if g.is_file() {
-                // Worktree o submodulo: el .git es un archivo con `gitdir: <ruta>`.
+                // Worktree or submodule: .git is a file holding `gitdir: <path>`.
                 let t = std::fs::read_to_string(&g).ok()?;
                 let p = t.trim().strip_prefix("gitdir:")?.trim();
                 let abs = if Path::new(p).is_absolute() {
@@ -110,8 +110,8 @@ impl Git {
         }
     }
 
-    /// Resuelve `.git/HEAD` sin lanzar nada. Tres casos: sha directo (HEAD
-    /// suelto), referencia con su archivo, y referencia empaquetada.
+    /// Resolves `.git/HEAD` spawning nothing. Three cases: a direct sha
+    /// (detached HEAD), a reference with its file, and a packed reference.
     fn head(&self) -> Option<String> {
         let h = std::fs::read_to_string(self.gitdir.join("HEAD")).ok()?;
         let h = h.trim();
@@ -161,9 +161,9 @@ impl Anchor for Git {
             return vec![];
         }
         let mut cuenta: std::collections::BTreeMap<String, usize> = Default::default();
-        // Commits desde el ancla. Si el sha ya no existe --rebase, rama
-        // borrada-- git falla y se devuelve vacio: mejor no decir nada que
-        // decir un numero falso.
+        // Commits since the anchor. If the sha is gone --rebase, deleted
+        // branch-- git fails and this returns empty: better to say nothing
+        // than to say a false number.
         if let Some(out) = self.git(&[
             "log",
             "--format=",
@@ -174,7 +174,7 @@ impl Anchor for Git {
                 *cuenta.entry(l.to_string()).or_default() += 1;
             }
         }
-        // Y lo que esta sin commitear, que cuenta como un cambio.
+        // And whatever is uncommitted, which counts as a change.
         if let Some(out) = self.git(&["status", "--porcelain"]) {
             for l in out.lines() {
                 if let Some(ruta) = l.get(3..) {
@@ -191,7 +191,7 @@ impl Anchor for Git {
             .into_iter()
             .map(|(ruta, veces)| Cambio { ruta, veces })
             .collect();
-        // Mas tocado primero; a igualdad, por ruta. Determinista.
+        // Most-touched first; ties broken by path. Deterministic.
         v.sort_by(|a, b| b.veces.cmp(&a.veces).then_with(|| a.ruta.cmp(&b.ruta)));
         v
     }
@@ -210,11 +210,11 @@ mod tests {
 
     #[test]
     fn head_se_lee_sin_lanzar_git() {
-        // Este mismo repositorio sirve de sustrato.
+        // This very repository serves as the substrate.
         let g = Git::nuevo(Path::new(".")).expect("vivac/ es un repo git");
         let s = g.snapshot();
         assert_eq!(s.kind, "git");
-        assert!(es_sha(&s.id), "HEAD no resolvio: {:?}", s.id);
+        assert!(es_sha(&s.id), "HEAD did not resolve: {:?}", s.id);
         assert_eq!(s.corto().len(), 7);
     }
 

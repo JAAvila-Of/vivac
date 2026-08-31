@@ -1,153 +1,141 @@
-//! `abandon` con rescate — `MODEL.md` §6, con la salvedad de `d33`.
+//! `abandon` with rescue — `MODEL.md` §6, with the exception recorded in `d33`.
 //!
-//! El rescate **no reparenta**. La invariante 11 dice que una cosa nace de un
-//! sitio, y el esquema hace inmutable el `spawns` a proposito: viaja dentro
-//! del evento de creacion. Un nodo rescatado se queda donde nacio, vivo bajo
-//! un padre abandonado. Estos tests son lo que sostiene esa promesa.
+//! Rescue **does not reparent**. Invariant 11 says a thing is born in one
+//! place, and the schema makes `spawns` immutable on purpose: it travels
+//! inside the creation event. A rescued node stays where it was born, alive
+//! under an abandoned parent. These tests are what holds that promise up.
 
 mod common;
 use common::Caja;
 
-/// g1 > t2 > t3 > (t4, t5). Abandonar t2 pone en juego a los otros cuatro.
+/// g1 > t2 > t3 > t4. Abandoning t2 puts the other three in play.
 fn rama(nombre: &str) -> Caja {
     let c = Caja::nueva(nombre);
-    c.ok(&[
-        "push",
-        "Migrar autenticacion",
-        "--por",
-        "el proveedor cierra",
-    ]);
-    c.ok(&[
-        "push",
-        "Elegir backend de cache",
-        "--por",
-        "el token store lo necesita",
-    ]);
+    c.ok(&["push", "Migrate authentication", "--why", "the provider is shutting down"]);
+    c.ok(&["push", "Pick a cache backend", "--why", "the token store needs one"]);
     c.ok(&[
         "add",
-        "Benchmark de serializacion",
-        "--padre",
+        "Serialization benchmark",
+        "--parent",
         "2",
-        "--por",
-        "hay que medir antes",
+        "--why",
+        "it has to be measured first",
     ]);
     c.ok(&[
         "add",
-        "Limpiar imports muertos",
-        "--padre",
+        "Drop dead imports",
+        "--parent",
         "3",
-        "--por",
-        "salio al pasar",
+        "--why",
+        "spotted along the way",
     ]);
     c
 }
 
-/// Sin `--cascada` no cae nada, y la lista de lo que caeria sale entera.
-/// Abandonar tiene que costar lo mismo que `pop`, pero no en silencio.
+/// Without `--cascade` nothing falls, and the list of what would fall comes
+/// out whole. Abandoning has to cost the same as `pop`, but not in silence.
 #[test]
-fn sin_cascada_no_cae_nada() {
-    let c = rama("sincascada");
-    let (s, cod) = c.correr(&["abandon", "2", "el backend ya no aplica"]);
-    assert_eq!(cod, 1, "tenia que rechazarlo:\n{s}");
-    for t in ["Elegir backend de cache", "Benchmark", "Limpiar imports"] {
-        assert!(s.contains(t), "no listo {t}:\n{s}");
+fn without_cascade_nothing_falls() {
+    let c = rama("nocascade");
+    let (s, cod) = c.correr(&["abandon", "2", "the backend no longer applies"]);
+    assert_eq!(cod, 1, "it had to refuse:\n{s}");
+    for t in ["Pick a cache backend", "benchmark", "Drop dead imports"] {
+        assert!(s.to_lowercase().contains(&t.to_lowercase()), "it did not list {t}:\n{s}");
     }
-    assert!(s.contains("--rescatar"), "no ofrecio el rescate:\n{s}");
+    assert!(s.contains("--rescue"), "it did not offer the rescue:\n{s}");
 
-    // Y nada se movio.
-    let t = c.ok(&["tree", "--todo"]);
-    assert!(!t.contains("[!]"), "abandono algo sin confirmacion:\n{t}");
+    // And nothing moved.
+    let t = c.ok(&["tree", "--all"]);
+    assert!(!t.contains("[!]"), "it abandoned something without confirmation:\n{t}");
 }
 
-/// Rescatar un nodo rescata su descendencia. Salvar al padre y dejar morir a
-/// los hijos seria un rescate a medias que nadie pidio.
+/// Rescuing a node rescues its descendants. Saving the parent and letting the
+/// children die would be a half rescue nobody asked for.
 #[test]
-fn el_rescate_arrastra_la_descendencia() {
-    let c = rama("arrastra");
-    let s = c.ok(&["abandon", "2", "el backend ya no aplica", "--rescatar", "3"]);
-    assert!(s.contains("Rescatados"), "{s}");
+fn a_rescue_drags_the_descendants_along() {
+    let c = rama("drags");
+    let s = c.ok(&["abandon", "2", "the backend no longer applies", "--rescue", "3"]);
+    assert!(s.contains("Rescued"), "{s}");
 
-    let t = c.ok(&["tree", "--todo"]);
-    assert!(t.contains("[!] t2"), "t2 tenia que caer:\n{t}");
-    assert!(t.contains("[ ] t3"), "t3 tenia que sobrevivir:\n{t}");
-    assert!(t.contains("[ ] t4"), "t4 cayo con su padre rescatado:\n{t}");
+    let t = c.ok(&["tree", "--all"]);
+    assert!(t.contains("[!] t2"), "t2 had to fall:\n{t}");
+    assert!(t.contains("[ ] t3"), "t3 had to survive:\n{t}");
+    assert!(t.contains("[ ] t4"), "t4 fell with its rescued parent:\n{t}");
 }
 
-/// Si se rescata todo lo abierto no queda nada que confirmar, y `--cascada`
-/// deja de hacer falta: solo se confirma lo que cae sin haberse nombrado.
+/// If everything open gets rescued there is nothing left to confirm, and
+/// `--cascade` stops being needed: only what falls unnamed is confirmed.
 #[test]
-fn rescatarlo_todo_no_pide_cascada() {
-    let c = rama("todo");
-    let (_, cod) = c.correr(&["abandon", "2", "ya no aplica", "--rescatar", "3"]);
-    assert_eq!(cod, 0, "pidio cascada sin tener nada que llevarse");
+fn rescuing_everything_needs_no_cascade() {
+    let c = rama("all");
+    let (_, cod) = c.correr(&["abandon", "2", "no longer applies", "--rescue", "3"]);
+    assert_eq!(cod, 0, "it asked for a cascade with nothing to take down");
 }
 
-/// **La promesa del producto.** El rescatado sigue naciendo de un nodo
-/// abandonado, y `why` lo dice en vez de esconderlo. Reparentar habria hecho
-/// que este camino mintiera.
+/// **The product's promise.** The rescued node is still born from an abandoned
+/// one, and `why` says so instead of hiding it. Reparenting would have made
+/// this path lie.
 #[test]
-fn el_rescatado_sigue_naciendo_de_donde_nacio() {
-    let c = rama("linaje");
-    c.ok(&["abandon", "2", "el backend ya no aplica", "--rescatar", "3"]);
+fn the_rescued_node_is_still_born_where_it_was_born() {
+    let c = rama("lineage");
+    c.ok(&["abandon", "2", "the backend no longer applies", "--rescue", "3"]);
 
     let w = c.ok(&["why", "3"]);
+    assert!(w.contains("Pick a cache backend"), "it erased the origin:\n{w}");
+    assert!(w.contains("abandoned"), "it does not say the origin fell:\n{w}");
     assert!(
-        w.contains("Elegir backend de cache"),
-        "borro el origen:\n{w}"
-    );
-    assert!(w.contains("abandonado"), "no dice que el origen cayo:\n{w}");
-    assert!(
-        w.contains("el backend ya no aplica"),
-        "perdio el motivo del abandono:\n{w}"
+        w.contains("the backend no longer applies"),
+        "it lost the reason for the abandonment:\n{w}"
     );
 
-    // Y el almacen sigue sano: un vivo bajo un abandonado es una forma
-    // legitima del arbol, no corrupcion.
+    // And the store stays healthy: something alive under something abandoned
+    // is a legitimate shape of the tree, not corruption.
     let (_, cod) = c.correr(&["check"]);
-    assert_eq!(cod, 0, "check lo tomo por roto");
+    assert_eq!(cod, 0, "check took it for broken");
 }
 
-/// La pila es el camino al foco y no puede cruzar un nodo abandonado. El
-/// rescatado sigue vivo, pero fuera del camino.
+/// The stack is the path to the focus and it cannot cross an abandoned node.
+/// The rescued node stays alive, but off the path.
 #[test]
-fn la_pila_no_cruza_un_abandonado() {
-    let c = rama("pila");
+fn the_stack_does_not_cross_an_abandoned_node() {
+    let c = rama("stack");
     c.ok(&["focus", "3"]);
-    c.ok(&["abandon", "2", "ya no aplica", "--rescatar", "3"]);
+    c.ok(&["abandon", "2", "no longer applies", "--rescue", "3"]);
     let s = c.ok(&["stack"]);
     assert!(
-        !s.contains("Elegir backend de cache"),
-        "un abandonado sigue en la pila:\n{s}"
+        !s.contains("Pick a cache backend"),
+        "an abandoned node is still on the stack:\n{s}"
     );
     assert!(
-        !s.contains("Benchmark"),
-        "el rescatado quedo en un camino que ya no existe:\n{s}"
+        !s.contains("benchmark") && !s.contains("Benchmark"),
+        "the rescued node was left on a path that no longer exists:\n{s}"
     );
 }
 
-/// Rescatar algo que no cuelga del abandonado no tiene sentido, y decirlo es
-/// mas barato que dejarlo pasar: la CLI del agente no ignora nada.
+/// Rescuing something that does not hang off the abandoned node makes no
+/// sense, and saying so is cheaper than letting it through: the agent's CLI
+/// ignores nothing.
 #[test]
-fn no_se_rescata_lo_que_no_cuelga() {
-    let c = rama("ajeno");
+fn what_does_not_hang_off_it_cannot_be_rescued() {
+    let c = rama("foreign");
     let (s, cod) = c.correr(&[
         "abandon",
         "2",
-        "ya no aplica",
-        "--cascada",
-        "--rescatar",
+        "no longer applies",
+        "--cascade",
+        "--rescue",
         "1",
     ]);
-    assert_eq!(cod, 2, "dejo pasar un rescate imposible:\n{s}");
-    assert!(s.contains("no cuelga"), "{s}");
+    assert_eq!(cod, 2, "it let an impossible rescue through:\n{s}");
+    assert!(s.contains("does not hang off"), "{s}");
 
     let (s, cod) = c.correr(&[
         "abandon",
         "2",
-        "ya no aplica",
-        "--cascada",
-        "--rescatar",
+        "no longer applies",
+        "--cascade",
+        "--rescue",
         "2",
     ]);
-    assert_eq!(cod, 2, "se rescato a si mismo:\n{s}");
+    assert_eq!(cod, 2, "it rescued itself from itself:\n{s}");
 }

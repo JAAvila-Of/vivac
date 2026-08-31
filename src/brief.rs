@@ -1,19 +1,19 @@
-//! El `brief`: render determinista y acotado en tokens.
+//! The `brief`: a deterministic render bounded in tokens.
 //!
-//! `BRIEF-SPEC.md`. Contesta tres preguntas en orden de importancia: donde
-//! estamos y como llegamos, que gobierna este punto, y **que esta fuera de
-//! alcance ahora mismo**. La tercera es la que ninguna otra herramienta emite:
-//! toda herramienta de memoria vuelca lo relevante, y el problema del
-//! desarrollo agentico es el contrario, acotar.
+//! `BRIEF-SPEC.md`. It answers three questions in order of importance: where
+//! we are and how we got here, what governs this point, and **what is out of
+//! scope right now**. The third is the one no other tool emits: every memory
+//! tool dumps what is relevant, and the problem in agentic development is the
+//! opposite one, bounding.
 //!
-//! Dos reglas mandan sobre todo lo demas:
+//! Two rules override everything else:
 //!
-//! - **Mismo log + mismo `--now` + mismo estado del ancla -> mismos bytes.**
-//!   Sin `--now` el determinismo seria imposible, porque las antiguedades son
-//!   relativas al momento.
-//! - **La espina nunca se trunca.** Si no cabe, el presupuesto esta mal y se
-//!   avisa, pero sale entera: es la respuesta a la pregunta 1, y sin ella el
-//!   brief no tiene razon de existir.
+//! - **Same log + same `--now` + same anchor state -> same bytes.** Without
+//!   `--now` determinism would be impossible, because ages are relative to
+//!   the moment.
+//! - **The spine is never truncated.** If it does not fit, the budget is
+//!   wrong and it says so, but it comes out whole: it is the answer to
+//!   question 1, and without it the brief has no reason to exist.
 
 use crate::anchor::Anchor;
 use crate::args::Args;
@@ -22,17 +22,17 @@ use crate::fallo::R;
 use crate::model::{Arbol, Nodo};
 
 const PRESUPUESTO: usize = 1500;
-/// Todo el brief es ASCII puro.
+/// The whole brief is pure ASCII.
 ///
-/// `BRIEF-SPEC.md` §7 dibuja la espina con caracteres de caja, pero el pilar
-/// de DX exige degradar sin romperse "en cmd.exe ademas de Windows Terminal",
-/// y ahi una pagina de codigos que no sea UTF-8 los convierte en basura. Lo
-/// normativo de §7 son los marcadores --que el foco se vea, que una bandera
-/// lleve su motivo, que una seccion vacia no salga-- no los glifos.
+/// `BRIEF-SPEC.md` §7 draws the spine with box-drawing characters, but the DX
+/// pillar demands it degrade without breaking "in cmd.exe as well as Windows
+/// Terminal", and there any code page that is not UTF-8 turns them into
+/// garbage. What is normative in §7 are the markers --that the focus be
+/// visible, that a flag carry its reason, that an empty section not show--
 const RAYA: &str = "------------------------------------------------------------";
 
-/// Una seccion del brief. El orden del vector es el de §3, que es a la vez
-/// orden de renderizado y de prioridad: se trunca desde abajo.
+/// One section of the brief. The vector order is the one in §3, which is both
+/// render order and priority order: truncation starts from the bottom.
 struct Seccion {
     lineas: Vec<String>,
     truncable: bool,
@@ -53,9 +53,9 @@ impl Seccion {
     }
 }
 
-/// Estimador de tokens. Es una estimacion y el techo es orientativo: lo que
-/// importa es que sea **determinista**, para que dos ejecuciones del mismo log
-/// trunquen igual.
+/// Token estimator. It is an estimate and the ceiling is indicative: what
+/// matters is that it be **deterministic**, so two runs of the same log
+/// truncate the same way.
 fn tokens(s: &str) -> usize {
     s.chars().count().div_ceil(4)
 }
@@ -68,20 +68,20 @@ fn tokens_de(secciones: &[Seccion]) -> usize {
         .sum()
 }
 
-/// Trunca una lista conservando los primeros `n`. Nunca se quita un elemento
-/// del medio en silencio.
+/// Truncates a list keeping the first `n`. An item from the middle is never
+/// dropped in silence.
 fn recortar(mut v: Vec<String>, n: usize, que: &str) -> Vec<String> {
     if v.len() > n {
         let sobran = v.len() - n;
         v.truncate(n);
-        v.push(format!("      ... y {sobran} mas (vivac {que})"));
+        v.push(format!("      ... and {sobran} more (vivac {que})"));
     }
     v
 }
 
 fn encabezado(titulo: &str, cuerpo: Vec<String>) -> Vec<String> {
-    // Las secciones vacias se omiten enteras, incluido el encabezado: un brief
-    // sin nada aparcado no dice "NO TOCAR AHORA: (vacio)".
+    // Empty sections are omitted whole, heading included: a brief with nothing
+    // parked does not say "DO NOT TOUCH NOW: (empty)".
     if cuerpo.is_empty() {
         return vec![];
     }
@@ -90,18 +90,18 @@ fn encabezado(titulo: &str, cuerpo: Vec<String>) -> Vec<String> {
     v
 }
 
-/// Constraints que gobiernan el camino.
+/// Constraints that govern the path.
 ///
-/// **Solo por `spawns`.** Heredar tambien por `depends_on` convertiria el
-/// calculo de O(profundidad) a O(grafo), y perderia que la herencia sea
-/// legible mirando la pila en pantalla.
+/// **By `spawns` only.** Inheriting through `depends_on` as well would turn
+/// the computation from O(depth) into O(graph), and would lose the property
+/// that inheritance is legible by looking at the stack on screen.
 fn constraints<'a>(a: &'a Arbol, camino: &[&Nodo]) -> Vec<&'a Nodo> {
     let en_camino: std::collections::HashSet<&str> = camino.iter().map(|n| n.id.as_str()).collect();
     let mut v: Vec<&Nodo> = a
         .todos()
         .filter(|n| n.tipo == Tipo::Constraint && n.estado.abierto())
         .filter(|n| {
-            // Del proyecto (cuelga de una raiz), o alcanzable desde el camino.
+            // Project-wide (hangs off a root), or reachable from the path.
             let del_proyecto = n
                 .padre
                 .as_ref()
@@ -113,7 +113,7 @@ fn constraints<'a>(a: &'a Arbol, camino: &[&Nodo]) -> Vec<&'a Nodo> {
                     .any(|p| en_camino.contains(p.id.as_str()))
         })
         .collect();
-    // En riesgo primero --las que llevan bandera-- y luego por alias.
+    // At risk first --the ones carrying a flag-- and then by alias.
     v.sort_by_key(|n| (n.banderas.is_empty(), n.num));
     v
 }
@@ -123,11 +123,11 @@ fn espina(camino: &[&Nodo]) -> Vec<String> {
     for (i, n) in camino.iter().enumerate() {
         let primero = i == 0;
         let ultimo = i == camino.len() - 1;
-        // Continuacion: el tronco sigue mientras quede algo debajo.
+        // Continuation: the trunk carries on while anything is left below.
         let sigue = if ultimo { "        " } else { "  |     " };
 
         let rama = if primero {
-            " META ".to_string()
+            " GOAL ".to_string()
         } else if ultimo {
             "  `-- ".to_string()
         } else {
@@ -139,14 +139,14 @@ fn espina(camino: &[&Nodo]) -> Vec<String> {
         } else {
             format!("  ! {}", banderas.join(" "))
         };
-        let aqui = if ultimo { "   <== AQUI" } else { "" };
+        let aqui = if ultimo { "   <== HERE" } else { "" };
         v.push(format!(
             "{rama}{:<6} {}{bandera}{aqui}",
             n.alias(),
             corta(&n.titulo, 44)
         ));
         if !primero && !n.por.is_empty() {
-            v.push(format!("{sigue}por: {}", corta(&n.por, 52)));
+            v.push(format!("{sigue}why: {}", corta(&n.por, 52)));
         }
         if !n.governs.is_empty() {
             v.push(format!("{sigue}governs: {}", n.governs.join(" ")));
@@ -158,9 +158,9 @@ fn espina(camino: &[&Nodo]) -> Vec<String> {
     v
 }
 
-/// Corta por palabra sin pasarse de `n`, **contando los puntos suspensivos**.
-/// Presupuestarlos importa: si no, el corte se pasa de largo justo en las
-/// lineas mas apretadas del brief, que son las que se truncan.
+/// Cuts on a word boundary without exceeding `n`, **counting the ellipsis**.
+/// Budgeting for it matters: otherwise the cut overruns on exactly the
+/// tightest lines of the brief, which are the ones being truncated.
 pub(crate) fn corta(s: &str, n: usize) -> String {
     if s.chars().count() <= n {
         return s.to_string();
@@ -177,8 +177,8 @@ pub fn brief(a: &Arbol, ancla: &dyn Anchor, args: &Args, proyecto: &str) -> R {
     Ok(())
 }
 
-/// El brief como texto. `session start --hook` lo necesita entero para
-/// meterlo en el sobre: lo que quede fuera del sobre, el agente no lo ve.
+/// The brief as text. `session start --hook` needs it whole to put in the
+/// envelope: whatever falls outside the envelope, the agent never sees.
 pub fn a_texto(
     a: &Arbol,
     ancla: &dyn Anchor,
@@ -209,17 +209,17 @@ pub fn a_texto(
 
     let mut s: Vec<Seccion> = Vec::new();
 
-    // 1. Cabecera. 2. Espina, que nunca se trunca.
+    // 1. Header. 2. Spine, which is never truncated.
     s.push(Seccion::fija(vec![
-        format!("vivac · proyecto: {proyecto} · lane: main · {fecha}"),
+        format!("vivac · project: {proyecto} · lane: main · {fecha}"),
         RAYA.to_string(),
         String::new(),
     ]));
     s.push(Seccion::fija(espina(&camino)));
 
-    // 3. Foco: lo que cuelga de el sin cerrar. Las decisiones vigentes no
-    //    entran --no son trabajo pendiente y tienen su propia seccion (8)--,
-    //    y lo que cuelga mas abajo se cuenta sin listarse.
+    // 3. Focus: what hangs off it unclosed. Standing decisions do not go in
+    //    --they are not pending work and they have their own section (8)--,
+    //    and whatever hangs further down is counted without being listed.
     let mut hijos: Vec<String> = a
         .hijos(&foco.id)
         .into_iter()
@@ -233,10 +233,10 @@ pub fn a_texto(
             )
         })
         .collect();
-    // Cerrar un padre no puede hacer invisibles a sus hijos abiertos. Se
-    // cuentan y se dice donde mirar; listarlos aqui seria traer el arbol
-    // entero, que es exactamente el ruido que el foco existe para dejar
-    // fuera.
+    // Closing a parent cannot make its open children invisible. They are
+    // counted and the place to look is named; listing them here would drag in
+    // the whole tree, which is exactly the noise the focus exists to keep
+    // out.
     let directos: std::collections::HashSet<&str> =
         a.hijos(&foco.id).iter().map(|c| c.id.as_str()).collect();
     let hondos = a
@@ -247,26 +247,26 @@ pub fn a_texto(
         .count();
     if hondos > 0 {
         hijos.push(format!(
-            "    + {hondos} mas abajo, fuera de este nivel   vivac open"
+            "    + {hondos} further down, outside this level   vivac open"
         ));
     }
-    s.push(Seccion::fija(encabezado("NACIO DE AQUI", hijos)));
+    s.push(Seccion::fija(encabezado("BORN FROM HERE", hijos)));
 
-    // 4. Invariantes.
+    // 4. Invariants.
     let inv: Vec<String> = constraints(a, &camino)
         .iter()
         .map(|c| {
             let riesgo = if c.banderas.is_empty() {
                 ""
             } else {
-                "   EN RIESGO"
+                "   AT RISK"
             };
             format!("  {:<6} {}{riesgo}", c.alias(), c.titulo)
         })
         .collect();
-    s.push(Seccion::fija(encabezado("INVARIANTES", inv)));
+    s.push(Seccion::fija(encabezado("INVARIANTS", inv)));
 
-    // 5. Preguntas bloqueantes: todas, sin truncar.
+    // 5. Blocking questions: all of them, untruncated.
     let en_camino: std::collections::HashSet<&str> = camino.iter().map(|n| n.id.as_str()).collect();
     let preg: Vec<String> = a
         .todos()
@@ -280,9 +280,9 @@ pub fn a_texto(
         .collect();
     let mut preg = preg;
     preg.sort();
-    s.push(Seccion::fija(encabezado("BLOQUEA", preg)));
+    s.push(Seccion::fija(encabezado("BLOCKS", preg)));
 
-    // 6. Banderas del camino, o a un salto de el.
+    // 6. Flags on the path, or one hop off it.
     let mut marcados: Vec<&Nodo> = a
         .todos()
         .filter(|n| !n.banderas.is_empty())
@@ -308,12 +308,12 @@ pub fn a_texto(
         })
         .collect();
     s.push(Seccion::suelta(encabezado(
-        "MARCADO",
+        "FLAGGED",
         recortar(ban, 3, "stats"),
     )));
 
-    // 7. Fuera de alcance. **Es el diferenciador del producto**, y solo tiene
-    // contenido si `park` cuesta lo mismo que `pop`.
+    // 7. Out of scope. **This is the product's differentiator**, and it only
+    // has content if `park` costs the same as `pop`.
     let mut aparcados: Vec<&Nodo> = a
         .todos()
         .filter(|n| n.estado == Estado::Suspended)
@@ -333,7 +333,7 @@ pub fn a_texto(
                 .padre
                 .as_ref()
                 .and_then(|p| a.nodo(p))
-                .map(|p| format!("cuelga de {}", p.alias()))
+                .map(|p| format!("hangs off {}", p.alias()))
                 .unwrap_or_default();
             let mut v = vec![format!(
                 "  {:<6} {:<40} {colgado}",
@@ -347,12 +347,12 @@ pub fn a_texto(
         })
         .collect();
     s.push(Seccion::suelta(encabezado(
-        "NO TOCAR AHORA",
+        "DO NOT TOUCH NOW",
         recortar(fuera, 6, "parked"),
     )));
 
-    // 8. Decisiones vigentes: en el camino, o con `governs` que solapa con el
-    // del foco. Las superadas no aparecen nunca.
+    // 8. Standing decisions: on the path, or with a `governs` overlapping the
+    // focus's own. Superseded ones never appear.
     let mut dec: Vec<&Nodo> = a
         .todos()
         .filter(|n| n.tipo == Tipo::Decision && n.estado.abierto())
@@ -372,12 +372,12 @@ pub fn a_texto(
         .map(|n| format!("  {:<6} {}", n.alias(), corta(&n.titulo, 52)))
         .collect();
     s.push(Seccion::suelta(encabezado(
-        "DECISIONES VIGENTES",
+        "STANDING DECISIONS",
         recortar(decs, 3, "tree"),
     )));
 
-    // 9. Ultimo vivac. Restaurar es siempre restaurar + diff: nunca se
-    // presenta un vivac sin decir que cambio desde entonces.
+    // 9. Last vivac. Restoring is always restore + diff: a vivac is never
+    // presented without saying what changed since.
     let vv: Vec<String> = match a.ultimo_vivac() {
         None => vec![],
         Some(v) => {
@@ -393,10 +393,10 @@ pub fn a_texto(
                 }
             )];
             if !v.next_intent.is_empty() {
-                l.push(format!("         ibas a: {}", corta(&v.next_intent, 52)));
+                l.push(format!("         you were about to: {}", corta(&v.next_intent, 52)));
             }
-            // Sin ancla no se inventan lineas de diff: se omiten, y arriba
-            // queda la fecha, que es la antiguedad temporal que si se tiene.
+            // With no anchor no diff lines are invented: they are omitted, and
+            // the date above stands in, which is the plain age there really is.
             if !v.anchor.vacio() {
                 let cambios = ancla.changed_since(&v.anchor);
                 if !cambios.is_empty() {
@@ -405,7 +405,7 @@ pub fn a_texto(
                         .filter(|c| v.working_set.iter().any(|g| crate::glob::cubre(g, &c.ruta)))
                         .count();
                     l.push(format!(
-                        "         {} cambios desde entonces, {tocan} tocan lo que gobierna",
+                        "         {} changes since, {tocan} touching what it governs",
                         cambios.len()
                     ));
                 }
@@ -413,23 +413,23 @@ pub fn a_texto(
             l
         }
     };
-    s.push(Seccion::suelta(encabezado("ULTIMO VIVAC", vv)));
+    s.push(Seccion::suelta(encabezado("LAST VIVAC", vv)));
 
-    // 10. Frescura.
+    // 10. Freshness.
     let viejos: Vec<String> = camino
         .iter()
         .filter(|n| n.banderas.contains_key(&crate::event::Bandera::Stale))
         .map(|n| format!("  {:<6} {}", n.alias(), n.titulo))
         .collect();
-    s.push(Seccion::suelta(encabezado("SIN TOCAR HACE TIEMPO", viejos)));
+    s.push(Seccion::suelta(encabezado("UNTOUCHED FOR A WHILE", viejos)));
 
     emitir(s, presupuesto, a)
 }
 
-/// Ensambla con presupuesto. Es un **techo blando**: se van quitando secciones
-/// truncables de abajo arriba hasta caber; si aun asi no cabe, se emite igual
-/// con un aviso. Rebasar el presupuesto es señal de que el arbol necesita
-/// poda, no de que el brief deba mentir por omision silenciosa.
+/// Assembles under budget. It is a **soft ceiling**: truncatable sections are
+/// dropped from the bottom up until it fits; if it still does not fit, it is
+/// emitted anyway with a warning. Going over budget is a sign the tree needs
+/// pruning, not that the brief should lie by silent omission.
 fn emitir(
     mut s: Vec<Seccion>,
     presupuesto: usize,
@@ -453,22 +453,22 @@ fn emitir(
     o.push_str(&format!(
         "
 {RAYA}
- {gastados} tokens · profundidad {} · {aparcados} aparcados
+ {gastados} tokens · depth {} · {aparcados} parked
 ",
         a.profundidad_pila()
     ));
     if gastados > presupuesto {
         o.push_str(&format!(
             "
- ! el brief excede el presupuesto ({gastados}/{presupuesto}).
-   La espina no se trunca nunca: lo que sobra es arbol, no render.
-   Que se puede podar:  vivac triage
+ ! the brief is over budget ({gastados}/{presupuesto}).
+   The spine is never truncated: what is left over is tree, not render.
+   What can be pruned:  vivac triage
 "
         ));
     } else if pedidos > presupuesto {
         o.push_str(&format!(
             "
- ! {} tokens recortados para caber en {presupuesto}.
+ ! {} tokens trimmed to fit in {presupuesto}.
 ",
             pedidos - gastados
         ));
@@ -476,14 +476,14 @@ fn emitir(
     Ok(o)
 }
 
-/// Pila vacia. **Nunca sale vacio**: enseña los objetivos abiertos y una
-/// accion concreta.
+/// Empty stack. **It never comes out empty**: it shows the open goals and one
+/// concrete action.
 fn sin_foco(a: &Arbol, proyecto: &str, fecha: &str) -> Result<String, crate::fallo::Fallo> {
     let mut o = format!(
-        "vivac · proyecto: {proyecto} · lane: main · {fecha}
+        "vivac · project: {proyecto} · lane: main · {fecha}
 {RAYA}
 
- Sin foco activo.
+ No active focus.
 "
     );
     let mut metas: Vec<&Nodo> = a
@@ -494,12 +494,12 @@ fn sin_foco(a: &Arbol, proyecto: &str, fecha: &str) -> Result<String, crate::fal
     if !metas.is_empty() {
         o.push_str(
             "
- OBJETIVOS ABIERTOS
+ OPEN GOALS
 ",
         );
         for m in metas {
             o.push_str(&format!(
-                "  {:<6} {:<40} {} abiertos por debajo
+                "  {:<6} {:<40} {} open below
 ",
                 m.alias(),
                 corta(&m.titulo, 40),
@@ -510,16 +510,16 @@ fn sin_foco(a: &Arbol, proyecto: &str, fecha: &str) -> Result<String, crate::fal
     o.push('\n');
     if a.vacio() {
         o.push_str(
-            " Empieza con:  vivac push \"<titulo>\" --por \"<motivo>\"
+            " Start with:  vivac push \"<title>\" --why \"<reason>\"
 ",
         );
     } else {
         o.push_str(
-            " Retoma con:   vivac focus <id>
+            " Pick up with:  vivac focus <id>
 ",
         );
         o.push_str(
-            " O abre otro:  vivac push \"<titulo>\" --por \"<motivo>\"
+            " Or open another:  vivac push \"<title>\" --why \"<reason>\"
 ",
         );
     }
@@ -532,10 +532,10 @@ mod tests {
 
     #[test]
     fn el_estimador_es_determinista() {
-        assert_eq!(tokens("hola"), 1);
-        assert_eq!(tokens("hola mundo"), 3);
+        assert_eq!(tokens("same"), 1);
+        assert_eq!(tokens("same tokens"), 3);
         assert_eq!(tokens(""), 0);
-        // Mismo texto, misma cifra, siempre.
+        // Same text, same number, always.
         assert_eq!(tokens("abcdefgh"), tokens("12345678"));
     }
 
@@ -545,21 +545,21 @@ mod tests {
         let r = recortar(v, 3, "parked");
         assert_eq!(r.len(), 4);
         assert_eq!(r[0], "l0");
-        assert!(r[3].contains("7 mas"), "{}", r[3]);
+        assert!(r[3].contains("7 more"), "{}", r[3]);
     }
 
     #[test]
     fn una_seccion_vacia_no_deja_encabezado() {
-        assert!(encabezado("NO TOCAR AHORA", vec![]).is_empty());
+        assert!(encabezado("DO NOT TOUCH NOW", vec![]).is_empty());
         assert_eq!(encabezado("X", vec!["  a".into()]).len(), 3);
     }
 
     #[test]
     fn cortar_respeta_palabras() {
-        assert_eq!(corta("hola mundo", 20), "hola mundo");
-        assert!(corta("una frase bastante larga que no cabe", 20).ends_with("..."));
+        assert_eq!(corta("hello world", 20), "hello world");
+        assert!(corta("a fairly long sentence that does not fit", 20).ends_with("..."));
         assert!(
-            corta("una frase bastante larga que no cabe", 20)
+            corta("a fairly long sentence that does not fit", 20)
                 .chars()
                 .count()
                 <= 20

@@ -1,12 +1,12 @@
-//! Tiempo sin dependencias.
+//! Time without dependencies.
 //!
-//! El pilar de rendimiento pone la escritura de un nodo en p99 < 5 ms, y el de
-//! seguridad quiere pocas dependencias que auditar. Formatear una fecha no
-//! justifica ninguna de las dos cosas: son treinta lineas de aritmetica.
+//! The performance pillar puts writing a node at p99 < 5 ms, and the security
+//! one wants few dependencies to audit. Formatting a date justifies neither:
+//! it is thirty lines of arithmetic.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Milisegundos desde epoch. Es lo que va dentro del ULID.
+/// Milliseconds since epoch. This is what goes inside the ULID.
 pub fn unix_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -14,7 +14,7 @@ pub fn unix_millis() -> u64 {
         .unwrap_or(0)
 }
 
-/// Instante en UTC, RFC 3339 con segundos. Es lo que va en el evento.
+/// Instant in UTC, RFC 3339 with seconds. This is what goes in the event.
 pub fn now_rfc3339() -> String {
     let secs = unix_millis() / 1000;
     let (y, m, d) = civil_from_days((secs / 86_400) as i64);
@@ -30,7 +30,7 @@ pub fn now_rfc3339() -> String {
     )
 }
 
-/// Los diez primeros caracteres de un RFC 3339, para presentacion.
+/// The first ten characters of an RFC 3339 stamp, for display.
 pub fn date_of(ts: &str) -> &str {
     if ts.len() >= 10 {
         &ts[..10]
@@ -39,8 +39,8 @@ pub fn date_of(ts: &str) -> &str {
     }
 }
 
-/// Algoritmo de Howard Hinnant: dias desde epoch a fecha civil proleptica
-/// gregoriana. Vale para cualquier fecha, no solo para el rango de 32 bits.
+/// Howard Hinnant's algorithm: days since epoch to proleptic Gregorian civil
+/// date. Valid for any date, not just the 32-bit range.
 fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let z = z + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
@@ -65,11 +65,11 @@ mod tests {
 
     #[test]
     fn fechas_conocidas() {
-        // 2026-08-31 son 20696 dias desde epoch.
+        // 2026-08-31 is 20696 days since epoch.
         assert_eq!(civil_from_days(20_696), (2026, 8, 31));
-        // Un 29 de febrero, que es donde se rompen las implementaciones ingenuas.
+        // A 29th of February, which is where naive implementations break.
         assert_eq!(civil_from_days(19_782), (2024, 2, 29));
-        // Antes de epoch: el signo tiene que ir por la rama negativa.
+        // Before epoch: the sign has to take the negative branch.
         assert_eq!(civil_from_days(-1), (1969, 12, 31));
     }
 
