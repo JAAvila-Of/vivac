@@ -264,4 +264,28 @@ pub enum Body {
         #[serde(default)]
         label: String,
     },
+    /// A session was opened and the brief was injected.
+    ///
+    /// Without it there is no answer to *was the brief read?*: a session
+    /// boundary was only ever the gap between two writes, and a gap also
+    /// happens when somebody goes to lunch.
+    ///
+    /// `source` is a `String` and not an enum **on purpose**. If a new kind of
+    /// opening ever shows up, an enum would make the whole line unreadable and
+    /// count it among the broken ones; a string lets it through and leaves the
+    /// decision to whoever reads.
+    ///
+    /// Everything here is an opaque identifier. The payload this is built from
+    /// also carries the path of the transcript, which holds the user's home
+    /// directory: it is read past and never written down.
+    #[serde(rename = "session.started")]
+    SessionStarted {
+        source: String,
+        #[serde(default)]
+        focus: Option<String>,
+        #[serde(default)]
+        vivac: Option<String>,
+        #[serde(default)]
+        session: Option<String>,
+    },
 }

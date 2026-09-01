@@ -24,7 +24,46 @@ fn envelope(evento: &str, text: &str) -> String {
     .to_string()
 }
 
-pub fn start(ctx: &crate::ops::Ctx, a: &Args, project: &str) -> R {
+/// What the hook is handed on stdin.
+///
+/// Two fields are read and the rest is left where it is. `transcript_path`
+/// travels in this same payload and it is the tempting one --it is what really
+/// links the tree to the conversation-- but it carries the user's home
+/// directory, and the security pillar vetoes that without negotiation. An
+/// opaque identifier yes; a path into somebody's filesystem no.
+struct HookInput {
+    source: String,
+    session: Option<String>,
+}
+
+impl HookInput {
+    fn read() -> HookInput {
+        use std::io::IsTerminal;
+        let mut raw = String::new();
+        // A terminal has no payload to give, and reading one would hang the
+        // hook waiting for an EOF that never comes.
+        if !std::io::stdin().is_terminal() {
+            use std::io::Read;
+            std::io::stdin().read_to_string(&mut raw).ok();
+        }
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
+        HookInput {
+            // `unknown` and not an empty string, so that reading it later tells
+            // "it did not say" apart from "we did not look".
+            source: v
+                .get("source")
+                .and_then(|s| s.as_str())
+                .unwrap_or("unknown")
+                .to_string(),
+            session: v
+                .get("session_id")
+                .and_then(|s| s.as_str())
+                .map(str::to_string),
+        }
+    }
+}
+
+pub fn start(ctx: &mut crate::ops::Ctx, a: &Args, project: &str) -> R {
     if !a.has("hook") {
         return crate::brief::brief(&ctx.tree, ctx.anchor.as_ref(), a, project);
     }
@@ -32,6 +71,13 @@ pub fn start(ctx: &crate::ops::Ctx, a: &Args, project: &str) -> R {
     // loose noise on stdout: what is not in the envelope, the agent never sees.
     let text = crate::brief::to_text(&ctx.tree, ctx.anchor.as_ref(), a, project)?;
     println!("{}", envelope("SessionStart", &text));
+    // The brief goes out **first**, and the write cannot take it down. A
+    // failure that left the agent with no brief would turn a hole in the
+    // instrument into blindness in the product, which is a far worse trade: a
+    // log missing an opening shows up on reading, an agent missing its brief
+    // does not show up until the thread is already lost.
+    let hook = HookInput::read();
+    crate::ops::session_started(ctx, &hook.source, hook.session).ok();
     Ok(())
 }
 

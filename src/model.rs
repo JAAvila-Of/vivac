@@ -300,6 +300,9 @@ impl Tree {
                     self.stack.drain(..i);
                 }
             }
+            // An opening moves nothing in the tree. What it does to the
+            // counters is decided above, and it is deliberate.
+            Body::SessionStarted { .. } => {}
         }
     }
 

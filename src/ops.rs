@@ -842,3 +842,15 @@ pub fn auto_vivac(ctx: &mut Ctx, kind: VivacKind, next: &str, label: &str) -> R 
     let v = vivac(ctx, kind, next, None, label);
     ctx.emit(vec![v])
 }
+
+/// The opening of a session, for the start hook.
+///
+/// `focus` and `vivac` stay empty here; they are filled in a moment.
+pub fn session_started(ctx: &mut Ctx, source: &str, session: Option<String>) -> R {
+    ctx.emit(vec![Body::SessionStarted {
+        source: source.to_string(),
+        focus: None,
+        vivac: None,
+        session,
+    }])
+}

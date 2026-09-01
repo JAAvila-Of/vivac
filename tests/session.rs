@@ -174,3 +174,68 @@ fn the_spanish_spellings_of_the_session_hooks_are_rejected() {
         );
     }
 }
+
+/// `SESSION-EVENT.md` §0: opening a session left no trace, so question 1 of
+/// the falsification criterion --was the brief read?-- could not be answered
+/// from the log at all. Only the gap between two writes, which also happens
+/// when somebody goes to lunch.
+#[test]
+fn opening_a_session_leaves_a_trace() {
+    let c = Sandbox::new_seeded("opening");
+    c.ok(&["push", "A goal", "--why", "it is needed"]);
+    let (out, code) = c.run_stdin(
+        &["session", "start", "--hook"],
+        r#"{"session_id":"abc-123","source":"startup"}"#,
+    );
+    assert_eq!(code, 0, "the start hook failed:\n{out}");
+    assert!(
+        c.log().contains("session.started"),
+        "the opening left no trace:\n{}",
+        c.log()
+    );
+}
+
+/// The four openings are not the same experiment --the brief competes with
+/// nothing on a cold start and with a whole restored transcript on a resume--
+/// so which one it was has to survive into the log.
+#[test]
+fn the_source_of_the_opening_travels_into_the_log() {
+    let c = Sandbox::new_seeded("source");
+    c.ok(&["push", "A goal", "--why", "it is needed"]);
+    c.run_stdin(
+        &["session", "start", "--hook"],
+        r#"{"session_id":"abc-123","source":"compact"}"#,
+    );
+    assert!(
+        c.log().contains(r#""source":"compact""#),
+        "the source did not survive:\n{}",
+        c.log()
+    );
+}
+
+/// The hook writes; the command a person runs does not. `vivac session start`
+/// typed by hand stays a pure read, which is what confines the write to the
+/// seam of the machine.
+#[test]
+fn the_command_a_person_runs_writes_nothing() {
+    let c = Sandbox::new_seeded("pureread");
+    c.ok(&["push", "A goal", "--why", "it is needed"]);
+    let before = c.log();
+    c.ok(&["session", "start"]);
+    assert_eq!(before, c.log(), "the read path wrote to the log");
+}
+
+/// A hook that fails in every directory gets switched off within two days,
+/// and the measurement goes with it. Garbage on stdin is not a reason to fail.
+#[test]
+fn a_broken_payload_still_opens_the_session() {
+    let c = Sandbox::new_seeded("garbage");
+    c.ok(&["push", "A goal", "--why", "it is needed"]);
+    let (out, code) = c.run_stdin(&["session", "start", "--hook"], "not json at all");
+    assert_eq!(code, 0, "garbage on stdin took the hook down:\n{out}");
+    assert!(
+        c.log().contains(r#""source":"unknown""#),
+        "an unsaid source has to read as `unknown`, not as empty:\n{}",
+        c.log()
+    );
+}

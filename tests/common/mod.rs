@@ -61,6 +61,38 @@ impl Sandbox {
         assert_eq!(c, 0, "`vivac {}` failed with {c}:\n{s}", args.join(" "));
         s
     }
+
+    /// Runs the binary with a payload on stdin, the way a hook is called.
+    #[allow(dead_code)]
+    pub fn run_stdin(&self, args: &[&str], stdin: &str) -> (String, i32) {
+        use std::io::Write;
+        let mut child = Command::new(BIN)
+            .current_dir(&self.0)
+            .args(args)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(stdin.as_bytes())
+            .unwrap();
+        let o = child.wait_with_output().unwrap();
+        (
+            String::from_utf8_lossy(&o.stdout).into_owned() + &String::from_utf8_lossy(&o.stderr),
+            o.status.code().unwrap_or(-1),
+        )
+    }
+
+    /// The raw log. Some things are only provable against what was written,
+    /// not against what a command chose to print.
+    #[allow(dead_code)]
+    pub fn log(&self) -> String {
+        std::fs::read_to_string(self.0.join(".vivac").join("events")).unwrap_or_default()
+    }
 }
 
 impl Drop for Sandbox {
