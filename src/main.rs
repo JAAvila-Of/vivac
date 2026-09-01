@@ -62,7 +62,7 @@ const USAGE: &str = r#"vivac - provenance of work
     vivac restore <v>                         rebuilds the stack, gives the diff
     vivac vivacs                              the stops, latest first
 
-  The maintainer reads          (all of them accept --json)
+  The maintainer reads          (--json on all of them but the brief)
 
     vivac brief [--budget 1500] [--now <date>]
                                               where you are and what NOT to touch
@@ -165,7 +165,12 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
 
     // Valid options per command. One that is not here is an error and not
     // silence: see `Args::unknown`.
-    const COMMON: &[&str] = &["json"];
+    //
+    // `--json` is listed command by command, and it used to be common to all
+    // of them. Common meant every command took it and ten did something with
+    // it: `vivac brief --json` and `vivac push "x" --json` both printed text
+    // and left with a 0. A flag allowed everywhere and read in ten places is
+    // the very failure this table exists to prevent, one level up (`f51`).
     let allowed: &[&str] = match cmd {
         "push" => &["why", "type", "blocks", "ref", "governs"],
         "pop" => &["force", "next"],
@@ -179,7 +184,10 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         ],
         "flag" => &["why", "off"],
         "save" => &["next"],
-        "brief" => &["budget", "now", "json"],
+        // The brief does not speak JSON, and that is a decision and not a
+        // gap: the shape would have to be designed, it has no consumer
+        // today, and the agent reads the brief as prose. `d53`.
+        "brief" => &["budget", "now"],
         "session" => &["hook", "next", "budget", "now"],
         "add" => &["parent", "why", "type", "blocks", "ref", "governs"],
         "done" => &["force"],
@@ -188,10 +196,13 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         "block" => &["off"],
         "tree" => &["all", "json"],
         "reconcile" => &["since", "all", "json"],
-        "park" | "promote" | "note" | "import" | "restore" | "vivacs" => &[],
-        _ => COMMON,
+        // The reads that speak JSON, spelled out. No shorthand: a shorthand
+        // is what let the brief claim it for two releases.
+        "why" | "open" | "stack" | "parked" | "triage" | "stats" | "vivacs" => &["json"],
+        "park" | "promote" | "note" | "import" | "restore" => &[],
+        _ => &[],
     };
-    let unknown = a.unknown(&[allowed, COMMON].concat());
+    let unknown = a.unknown(allowed);
     if !unknown.is_empty() {
         let takes = if allowed.is_empty() {
             "none".to_string()
@@ -212,6 +223,30 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
                 .map(|o| format!("--{o}"))
                 .collect::<Vec<_>>()
                 .join(" ")
+        )));
+    }
+
+    // Words each command takes of its own. Anything past that is refused for
+    // the same reason an unknown flag is: the table above only ever covered
+    // half the command line, and the other half went through in silence
+    // (`f52`).
+    let takes: usize = match cmd {
+        "park" | "abandon" | "done" | "note" | "flag" => 2,
+        "focus" | "push" | "pop" | "promote" | "add" | "block" | "decide" | "save" | "restore"
+        | "import" | "why" | "tree" | "session" => 1,
+        _ => 0,
+    };
+    if let [first, ..] = a.extra(takes) {
+        let room = match takes {
+            0 => "no words of its own".to_string(),
+            1 => "one word of its own".to_string(),
+            n => format!("{n} words of its own"),
+        };
+        return Err(Failure::usage(format!(
+            "{cmd} does not take \"{first}\".
+
+  It takes {room}. Everything else goes behind a --flag, and a flag
+  that repeats is written out again:  --governs a --governs b"
         )));
     }
 

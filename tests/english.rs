@@ -156,11 +156,17 @@ fn nothing_the_tool_prints_is_in_spanish() {
 /// The other half of the audience. The keys of `--json` are the agent's
 /// contract and just as public as the prose; `en_paralelo` sat inside
 /// `why --json` through two releases because no test had ever asked for JSON.
+///
+/// **The brief is not on this list, and it was.** It sat at the top asking
+/// for `brief --json`, getting the ASCII brief back, and checking that for
+/// Spanish -- which it is, and which proved nothing about JSON. A test that
+/// asks a command for something it does not do, and passes on whatever comes
+/// back, is how `f51` survived: the list of commands that speak JSON lives
+/// in `main.rs`, and this one has to match it by hand.
 #[test]
 fn the_json_is_english_too() {
     let c = seeded();
     let commands: &[&[&str]] = &[
-        &["brief", "--json"],
         &["why", "3", "--json"],
         &["tree", "--json"],
         &["tree", "--all", "--json"],

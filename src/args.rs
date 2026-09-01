@@ -3,8 +3,14 @@
 //! No `clap`. The security pillar wants few dependencies to audit and the
 //! performance one pays for process startup on every call --there is no
 //! daemon-- so the surface is this: positionals, `--key value` and flags.
-//! It fits in forty lines, and every flag can carry a Spanish alias without
-//! anyone having to know about it.
+//! It fits in forty lines.
+//!
+//! Nothing here normalises anything. It used to fold a table of Spanish
+//! aliases at the door, and `d45` retired it: a flag is English or it is
+//! unknown, and an unknown flag is refused rather than ignored. The two
+//! rules that survive that are `unknown` and `extra`, and they say the same
+//! thing about the two halves of a command line -- what the CLI did not
+//! understand, it does not keep quiet about.
 
 use std::collections::HashMap;
 
@@ -67,15 +73,27 @@ impl Args {
     /// interface the agent uses: you type `--kind finding`, the CLI says
     /// nothing, and the node keeps the default type. Nobody notices until
     /// they look at the tree. Found exactly that way, while using it.
-    pub fn unknown(&self, permitidas: &[&str]) -> Vec<&str> {
+    pub fn unknown(&self, allowed: &[&str]) -> Vec<&str> {
         let mut v: Vec<&str> = self
             .opts
             .keys()
             .map(|k| k.as_str())
-            .filter(|k| !permitidas.contains(k))
+            .filter(|k| !allowed.contains(k))
             .collect();
         v.sort_unstable();
         v
+    }
+
+    /// Positionals beyond the ones the command takes.
+    ///
+    /// The mirror of `unknown`, and it exists because that one only ever
+    /// covered the flags. The bare words went through in silence: `vivac add
+    /// "title" "junk"` kept the title and dropped the rest with an exit code
+    /// of 0. So did `--governs a b`, which is how it was actually found --
+    /// a flag takes one value, so `b` stops being part of the flag and
+    /// becomes a positional nobody was looking at (`f52`).
+    pub fn extra(&self, takes: usize) -> &[String] {
+        self.positionals.get(takes..).unwrap_or_default()
     }
 }
 
@@ -136,5 +154,18 @@ mod tests {
     #[test]
     fn an_unknown_flag_is_quoted_back_verbatim() {
         assert_eq!(p("--nonesuch 1").unknown(&["why"]), vec!["nonesuch"]);
+    }
+
+    /// A word too many is refused rather than dropped.
+    ///
+    /// `--governs a b` is the way in that actually happened, and it does not
+    /// look like a positional at all when you type it.
+    #[test]
+    fn a_positional_too_many_is_not_swallowed() {
+        assert!(p("title --why reason").extra(1).is_empty());
+        assert_eq!(p("title junk --why reason").extra(1), ["junk"]);
+        assert_eq!(p("title --governs a b").extra(1), ["b"]);
+        // A command that takes two words is not tripped by its second one.
+        assert!(p("3 suspect --why reason").extra(2).is_empty());
     }
 }
