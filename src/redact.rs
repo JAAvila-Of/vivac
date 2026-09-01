@@ -25,7 +25,7 @@ pub struct Finding {
 /// Prefixes published by whoever issues the credential. Zero ambiguity: if
 /// they show up, it is a key. The number is the minimum count of characters
 /// that must follow the prefix for it to count.
-const PREFIJOS: &[(&str, usize)] = &[
+const PREFIXES: &[(&str, usize)] = &[
     ("sqa_", 20),
     ("squ_", 20),
     ("sqp_", 20),
@@ -94,7 +94,7 @@ fn check_token(field: &str, tok: &str) -> Option<Finding> {
         })
     };
 
-    for (p, min) in PREFIJOS {
+    for (p, min) in PREFIXES {
         if tok.starts_with(p) && tok.len() >= p.len() + min {
             return finding("known credential prefix", ADVICE_KEY);
         }
@@ -125,12 +125,12 @@ fn check_token(field: &str, tok: &str) -> Option<Finding> {
 /// Splits on whitespace and on the signs that are never part of a
 /// credential. Dashes, dots, slashes and underscores are kept, because they are.
 fn tokens(text: &str) -> impl Iterator<Item = &str> {
-    const CORTES: &[char] = &[
+    const SEPARATORS: &[char] = &[
         ',', ';', '"', '\'', '(', ')', '[', ']', '{', '}', '<', '>', '`',
     ];
-    const BORDES: &[char] = &['.', ':', '!', '?'];
-    text.split(|c: char| c.is_whitespace() || CORTES.contains(&c))
-        .map(|t| t.trim_matches(|c: char| BORDES.contains(&c)))
+    const EDGES: &[char] = &['.', ':', '!', '?'];
+    text.split(|c: char| c.is_whitespace() || SEPARATORS.contains(&c))
+        .map(|t| t.trim_matches(|c: char| EDGES.contains(&c)))
         .filter(|t| !t.is_empty())
 }
 

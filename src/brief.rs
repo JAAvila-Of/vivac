@@ -21,7 +21,7 @@ use crate::event::{Kind, State};
 use crate::failure::R;
 use crate::model::{Node, Tree};
 
-const PRESUPUESTO: usize = 1500;
+const BUDGET: usize = 1500;
 /// The whole brief is pure ASCII.
 ///
 /// `BRIEF-SPEC.md` §7 draws the spine with box-drawing characters, but the DX
@@ -199,7 +199,7 @@ pub fn to_text(
     let budget: usize = args
         .opt("budget")
         .and_then(|s| s.parse().ok())
-        .unwrap_or(PRESUPUESTO);
+        .unwrap_or(BUDGET);
 
     let lineage: Vec<&Node> = match a.stack.last() {
         Some(id) => a.ancestors(id),

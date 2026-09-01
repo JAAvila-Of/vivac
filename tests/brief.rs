@@ -254,11 +254,11 @@ fn a_decision_is_not_a_front() {
     );
 
     // And that single time is under STANDING DECISIONS, not BORN FROM HERE.
-    let hasta = b
+    let heading_at = b
         .find("STANDING DECISIONS")
         .expect("the section is missing");
     assert!(
-        b.find("Use a distributed token store").unwrap() > hasta,
+        b.find("Use a distributed token store").unwrap() > heading_at,
         "it shows up before its section, i.e. as a pending child:\n{b}"
     );
 
