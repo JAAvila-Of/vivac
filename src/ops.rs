@@ -22,8 +22,8 @@ pub struct Ctx {
 
 impl Ctx {
     pub fn load(store: Store) -> Result<Ctx, Failure> {
-        let (eventos, rotas) = store.read_all()?;
-        let tree = fold(&eventos, rotas);
+        let (events, broken) = store.read_all()?;
+        let tree = fold(&events, broken);
         let anchor = anchor::detect(&store.root);
         Ok(Ctx {
             store,
@@ -34,10 +34,10 @@ impl Ctx {
 
     /// Writes and **then applies in memory**, so that whatever gets printed
     /// next is the state after the operation and not the one before it.
-    fn emit(&mut self, cuerpos: Vec<Body>) -> R {
-        self.store.append(cuerpos.clone(), self.tree.seq)?;
+    fn emit(&mut self, bodies: Vec<Body>) -> R {
+        self.store.append(bodies.clone(), self.tree.seq)?;
         let ts = crate::clock::now_rfc3339();
-        for c in &cuerpos {
+        for c in &bodies {
             let seq = self.tree.seq + 1;
             self.tree.apply(seq, &ts, c);
         }
@@ -101,9 +101,9 @@ fn guard_text(fields: &[(&str, &str)]) -> R {
     }
 }
 
-fn tipo_de(a: &Args, por_defecto: Kind) -> Result<Kind, Failure> {
+fn kind_of(a: &Args, fallback: Kind) -> Result<Kind, Failure> {
     match a.opt("type") {
-        None => Ok(por_defecto),
+        None => Ok(fallback),
         Some(s) => Kind::parse(s)
             .ok_or_else(|| Failure::usage(format!("Unknown type: {s}. They are: {}", Kind::ALL))),
     }
@@ -158,7 +158,7 @@ pub fn push(ctx: &mut Ctx, a: &Args) -> R {
     })?;
 
     let parent = ctx.tree.focus().map(|n| n.id.clone());
-    let kind = tipo_de(
+    let kind = kind_of(
         a,
         if parent.is_none() {
             Kind::Goal
@@ -382,7 +382,7 @@ pub fn add(ctx: &mut Ctx, a: &Args) -> R {
         Some(p) => Some(ctx.resolve(p)?.id.clone()),
         None => ctx.tree.focus().map(|n| n.id.clone()),
     };
-    let kind = tipo_de(
+    let kind = kind_of(
         a,
         if parent.is_none() {
             Kind::Goal
@@ -550,7 +550,7 @@ pub fn abandon(ctx: &mut Ctx, a: &Args) -> R {
         forced: false,
     }];
     let falling_count = falling.len();
-    let salvados_dice: Vec<(String, String)> =
+    let saved_lines: Vec<(String, String)> =
         saved.iter().map(|d| (d.alias(), d.title.clone())).collect();
     for d in falling {
         evs.push(Body::StateChanged {
@@ -576,10 +576,10 @@ pub fn abandon(ctx: &mut Ctx, a: &Args) -> R {
     if falling_count > 0 {
         println!("        and {falling_count} descendant(s) with it");
     }
-    if !salvados_dice.is_empty() {
+    if !saved_lines.is_empty() {
         println!();
         println!("  Rescued, and still born from {}:", n.alias());
-        for (alias, title) in &salvados_dice {
+        for (alias, title) in &saved_lines {
             println!("      {alias:<6} {title}");
         }
         println!();
@@ -643,9 +643,9 @@ pub fn focus(ctx: &mut Ctx, a: &Args) -> R {
             evs.push(Body::Pushed { node: id.clone() });
         }
     }
-    let revivido = !n.state.is_open();
+    let revived = !n.state.is_open();
     ctx.emit(evs)?;
-    if revivido {
+    if revived {
         println!("  {} is open again", n.alias());
     }
     crate::render::stack(&ctx.tree, a)

@@ -60,8 +60,8 @@ fn tokens(s: &str) -> usize {
     s.chars().count().div_ceil(4)
 }
 
-fn tokens_of(secciones: &[Section]) -> usize {
-    secciones
+fn tokens_of(sections: &[Section]) -> usize {
+    sections
         .iter()
         .flat_map(|s| s.lines.iter())
         .map(|l| tokens(l) + 1)
@@ -189,13 +189,13 @@ pub fn to_text(
     args: &Args,
     project: &str,
 ) -> Result<String, crate::failure::Failure> {
-    let hoy = args.opt("now").unwrap_or("").to_string();
-    let hoy = if hoy.is_empty() {
+    let today = args.opt("now").unwrap_or("").to_string();
+    let today = if today.is_empty() {
         crate::clock::now_rfc3339()
     } else {
-        hoy
+        today
     };
-    let date = crate::clock::date_of(&hoy).to_string();
+    let date = crate::clock::date_of(&today).to_string();
     let budget: usize = args
         .opt("budget")
         .and_then(|s| s.parse().ok())
@@ -241,7 +241,7 @@ pub fn to_text(
     // counted and the place to look is named; listing them here would drag in
     // the whole tree, which is exactly the noise the focus exists to keep
     // out.
-    let directos: std::collections::HashSet<&str> = a
+    let direct: std::collections::HashSet<&str> = a
         .children(&focus.id)
         .iter()
         .map(|c| c.id.as_str())
@@ -249,7 +249,7 @@ pub fn to_text(
     let deep = a
         .descendants(&focus.id)
         .into_iter()
-        .filter(|n| n.is_front() && !directos.contains(n.id.as_str()))
+        .filter(|n| n.is_front() && !direct.contains(n.id.as_str()))
         .filter(|n| !a.children(&n.id).iter().any(|c| c.is_front()))
         .count();
     if deep > 0 {

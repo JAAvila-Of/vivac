@@ -85,8 +85,8 @@ pub fn import(ctx: &mut Ctx, args: &Args) -> R {
             ctx.tree.total()
         )));
     }
-    let crudo = std::fs::read_to_string(file_path)?;
-    let old: Old = serde_json::from_str(&crudo)
+    let raw = std::fs::read_to_string(file_path)?;
+    let old: Old = serde_json::from_str(&raw)
         .map_err(|e| Failure::usage(format!("{file_path} is not a spike tree.json: {e}")))?;
 
     let mut nodes: Vec<&OldNode> = old.nodes.values().collect();
@@ -112,12 +112,12 @@ pub fn import(ctx: &mut Ctx, args: &Args) -> R {
     }
 
     let ulids: BTreeMap<u64, String> = nodes.iter().map(|n| (n.id, id::ulid())).collect();
-    let mut eventos = Vec::new();
+    let mut events = Vec::new();
     let mut seq = 0u64;
     let actor = ctx.store.config.actor.clone();
     let mut push_event = |body: Body, ts: String| {
         seq += 1;
-        eventos.push(Event {
+        events.push(Event {
             seq,
             id: id::ulid(),
             ts,
@@ -172,9 +172,9 @@ pub fn import(ctx: &mut Ctx, args: &Args) -> R {
     }
 
     let total = nodes.len();
-    ctx.store.write_raw(&eventos)?;
+    ctx.store.write_raw(&events)?;
     println!("  {total} nodes imported from {file_path}");
-    println!("        {} events written to .vivac/events", eventos.len());
+    println!("        {} events written to .vivac/events", events.len());
     println!();
     println!("  Review what the spike could not see:  vivac check");
     Ok(())

@@ -1,7 +1,8 @@
-# Los finales de linea los fija el repositorio, no la maquina que clona.
+# Line endings are fixed by the repository, not by the machine that clones it.
 #
-# Sin esto, con `core.autocrlf=true` --el valor por defecto del instalador de
-# git para Windows-- un clon deja CRLF en disco, `cargo package` empaqueta CRLF
-# y cualquier parche por texto contra el arbol de trabajo deja de encajar sin
-# decir por que. Paso: un `git stash` de ida y vuelta convirtio tres archivos.
+# Without this, and with `core.autocrlf=true` --what the git installer for
+# Windows sets by default-- a clone leaves CRLF on disk, `cargo package` ships
+# CRLF, and any patch applied by text against the working tree stops matching
+# without saying why. It happened: one `git stash` round trip converted three
+# files.
 * text=auto eol=lf

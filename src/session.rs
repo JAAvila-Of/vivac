@@ -14,10 +14,10 @@ use crate::failure::{Failure, R};
 /// Wraps text in the envelope Claude Code injects into the context. It is a
 /// single JSON line, with no external dependency and no `jq` in between: a
 /// hook with a pipe is a hook that breaks on the first different machine.
-fn envelope(evento: &str, text: &str) -> String {
+fn envelope(event_name: &str, text: &str) -> String {
     serde_json::json!({
         "hookSpecificOutput": {
-            "hookEventName": evento,
+            "hookEventName": event_name,
             "additionalContext": text,
         }
     })

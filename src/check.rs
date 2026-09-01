@@ -57,12 +57,12 @@ pub fn check(a: &Tree, args: &Args) -> Result<i32, crate::failure::Failure> {
         // render still marks it; what it does not do is break CI every day.
         if n.state == State::Done && !n.forced_close && !a.open_blockers(&n.id).is_empty() {
             let pending_count = a.open_blockers(&n.id);
-            let quienes: Vec<String> = pending_count.iter().map(|c| c.alias()).collect();
+            let aliases: Vec<String> = pending_count.iter().map(|c| c.alias()).collect();
             project.push(format!(
                 "{} is closed with {} open condition(s): {}",
                 n.alias(),
                 pending_count.len(),
-                quienes.join(", ")
+                aliases.join(", ")
             ));
         }
     }

@@ -103,7 +103,7 @@ impl Counts {
 pub struct Tree {
     nodes: HashMap<String, Node>,
     children: HashMap<String, Vec<String>>,
-    por_num: HashMap<u64, String>,
+    by_num: HashMap<u64, String>,
     pub roots: Vec<String>,
     pub stack: Vec<String>,
     pub vivacs: Vec<Vivac>,
@@ -131,12 +131,12 @@ pub struct Tree {
     pub broken_lines: usize,
 }
 
-pub fn fold(eventos: &[Event], rotas: usize) -> Tree {
+pub fn fold(events: &[Event], broken: usize) -> Tree {
     let mut a = Tree {
-        broken_lines: rotas,
+        broken_lines: broken,
         ..Default::default()
     };
-    for e in eventos {
+    for e in events {
         a.apply(e.seq, &e.ts, &e.payload);
     }
     a.sort_nodes();
@@ -212,7 +212,7 @@ impl Tree {
                         flags: BTreeMap::new(),
                     },
                 );
-                self.por_num.insert(*num, node.clone());
+                self.by_num.insert(*num, node.clone());
                 self.next_num = self.next_num.max(*num + 1);
                 match parent {
                     Some(p) => self
@@ -350,7 +350,7 @@ impl Tree {
     pub fn resolve(&self, s: &str) -> Option<&Node> {
         let clean = s.trim().trim_start_matches('#');
         if let Ok(n) = clean.parse::<u64>() {
-            return self.por_num.get(&n).and_then(|id| self.nodes.get(id));
+            return self.by_num.get(&n).and_then(|id| self.nodes.get(id));
         }
         // By character, not by byte. `&clean[1..]` aborts the whole process
         // when the first letter is multibyte --and the tree these ids live in
@@ -362,7 +362,7 @@ impl Tree {
         if !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()) {
             if let Ok(n) = rest.parse::<u64>() {
                 return self
-                    .por_num
+                    .by_num
                     .get(&n)
                     .and_then(|id| self.nodes.get(id))
                     .filter(|nd| nd.kind.prefix() == prefix);

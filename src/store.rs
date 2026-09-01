@@ -112,19 +112,19 @@ impl Store {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((vec![], 0)),
             Err(e) => return Err(e),
         };
-        let mut eventos = Vec::new();
-        let mut rotas = 0usize;
+        let mut events = Vec::new();
+        let mut broken = 0usize;
         for line in BufReader::new(f).lines() {
             let line = line?;
             if line.trim().is_empty() {
                 continue;
             }
             match serde_json::from_str(&line) {
-                Ok(e) => eventos.push(e),
-                Err(_) => rotas += 1,
+                Ok(e) => events.push(e),
+                Err(_) => broken += 1,
             }
         }
-        Ok((eventos, rotas))
+        Ok((events, broken))
     }
 
     /// Appends events at the end. One line per event, rewriting nothing.
@@ -159,9 +159,9 @@ impl Store {
     /// Writes already-built events, keeping their original timestamp. Only
     /// `import` uses it: a tree from elsewhere keeps its dates, because
     /// otherwise the migration flattens the only timeline it had.
-    pub fn write_raw(&self, eventos: &[crate::event::Event]) -> std::io::Result<()> {
-        let mut buf = String::with_capacity(256 * eventos.len());
-        for e in eventos {
+    pub fn write_raw(&self, events: &[crate::event::Event]) -> std::io::Result<()> {
+        let mut buf = String::with_capacity(256 * events.len());
+        for e in events {
             buf.push_str(&serde_json::to_string(e).map_err(std::io::Error::other)?);
             buf.push('\n');
         }

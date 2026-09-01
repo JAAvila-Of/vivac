@@ -638,7 +638,7 @@ pub fn vivacs(a: &Tree, args: &Args) -> R {
     }
     println!();
     for v in a.vivacs.iter().rev().take(20) {
-        let cima = v
+        let top = v
             .stack
             .last()
             .map(|(al, t)| format!("{al}  {t}"))
@@ -648,7 +648,7 @@ pub fn vivacs(a: &Tree, args: &Args) -> R {
             v.alias(),
             v.kind.word(),
             crate::clock::date_of(&v.ts),
-            cima
+            top
         );
         if !v.label.is_empty() {
             println!("           {}", v.label);

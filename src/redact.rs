@@ -75,7 +75,7 @@ pub fn check_field(field: &str, text: &str) -> Option<Finding> {
             advice: ADVICE_KEY,
         });
     }
-    tokens(text).find_map(|tok| revisar_token(field, tok))
+    tokens(text).find_map(|tok| check_token(field, tok))
 }
 
 /// Checks several fields at once. Returns the first that fails, which is all
@@ -84,7 +84,7 @@ pub fn check_fields(fields: &[(&str, &str)]) -> Option<Finding> {
     fields.iter().find_map(|(c, t)| check_field(c, t))
 }
 
-fn revisar_token(field: &str, tok: &str) -> Option<Finding> {
+fn check_token(field: &str, tok: &str) -> Option<Finding> {
     let finding = |rule, advice| {
         Some(Finding {
             rule,
@@ -138,8 +138,8 @@ fn is_jwt(tok: &str) -> bool {
     if !tok.starts_with("eyJ") {
         return false;
     }
-    let partes: Vec<&str> = tok.split('.').collect();
-    partes.len() == 3 && partes.iter().all(|p| p.len() >= 8) && partes[1].starts_with("eyJ")
+    let parts: Vec<&str> = tok.split('.').collect();
+    parts.len() == 3 && parts.iter().all(|p| p.len() >= 8) && parts[1].starts_with("eyJ")
 }
 
 fn is_email(tok: &str) -> bool {
@@ -163,10 +163,11 @@ fn is_email(tok: &str) -> bool {
 /// A home path carries the name of whoever owns it, which is personal data.
 /// `~` does not: it resolves on the reader's machine and identifies nobody.
 fn is_home_path(tok: &str) -> bool {
-    let bajo = tok.to_ascii_lowercase().replace('\\', "/");
+    let lower = tok.to_ascii_lowercase().replace('\\', "/");
     ["/users/", "/home/"].iter().any(|p| {
-        bajo.find(p)
-            .map(|i| bajo[i + p.len()..].split('/').next().unwrap_or("").len() > 1)
+        lower
+            .find(p)
+            .map(|i| lower[i + p.len()..].split('/').next().unwrap_or("").len() > 1)
             .unwrap_or(false)
     })
 }
@@ -189,10 +190,10 @@ fn suspicious_entropy(tok: &str) -> bool {
     if !(24..=512).contains(&tok.len()) || known_shape(tok) || !credential_alphabet(tok) {
         return false;
     }
-    let digito = tok.bytes().any(|b| b.is_ascii_digit());
-    let minus = tok.bytes().any(|b| b.is_ascii_lowercase());
-    let mayus = tok.bytes().any(|b| b.is_ascii_uppercase());
-    digito && minus && mayus && vowels(tok) < 0.26 && shannon(tok) >= 3.8
+    let digit = tok.bytes().any(|b| b.is_ascii_digit());
+    let lower = tok.bytes().any(|b| b.is_ascii_lowercase());
+    let upper = tok.bytes().any(|b| b.is_ascii_uppercase());
+    digit && lower && upper && vowels(tok) < 0.26 && shannon(tok) >= 3.8
 }
 
 fn credential_alphabet(tok: &str) -> bool {
@@ -212,8 +213,8 @@ fn vowels(tok: &str) -> f64 {
 /// Long random-looking things that are not secrets and turn up constantly in
 /// a real provenance tree: SHAs, UUIDs, ULIDs, paths and URLs.
 fn known_shape(tok: &str) -> bool {
-    let sin_guiones: String = tok.chars().filter(|c| *c != '-').collect();
-    if !sin_guiones.is_empty() && sin_guiones.bytes().all(|b| b.is_ascii_hexdigit()) {
+    let no_dashes: String = tok.chars().filter(|c| *c != '-').collect();
+    if !no_dashes.is_empty() && no_dashes.bytes().all(|b| b.is_ascii_hexdigit()) {
         return true; // SHA, checksum, UUID
     }
     if tok.len() == 26

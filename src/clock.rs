@@ -74,7 +74,7 @@ mod tests {
     }
 
     #[test]
-    fn formato_estable() {
+    fn format_is_stable() {
         let s = now_rfc3339();
         assert_eq!(s.len(), 20);
         assert!(s.ends_with('Z'));
