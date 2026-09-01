@@ -1,12 +1,13 @@
 //! What a stranger reads: the chrome the binary prints.
 //!
-//! This file exists because the same defect got through **four separate
-//! times** during the port to English. A rename over the sources reached
-//! inside string literals and swapped words for whatever the surrounding code
-//! happened to call them: `vivac open` printed *"6 frente openeds"* and the
-//! subtree counts came out as *"3 open_count / 8 closed_count"*. Every time it
-//! compiled, every time the suite stayed green, and the only thing that ever
-//! caught it was running the binary by hand against a real tree.
+//! This file exists because output that is not English got through **five
+//! separate times** during the port. Twice a rename reached inside string
+//! literals and swapped words for whatever the surrounding code happened to
+//! call them -- `vivac open` printed *"6 frente openeds"*, subtree counts came
+//! out as *"3 open_count / 8 closed_count"* -- and twice the prose pass simply
+//! never opened the line. Every time it compiled, every time the suite stayed
+//! green, and the only thing that ever caught one was running the binary by
+//! hand.
 //!
 //! So the suite runs it. Two rules over everything the tool prints:
 //!
@@ -17,58 +18,39 @@
 //!
 //! `--json` is exempt from rule 2 on purpose: there the underscore is the
 //! contract, not an accident.
+//!
+//! **The word list is derived, not remembered, and that is the point.** The
+//! first version of this file carried a list of the Spanish words that had
+//! already been caught, which is a list of the bugs somebody had already
+//! found. It went green over `main.rs` still answering *"Comando
+//! desconocido"* and *"push no acepta --bogus"*, because nobody had thought
+//! to write down `comando` or `acepta`.
+//!
+//! `tests/data/spanish-vocabulary.txt` is instead every word the binary
+//! printed while it was Spanish -- lifted from the string literals of commit
+//! `4846499`, the last one before the port -- minus every word it prints
+//! today, plus the Spanish that is deliberately kept as **data**: the flag
+//! alias table, the `serde` aliases and the Spanish spellings `Kind::parse`
+//! still accepts. A word leaves the list by being spoken in English, which is
+//! the only way that is not a guess.
 
 mod common;
 use common::Sandbox;
+use std::collections::HashSet;
 
-/// Spanish words that cannot appear in the chrome.
-///
-/// Every one of them was in the output at some point; that is the only reason
-/// it is on the list. Words English shares -- `no`, `sin`, `con` -- are left
-/// out, because a guard that cries wolf gets deleted.
-const SPANISH: &[&str] = &[
-    "frente",
-    "nodo",
-    "padre",
-    "hijo",
-    "arbol",
-    "abierto",
-    "abierta",
-    "cerrado",
-    "cerrada",
-    "razon",
-    "motivo",
-    "aqui",
-    "pila",
-    "titulo",
-    "estado",
-    "hallazgo",
-    "camino",
-    "marcado",
-    "riesgo",
-    "forzado",
-    "bandera",
-    "etiqueta",
-    "tarea",
-    "pregunta",
-    "meta",
-    "para",
-    "porque",
-    "cuando",
-    "donde",
-    "desde",
-    "hasta",
-    "una",
-    "esta",
-    "este",
-    "que",
-    "por",
-    "los",
-    "las",
-    "del",
-    "mas",
-    "siguiente",
-];
+/// Every word the tool used to print in Spanish and does not print now. See
+/// the note above for how it is derived; it is a file and not a `const`
+/// because Spanish that carries weight does not belong in a `.rs`, which this
+/// project learned the hard way.
+const SPANISH_VOCABULARY: &str = include_str!("data/spanish-vocabulary.txt");
+
+fn spanish() -> HashSet<&'static str> {
+    SPANISH_VOCABULARY
+        .lines()
+        .map(str::trim)
+        .filter(|w| !w.is_empty())
+        .collect()
+}
 
 /// Splits on anything that is not a word character, keeping `_` inside the
 /// token so a leaked identifier stays in one piece.
@@ -78,9 +60,10 @@ fn words(s: &str) -> impl Iterator<Item = &str> {
 }
 
 fn assert_reads_as_english(label: &str, out: &str) {
+    let spanish = spanish();
     for w in words(out) {
         assert!(
-            !SPANISH.contains(&w.to_lowercase().as_str()),
+            !spanish.contains(w.to_lowercase().as_str()),
             "`vivac {label}` printed the Spanish word `{w}`:\n{out}"
         );
         // Case matters: `SONAR_TOKEN` in the redaction advice is a name being
@@ -188,6 +171,33 @@ fn the_refusals_read_as_english_too() {
     assert_reads_as_english("why 999", &out);
     let (out, _) = c.run(&["nonsense"]);
     assert_reads_as_english("nonsense", &out);
+
+    // Rejecting an option. Both branches: a command with a list of its own,
+    // and one that takes nothing but `--json`. This is where the first
+    // version of the guard was blind.
+    let (out, _) = c.run(&["push", "x", "--why", "y", "--bogus"]);
+    assert!(out.contains("does not take --bogus"), "{out}");
+    assert_reads_as_english("push --bogus", &out);
+    let (out, _) = c.run(&["park", "--bogus"]);
+    assert!(out.contains("It takes: none"), "{out}");
+    assert_reads_as_english("park --bogus", &out);
+
+    let (out, _) = c.run(&["--help"]);
+    assert_reads_as_english("--help", &out);
+}
+
+/// The list is only worth what it still contains. If a bad regenerate empties
+/// it, or a rename translates it, every assertion above passes over nothing.
+#[test]
+fn the_word_list_is_still_a_word_list() {
+    let v = spanish();
+    assert!(v.len() > 400, "the vocabulary shrank to {}", v.len());
+    for w in ["comando", "acepta", "frente", "nodo", "camino", "forzado"] {
+        assert!(v.contains(w), "`{w}` fell out of the vocabulary");
+    }
+    for w in ["push", "brief", "stack", "anchor", "manual"] {
+        assert!(!v.contains(w), "`{w}` is English and cannot be banned");
+    }
 }
 
 /// `block --off` printed *"f2 ya no blocks the close of g1"*: half the

@@ -5,11 +5,11 @@
 
 /// Does the pattern cover the path? Slashes are normalized, so a `governs`
 /// written on Windows holds on Linux and the other way round.
-pub fn covers(patron: &str, file_path: &str) -> bool {
-    if patron.is_empty() {
+pub fn covers(pattern: &str, file_path: &str) -> bool {
+    if pattern.is_empty() {
         return false;
     }
-    let p: Vec<char> = patron.replace('\\', "/").chars().collect();
+    let p: Vec<char> = pattern.replace('\\', "/").chars().collect();
     let r: Vec<char> = file_path.replace('\\', "/").chars().collect();
     matches_at(&p, &r)
 }
@@ -32,8 +32,8 @@ fn matches_at(p: &[char], r: &[char]) -> bool {
             return (0..=r.len()).any(|i| matches_at(rest, &r[i..]));
         }
         let rest = &p[1..];
-        let hasta = r.iter().position(|c| *c == '/').unwrap_or(r.len());
-        return (0..=hasta).any(|i| matches_at(rest, &r[i..]));
+        let upto = r.iter().position(|c| *c == '/').unwrap_or(r.len());
+        return (0..=upto).any(|i| matches_at(rest, &r[i..]));
     }
     if r.is_empty() {
         return false;

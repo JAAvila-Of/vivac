@@ -160,10 +160,10 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         return check::check(&ctx.tree, a);
     }
 
-    // Valid options per command. One that is not here is an error, not
-    // silencio: ver `Args::unknown`.
+    // Valid options per command. One that is not here is an error and not
+    // silence: see `Args::unknown`.
     const COMMON: &[&str] = &["json"];
-    let permitidas: &[&str] = match cmd {
+    let allowed: &[&str] = match cmd {
         "push" => &["why", "type", "blocks", "ref", "governs"],
         "pop" => &["force", "next"],
         "decide" => &[
@@ -187,21 +187,21 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         "park" | "promote" | "note" | "import" | "restore" | "vivacs" => &[],
         _ => COMMON,
     };
-    let unknown = a.unknown(&[permitidas, COMMON].concat());
+    let unknown = a.unknown(&[allowed, COMMON].concat());
     if !unknown.is_empty() {
-        let validas = if permitidas.is_empty() {
-            "ninguna".to_string()
+        let takes = if allowed.is_empty() {
+            "none".to_string()
         } else {
-            permitidas
+            allowed
                 .iter()
                 .map(|o| format!("--{o}"))
                 .collect::<Vec<_>>()
                 .join(" ")
         };
         return Err(Failure::usage(format!(
-            "{} no acepta {}.
+            "{} does not take {}.
 
-  Acepta: {validas}",
+  It takes: {takes}",
             cmd,
             unknown
                 .iter()
@@ -245,7 +245,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         "stats" => render::stats(&ctx.tree, a),
         other => {
             print!("{USAGE}");
-            return Err(Failure::usage(format!("Comando desconocido: {other}")));
+            return Err(Failure::usage(format!("unknown command: {other}")));
         }
     };
     r.map(|_| 0)
