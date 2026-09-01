@@ -185,6 +185,16 @@ which 0.2.x read through aliases. 0.3.0 speaks one language, so it reports
 those lines as unreadable rather than guessing. If you have such a log, 0.2.1
 still reads it.
 
+**Releases before 0.3.2 could park the wrong node.** `park <id> "<reason>"`
+with an id that named nothing exited 0, parked whatever the focus was instead
+of what you asked for, and kept the unresolved id as the reason -- dropping the
+reason you wrote. The event it leaves behind is indistinguishable from a
+deliberate park, so the tree never says it happened. If one of your trees was
+written with an earlier release, `vivac parked` is where to look: an entry
+whose reason reads like an id, or a node you do not remember parking.
+`vivac focus <id>` takes it back out and asks no permission to do it, because
+parking only ever said "maybe I will be back".
+
 ## Hooks
 
 ```sh
