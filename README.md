@@ -146,7 +146,7 @@ definition: **security vetoes, performance budgets, DX judges.**
 
 **Tier 0 complete.** The tree, the two edges, the closure rule, the redaction
 guard, the `brief` with its token budget, the session hooks, the vivacs and the
-`Anchor` with its `Git` and `Null` implementations. 73 tests, of which 11 are
+`Anchor` with its `Git` and `Null` implementations. 74 tests, of which 11 are
 the brief specification's contract executed against the real binary.
 
 `reconcile` is the first of Tier 1. It answers the one question that keeps the

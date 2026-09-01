@@ -102,12 +102,15 @@ fn constraints<'a>(a: &'a Tree, lineage: &[&Node]) -> Vec<&'a Node> {
         .nodes_iter()
         .filter(|n| n.kind == Kind::Constraint && n.state.is_open())
         .filter(|n| {
-            // Project-wide (hangs off a root), or reachable from the path.
-            let project_wide = n
-                .parent
-                .as_ref()
-                .and_then(|p| a.node(p))
-                .is_some_and(|p| p.parent.is_none());
+            // Project-wide, or reachable from the path. Project-wide means
+            // hanging off a root **or being one**: `MODEL.md` §9.5 blesses
+            // `parent: PROJECT`, and a node with no parent at all is the
+            // strongest form of that, not a weaker one.
+            let project_wide = n.parent.is_none()
+                || n.parent
+                    .as_ref()
+                    .and_then(|p| a.node(p))
+                    .is_some_and(|p| p.parent.is_none());
             project_wide
                 || a.ancestors(&n.id)
                     .iter()
@@ -347,13 +350,20 @@ pub fn to_text(
         trim_list(out_of_scope, 6, "parked"),
     )));
 
-    // 8. Standing decisions: on the path, or with a `governs` overlapping the
-    // focus's own. Superseded ones never appear.
+    // 8. Standing decisions: project-level, on the path, or with a `governs`
+    // overlapping the focus's own. Superseded ones never appear.
+    //
+    // **Project-level had been missing**, and it is the case that matters
+    // most: a decision that governs the whole product hangs off nothing, so
+    // it was on no path and reached no brief. The invariants above had the
+    // clause and the decisions did not, which was an asymmetry and not a
+    // choice.
     let mut dec: Vec<&Node> = a
         .nodes_iter()
         .filter(|n| n.kind == Kind::Decision && n.state.is_open())
         .filter(|n| {
-            on_lineage.contains(n.id.as_str())
+            n.parent.is_none()
+                || on_lineage.contains(n.id.as_str())
                 || n.parent
                     .as_ref()
                     .is_some_and(|p| on_lineage.contains(p.as_str()))

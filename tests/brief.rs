@@ -308,3 +308,39 @@ fn what_is_open_under_a_closed_node_gets_counted() {
         "it counted without saying where to look:\n{b}"
     );
 }
+
+/// A decision that governs the whole product hangs off nothing, so it is on no
+/// path and used to reach no brief. The invariants section had the
+/// project-level clause and the decisions section did not, which was an
+/// asymmetry rather than a choice -- and it hid exactly the decisions that
+/// matter most, the ones that are not about one branch of the work.
+#[test]
+fn a_project_level_decision_reaches_the_brief() {
+    let c = Sandbox::new_seeded("project-level");
+    // Nothing on the stack yet, so it is born with no parent at all: it is
+    // about the product and not about one branch of it.
+    c.ok(&[
+        "decide",
+        "Keys never live in the tree",
+        "--reason",
+        "the tree maps where the system is weak",
+    ]);
+    c.ok(&[
+        "push",
+        "Migrate to OIDC",
+        "--why",
+        "the provider is shutting down",
+    ]);
+
+    let s = c.ok(&["brief"]);
+    assert!(
+        s.contains("STANDING DECISIONS"),
+        "no section at all:
+{s}"
+    );
+    assert!(
+        s.contains("Keys never live in the tree"),
+        "the decision that governs everything went missing:
+{s}"
+    );
+}
