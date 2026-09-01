@@ -155,3 +155,22 @@ fn a_segment_of_none_of_the_three_still_says_something() {
         "the stop came out blank after a flag:\n{v}"
     );
 }
+
+/// `d45` retired the Spanish layer, and retiring it means the old spelling is
+/// an unknown subcommand rather than a silent synonym. A word that is accepted
+/// instead of rejected teaches the caller a spelling that does not exist, and
+/// `session` was the last place in the product still doing it (`f57`).
+#[test]
+fn the_spanish_spellings_of_the_session_hooks_are_rejected() {
+    let c = Sandbox::new_seeded("spanish");
+    c.ok(&["push", "A goal", "--why", "it is needed"]);
+    for args in [["session", "inicio"], ["session", "fin"]] {
+        let (s, code) = c.run(&args);
+        assert_ne!(code, 0, "`vivac {}` was accepted:\n{s}", args.join(" "));
+        assert!(
+            s.contains("usage"),
+            "`vivac {}` failed without saying how:\n{s}",
+            args.join(" ")
+        );
+    }
+}

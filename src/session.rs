@@ -97,8 +97,8 @@ fn segment_label(t: &crate::model::Tree) -> String {
 
 pub fn dispatch(ctx: &mut crate::ops::Ctx, a: &Args, project: &str) -> R {
     match a.positional(0) {
-        Some("start") | Some("inicio") => start(ctx, a, project),
-        Some("end") | Some("fin") => end(ctx, a),
+        Some("start") => start(ctx, a, project),
+        Some("end") => end(ctx, a),
         _ => Err(Failure::usage("usage: vivac session start|end [--hook]")),
     }
 }
