@@ -239,3 +239,24 @@ fn a_broken_payload_still_opens_the_session() {
         c.log()
     );
 }
+
+/// An opening is a fact about the session, not about the tree. If it counted
+/// as a change, the next `Stop` would leave an automatic stop for a session
+/// that did nothing -- which is the repeated stop the guard exists to avoid.
+#[test]
+fn an_opening_does_not_arm_the_automatic_stop() {
+    let c = Sandbox::new_seeded("noarm");
+    c.ok(&["push", "A goal", "--why", "it is needed"]);
+    c.ok(&["session", "end", "--hook"]);
+    let before = how_many(&c.ok(&["vivacs"]), "auto");
+    c.run_stdin(
+        &["session", "start", "--hook"],
+        r#"{"session_id":"abc-123","source":"startup"}"#,
+    );
+    c.ok(&["session", "end", "--hook"]);
+    assert_eq!(
+        how_many(&c.ok(&["vivacs"]), "auto"),
+        before,
+        "the opening armed a stop for a session that did nothing"
+    );
+}

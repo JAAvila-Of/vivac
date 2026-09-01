@@ -159,6 +159,12 @@ impl Tree {
             self.seg_closed = 0;
             self.seg_notes = 0;
             self.seg_events = 0;
+        } else if matches!(body, Body::SessionStarted { .. }) {
+            // Neither a change nor a stop. Opening a session says something
+            // about the session and nothing about the tree: counted as a
+            // change it would arm an automatic stop for a session that did
+            // nothing, and counted as a stop it would swallow the next real
+            // one.
         } else {
             self.seq_change = self.seq_change.max(seq);
             self.seg_events += 1;
