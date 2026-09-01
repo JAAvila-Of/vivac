@@ -348,21 +348,27 @@ impl Tree {
     /// The bare number works on purpose --`vivac why 7`-- because forcing
     /// anyone to recall the prefix is capture cost with nothing in return.
     pub fn resolve(&self, s: &str) -> Option<&Node> {
-        let limpio = s.trim().trim_start_matches('#');
-        if let Ok(n) = limpio.parse::<u64>() {
+        let clean = s.trim().trim_start_matches('#');
+        if let Ok(n) = clean.parse::<u64>() {
             return self.por_num.get(&n).and_then(|id| self.nodes.get(id));
         }
-        let sin_prefijo = &limpio[1..];
-        if limpio.len() > 1 && sin_prefijo.chars().all(|c| c.is_ascii_digit()) {
-            if let Ok(n) = sin_prefijo.parse::<u64>() {
+        // By character, not by byte. `&clean[1..]` aborts the whole process
+        // when the first letter is multibyte --and the tree these ids live in
+        // is written in Spanish, so a word starting with `ultima` spelled
+        // properly is the ordinary case-- and again on the empty string. `f75`.
+        let mut rest = clean.chars();
+        let prefix = rest.next()?;
+        let rest = rest.as_str();
+        if !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()) {
+            if let Ok(n) = rest.parse::<u64>() {
                 return self
                     .por_num
                     .get(&n)
                     .and_then(|id| self.nodes.get(id))
-                    .filter(|nd| nd.kind.prefix() == limpio.chars().next().unwrap());
+                    .filter(|nd| nd.kind.prefix() == prefix);
             }
         }
-        self.nodes.get(limpio)
+        self.nodes.get(clean)
     }
 
     pub fn children(&self, id: &str) -> Vec<&Node> {

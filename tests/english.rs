@@ -118,7 +118,7 @@ fn seeded() -> Sandbox {
         "the tag is the anchor",
     ]);
     c.ok(&["add", "Write the announcement", "--why", "nobody knows yet"]);
-    c.ok(&["park", "6", "the wording waits for the release"]);
+    c.ok(&["park", "5", "the wording waits for the release"]);
     c.ok(&["flag", "4", "review", "--why", "the reason may be stale"]);
     c.ok(&["note", "2", "the adapter also owns the retry budget"]);
     c.ok(&["save", "before the release", "--next", "cut the tag"]);

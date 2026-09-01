@@ -176,3 +176,46 @@ fn what_does_not_hang_off_it_cannot_be_rescued() {
     ]);
     assert_eq!(code, 2, "it rescued itself from itself:\n{s}");
 }
+
+/// `g1` with `t2` stacked on top of it: a leaf focus, so nothing cascades and
+/// the only thing under test is which node the words picked out.
+fn pair(name: &str) -> Sandbox {
+    let c = Sandbox::new_seeded(name);
+    c.ok(&["push", "Ship the release", "--why", "the tag is cut"]);
+    c.ok(&["push", "Rewrite the notes", "--why", "they read badly"]);
+    c
+}
+
+/// `f74`, the half that bites hardest. `abandon` is destructive and takes
+/// `--cascade`, so falling back to the focus does not merely mislabel a stop:
+/// it can take a node and every descendant it has, while the word actually
+/// typed named something else entirely.
+#[test]
+fn an_id_that_names_nothing_is_refused_not_guessed() {
+    let c = pair("abandon-unknown");
+    let (out, code) = c.run(&["abandon", "f99", "a reason worth keeping"]);
+    assert_ne!(code, 0, "abandon took an id that names nothing:\n{out}");
+    assert!(out.contains("f99"), "the refusal does not name it:\n{out}");
+    let t = c.ok(&["tree", "--all"]);
+    assert!(
+        !t.contains("[!]"),
+        "it abandoned the focus in its place:\n{t}"
+    );
+}
+
+#[test]
+fn a_lone_reason_still_abandons_the_focus() {
+    let c = pair("abandon-reason");
+    c.ok(&["abandon", "the release slipped"]);
+    let t = c.ok(&["tree", "--all"]);
+    assert!(t.contains("[!]"), "nothing was abandoned:\n{t}");
+}
+
+/// `f75`, reached through `abandon` because it resolves every word it is
+/// given, reasons included.
+#[test]
+fn a_reason_starting_with_a_multibyte_letter_does_not_crash() {
+    let c = pair("abandon-accent");
+    let (out, _) = c.run(&["abandon", "última revisión antes de cerrar"]);
+    assert!(!out.contains("panicked"), "it aborted the process:\n{out}");
+}

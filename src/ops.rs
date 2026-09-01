@@ -231,18 +231,58 @@ pub fn pop(ctx: &mut Ctx, a: &Args) -> R {
 /// `park` — what produces DO NOT TOUCH NOW; without it that section always
 /// comes out empty. The closure rule does not stop it: parking claims nothing
 /// finished, and if parking cost more than ignoring, nobody would park.
-pub fn park(ctx: &mut Ctx, a: &Args) -> R {
-    let (node, reason) = match a.positional(0).and_then(|s| ctx.tree.resolve(s)) {
-        Some(n) => (n.clone(), a.positional(1).unwrap_or("")),
-        None => {
-            let f = ctx
-                .tree
-                .focus()
-                .ok_or_else(|| Failure::usage("usage: vivac park [<id>] [\"<reason>\"]"))?
-                .clone();
-            (f, a.positional(0).unwrap_or(""))
-        }
+/// Whether a word is shaped like the name of a node.
+///
+/// A bare number, or one character of type prefix and a number: `25`, `f25`.
+/// Prose never looks like that, so a word that does and resolves to nothing is
+/// a typo rather than a reason, and saying so beats guessing.
+fn looks_like_an_id(s: &str) -> bool {
+    let s = s.trim().trim_start_matches('#');
+    let mut c = s.chars();
+    let Some(first) = c.next() else {
+        return false;
     };
+    let rest = c.as_str();
+    if first.is_ascii_digit() {
+        return rest.chars().all(|c| c.is_ascii_digit());
+    }
+    !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit())
+}
+
+/// The node an operation acts on where naming it is optional, and the reason
+/// written beside it.
+///
+/// **Two words are not ambiguous**: the first is an id and it has to resolve.
+/// `park f74 "<reason>"` used to fall through to the focus when `f74` named
+/// nothing, parking a node nobody had written down, filing `f74` itself as the
+/// reason, dropping the reason actually typed, and exiting 0. The hole was
+/// `and_then`, which flattens "did not resolve" into the same `None` as "was
+/// not given" (`f74`).
+///
+/// One word **is** ambiguous by the grammar, because a reason is as good a
+/// word as an alias. So it is resolved, and only a word shaped like an id has
+/// to succeed.
+fn named_or_focus(ctx: &Ctx, a: &Args, usage: &'static str) -> Result<(Node, String), Failure> {
+    let focus = || {
+        ctx.tree
+            .focus()
+            .cloned()
+            .ok_or_else(|| Failure::usage(usage))
+    };
+    match (a.positional(0), a.positional(1)) {
+        (Some(s), Some(r)) => Ok((ctx.resolve(s)?.clone(), r.to_string())),
+        (Some(w), None) => match ctx.tree.resolve(w) {
+            Some(n) => Ok((n.clone(), String::new())),
+            None if looks_like_an_id(w) => Err(Failure::usage(format!("No such node: {w}."))),
+            None => Ok((focus()?, w.to_string())),
+        },
+        _ => Ok((focus()?, String::new())),
+    }
+}
+
+pub fn park(ctx: &mut Ctx, a: &Args) -> R {
+    let (node, reason) = named_or_focus(ctx, a, "usage: vivac park [<id>] [\"<reason>\"]")?;
+    let reason = reason.as_str();
     guard_text(&[("reason", reason)])?;
     let mut evs = vec![vivac(
         ctx,
@@ -443,20 +483,8 @@ pub fn promote(ctx: &mut Ctx, a: &Args) -> R {
 /// finding under a closed batch, which the tree already knows how to show and
 /// the brief already knows how to count.
 pub fn abandon(ctx: &mut Ctx, a: &Args) -> R {
-    let n = match a.positional(0).and_then(|s| ctx.tree.resolve(s)) {
-        Some(n) => n.clone(),
-        None => ctx
-            .tree
-            .focus()
-            .ok_or_else(|| Failure::usage("usage: vivac abandon [<id>] \"<reason>\""))?
-            .clone(),
-    };
-    let reason = a
-        .positionals
-        .iter()
-        .rev()
-        .find(|s| ctx.tree.resolve(s).is_none());
-    let reason = reason.map(|s| s.as_str()).unwrap_or("");
+    let (n, reason) = named_or_focus(ctx, a, "usage: vivac abandon [<id>] \"<reason>\"")?;
+    let reason = reason.as_str();
     guard_text(&[("reason", reason)])?;
 
     // Rescuing a node rescues its descendants. Saving the parent and letting
