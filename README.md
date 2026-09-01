@@ -48,9 +48,13 @@ Measured on a real compiler: the path between the goal and the day's work was
 tracker, 52 planning documents and 21 issues. The structure was temporal,
 which is exactly the opposite of provenance.
 
-Logbooks, ADRs and issues all store the **node**. None of them stores the
-**edge**. That is how you can have everything written down and still not be
-able to say where something came from.
+Logbooks, ADRs, issue trackers and session memory for agents all store the
+**node**. None of them stores the **edge**. That is how you can have
+everything written down and still not be able to say where something came
+from.
+
+[Where it sits](docs/POSITION.md) works through that category by category,
+and says where each of them is better than this.
 
 ## How it is used
 
@@ -204,6 +208,11 @@ vivac init
 From source, `cargo install --path .` inside the repo.
 
 No daemon, no server and no network. The store is `.vivac/`, two files.
+
+## Contributing
+
+Not for now — neither pull requests nor issues. The reason is in
+[`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Licence
 
