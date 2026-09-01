@@ -32,7 +32,13 @@
 //! today, plus the Spanish that is deliberately kept as **data**: the flag
 //! alias table, the `serde` aliases and the Spanish spellings `Kind::parse`
 //! still accepts. A word leaves the list by being spoken in English, which is
-//! the only way that is not a guess.
+//! the only way out that is not a guess.
+//!
+//! `tools/spanish-vocabulary.py` regenerates it. Run it **after** fixing a
+//! string this test caught, never before: regenerating first subtracts the
+//! very word that is still wrong, which is how `en_paralelo` -- a key in
+//! `why --json` since the port -- stayed out of the list for one commit after
+//! the list existed.
 
 mod common;
 use common::Sandbox;
@@ -59,18 +65,30 @@ fn words(s: &str) -> impl Iterator<Item = &str> {
         .filter(|w| !w.is_empty())
 }
 
-fn assert_reads_as_english(label: &str, out: &str) {
+/// Rule 1 on its own. `--json` gets only this one: there the underscore is
+/// the contract, not an accident.
+fn assert_no_spanish(label: &str, out: &str) {
     let spanish = spanish();
-    for w in words(out) {
+    // Split on `_` as well: a JSON key is one token to `words`, and
+    // `en_paralelo` slipped past exactly there.
+    for w in words(out).flat_map(|w| w.split('_')) {
         assert!(
             !spanish.contains(w.to_lowercase().as_str()),
-            "`vivac {label}` printed the Spanish word `{w}`:\n{out}"
+            "`vivac {label}` printed the Spanish word `{w}`:
+{out}"
         );
+    }
+}
+
+fn assert_reads_as_english(label: &str, out: &str) {
+    assert_no_spanish(label, out);
+    for w in words(out) {
         // Case matters: `SONAR_TOKEN` in the redaction advice is a name being
         // quoted, not a variable that escaped.
         assert!(
             !(w.contains('_') && w.chars().all(|c| c.is_ascii_lowercase() || c == '_')),
-            "`vivac {label}` printed `{w}`, which is an identifier and not a word:\n{out}"
+            "`vivac {label}` printed `{w}`, which is an identifier and not a word:
+{out}"
         );
     }
 }
@@ -123,6 +141,7 @@ fn nothing_the_tool_prints_is_in_spanish() {
         &["stack"],
         &["parked"],
         &["triage"],
+        &["reconcile"],
         &["stats"],
         &["check"],
         &["vivacs"],
@@ -133,6 +152,31 @@ fn nothing_the_tool_prints_is_in_spanish() {
     for cmd in commands {
         let out = c.ok(cmd);
         assert_reads_as_english(&cmd.join(" "), &out);
+    }
+}
+
+/// The other half of the audience. The keys of `--json` are the agent's
+/// contract and just as public as the prose; `en_paralelo` sat inside
+/// `why --json` through two releases because no test had ever asked for JSON.
+#[test]
+fn the_json_is_english_too() {
+    let c = seeded();
+    let commands: &[&[&str]] = &[
+        &["brief", "--json"],
+        &["why", "3", "--json"],
+        &["tree", "--json"],
+        &["tree", "--all", "--json"],
+        &["open", "--json"],
+        &["stack", "--json"],
+        &["parked", "--json"],
+        &["triage", "--json"],
+        &["stats", "--json"],
+        &["vivacs", "--json"],
+        &["reconcile", "--json"],
+    ];
+    for cmd in commands {
+        let out = c.ok(cmd);
+        assert_no_spanish(&cmd.join(" "), &out);
     }
 }
 

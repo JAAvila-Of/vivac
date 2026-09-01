@@ -72,7 +72,7 @@ fn json_node(a: &Tree, ag: &Aggregates, n: &Node) -> serde_json::Value {
     })
 }
 
-fn print_json(v: serde_json::Value) -> R {
+pub(crate) fn print_json(v: serde_json::Value) -> R {
     println!(
         "{}",
         serde_json::to_string_pretty(&v).map_err(std::io::Error::other)?
@@ -108,7 +108,7 @@ pub fn why(a: &Tree, args: &Args) -> R {
         return print_json(json!({
             "node": json_node(a, ag, n),
             "path": lineage.iter().map(|x| json_node(a, ag, x)).collect::<Vec<_>>(),
-            "en_paralelo": siblings,
+            "in_parallel": siblings,
             "born_here": a.children(&n.id).iter().filter(|c| c.state.is_open())
                 .map(|c| json_node(a, ag, c)).collect::<Vec<_>>(),
             "blockers": a.open_blockers(&n.id).iter()

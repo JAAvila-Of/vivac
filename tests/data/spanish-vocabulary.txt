@@ -334,6 +334,7 @@ padre
 para
 parada
 paradas
+paralelo
 pasa
 pasar
 paso

@@ -175,7 +175,13 @@ impl Anchor for Git {
             }
         }
         // And whatever is uncommitted, which counts as a change.
-        if let Some(out) = self.git(&["status", "--porcelain"]) {
+        //
+        // `-uall` is not decoration: without it git collapses a whole
+        // untracked directory into one line -- `src/` -- and the file that
+        // nobody has claimed yet, which is the case `reconcile` exists for,
+        // never appears. Ignored paths stay ignored, so `target/` does not
+        // come flooding in.
+        if let Some(out) = self.git(&["status", "--porcelain", "-uall"]) {
             for l in out.lines() {
                 if let Some(file_path) = l.get(3..) {
                     let file_path = file_path.rsplit(" -> ").next().unwrap_or(file_path).trim();

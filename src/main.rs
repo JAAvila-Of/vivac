@@ -22,6 +22,7 @@ mod id;
 mod import;
 mod model;
 mod ops;
+mod reconcile;
 mod redact;
 mod render;
 mod session;
@@ -71,6 +72,8 @@ const USAGE: &str = r#"vivac - provenance of work
     vivac stack                               where you are right now
     vivac parked                              DO NOT TOUCH NOW
     vivac triage                              what can be pruned, and with what
+    vivac reconcile [--since <v>] [--all]     files that changed with nothing
+                                              in the tree claiming them
     vivac stats                               numbers
     vivac check                               invariants; belongs in CI
 
@@ -184,6 +187,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         "focus" => &["reopen"],
         "block" => &["off"],
         "tree" => &["all", "json"],
+        "reconcile" => &["since", "all", "json"],
         "park" | "promote" | "note" | "import" | "restore" | "vivacs" => &[],
         _ => COMMON,
     };
@@ -242,6 +246,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         "stack" => render::stack(&ctx.tree, a),
         "parked" => render::parked(&ctx.tree, a),
         "triage" => render::triage(&ctx.tree, a),
+        "reconcile" => reconcile::reconcile(&ctx.tree, ctx.anchor.as_ref(), a),
         "stats" => render::stats(&ctx.tree, a),
         other => {
             print!("{USAGE}");

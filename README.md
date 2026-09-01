@@ -77,6 +77,7 @@ vivac open          the open fronts, each with its lineage
 vivac stack         the focus stack
 vivac parked        DO NOT TOUCH NOW
 vivac triage        what can be pruned, and with which command
+vivac reconcile     files that changed with nothing in the tree claiming them
 ```
 
 **And there are safe stops.** A vivac is the bivouac partway up a climb: a
@@ -148,8 +149,14 @@ definition: **security vetoes, performance budgets, DX judges.**
 
 **Tier 0 complete.** The tree, the two edges, the closure rule, the redaction
 guard, the `brief` with its token budget, the session hooks, the vivacs and the
-`Anchor` with its `Git` and `Null` implementations. 63 tests, of which 11 are
+`Anchor` with its `Git` and `Null` implementations. 76 tests, of which 11 are
 the brief specification's contract executed against the real binary.
+
+`reconcile` is the first of Tier 1. It answers the one question that keeps the
+tree honest -- *what changed since the tree last looked, and which of it does
+no node claim?* -- by diffing the anchor's history against the `governs` globs
+the nodes declare. It reports and never writes: it can say nobody claims a
+file, and it cannot say which thread that file belongs to.
 
 The `brief` is deterministic by contract: same log, same `--now`, same bytes.
 The spine — the path from the root to the focus — is **never truncated**: if it
