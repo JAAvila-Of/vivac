@@ -260,3 +260,76 @@ fn an_opening_does_not_arm_the_automatic_stop() {
         "the opening armed a stop for a session that did nothing"
     );
 }
+
+/// What the brief claimed, so that "was it followed?" stops being a judgement
+/// and becomes a query. The identifiers are the ones the rest of the log
+/// already uses, not the alias, which is recomputed on every fold.
+///
+/// These are inputs, never a verdict: what counts as *following* the brief
+/// lives in whoever reads.
+#[test]
+fn the_opening_records_what_the_brief_claimed() {
+    let c = Sandbox::new_seeded("claimed");
+    c.ok(&["push", "A goal", "--why", "it is needed"]);
+    c.run_stdin(
+        &["session", "start", "--hook"],
+        r#"{"session_id":"abc-123","source":"startup"}"#,
+    );
+    let log = c.log();
+    let opening = log
+        .lines()
+        .find(|l| l.contains("session.started"))
+        .unwrap_or_else(|| panic!("no opening in the log:\n{log}"));
+    assert!(
+        opening.contains(r#""session":"abc-123""#),
+        "the session identifier did not survive:\n{opening}"
+    );
+    assert!(
+        !opening.contains(r#""focus":null"#),
+        "the opening recorded no focus, and there was one:\n{opening}"
+    );
+    // The push left a stop behind, so there is a last one to point at.
+    assert!(
+        !opening.contains(r#""vivac":null"#),
+        "the opening recorded no last stop, and there was one:\n{opening}"
+    );
+}
+
+/// The line inside the payload: an opaque identifier yes, a filesystem path
+/// no. The transcript path arrives beside the session id and carries the
+/// user's home directory, which the security pillar vetoes.
+#[test]
+fn the_transcript_path_never_reaches_the_log() {
+    let c = Sandbox::new_seeded("noleak");
+    c.ok(&["push", "A goal", "--why", "it is needed"]);
+    c.run_stdin(
+        &["session", "start", "--hook"],
+        r#"{"session_id":"abc-123","source":"startup","transcript_path":"/home/someone/.claude/projects/x/y.jsonl","cwd":"/home/someone/work"}"#,
+    );
+    let log = c.log();
+    assert!(
+        !log.contains("someone"),
+        "a path out of the payload reached the log:\n{log}"
+    );
+    assert!(
+        !log.contains("transcript"),
+        "the transcript path reached the log:\n{log}"
+    );
+}
+
+/// With nothing on the stack the brief names no focus, and the opening has to
+/// say so rather than invent one.
+#[test]
+fn an_opening_with_no_focus_records_none() {
+    let c = Sandbox::new_seeded("nofocus");
+    c.run_stdin(
+        &["session", "start", "--hook"],
+        r#"{"session_id":"abc-123","source":"startup"}"#,
+    );
+    let log = c.log();
+    assert!(log.contains("session.started"), "no opening:\n{log}");
+    assert!(
+        log.contains(r#""focus":null"#),
+        "it invented a focus out of an empty stack:\n{log}"
+    );
+}

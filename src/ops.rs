@@ -845,12 +845,24 @@ pub fn auto_vivac(ctx: &mut Ctx, kind: VivacKind, next: &str, label: &str) -> R 
 
 /// The opening of a session, for the start hook.
 ///
-/// `focus` and `vivac` stay empty here; they are filled in a moment.
+/// It records **what the brief claimed** --the focus it named and the stop it
+/// showed as the last one-- so that *was the brief followed?* can be answered
+/// by comparing that against the first node touched afterwards, instead of by
+/// somebody's judgement.
+///
+/// These are inputs and never a verdict: what counts as *following* the brief
+/// lives in whoever reads, not in the log. Storing the comparison instead of
+/// its terms would freeze a definition that may well turn out to be wrong.
 pub fn session_started(ctx: &mut Ctx, source: &str, session: Option<String>) -> R {
+    // The focus the brief paints is the top of the stack: it walks the
+    // ancestors of `stack.last()` and keeps the last of the lineage, which is
+    // that same node again.
+    let focus = ctx.tree.focus().map(|n| n.id.clone());
+    let vivac = ctx.tree.vivacs.last().map(|v| v.id.clone());
     ctx.emit(vec![Body::SessionStarted {
         source: source.to_string(),
-        focus: None,
-        vivac: None,
+        focus,
+        vivac,
         session,
     }])
 }
