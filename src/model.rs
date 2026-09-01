@@ -115,6 +115,18 @@ pub struct Tree {
     /// Claude Code's `Stop` hook runs every turn, not at session close (`f35`).
     pub seq_change: u64,
     pub seq_vivac: u64,
+    /// How many nodes were born since the last stop. An automatic stop has no
+    /// declared intent --nobody was asked for one-- so what it can honestly
+    /// carry is what its segment contained (`f59`).
+    pub seg_new: u64,
+    /// How many were settled in it.
+    pub seg_closed: u64,
+    /// And how much was written down against the ones already there.
+    pub seg_notes: u64,
+    /// Everything the segment held, births and closes and notes included. It
+    /// is what the label falls back to when the segment moved the tree in some
+    /// other way --a flag, a park, a bare push-- so that a stop is never blank.
+    pub seg_events: u64,
     pub next_num: u64,
     pub broken_lines: usize,
 }
@@ -143,8 +155,19 @@ impl Tree {
         self.seq = self.seq.max(seq);
         if matches!(body, Body::VivacCreated { .. }) {
             self.seq_vivac = self.seq_vivac.max(seq);
+            self.seg_new = 0;
+            self.seg_closed = 0;
+            self.seg_notes = 0;
+            self.seg_events = 0;
         } else {
             self.seq_change = self.seq_change.max(seq);
+            self.seg_events += 1;
+            match body {
+                Body::NodeCreated { .. } => self.seg_new += 1,
+                Body::StateChanged { state, .. } if *state == State::Done => self.seg_closed += 1,
+                Body::NodeNoted { .. } => self.seg_notes += 1,
+                _ => {}
+            }
         }
         match body {
             Body::NodeCreated {

@@ -837,8 +837,8 @@ pub fn restore(ctx: &mut Ctx, a: &Args) -> R {
 }
 
 /// An automatic stop, for the end-of-session hook.
-pub fn auto_vivac(ctx: &mut Ctx, kind: VivacKind, next: &str) -> R {
-    guard_text(&[("next", next)])?;
-    let v = vivac(ctx, kind, next, None, "");
+pub fn auto_vivac(ctx: &mut Ctx, kind: VivacKind, next: &str, label: &str) -> R {
+    guard_text(&[("next", next), ("label", label)])?;
+    let v = vivac(ctx, kind, next, None, label);
     ctx.emit(vec![v])
 }

@@ -71,3 +71,87 @@ fn they_stay_quiet_where_there_is_no_tree() {
         assert_eq!(s.trim(), "", "{args:?} said too much:\n{s}");
     }
 }
+
+/// An automatic stop nobody declared still has to say something. Two autos in
+/// a row that read identically do not segment a session, they log it (`f59`).
+/// The label is derived from the seams --what the segment contained-- and never
+/// from a judgement of relevance, which `DX` already measured at zero uses.
+#[test]
+fn an_automatic_stop_says_what_its_segment_contained() {
+    let c = Sandbox::new_seeded("segment");
+    c.ok(&["push", "A goal", "--why", "it is needed"]);
+    c.ok(&["session", "end", "--hook"]);
+    c.ok(&["add", "First finding", "--why", "it turned up"]);
+    c.ok(&["add", "Second finding", "--why", "it turned up too"]);
+    c.ok(&["session", "end", "--hook"]);
+    let v = c.ok(&["vivacs"]);
+    assert!(
+        v.contains("2 new"),
+        "the automatic stop did not say what it closed:\n{v}"
+    );
+}
+
+/// Closing is as much of a seam as opening. A segment that only settled things
+/// would otherwise read as if nothing had happened in it.
+#[test]
+fn an_automatic_stop_counts_what_its_segment_closed() {
+    let c = Sandbox::new_seeded("closed");
+    c.ok(&["push", "A goal", "--why", "it is needed"]);
+    c.ok(&["add", "First finding", "--why", "it turned up"]);
+    c.ok(&["session", "end", "--hook"]);
+    c.ok(&["done", "2", "it was settled"]);
+    c.ok(&["session", "end", "--hook"]);
+    let v = c.ok(&["vivacs"]);
+    assert!(
+        v.contains("1 closed"),
+        "the automatic stop counted no closes:\n{v}"
+    );
+}
+
+/// A segment made only of notes is still a segment. The real tree has turns
+/// that wrote nothing but notes, and they have to be tellable apart.
+#[test]
+fn an_automatic_stop_counts_the_notes_of_its_segment() {
+    let c = Sandbox::new_seeded("notes");
+    c.ok(&["push", "A goal", "--why", "it is needed"]);
+    c.ok(&["session", "end", "--hook"]);
+    c.ok(&["note", "1", "something turned up"]);
+    c.ok(&["note", "1", "and something else"]);
+    c.ok(&["session", "end", "--hook"]);
+    let v = c.ok(&["vivacs"]);
+    assert!(
+        v.contains("2 notes"),
+        "the automatic stop counted no notes:\n{v}"
+    );
+}
+
+/// One note is a note, not notes. The label is prose the maintainer reads in
+/// `vivac vivacs`, and prose that counts wrong reads like a machine talking.
+#[test]
+fn a_single_note_is_not_pluralised() {
+    let c = Sandbox::new_seeded("plural");
+    c.ok(&["push", "A goal", "--why", "it is needed"]);
+    c.ok(&["session", "end", "--hook"]);
+    c.ok(&["note", "1", "something turned up"]);
+    c.ok(&["session", "end", "--hook"]);
+    let v = c.ok(&["vivacs"]);
+    assert!(v.contains("1 note"), "it counted no notes:\n{v}");
+    assert!(!v.contains("1 notes"), "it said `1 notes`:\n{v}");
+}
+
+/// Not every seam is a birth, a close or a note. A segment that only raised a
+/// flag still moved the tree, and if the label came out empty the stop would be
+/// back to being the blank line `f59` was about.
+#[test]
+fn a_segment_of_none_of_the_three_still_says_something() {
+    let c = Sandbox::new_seeded("other");
+    c.ok(&["push", "A goal", "--why", "it is needed"]);
+    c.ok(&["session", "end", "--hook"]);
+    c.ok(&["flag", "1", "review", "--why", "it needs a second look"]);
+    c.ok(&["session", "end", "--hook"]);
+    let v = c.ok(&["vivacs"]);
+    assert!(
+        v.contains("1 change"),
+        "the stop came out blank after a flag:\n{v}"
+    );
+}

@@ -55,12 +55,44 @@ pub fn end(ctx: &mut crate::ops::Ctx, a: &Args) -> R {
         return Ok(());
     }
     let next = a.opt_or("next");
+    let label = segment_label(&ctx.tree);
     let num = ctx.tree.next_vivac_num.max(1);
-    crate::ops::auto_vivac(ctx, VivacKind::Auto, &next)?;
+    crate::ops::auto_vivac(ctx, VivacKind::Auto, &next, &label)?;
     if !a.has("hook") {
         println!("  v{num}  automatic stop at session close");
     }
     Ok(())
+}
+
+/// What the segment being closed contained, counted off the seams.
+///
+/// The other four kinds of stop are written by somebody who knows what they
+/// were doing, and they all carry a `next_intent`. The automatic one is
+/// written by a hook that was never told: asking the agent for the intent is
+/// the judgement of relevance `DX` already measured at zero uses. So it
+/// carries what it can know without asking --how much the segment held-- and
+/// leaves `next_intent` honestly empty (`f59`).
+fn segment_label(t: &crate::model::Tree) -> String {
+    let mut parts = Vec::new();
+    if t.seg_new > 0 {
+        parts.push(format!("{} new", t.seg_new));
+    }
+    if t.seg_closed > 0 {
+        parts.push(format!("{} closed", t.seg_closed));
+    }
+    if t.seg_notes == 1 {
+        parts.push("1 note".to_string());
+    } else if t.seg_notes > 1 {
+        parts.push(format!("{} notes", t.seg_notes));
+    }
+    if parts.is_empty() && t.seg_events > 0 {
+        parts.push(if t.seg_events == 1 {
+            "1 change".to_string()
+        } else {
+            format!("{} changes", t.seg_events)
+        });
+    }
+    parts.join(", ")
 }
 
 pub fn dispatch(ctx: &mut crate::ops::Ctx, a: &Args, project: &str) -> R {
