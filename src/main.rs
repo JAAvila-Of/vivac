@@ -50,6 +50,8 @@ const USAGE: &str = r#"vivac - provenance of work
   Without touching the stack
 
     vivac add "<title>" [--parent N] [--why "<reason>"] [--blocks]
+          [--type goal|task|decision|question|constraint|finding|assumption]
+          [--ref R] [--governs G]
     vivac done <id> ["<outcome>"] [--force]
     vivac note [<id>] "<note>"
     vivac block <id> [--off]
