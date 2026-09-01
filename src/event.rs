@@ -177,11 +177,17 @@ pub struct Event {
 
 /// The event body.
 ///
-/// Every field carries a `serde(alias)` with the name it had while the tool
-/// was written in Spanish. New events are written in English; the logs that
-/// already exist keep being read. The log is the source of truth and it is
-/// append-only, so a rename that could not read backwards would not be a
-/// rename, it would be a data loss.
+/// The fields are English, and only English. They each carried a
+/// `serde(alias)` with their Spanish name while the port was in flight, and
+/// `d45` retired that layer: the log now reads one spelling.
+///
+/// The way out was to migrate the data, not to carry the compatibility layer
+/// forever. The three real trees were rewritten **before** anything was
+/// removed, the migration was checked by diffing the output byte for byte
+/// against the binary that still read both spellings, and each previous log
+/// stayed beside its tree as `events.pre-english`. The log is the source of
+/// truth and it is append-only, so a rename that could not read what is
+/// already written would not be a rename, it would be a data loss.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum Body {
