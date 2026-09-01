@@ -54,9 +54,9 @@ pub fn end(ctx: &mut crate::ops::Ctx, a: &Args) -> R {
         }
         return Ok(());
     }
-    let luego = a.opt_or("next");
+    let next = a.opt_or("next");
     let num = ctx.tree.next_vivac_num.max(1);
-    crate::ops::auto_vivac(ctx, VivacKind::Auto, &luego)?;
+    crate::ops::auto_vivac(ctx, VivacKind::Auto, &next)?;
     if !a.has("hook") {
         println!("  v{num}  automatic stop at session close");
     }

@@ -209,9 +209,9 @@ pub fn pop(ctx: &mut Ctx, a: &Args) -> R {
         })?
         .clone();
     let outcome = a.positional(0).unwrap_or("");
-    let luego = a.opt("next").unwrap_or(outcome);
-    guard_text(&[("outcome", outcome), ("next", luego)])?;
-    let v = vivac(ctx, VivacKind::Pop, luego, Some(focus.id.clone()), "");
+    let next = a.opt("next").unwrap_or(outcome);
+    guard_text(&[("outcome", outcome), ("next", next)])?;
+    let v = vivac(ctx, VivacKind::Pop, next, Some(focus.id.clone()), "");
     close_node(ctx, &focus, outcome, a.has("force"), true)?;
     ctx.emit(vec![v])?;
     match ctx.tree.node(focus.parent.as_deref().unwrap_or("")) {
@@ -278,10 +278,10 @@ fn close_node(
     ctx: &mut Ctx,
     n: &crate::model::Node,
     outcome: &str,
-    forzar: bool,
+    force: bool,
     unstack: bool,
 ) -> R {
-    if !forzar {
+    if !force {
         let pending_count = ctx.tree.open_blockers(&n.id);
         if !pending_count.is_empty() {
             let mut m = format!(
@@ -304,7 +304,7 @@ fn close_node(
         node: n.id.clone(),
         state: State::Done,
         outcome: outcome.to_string(),
-        forced: forzar,
+        forced: force,
     }];
     if unstack && ctx.tree.stack.contains(&n.id) {
         evs.push(Body::Popped { node: n.id.clone() });
@@ -314,9 +314,9 @@ fn close_node(
         "  {}  {}  -> {}",
         n.alias(),
         n.title,
-        if forzar { "closed BY FORCE" } else { "closed" }
+        if force { "closed BY FORCE" } else { "closed" }
     );
-    if forzar {
+    if force {
         println!("        recorded as a false close in every render");
     }
     Ok(())
@@ -637,7 +637,7 @@ pub fn flag(ctx: &mut Ctx, a: &Args) -> R {
     };
     let n = ctx.resolve(sid)?.clone();
     let flag = Flag::parse(sb)
-        .ok_or_else(|| Failure::usage(format!("Unknown flag: {sb}. They are: {}", Flag::TODAS)))?;
+        .ok_or_else(|| Failure::usage(format!("Unknown flag: {sb}. They are: {}", Flag::ALL)))?;
 
     if a.has("off") {
         ctx.emit(vec![Body::FlagCleared {
@@ -715,9 +715,9 @@ pub fn decide(ctx: &mut Ctx, a: &Args) -> R {
 /// `save [label]` — a safe stop on purpose.
 pub fn save(ctx: &mut Ctx, a: &Args) -> R {
     let label = a.positional(0).unwrap_or("");
-    let luego = a.opt_or("next");
-    guard_text(&[("label", label), ("next", &luego)])?;
-    let v = vivac(ctx, VivacKind::Manual, &luego, None, label);
+    let next = a.opt_or("next");
+    guard_text(&[("label", label), ("next", &next)])?;
+    let v = vivac(ctx, VivacKind::Manual, &next, None, label);
     let num = ctx.tree.next_vivac_num.max(1);
     ctx.emit(vec![v])?;
     let anchoring = ctx.anchor.snapshot();
@@ -732,7 +732,7 @@ pub fn save(ctx: &mut Ctx, a: &Args) -> R {
         // restoring it will only give plain age, not a diff.
         println!("        no anchor: there is no version control here");
     }
-    if luego.is_empty() {
+    if next.is_empty() {
         println!("        no --next: coming back there will be nothing to pick up");
     }
     Ok(())
@@ -837,8 +837,8 @@ pub fn restore(ctx: &mut Ctx, a: &Args) -> R {
 }
 
 /// An automatic stop, for the end-of-session hook.
-pub fn auto_vivac(ctx: &mut Ctx, kind: VivacKind, luego: &str) -> R {
-    guard_text(&[("next", luego)])?;
-    let v = vivac(ctx, kind, luego, None, "");
+pub fn auto_vivac(ctx: &mut Ctx, kind: VivacKind, next: &str) -> R {
+    guard_text(&[("next", next)])?;
+    let v = vivac(ctx, kind, next, None, "");
     ctx.emit(vec![v])
 }

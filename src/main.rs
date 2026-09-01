@@ -102,7 +102,7 @@ fn run() -> i32 {
         print!("{USAGE}");
         return 0;
     };
-    if matches!(cmd.as_str(), "-h" | "--help" | "help" | "ayuda") {
+    if matches!(cmd.as_str(), "-h" | "--help" | "help") {
         print!("{USAGE}");
         return 0;
     }

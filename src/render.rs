@@ -201,7 +201,7 @@ pub fn why(a: &Tree, args: &Args) -> R {
     Ok(())
 }
 
-fn branch(a: &Tree, ag: &Aggregates, n: &Node, prefix: &str, is_last: bool, todo: bool) {
+fn branch(a: &Tree, ag: &Aggregates, n: &Node, prefix: &str, is_last: bool, show_all: bool) {
     let f = ag.counts(&n.id).phrase();
     let mut tail = if f.is_empty() {
         String::new()
@@ -226,10 +226,10 @@ fn branch(a: &Tree, ag: &Aggregates, n: &Node, prefix: &str, is_last: bool, todo
     let children: Vec<_> = a
         .children(&n.id)
         .into_iter()
-        .filter(|h| todo || h.state.is_open() || ag.counts(&h.id).open_count > 0)
+        .filter(|h| show_all || h.state.is_open() || ag.counts(&h.id).open_count > 0)
         .collect();
     for (i, h) in children.iter().enumerate() {
-        branch(a, ag, h, &sig, i == children.len() - 1, todo);
+        branch(a, ag, h, &sig, i == children.len() - 1, show_all);
     }
 }
 
@@ -261,13 +261,13 @@ pub fn tree(a: &Tree, args: &Args) -> R {
         println!("  Empty tree.  vivac push \"<title>\" --why \"<reason>\"");
         return Ok(());
     }
-    let todo = args.has("all") || args.has("all");
+    let show_all = args.has("all");
     println!();
     for (i, n) in roots.iter().enumerate() {
-        branch(a, ag, n, "  ", i == roots.len() - 1, todo);
+        branch(a, ag, n, "  ", i == roots.len() - 1, show_all);
     }
     println!();
-    if !todo {
+    if !show_all {
         println!("  (closed nodes with no open descendants hidden; --all shows them)");
         println!();
     }

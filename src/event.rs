@@ -33,13 +33,13 @@ impl Kind {
 
     pub fn parse(s: &str) -> Option<Kind> {
         Some(match s {
-            "goal" | "meta" => Kind::Goal,
-            "task" | "tarea" => Kind::Task,
+            "goal" => Kind::Goal,
+            "task" => Kind::Task,
             "decision" => Kind::Decision,
-            "question" | "pregunta" => Kind::Question,
-            "constraint" | "restriccion" => Kind::Constraint,
-            "finding" | "hallazgo" => Kind::Finding,
-            "assumption" | "asuncion" => Kind::Assumption,
+            "question" => Kind::Question,
+            "constraint" => Kind::Constraint,
+            "finding" => Kind::Finding,
+            "assumption" => Kind::Assumption,
             _ => return None,
         })
     }
@@ -112,8 +112,8 @@ pub enum Flag {
 impl Flag {
     pub fn parse(s: &str) -> Option<Flag> {
         Some(match s {
-            "suspect" | "sospechoso" => Flag::Suspect,
-            "review" | "revisar" => Flag::Review,
+            "suspect" => Flag::Suspect,
+            "review" => Flag::Review,
             "stale" | "old" => Flag::Stale,
             _ => return None,
         })
@@ -127,7 +127,7 @@ impl Flag {
         }
     }
 
-    pub const TODAS: &'static str = "suspect, review, stale";
+    pub const ALL: &'static str = "suspect, review, stale";
 }
 
 /// A vivac: a safe stop partway up. `MODEL.md` §4.7 calls it a **single
@@ -191,19 +191,16 @@ pub enum Body {
     /// by a check somebody can forget.
     #[serde(rename = "node.created")]
     NodeCreated {
-        #[serde(alias = "nodo")]
         node: String,
         num: u64,
         // Not `type`: that name is taken by the enum tag above.
-        #[serde(alias = "tipo")]
         kind: Kind,
-        #[serde(alias = "titulo")]
         title: String,
-        #[serde(default, alias = "por")]
+        #[serde(default)]
         why: String,
-        #[serde(default, alias = "padre")]
+        #[serde(default)]
         parent: Option<String>,
-        #[serde(default, alias = "bloquea")]
+        #[serde(default)]
         blocks: bool,
         #[serde(default)]
         refs: Vec<String>,
@@ -212,64 +209,35 @@ pub enum Body {
     },
     #[serde(rename = "state.changed")]
     StateChanged {
-        #[serde(alias = "nodo")]
         node: String,
-        #[serde(alias = "estado")]
         state: State,
-        #[serde(default, alias = "resultado")]
+        #[serde(default)]
         outcome: String,
         /// A forced close is legitimate, but it has to be a decision and not
         /// an oversight: that is why it leaves a trace here. `MODEL.md` §7.
-        #[serde(default, alias = "forzado")]
+        #[serde(default)]
         forced: bool,
     },
     #[serde(rename = "node.noted")]
-    NodeNoted {
-        #[serde(alias = "nodo")]
-        node: String,
-        #[serde(alias = "nota")]
-        note: String,
-    },
+    NodeNoted { node: String, note: String },
     #[serde(rename = "edge.blocks")]
-    BlockChanged {
-        #[serde(alias = "nodo")]
-        node: String,
-        #[serde(alias = "bloquea")]
-        blocks: bool,
-    },
+    BlockChanged { node: String, blocks: bool },
     #[serde(rename = "stack.pushed")]
-    Pushed {
-        #[serde(alias = "nodo")]
-        node: String,
-    },
+    Pushed { node: String },
     #[serde(rename = "stack.popped")]
-    Popped {
-        #[serde(alias = "nodo")]
-        node: String,
-    },
+    Popped { node: String },
     #[serde(rename = "stack.promoted")]
-    Promoted {
-        #[serde(alias = "nodo")]
-        node: String,
-    },
+    Promoted { node: String },
     /// The reason is mandatory: `BRIEF-SPEC.md` §10 tests it, because a flag
     /// with no reason informs nobody and is only noise.
     #[serde(rename = "flag.raised")]
     FlagRaised {
-        #[serde(alias = "nodo")]
         node: String,
-        #[serde(alias = "bandera")]
         flag: Flag,
-        #[serde(alias = "motivo")]
         reason: String,
     },
     #[serde(rename = "flag.cleared")]
-    FlagCleared {
-        #[serde(alias = "nodo")]
-        node: String,
-        #[serde(alias = "bandera")]
-        flag: Flag,
-    },
+    FlagCleared { node: String, flag: Flag },
     #[serde(rename = "vivac.created")]
     VivacCreated {
         vivac: String,
@@ -277,7 +245,6 @@ pub enum Body {
         kind: VivacKind,
         /// Frozen stack with titles: a vivac has to stay readable even after
         /// the nodes have changed.
-        #[serde(alias = "pila")]
         stack: Vec<(String, String)>,
         /// Paths of the pitch. Not measured --that would need `post_tool`, which
         /// is not in Tier 0-- but derived from the `governs` the stack declares.
@@ -288,7 +255,7 @@ pub enum Body {
         anchor: crate::anchor::AnchorRef,
         #[serde(default)]
         node_ref: Option<String>,
-        #[serde(default, alias = "etiqueta")]
+        #[serde(default)]
         label: String,
     },
 }

@@ -95,9 +95,6 @@ tree manipulation gives you a branch manager worse than git.
 Everything the agent needs to do can be done with no interactive interface,
 and every read command accepts `--json`.
 
-Flags carry an English name and keep their original Spanish one as an alias:
-`--parent` and `--padre` are the same flag.
-
 ## The two edges
 
 It is the distinction that holds the model up, and it came out of seeding two
@@ -149,7 +146,7 @@ definition: **security vetoes, performance budgets, DX judges.**
 
 **Tier 0 complete.** The tree, the two edges, the closure rule, the redaction
 guard, the `brief` with its token budget, the session hooks, the vivacs and the
-`Anchor` with its `Git` and `Null` implementations. 76 tests, of which 11 are
+`Anchor` with its `Git` and `Null` implementations. 73 tests, of which 11 are
 the brief specification's contract executed against the real binary.
 
 `reconcile` is the first of Tier 1. It answers the one question that keeps the
@@ -177,6 +174,12 @@ with the size of the log, which is read whole on every call. **That is where
 SQLite comes in**, and now it has a number instead of a hunch.
 
 Not there yet: TUI, search, cascading invalidation, team mode.
+
+**0.3.0 does not read a log written by 0.1.x or 0.2.x.** The tool was written
+in Spanish and those releases stored the event fields under Spanish names,
+which 0.2.x read through aliases. 0.3.0 speaks one language, so it reports
+those lines as unreadable rather than guessing. If you have such a log, 0.2.1
+still reads it.
 
 ## Hooks
 

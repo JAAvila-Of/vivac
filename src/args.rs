@@ -14,33 +14,6 @@ pub struct Args {
     opts: HashMap<String, Vec<String>>,
 }
 
-/// English is canonical; the Spanish name of every flag keeps working.
-///
-/// The tool was written in Spanish and three real trees were seeded with those
-/// flags already in the fingers. Renaming them outright would have broken
-/// scripts for nothing: normalizing here means everything downstream sees one
-/// name, the help teaches only English, and the alias costs one match arm.
-///
-/// An unknown flag is not in this table, so it comes out exactly as it was
-/// typed and `unknown` can quote it back.
-fn canonical(k: &str) -> &str {
-    match k {
-        "alternativa" => "alternative",
-        "bloquea" => "blocks",
-        "cascada" => "cascade",
-        "forzar" => "force",
-        "luego" => "next",
-        "padre" => "parent",
-        "por" => "why",
-        "razon" => "reason",
-        "reabrir" => "reopen",
-        "rescatar" => "rescue",
-        "tipo" => "type",
-        "todo" => "all",
-        other => other,
-    }
-}
-
 impl Args {
     pub fn parse<I: IntoIterator<Item = String>>(it: I) -> Args {
         let v: Vec<String> = it.into_iter().collect();
@@ -58,10 +31,7 @@ impl Args {
                         n.clone()
                     })
                 });
-                a.opts
-                    .entry(canonical(k).to_string())
-                    .or_default()
-                    .extend(val);
+                a.opts.entry(k.to_string()).or_default().extend(val);
             } else {
                 a.positionals.push(v[i].clone());
             }
@@ -148,53 +118,23 @@ mod tests {
         assert_eq!(a.opt("type"), Some("decision"));
     }
 
-    /// The Spanish name of a flag still works, and lands on the English one.
+    /// A flag is English or it is nothing.
     ///
-    /// Three real trees were seeded with those flags in the fingers. Dropping
-    /// them would break scripts for nothing, so they normalize at the door and
-    /// nothing downstream ever sees two names for one thing.
+    /// The Spanish names the tool grew up with were normalized at the door
+    /// until `d45` retired them. They are now unknown flags, and an unknown
+    /// flag is **refused**, not ignored: a typo that changes nothing silently
+    /// is worse than one that stops you.
     #[test]
-    fn the_spanish_alias_resolves_to_the_english_name() {
-        let a = p("t --por reason --bloquea --padre 3 --forzar --luego x");
-        assert_eq!(a.opt("why"), Some("reason"));
-        assert!(a.has("blocks"));
-        assert_eq!(a.opt("parent"), Some("3"));
-        assert!(a.has("force"));
-        assert_eq!(a.opt("next"), Some("x"));
-
-        // And it is genuinely the same key, not a second one.
-        assert!(a
-            .unknown(&["why", "blocks", "parent", "force", "next"])
-            .is_empty());
-
-        // An unknown flag is not in the table, so it is quoted back verbatim.
-        assert_eq!(p("--inventada 1").unknown(&["why"]), vec!["inventada"]);
+    fn a_flag_that_is_not_english_is_unknown_rather_than_ignored() {
+        let a = p("t --padre 3");
+        assert_eq!(a.opt("parent"), None);
+        assert_eq!(a.unknown(&["why", "parent"]), vec!["padre"]);
     }
 
-    /// Every Spanish name in the alias table maps to a different English one.
-    ///
-    /// The table is the one place in the crate where a Spanish string is load
-    /// bearing, so a global rename can translate it and break nothing at
-    /// compile time. This test is the thing that notices.
+    /// An unknown flag comes out exactly as it was typed, so the message that
+    /// refuses it can name it.
     #[test]
-    fn no_alias_translated_itself_away() {
-        for es in [
-            "por",
-            "tipo",
-            "bloquea",
-            "forzar",
-            "luego",
-            "padre",
-            "cascada",
-            "rescatar",
-            "reabrir",
-            "todo",
-            "razon",
-            "alternativa",
-        ] {
-            let en = canonical(es);
-            assert_ne!(en, es, "the alias for --{es} was lost");
-            assert_eq!(canonical(en), en, "--{en} is not canonical");
-        }
+    fn an_unknown_flag_is_quoted_back_verbatim() {
+        assert_eq!(p("--nonesuch 1").unknown(&["why"]), vec!["nonesuch"]);
     }
 }

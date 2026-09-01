@@ -45,7 +45,7 @@ struct OldNode {
     closed: Option<String>,
 }
 
-fn tipo_de(kind: &str) -> Kind {
+fn kind_of(kind: &str) -> Kind {
     match kind {
         "goal" => Kind::Goal,
         "decision" => Kind::Decision,
@@ -132,7 +132,7 @@ pub fn import(ctx: &mut Ctx, args: &Args) -> R {
             Body::NodeCreated {
                 node: ulids[&n.id].clone(),
                 num: n.id,
-                kind: tipo_de(&n.kind),
+                kind: kind_of(&n.kind),
                 title: n.title.clone(),
                 why: n.why.clone(),
                 parent: n.parent.and_then(|p| ulids.get(&p).cloned()),

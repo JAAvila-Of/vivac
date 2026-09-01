@@ -5,7 +5,6 @@ The list the output guard reads is derived, not remembered:
 
     every word the binary printed while it was Spanish
       minus every word it prints today
-      plus  the Spanish kept on purpose as data
 
 The Spanish side is lifted from the string literals of commit 4846499, the
 last one before the port to English, so that half never changes. The English
@@ -122,21 +121,10 @@ def main():
             continue
         spoken_today |= words_in_literals(io.open(f, encoding="utf-8").read())
 
-    # Spanish that is data and must never come back out as prose: the flag
-    # alias table, the serde aliases, and the Spanish spellings `Kind::parse`
-    # and `Flag::parse` still accept as input.
-    args = io.open("src/args.rs", encoding="utf-8").read()
-    rest = "".join(io.open(f, encoding="utf-8").read()
-                   for f in ("src/event.rs", "src/import.rs"))
-    kept = set(re.findall(r'"([a-z]+)"\s*=>\s*"[a-z]+"', args))
-    kept |= set(re.findall(r'alias\s*=\s*"([a-z]+)"', rest))
-    for m in re.finditer(r'((?:"[a-z]+"\s*\|\s*)+"[a-z]+")\s*=>', rest):
-        kept |= set(re.findall(r'"([a-z]+)"', m.group(1))[1:])
-
-    banned = sorted((spoken_in_spanish - spoken_today) | kept)
+    banned = sorted(spoken_in_spanish - spoken_today)
     io.open(OUT, "w", encoding="utf-8", newline="\n").write("\n".join(banned) + "\n")
-    print(f"{len(spoken_in_spanish)} spoken in Spanish, {len(spoken_today)} spoken today, "
-          f"{len(kept)} kept as data -> {len(banned)} banned, written to {OUT}")
+    print(f"{len(spoken_in_spanish)} spoken in Spanish, {len(spoken_today)} spoken today "
+          f"-> {len(banned)} banned, written to {OUT}")
 
 
 if __name__ == "__main__":

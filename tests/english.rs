@@ -29,10 +29,8 @@
 //! `tests/data/spanish-vocabulary.txt` is instead every word the binary
 //! printed while it was Spanish -- lifted from the string literals of commit
 //! `4846499`, the last one before the port -- minus every word it prints
-//! today, plus the Spanish that is deliberately kept as **data**: the flag
-//! alias table, the `serde` aliases and the Spanish spellings `Kind::parse`
-//! still accepts. A word leaves the list by being spoken in English, which is
-//! the only way out that is not a guess.
+//! today. A word leaves the list by being spoken in English, which is the only
+//! way out that is not a guess.
 //!
 //! `tools/spanish-vocabulary.py` regenerates it. Run it **after** fixing a
 //! string this test caught, never before: regenerating first subtracts the
