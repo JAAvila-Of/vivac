@@ -1,0 +1,63 @@
+# Releasing. The version number and the changelog are computed from the commit
+# messages; nothing reaches crates.io until a human merges the release pull
+# request. That merge is the gate, and it is the only one.
+#
+# There are no stored credentials. Publishing authenticates with crates.io over
+# OIDC -- GitHub signs a short-lived token, crates.io validates it against
+# GitHub's public keys, and it expires within the hour. A long-lived registry
+# token would be the most dangerous secret this project could hold: whoever took
+# it could publish anything, as us, to everyone who installs vivac.
+#
+# One manual step per release, and it is a consequence of that choice. GitHub
+# does not start workflow runs for events its own token caused, so the release
+# pull request opens with no checks on it, and `main` requires them all. Close
+# it and reopen it to run them. The alternative is an app or a personal token,
+# which is the credential this file exists to avoid.
+
+name: release-plz
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  pr:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    concurrency:
+      group: release-plz-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: release-plz/action@v0.5.131
+        with:
+          command: release-pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: release-plz/action@v0.5.131
+        with:
+          command: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
