@@ -1,5 +1,7 @@
 # vivac
 
+[![ci](https://github.com/JAAvila-Of/vivac/actions/workflows/ci.yml/badge.svg)](https://github.com/JAAvila-Of/vivac/actions/workflows/ci.yml)
+
 **A tree where every node knows which node it was born from.** It exists to
 answer *"why are we here?"* months later, when nobody remembers any more.
 
