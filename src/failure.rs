@@ -48,6 +48,21 @@ impl Failure {
         eprintln!();
     }
 
+    /// The failure as plain text.
+    ///
+    /// `print_to_stderr` writes for a terminal --leading spaces, blank lines
+    /// around it-- and to a channel the model never sees. The MCP server
+    /// hands the model this instead, because a refusal it cannot read is a
+    /// refusal it cannot act on. Two renderings of the same data, on purpose.
+    pub fn message(&self) -> String {
+        match self {
+            Failure::Model(m) | Failure::Usage(m) => m.trim().to_string(),
+            Failure::Redaction(h) => h.to_string(),
+            Failure::NoStore => "No .vivac/ here or further up. Plant one: vivac init".into(),
+            Failure::Io(e) => format!("Input/output error: {e}"),
+        }
+    }
+
     pub fn usage(m: impl Into<String>) -> Failure {
         Failure::Usage(format!("  {}", m.into()))
     }
