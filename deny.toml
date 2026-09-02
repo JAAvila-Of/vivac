@@ -1,0 +1,18 @@
+# The dependency licence policy, specified in the design corpus a month before
+# this file existed -- in a document that says, in the same paragraph, that the
+# policy belongs in CI and not in a document nobody re-reads.
+#
+# Anything outside the list breaks the build. Exceptions get recorded here, in
+# the open, rather than argued once and forgotten. The tree is clean today with
+# three direct dependencies; the gate exists because the problem shows up in
+# transitive dependency number forty, not in the one that was chosen.
+
+[licenses]
+allow = ["MIT", "Apache-2.0", "Apache-2.0 WITH LLVM-exception",
+         "BSD-2-Clause", "BSD-3-Clause", "ISC", "Zlib",
+         "Unicode-3.0", "CC0-1.0"]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "warn"
+deny = [{ name = "serde" }]
