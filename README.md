@@ -80,6 +80,7 @@ vivac brief         where you are, what governs this point, what NOT to touch
 vivac why 11        the path from the root, narrated
 vivac tree          the tree, with false closes marked
 vivac open          the open fronts, each with its lineage
+vivac find cache    every node whose text holds all the words, newest first
 vivac stack         the focus stack
 vivac parked        DO NOT TOUCH NOW
 vivac triage        what can be pruned, and with which command
@@ -152,14 +153,20 @@ definition: **security vetoes, performance budgets, DX judges.**
 
 **Tier 0 complete.** The tree, the two edges, the closure rule, the redaction
 guard, the `brief` with its token budget, the session hooks, the vivacs and the
-`Anchor` with its `Git` and `Null` implementations. 102 tests, of which 12 are
-the brief specification's contract executed against the real binary.
+`Anchor` with its `Git` and `Null` implementations. The suite runs on every
+pull request, on Linux, macOS and Windows; twelve of its tests are the brief
+specification's contract, executed against the real binary.
 
 `reconcile` is the first of Tier 1. It answers the one question that keeps the
 tree honest -- *what changed since the tree last looked, and which of it does
 no node claim?* -- by diffing the anchor's history against the `governs` globs
 the nodes declare. It reports and never writes: it can say nobody claims a
 file, and it cannot say which thread that file belongs to.
+
+`find` is the other half of reading. It returns every node whose title, reason,
+note or outcome holds all of the words, newest first, each with the lineage it
+hangs from. Closed nodes are included on purpose: what you go looking for
+months later is usually finished.
 
 The `brief` is deterministic by contract: same log, same `--now`, same bytes.
 The spine — the path from the root to the focus — is **never truncated**: if it
@@ -179,7 +186,7 @@ In the low hundreds of nodes it holds, and from there up it degrades linearly
 with the size of the log, which is read whole on every call. **That is where
 SQLite comes in**, and now it has a number instead of a hunch.
 
-Not there yet: TUI, search, cascading invalidation, team mode.
+Not there yet: TUI, cascading invalidation, team mode.
 
 **0.3.0 does not read a log written by 0.1.x or 0.2.x.** The tool was written
 in Spanish and those releases stored the event fields under Spanish names,
