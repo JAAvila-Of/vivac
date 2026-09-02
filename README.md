@@ -210,6 +210,25 @@ the previous one: a stop that repeats identically is not a stop, it is a log.
 Both stay quiet and exit 0 where there is no `.vivac/`, so they can be left in
 the global configuration without getting in the way of other projects.
 
+## MCP
+
+The reads, as tools an agent can call:
+
+```sh
+claude mcp add vivac -- vivac mcp
+```
+
+Four of them — `vivac_brief`, `vivac_find`, `vivac_why`, `vivac_open` — because
+every tool costs context in every session, so the list is a budget rather than a
+catalogue. It speaks JSON-RPC over standard input and adds no dependency: the
+server is the binary you already installed, and the writes keep going through
+the CLI.
+
+Hooks and MCP are not the same offer, and the difference matters. A hook fires
+whether or not anybody wanted it; a tool is called only if the agent decides to.
+So the brief still arrives through `SessionStart`, where nothing has to choose
+it — `vivac_brief` is for asking again mid-session, not for the opening.
+
 ## Install
 
 ```sh

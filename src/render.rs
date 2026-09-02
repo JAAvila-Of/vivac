@@ -85,6 +85,64 @@ pub(crate) fn print_json(v: serde_json::Value) -> R {
 /// It narrates the path from the root and then answers the three questions
 /// that come next: what was left open in parallel, what was born here, and
 /// what keeps each step of the path from closing.
+/// `why` as data.
+///
+/// The builder and the printing are two functions, the way `brief.rs` has
+/// always had them: `to_text` builds and `brief` prints one line lower. It
+/// matters more than tidiness here, because a second reader --the MCP server--
+/// speaks JSON-RPC over the same standard output. A `println!` in its path
+/// does not look untidy, it corrupts the channel.
+pub fn why_data(a: &Tree, id: &str) -> Result<serde_json::Value, Failure> {
+    let ag = &a.aggregates();
+    let n = a
+        .resolve(id)
+        .ok_or_else(|| Failure::usage(format!("No such node: {id}.")))?;
+    let lineage = a.ancestors(&n.id);
+    let siblings: Vec<_> = n
+        .parent
+        .as_ref()
+        .map(|p| a.children(p))
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|c| c.id != n.id && c.state.is_open())
+        .map(|c| json_node(a, ag, c))
+        .collect();
+    Ok(json!({
+        "node": json_node(a, ag, n),
+        "path": lineage.iter().map(|x| json_node(a, ag, x)).collect::<Vec<_>>(),
+        "in_parallel": siblings,
+        "born_here": a.children(&n.id).iter().filter(|c| c.state.is_open())
+            .map(|c| json_node(a, ag, c)).collect::<Vec<_>>(),
+        "blockers": a.open_blockers(&n.id).iter()
+            .map(|c| json_node(a, ag, c)).collect::<Vec<_>>(),
+    }))
+}
+
+/// The open fronts as data.
+pub fn open_data(a: &Tree) -> serde_json::Value {
+    let ag = &a.aggregates();
+    let mut leaves: Vec<&Node> = a
+        .nodes_iter()
+        .filter(|n| n.is_front() && !a.children(&n.id).iter().any(|c| c.is_front()))
+        .collect();
+    leaves.sort_by_key(|n| n.num);
+    json!(leaves
+        .iter()
+        .map(|n| {
+            let mut v = json_node(a, ag, n);
+            v["lineage"] = json!(a
+                .ancestors(&n.id)
+                .iter()
+                .rev()
+                .skip(1)
+                .rev()
+                .map(|p| p.alias())
+                .collect::<Vec<_>>());
+            v
+        })
+        .collect::<Vec<_>>())
+}
+
 pub fn why(a: &Tree, args: &Args) -> R {
     let ag = &a.aggregates();
     let s = args
@@ -96,24 +154,7 @@ pub fn why(a: &Tree, args: &Args) -> R {
     let lineage = a.ancestors(&n.id);
 
     if args.has("json") {
-        let siblings: Vec<_> = n
-            .parent
-            .as_ref()
-            .map(|p| a.children(p))
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|c| c.id != n.id && c.state.is_open())
-            .map(|c| json_node(a, ag, c))
-            .collect();
-        return print_json(json!({
-            "node": json_node(a, ag, n),
-            "path": lineage.iter().map(|x| json_node(a, ag, x)).collect::<Vec<_>>(),
-            "in_parallel": siblings,
-            "born_here": a.children(&n.id).iter().filter(|c| c.state.is_open())
-                .map(|c| json_node(a, ag, c)).collect::<Vec<_>>(),
-            "blockers": a.open_blockers(&n.id).iter()
-                .map(|c| json_node(a, ag, c)).collect::<Vec<_>>(),
-        }));
+        return print_json(why_data(a, s)?);
     }
 
     println!();
@@ -277,7 +318,6 @@ pub fn tree(a: &Tree, args: &Args) -> R {
 /// `open` — the open fronts, each with its lineage compressed. It is the
 /// "where was I" view for the start of the day.
 pub fn open(a: &Tree, args: &Args) -> R {
-    let ag = &a.aggregates();
     let mut leaves: Vec<&Node> = a
         .nodes_iter()
         .filter(|n| n.is_front() && !a.children(&n.id).iter().any(|c| c.is_front()))
@@ -288,21 +328,7 @@ pub fn open(a: &Tree, args: &Args) -> R {
         .filter(|n| n.kind == Kind::Decision && n.state.is_open())
         .count();
     if args.has("json") {
-        return print_json(json!(leaves
-            .iter()
-            .map(|n| {
-                let mut v = json_node(a, ag, n);
-                v["lineage"] = json!(a
-                    .ancestors(&n.id)
-                    .iter()
-                    .rev()
-                    .skip(1)
-                    .rev()
-                    .map(|p| p.alias())
-                    .collect::<Vec<_>>());
-                v
-            })
-            .collect::<Vec<_>>()));
+        return print_json(open_data(a));
     }
     if leaves.is_empty() && standing == 0 {
         println!("  Nothing open.");
@@ -734,14 +760,16 @@ fn snippet(text: &str, terms: &[String], width: usize) -> String {
 ///
 /// Newest first, because a search over a tree that has been running for
 /// months is answered from the end far more often than from the beginning.
-pub fn find(a: &Tree, args: &Args) -> R {
-    let usage = || Failure::usage("usage: vivac find \"<text>\"".to_string());
-    let query = args.positional(0).ok_or_else(usage)?;
+fn terms_of(query: &str) -> Result<Vec<String>, Failure> {
     let terms: Vec<String> = query.split_whitespace().map(|t| t.to_lowercase()).collect();
     if terms.is_empty() {
-        return Err(usage());
+        return Err(Failure::usage("usage: vivac find \"<text>\"".to_string()));
     }
+    Ok(terms)
+}
 
+/// Every node that matches, newest first, each with the fields it hit on.
+fn hits_for<'t>(a: &'t Tree, terms: &[String]) -> Vec<(&'t Node, Vec<&'static str>)> {
     let mut hits: Vec<(&Node, Vec<&'static str>)> = Vec::new();
     for n in a.nodes_iter() {
         let lowered: Vec<(&'static str, String)> = searchable(n)
@@ -763,27 +791,41 @@ pub fn find(a: &Tree, args: &Args) -> R {
         hits.push((n, matched));
     }
     hits.sort_by_key(|(n, _)| std::cmp::Reverse(n.num));
+    hits
+}
 
-    let lineage_of = |n: &Node| -> Vec<String> {
-        let line = a.ancestors(&n.id);
-        line[..line.len().saturating_sub(1)]
-            .iter()
-            .map(|p| p.alias())
-            .collect()
-    };
+fn lineage_of(a: &Tree, n: &Node) -> Vec<String> {
+    let line = a.ancestors(&n.id);
+    line[..line.len().saturating_sub(1)]
+        .iter()
+        .map(|p| p.alias())
+        .collect()
+}
 
+/// `find` as data.
+pub fn find_data(a: &Tree, query: &str) -> Result<serde_json::Value, Failure> {
+    let terms = terms_of(query)?;
+    let ag = &a.aggregates();
+    Ok(json!(hits_for(a, &terms)
+        .iter()
+        .map(|(n, matched)| {
+            let mut v = json_node(a, ag, n);
+            v["lineage"] = json!(lineage_of(a, n));
+            v["matched"] = json!(matched);
+            v
+        })
+        .collect::<Vec<_>>()))
+}
+
+pub fn find(a: &Tree, args: &Args) -> R {
+    let query = args
+        .positional(0)
+        .ok_or_else(|| Failure::usage("usage: vivac find \"<text>\"".to_string()))?;
+    let terms = terms_of(query)?;
     if args.has("json") {
-        let ag = &a.aggregates();
-        return print_json(json!(hits
-            .iter()
-            .map(|(n, matched)| {
-                let mut v = json_node(a, ag, n);
-                v["lineage"] = json!(lineage_of(n));
-                v["matched"] = json!(matched);
-                v
-            })
-            .collect::<Vec<_>>()));
+        return print_json(find_data(a, query)?);
     }
+    let hits = hits_for(a, &terms);
 
     if hits.is_empty() {
         println!("  Nothing matches \"{query}\".");
@@ -799,7 +841,7 @@ pub fn find(a: &Tree, args: &Args) -> R {
     println!();
     for (n, matched) in hits.iter().take(20) {
         println!("  {:<6} {}", n.alias(), n.title);
-        let lineage = lineage_of(n);
+        let lineage = lineage_of(a, n);
         if !lineage.is_empty() {
             println!("         via {}", lineage.join(" > "));
         }

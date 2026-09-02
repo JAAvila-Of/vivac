@@ -10,6 +10,7 @@ active
 actor
 add
 advice
+after
 ag
 aggregates
 al
@@ -22,6 +23,7 @@ along
 alphabet
 alphabetic
 alphanumeric
+already
 alternatives
 an
 ancestors
@@ -30,6 +32,8 @@ anchoring
 and
 announces
 another
+answer
+answers
 any
 appear
 append
@@ -37,10 +41,13 @@ apply
 are
 arg
 args
+argument
 argv
 arm
+array
 as
 ascii
+ask
 assert
 assumption
 at
@@ -72,10 +79,13 @@ broken
 btree
 budget
 buf
+but
 by
 bytes
+call
 calling
 came
+can
 cannot
 capacity
 carries
@@ -101,6 +111,7 @@ clamp
 clean
 clear
 cleared
+cli
 clip
 clipping
 clock
@@ -164,6 +175,7 @@ depth
 deref
 derive
 descendants
+description
 deserialize
 detect
 determinism
@@ -178,6 +190,7 @@ doe
 does
 domain
 done
+down
 doy
 drags
 drain
@@ -237,6 +250,7 @@ file
 filter
 find
 finding
+fingerprint
 first
 fixed
 flag
@@ -244,6 +258,7 @@ flagged
 flags
 flat
 flatten
+flush
 fmt
 fn
 focus
@@ -257,6 +272,7 @@ found
 four
 from
 front
+fronts
 fs
 get
 getrandom
@@ -271,6 +287,7 @@ governing
 governs
 guard
 guessed
+handle
 hang
 hangs
 has
@@ -279,6 +296,7 @@ hashes
 head
 heading
 headings
+hello
 help
 here
 heuristic
@@ -307,6 +325,7 @@ in
 include
 indent
 initial
+initialize
 inline
 input
 insert
@@ -330,6 +349,7 @@ jwt
 key
 keys
 kids
+kill
 kind
 known
 label
@@ -349,9 +369,11 @@ lineage
 lines
 list
 listed
+lists
 literals
 live
 load
+lock
 log
 log2
 lone
@@ -377,12 +399,17 @@ matches
 matching
 matter
 max
+mcp
 mem
+message
+metadata
+method
 millis
 min
 missing
 mod
 model
+modified
 move
 mp
 ms
@@ -409,10 +436,13 @@ note
 noted
 notes
 nothing
+notification
+notify
 now
 null
 num
 nums
+object
 of
 off
 ok
@@ -450,6 +480,7 @@ pa
 packed
 pair
 panic
+params
 parent
 park
 parked
@@ -492,6 +523,9 @@ process
 project
 promote
 promoted
+properties
+prose
+protocol
 prune
 ps
 pt
@@ -535,7 +569,9 @@ rename
 render
 repeat
 replace
+reply
 requested
+required
 rescue
 rescued
 rescuing
@@ -559,6 +595,7 @@ root
 roots
 rotate
 rows
+rpc
 rposition
 rsplit
 rule
@@ -571,6 +608,7 @@ save
 saved
 says
 sb
+schema
 scope
 search
 searchable
@@ -589,6 +627,8 @@ separators
 seq
 serde
 serialize
+serve
+server
 session
 set
 sha
@@ -630,6 +670,7 @@ src
 stable
 stack
 stale
+standard
 standing
 stars
 start
@@ -702,6 +743,7 @@ token
 tokens
 too
 tool
+tools
 top
 total
 touching
@@ -783,7 +825,10 @@ words
 work
 working
 world
+would
 wrap
 write
+writeln
 writes
+written
 yoe

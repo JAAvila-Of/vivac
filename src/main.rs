@@ -20,6 +20,7 @@ mod failure;
 mod glob;
 mod id;
 mod import;
+mod mcp;
 mod model;
 mod ops;
 mod reconcile;
@@ -84,6 +85,7 @@ const USAGE: &str = r#"vivac - provenance of work
 
     vivac session start [--hook]              the brief, ready to inject
     vivac session end   [--hook]              automatic stop at close
+    vivac mcp                                 serve the reads over MCP
     vivac hooks                               what to paste into settings.json
 
   Getting started
@@ -158,6 +160,13 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         }
         return Err(Failure::NoStore);
     };
+    // The server outlives its calls and it is not the only writer, so it
+    // loads the tree itself and reloads it when the log moves. Everything
+    // below assumes one command, one process, one fold.
+    if cmd == "mcp" {
+        return mcp::serve(root).map(|_| 0);
+    }
+
     let mut ctx = ops::Ctx::load(store::Store::open(root)?)?;
 
     // `check` is the only one with an exit code of its own: it separates
