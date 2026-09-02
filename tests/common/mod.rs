@@ -9,6 +9,32 @@ use std::process::Command;
 
 const BIN: &str = env!("CARGO_BIN_EXE_vivac");
 
+/// A directory name nothing else can take.
+///
+/// It used to be the clock alone, and the clock is not a source of
+/// uniqueness: on the machine this was written on, six consecutive reads of
+/// the system time come back identical, and every test in a file passes the
+/// same `name`. Two of them then seeded the same store, and `vivac check`
+/// reported every number twice. It had been true on all three platforms all
+/// along; macOS is just where the threads stopped saving it, on the first run
+/// the suite ever had outside one developer's machine.
+///
+/// The pid separates test binaries, the counter separates calls inside one,
+/// and the clock separates runs whose pid the system reused. Unique by
+/// construction rather than by luck.
+fn unique(prefix: &str, name: &str) -> PathBuf {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "vivac-{prefix}-{name}-{}-{n}-{ts}",
+        std::process::id()
+    ))
+}
+
 pub struct Sandbox(pub PathBuf);
 
 impl Sandbox {
@@ -19,25 +45,13 @@ impl Sandbox {
     /// use this see it as dead. It is not.
     #[allow(dead_code)]
     pub fn new_empty(name: &str) -> Sandbox {
-        let d = std::env::temp_dir().join(format!(
-            "vivac-v-{name}-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let d = unique("v", name);
         std::fs::create_dir_all(&d).unwrap();
         Sandbox(d)
     }
 
     pub fn new_seeded(name: &str) -> Sandbox {
-        let d = std::env::temp_dir().join(format!(
-            "vivac-t-{name}-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let d = unique("t", name);
         std::fs::create_dir_all(&d).unwrap();
         let c = Sandbox(d);
         c.ok(&["init"]);

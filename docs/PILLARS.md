@@ -26,6 +26,26 @@ model asked for each event's `actor` to be `git config user.email`. That is
 personal data. **Security vetoed and the model was corrected**: the actor is an
 opaque identifier generated at `init`.
 
+## Correctness over cost
+
+**The right way to do a thing does not depend on what it costs.** Expense is not
+an argument for a bypass, a shortcut or a special case. If something is worth
+doing it is done properly; if it is not worth doing it is not done. Those are
+the only two answers, and "the cheap version, for now" is not a third.
+
+This does not soften the performance budget, it sharpens it. A budget kills a
+feature whole; it never licences a degraded one. What the rule forbids is the
+outcome where something half exists because doing it right looked expensive.
+
+It is not a licence to build more. Scope is decided elsewhere and ruthlessly:
+"do we need this at all?" stays wide open, and dropping a requirement is always
+available. What is not available is keeping the requirement and meeting it
+badly.
+
+Like the pillars, it is a rejection criterion. "That would take too long", "that
+is a lot of work" and "we can fix it later" are not reasons, and a design that
+rests on one of them does not get in.
+
 ---
 
 ## Pillar 1 — DX
