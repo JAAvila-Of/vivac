@@ -36,7 +36,7 @@
 //! both directions, so a word cannot linger with a licence after the last
 //! identifier that used it is gone.
 
-use std::collections::{BTreeMap, BTreeSet};
+use  std::collections::{BTreeMap, BTreeSet};
 
 const VOCABULARY: &str = "tests/data/identifier-vocabulary.txt";
 const SPANISH: &str = "tests/data/spanish-vocabulary.txt";
