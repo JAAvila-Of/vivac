@@ -75,7 +75,7 @@ impl Node {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy, serde::Serialize)]
 pub struct Counts {
     pub total: usize,
     pub open_count: usize,

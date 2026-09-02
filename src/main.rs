@@ -23,6 +23,8 @@ mod import;
 mod mcp;
 mod model;
 mod ops;
+mod outcome;
+mod params;
 mod reconcile;
 mod redact;
 mod render;
@@ -262,21 +264,20 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         )));
     }
 
+    if let Some(o) = write_op(cmd, &mut ctx, a)? {
+        print!("{}", outcome::to_text(&o));
+        // Trap: `focus` and `restore` used to end by delegating to
+        // `render::stack`, which reads `--json` off `a` on its own. Neither
+        // is allowed `--json` in the table above, so that branch was never
+        // reachable from either call site; the call just moves here, right
+        // after the `Outcome` each one now returns is printed.
+        if matches!(cmd, "focus" | "restore") {
+            render::stack(&ctx.tree, a)?;
+        }
+        return Ok(0);
+    }
+
     let r: failure::R = match cmd {
-        "focus" => ops::focus(&mut ctx, a),
-        "decide" => ops::decide(&mut ctx, a),
-        "flag" => ops::flag(&mut ctx, a),
-        "save" => ops::save(&mut ctx, a),
-        "restore" => ops::restore(&mut ctx, a),
-        "push" => ops::push(&mut ctx, a),
-        "pop" => ops::pop(&mut ctx, a),
-        "park" => ops::park(&mut ctx, a),
-        "promote" => ops::promote(&mut ctx, a),
-        "abandon" => ops::abandon(&mut ctx, a),
-        "add" => ops::add(&mut ctx, a),
-        "done" => ops::done(&mut ctx, a),
-        "note" => ops::note(&mut ctx, a),
-        "block" => ops::block(&mut ctx, a),
         "import" => import::import(&mut ctx, a),
         "brief" => {
             let project = project_name(&ctx);
@@ -302,4 +303,28 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         }
     };
     r.map(|_| 0)
+}
+
+/// The fourteen write operations, matched once so that printing an `Outcome`
+/// lives in exactly one place in `dispatch` below. `None` means `cmd` names
+/// one of the reads instead, which go on printing for themselves --
+/// `render.rs` and `brief.rs` are not part of this: they are not writes.
+fn write_op(cmd: &str, ctx: &mut ops::Ctx, a: &Args) -> Result<Option<outcome::Outcome>, Failure> {
+    Ok(Some(match cmd {
+        "push" => ops::push(ctx, params::Push::from_args(a)?)?,
+        "pop" => ops::pop(ctx, params::Pop::from_args(a)?)?,
+        "done" => ops::done(ctx, params::Done::from_args(a)?)?,
+        "park" => ops::park(ctx, params::Park::from_args(a)?)?,
+        "add" => ops::add(ctx, params::Add::from_args(a)?)?,
+        "note" => ops::note(ctx, params::Note::from_args(a)?)?,
+        "block" => ops::block(ctx, params::Block::from_args(a)?)?,
+        "promote" => ops::promote(ctx, params::Promote::from_args(a)?)?,
+        "abandon" => ops::abandon(ctx, params::Abandon::from_args(a)?)?,
+        "focus" => ops::focus(ctx, params::Focus::from_args(a)?)?,
+        "flag" => ops::flag(ctx, params::Flag::from_args(a)?)?,
+        "decide" => ops::decide(ctx, params::Decide::from_args(a)?)?,
+        "save" => ops::save(ctx, params::Save::from_args(a)?)?,
+        "restore" => ops::restore(ctx, params::Restore::from_args(a)?)?,
+        _ => return Ok(None),
+    }))
 }
