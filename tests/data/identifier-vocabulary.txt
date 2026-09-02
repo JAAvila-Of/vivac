@@ -31,6 +31,7 @@ and
 announces
 another
 any
+appear
 append
 apply
 are
@@ -62,6 +63,7 @@ body
 bogus
 bool
 born
+both
 box
 branch
 break
@@ -73,11 +75,13 @@ buf
 by
 bytes
 calling
+came
 cannot
 capacity
 carries
 carry
 cascade
+case
 ceil
 cfg
 chain
@@ -93,6 +97,7 @@ civil
 claim
 claimed
 claims
+clamp
 clean
 clear
 cleared
@@ -278,6 +283,8 @@ help
 here
 heuristic
 hexdigit
+hit
+hits
 hollow
 home
 hook
@@ -355,6 +362,7 @@ lossy
 lost
 lower
 lowercase
+lowered
 main
 makes
 mandatory
@@ -364,7 +372,10 @@ map
 mark
 mask
 match
+matched
 matches
+matching
+matter
 max
 mem
 millis
@@ -426,6 +437,7 @@ or
 ord
 order
 ordering
+origin
 orphaned
 orphans
 other
@@ -486,6 +498,7 @@ pt
 pub
 push
 pushed
+query
 question
 questions
 quiet
@@ -560,6 +573,8 @@ says
 sb
 scope
 search
+searchable
+searched
 secret
 secs
 section
@@ -596,6 +611,7 @@ slashes
 sleep
 slice
 snapshot
+snippet
 so
 some
 something
@@ -656,7 +672,9 @@ take
 takes
 task
 temp
+term
 terminal
+terms
 test
 tests
 text
@@ -703,6 +721,7 @@ truncation
 ts
 turn
 twice
+twin
 type
 u128
 u32
