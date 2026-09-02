@@ -2,7 +2,7 @@
 name = "vivac"
 version = "0.3.2"
 edition = "2021"
-rust-version = "1.90"
+rust-version = "1.75"
 description = "Provenance tree for work: every node knows which node it was born from"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/JAAvila-Of/vivac"
