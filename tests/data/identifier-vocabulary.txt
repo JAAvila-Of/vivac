@@ -43,6 +43,7 @@ ascii
 assert
 assumption
 at
+atomic
 auto
 automatic
 aws
@@ -224,6 +225,7 @@ fallback
 falling
 falls
 false
+fetch
 field
 fields
 file
@@ -423,6 +425,7 @@ opts
 or
 ord
 order
+ordering
 orphaned
 orphans
 other
@@ -512,6 +515,7 @@ refused
 refuses
 rejected
 rel
+relaxed
 rem
 remove
 rename
@@ -644,6 +648,7 @@ suspect
 suspended
 suspicious
 swallowed
+sync
 system
 tag
 tail
@@ -707,6 +712,7 @@ ulid
 ulids
 unclaimed
 under
+unique
 unix
 unknown
 unstable
