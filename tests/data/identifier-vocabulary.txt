@@ -9,6 +9,7 @@ action
 active
 actor
 add
+added
 advice
 after
 ag
@@ -28,7 +29,6 @@ alternatives
 an
 ancestors
 anchor
-anchoring
 and
 announces
 another
@@ -63,6 +63,7 @@ before
 bin
 blessed
 block
+blocked
 blockers
 blocks
 bodies
@@ -91,6 +92,7 @@ capacity
 carries
 carry
 cascade
+cascaded
 case
 ceil
 cfg
@@ -165,6 +167,7 @@ dead
 debug
 dec
 decide
+decided
 decision
 decisions
 dedup
@@ -262,6 +265,7 @@ flush
 fmt
 fn
 focus
+focused
 fold
 for
 force
@@ -324,6 +328,7 @@ import
 in
 include
 indent
+info
 initial
 initialize
 inline
@@ -453,6 +458,7 @@ one
 ones
 only
 onward
+op
 open
 opened
 opening
@@ -567,6 +573,7 @@ rem
 remove
 rename
 render
+reopen
 repeat
 replace
 reply
@@ -579,6 +586,7 @@ resolve
 respects
 rest
 restore
+restored
 result
 retain
 return
@@ -689,6 +697,7 @@ stdio
 stdout
 still
 stop
+stopped
 store
 str
 string
@@ -697,9 +706,11 @@ struct
 sub
 subtree
 success
+suffix
 sum
 super
 superseded
+supersedes
 surplus
 suspect
 suspended

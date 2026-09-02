@@ -7,10 +7,11 @@
 //! keeping?" was called zero times, under a protocol declared mandatory.
 
 use crate::anchor::{self, Anchor};
-use crate::args::Args;
 use crate::event::{Body, Flag, Kind, State, VivacKind};
 use crate::failure::{Failure, R};
 use crate::model::{fold, Node, Tree};
+use crate::outcome::{self, Outcome};
+use crate::params;
 use crate::store::Store;
 use crate::{id, redact};
 
@@ -101,28 +102,41 @@ fn guard_text(fields: &[(&str, &str)]) -> R {
     }
 }
 
-fn kind_of(a: &Args, fallback: Kind) -> Result<Kind, Failure> {
-    match a.opt("type") {
+fn kind_of(raw: Option<&str>, fallback: Kind) -> Result<Kind, Failure> {
+    match raw {
         None => Ok(fallback),
         Some(s) => Kind::parse(s)
             .ok_or_else(|| Failure::usage(format!("Unknown type: {s}. They are: {}", Kind::ALL))),
     }
 }
 
-/// Creates a node. Returns the event and the alias number assigned.
-fn born(
-    ctx: &Ctx,
-    title: &str,
-    why: &str,
+/// What it takes to create a node, named rather than positional.
+///
+/// `title` and `why` stay borrowed rather than owned: every caller still
+/// needs its own copy afterwards (a title goes into the vivac, `add`'s
+/// `where_at` reads the parent, not this), so taking a slice costs nothing
+/// and asking for an owned `String` here would just make each caller clone
+/// one it already had.
+struct Born<'a> {
+    title: &'a str,
+    why: &'a str,
     kind: Kind,
     parent: Option<String>,
-    a: &Args,
-) -> Result<(Body, u64, String), Failure> {
-    let refs = a.list("ref");
-    let governs = a.list("governs");
-    let mut fields: Vec<(&str, &str)> = vec![("title", title), ("why", why)];
-    fields.extend(refs.iter().map(|r| ("ref", r.as_str())));
-    fields.extend(governs.iter().map(|g| ("governs", g.as_str())));
+    refs: Vec<String>,
+    governs: Vec<String>,
+    blocks: bool,
+}
+
+/// Creates a node. Returns the event and the alias number assigned.
+///
+/// Takes a `Born` already extracted rather than `&Args`: the three ops that
+/// call this (`push`, `add`, `decide`) do not all read the fields the same
+/// way (`add` defaults `why` with `.opt_or`, `push` demands it), so the
+/// reading stays with each caller and only the shared write comes here.
+fn born(ctx: &Ctx, b: Born) -> Result<(Body, u64, String), Failure> {
+    let mut fields: Vec<(&str, &str)> = vec![("title", b.title), ("why", b.why)];
+    fields.extend(b.refs.iter().map(|r| ("ref", r.as_str())));
+    fields.extend(b.governs.iter().map(|g| ("governs", g.as_str())));
     guard_text(&fields)?;
 
     let node = id::ulid();
@@ -131,13 +145,13 @@ fn born(
         Body::NodeCreated {
             node: node.clone(),
             num,
-            kind,
-            title: title.to_string(),
-            why: why.to_string(),
-            parent,
-            blocks: a.has("blocks"),
-            refs,
-            governs,
+            kind: b.kind,
+            title: b.title.to_string(),
+            why: b.why.to_string(),
+            parent: b.parent,
+            blocks: b.blocks,
+            refs: b.refs,
+            governs: b.governs,
         },
         num,
         node,
@@ -146,59 +160,58 @@ fn born(
 
 /// `push` — open a detour. It is **the** operation: the provenance edge is
 /// created here on its own, with nobody having to remember to declare it.
-pub fn push(ctx: &mut Ctx, a: &Args) -> R {
-    let title = a
-        .positional(0)
-        .ok_or_else(|| Failure::usage("usage: vivac push \"<title>\" --why \"<reason>\""))?;
-    let why = a.opt("why").ok_or_else(|| {
-        Failure::usage(
-            "Missing --why. A detour with no reason is exactly the failure this\n  \
-             exists to attack: in a month nobody will know why.",
-        )
-    })?;
-
+pub fn push(ctx: &mut Ctx, p: params::Push) -> Result<Outcome, Failure> {
     let parent = ctx.tree.focus().map(|n| n.id.clone());
     let kind = kind_of(
-        a,
+        p.kind.as_deref(),
         if parent.is_none() {
             Kind::Goal
         } else {
             Kind::Task
         },
     )?;
-    let (ev, num, node) = born(ctx, title, why, kind, parent.clone(), a)?;
+    let (ev, num, node) = born(
+        ctx,
+        Born {
+            title: &p.title,
+            why: &p.why,
+            kind,
+            parent: parent.clone(),
+            refs: p.refs,
+            governs: p.governs,
+            blocks: p.blocks,
+        },
+    )?;
     // The vivac goes **before** the push: it freezes the stack at the moment
     // of the fork, which is the belay where you make yourself safe before
     // setting off. The `next_intent` is the child being opened, because that
-    let v = vivac(ctx, VivacKind::Push, title, parent, "");
+    let v = vivac(ctx, VivacKind::Push, &p.title, parent, "");
     ctx.emit(vec![v, ev, Body::Pushed { node }])?;
 
     // `emit` already applied the push in memory, so the stack includes the
     // new node and there is no need to add one.
     let depth_of = ctx.tree.stack_depth();
-    println!("  {}{}  {}", kind.prefix(), num, title);
-    if a.has("blocks") {
-        println!("        blocks its parent from closing");
-    }
     // §6.1: intervene, never block. A deep stack is almost never lack of
     // discipline: the root goal moved and nobody re-rooted.
-    if depth_of >= 4 {
-        if let Some(root) = ctx.tree.roots().first() {
-            println!();
-            println!(
-                "  You are {depth_of} levels away from {} \"{}\".",
-                root.alias(),
-                root.title
-            );
-            println!("  Is this still a detour, or did the real goal move?");
-            println!("  If it moved:  vivac promote");
-        }
-    }
-    Ok(())
+    let advice = if depth_of >= 4 {
+        ctx.tree.roots().first().map(|root| outcome::DepthAdvice {
+            depth: depth_of,
+            root_alias: root.alias(),
+            root_title: root.title.clone(),
+        })
+    } else {
+        None
+    };
+    Ok(Outcome::Pushed {
+        alias: format!("{}{}", kind.prefix(), num),
+        title: p.title,
+        blocks: p.blocks,
+        advice,
+    })
 }
 
 /// `pop` — close the focus and come back to the parent with context.
-pub fn pop(ctx: &mut Ctx, a: &Args) -> R {
+pub fn pop(ctx: &mut Ctx, p: params::Pop) -> Result<Outcome, Failure> {
     let focus = ctx
         .tree
         .focus()
@@ -208,24 +221,24 @@ pub fn pop(ctx: &mut Ctx, a: &Args) -> R {
             )
         })?
         .clone();
-    let outcome = a.positional(0).unwrap_or("");
-    let next = a.opt("next").unwrap_or(outcome);
-    guard_text(&[("outcome", outcome), ("next", next)])?;
+    let outcome_text = p.outcome.as_str();
+    let next = p.next.as_deref().unwrap_or(outcome_text);
+    guard_text(&[("outcome", outcome_text), ("next", next)])?;
     let v = vivac(ctx, VivacKind::Pop, next, Some(focus.id.clone()), "");
-    close_node(ctx, &focus, outcome, a.has("force"), true)?;
+    // Trap: two separate `emit`s in a row, not one lot like `push` -- one
+    // inside `close_node`, one here for the vivac -- and the parent's counts
+    // below have to be read only after both, or the number comes out wrong.
+    let closed = close_node(ctx, &focus, outcome_text, p.force, true)?;
     ctx.emit(vec![v])?;
-    match ctx.tree.node(focus.parent.as_deref().unwrap_or("")) {
-        Some(p) => {
-            let r = ctx.tree.counts(&p.id);
-            println!("  back to {}  {}", p.alias(), p.title);
-            let f = r.phrase();
-            if !f.is_empty() {
-                println!("        ({f} below it)");
-            }
-        }
-        None => println!("  empty stack"),
-    }
-    Ok(())
+    let parent = match ctx.tree.node(focus.parent.as_deref().unwrap_or("")) {
+        Some(parent) => Some(outcome::PoppedTo {
+            alias: parent.alias(),
+            title: parent.title.clone(),
+            counts: ctx.tree.counts(&parent.id),
+        }),
+        None => None,
+    };
+    Ok(Outcome::Popped { closed, parent })
 }
 
 /// `park` — what produces DO NOT TOUCH NOW; without it that section always
@@ -262,14 +275,19 @@ fn looks_like_an_id(s: &str) -> bool {
 /// One word **is** ambiguous by the grammar, because a reason is as good a
 /// word as an alias. So it is resolved, and only a word shaped like an id has
 /// to succeed.
-fn named_or_focus(ctx: &Ctx, a: &Args, usage: &'static str) -> Result<(Node, String), Failure> {
+fn named_or_focus(
+    ctx: &Ctx,
+    node: Option<&str>,
+    reason: Option<&str>,
+    usage: &'static str,
+) -> Result<(Node, String), Failure> {
     let focus = || {
         ctx.tree
             .focus()
             .cloned()
             .ok_or_else(|| Failure::usage(usage))
     };
-    match (a.positional(0), a.positional(1)) {
+    match (node, reason) {
         (Some(s), Some(r)) => Ok((ctx.resolve(s)?.clone(), r.to_string())),
         (Some(w), None) => match ctx.tree.resolve(w) {
             Some(n) => Ok((n.clone(), String::new())),
@@ -280,8 +298,13 @@ fn named_or_focus(ctx: &Ctx, a: &Args, usage: &'static str) -> Result<(Node, Str
     }
 }
 
-pub fn park(ctx: &mut Ctx, a: &Args) -> R {
-    let (node, reason) = named_or_focus(ctx, a, "usage: vivac park [<id>] [\"<reason>\"]")?;
+pub fn park(ctx: &mut Ctx, p: params::Park) -> Result<Outcome, Failure> {
+    let (node, reason) = named_or_focus(
+        ctx,
+        p.node.as_deref(),
+        p.reason.as_deref(),
+        "usage: vivac park [<id>] [\"<reason>\"]",
+    )?;
     let reason = reason.as_str();
     guard_text(&[("reason", reason)])?;
     let mut evs = vec![vivac(
@@ -303,9 +326,10 @@ pub fn park(ctx: &mut Ctx, a: &Args) -> R {
         });
     }
     ctx.emit(evs)?;
-    println!("  {}  {}  -> parked", node.alias(), node.title);
-    println!("        shows up in:  vivac parked");
-    Ok(())
+    Ok(Outcome::Parked {
+        alias: node.alias(),
+        title: node.title,
+    })
 }
 
 /// The closure rule. `MODEL.md` §7, and the **only** rule in the model that
@@ -320,7 +344,7 @@ fn close_node(
     outcome: &str,
     force: bool,
     unstack: bool,
-) -> R {
+) -> Result<crate::outcome::Closed, Failure> {
     if !force {
         let pending_count = ctx.tree.open_blockers(&n.id);
         if !pending_count.is_empty() {
@@ -350,100 +374,102 @@ fn close_node(
         evs.push(Body::Popped { node: n.id.clone() });
     }
     ctx.emit(evs)?;
-    println!(
-        "  {}  {}  -> {}",
-        n.alias(),
-        n.title,
-        if force { "closed BY FORCE" } else { "closed" }
-    );
-    if force {
-        println!("        recorded as a false close in every render");
-    }
-    Ok(())
+    Ok(crate::outcome::Closed {
+        alias: n.alias(),
+        title: n.title.clone(),
+        force,
+    })
 }
 
-pub fn done(ctx: &mut Ctx, a: &Args) -> R {
-    let s = a
-        .positional(0)
-        .ok_or_else(|| Failure::usage("usage: vivac done <id> [\"<outcome>\"] [--force]"))?;
-    let n = ctx.resolve(s)?.clone();
-    let outcome = a.positional(1).unwrap_or("");
-    guard_text(&[("outcome", outcome)])?;
-    close_node(ctx, &n, outcome, a.has("force"), true)
+pub fn done(ctx: &mut Ctx, p: params::Done) -> Result<Outcome, Failure> {
+    let n = ctx.resolve(&p.id)?.clone();
+    guard_text(&[("outcome", &p.outcome)])?;
+    let closed = close_node(ctx, &n, &p.outcome, p.force, true)?;
+    Ok(Outcome::Done { closed })
 }
 
 /// `add` — a node without touching the stack. It is how a tree that already
 /// existed elsewhere gets in, and how a finding hangs off something that is
-pub fn add(ctx: &mut Ctx, a: &Args) -> R {
-    let title = a.positional(0).ok_or_else(|| {
-        Failure::usage("usage: vivac add \"<title>\" [--parent N] [--why \"<reason>\"]")
-    })?;
-    let parent = match a.opt("parent") {
-        Some(p) => Some(ctx.resolve(p)?.id.clone()),
+pub fn add(ctx: &mut Ctx, p: params::Add) -> Result<Outcome, Failure> {
+    let parent = match &p.parent {
+        Some(s) => Some(ctx.resolve(s)?.id.clone()),
         None => ctx.tree.focus().map(|n| n.id.clone()),
     };
     let kind = kind_of(
-        a,
+        p.kind.as_deref(),
         if parent.is_none() {
             Kind::Goal
         } else {
             Kind::Task
         },
     )?;
-    let (ev, num, _) = born(ctx, title, &a.opt_or("why"), kind, parent.clone(), a)?;
+    let (ev, num, _) = born(
+        ctx,
+        Born {
+            title: &p.title,
+            why: &p.why,
+            kind,
+            parent: parent.clone(),
+            refs: p.refs,
+            governs: p.governs,
+            blocks: p.blocks,
+        },
+    )?;
     ctx.emit(vec![ev])?;
-    let where_at = match parent.and_then(|p| ctx.tree.node(&p).map(|n| n.alias())) {
-        Some(al) => format!(" under {al}"),
-        None => " (root)".into(),
-    };
-    println!("  {}{}  {}{}", kind.prefix(), num, title, where_at);
-    if a.has("blocks") {
-        println!("        blocks its parent from closing");
-    }
-    Ok(())
+    let parent_info = parent
+        .and_then(|id| ctx.tree.node(&id))
+        .map(|n| outcome::AddedUnder {
+            alias: n.alias(),
+            title: n.title.clone(),
+        });
+    Ok(Outcome::Added {
+        alias: format!("{}{}", kind.prefix(), num),
+        title: p.title,
+        parent: parent_info,
+        blocks: p.blocks,
+    })
 }
 
-pub fn note(ctx: &mut Ctx, a: &Args) -> R {
-    let (n, note) = match (a.positional(0), a.positional(1)) {
-        (Some(s), Some(t)) => (ctx.resolve(s)?.clone(), t),
+pub fn note(ctx: &mut Ctx, p: params::Note) -> Result<Outcome, Failure> {
+    let (n, note) = match (p.node.as_deref(), p.note.as_deref()) {
+        (Some(s), Some(t)) => (ctx.resolve(s)?.clone(), t.to_string()),
         (Some(t), None) => {
             let f = ctx
                 .tree
                 .focus()
                 .ok_or_else(|| Failure::usage("usage: vivac note [<id>] \"<note>\""))?;
-            (f.clone(), t)
+            (f.clone(), t.to_string())
         }
         _ => return Err(Failure::usage("usage: vivac note [<id>] \"<note>\"")),
     };
-    guard_text(&[("note", note)])?;
+    guard_text(&[("note", &note)])?;
     ctx.emit(vec![Body::NodeNoted {
         node: n.id.clone(),
-        note: note.to_string(),
+        note,
     }])?;
-    println!("  {} noted", n.alias());
-    Ok(())
+    Ok(Outcome::Noted { alias: n.alias() })
 }
 
-pub fn block(ctx: &mut Ctx, a: &Args) -> R {
-    let s = a
-        .positional(0)
-        .ok_or_else(|| Failure::usage("usage: vivac block <id> [--off]"))?;
-    let n = ctx.resolve(s)?.clone();
+pub fn block(ctx: &mut Ctx, p: params::Block) -> Result<Outcome, Failure> {
+    let n = ctx.resolve(&p.id)?.clone();
     let Some(parent) = n.parent.as_ref().and_then(|p| ctx.tree.node(p)) else {
         return Err(Failure::usage(format!(
             "{} is the root: there is no parent to block.",
             n.alias()
         )));
     };
-    let blocks = !a.has("off");
+    let blocks = !p.off;
     let (pa, pt) = (parent.alias(), parent.title.clone());
     ctx.emit(vec![Body::BlockChanged {
         node: n.id.clone(),
         blocks,
     }])?;
-    let verb = if blocks { "blocks" } else { "no longer blocks" };
-    println!("  {} {} the close of {pa}  {pt}", n.alias(), verb);
-    Ok(())
+    Ok(Outcome::Blocked {
+        alias: n.alias(),
+        blocks,
+        parent_alias: pa,
+        parent_title: pt,
+    })
 }
 
 /// `promote` — the focus becomes a goal of its own and the stack is cut there.
@@ -451,9 +477,9 @@ pub fn block(ctx: &mut Ctx, a: &Args) -> R {
 /// The provenance chain is **kept**: where it was born does not change just
 /// because its rank did. Without this operation, the depth warning has no way
 /// out and ends up being ignored.
-pub fn promote(ctx: &mut Ctx, a: &Args) -> R {
-    let n = match a.positional(0) {
-        Some(s) => ctx.resolve(s)?.clone(),
+pub fn promote(ctx: &mut Ctx, p: params::Promote) -> Result<Outcome, Failure> {
+    let n = match p.id {
+        Some(s) => ctx.resolve(&s)?.clone(),
         None => ctx
             .tree
             .focus()
@@ -461,11 +487,19 @@ pub fn promote(ctx: &mut Ctx, a: &Args) -> R {
             .clone(),
     };
     ctx.emit(vec![Body::Promoted { node: n.id.clone() }])?;
-    println!("  {}  {}  -> a goal of its own", n.alias(), n.title);
-    if let Some(p) = n.parent.as_ref().and_then(|p| ctx.tree.node(p)) {
-        println!("        still born from {}  {}", p.alias(), p.title);
-    }
-    Ok(())
+    let parent = n
+        .parent
+        .as_ref()
+        .and_then(|id| ctx.tree.node(id))
+        .map(|parent| outcome::StillBornFrom {
+            alias: parent.alias(),
+            title: parent.title.clone(),
+        });
+    Ok(Outcome::Promoted {
+        alias: n.alias(),
+        title: n.title,
+        parent,
+    })
 }
 
 /// `abandon` — discard. It costs the same as `pop` on purpose: if abandoning
@@ -482,8 +516,13 @@ pub fn promote(ctx: &mut Ctx, a: &Args) -> R {
 /// born: alive, under an abandoned parent. It is the same shape as an open
 /// finding under a closed batch, which the tree already knows how to show and
 /// the brief already knows how to count.
-pub fn abandon(ctx: &mut Ctx, a: &Args) -> R {
-    let (n, reason) = named_or_focus(ctx, a, "usage: vivac abandon [<id>] \"<reason>\"")?;
+pub fn abandon(ctx: &mut Ctx, p: params::Abandon) -> Result<Outcome, Failure> {
+    let (n, reason) = named_or_focus(
+        ctx,
+        p.node.as_deref(),
+        p.reason.as_deref(),
+        "usage: vivac abandon [<id>] \"<reason>\"",
+    )?;
     let reason = reason.as_str();
     guard_text(&[("reason", reason)])?;
 
@@ -491,7 +530,7 @@ pub fn abandon(ctx: &mut Ctx, a: &Args) -> R {
     // the children die would be a half rescue nobody asked for, and would
     // orphan exactly what was meant to be kept.
     let mut rescued: std::collections::HashSet<String> = Default::default();
-    for s in a.list("rescue") {
+    for s in p.rescue {
         let r = ctx
             .tree
             .resolve(&s)
@@ -523,7 +562,7 @@ pub fn abandon(ctx: &mut Ctx, a: &Args) -> R {
 
     // Only what falls unnamed needs confirming. If everything was rescued,
     // there is nothing left to confirm.
-    if !falling.is_empty() && !a.has("cascade") {
+    if !falling.is_empty() && !p.cascade {
         let mut m = format!(
             "  {}  {}\n  has {} open descendant(s) with no rescue:\n",
             n.alias(),
@@ -572,21 +611,15 @@ pub fn abandon(ctx: &mut Ctx, a: &Args) -> R {
     }
 
     ctx.emit(evs)?;
-    println!("  {}  {}  -> abandoned", n.alias(), n.title);
-    if falling_count > 0 {
-        println!("        and {falling_count} descendant(s) with it");
-    }
-    if !saved_lines.is_empty() {
-        println!();
-        println!("  Rescued, and still born from {}:", n.alias());
-        for (alias, title) in &saved_lines {
-            println!("      {alias:<6} {title}");
-        }
-        println!();
-        println!("  Their lineage crosses an abandoned node on purpose: where they");
-        println!("  were born does not change because it got discarded.");
-    }
-    Ok(())
+    Ok(Outcome::Abandoned {
+        alias: n.alias(),
+        title: n.title,
+        cascaded: (falling_count > 0).then_some(falling_count),
+        rescued: saved_lines
+            .into_iter()
+            .map(|(alias, title)| outcome::RescuedNode { alias, title })
+            .collect(),
+    })
 }
 
 /// `focus` — step back into a node that already exists.
@@ -596,13 +629,10 @@ pub fn abandon(ctx: &mut Ctx, a: &Args) -> R {
 /// am on this" without opening a new node, which is exactly the litter to be
 /// avoided. The stack becomes the path from the root down to the node, which
 /// is what working on it means.
-pub fn focus(ctx: &mut Ctx, a: &Args) -> R {
-    let s = a
-        .positional(0)
-        .ok_or_else(|| Failure::usage("usage: vivac focus <id> [--reopen]"))?;
-    let n = ctx.resolve(s)?.clone();
+pub fn focus(ctx: &mut Ctx, p: params::Focus) -> Result<Outcome, Failure> {
+    let n = ctx.resolve(&p.id)?.clone();
 
-    if !n.state.is_open() && !a.has("reopen") {
+    if !n.state.is_open() && !p.reopen {
         // Parking says "maybe I will be back", so returning is the normal
         // operation and asks no permission. Closing claims something finished:
         // undoing that has to be deliberate.
@@ -645,10 +675,15 @@ pub fn focus(ctx: &mut Ctx, a: &Args) -> R {
     }
     let revived = !n.state.is_open();
     ctx.emit(evs)?;
-    if revived {
-        println!("  {} is open again", n.alias());
-    }
-    crate::render::stack(&ctx.tree, a)
+    // Trap: `render::stack` used to be called from here, reading `a` for its
+    // own `--json` on its own. `main.rs` calls it separately now, after this
+    // `Outcome` is printed -- `render.rs` is not touched, and the flag never
+    // reached this call site from the CLI anyway (`focus` is not allowed
+    // `--json` in `main.rs`'s table).
+    Ok(Outcome::Focused {
+        alias: n.alias(),
+        revived,
+    })
 }
 
 /// `flag <id> <flag> --why <reason>` — raise or clear a flag.
@@ -656,40 +691,43 @@ pub fn focus(ctx: &mut Ctx, a: &Args) -> R {
 /// The reason is **mandatory** when raising it. `BRIEF-SPEC.md` §10 tests it
 /// as a contract: a flag with no reason informs nobody, it only adds noise to
 /// the brief, and within a week they all get ignored.
-pub fn flag(ctx: &mut Ctx, a: &Args) -> R {
-    let (Some(sid), Some(sb)) = (a.positional(0), a.positional(1)) else {
-        return Err(Failure::usage(
-            "usage: vivac flag <id> <flag> --why \"<reason>\"  |  --off\n\n  \
-             Flags: suspect, review, stale",
-        ));
-    };
-    let n = ctx.resolve(sid)?.clone();
-    let flag = Flag::parse(sb)
-        .ok_or_else(|| Failure::usage(format!("Unknown flag: {sb}. They are: {}", Flag::ALL)))?;
+pub fn flag(ctx: &mut Ctx, p: params::Flag) -> Result<Outcome, Failure> {
+    let n = ctx.resolve(&p.id)?.clone();
+    let flag = Flag::parse(&p.flag).ok_or_else(|| {
+        Failure::usage(format!("Unknown flag: {}. They are: {}", p.flag, Flag::ALL))
+    })?;
 
-    if a.has("off") {
+    if p.off {
         ctx.emit(vec![Body::FlagCleared {
             node: n.id.clone(),
             flag,
         }])?;
-        println!("  {}  is no longer {}", n.alias(), flag.word());
-        return Ok(());
+        return Ok(Outcome::Flagged {
+            alias: n.alias(),
+            flag: flag.word().to_string(),
+            change: outcome::FlagChange::Off,
+        });
     }
-    let reason = a.opt("why").ok_or_else(|| {
+    let reason = p.why.ok_or_else(|| {
         Failure::usage(
             "Missing --why. A flag with no reason informs nobody: in two weeks\n  \
              nobody will know what needed looking at, and they all get ignored.",
         )
     })?;
-    guard_text(&[("reason", reason)])?;
+    guard_text(&[("reason", &reason)])?;
     ctx.emit(vec![Body::FlagRaised {
         node: n.id.clone(),
         flag,
-        reason: reason.to_string(),
+        reason: reason.clone(),
     }])?;
-    println!("  {}  {}  -> {}", n.alias(), n.title, flag.word());
-    println!("        {reason}");
-    Ok(())
+    Ok(Outcome::Flagged {
+        alias: n.alias(),
+        flag: flag.word().to_string(),
+        change: outcome::FlagChange::Raised {
+            title: n.title,
+            reason,
+        },
+    })
 }
 
 /// `decide` — record a decision.
@@ -697,27 +735,29 @@ pub fn flag(ctx: &mut Ctx, a: &Args) -> R {
 /// The discarded alternatives are optional in the schema and mandatory in
 /// practice: without them, in a month the agent proposes again what you
 /// already rejected.
-pub fn decide(ctx: &mut Ctx, a: &Args) -> R {
-    let title = a.positional(0).ok_or_else(|| {
-        Failure::usage(
-            "usage: vivac decide \"<title>\" --reason \"<r>\" [--alternative X] [--supersedes d9]",
-        )
-    })?;
-    let reason = a.opt("reason").ok_or_else(|| {
-        Failure::usage("Missing --reason. A decision with no reason is a datum, not a decision.")
-    })?;
-    let alternatives = a.list("alternative");
-    let superseded = match a.opt("supersedes") {
+pub fn decide(ctx: &mut Ctx, p: params::Decide) -> Result<Outcome, Failure> {
+    let superseded = match &p.supersedes {
         Some(s) => Some(ctx.resolve(s)?.clone()),
         None => None,
     };
 
-    let mut body = reason.to_string();
-    if !alternatives.is_empty() {
-        body.push_str(&format!("  |  discarded: {}", alternatives.join("; ")));
+    let mut body = p.reason.clone();
+    if !p.alternatives.is_empty() {
+        body.push_str(&format!("  |  discarded: {}", p.alternatives.join("; ")));
     }
     let parent = ctx.tree.focus().map(|n| n.id.clone());
-    let (ev, num, _) = born(ctx, title, &body, Kind::Decision, parent, a)?;
+    let (ev, num, _) = born(
+        ctx,
+        Born {
+            title: &p.title,
+            why: &body,
+            kind: Kind::Decision,
+            parent,
+            refs: p.refs,
+            governs: p.governs,
+            blocks: p.blocks,
+        },
+    )?;
 
     let mut evs = vec![ev];
     if let Some(v) = &superseded {
@@ -730,40 +770,29 @@ pub fn decide(ctx: &mut Ctx, a: &Args) -> R {
         });
     }
     ctx.emit(evs)?;
-    println!("  d{num}  {title}");
-    if let Some(v) = superseded {
-        println!("        {} becomes superseded", v.alias());
-    }
-    if alternatives.is_empty() {
-        println!("        no alternatives recorded: in a month they get proposed again");
-    }
-    Ok(())
+    Ok(Outcome::Decided {
+        alias: format!("d{num}"),
+        title: p.title,
+        superseded: superseded.map(|v| outcome::SupersededNode { alias: v.alias() }),
+        no_alternatives: p.alternatives.is_empty(),
+    })
 }
 
 /// `save [label]` — a safe stop on purpose.
-pub fn save(ctx: &mut Ctx, a: &Args) -> R {
-    let label = a.positional(0).unwrap_or("");
-    let next = a.opt_or("next");
-    guard_text(&[("label", label), ("next", &next)])?;
-    let v = vivac(ctx, VivacKind::Manual, &next, None, label);
+pub fn save(ctx: &mut Ctx, p: params::Save) -> Result<Outcome, Failure> {
+    guard_text(&[("label", &p.label), ("next", &p.next)])?;
+    let v = vivac(ctx, VivacKind::Manual, &p.next, None, &p.label);
     let num = ctx.tree.next_vivac_num.max(1);
     ctx.emit(vec![v])?;
-    let anchoring = ctx.anchor.snapshot();
-    println!(
-        "  v{num}  {}",
-        if label.is_empty() { "no label" } else { label }
-    );
-    if !anchoring.is_empty_tree() {
-        println!("        anchored to {}", anchoring.short());
-    } else {
-        // With no VCS no precision is faked: the vivac is worth the same, but
-        // restoring it will only give plain age, not a diff.
-        println!("        no anchor: there is no version control here");
-    }
-    if next.is_empty() {
-        println!("        no --next: coming back there will be nothing to pick up");
-    }
-    Ok(())
+    // With no VCS no precision is faked: the vivac is worth the same, but
+    // restoring it will only give plain age, not a diff.
+    let anchor = ctx.anchor.snapshot();
+    Ok(Outcome::Saved {
+        num,
+        label: p.label,
+        anchor,
+        next: p.next,
+    })
 }
 
 /// `restore <v>` — go back to a vivac.
@@ -771,26 +800,31 @@ pub fn save(ctx: &mut Ctx, a: &Args) -> R {
 /// **It never touches the working tree.** Mixing context navigation with tree
 /// manipulation turns a tool for attention into a branch manager worse than
 /// git. It rebuilds the stack and presents the diff.
-pub fn restore(ctx: &mut Ctx, a: &Args) -> R {
-    let s = a
-        .positional(0)
-        .ok_or_else(|| Failure::usage("usage: vivac restore <v>"))?;
+pub fn restore(ctx: &mut Ctx, p: params::Restore) -> Result<Outcome, Failure> {
     let v = ctx
         .tree
-        .vivac(s)
-        .ok_or_else(|| Failure::usage(format!("No such vivac: {s}.")))?
+        .vivac(&p.vivac)
+        .ok_or_else(|| Failure::usage(format!("No such vivac: {}.", p.vivac)))?
         .clone();
 
     // The vivac's stack is frozen by alias. Nodes that no longer exist or are
     // closed get skipped and named: restoring resurrects nothing.
     let mut lineage = Vec::new();
-    let mut lost = Vec::new();
+    let mut lost: Vec<outcome::LostNode> = Vec::new();
     for (alias, title) in &v.stack {
-        match ctx.tree.resolve(alias) {
-            Some(n) if n.state.is_open() => lineage.push(n.id.clone()),
-            Some(n) => lost.push(format!("{alias} {title} [{}]", n.state.word(n.kind))),
-            None => lost.push(format!("{alias} {title} [gone]")),
-        }
+        let state = match ctx.tree.resolve(alias) {
+            Some(n) if n.state.is_open() => {
+                lineage.push(n.id.clone());
+                continue;
+            }
+            Some(n) => n.state.word(n.kind).to_string(),
+            None => "gone".to_string(),
+        };
+        lost.push(outcome::LostNode {
+            alias: alias.clone(),
+            title: title.clone(),
+            state,
+        });
     }
     let mut evs: Vec<Body> = ctx
         .tree
@@ -807,68 +841,51 @@ pub fn restore(ctx: &mut Ctx, a: &Args) -> R {
     let changes = ctx.anchor.changed_since(&v.anchor);
     ctx.emit(evs)?;
 
-    println!();
-    println!(
-        "  {} · {} · {}",
-        v.alias(),
-        v.kind.word(),
-        crate::clock::date_of(&v.ts)
-    );
-    if !v.label.is_empty() {
-        println!("  {}", v.label);
-    }
-    println!();
-    if !v.next_intent.is_empty() {
-        println!("  you were about to:  {}", v.next_intent);
-        println!();
-    }
-    for p in &lost {
-        println!("  no longer on the stack:  {p}");
-    }
-    if !lost.is_empty() {
-        println!();
-    }
-    if v.anchor.is_empty_tree() {
-        println!("  No anchor: there is no diff to show, only the date above.");
-        println!();
+    let anchor = if v.anchor.is_empty_tree() {
+        outcome::RestoreAnchor::Empty
     } else if changes.is_empty() {
-        println!("  Nothing changed since {}.", v.anchor.short());
-        println!();
+        outcome::RestoreAnchor::NoChanges {
+            anchor_short: v.anchor.short().to_string(),
+        }
     } else {
-        let touching: Vec<&crate::anchor::Change> = changes
-            .iter()
-            .filter(|c| {
-                v.working_set
-                    .iter()
-                    .any(|g| crate::glob::covers(g, &c.file_path))
-            })
-            .collect();
-        println!(
-            "  {} changes since {}{}",
-            changes.len(),
-            v.anchor.short(),
-            if v.working_set.is_empty() {
-                String::new()
-            } else {
-                format!(", {} of them touch what the stack governed", touching.len())
-            }
-        );
-        for c in changes.iter().take(6) {
-            println!("      {:<52} ({})", c.file_path, c.times);
+        outcome::RestoreAnchor::Changed {
+            anchor_short: v.anchor.short().to_string(),
+            changes: changes
+                .iter()
+                .map(|c| outcome::ChangeLine {
+                    file_path: c.file_path.clone(),
+                    times: c.times,
+                })
+                .collect(),
+            working_set: v.working_set.clone(),
         }
-        if changes.len() > 6 {
-            println!("      ... and {} more", changes.len() - 6);
-        }
-        println!();
-    }
-    crate::render::stack(&ctx.tree, a)
+    };
+    // Trap: `render::stack` used to be called from here too, on the same `a`
+    // it read `--json` from on its own. `main.rs` calls it separately now,
+    // after this `Outcome` is printed -- `restore` is allowed no flags at all
+    // in `main.rs`'s table, so `--json` never reached this call site either.
+    Ok(Outcome::Restored {
+        alias: v.alias(),
+        kind: v.kind.word().to_string(),
+        ts: v.ts,
+        label: v.label,
+        next_intent: v.next_intent,
+        lost,
+        anchor,
+    })
 }
 
 /// An automatic stop, for the end-of-session hook.
-pub fn auto_vivac(ctx: &mut Ctx, kind: VivacKind, next: &str, label: &str) -> R {
+pub fn auto_vivac(
+    ctx: &mut Ctx,
+    kind: VivacKind,
+    next: &str,
+    label: &str,
+) -> Result<Outcome, Failure> {
     guard_text(&[("next", next), ("label", label)])?;
     let v = vivac(ctx, kind, next, None, label);
-    ctx.emit(vec![v])
+    ctx.emit(vec![v])?;
+    Ok(Outcome::AutoStopped)
 }
 
 /// The opening of a session, for the start hook.
@@ -881,7 +898,11 @@ pub fn auto_vivac(ctx: &mut Ctx, kind: VivacKind, next: &str, label: &str) -> R 
 /// These are inputs and never a verdict: what counts as *following* the brief
 /// lives in whoever reads, not in the log. Storing the comparison instead of
 /// its terms would freeze a definition that may well turn out to be wrong.
-pub fn session_started(ctx: &mut Ctx, source: &str, session: Option<String>) -> R {
+pub fn session_started(
+    ctx: &mut Ctx,
+    source: &str,
+    session: Option<String>,
+) -> Result<Outcome, Failure> {
     // The focus the brief paints is the top of the stack: it walks the
     // ancestors of `stack.last()` and keeps the last of the lineage, which is
     // that same node again.
@@ -892,5 +913,6 @@ pub fn session_started(ctx: &mut Ctx, source: &str, session: Option<String>) -> 
         focus,
         vivac,
         session,
-    }])
+    }])?;
+    Ok(Outcome::SessionOpened)
 }
