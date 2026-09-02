@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - record the releases up to 0.3.2 in a changelog
 - ignore the bytecode the commit guard leaves behind ([#3](https://github.com/JAAvila-Of/vivac/pull/3))
 - run the suite, the linters and the guards on every pull request
+- warn in the readme that releases before 0.3.2 could park the wrong node
+- add correctness over cost to the pillars
 
 ## [0.3.2](https://github.com/JAAvila-Of/vivac/compare/v0.3.1...v0.3.2) - 2026-09-01
 
