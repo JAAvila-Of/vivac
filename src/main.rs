@@ -71,6 +71,7 @@ const USAGE: &str = r#"vivac - provenance of work
     vivac why <id>                            WHY WE ARE HERE
     vivac tree [id] [--all]                   the tree, with false closes marked
     vivac open                                open fronts and their lineage
+    vivac find "<text>"                       every node whose words match
     vivac stack                               where you are right now
     vivac parked                              DO NOT TOUCH NOW
     vivac triage                              what can be pruned, and with what
@@ -200,7 +201,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         "reconcile" => &["since", "all", "json"],
         // The reads that speak JSON, spelled out. No shorthand: a shorthand
         // is what let the brief claim it for two releases.
-        "why" | "open" | "stack" | "parked" | "triage" | "stats" | "vivacs" => &["json"],
+        "why" | "open" | "stack" | "parked" | "triage" | "stats" | "vivacs" | "find" => &["json"],
         "park" | "promote" | "note" | "import" | "restore" => &[],
         _ => &[],
     };
@@ -235,7 +236,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
     let takes: usize = match cmd {
         "park" | "abandon" | "done" | "note" | "flag" => 2,
         "focus" | "push" | "pop" | "promote" | "add" | "block" | "decide" | "save" | "restore"
-        | "import" | "why" | "tree" | "session" => 1,
+        | "import" | "why" | "tree" | "session" | "find" => 1,
         _ => 0,
     };
     if let [first, ..] = a.extra(takes) {
@@ -280,6 +281,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         "why" => render::why(&ctx.tree, a),
         "tree" => render::tree(&ctx.tree, a),
         "open" => render::open(&ctx.tree, a),
+        "find" => render::find(&ctx.tree, a),
         "stack" => render::stack(&ctx.tree, a),
         "parked" => render::parked(&ctx.tree, a),
         "triage" => render::triage(&ctx.tree, a),

@@ -664,3 +664,163 @@ pub fn vivacs(a: &Tree, args: &Args) -> R {
     println!();
     Ok(())
 }
+
+/// The fields of a node that carry meaning, in the order a reader wants them.
+///
+/// The title is a label; the reason, the note and the outcome are where the
+/// thinking is. A search that read only titles would find the folder and miss
+/// what is inside it.
+fn searchable(n: &Node) -> [(&'static str, &str); 4] {
+    [
+        ("title", n.title.as_str()),
+        ("why", n.why.as_str()),
+        ("note", n.note.as_str()),
+        ("outcome", n.outcome.as_str()),
+    ]
+}
+
+/// A window of `width` characters around the first term that hit.
+///
+/// The offsets come out of the lowercased copy, and lowercasing can change
+/// how many bytes --and even how many characters-- a string takes, so the
+/// map back to the original is built while lowercasing rather than assumed.
+/// A snippet that lands two characters off is not a defect worth a wrong
+/// answer.
+fn snippet(text: &str, terms: &[String], width: usize) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= width {
+        return text.split_whitespace().collect::<Vec<_>>().join(" ");
+    }
+    let mut lower = String::with_capacity(text.len());
+    let mut origin: Vec<usize> = Vec::with_capacity(text.len());
+    for (i, c) in chars.iter().enumerate() {
+        for lowered_char in c.to_lowercase() {
+            for _ in 0..lowered_char.len_utf8() {
+                origin.push(i);
+            }
+            lower.push(lowered_char);
+        }
+    }
+    let at = terms
+        .iter()
+        .filter_map(|t| lower.find(t.as_str()))
+        .min()
+        .map(|b| origin[b])
+        .unwrap_or(0);
+    let end = (at + width * 2 / 3).clamp(width, chars.len());
+    let start = end - width;
+    let mut out = String::new();
+    if start > 0 {
+        out.push_str("...");
+    }
+    out.extend(chars[start..end].iter());
+    if end < chars.len() {
+        out.push_str("...");
+    }
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Text search over the tree.
+///
+/// `PILLARS.md` gives text search a ceiling of 100 ms and nothing ever
+/// implemented it: a budget with no floor under it, the same class of
+/// unchecked claim as the test count that lied for a day.
+///
+/// Two rules it does not bend. **Every term has to appear**, or a second word
+/// would widen the search instead of narrowing it, which is the opposite of
+/// what typing more means. And **closed nodes are searched too**: what you
+/// look for months later is usually finished, and a search that stopped at
+/// the open fronts would be a to-do list rather than a memory.
+///
+/// Newest first, because a search over a tree that has been running for
+/// months is answered from the end far more often than from the beginning.
+pub fn find(a: &Tree, args: &Args) -> R {
+    let usage = || Failure::usage("usage: vivac find \"<text>\"".to_string());
+    let query = args.positional(0).ok_or_else(usage)?;
+    let terms: Vec<String> = query.split_whitespace().map(|t| t.to_lowercase()).collect();
+    if terms.is_empty() {
+        return Err(usage());
+    }
+
+    let mut hits: Vec<(&Node, Vec<&'static str>)> = Vec::new();
+    for n in a.nodes_iter() {
+        let lowered: Vec<(&'static str, String)> = searchable(n)
+            .iter()
+            .filter(|(_, v)| !v.is_empty())
+            .map(|(k, v)| (*k, v.to_lowercase()))
+            .collect();
+        if !terms
+            .iter()
+            .all(|t| lowered.iter().any(|(_, v)| v.contains(t.as_str())))
+        {
+            continue;
+        }
+        let matched: Vec<&'static str> = lowered
+            .iter()
+            .filter(|(_, v)| terms.iter().any(|t| v.contains(t.as_str())))
+            .map(|(k, _)| *k)
+            .collect();
+        hits.push((n, matched));
+    }
+    hits.sort_by_key(|(n, _)| std::cmp::Reverse(n.num));
+
+    let lineage_of = |n: &Node| -> Vec<String> {
+        let line = a.ancestors(&n.id);
+        line[..line.len().saturating_sub(1)]
+            .iter()
+            .map(|p| p.alias())
+            .collect()
+    };
+
+    if args.has("json") {
+        let ag = &a.aggregates();
+        return print_json(json!(hits
+            .iter()
+            .map(|(n, matched)| {
+                let mut v = json_node(a, ag, n);
+                v["lineage"] = json!(lineage_of(n));
+                v["matched"] = json!(matched);
+                v
+            })
+            .collect::<Vec<_>>()));
+    }
+
+    if hits.is_empty() {
+        println!("  Nothing matches \"{query}\".");
+        return Ok(());
+    }
+    println!();
+    println!(
+        "  {} match{} for \"{}\"",
+        hits.len(),
+        if hits.len() == 1 { "" } else { "es" },
+        query,
+    );
+    println!();
+    for (n, matched) in hits.iter().take(20) {
+        println!("  {:<6} {}", n.alias(), n.title);
+        let lineage = lineage_of(n);
+        if !lineage.is_empty() {
+            println!("         via {}", lineage.join(" > "));
+        }
+        // The title is already on the line above it. Repeating it as the
+        // reason the hit came back would say nothing.
+        for field in matched.iter().filter(|f| **f != "title") {
+            let text = searchable(n)
+                .iter()
+                .find(|(k, _)| k == field)
+                .map(|(_, v)| *v)
+                .unwrap_or_default();
+            println!("         {}: {}", field, snippet(text, &terms, WIDTH));
+        }
+    }
+    if hits.len() > 20 {
+        println!();
+        println!(
+            "  ... and {} more   vivac find \"...\" --json",
+            hits.len() - 20
+        );
+    }
+    println!();
+    Ok(())
+}
