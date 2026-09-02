@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3](https://github.com/JAAvila-Of/vivac/compare/v0.3.2...v0.3.3) - 2026-09-02
+
+### Added
+
+- *(mcp)* the reads as tools an agent can call
+- *(find)* text search over every field that carries meaning
+
+### Other
+
+- *(ops)* return what happened instead of printing it
+- match the changelog to the shape the machine writes
+- point the readme at the pipeline that now exists
+- derive the version and publish from the commit log
+- record the releases up to 0.3.2 in a changelog
+- ignore the bytecode the commit guard leaves behind ([#3](https://github.com/JAAvila-Of/vivac/pull/3))
+- run the suite, the linters and the guards on every pull request
+
 ## [0.3.2](https://github.com/JAAvila-Of/vivac/compare/v0.3.1...v0.3.2) - 2026-09-01
 
 ### Added
