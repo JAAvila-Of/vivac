@@ -10,6 +10,7 @@ active
 actor
 add
 added
+addr
 advice
 after
 ag
@@ -63,6 +64,8 @@ baskets
 be
 before
 bin
+bind
+binding
 blessed
 block
 blocked
@@ -72,6 +75,7 @@ bodies
 body
 bogus
 bool
+boot
 born
 both
 box
@@ -137,16 +141,19 @@ command
 commands
 common
 config
+connect
 const
 constraint
 constraints
 cont
 contained
 contains
+content
 continue
 control
 copied
 copy
+cors
 count
 counted
 counts
@@ -232,11 +239,14 @@ error
 escaped
 estimator
 ev
+even
 event
 events
+ever
 every
 everything
 evs
+exact
 exist
 exists
 exit
@@ -276,10 +286,12 @@ fold
 for
 force
 forced
+foreign
 format
 formatter
 found
 four
+free
 from
 front
 fronts
@@ -294,6 +306,7 @@ gives
 glob
 goal
 goals
+good
 governing
 governs
 guard
@@ -305,6 +318,8 @@ has
 hash
 hashes
 head
+header
+headers
 heading
 headings
 hello
@@ -330,6 +345,7 @@ ident
 identifier
 ids
 if
+ignore
 ignored
 impl
 import
@@ -383,10 +399,12 @@ lineage
 lines
 list
 listed
+listener
 lists
 literals
 live
 load
+local
 lock
 log
 log2
@@ -406,6 +424,7 @@ manual
 many
 map
 mark
+marker
 mask
 match
 matched
@@ -437,6 +456,7 @@ nanos
 nd
 ne
 needs
+net
 never
 new
 next
@@ -453,6 +473,7 @@ nothing
 notification
 notify
 now
+nth
 null
 num
 number
@@ -524,6 +545,7 @@ pluralised
 pop
 popped
 populated
+port
 position
 positional
 positionals
@@ -591,6 +613,7 @@ reopen
 repeat
 replace
 reply
+request
 requested
 required
 rescue
@@ -598,6 +621,7 @@ rescued
 rescuing
 resolve
 respects
+response
 rest
 restore
 restored
@@ -611,6 +635,7 @@ review
 revived
 rfc3339
 rid
+right
 risk
 room
 root
@@ -632,14 +657,17 @@ saved
 says
 sb
 schema
+scheme
 scope
 search
 searchable
 searched
+second
 secret
 secs
 section
 sections
+security
 seeded
 seen
 seg
@@ -651,7 +679,9 @@ seq
 serde
 serialize
 serve
+served
 server
+serves
 session
 set
 sha
@@ -671,6 +701,7 @@ single
 six
 skip
 skipped
+slash
 slashes
 sleep
 slice
@@ -716,6 +747,7 @@ stop
 stopped
 store
 str
+stream
 string
 strip
 struct
@@ -741,6 +773,7 @@ taken
 takes
 target
 task
+tcp
 temp
 term
 terminal
@@ -761,6 +794,7 @@ through
 tidy
 tight
 time
+timeout
 times
 title
 tld
@@ -783,6 +817,7 @@ travels
 tree
 triage
 trim
+trimmed
 trimming
 true
 truncable
@@ -796,6 +831,7 @@ twin
 two
 type
 u128
+u16
 u32
 u64
 u8
@@ -814,6 +850,7 @@ upper
 uppercase
 upto
 upward
+url
 usage
 use
 used
@@ -840,6 +877,7 @@ wait
 waiting
 want
 was
+web
 what
 where
 which
