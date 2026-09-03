@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.7](https://github.com/JAAvila-Of/vivac/compare/v0.3.6...v0.3.7) - 2026-09-03
+
+### Added
+
+- *(why)* what each step of the path looked like at the time
+
+### Other
+
+- *(readme)* hold the README's promises against the binary
+- *(readme)* correct three claims the binary contradicts
+
 ## [0.3.6](https://github.com/JAAvila-Of/vivac/compare/v0.3.5...v0.3.6) - 2026-09-03
 
 ### Added
