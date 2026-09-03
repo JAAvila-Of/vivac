@@ -27,11 +27,11 @@
 
 use crate::args::Args;
 use crate::failure::{Failure, R};
-use crate::{brief, ops, render, store};
+use crate::project::{Project, Registry};
+use crate::{brief, render};
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
-use std::time::SystemTime;
 
 /// The version spoken when the client does not name one.
 const PROTOCOL: &str = "2025-06-18";
@@ -121,56 +121,6 @@ fn schema(t: &Tool) -> Value {
     })
 }
 
-/// The store, and enough of a fingerprint to know when it moved.
-///
-/// The server outlives the calls and it is not the only writer: the agent
-/// still writes through the CLI, and another session may be writing too. A
-/// tree folded once at startup would answer today's question with the tree
-/// from whenever the client happened to connect.
-///
-/// The log only ever grows, so its length alone is an exact change detector.
-/// The modification time rides along for the one case length cannot see: a
-/// rewrite that lands on the same byte count.
-struct State {
-    root: PathBuf,
-    project: String,
-    ctx: ops::Ctx,
-    seen: (u64, Option<SystemTime>),
-}
-
-fn fingerprint(log: &std::path::Path) -> (u64, Option<SystemTime>) {
-    match std::fs::metadata(log) {
-        Ok(m) => (m.len(), m.modified().ok()),
-        Err(_) => (0, None),
-    }
-}
-
-impl State {
-    fn open(root: PathBuf) -> Result<State, Failure> {
-        let project = root
-            .file_name()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "-".into());
-        let ctx = ops::Ctx::load(store::Store::open(root.clone())?)?;
-        let seen = fingerprint(&ctx.store.log());
-        Ok(State {
-            root,
-            project,
-            ctx,
-            seen,
-        })
-    }
-
-    fn current(&mut self) -> Result<&ops::Ctx, Failure> {
-        let now = fingerprint(&self.ctx.store.log());
-        if now != self.seen {
-            self.ctx = ops::Ctx::load(store::Store::open(self.root.clone())?)?;
-            self.seen = now;
-        }
-        Ok(&self.ctx)
-    }
-}
-
 fn ok(id: &Value, result: Value) -> String {
     json!({ "jsonrpc": "2.0", "id": id, "result": result }).to_string()
 }
@@ -207,29 +157,29 @@ fn argument<'a>(params: &'a Value, name: &str) -> Option<&'a str> {
     params["arguments"][name].as_str()
 }
 
-fn call(state: &mut State, params: &Value) -> Result<String, Failure> {
+fn call(project: &mut Project, params: &Value) -> Result<String, Failure> {
     let name = params["name"].as_str().unwrap_or_default();
     let missing = |what: &str| Failure::usage(format!("{name} needs a {what}."));
     match name {
         "vivac_brief" => {
             let empty = Args::default();
-            let project = state.project.clone();
-            let ctx = state.current()?;
-            brief::to_text(&ctx.tree, ctx.anchor.as_ref(), &empty, &project)
+            let id = project.id.clone();
+            let ctx = project.current()?;
+            brief::to_text(&ctx.tree, ctx.anchor.as_ref(), &empty, &id)
         }
         "vivac_find" => {
             let query = argument(params, "query")
                 .ok_or_else(|| missing("query"))?
                 .to_string();
-            pretty(render::find_data(&state.current()?.tree, &query)?)
+            pretty(render::find_data(&project.current()?.tree, &query)?)
         }
         "vivac_why" => {
             let id = argument(params, "id")
                 .ok_or_else(|| missing("id"))?
                 .to_string();
-            pretty(render::why_data(&state.current()?.tree, &id)?)
+            pretty(render::why_data(&project.current()?.tree, &id)?)
         }
-        "vivac_open" => pretty(render::open_data(&state.current()?.tree)),
+        "vivac_open" => pretty(render::open_data(&project.current()?.tree)),
         other => Err(Failure::usage(format!(
             "no such tool: {other}. This server has: {}",
             TOOLS.iter().map(|t| t.name).collect::<Vec<_>>().join(", ")
@@ -240,7 +190,7 @@ fn call(state: &mut State, params: &Value) -> Result<String, Failure> {
 /// One line in, at most one line out. `None` is a notification, which by
 /// definition is not answered: a reply nobody is waiting for would be read as
 /// the answer to whatever comes next.
-fn handle(state: &mut State, line: &str) -> Option<String> {
+fn handle(project: &mut Project, line: &str) -> Option<String> {
     let message: Value = match serde_json::from_str(line) {
         Ok(v) => v,
         Err(e) => {
@@ -272,7 +222,7 @@ fn handle(state: &mut State, line: &str) -> Option<String> {
             &id,
             json!({ "tools": TOOLS.iter().map(schema).collect::<Vec<_>>() }),
         )),
-        "tools/call" => Some(match call(state, &params) {
+        "tools/call" => Some(match call(project, &params) {
             Ok(text) => tool_ok(&id, text),
             Err(e) => tool_error(&id, e.message()),
         }),
@@ -285,7 +235,8 @@ fn handle(state: &mut State, line: &str) -> Option<String> {
 }
 
 pub fn serve(root: PathBuf) -> R {
-    let mut state = State::open(root)?;
+    let mut registry = Registry::open(vec![root])?;
+    let project = registry.first();
     let input = std::io::stdin();
     let mut output = std::io::stdout();
     for line in input.lock().lines() {
@@ -293,7 +244,7 @@ pub fn serve(root: PathBuf) -> R {
         if line.trim().is_empty() {
             continue;
         }
-        if let Some(reply) = handle(&mut state, &line) {
+        if let Some(reply) = handle(project, &line) {
             writeln!(output, "{reply}").map_err(Failure::Io)?;
             output.flush().map_err(Failure::Io)?;
         }

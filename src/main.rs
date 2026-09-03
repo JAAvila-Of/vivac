@@ -25,6 +25,7 @@ mod model;
 mod ops;
 mod outcome;
 mod params;
+mod project;
 mod reconcile;
 mod redact;
 mod render;
