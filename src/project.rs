@@ -85,6 +85,13 @@ impl Registry {
     pub fn first(&mut self) -> &mut Project {
         &mut self.projects[0]
     }
+
+    /// Every id in the registry, in the order the roots were given. The `web`
+    /// scaffold page uses this to name what it is serving; the surface that
+    /// actually reads across projects is `t84`, not this.
+    pub fn ids(&self) -> Vec<&str> {
+        self.projects.iter().map(|p| p.id.as_str()).collect()
+    }
 }
 
 /// Collapses roots that point at the same place, keeping the first spelling

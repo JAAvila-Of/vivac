@@ -13,6 +13,11 @@ categories = ["command-line-utilities", "development-tools"]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 getrandom = "0.2"
+# `d138`: the only one of four candidates that compiles against the MSRV
+# below, +5 crates. A hand-rolled listener over `std::net::TcpListener` was
+# the +0 alternative and security vetoed it: the three defenses in `WEB.md`
+# §4.1 are header parsing, and that is not code to write twice.
+tiny_http = "0.12"
 
 # The same `serde_json` the crate already links, so the tree gains nothing.
 # The MCP tests read JSON-RPC replies, and asserting on substrings of a

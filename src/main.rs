@@ -31,6 +31,7 @@ mod redact;
 mod render;
 mod session;
 mod store;
+mod web;
 
 use args::Args;
 use failure::Failure;
@@ -89,6 +90,8 @@ const USAGE: &str = r#"vivac - provenance of work
     vivac session start [--hook]              the brief, ready to inject
     vivac session end   [--hook]              automatic stop at close
     vivac mcp                                 serve the reads over MCP
+    vivac web [--port N] [--no-open]          the tree in a browser, and
+          [--project P]                       nowhere but this machine
     vivac hooks                               what to paste into settings.json
 
   Getting started
@@ -179,6 +182,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         "block" => &["off"],
         "tree" => &["all", "json"],
         "reconcile" => &["since", "all", "json"],
+        "web" => &["port", "no-open", "project"],
         "init" | "hooks" | "mcp" => &[],
         // The reads that speak JSON, spelled out. No shorthand: a shorthand
         // is what let the brief claim it for two releases.
@@ -239,6 +243,28 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
     // below assumes one command, one process, one fold.
     if cmd == "mcp" {
         return mcp::serve(root).map(|_| 0);
+    }
+
+    // Same reason as `mcp`, over one or more roots instead of one: the
+    // server keeps running after this call returns, so it builds its own
+    // registry rather than taking the `ctx` below.
+    if cmd == "web" {
+        let mut roots: Vec<std::path::PathBuf> = a
+            .list("project")
+            .iter()
+            .map(std::path::PathBuf::from)
+            .collect();
+        if roots.is_empty() {
+            roots.push(root);
+        }
+        let port =
+            match a.opt("port") {
+                None => None,
+                Some(p) => Some(p.parse::<u16>().map_err(|_| {
+                    Failure::usage(format!("--port needs a port number, not \"{p}\""))
+                })?),
+            };
+        return web::serve(roots, port, !a.has("no-open")).map(|_| 0);
     }
 
     let mut ctx = ops::Ctx::load(store::Store::open(root)?)?;
