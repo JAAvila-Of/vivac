@@ -337,6 +337,7 @@ in
 include
 indent
 info
+init
 initial
 initialize
 inline
@@ -517,6 +518,7 @@ phrase
 picks
 pii
 piped
+plants
 plural
 pluralised
 pop
@@ -578,6 +580,7 @@ refused
 refuses
 registry
 rejected
+rejects
 rel
 relaxed
 rem
@@ -834,6 +837,7 @@ vocabulary
 vowels
 vv
 wait
+waiting
 want
 was
 what

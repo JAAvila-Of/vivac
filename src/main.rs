@@ -141,6 +141,77 @@ fn project_name(ctx: &ops::Ctx) -> String {
 fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
     let cwd = std::env::current_dir().map_err(Failure::Io)?;
 
+    // Valid options per command. One that is not here is an error and not
+    // silence: see `Args::unknown`.
+    //
+    // `--json` is listed command by command, and it used to be common to all
+    // of them. Common meant every command took it and ten did something with
+    // it: `vivac brief --json` and `vivac push "x" --json` both printed text
+    // and left with a 0. A flag allowed everywhere and read in ten places is
+    // the very failure this table exists to prevent, one level up (`f51`).
+    //
+    // This runs before every command below, including the ones that return
+    // before ever touching a store: a command that does its job and along
+    // the way ignores what it did not understand is exactly what `f51`
+    // describes.
+    let allowed: &[&str] = match cmd {
+        "push" => &["why", "type", "blocks", "ref", "governs"],
+        "pop" => &["force", "next"],
+        "decide" => &[
+            "reason",
+            "alternative",
+            "supersedes",
+            "ref",
+            "governs",
+            "blocks",
+        ],
+        "flag" => &["why", "off"],
+        "save" => &["next"],
+        // The brief does not speak JSON, and that is a decision and not a
+        // gap: the shape would have to be designed, it has no consumer
+        // today, and the agent reads the brief as prose. `d53`.
+        "brief" => &["budget", "now"],
+        "session" => &["hook", "next", "budget", "now"],
+        "add" => &["parent", "why", "type", "blocks", "ref", "governs"],
+        "done" => &["force"],
+        "abandon" => &["cascade", "rescue"],
+        "focus" => &["reopen"],
+        "block" => &["off"],
+        "tree" => &["all", "json"],
+        "reconcile" => &["since", "all", "json"],
+        "init" | "hooks" | "mcp" => &[],
+        // The reads that speak JSON, spelled out. No shorthand: a shorthand
+        // is what let the brief claim it for two releases.
+        "why" | "open" | "stack" | "parked" | "triage" | "stats" | "vivacs" | "find" | "check" => {
+            &["json"]
+        }
+        "park" | "promote" | "note" | "import" | "restore" => &[],
+        _ => &[],
+    };
+    let unknown = a.unknown(allowed);
+    if !unknown.is_empty() {
+        let takes = if allowed.is_empty() {
+            "none".to_string()
+        } else {
+            allowed
+                .iter()
+                .map(|o| format!("--{o}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        return Err(Failure::usage(format!(
+            "{} does not take {}.
+
+  It takes: {takes}",
+            cmd,
+            unknown
+                .iter()
+                .map(|o| format!("--{o}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        )));
+    }
+
     if cmd == "init" {
         let s = store::Store::create(&cwd)?;
         println!("  vivac planted in {}", cwd.display());
@@ -176,69 +247,6 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
     // store corruption from a finding about the project.
     if cmd == "check" {
         return check::check(&ctx.tree, a);
-    }
-
-    // Valid options per command. One that is not here is an error and not
-    // silence: see `Args::unknown`.
-    //
-    // `--json` is listed command by command, and it used to be common to all
-    // of them. Common meant every command took it and ten did something with
-    // it: `vivac brief --json` and `vivac push "x" --json` both printed text
-    // and left with a 0. A flag allowed everywhere and read in ten places is
-    // the very failure this table exists to prevent, one level up (`f51`).
-    let allowed: &[&str] = match cmd {
-        "push" => &["why", "type", "blocks", "ref", "governs"],
-        "pop" => &["force", "next"],
-        "decide" => &[
-            "reason",
-            "alternative",
-            "supersedes",
-            "ref",
-            "governs",
-            "blocks",
-        ],
-        "flag" => &["why", "off"],
-        "save" => &["next"],
-        // The brief does not speak JSON, and that is a decision and not a
-        // gap: the shape would have to be designed, it has no consumer
-        // today, and the agent reads the brief as prose. `d53`.
-        "brief" => &["budget", "now"],
-        "session" => &["hook", "next", "budget", "now"],
-        "add" => &["parent", "why", "type", "blocks", "ref", "governs"],
-        "done" => &["force"],
-        "abandon" => &["cascade", "rescue"],
-        "focus" => &["reopen"],
-        "block" => &["off"],
-        "tree" => &["all", "json"],
-        "reconcile" => &["since", "all", "json"],
-        // The reads that speak JSON, spelled out. No shorthand: a shorthand
-        // is what let the brief claim it for two releases.
-        "why" | "open" | "stack" | "parked" | "triage" | "stats" | "vivacs" | "find" => &["json"],
-        "park" | "promote" | "note" | "import" | "restore" => &[],
-        _ => &[],
-    };
-    let unknown = a.unknown(allowed);
-    if !unknown.is_empty() {
-        let takes = if allowed.is_empty() {
-            "none".to_string()
-        } else {
-            allowed
-                .iter()
-                .map(|o| format!("--{o}"))
-                .collect::<Vec<_>>()
-                .join(" ")
-        };
-        return Err(Failure::usage(format!(
-            "{} does not take {}.
-
-  It takes: {takes}",
-            cmd,
-            unknown
-                .iter()
-                .map(|o| format!("--{o}"))
-                .collect::<Vec<_>>()
-                .join(" ")
-        )));
     }
 
     // Words each command takes of its own. Anything past that is refused for
