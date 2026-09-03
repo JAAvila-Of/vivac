@@ -408,6 +408,24 @@ impl Tree {
         lineage
     }
 
+    /// The lineage from the goal a node answers to down to the node itself --
+    /// the nearest goal at or above it, which may be the node. Falls back to
+    /// the whole lineage when nothing above it is a goal.
+    ///
+    /// `ancestors` counts from the root instead, and that is a number
+    /// `promote` can never move: promoting makes a node a goal without
+    /// reparenting it (`d33`), so the birth chain stays exactly as long as it
+    /// was. What promoting does change is which goal the nodes below answer
+    /// to, and this is where that shows up (`f156`).
+    pub fn under_goal(&self, id: &str) -> Vec<&Node> {
+        let lineage = self.ancestors(id);
+        let cut = lineage
+            .iter()
+            .rposition(|n| n.kind == Kind::Goal)
+            .unwrap_or(0);
+        lineage[cut..].to_vec()
+    }
+
     pub fn descendants(&self, id: &str) -> Vec<&Node> {
         let mut out = Vec::new();
         let mut stack = vec![id.to_string()];
@@ -587,6 +605,27 @@ mod tests {
         }
     }
 
+    fn node(seq: u64, num: u64, kind: Kind, parent: Option<&str>) -> Event {
+        Event {
+            seq,
+            id: format!("e{seq}"),
+            ts: "2026-09-03T10:00:00Z".to_string(),
+            actor: "a".to_string(),
+            lane: "main".to_string(),
+            payload: Body::NodeCreated {
+                node: format!("n{num}"),
+                num,
+                kind,
+                title: format!("Node {num}"),
+                why: "it is needed".to_string(),
+                parent: parent.map(str::to_string),
+                blocks: false,
+                refs: vec![],
+                governs: vec![],
+            },
+        }
+    }
+
     fn stop(seq: u64) -> Event {
         stop_of_kind(seq, VivacKind::Manual)
     }
@@ -610,6 +649,50 @@ mod tests {
                 label: String::new(),
             },
         }
+    }
+
+    /// The distance `triage` warns on is to the goal a node answers to, and a
+    /// goal partway down the chain is the one that counts: it is the whole
+    /// reason `promote` can quiet the warning at all (`f156`).
+    #[test]
+    fn the_lineage_under_a_goal_starts_at_the_nearest_one() {
+        let events = vec![
+            node(1, 1, Kind::Goal, None),
+            node(2, 2, Kind::Task, Some("n1")),
+            node(3, 3, Kind::Goal, Some("n2")),
+            node(4, 4, Kind::Task, Some("n3")),
+        ];
+        let tree = fold(&events, 0);
+        assert_eq!(tree.ancestors("n4").len(), 4);
+        let under: Vec<u64> = tree.under_goal("n4").iter().map(|n| n.num).collect();
+        assert_eq!(under, vec![3, 4]);
+    }
+
+    /// A goal answers to itself, which is why promoting a node takes it out of
+    /// the warning along with everything below it.
+    #[test]
+    fn a_goal_is_its_own_goal() {
+        let events = vec![
+            node(1, 1, Kind::Goal, None),
+            node(2, 2, Kind::Task, Some("n1")),
+            node(3, 3, Kind::Goal, Some("n2")),
+        ];
+        let tree = fold(&events, 0);
+        assert_eq!(tree.under_goal("n3").len(), 1);
+    }
+
+    /// With no goal anywhere above it there is nothing nearer to count from,
+    /// so the whole lineage stands in -- which is what the number meant before
+    /// goals partway down existed.
+    #[test]
+    fn with_no_goal_above_it_the_whole_lineage_stands_in() {
+        let events = vec![
+            node(1, 1, Kind::Task, None),
+            node(2, 2, Kind::Task, Some("n1")),
+            node(3, 3, Kind::Task, Some("n2")),
+        ];
+        let tree = fold(&events, 0);
+        assert_eq!(tree.under_goal("n3").len(), 3);
     }
 
     /// `changes` measures a stretch from a vivac's own seq. Without it, the

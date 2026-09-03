@@ -371,8 +371,8 @@ pub fn open(a: &Tree, args: &Args) -> R {
 ///
 /// A brief over budget **must not lie by omission** (`BRIEF-SPEC.md` §4):
 /// the signal is that the graph needs pruning, and this is the view that says
-/// where. `MODEL.md` §6.1 also sends it the deep nodes, because a deep stack
-/// is almost never lack of discipline: it is that the root goal moved and
+/// where. `MODEL.md` §6.1 also sends it the deep nodes, because a chain that
+/// long is almost never lack of discipline: it is that the goal moved and
 /// nobody re-rooted.
 pub fn triage(a: &Tree, args: &Args) -> R {
     let ag = &a.aggregates();
@@ -382,11 +382,14 @@ pub fn triage(a: &Tree, args: &Args) -> R {
         .filter(|n| n.state == State::Suspended)
         .collect();
 
-    // `MODEL.md` §6.1: from 6 on it shows up here, and it never blocks.
+    // `MODEL.md` §6.1: from 6 on it shows up here, and it never blocks. The
+    // distance is to the goal the node answers to, not to the root: `promote`
+    // is the way out this section prints, and a count from the root is one
+    // `promote` cannot move (`f156`).
     let mut deep: Vec<(&Node, usize)> = a
         .nodes_iter()
         .filter(|n| n.is_front())
-        .map(|n| (n, a.ancestors(&n.id).len()))
+        .map(|n| (n, a.under_goal(&n.id).len()))
         .filter(|(_, d)| *d >= 6)
         .collect();
 
@@ -425,7 +428,10 @@ pub fn triage(a: &Tree, args: &Args) -> R {
             "parked": parked_nodes.iter().map(|n| json_node(a, ag, n)).collect::<Vec<_>>(),
             "deep": deep.iter().map(|(n, d)| {
                 let mut v = json_node(a, ag, n);
-                v["depth"] = json!(d);
+                // Named for what it counts. `stats` reports a `depth` measured
+                // from the root, and one key meaning two distances would be
+                // read wrong exactly once.
+                v["depth_from_goal"] = json!(d);
                 v
             }).collect::<Vec<_>>(),
             "orphaned_by_discard": orphaned.iter().map(|(n, p)| {
@@ -463,13 +469,15 @@ pub fn triage(a: &Tree, args: &Args) -> R {
     if !deep.is_empty() {
         println!();
         println!(
-            "  6 OR MORE FROM THE ROOT ({})      promote <id>",
+            "  6 OR MORE FROM ITS GOAL ({})      promote <id>",
             deep.len()
         );
         for (n, d) in &deep {
             println!("    {:<6} {:<40} depth {d}", n.alias(), clip(&n.title, 40));
+            // The lineage starts where the number does. Drawing it from the
+            // root beside a distance to the goal would say two things at once.
             let v: Vec<String> = a
-                .ancestors(&n.id)
+                .under_goal(&n.id)
                 .iter()
                 .rev()
                 .skip(1)

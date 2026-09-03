@@ -154,7 +154,7 @@ fn the_rescued_node_comes_back_past_the_eye() {
 }
 
 /// `MODEL.md` §6.1: from 6 on it shows up in triage, with `promote` as the way
-/// out. A deep stack is almost never lack of discipline.
+/// out. A chain that long is almost never lack of discipline.
 #[test]
 fn from_six_deep_onward() {
     let c = Sandbox::new_seeded("deep");
@@ -162,13 +162,65 @@ fn from_six_deep_onward() {
         c.ok(&["push", &format!("Level {i}"), "--why", "still going down"]);
     }
     let s = c.ok(&["triage"]);
-    assert!(!s.contains("6 OR MORE"), "it warned at five:\n{s}");
+    assert!(
+        !s.contains("6 OR MORE"),
+        "it warned at five:
+{s}"
+    );
 
     c.ok(&["push", "Level 6", "--why", "one more"]);
     let s = c.ok(&["triage"]);
-    assert!(section(&s, "6 OR MORE FROM THE ROOT"), "{s}");
-    assert!(s.contains("promote <id>"), "no way out offered:\n{s}");
+    assert!(section(&s, "6 OR MORE FROM ITS GOAL"), "{s}");
+    assert!(
+        s.contains("promote <id>"),
+        "no way out offered:
+{s}"
+    );
     assert!(s.contains("depth 6"), "{s}");
+}
+
+/// `f156`: the remedy the section prints has to be able to work. `promote`
+/// makes a node a goal and leaves it hanging where it was born (`d33`), so a
+/// count from the root is one it can never move, and the section would go on
+/// recommending it forever. The distance to the goal a node answers to is the
+/// number promoting does change.
+#[test]
+fn promoting_a_node_above_them_quiets_the_warning() {
+    let c = Sandbox::new_seeded("deep-promote");
+    for i in 1..=6 {
+        c.ok(&["push", &format!("Level {i}"), "--why", "still going down"]);
+    }
+    assert!(section(&c.ok(&["triage"]), "6 OR MORE FROM ITS GOAL"));
+
+    // Halfway up the chain the warning is about, and deliberately not the
+    // focus: what has to move is the distance of everything below it.
+    c.ok(&["promote", "3"]);
+    let s = c.ok(&["triage"]);
+    assert!(
+        !s.contains("6 OR MORE"),
+        "promote did not move the number it recommends itself for:
+{s}"
+    );
+}
+
+/// The lineage under the number has to start where the number does. A path
+/// from the root printed beside a distance to the goal says two different
+/// things at once.
+#[test]
+fn the_lineage_starts_at_the_goal_the_number_counts_from() {
+    let c = Sandbox::new_seeded("deep-via");
+    for i in 1..=7 {
+        c.ok(&["push", &format!("Level {i}"), "--why", "still going down"]);
+    }
+    c.ok(&["promote", "2"]);
+    let s = c.ok(&["triage"]);
+    assert!(section(&s, "6 OR MORE FROM ITS GOAL"), "{s}");
+    let via = s
+        .lines()
+        .find(|l| l.trim_start().starts_with("via "))
+        .expect("a lineage line");
+    assert!(via.contains("g2"), "it does not start at the goal: {via}");
+    assert!(!via.contains("t1 "), "it reached past the goal: {via}");
 }
 
 /// The other half of the audience. `--json` carries the four baskets, empty
