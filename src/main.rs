@@ -83,7 +83,8 @@ const USAGE: &str = r#"vivac - provenance of work
     vivac triage                              what can be pruned, and with what
     vivac reconcile [--since <v>] [--all]     files that changed with nothing
                                               in the tree claiming them
-    vivac changes [--since <v>]               what moved since a stop
+    vivac changes [--since <v>|manual]        what moved since a stop, or
+                                              since the last one you made
     vivac stats                               numbers
     vivac check                               invariants; belongs in CI
 

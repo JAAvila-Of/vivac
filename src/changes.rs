@@ -2,9 +2,17 @@
 //!
 //! `t148`: the log already has every event and no read hands them back
 //! grouped by what happened, so answering "what did this stretch move" meant
-//! opening `events` by hand. The boundary is a vivac and never a raw
-//! timestamp, because a timestamp ties within the same second and a vivac's
+//! opening `events` by hand. The boundary is a stop and never a raw
+//! timestamp, because a timestamp ties within the same second and a stop's
 //! `seq` does not.
+//!
+//! `t155`: the log's last stop is not the boundary anybody wants. The `Stop`
+//! hook writes one on every turn that moves the tree -- 23 in a single day on
+//! this project's own tree, 19 of them automatic -- so "since the last stop"
+//! answers "since my last action" where the question was "since the last time
+//! I looked". `--since manual` measures from the last stop somebody sat down
+//! and made, which is the only one of the five kinds a person chooses to
+//! write.
 
 use crate::args::Args;
 use crate::event::{Body, Event, Flag, State};
@@ -13,10 +21,26 @@ use crate::model::{Node, Tree, Vivac};
 use crate::render::{print_json, wrap, WIDTH};
 use serde_json::json;
 
+/// Where a stretch is measured from, and how that place was chosen. Both live
+/// in one type because the sentence the header prints depends on the two: the
+/// same stop reads differently when it is merely the log's most recent one and
+/// when it is the last one somebody sat down and made.
+pub enum Boundary<'a> {
+    Stop {
+        vivac: &'a Vivac,
+        /// Picked by `--since manual`, rather than being the log's last stop
+        /// or one named outright.
+        manual: bool,
+    },
+    /// The whole log. `asked_for_manual` tells the two ways of arriving here
+    /// apart: a log with no stops at all, and `--since manual` on a log where
+    /// every stop was written by the hook. Same stretch, different sentence.
+    Beginning { asked_for_manual: bool },
+}
+
 pub struct Changed<'a> {
-    /// The stop the stretch is measured from. `None` means the log has no
-    /// stops at all, so the stretch is everything.
-    pub since: Option<&'a Vivac>,
+    /// The boundary the stretch is measured from.
+    pub since: Boundary<'a>,
     pub opened: Vec<&'a Node>,
     pub closed: Vec<Closed<'a>>,
     pub flagged: Vec<Flagged<'a>>,
@@ -69,7 +93,9 @@ pub struct Tail {
 /// was written.
 pub fn collect<'a>(tree: &'a Tree, log: &[Event], since_seq: u64) -> Changed<'a> {
     let mut result = Changed {
-        since: None,
+        since: Boundary::Beginning {
+            asked_for_manual: false,
+        },
         opened: Vec::new(),
         closed: Vec::new(),
         flagged: Vec::new(),
@@ -147,16 +173,40 @@ pub fn collect<'a>(tree: &'a Tree, log: &[Event], since_seq: u64) -> Changed<'a>
 /// reading, not a check, and an empty stretch is answered with a sentence
 /// rather than a non-zero code.
 pub fn changes(tree: &Tree, log: &[Event], args: &Args) -> Result<i32, Failure> {
-    let since = match args.opt("since") {
-        Some(s) => Some(
-            tree.vivac(s)
-                .ok_or_else(|| Failure::usage(format!("No such vivac: {s}.")))?,
-        ),
-        None => tree.last_vivac(),
+    let boundary = match args.opt("since") {
+        Some("manual") => match tree.last_manual_vivac() {
+            Some(v) => Boundary::Stop {
+                vivac: v,
+                manual: true,
+            },
+            None => Boundary::Beginning {
+                asked_for_manual: true,
+            },
+        },
+        Some(s) => Boundary::Stop {
+            vivac: tree.vivac(s).ok_or_else(|| {
+                Failure::usage(format!(
+                    "No such vivac: {s}. Give a stop's alias, or `manual` for the last stop you made."
+                ))
+            })?,
+            manual: false,
+        },
+        None => match tree.last_vivac() {
+            Some(v) => Boundary::Stop {
+                vivac: v,
+                manual: false,
+            },
+            None => Boundary::Beginning {
+                asked_for_manual: false,
+            },
+        },
     };
-    let since_seq = since.map(|v| v.seq).unwrap_or(0);
+    let since_seq = match &boundary {
+        Boundary::Stop { vivac, .. } => vivac.seq,
+        Boundary::Beginning { .. } => 0,
+    };
     let mut result = collect(tree, log, since_seq);
-    result.since = since;
+    result.since = boundary;
 
     if args.has("json") {
         return print_json(as_json(&result)).map(|_| 0);
@@ -174,23 +224,39 @@ fn plural(n: usize) -> &'static str {
     }
 }
 
-/// `CHANGES SINCE ...`, in one of three forms and never a fourth: the last
-/// stop, an older one with how many stops lie between it and now, or no stop
-/// at all. It carries no clock time on purpose: `now_rfc3339` writes in UTC,
-/// and a bare hour would read as local to whoever is looking at it.
-fn header(since: Option<&Vivac>, stops_since: usize) -> String {
+/// `CHANGES SINCE ...`, in one of six forms and never a seventh: the log's
+/// last stop, an older one with how many stops lie between it and now, the
+/// last stop somebody made with how many the hook wrote after it, or the
+/// beginning of the log, which itself splits in two depending on whether a
+/// stop made by hand was asked for and not found. It carries no clock time on
+/// purpose: `now_rfc3339` writes in UTC, and a bare hour would read as local
+/// to whoever is looking at it.
+fn header(since: &Boundary, stops_since: usize) -> String {
     match since {
-        None => "  CHANGES SINCE THE BEGINNING - no stops yet".to_string(),
-        Some(v) => {
-            let date = crate::clock::date_of(&v.ts);
-            if stops_since == 0 {
-                format!("  CHANGES SINCE {}, the last stop - {date}", v.alias())
-            } else {
-                format!(
-                    "  CHANGES SINCE {} - {date}, {stops_since} stop{} ago",
-                    v.alias(),
-                    plural(stops_since)
-                )
+        Boundary::Beginning {
+            asked_for_manual: false,
+        } => "  CHANGES SINCE THE BEGINNING - no stops yet".to_string(),
+        Boundary::Beginning {
+            asked_for_manual: true,
+        } => "  CHANGES SINCE THE BEGINNING - no stop here was made by hand".to_string(),
+        Boundary::Stop { vivac, manual } => {
+            let date = crate::clock::date_of(&vivac.ts);
+            match (manual, stops_since) {
+                (false, 0) => format!("  CHANGES SINCE {}, the last stop - {date}", vivac.alias()),
+                (false, n) => format!(
+                    "  CHANGES SINCE {} - {date}, {n} stop{} ago",
+                    vivac.alias(),
+                    plural(n)
+                ),
+                (true, 0) => format!(
+                    "  CHANGES SINCE {}, the last stop you made - {date}",
+                    vivac.alias()
+                ),
+                (true, n) => format!(
+                    "  CHANGES SINCE {}, the last stop you made - {date}, {n} stop{} since",
+                    vivac.alias(),
+                    plural(n)
+                ),
             }
         }
     }
@@ -232,7 +298,7 @@ fn tail_phrase(tail: &Tail) -> Option<String> {
 
 fn print_text(result: &Changed) {
     println!();
-    println!("{}", header(result.since, result.tail.stops));
+    println!("{}", header(&result.since, result.tail.stops));
 
     let mut said_something = false;
 
@@ -303,9 +369,11 @@ fn print_text(result: &Changed) {
 
     if !said_something {
         println!();
-        match result.since {
-            Some(v) => println!("  Nothing has moved since {}.", v.alias()),
-            None => println!("  Nothing has moved."),
+        match &result.since {
+            Boundary::Stop { vivac, .. } => {
+                println!("  Nothing has moved since {}.", vivac.alias())
+            }
+            Boundary::Beginning { .. } => println!("  Nothing has moved."),
         }
     }
     println!();
@@ -313,11 +381,19 @@ fn print_text(result: &Changed) {
 
 fn as_json(result: &Changed) -> serde_json::Value {
     json!({
-        "since": result.since.map(|v| json!({
-            "alias": v.alias(),
-            "ts": v.ts,
-            "stops_since": result.tail.stops,
-        })),
+        // `kind` says how the boundary was chosen, not what kind of stop it
+        // is: `--since v122` on a stop somebody made still reads `stop`,
+        // because naming it outright is not the same question as asking for
+        // the last one made by hand.
+        "since": match &result.since {
+            Boundary::Stop { vivac, manual } => json!({
+                "kind": if *manual { "manual" } else { "stop" },
+                "alias": vivac.alias(),
+                "ts": vivac.ts,
+                "stops_since": result.tail.stops,
+            }),
+            Boundary::Beginning { .. } => serde_json::Value::Null,
+        },
         "opened": result.opened.iter().map(|n| json!({
             "alias": n.alias(),
             "title": n.title,
