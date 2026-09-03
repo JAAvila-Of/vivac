@@ -1,0 +1,236 @@
+/* `WEB.md` §5: one binary, no build step. This is embedded with `include_str!`
+   and inlined into a <style>, because the CSP admits `style-src 'unsafe-inline'`
+   and no external stylesheet at all. It lives in its own file rather than in a
+   `format!` because nobody maintains two hundred lines of CSS inside a string
+   literal.
+
+   Nothing here is the only thing carrying a meaning. The DX pillar says meaning
+   is never encoded in colour alone, so every state that matters is also a word
+   and a position: colour repeats what the text already said, and a reader with
+   no colour at all loses nothing. */
+
+:root {
+  --ink: #16181d;
+  --ink-soft: #5c626e;
+  --ink-faint: #878d99;
+  --ground: #fbfaf8;
+  --panel: #ffffff;
+  --rule: #e2e0db;
+  --rule-soft: #eeece8;
+  --accent: #2f5d50;
+  --warn: #8a4b1f;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono", Menlo,
+    Consolas, monospace;
+  --prose: ui-sans-serif, system-ui, "Segoe UI", Inter, Helvetica, Arial,
+    sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink: #e6e5e1;
+    --ink-soft: #a2a7b2;
+    --ink-faint: #767c88;
+    --ground: #14161a;
+    --panel: #1b1e23;
+    --rule: #2c3037;
+    --rule-soft: #23272d;
+    --accent: #7fbfa9;
+    --warn: #d79a63;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 2.5rem 1.5rem 5rem;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--prose);
+  font-size: 15px;
+  line-height: 1.55;
+  -webkit-text-size-adjust: 100%;
+}
+
+.page {
+  max-width: 54rem;
+  margin: 0 auto;
+}
+
+/* ---- masthead ------------------------------------------------------- */
+
+header {
+  border-bottom: 1px solid var(--rule);
+  padding-bottom: 1.1rem;
+  margin-bottom: 2.2rem;
+}
+
+header h1 {
+  margin: 0;
+  font-size: 1.35rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+header .promise {
+  margin: 0.3rem 0 0;
+  color: var(--ink-soft);
+  font-size: 0.9rem;
+}
+
+/* ---- sections ------------------------------------------------------- */
+
+section {
+  margin-bottom: 2.6rem;
+}
+
+section > h2 {
+  margin: 0 0 0.2rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--ink-soft);
+}
+
+section > .since {
+  margin: 0 0 1rem;
+  color: var(--ink-faint);
+  font-size: 0.85rem;
+}
+
+section > h3 {
+  margin: 1.4rem 0 0.5rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+
+.empty {
+  margin: 0;
+  color: var(--ink-soft);
+  font-style: italic;
+}
+
+/* ---- node lists ----------------------------------------------------- */
+
+ul.nodes {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--rule-soft);
+}
+
+ul.nodes > li {
+  display: grid;
+  grid-template-columns: 4.5rem 1fr;
+  gap: 0 0.9rem;
+  padding: 0.55rem 0;
+  border-bottom: 1px solid var(--rule-soft);
+}
+
+.alias {
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+  padding-top: 0.13rem;
+}
+
+.title {
+  margin: 0;
+}
+
+.note {
+  margin: 0.2rem 0 0;
+  grid-column: 2;
+  color: var(--ink-soft);
+  font-size: 0.88rem;
+}
+
+/* The word does the work; the rule beside it is a second cue, not the
+   first one. */
+.note.forced,
+.note.flag {
+  border-left: 2px solid var(--warn);
+  padding-left: 0.55rem;
+}
+
+.word {
+  font-family: var(--mono);
+  font-size: 0.76rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-faint);
+}
+
+/* ---- the stack ------------------------------------------------------ */
+
+ol.stack {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+ol.stack > li {
+  padding: 0.3rem 0 0.3rem 0;
+  display: grid;
+  grid-template-columns: 4.5rem 1fr;
+  gap: 0 0.9rem;
+}
+
+ol.stack > li .title {
+  border-left: 1px solid var(--rule);
+  padding-left: 0.9rem;
+}
+
+ol.stack > li.here .title {
+  border-left: 2px solid var(--accent);
+  font-weight: 600;
+}
+
+ol.stack > li.here .here-mark {
+  font-family: var(--mono);
+  font-size: 0.76rem;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+  margin-left: 0.5rem;
+}
+
+/* ---- the index of projects ------------------------------------------ */
+
+ul.projects {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+ul.projects > li {
+  padding: 0.45rem 0;
+  border-bottom: 1px solid var(--rule-soft);
+}
+
+a {
+  color: var(--accent);
+  text-underline-offset: 0.15em;
+}
+
+a:focus-visible,
+a:hover {
+  text-decoration-thickness: 2px;
+}
+
+/* ---- footer --------------------------------------------------------- */
+
+footer {
+  margin-top: 3rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--rule);
+  color: var(--ink-faint);
+  font-size: 0.82rem;
+}
+
+footer code {
+  font-family: var(--mono);
+}

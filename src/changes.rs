@@ -167,6 +167,35 @@ pub fn collect<'a>(tree: &'a Tree, log: &[Event], since_seq: u64) -> Changed<'a>
     result
 }
 
+impl Boundary<'_> {
+    /// The seq a stretch starts after. Exclusive: the stop itself belongs to
+    /// the stretch before it.
+    pub(crate) fn seq(&self) -> u64 {
+        match self {
+            Boundary::Stop { vivac, .. } => vivac.seq,
+            Boundary::Beginning { .. } => 0,
+        }
+    }
+}
+
+/// The boundary `--since manual` measures from: the last stop somebody sat
+/// down and made, or the whole log if there has never been one.
+///
+/// Its own function so a caller that is not the CLI -- `t160`'s Today page,
+/// which owes its "what changed" block this same limit -- asks the tree for
+/// it directly instead of re-deriving it, and the two can never disagree.
+pub(crate) fn manual_boundary(tree: &Tree) -> Boundary<'_> {
+    match tree.last_manual_vivac() {
+        Some(v) => Boundary::Stop {
+            vivac: v,
+            manual: true,
+        },
+        None => Boundary::Beginning {
+            asked_for_manual: true,
+        },
+    }
+}
+
 /// `changes` — what a stretch of work moved, printed with `triage`'s style.
 ///
 /// Always exits `0` when the command itself was well formed: this is a
@@ -174,15 +203,7 @@ pub fn collect<'a>(tree: &'a Tree, log: &[Event], since_seq: u64) -> Changed<'a>
 /// rather than a non-zero code.
 pub fn changes(tree: &Tree, log: &[Event], args: &Args) -> Result<i32, Failure> {
     let boundary = match args.opt("since") {
-        Some("manual") => match tree.last_manual_vivac() {
-            Some(v) => Boundary::Stop {
-                vivac: v,
-                manual: true,
-            },
-            None => Boundary::Beginning {
-                asked_for_manual: true,
-            },
-        },
+        Some("manual") => manual_boundary(tree),
         Some(s) => Boundary::Stop {
             vivac: tree.vivac(s).ok_or_else(|| {
                 Failure::usage(format!(
@@ -201,11 +222,7 @@ pub fn changes(tree: &Tree, log: &[Event], args: &Args) -> Result<i32, Failure> 
             },
         },
     };
-    let since_seq = match &boundary {
-        Boundary::Stop { vivac, .. } => vivac.seq,
-        Boundary::Beginning { .. } => 0,
-    };
-    let mut result = collect(tree, log, since_seq);
+    let mut result = collect(tree, log, boundary.seq());
     result.since = boundary;
 
     if args.has("json") {
@@ -264,7 +281,7 @@ fn header(since: &Boundary, stops_since: usize) -> String {
 
 /// The tail line, naming only what is not zero, in a fixed order. `stops`
 /// never appears here: it already spoke in the header.
-fn tail_phrase(tail: &Tail) -> Option<String> {
+pub(crate) fn tail_phrase(tail: &Tail) -> Option<String> {
     let mut parts = Vec::new();
     if tail.focus_moves > 0 {
         parts.push(format!(
