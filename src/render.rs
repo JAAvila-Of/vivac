@@ -9,12 +9,14 @@
 //! Every render has its `--json` twin, which is the other half of the
 //! audience: the agent needs parseable output, not a drawn tree.
 
+use crate::anchor::AnchorRef;
 use crate::args::Args;
 use crate::brief::clip;
-use crate::event::{Kind, State};
+use crate::event::{Body, Event, Kind, State};
 use crate::failure::{Failure, R};
 use crate::model::{Aggregates, Node, Tree};
 use serde_json::json;
+use std::collections::HashMap;
 
 pub(crate) const WIDTH: usize = 62;
 
@@ -85,6 +87,114 @@ pub(crate) fn print_json(v: serde_json::Value) -> R {
 /// It narrates the path from the root and then answers the three questions
 /// that come next: what was left open in parallel, what was born here, and
 /// what keeps each step of the path from closing.
+///
+/// `--full` adds three more, per step of the path and on `node` itself: the
+/// anchor in force when that step was born, the decisions born there that
+/// still stand, and the siblings that were still open at that moment. The
+/// first two answer from the folded `Tree`; the third cannot, because
+/// closing is folded away to the final state, and this is a question about
+/// a moment in the past. `Full` answers it from the log directly.
+///
+/// Only the log gives a moment a `seq`: `ts` alone ties within the same day,
+/// and this project has had days with 23 stops on it, so a comparison by
+/// date would be wrong on exactly the days it matters.
+struct Full {
+    /// Node id -> the `seq` it was created at. The first `node.created` for
+    /// an id wins, matching `Tree::apply`'s own rule for a repeated one.
+    created: HashMap<String, u64>,
+    /// Node id -> every `state.changed` it ever had, in log order. A node can
+    /// be reopened, so this is not "the one time it closed": it is the whole
+    /// history, searched for whatever it was at a given `seq`.
+    state: HashMap<String, Vec<(u64, State)>>,
+}
+
+impl Full {
+    fn from_log(log: &[Event]) -> Full {
+        let mut created = HashMap::new();
+        let mut state: HashMap<String, Vec<(u64, State)>> = HashMap::new();
+        for e in log {
+            match &e.payload {
+                Body::NodeCreated { node, .. } => {
+                    created.entry(node.clone()).or_insert(e.seq);
+                }
+                Body::StateChanged { node, state: s, .. } => {
+                    state.entry(node.clone()).or_default().push((e.seq, *s));
+                }
+                _ => {}
+            }
+        }
+        Full { created, state }
+    }
+
+    /// What a node's state was at `seq`, inclusive. With no `state.changed`
+    /// at or before it, the node was still in the one it is born with.
+    fn state_at(&self, id: &str, seq: u64) -> State {
+        self.state
+            .get(id)
+            .into_iter()
+            .flatten()
+            .rfind(|(s, _)| *s <= seq)
+            .map(|(_, state)| *state)
+            .unwrap_or(State::Active)
+    }
+}
+
+/// The anchor in force when `n` was born: the most recent stop at or before
+/// the `seq` of its `node.created`, and its anchor. Empty with nothing
+/// earlier to point to -- there is no version control, or the node predates
+/// every stop -- and that is a value, not a failure.
+fn anchor_of(a: &Tree, full: &Full, n: &Node) -> AnchorRef {
+    let Some(&seq) = full.created.get(&n.id) else {
+        return AnchorRef::default();
+    };
+    a.vivacs
+        .iter()
+        .rfind(|v| v.seq <= seq)
+        .map(|v| v.anchor.clone())
+        .unwrap_or_default()
+}
+
+/// The decisions born from `n` that still stand: a filter over what
+/// `born_here` already lists, kept to the ones that are a decision and still
+/// open. Superseding one closes it, so a superseded decision drops out on
+/// its own.
+fn standing_of<'a>(a: &'a Tree, n: &Node) -> Vec<&'a Node> {
+    a.children(&n.id)
+        .into_iter()
+        .filter(|c| c.kind == Kind::Decision && c.state.is_open())
+        .collect()
+}
+
+/// The siblings of `n`, born before it by `Node::num`, that were still open
+/// at the `seq` `n` was born. Not by `closed`'s date: two siblings can open
+/// and close on the day `n` was born, in an order the date cannot tell
+/// apart.
+fn open_then_of<'a>(a: &'a Tree, full: &Full, n: &Node) -> Vec<&'a Node> {
+    let (Some(&seq), Some(parent)) = (full.created.get(&n.id), n.parent.as_ref()) else {
+        return vec![];
+    };
+    a.children(parent)
+        .into_iter()
+        .filter(|c| c.id != n.id && c.num < n.num)
+        .filter(|c| full.state_at(&c.id, seq).is_open())
+        .collect()
+}
+
+/// `json_node`, with the three `--full` fields added.
+fn json_node_full(a: &Tree, ag: &Aggregates, full: &Full, n: &Node) -> serde_json::Value {
+    let mut v = json_node(a, ag, n);
+    v["anchor"] = json!(anchor_of(a, full, n));
+    v["standing"] = json!(standing_of(a, n)
+        .iter()
+        .map(|c| json_node(a, ag, c))
+        .collect::<Vec<_>>());
+    v["open_then"] = json!(open_then_of(a, full, n)
+        .iter()
+        .map(|c| json_node(a, ag, c))
+        .collect::<Vec<_>>());
+    v
+}
+
 /// `why` as data.
 ///
 /// The builder and the printing are two functions, the way `brief.rs` has
@@ -92,12 +202,20 @@ pub(crate) fn print_json(v: serde_json::Value) -> R {
 /// matters more than tidiness here, because a second reader --the MCP server--
 /// speaks JSON-RPC over the same standard output. A `println!` in its path
 /// does not look untidy, it corrupts the channel.
-pub fn why_data(a: &Tree, id: &str) -> Result<serde_json::Value, Failure> {
+///
+/// `full` is `None` for every caller but `why --full`, `why_data`'s own
+/// signature included: the MCP tool calls that one and has never asked for
+/// the log, so its shape stays exactly what it has always been.
+fn why_data_impl(a: &Tree, full: Option<&Full>, id: &str) -> Result<serde_json::Value, Failure> {
     let ag = &a.aggregates();
     let n = a
         .resolve(id)
         .ok_or_else(|| Failure::usage(format!("No such node: {id}.")))?;
     let lineage = a.ancestors(&n.id);
+    let node_json = |x: &Node| match full {
+        Some(f) => json_node_full(a, ag, f, x),
+        None => json_node(a, ag, x),
+    };
     let siblings: Vec<_> = n
         .parent
         .as_ref()
@@ -108,14 +226,18 @@ pub fn why_data(a: &Tree, id: &str) -> Result<serde_json::Value, Failure> {
         .map(|c| json_node(a, ag, c))
         .collect();
     Ok(json!({
-        "node": json_node(a, ag, n),
-        "path": lineage.iter().map(|x| json_node(a, ag, x)).collect::<Vec<_>>(),
+        "node": node_json(n),
+        "path": lineage.iter().map(|x| node_json(x)).collect::<Vec<_>>(),
         "in_parallel": siblings,
         "born_here": a.children(&n.id).iter().filter(|c| c.state.is_open())
             .map(|c| json_node(a, ag, c)).collect::<Vec<_>>(),
         "blockers": a.open_blockers(&n.id).iter()
             .map(|c| json_node(a, ag, c)).collect::<Vec<_>>(),
     }))
+}
+
+pub fn why_data(a: &Tree, id: &str) -> Result<serde_json::Value, Failure> {
+    why_data_impl(a, None, id)
 }
 
 /// The open fronts as data.
@@ -143,7 +265,43 @@ pub fn open_data(a: &Tree) -> serde_json::Value {
         .collect::<Vec<_>>())
 }
 
-pub fn why(a: &Tree, args: &Args) -> R {
+/// The `--full` lines for one step of the path, printed the way the JSON
+/// twin carries the same three fields: the anchor, the decisions still
+/// standing, and the siblings still open at that moment.
+fn print_full_of(a: &Tree, full: &Full, n: &Node) {
+    let anchor = anchor_of(a, full, n);
+    if anchor.is_empty_tree() {
+        println!("        anchor: none");
+    } else {
+        println!("        anchor: {} ({})", anchor.short(), anchor.kind);
+    }
+    let standing = standing_of(a, n);
+    if !standing.is_empty() {
+        println!(
+            "        standing ({}): {}",
+            standing.len(),
+            standing
+                .iter()
+                .map(|d| d.alias())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+    let open_then = open_then_of(a, full, n);
+    if !open_then.is_empty() {
+        println!(
+            "        open then ({}): {}",
+            open_then.len(),
+            open_then
+                .iter()
+                .map(|d| d.alias())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+}
+
+pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
     let ag = &a.aggregates();
     let s = args
         .positional(0)
@@ -152,9 +310,13 @@ pub fn why(a: &Tree, args: &Args) -> R {
         .resolve(s)
         .ok_or_else(|| Failure::usage(format!("No such node: {s}.")))?;
     let lineage = a.ancestors(&n.id);
+    let full = args.has("full").then(|| Full::from_log(log));
 
     if args.has("json") {
-        return print_json(why_data(a, s)?);
+        return print_json(match &full {
+            Some(f) => why_data_impl(a, Some(f), s)?,
+            None => why_data(a, s)?,
+        });
     }
 
     println!();
@@ -176,6 +338,9 @@ pub fn why(a: &Tree, args: &Args) -> R {
             if !p.outcome.is_empty() {
                 println!("{l}");
             }
+        }
+        if let Some(f) = &full {
+            print_full_of(a, f, p);
         }
         if !is_last {
             let f = ag.counts(&p.id).phrase();

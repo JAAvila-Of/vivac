@@ -74,7 +74,10 @@ const USAGE: &str = r#"vivac - provenance of work
 
     vivac brief [--budget 1500] [--now <date>]
                                               where you are and what NOT to touch
-    vivac why <id>                            WHY WE ARE HERE
+    vivac why <id> [--full]                   WHY WE ARE HERE
+                                              --full: anchor, standing
+                                              decisions and open siblings,
+                                              per step of the path
     vivac tree [id] [--all]                   the tree, with false closes marked
     vivac open                                open fronts and their lineage
     vivac find "<text>"                       every node whose words match
@@ -190,9 +193,11 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         "init" | "hooks" | "mcp" => &[],
         // The reads that speak JSON, spelled out. No shorthand: a shorthand
         // is what let the brief claim it for two releases.
-        "why" | "open" | "stack" | "parked" | "triage" | "stats" | "vivacs" | "find" | "check" => {
-            &["json"]
-        }
+        "open" | "stack" | "parked" | "triage" | "stats" | "vivacs" | "find" | "check" => &["json"],
+        // `--full` is its own on top of `--json`, so `why` cannot share the
+        // arm above without granting every other read a flag it does not
+        // read.
+        "why" => &["json", "full"],
         "park" | "promote" | "note" | "import" | "restore" => &[],
         _ => &[],
     };
@@ -280,6 +285,24 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         return changes::changes(&ctx.tree, &log, a);
     }
 
+    // Its own load too, for the same reason: `--full` answers "who was
+    // still open when this was born", and the folded `Tree` has already
+    // forgotten that once a node closes. The "one word of its own" limit
+    // is checked here rather than left to the generic path below, so
+    // `vivac why t1 extra` still refuses it exactly as it always has.
+    if cmd == "why" {
+        let (ctx, log) = ops::Ctx::load_with_log(store::Store::open(root)?)?;
+        if let [first, ..] = a.extra(1) {
+            return Err(Failure::usage(format!(
+                "{cmd} does not take \"{first}\".
+
+  It takes one word of its own. Everything else goes behind a --flag, and a flag
+  that repeats is written out again:  --governs a --governs b"
+            )));
+        }
+        return render::why(&ctx.tree, &log, a).map(|_| 0);
+    }
+
     let mut ctx = ops::Ctx::load(store::Store::open(root)?)?;
 
     // `check` is the only one with an exit code of its own: it separates
@@ -295,7 +318,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
     let takes: usize = match cmd {
         "park" | "abandon" | "done" | "note" | "flag" => 2,
         "focus" | "push" | "pop" | "promote" | "add" | "block" | "decide" | "save" | "restore"
-        | "import" | "why" | "tree" | "session" | "find" => 1,
+        | "import" | "tree" | "session" | "find" => 1,
         _ => 0,
     };
     if let [first, ..] = a.extra(takes) {
@@ -336,7 +359,6 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
             let project = project_name(&ctx);
             session::dispatch(&mut ctx, a, &project)
         }
-        "why" => render::why(&ctx.tree, a),
         "tree" => render::tree(&ctx.tree, a),
         "open" => render::open(&ctx.tree, a),
         "find" => render::find(&ctx.tree, a),
