@@ -36,10 +36,28 @@ struct Server {
 
 impl Server {
     fn start(dir: &std::path::Path) -> Server {
+        Server::start_serving(dir, &[])
+    }
+
+    /// Like `start`, but naming the roots to serve with one `--project` per
+    /// directory, so a server can be asked to serve more than the one it
+    /// starts in. `dir` is still the working directory: `vivac web` needs a
+    /// tree at or above its cwd regardless of what `--project` names.
+    fn start_serving(dir: &std::path::Path, roots: &[&std::path::Path]) -> Server {
         let port = free_port();
+        let mut args: Vec<std::ffi::OsString> = vec![
+            "web".into(),
+            "--port".into(),
+            port.to_string().into(),
+            "--no-open".into(),
+        ];
+        for r in roots {
+            args.push("--project".into());
+            args.push((*r).into());
+        }
         let mut child = Command::new(BIN)
             .current_dir(dir)
-            .args(["web", "--port", &port.to_string(), "--no-open"])
+            .args(&args)
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
@@ -196,12 +214,59 @@ fn token_from(body: &str) -> String {
     rest[..end].to_string()
 }
 
+/// Every `href="..."` value in the page, in the order they appear.
+fn hrefs_in(body: &str) -> Vec<String> {
+    let marker = "href=\"";
+    let mut out = Vec::new();
+    let mut rest = body;
+    while let Some(start) = rest.find(marker) {
+        let after = &rest[start + marker.len()..];
+        let Some(end) = after.find('"') else {
+            break;
+        };
+        out.push(after[..end].to_string());
+        rest = &after[end + 1..];
+    }
+    out
+}
+
 fn up(name: &str) -> Up {
     let sandbox = Sandbox::new_seeded(name);
     let server = Server::start(&sandbox.0);
     Up {
         server,
         _sandbox: sandbox,
+    }
+}
+
+/// A running server over more than one sandbox, none of which it outlives.
+/// Field order matters here for the same reason it does in `Up`.
+struct UpMany {
+    server: Server,
+    _sandboxes: Vec<Sandbox>,
+}
+
+impl UpMany {
+    fn port(&self) -> u16 {
+        self.server.port
+    }
+
+    fn boot_path(&self) -> String {
+        self.server.boot_path()
+    }
+
+    fn host(&self) -> String {
+        self.server.host()
+    }
+}
+
+fn up_many(names: &[&str]) -> UpMany {
+    let sandboxes: Vec<Sandbox> = names.iter().map(|n| Sandbox::new_seeded(n)).collect();
+    let roots: Vec<&std::path::Path> = sandboxes.iter().map(|s| s.0.as_path()).collect();
+    let server = Server::start_serving(&sandboxes[0].0, &roots);
+    UpMany {
+        server,
+        _sandboxes: sandboxes,
     }
 }
 
@@ -227,6 +292,9 @@ fn the_same_boot_url_a_second_time_is_refused() {
     );
 }
 
+/// `d145`: the index with exactly one project redirects rather than
+/// serving a list nobody needs to read, so "serves" here means the gate let
+/// the request through to the router -- not that it came back as `200`.
 #[test]
 fn a_good_token_in_the_header_serves() {
     let s = up("good-token");
@@ -237,7 +305,161 @@ fn a_good_token_in_the_header_serves() {
         "/",
         &[("Host", s.host()), ("X-Vivac-Token", token)],
     );
+    assert_eq!(a.status, 302, "{}", a.body);
+}
+
+/// `d145`: with exactly one project, the index does not make anybody click
+/// through it.
+#[test]
+fn a_single_project_index_redirects_to_its_page() {
+    let s = up("index-one");
+    let boot = call(s.port(), &s.boot_path(), &[("Host", s.host())]);
+    let token = token_from(&boot.body);
+    let a = call(
+        s.port(),
+        "/",
+        &[("Host", s.host()), ("X-Vivac-Token", token)],
+    );
+    assert_eq!(a.status, 302, "{}", a.body);
+    let id = s
+        ._sandbox
+        .0
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    assert_eq!(
+        a.header("Location"),
+        Some(format!("/p/{id}/")).as_deref(),
+        "{:?}",
+        a.headers
+    );
+}
+
+/// `d146`: the link shows the directory's own name and points at its
+/// sanitized id. One of the two sandboxes carries a space in its name for
+/// exactly that reason: a `href` can never carry one, a link's text can.
+#[test]
+fn two_or_more_projects_list_with_a_link_each() {
+    let up = up_many(&["index-list-a", "index list b"]);
+    let boot = call(up.port(), &up.boot_path(), &[("Host", up.host())]);
+    let token = token_from(&boot.body);
+    let a = call(
+        up.port(),
+        "/",
+        &[("Host", up.host()), ("X-Vivac-Token", token)],
+    );
     assert_eq!(a.status, 200, "{}", a.body);
+
+    let hrefs = hrefs_in(&a.body);
+    assert_eq!(hrefs.len(), 2, "expected one link per project:\n{}", a.body);
+    assert!(
+        hrefs.iter().all(|h| !h.contains(' ')),
+        "a href carried a raw space, which an id can never have: {hrefs:?}"
+    );
+
+    for sandbox in &up._sandboxes {
+        let name = sandbox
+            .0
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert!(
+            a.body.contains(&name),
+            "the link text does not show the raw name {name}:\n{}",
+            a.body
+        );
+    }
+}
+
+/// `WEB.md` §3.1 over a real socket: the page a project's `id` routes to,
+/// with the focus on it.
+#[test]
+fn a_projects_today_page_serves_with_its_focus_on_it() {
+    let s = up("today");
+    s._sandbox
+        .ok(&["push", "Fix the cache adapter", "--why", "the bug needs it"]);
+    let boot = call(s.port(), &s.boot_path(), &[("Host", s.host())]);
+    let token = token_from(&boot.body);
+    let id = s
+        ._sandbox
+        .0
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let a = call(
+        s.port(),
+        &format!("/p/{id}/"),
+        &[("Host", s.host()), ("X-Vivac-Token", token)],
+    );
+    assert_eq!(a.status, 200, "{}", a.body);
+    assert_eq!(a.header("Content-Type"), Some("text/html; charset=utf-8"));
+    assert!(a.body.contains("Fix the cache adapter"), "{}", a.body);
+    assert!(a.body.contains("you are here"), "{}", a.body);
+    assert!(a.body.contains("What moved"), "{}", a.body);
+}
+
+/// `WEB.md` §7.4: the page loads with no internet. Proved on the bytes that
+/// actually left the socket, not on the template they were built from.
+#[test]
+fn the_served_page_reaches_for_nothing_off_this_machine() {
+    let s = up("today-offline");
+    let boot = call(s.port(), &s.boot_path(), &[("Host", s.host())]);
+    let token = token_from(&boot.body);
+    let id = s
+        ._sandbox
+        .0
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let a = call(
+        s.port(),
+        &format!("/p/{id}/"),
+        &[("Host", s.host()), ("X-Vivac-Token", token)],
+    );
+    assert_eq!(a.status, 200, "{}", a.body);
+    assert!(!a.body.contains("http://"), "{}", a.body);
+    assert!(!a.body.contains("https://"), "{}", a.body);
+}
+
+/// An `id` the registry does not hold is a 404, and the id it did not
+/// recognise never comes back in the answer.
+#[test]
+fn a_project_id_the_registry_does_not_hold_is_not_found() {
+    let s = up("today-unknown");
+    let boot = call(s.port(), &s.boot_path(), &[("Host", s.host())]);
+    let token = token_from(&boot.body);
+    let a = call(
+        s.port(),
+        "/p/not-a-project/",
+        &[("Host", s.host()), ("X-Vivac-Token", token)],
+    );
+    assert_eq!(a.status, 404, "{}", a.body);
+    assert_eq!(a.body, "not found\n");
+}
+
+/// An admitted request for a path `route` does not know is `NotFound`, and
+/// that has to come back as its own 404 rather than as the index page --
+/// the one thing a security-relevant router must never do is fall open.
+#[test]
+fn an_unknown_route_is_not_found_and_not_the_index() {
+    let s = up("unknown-route");
+    let boot = call(s.port(), &s.boot_path(), &[("Host", s.host())]);
+    let token = token_from(&boot.body);
+    let a = call(
+        s.port(),
+        "/does-not-exist",
+        &[("Host", s.host()), ("X-Vivac-Token", token)],
+    );
+    assert_eq!(a.status, 404, "{}", a.body);
+    assert_eq!(
+        a.body, "not found\n",
+        "a 404 leaked something else:\n{}",
+        a.body
+    );
 }
 
 #[test]

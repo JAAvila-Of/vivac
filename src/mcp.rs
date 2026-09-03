@@ -163,9 +163,9 @@ fn call(project: &mut Project, params: &Value) -> Result<String, Failure> {
     match name {
         "vivac_brief" => {
             let empty = Args::default();
-            let id = project.id.clone();
+            let name = project.name.clone();
             let ctx = project.current()?;
-            brief::to_text(&ctx.tree, ctx.anchor.as_ref(), &empty, &id)
+            brief::to_text(&ctx.tree, ctx.anchor.as_ref(), &empty, &name)
         }
         "vivac_find" => {
             let query = argument(params, "query")

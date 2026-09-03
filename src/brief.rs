@@ -20,6 +20,7 @@ use crate::args::Args;
 use crate::event::{Kind, State};
 use crate::failure::R;
 use crate::model::{Node, Tree};
+use std::collections::HashSet;
 
 const BUDGET: usize = 1500;
 /// The whole brief is pure ASCII.
@@ -95,7 +96,7 @@ fn heading(title: &str, body: Vec<String>) -> Vec<String> {
 /// **By `spawns` only.** Inheriting through `depends_on` as well would turn
 /// the computation from O(depth) into O(graph), and would lose the property
 /// that inheritance is legible by looking at the stack on screen.
-fn constraints<'a>(a: &'a Tree, lineage: &[&Node]) -> Vec<&'a Node> {
+pub(crate) fn constraints<'a>(a: &'a Tree, lineage: &[&Node]) -> Vec<&'a Node> {
     let on_lineage: std::collections::HashSet<&str> =
         lineage.iter().map(|n| n.id.as_str()).collect();
     let mut v: Vec<&Node> = a
@@ -174,6 +175,33 @@ pub(crate) fn clip(s: &str, n: usize) -> String {
         Some((a, _)) if !a.is_empty() => format!("{a}..."),
         _ => format!("{t}..."),
     }
+}
+
+/// Standing decisions that reach the focus: project-level, on the path, or
+/// with a `governs` overlapping the focus's own. Superseded ones never
+/// appear.
+///
+/// With no focus, `lineage` is empty and so is `on_lineage`: the filter
+/// below then keeps only the project-level ones, which is the right answer
+/// rather than a degraded one -- a decision that governs the whole product
+/// hangs off nothing, so it stays reachable from an empty path.
+pub(crate) fn standing<'a>(a: &'a Tree, focus: &Node, on_lineage: &HashSet<&str>) -> Vec<&'a Node> {
+    let mut dec: Vec<&Node> = a
+        .nodes_iter()
+        .filter(|n| n.kind == Kind::Decision && n.state.is_open())
+        .filter(|n| {
+            n.parent.is_none()
+                || on_lineage.contains(n.id.as_str())
+                || n.parent
+                    .as_ref()
+                    .is_some_and(|p| on_lineage.contains(p.as_str()))
+                || n.governs
+                    .iter()
+                    .any(|g| focus.governs.iter().any(|f| crate::glob::covers(g, f)))
+        })
+        .collect();
+    dec.sort_by_key(|n| n.num);
+    dec
 }
 
 pub fn brief(a: &Tree, anchor_of: &dyn Anchor, args: &Args, project: &str) -> R {
@@ -358,21 +386,7 @@ pub fn to_text(
     // it was on no path and reached no brief. The invariants above had the
     // clause and the decisions did not, which was an asymmetry and not a
     // choice.
-    let mut dec: Vec<&Node> = a
-        .nodes_iter()
-        .filter(|n| n.kind == Kind::Decision && n.state.is_open())
-        .filter(|n| {
-            n.parent.is_none()
-                || on_lineage.contains(n.id.as_str())
-                || n.parent
-                    .as_ref()
-                    .is_some_and(|p| on_lineage.contains(p.as_str()))
-                || n.governs
-                    .iter()
-                    .any(|g| focus.governs.iter().any(|f| crate::glob::covers(g, f)))
-        })
-        .collect();
-    dec.sort_by_key(|n| n.num);
+    let dec = standing(a, focus, &on_lineage);
     let decisions: Vec<String> = dec
         .iter()
         .map(|n| format!("  {:<6} {}", n.alias(), clip(&n.title, 52)))
