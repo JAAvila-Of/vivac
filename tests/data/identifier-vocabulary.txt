@@ -49,6 +49,7 @@ as
 ascii
 ask
 assert
+assign
 assumption
 at
 atomic
@@ -57,6 +58,7 @@ automatic
 aws
 back
 backslash
+bare
 baskets
 be
 before
@@ -87,7 +89,9 @@ call
 calling
 came
 can
+candidate
 cannot
+canonicalize
 capacity
 carries
 carry
@@ -158,6 +162,7 @@ ctx
 cur
 current
 cwd
+dash
 dashes
 data
 date
@@ -186,6 +191,7 @@ deterministic
 digit
 dir
 direct
+directory
 dispatch
 display
 div
@@ -283,6 +289,7 @@ getrandom
 gets
 git
 gitdir
+given
 gives
 glob
 goal
@@ -321,6 +328,7 @@ i64
 id
 ident
 identifier
+ids
 if
 ignored
 impl
@@ -446,6 +454,7 @@ notify
 now
 null
 num
+number
 nums
 object
 of
@@ -527,6 +536,7 @@ prints
 problem
 process
 project
+projects
 promote
 promoted
 properties
@@ -566,6 +576,7 @@ refs
 refusals
 refused
 refuses
+registry
 rejected
 rel
 relaxed
@@ -609,6 +620,7 @@ rsplit
 rule
 run
 runs
+same
 sample
 sandbox
 saturating
@@ -655,6 +667,7 @@ since
 single
 six
 skip
+skipped
 slashes
 sleep
 slice
@@ -721,7 +734,9 @@ system
 tag
 tail
 take
+taken
 takes
+target
 task
 temp
 term
@@ -775,6 +790,7 @@ ts
 turn
 twice
 twin
+two
 type
 u128
 u32
@@ -790,6 +806,7 @@ unknown
 unstable
 unstack
 unwrap
+up
 upper
 uppercase
 upto
@@ -817,6 +834,7 @@ vocabulary
 vowels
 vv
 wait
+want
 was
 what
 where
@@ -843,3 +861,4 @@ writeln
 writes
 written
 yoe
+zip
