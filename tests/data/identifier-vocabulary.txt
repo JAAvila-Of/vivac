@@ -37,6 +37,7 @@ answer
 answers
 any
 appear
+appears
 append
 apply
 are
@@ -63,6 +64,7 @@ bare
 baskets
 be
 before
+beginning
 bin
 bind
 binding
@@ -247,6 +249,7 @@ every
 everything
 evs
 exact
+exclusive
 exist
 exists
 exit
@@ -306,9 +309,12 @@ gives
 glob
 goal
 goals
+goes
 good
 governing
 governs
+group
+groups
 guard
 guessed
 handle
@@ -351,6 +357,7 @@ impl
 import
 in
 include
+includes
 indent
 info
 init
@@ -394,6 +401,7 @@ let
 letter
 level
 like
+limit
 line
 lineage
 lines
@@ -409,6 +417,7 @@ lock
 log
 log2
 lone
+longer
 looks
 loop
 loose
@@ -424,6 +433,7 @@ manual
 many
 map
 mark
+marked
 marker
 mask
 match
@@ -433,6 +443,7 @@ matching
 matter
 max
 mcp
+measures
 mem
 message
 metadata
@@ -444,6 +455,8 @@ mod
 model
 modified
 move
+moved
+moves
 mp
 ms
 msg
@@ -452,6 +465,7 @@ mut
 name
 named
 names
+naming
 nanos
 nd
 ne
@@ -483,6 +497,7 @@ of
 off
 ok
 old
+older
 on
 once
 one
@@ -606,6 +621,7 @@ rejects
 rel
 relaxed
 rem
+remembers
 remove
 rename
 render
@@ -648,6 +664,7 @@ rsplit
 rule
 run
 runs
+said
 same
 sample
 sandbox
@@ -745,9 +762,11 @@ stdout
 still
 stop
 stopped
+stops
 store
 str
 stream
+stretch
 string
 strip
 struct
@@ -842,6 +861,7 @@ under
 unique
 unix
 unknown
+unreadable
 unstable
 unstack
 unwrap

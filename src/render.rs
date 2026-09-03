@@ -16,9 +16,9 @@ use crate::failure::{Failure, R};
 use crate::model::{Aggregates, Node, Tree};
 use serde_json::json;
 
-const WIDTH: usize = 62;
+pub(crate) const WIDTH: usize = 62;
 
-fn wrap(text: &str, width: usize, indent: &str) -> Vec<String> {
+pub(crate) fn wrap(text: &str, width: usize, indent: &str) -> Vec<String> {
     if text.trim().is_empty() {
         return vec![];
     }
