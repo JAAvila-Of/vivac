@@ -28,7 +28,7 @@ $ vivac why 11
         ^^^ you are here
 
   In parallel, still open (2):
-      t9     TUI for the maintainer
+      t9     Web interface for the maintainer
       t10    Migrate from JSON to SQLite
 
   t8 does not close until these close (1):
@@ -186,7 +186,8 @@ In the low hundreds of nodes it holds, and from there up it degrades linearly
 with the size of the log, which is read whole on every call. **That is where
 SQLite comes in**, and now it has a number instead of a hunch.
 
-Not there yet: TUI, cascading invalidation, team mode.
+Not there yet: the web interface, search across projects, cascading
+invalidation, team mode.
 
 **0.3.0 does not read a log written by 0.1.x or 0.2.x.** The tool was written
 in Spanish and those releases stored the event fields under Spanish names,
@@ -225,11 +226,15 @@ The reads, as tools an agent can call:
 claude mcp add vivac -- vivac mcp
 ```
 
-Four of them — `vivac_brief`, `vivac_find`, `vivac_why`, `vivac_open` — because
-every tool costs context in every session, so the list is a budget rather than a
-catalogue. It speaks JSON-RPC over standard input and adds no dependency: the
-server is the binary you already installed, and the writes keep going through
-the CLI.
+Four of them today — `vivac_brief`, `vivac_find`, `vivac_why`, `vivac_open`. It
+speaks JSON-RPC over standard input and adds no dependency: the server is the
+binary you already installed, and the writes keep going through the CLI.
+
+Four because every tool costs context in every session, and that is a real
+cost. It is not, however, a reason to ship a short list forever: the budget
+belongs to whoever launches the server, not to whoever wrote it. The writes
+belong here too, behind a flag that says how much of the surface this session
+should see.
 
 Hooks and MCP are not the same offer, and the difference matters. A hook fires
 whether or not anybody wanted it; a tool is called only if the agent decides to.
@@ -245,7 +250,10 @@ vivac init
 
 From source, `cargo install --path .` inside the repo.
 
-No daemon, no server and no network. The store is `.vivac/`, two files.
+No background process, and no network in the write path — `push` is the binary
+writing to a file. **The binary never phones home**, and that one is a promise
+rather than a description of the current version. The store is `.vivac/`, two
+files.
 
 ## Contributing
 

@@ -51,19 +51,25 @@ rests on one of them does not get in.
 ## Pillar 1 — DX
 
 The people who use this are developers. It has to be intuitive for them and
-**visually good**: a well-designed TUI, not a text dump.
+**visually good**: a well-designed interface, not a text dump.
 
 ### Two audiences, and this is the design fork
 
 | Who | What they do | What they need |
 |---|---|---|
 | **The agent** (executor) | writes: opens nodes, closes them, notes | **CLI**: quiet, scriptable, exit codes, parseable output |
-| **The maintainer** (human) | reads: navigates, understands, decides | **TUI**: the tree, the `why` path, filters, navigation |
+| **The maintainer** (human) | reads: navigates, understands, decides | **the web interface**: the tree, the `why` path drawn, filters, navigation |
 
-**A rule with teeth: everything the agent needs to do has to be doable without
-the TUI.** If a feature only exists in the interactive interface, an agent
-cannot use it and the project loses half its users. The TUI is never the only
-road to anything.
+**A rule with teeth: everything the agent needs to do has to be doable from the
+command line.** If a feature only exists in the interactive interface, an agent
+cannot use it and the project loses half its users. The interface is never the
+only road to anything, and it has no operations of its own — every one of them
+is a command that already exists.
+
+That rule used to name a TUI, and the reasoning is why the TUI is not being
+built: maintaining two reading surfaces is exactly what the rule exists to
+prevent, because each feature then gets built twice or lives in one of them.
+There is one, and it is a page.
 
 ### Capture cannot cost more than losing the thread
 
@@ -128,11 +134,23 @@ Measured on 2026-08-31: it holds the write budget up to the order of a thousand
 nodes, and at ten thousand it goes over. That is the trigger for SQLite, and now
 it is a number.
 
-### Anti-features
+### What the budget forbids
 
-- **No daemon** on the local path: it is startup latency and one more thing to
-  fall over.
-- **No network on the write path.** Ever.
+- **No network on the write path.** Ever. `push` is the binary writing to a
+  file, and nothing in that path waits on anything.
+
+**And one correction, which belongs here because this is the document a
+rejection cites for its authority.** *"No daemon on the local path"* used to sit
+in this list. It does not belong to the pillar: startup latency is a real cost,
+but keeping a process alive or not is a scope and sequencing choice, and quoting
+a pillar to end that argument borrows authority the claim never had.
+
+There is still no daemon, and now for a better reason than a budget: the session
+hooks are the binary reading a local file, so nothing needs one. An interface
+somebody starts by hand, which listens on the loopback address and dies when
+they close it, is not a daemon and does not touch this budget. Listening on the
+loopback address is also not phoning home — that one belongs to the security
+pillar, it is absolute, and it is untouched.
 
 ---
 

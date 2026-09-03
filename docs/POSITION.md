@@ -67,6 +67,9 @@ The failure that produces is specific, and it is not forgetting. Everything is
 written down, retrieval works, and the thing you needed does not come back —
 because nothing ever connected it to what you are doing now.
 
+The conclusion is not *"so run both"*. It is the opposite, and the last
+section says why.
+
 ## The three mechanisms
 
 Subtract all of the above and what is left is not a better memory. It is three
@@ -93,16 +96,12 @@ from the DX pillar, and the measurement behind it is in
 
 ## Where the other categories are better
 
-This is the section that makes the rest worth reading.
+This is the section that makes the rest worth reading. It splits in two, and
+the split is the whole point: some of these are shapes this tool is not, and
+some are things it owes.
 
-- **Recall across everything you have ever done.** A memory store with
-  thousands of records and full-text search answers *"have I seen this
-  before?"* over a far wider surface, and asks no structure of you in order to
-  do it. This answers questions about one tree, and only about work somebody
-  opened a node for.
-- **Noticing that a record went stale.** Some memory stores attach a review
-  date to each record by type and surface what is due. Here that is
-  `vivac flag <id> stale`, by hand — which is worse, and known to be worse.
+### Better, and staying that way
+
 - **Collaboration and process.** Assignment, notification, estimation,
   reporting to people outside the work: that is what trackers are for. None of
   it is here, and none of it is planned.
@@ -111,15 +110,50 @@ This is the section that makes the rest worth reading.
 - **Explaining a decision to a newcomer in prose.** A decision record is better
   shaped for that. A node's title is one line on purpose.
 
-Running one of these alongside this tool is the expected case, not a
-compromise.
+### Better today, and that is a debt
+
+- **Recall across everything you have ever done.** `vivac find` searches every
+  field that carries meaning, closed nodes included, and returns each hit with
+  the lineage it hangs from. What it does not do yet is cross projects: it
+  answers about one tree, and a memory store answers about all of them at once.
+- **Scale.** A store holding tens of thousands of records and answering in
+  milliseconds is a different engine from a log folded on every call. The
+  numbers are in the [README](../README.md#status), and they say where the
+  ceiling is.
+- **Noticing that a record went stale.** Some memory stores attach a review
+  date to each record by type and surface what is due. Here that is
+  `vivac flag <id> stale`, by hand — which is worse, and known to be worse.
+
+Nothing in that second list is a shrug. Each item still open is a reason to
+keep a second record running, and the next section is about why that is the
+thing to avoid.
 
 ## The rule that follows
 
-**It does not compete on memory. It competes on structure.**
+**One map.** An agent draws its context from one place, or it decides against
+two records that disagree and nobody notices which one it used.
 
-Every feature is justified against that sentence. If it is a better way to
-remember things, it belongs in a memory store and not here. If it makes the
-shape of the work legible, it is in scope. That is a rejection criterion in
-the same sense as the [pillars](PILLARS.md), and it exists to be used to say
-no.
+This document used to end on a different sentence: *"it does not compete on
+memory, it competes on structure."* That sentence did real work — the edge of
+birth came out of taking it seriously — but it assumed the two records could
+sit side by side. They cannot. Each one points at the context it holds, and
+sooner or later one of them settles something the other already settled
+differently. The problem was never competition. It was collision.
+
+So the rejection criterion changed shape, and it got harder rather than
+looser:
+
+> **Does this force the agent to consult a second map?**
+
+A capability a memory store covers and this one does not is not scope
+declined. It is context the agent will go and fetch elsewhere, and the
+collision comes back with it. Which is why the debts above are written as
+debts.
+
+What did not change is the reason any of this is worth having. Everything on
+that list gets rebuilt **hanging off where it was born**. A search that
+returns records is a search; a search that returns records along with the path
+that leads to each one is the thing nothing else on your disk can do. The
+rejection criterion is used to say no in the same sense as the
+[pillars](PILLARS.md) — and now it is also used to say *not yet, and here is
+what is missing.*
