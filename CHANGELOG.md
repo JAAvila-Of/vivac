@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.6](https://github.com/JAAvila-Of/vivac/compare/v0.3.5...v0.3.6) - 2026-09-03
+
+### Added
+
+- *(web)* today, the page that says what moved while you were away
+- *(changes)* measure a stretch from the last stop made by hand
+
+### Fixed
+
+- *(triage)* count the depth to a node's goal, not to the root
+
 ## [0.3.5](https://github.com/JAAvila-Of/vivac/compare/v0.3.4...v0.3.5) - 2026-09-03
 
 ### Added
