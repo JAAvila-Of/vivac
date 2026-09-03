@@ -85,7 +85,34 @@ vivac stack         the focus stack
 vivac parked        DO NOT TOUCH NOW
 vivac triage        what can be pruned, and with which command
 vivac reconcile     files that changed with nothing in the tree claiming them
+vivac changes       what a stretch of work opened, closed and marked
+vivac stats         the numbers
+vivac check         the invariants; this one belongs in CI
 ```
+
+Everything the agent needs to do can be done from the command line, with no
+interface in the way, and every one of those reads takes `--json` — every one
+but the `brief`, which is written to be injected into a session and read as
+prose, never parsed.
+
+**And the maintainer looks.** `vivac web` draws the tree in a browser, on this
+machine and nowhere else: a server somebody starts and that dies when they
+close it, bound to `127.0.0.1`, reachable through a one-time key it prints.
+
+```sh
+vivac web           the tree in a browser, on this machine and nowhere else
+```
+
+It has **no functions of its own.** Every page calls the same function the
+command calls, so there is no second write path for the redaction guard to be
+walked around, and anything that goes wrong on a page has a command that
+repeats it. If a page needs something the command line does not have, that
+thing gets built on the command line first.
+
+Today it serves one page: what moved while you were not looking. It is there
+because a context budget and a screen are not the same problem. The `brief`
+answers *where am I* in a few hundred tokens and does it well; it was never
+going to answer *what changed under me while I was not asking*.
 
 **And there are safe stops.** A vivac is the bivouac partway up a climb: a
 coherent state, with the stack frozen and the identity of the code at that
@@ -98,9 +125,6 @@ vivac restore v14   rebuilds the stack and says what changed since
 
 `restore` **never touches the working tree**. Mixing context navigation with
 tree manipulation gives you a branch manager worse than git.
-
-Everything the agent needs to do can be done with no interactive interface,
-and every read command accepts `--json`.
 
 ## The two edges
 
@@ -187,8 +211,7 @@ In the low hundreds of nodes it holds, and from there up it degrades linearly
 with the size of the log, which is read whole on every call. **That is where
 SQLite comes in**, and now it has a number instead of a hunch.
 
-Not there yet: the web interface, search across projects, cascading
-invalidation, team mode.
+Not there yet: search across projects, cascading invalidation, team mode.
 
 **0.3.0 does not read a log written by 0.1.x or 0.2.x.** The tool was written
 in Spanish and those releases stored the event fields under Spanish names,
