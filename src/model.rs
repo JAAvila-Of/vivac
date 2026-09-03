@@ -454,6 +454,18 @@ impl Tree {
         self.vivacs.last()
     }
 
+    /// The last stop somebody made. `Auto` is what the `Stop` hook writes on
+    /// every turn that moves the tree, and `Push`, `Pop` and `Park` ride along
+    /// with the operation that caused them: `Manual` is the only kind a person
+    /// sat down and wrote, which is what makes it a boundary rather than a
+    /// heartbeat.
+    pub fn last_manual_vivac(&self) -> Option<&Vivac> {
+        self.vivacs
+            .iter()
+            .rev()
+            .find(|v| v.kind == VivacKind::Manual)
+    }
+
     pub fn vivac(&self, s: &str) -> Option<&Vivac> {
         let n: u64 = s.trim().trim_start_matches(['#', 'v']).parse().ok()?;
         self.vivacs.iter().find(|v| v.num == n)
@@ -576,6 +588,10 @@ mod tests {
     }
 
     fn stop(seq: u64) -> Event {
+        stop_of_kind(seq, VivacKind::Manual)
+    }
+
+    fn stop_of_kind(seq: u64, kind: VivacKind) -> Event {
         Event {
             seq,
             id: format!("e{seq}"),
@@ -583,9 +599,9 @@ mod tests {
             actor: "a".to_string(),
             lane: "main".to_string(),
             payload: Body::VivacCreated {
-                vivac: "v1".to_string(),
-                num: 1,
-                kind: VivacKind::Manual,
+                vivac: format!("v{seq}"),
+                num: seq,
+                kind,
                 stack: vec![],
                 working_set: vec![],
                 next_intent: String::new(),
@@ -604,5 +620,32 @@ mod tests {
         let events = vec![created(1), stop(2), created(3)];
         let tree = fold(&events, 0);
         assert_eq!(tree.vivacs[0].seq, 2);
+    }
+
+    /// The last stop and the last stop somebody made are different stops, and
+    /// on a real tree they are usually far apart: the `Stop` hook writes one
+    /// on every turn that moves the tree.
+    #[test]
+    fn the_last_stop_made_by_hand_skips_the_ones_the_hook_wrote() {
+        let events = vec![
+            stop_of_kind(1, VivacKind::Manual),
+            stop_of_kind(2, VivacKind::Auto),
+            stop_of_kind(3, VivacKind::Pop),
+        ];
+        let tree = fold(&events, 0);
+        assert_eq!(tree.last_vivac().expect("a stop").num, 3);
+        assert_eq!(
+            tree.last_manual_vivac().expect("a stop made by hand").num,
+            1
+        );
+    }
+
+    /// A tree whose every stop came from the hook has none made by hand, and
+    /// says so rather than handing back the nearest thing.
+    #[test]
+    fn a_tree_with_no_stop_made_by_hand_has_none() {
+        let events = vec![stop_of_kind(1, VivacKind::Auto)];
+        let tree = fold(&events, 0);
+        assert!(tree.last_manual_vivac().is_none());
     }
 }

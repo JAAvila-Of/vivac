@@ -34,6 +34,7 @@ and
 announces
 another
 answer
+answered
 answers
 any
 appear
@@ -50,6 +51,7 @@ array
 as
 ascii
 ask
+asked
 assert
 assign
 assumption
@@ -80,6 +82,7 @@ bool
 boot
 born
 both
+boundary
 box
 branch
 break
@@ -317,6 +320,7 @@ group
 groups
 guard
 guessed
+hand
 handle
 hang
 hangs
@@ -426,6 +430,7 @@ lost
 lower
 lowercase
 lowered
+made
 main
 makes
 mandatory
@@ -718,6 +723,7 @@ single
 six
 skip
 skipped
+skips
 slash
 slashes
 sleep
@@ -922,5 +928,6 @@ write
 writeln
 writes
 written
+wrote
 yoe
 zip
