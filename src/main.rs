@@ -13,6 +13,7 @@
 mod anchor;
 mod args;
 mod brief;
+mod changes;
 mod check;
 mod clock;
 mod event;
@@ -82,6 +83,7 @@ const USAGE: &str = r#"vivac - provenance of work
     vivac triage                              what can be pruned, and with what
     vivac reconcile [--since <v>] [--all]     files that changed with nothing
                                               in the tree claiming them
+    vivac changes [--since <v>]               what moved since a stop
     vivac stats                               numbers
     vivac check                               invariants; belongs in CI
 
@@ -182,6 +184,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         "block" => &["off"],
         "tree" => &["all", "json"],
         "reconcile" => &["since", "all", "json"],
+        "changes" => &["since", "json"],
         "web" => &["port", "no-open", "project"],
         "init" | "hooks" | "mcp" => &[],
         // The reads that speak JSON, spelled out. No shorthand: a shorthand
@@ -265,6 +268,15 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
                 })?),
             };
         return web::serve(roots, port, !a.has("no-open")).map(|_| 0);
+    }
+
+    // Its own load, ahead of the generic one below, for the same reason as
+    // `mcp` and `web`: the generic one folds the log and drops the events,
+    // and `changes` is the one command that needs them back. Reading here
+    // and again below would read the log twice for nothing.
+    if cmd == "changes" {
+        let (ctx, log) = ops::Ctx::load_with_log(store::Store::open(root)?)?;
+        return changes::changes(&ctx.tree, &log, a);
     }
 
     let mut ctx = ops::Ctx::load(store::Store::open(root)?)?;

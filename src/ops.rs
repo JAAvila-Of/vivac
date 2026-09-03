@@ -7,7 +7,7 @@
 //! keeping?" was called zero times, under a protocol declared mandatory.
 
 use crate::anchor::{self, Anchor};
-use crate::event::{Body, Flag, Kind, State, VivacKind};
+use crate::event::{Body, Event, Flag, Kind, State, VivacKind};
 use crate::failure::{Failure, R};
 use crate::model::{fold, Node, Tree};
 use crate::outcome::{self, Outcome};
@@ -23,14 +23,27 @@ pub struct Ctx {
 
 impl Ctx {
     pub fn load(store: Store) -> Result<Ctx, Failure> {
+        Ctx::load_with_log(store).map(|(c, _)| c)
+    }
+
+    /// Same read as `load`, handing back the events instead of dropping them.
+    ///
+    /// One command needs the log itself and not only what it folds into
+    /// (`changes`), and there are two worse ways to give it that: a field on
+    /// `Ctx` that twenty-nine other commands carry and never read, or a
+    /// second full read of a file this one has already read.
+    pub fn load_with_log(store: Store) -> Result<(Ctx, Vec<Event>), Failure> {
         let (events, broken) = store.read_all()?;
         let tree = fold(&events, broken);
         let anchor = anchor::detect(&store.root);
-        Ok(Ctx {
-            store,
-            tree,
-            anchor,
-        })
+        Ok((
+            Ctx {
+                store,
+                tree,
+                anchor,
+            },
+            events,
+        ))
     }
 
     /// Writes and **then applies in memory**, so that whatever gets printed

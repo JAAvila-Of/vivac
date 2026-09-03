@@ -43,6 +43,10 @@ pub struct Node {
 pub struct Vivac {
     pub id: String,
     pub num: u64,
+    /// The seq it was born at. `changes` measures a stretch from this: `ts`
+    /// alone ties within the same second, and a stop cannot anchor a
+    /// boundary with a number it does not remember.
+    pub seq: u64,
     pub kind: VivacKind,
     pub stack: Vec<(String, String)>,
     pub working_set: Vec<String>,
@@ -285,6 +289,7 @@ impl Tree {
                 self.vivacs.push(Vivac {
                     id: vivac.clone(),
                     num: *num,
+                    seq,
                     kind: *kind,
                     stack: stack.clone(),
                     working_set: working_set.clone(),
@@ -542,5 +547,62 @@ impl Tree {
             ag.blockers.insert((*id).clone(), b);
         }
         ag
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn created(seq: u64) -> Event {
+        Event {
+            seq,
+            id: format!("e{seq}"),
+            ts: "2026-09-03T10:00:00Z".to_string(),
+            actor: "a".to_string(),
+            lane: "main".to_string(),
+            payload: Body::NodeCreated {
+                node: "n1".to_string(),
+                num: 1,
+                kind: Kind::Goal,
+                title: "Root".to_string(),
+                why: "it is needed".to_string(),
+                parent: None,
+                blocks: false,
+                refs: vec![],
+                governs: vec![],
+            },
+        }
+    }
+
+    fn stop(seq: u64) -> Event {
+        Event {
+            seq,
+            id: format!("e{seq}"),
+            ts: "2026-09-03T10:05:00Z".to_string(),
+            actor: "a".to_string(),
+            lane: "main".to_string(),
+            payload: Body::VivacCreated {
+                vivac: "v1".to_string(),
+                num: 1,
+                kind: VivacKind::Manual,
+                stack: vec![],
+                working_set: vec![],
+                next_intent: String::new(),
+                anchor: AnchorRef::default(),
+                node_ref: None,
+                label: String::new(),
+            },
+        }
+    }
+
+    /// `changes` measures a stretch from a vivac's own seq. Without it, the
+    /// only boundary left to compare against would be `ts`, which ties within
+    /// the same second.
+    #[test]
+    fn a_vivac_remembers_the_seq_it_was_created_at() {
+        let events = vec![created(1), stop(2), created(3)];
+        let tree = fold(&events, 0);
+        assert_eq!(tree.vivacs[0].seq, 2);
     }
 }
