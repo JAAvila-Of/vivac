@@ -1,4 +1,4 @@
-# The three pillars
+# The four pillars
 
 **They govern by definition.** Every design decision is justified against them,
 and if it contradicts them it does not get in. They are not aspirations: they
@@ -12,7 +12,14 @@ They will collide. When they do:
 |---|---|
 | **Security** | **veto**. It can kill an entire feature, with no negotiation |
 | **Performance** | **budget**. It sets a ceiling the feature must respect in order to exist |
-| **DX** | **judge**. It decides between the options that already cleared the other two |
+| **UX** | **burden of proof**. A reading surface has to say what a person learns from it that they were not going to learn. No answer, no surface |
+| **DX** | **judge**. It decides between the options that cleared the other three |
+
+Read in that order they ask four different questions: security asks whether this
+may exist at all, performance asks what it is allowed to cost, UX asks whether
+anybody learns anything from it, and DX decides what shape it takes. Only the
+first kills outright. The other two kill by going unanswered, which is slower and
+just as final.
 
 A real collision, and why the order matters: semantic search wants an embedding
 model. That is either a network call (slow, and it asks for a key) or a local
@@ -25,6 +32,15 @@ A second collision, settled on 2026-08-31 while the port was being written: the
 model asked for each event's `actor` to be `git config user.email`. That is
 personal data. **Security vetoed and the model was corrected**: the actor is an
 opaque identifier generated at `init`.
+
+A third, on 2026-09-03, and it is the one that shows the newest pillar doing
+work. The web design listed five surfaces. Two of them -- a decisions board and a
+list of open fronts -- are things `vivac tree` and `vivac open` already answer
+well from a terminal, and neither could say what a person would learn from the
+page that the command was not already telling them. **Both were cut, and not for
+budget.** The one that survived first answers it in a sentence: the drawn
+lineage is the only place in the product that shows the *shape* of the path
+rather than its text.
 
 ## Correctness over cost
 
@@ -50,8 +66,13 @@ rests on one of them does not get in.
 
 ## Pillar 1 — DX
 
-The people who use this are developers. It has to be intuitive for them and
-**visually good**: a well-designed interface, not a text dump.
+The people who use this are developers, and one of them is not a person. It has
+to be intuitive at a terminal and scriptable from a program.
+
+*"And visually good: a well-designed interface, not a text dump"* used to be the
+rest of this paragraph. It moved out on 2026-09-03 and became Pillar 4, because
+sitting here it was an aspiration in a document whose first paragraph says it
+holds none.
 
 ### Two audiences, and this is the design fork
 
@@ -177,3 +198,71 @@ tree is a map of where a system is weak and not yet fixed.**
   to answer before writing a line of that part is **who holds the key**. If the
   server holds it, that is not privacy, it is a promise.
 - Identity for team mode: an opaque identifier, never an email or a name.
+
+---
+
+## Pillar 4 — UX
+
+Added on 2026-09-03, when the web became the thing being built. It is not new
+ground: it is one sentence that had been sitting inside the DX pillar, and that
+sentence had never rejected anything.
+
+DX is the contract with a developer and with a program: a command that scripts,
+an exit code, output that parses, capture that costs less than losing the thread.
+UX is the other half and its subject is different: **a person looking at a
+screen, who does not yet know what to ask.**
+
+### What it costs when it fails, measured
+
+On 2026-09-02 the owner of this project learned in a single day about three
+decisions that had been written down for days. Nothing had been lost. The tree
+held them, the documents held them, and none of it had arrived. The words that
+day were *"we should know it at the same time"*.
+
+That is not a memory failure and it is not a capture failure -- both of those
+worked exactly as designed. It is the thing this pillar exists to prevent: **the
+gap between what a system holds and what a person has actually seen.**
+
+The CLI answers well when you know what to ask. Until now, nothing in the product
+answered the other thing.
+
+### The burden of proof
+
+> **Every reading surface has to say, in one sentence, what a person learns from
+> it that they were not going to learn.** The sentence is written before the
+> surface is built and it goes on the node. No sentence, no surface.
+
+**"Were not going to learn" covers what was already written and was not going to
+be read.** That is the whole failure this pillar came out of: nothing was
+missing, and it still did not arrive. Availability is not arrival. So a surface
+that carries information the product already holds, and lands it in a glance
+where the text needed a scroll and a memory of what came before, has answered the
+question honestly. What has not answered it is a surface whose entire case is
+that it is more comfortable.
+
+It points the restrictive way: it cuts surfaces, it never licences them. A page
+that shows what a command already says is not a second way to read, it is a
+second place to keep current -- which is the argument that killed the TUI,
+arriving from the other side.
+
+### How it is checked
+
+This is the one pillar whose criterion is not a test, and pretending otherwise
+would be worse than saying it plainly. A suite can prove a page renders, that its
+numbers are right and that nothing leaked. It cannot prove somebody found out in
+time.
+
+So the check is the failure that created the pillar, turned into a question:
+**did you learn it while it still mattered?** It is asked of a person, and a "no"
+is a finding like any other.
+
+### What it does not get to do
+
+- **It does not touch the security pillar.** A page that would show more is not
+  an argument against a veto.
+- **It does not soften anything of DX's.** Meaning is still never encoded in
+  colour alone, and everything the agent needs is still doable from the command
+  line. Those exist so that nobody is locked out, and a better-looking screen is
+  not a reason to lock somebody out.
+- **It is not a licence to build more.** It is a burden of proof, which means the
+  default answer is no.

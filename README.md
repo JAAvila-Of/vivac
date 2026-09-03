@@ -147,7 +147,8 @@ forces a few things, and they are not negotiable:
 - **No telemetry.** The binary does not phone home.
 
 These rules come from the [pillars](docs/PILLARS.md), which govern by
-definition: **security vetoes, performance budgets, DX judges.**
+definition: **security vetoes, performance budgets, UX proves a surface is worth
+reading, DX judges.**
 
 ## Status
 
