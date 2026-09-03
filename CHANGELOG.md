@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.5](https://github.com/JAAvila-Of/vivac/compare/v0.3.4...v0.3.5) - 2026-09-03
+
+### Added
+
+- *(changes)* what a stretch of work moved, since a stop
+- *(web)* the tree in a browser, on this machine and nowhere else
+
+### Fixed
+
+- *(cli)* check the flags before the commands that return early
+
+### Other
+
+- *(pillars)* add UX as the fourth pillar, with a burden of proof
+- *(project)* move the long-lived tree out of the mcp server
+
 ## [0.3.4](https://github.com/JAAvila-Of/vivac/compare/v0.3.3...v0.3.4) - 2026-09-03
 
 ### Other
