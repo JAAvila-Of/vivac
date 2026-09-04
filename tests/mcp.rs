@@ -156,14 +156,15 @@ fn the_brief_comes_back_as_the_prose_it_is() {
 #[test]
 fn find_comes_back_as_the_json_the_cli_would_print() {
     let c = seeded("find");
+    let cli_text = c.ok(&["find", "malformed", "--json"]);
+    let cli: Value = serde_json::from_str(&cli_text).expect("the CLI payload is not JSON");
     let mut s = hello(&c);
     let r = s.ask(
         r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"vivac_find","arguments":{"query":"malformed"}}}"#,
     );
     let t = text_of(&r);
     let v: Value = serde_json::from_str(&t).expect("the payload is not JSON");
-    assert_eq!(v[0]["title"], "Guard the commit messages", "{t}");
-    assert!(v[0]["lineage"].is_array(), "{t}");
+    assert_eq!(v, cli, "the MCP tool and `find --json` disagree:\n{t}");
 }
 
 #[test]
