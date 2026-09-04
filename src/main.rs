@@ -61,8 +61,8 @@ const USAGE: &str = r#"vivac - provenance of work
     vivac done <id> ["<outcome>"] [--force]
     vivac note [<id>] "<note>"
     vivac block <id> [--off]
-    vivac decide "<title>" --reason "<r>" [--alternative X]
-          [--supersedes d9] [--parent N]
+    vivac decide "<title>" --reason "<r>" [--parent N] [--alternative X]
+          [--supersedes d9] [--blocks] [--ref R] [--governs G]
     vivac flag <id> suspect|review|stale --why "<reason>"  [--off]
 
   Safe stops
