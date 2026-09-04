@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2](https://github.com/JAAvila-Of/vivac/compare/v0.4.1...v0.4.2) - 2026-09-04
+
+### Added
+
+- *(web)* the lineage of a node, drawn, at `/p/<id>/why/<node>`. `why`
+  narrates the path from the root; this draws it, one step per node, with
+  what still governs there and what was open at the time.
+
+### Fixed
+
+- *(web)* **`vivac web` could not be used in a browser at all**, in 0.4.0 and
+  0.4.1. The session token was accepted only in an `X-Vivac-Token` header,
+  and a browser following a link sends no header the page chose, so every
+  page after the boot URL answered 401 and the boot URL itself rendered a
+  page that said only that the server was listening. The token now travels
+  in a session cookie as well, and the boot URL redirects to the front page.
+  The header still works, so `curl` and scripts are unaffected.
+
 ## [0.4.1](https://github.com/JAAvila-Of/vivac/compare/v0.4.0...v0.4.1) - 2026-09-04
 
 ### Added
