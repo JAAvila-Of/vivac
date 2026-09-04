@@ -16,7 +16,7 @@ use crate::failure::Failure;
 pub struct Gate {
     port: u16,
     token: String,
-    /// The one-time key that unlocks the boot page. `None` once spent, and a
+    /// The one-time key that starts a session. `None` once spent, and a
     /// spent key never lights up again -- see `admit` below.
     boot: Option<String>,
 }
@@ -29,10 +29,17 @@ pub struct Incoming<'a> {
     pub origin: Option<&'a str>,
     /// The value of `X-Vivac-Token`.
     pub token: Option<&'a str>,
+    /// The raw `Cookie` header, exactly as it arrived. `d190`: this is how
+    /// a browser carries the token, because following a link sends no
+    /// header a page chose.
+    pub cookie: Option<&'a str>,
 }
 
 pub enum Verdict {
-    /// Serve the boot page, which carries the session token inside it.
+    /// Spend the boot key: hand the session token over as a cookie and
+    /// send the browser to the front page (`d190`). It used to serve a page
+    /// that carried the token in a `<meta>` nothing ever read, which is
+    /// what `f189` found.
     Boot,
     /// A legitimate request from a page that already holds the token.
     Serve,
@@ -41,9 +48,9 @@ pub enum Verdict {
 
 /// Why a request was refused.
 ///
-/// `NoValidToken` covers three different reasons on purpose, and they are
-/// not told apart: no token at all, the wrong token, and a boot key already
-/// spent. Distinguishing them would give a page probing for a valid token
+/// `NoValidToken` covers four different reasons on purpose, and they are
+/// not told apart: no token at all, the wrong token in the header, the
+/// wrong one in the cookie, and a boot key already spent. Distinguishing them would give a page probing for a valid token
 /// three different answers instead of one, which is an oracle -- and the
 /// safest oracle is the one that cannot be built because the type has
 /// nowhere to carry the difference.
@@ -51,6 +58,25 @@ pub enum Denial {
     ForeignHost,
     ForeignOrigin,
     NoValidToken,
+}
+
+/// The name the session cookie goes by. `d190`.
+pub(super) const SESSION_COOKIE: &str = "vivac_session";
+
+/// The session cookie's value out of a raw `Cookie` header, or `None`.
+///
+/// `d138` refused to hand-write a header parser for anything security
+/// watches, and this is the one exception the same reasoning allows: a
+/// `Cookie` header is a list of `name=value` separated by `;` and nothing
+/// else -- no quoting to get wrong, no continuation lines, no encoding. The
+/// name is matched whole after trimming, so `vivac_session_other` is a
+/// different cookie and not a prefix of this one, and a malformed jar is
+/// simply not a match rather than a case to handle.
+fn session_cookie(raw: &str) -> Option<&str> {
+    raw.split(';').find_map(|pair| {
+        let (name, value) = pair.split_once('=')?;
+        (name.trim() == SESSION_COOKIE).then(|| value.trim())
+    })
 }
 
 fn random_hex(bytes: usize) -> Result<String, Failure> {
@@ -149,7 +175,12 @@ impl Gate {
             }
         }
 
-        if let Some(token) = r.token {
+        // Two doors to the same lock, and the same comparison behind both.
+        // The header is how `curl` and the tests speak; the cookie is how a
+        // browser does, because following a link sends no header the page
+        // chose (`d190`).
+        let offered = r.token.or_else(|| r.cookie.and_then(session_cookie));
+        if let Some(token) = offered {
             if constant_time_eq(token, &self.token) {
                 return Verdict::Serve;
             }
@@ -180,6 +211,19 @@ mod tests {
             host,
             origin,
             token,
+            cookie: None,
+        }
+    }
+
+    /// What a browser sends: no `X-Vivac-Token` at all, just the cookie it
+    /// was handed when the boot key was spent.
+    fn browsing<'a>(path: &'a str, host: &'a str, cookie: &'a str) -> Incoming<'a> {
+        Incoming {
+            path,
+            host: Some(host),
+            origin: None,
+            token: None,
+            cookie: Some(cookie),
         }
     }
 
@@ -369,5 +413,108 @@ mod tests {
         let a = gate();
         let b = gate();
         assert_ne!(a.token(), b.token());
+    }
+    /// `f189`: the whole reason this exists. A browser following a link
+    /// sends the headers it chooses to send and no header the page asked
+    /// for, so the token has to arrive in the one thing it does send back
+    /// on its own.
+    #[test]
+    fn a_browser_carrying_only_the_cookie_is_served() {
+        let mut g = gate();
+        let token = g.token().to_string();
+        let host = format!("127.0.0.1:{PORT}");
+        let jar = format!("vivac_session={token}");
+        assert!(matches!(
+            g.admit(&browsing("/p/x/why/g1", &host, &jar)),
+            Verdict::Serve
+        ));
+    }
+
+    /// A cookie header holds whatever else that origin set, in no
+    /// particular order, and the value is read by name and not by position.
+    #[test]
+    fn the_session_cookie_is_found_among_others() {
+        let mut g = gate();
+        let token = g.token().to_string();
+        let host = format!("127.0.0.1:{PORT}");
+        for jar in [
+            format!("theme=dark; vivac_session={token}; tz=utc"),
+            format!("vivac_session={token}; theme=dark"),
+            format!("theme=dark;vivac_session={token}"),
+            format!("  vivac_session = {token}  "),
+        ] {
+            assert!(
+                matches!(g.admit(&browsing("/", &host, &jar)), Verdict::Serve),
+                "not found in {jar}"
+            );
+        }
+    }
+
+    /// A name the session cookie's own is a prefix of must not be mistaken
+    /// for it, in either direction.
+    #[test]
+    fn a_cookie_whose_name_merely_looks_like_the_session_one_is_refused() {
+        let mut g = gate();
+        let token = g.token().to_string();
+        let host = format!("127.0.0.1:{PORT}");
+        for jar in [
+            format!("vivac_session_other={token}"),
+            format!("not_vivac_session={token}"),
+            format!("vivac_sessio={token}"),
+        ] {
+            assert!(
+                is_no_valid_token(g.admit(&browsing("/", &host, &jar))),
+                "accepted {jar}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_cookie_carrying_the_wrong_token_is_refused() {
+        let mut g = gate();
+        let host = format!("127.0.0.1:{PORT}");
+        assert!(is_no_valid_token(g.admit(&browsing(
+            "/",
+            &host,
+            "vivac_session=0000000000000000000000000000000000000000000000000000000000000000"
+        ))));
+    }
+
+    /// Malformed jars are not a special case to handle, they are simply not
+    /// a match. None of these may panic either.
+    #[test]
+    fn a_cookie_header_that_makes_no_sense_is_just_not_a_match() {
+        let mut g = gate();
+        let host = format!("127.0.0.1:{PORT}");
+        for jar in ["", ";", "=", "vivac_session", "vivac_session=", "; ;;"] {
+            assert!(
+                is_no_valid_token(g.admit(&browsing("/", &host, jar))),
+                "accepted {jar:?}"
+            );
+        }
+    }
+
+    /// The cookie is a second door, not a replacement: everything the gate
+    /// refused before it existed, it still refuses.
+    #[test]
+    fn a_cookie_does_not_excuse_a_foreign_host_or_origin() {
+        let mut g = gate();
+        let token = g.token().to_string();
+        let jar = format!("vivac_session={token}");
+        assert!(is_foreign_host(g.admit(&Incoming {
+            path: "/",
+            host: Some("evil.example:80"),
+            origin: None,
+            token: None,
+            cookie: Some(&jar),
+        })));
+        let host = format!("127.0.0.1:{PORT}");
+        assert!(is_foreign_origin(g.admit(&Incoming {
+            path: "/",
+            host: Some(&host),
+            origin: Some("http://evil.example"),
+            token: None,
+            cookie: Some(&jar),
+        })));
     }
 }

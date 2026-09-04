@@ -202,16 +202,26 @@ fn call(port: u16, path: &str, headers: &[(&str, String)]) -> Answer {
     }
 }
 
-/// The token out of the boot page's `<meta name="vivac-token" content="...">`.
-fn token_from(body: &str) -> String {
-    let marker = "content=\"";
-    let start = body
-        .find(marker)
-        .unwrap_or_else(|| panic!("no token meta tag in the boot page:\n{body}"))
-        + marker.len();
-    let rest = &body[start..];
-    let end = rest.find('"').unwrap();
-    rest[..end].to_string()
+/// The session token, off the `Set-Cookie` the boot key hands back.
+///
+/// It used to be read out of a `<meta>` in the boot page. `d190` replaced
+/// that page with a redirect, so the token now arrives where a browser
+/// picks it up on its own -- which was the whole point of `f189`.
+fn token_from(a: &Answer) -> String {
+    let raw = a.header("Set-Cookie").unwrap_or_else(|| {
+        panic!(
+            "no Set-Cookie on the boot answer:
+{}",
+            a.body
+        )
+    });
+    let after = raw
+        .split(';')
+        .next()
+        .and_then(|pair| pair.split_once('='))
+        .unwrap_or_else(|| panic!("no name=value in {raw}"));
+    assert_eq!(after.0.trim(), "vivac_session", "in {raw}");
+    after.1.trim().to_string()
 }
 
 /// Every `href="..."` value in the page, in the order they appear.
@@ -271,11 +281,23 @@ fn up_many(names: &[&str]) -> UpMany {
 }
 
 #[test]
-fn the_boot_url_returns_the_token() {
+fn the_boot_key_hands_over_a_session_cookie_and_redirects() {
     let s = up("boot");
     let a = call(s.port(), &s.boot_path(), &[("Host", s.host())]);
-    assert_eq!(a.status, 200, "{}", a.body);
-    assert_eq!(token_from(&a.body).len(), 64, "{}", a.body);
+    // `d190`: it lands you where the work is, instead of on a page whose
+    // whole content was "vivac is listening".
+    assert_eq!(a.status, 302, "{}", a.body);
+    assert_eq!(a.header("Location"), Some("/"), "{}", a.body);
+    assert_eq!(token_from(&a).len(), 64, "{}", a.body);
+    let jar = a.header("Set-Cookie").unwrap();
+    // The flags are the defence, so they are asserted and not assumed.
+    assert!(jar.contains("HttpOnly"), "{jar}");
+    assert!(jar.contains("SameSite=Strict"), "{jar}");
+    assert!(jar.contains("Path=/"), "{jar}");
+    // A session cookie: it dies with the browser, and the server forgets
+    // the token when the process does.
+    assert!(!jar.contains("Max-Age"), "{jar}");
+    assert!(!jar.contains("Expires"), "{jar}");
 }
 
 #[test]
@@ -283,7 +305,7 @@ fn the_same_boot_url_a_second_time_is_refused() {
     let s = up("boot-twice");
     let path = s.boot_path();
     let first = call(s.port(), &path, &[("Host", s.host())]);
-    assert_eq!(first.status, 200, "{}", first.body);
+    assert_eq!(first.status, 302, "{}", first.body);
     let second = call(s.port(), &path, &[("Host", s.host())]);
     assert_eq!(
         second.status, 401,
@@ -299,7 +321,7 @@ fn the_same_boot_url_a_second_time_is_refused() {
 fn a_good_token_in_the_header_serves() {
     let s = up("good-token");
     let boot = call(s.port(), &s.boot_path(), &[("Host", s.host())]);
-    let token = token_from(&boot.body);
+    let token = token_from(&boot);
     let a = call(
         s.port(),
         "/",
@@ -314,7 +336,7 @@ fn a_good_token_in_the_header_serves() {
 fn a_single_project_index_redirects_to_its_page() {
     let s = up("index-one");
     let boot = call(s.port(), &s.boot_path(), &[("Host", s.host())]);
-    let token = token_from(&boot.body);
+    let token = token_from(&boot);
     let a = call(
         s.port(),
         "/",
@@ -343,7 +365,7 @@ fn a_single_project_index_redirects_to_its_page() {
 fn two_or_more_projects_list_with_a_link_each() {
     let up = up_many(&["index-list-a", "index list b"]);
     let boot = call(up.port(), &up.boot_path(), &[("Host", up.host())]);
-    let token = token_from(&boot.body);
+    let token = token_from(&boot);
     let a = call(
         up.port(),
         "/",
@@ -381,7 +403,7 @@ fn a_projects_today_page_serves_with_its_focus_on_it() {
     s._sandbox
         .ok(&["push", "Fix the cache adapter", "--why", "the bug needs it"]);
     let boot = call(s.port(), &s.boot_path(), &[("Host", s.host())]);
-    let token = token_from(&boot.body);
+    let token = token_from(&boot);
     let id = s
         ._sandbox
         .0
@@ -407,7 +429,7 @@ fn a_projects_today_page_serves_with_its_focus_on_it() {
 fn the_served_page_reaches_for_nothing_off_this_machine() {
     let s = up("today-offline");
     let boot = call(s.port(), &s.boot_path(), &[("Host", s.host())]);
-    let token = token_from(&boot.body);
+    let token = token_from(&boot);
     let id = s
         ._sandbox
         .0
@@ -431,7 +453,7 @@ fn the_served_page_reaches_for_nothing_off_this_machine() {
 fn a_project_id_the_registry_does_not_hold_is_not_found() {
     let s = up("today-unknown");
     let boot = call(s.port(), &s.boot_path(), &[("Host", s.host())]);
-    let token = token_from(&boot.body);
+    let token = token_from(&boot);
     let a = call(
         s.port(),
         "/p/not-a-project/",
@@ -448,7 +470,7 @@ fn a_project_id_the_registry_does_not_hold_is_not_found() {
 fn an_unknown_route_is_not_found_and_not_the_index() {
     let s = up("unknown-route");
     let boot = call(s.port(), &s.boot_path(), &[("Host", s.host())]);
-    let token = token_from(&boot.body);
+    let token = token_from(&boot);
     let a = call(
         s.port(),
         "/does-not-exist",
@@ -473,7 +495,7 @@ fn no_token_at_all_is_refused() {
 fn a_foreign_host_is_refused_even_with_the_right_token() {
     let s = up("foreign-host");
     let boot = call(s.port(), &s.boot_path(), &[("Host", s.host())]);
-    let token = token_from(&boot.body);
+    let token = token_from(&boot);
     let a = call(
         s.port(),
         "/",
@@ -486,7 +508,7 @@ fn a_foreign_host_is_refused_even_with_the_right_token() {
 fn a_foreign_origin_is_refused() {
     let s = up("foreign-origin");
     let boot = call(s.port(), &s.boot_path(), &[("Host", s.host())]);
-    let token = token_from(&boot.body);
+    let token = token_from(&boot);
     let a = call(
         s.port(),
         "/",
@@ -506,7 +528,7 @@ fn a_foreign_origin_is_refused() {
 fn no_response_ever_carries_a_cors_header() {
     let s = up("no-cors");
     let boot = call(s.port(), &s.boot_path(), &[("Host", s.host())]);
-    let token = token_from(&boot.body);
+    let token = token_from(&boot);
     let served = call(
         s.port(),
         "/",
@@ -527,7 +549,7 @@ fn no_response_ever_carries_a_cors_header() {
 fn every_response_carries_the_security_headers() {
     let s = up("security-headers");
     let boot = call(s.port(), &s.boot_path(), &[("Host", s.host())]);
-    let token = token_from(&boot.body);
+    let token = token_from(&boot);
     let served = call(
         s.port(),
         "/",
@@ -549,4 +571,114 @@ fn every_response_carries_the_security_headers() {
             a.headers
         );
     }
+}
+/// `WEB.md` §3.2 over a real socket: the lineage of a node, drawn.
+///
+/// The unit tests build the page from a folded tree; this one proves the
+/// route reaches it and that the bytes leaving the socket carry the shape.
+#[test]
+fn the_lineage_of_a_node_is_served_with_a_step_per_ancestor() {
+    let s = up("why-page");
+    s._sandbox
+        .ok(&["push", "Ship the thing", "--why", "it is the goal"]);
+    s._sandbox
+        .ok(&["push", "The face is web", "--why", "the owner asked"]);
+    let boot = call(s.port(), &s.boot_path(), &[("Host", s.host())]);
+    let token = token_from(&boot);
+    let id = s
+        ._sandbox
+        .0
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let a = call(
+        s.port(),
+        &format!("/p/{id}/why/2"),
+        &[("Host", s.host()), ("X-Vivac-Token", token)],
+    );
+    assert_eq!(a.status, 200, "{}", a.body);
+    assert_eq!(a.header("Content-Type"), Some("text/html; charset=utf-8"));
+    // Both steps of the path, and the mark on the one that was asked for.
+    assert!(a.body.contains("Ship the thing"), "{}", a.body);
+    assert!(a.body.contains("The face is web"), "{}", a.body);
+    assert!(a.body.contains("you are here"), "{}", a.body);
+    // The drawing is also the way you walk the tree.
+    assert!(
+        hrefs_in(&a.body).iter().any(|h| h.contains("/why/")),
+        "{}",
+        a.body
+    );
+    // §7.4, proved on the bytes that actually left the socket.
+    assert!(!a.body.contains("http://"), "{}", a.body);
+    assert!(!a.body.contains("https://"), "{}", a.body);
+}
+
+/// A node the tree does not hold is a 404, the same as a project it does
+/// not hold: a page that draws an empty spine for a typo teaches that the
+/// node exists.
+#[test]
+fn a_lineage_for_a_node_that_is_not_there_is_not_found() {
+    let s = up("why-unknown");
+    let boot = call(s.port(), &s.boot_path(), &[("Host", s.host())]);
+    let token = token_from(&boot);
+    let id = s
+        ._sandbox
+        .0
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let a = call(
+        s.port(),
+        &format!("/p/{id}/why/f999"),
+        &[("Host", s.host()), ("X-Vivac-Token", token)],
+    );
+    assert_eq!(a.status, 404, "{}", a.body);
+    assert_eq!(a.body, "not found\n");
+}
+
+/// `f189`: the test that was missing, and whose absence let the main
+/// surface sit broken for a day with fifteen green ones around it. No
+/// `X-Vivac-Token` anywhere -- just the cookie, which is all a browser
+/// sends back when it follows a link.
+#[test]
+fn a_browser_that_only_carries_the_cookie_can_walk_from_today_to_a_lineage() {
+    let s = up("browsing");
+    s._sandbox
+        .ok(&["push", "Ship the thing", "--why", "it is the goal"]);
+    s._sandbox
+        .ok(&["push", "The face is web", "--why", "the owner asked"]);
+    let boot = call(s.port(), &s.boot_path(), &[("Host", s.host())]);
+    let jar = format!("vivac_session={}", token_from(&boot));
+    let id = s
+        ._sandbox
+        .0
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+
+    let today = call(
+        s.port(),
+        &format!("/p/{id}/"),
+        &[("Host", s.host()), ("Cookie", jar.clone())],
+    );
+    assert_eq!(today.status, 200, "{}", today.body);
+
+    // Follow a link off the page rather than a path written here: a link
+    // that goes nowhere is exactly the failure this test exists for.
+    let lineage = hrefs_in(&today.body)
+        .into_iter()
+        .find(|h| h.contains("/why/"))
+        .unwrap_or_else(|| {
+            panic!(
+                "no lineage link on the Today page:
+{}",
+                today.body
+            )
+        });
+    let a = call(s.port(), &lineage, &[("Host", s.host()), ("Cookie", jar)]);
+    assert_eq!(a.status, 200, "{} -> {}", lineage, a.body);
+    assert!(a.body.contains("you are here"), "{}", a.body);
 }

@@ -44,6 +44,20 @@ impl Kind {
         })
     }
 
+    /// The word this type goes by. The inverse of `parse`, and spelled the
+    /// same way the log serialises it.
+    pub fn word(self) -> &'static str {
+        match self {
+            Kind::Goal => "goal",
+            Kind::Task => "task",
+            Kind::Decision => "decision",
+            Kind::Question => "question",
+            Kind::Constraint => "constraint",
+            Kind::Finding => "finding",
+            Kind::Assumption => "assumption",
+        }
+    }
+
     pub const ALL: &'static str = "goal, task, decision, question, constraint, finding, assumption";
 }
 

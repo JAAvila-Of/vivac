@@ -234,3 +234,139 @@ footer {
 footer code {
   font-family: var(--mono);
 }
+
+/* ---- the spine (WEB.md 3.2) ----------------------------------------- */
+
+/* The lineage is drawn with a border and a knot, not with SVG: seven rows
+   do not need a drawing surface, the text stays selectable and copyable,
+   and nothing has to be measured in JS. `d187`. */
+
+header .crumb {
+  margin: 0 0 0.4rem;
+  font-size: 0.85rem;
+}
+
+ol.spine {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+ol.spine > li {
+  display: grid;
+  grid-template-columns: 4.5rem 1fr;
+  gap: 0 0.9rem;
+}
+
+ol.spine > li > .alias {
+  padding-top: 0.1rem;
+}
+
+ol.spine > li > .what {
+  position: relative;
+  border-left: 1px solid var(--rule);
+  padding: 0 0 1.6rem 1.2rem;
+}
+
+/* The line stops at the last step: it is the end of the path, not a
+   thread that keeps going. */
+ol.spine > li:last-child > .what {
+  border-left-color: transparent;
+  padding-bottom: 0;
+}
+
+/* The knot. A step is a point on the line, and the point is a shape and a
+   position before it is a tone. */
+ol.spine > li > .what::before {
+  content: "";
+  position: absolute;
+  left: -0.29rem;
+  top: 0.42rem;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--ground);
+  border: 1px solid var(--rule);
+}
+
+ol.spine > li.here > .what::before {
+  background: var(--accent);
+  border-color: var(--accent);
+  width: 0.62rem;
+  height: 0.62rem;
+  left: -0.35rem;
+}
+
+ol.spine > li.here .title {
+  font-weight: 600;
+}
+
+ol.spine .title {
+  margin: 0;
+}
+
+/* The always-visible facts: what this step is, what state it is in, when
+   it opened, and how much is still open underneath. Every one of them is a
+   word or a number; none of them is only a colour. */
+.facts {
+  margin: 0.25rem 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 0.75rem;
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+}
+
+.facts .when,
+.facts .anchor {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+}
+
+.count {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  color: var(--ink-faint);
+}
+
+/* The weight of a step is its summary, so the click lands where the
+   weight is. A step with nothing under it gets no triangle at all. */
+ol.spine details {
+  margin: 0.3rem 0 0;
+}
+
+ol.spine summary {
+  cursor: pointer;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 0.75rem;
+  padding: 0.1rem 0;
+  color: var(--ink-soft);
+}
+
+ol.spine summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+ol.spine summary .count {
+  color: var(--accent);
+}
+
+ol.spine .detail {
+  padding: 0.2rem 0 0.4rem;
+}
+
+ol.spine .detail h3 {
+  margin: 0.7rem 0 0.3rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--ink-faint);
+}
+
+ol.spine .detail ul.nodes > li {
+  grid-template-columns: 3.6rem 1fr;
+  padding: 0.35rem 0;
+}
