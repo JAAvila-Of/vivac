@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/JAAvila-Of/vivac/compare/v0.3.7...v0.4.0) - 2026-09-04
+
+### Added
+
+- *(find)* [**breaking**] hits come back as handles, not whole nodes
+
+  A hit carries `alias`, `kind`, `state`, `title`, `lineage` and `matched`,
+  and nothing else. `matched` changed from a list of the field names that
+  matched to an object mapping each of those fields to the fragment that
+  matched inside it. Gone from a hit, and answered by `why <alias>` instead:
+  `id`, `num`, `why`, `blocks`, `parent`, `note`, `outcome`, `refs`,
+  `governs`, `opened`, `closed`, `false_close`, `open_below`, `total_below`.
+  Both `find --json` and the `vivac_find` MCP tool return this shape: they
+  are the same payload and cannot drift apart.
+
+### Other
+
+- *(readme)* say what 0.x promises and what keeps 1.0 away
+- *(readme)* warn that a running MCP server blocks updates on Windows
+- *(contributing)* say where a security flaw gets reported
+- *(release)* the held run is approved, not closed and reopened
+
 ## [0.3.7](https://github.com/JAAvila-Of/vivac/compare/v0.3.6...v0.3.7) - 2026-09-03
 
 ### Added
