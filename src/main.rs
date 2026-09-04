@@ -61,7 +61,8 @@ const USAGE: &str = r#"vivac - provenance of work
     vivac done <id> ["<outcome>"] [--force]
     vivac note [<id>] "<note>"
     vivac block <id> [--off]
-    vivac decide "<title>" --reason "<r>" [--alternative X] [--supersedes d9]
+    vivac decide "<title>" --reason "<r>" [--alternative X]
+          [--supersedes d9] [--parent N]
     vivac flag <id> suspect|review|stale --why "<reason>"  [--off]
 
   Safe stops
@@ -167,6 +168,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         "push" => &["why", "type", "blocks", "ref", "governs"],
         "pop" => &["force", "next"],
         "decide" => &[
+            "parent",
             "reason",
             "alternative",
             "supersedes",

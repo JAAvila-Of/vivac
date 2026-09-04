@@ -758,7 +758,10 @@ pub fn decide(ctx: &mut Ctx, p: params::Decide) -> Result<Outcome, Failure> {
     if !p.alternatives.is_empty() {
         body.push_str(&format!("  |  discarded: {}", p.alternatives.join("; ")));
     }
-    let parent = ctx.tree.focus().map(|n| n.id.clone());
+    let parent = match &p.parent {
+        Some(s) => Some(ctx.resolve(s)?.id.clone()),
+        None => ctx.tree.focus().map(|n| n.id.clone()),
+    };
     let (ev, num, _) = born(
         ctx,
         Born {
