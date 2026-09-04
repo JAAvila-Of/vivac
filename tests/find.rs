@@ -143,7 +143,71 @@ fn find_without_a_query_is_a_usage_error() {
 fn the_json_twin_carries_the_hits_and_says_where_they_matched() {
     let c = seeded("json");
     let s = c.ok(&["find", "malformed", "--json"]);
-    assert!(s.contains("\"lineage\""), "{s}");
-    assert!(s.contains("\"matched\""), "{s}");
-    assert!(s.contains("\"why\""), "{s}");
+    let v: serde_json::Value = serde_json::from_str(&s).expect("the payload is not JSON");
+    let hit = &v[0];
+    assert!(hit["lineage"].is_array(), "{s}");
+    let matched = hit["matched"]
+        .as_object()
+        .unwrap_or_else(|| panic!("matched is not an object, it is a list of field names: {s}"));
+    let why = matched["why"]
+        .as_str()
+        .unwrap_or_else(|| panic!("matched has no why fragment: {s}"));
+    assert!(why.contains("malformed"), "{s}");
+}
+
+/// A hit carries only the six fields a handle needs: `alias`, `kind`,
+/// `state`, `title`, `lineage`, `matched`. Everything else -- `why`, `note`,
+/// `outcome`, the twelve bookkeeping fields `json_node` also carries -- comes
+/// from `why` on the alias, not from the hit itself.
+#[test]
+fn a_hit_has_exactly_the_six_handle_fields() {
+    let c = seeded("keys");
+    let s = c.ok(&["find", "malformed", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&s).expect("the payload is not JSON");
+    let hit = v[0].as_object().expect("a hit is not an object");
+    let mut keys: Vec<&str> = hit.keys().map(String::as_str).collect();
+    keys.sort();
+    assert_eq!(
+        keys,
+        ["alias", "kind", "lineage", "matched", "state", "title"],
+        "{s}"
+    );
+}
+
+/// The JSON carries the fragment `snippet` produces, not the whole field. A
+/// `why` far wider than `snippet`'s window, with a rare word at each end,
+/// proves it: the word at the front is what the query hit, and the word at
+/// the far end should never reach the payload.
+#[test]
+fn the_json_snippet_does_not_carry_the_whole_field() {
+    let c = seeded("snippet");
+    let padding = "filler word ".repeat(12);
+    let long_why = format!("zzzfrontword {padding}zzzendword");
+    c.ok(&[
+        "add",
+        "Something with a long reason",
+        "--why",
+        &long_why,
+        "--type",
+        "task",
+    ]);
+    let s = c.ok(&["find", "zzzfrontword", "--json"]);
+    assert!(s.contains("zzzfrontword"), "{s}");
+    assert!(!s.contains("zzzendword"), "{s}");
+}
+
+/// The title is not repeated as a reason line in the prose, but the JSON is
+/// data, not rendering: a title hit has to name `title` inside `matched` or
+/// an agent cannot tell a title hit from a `why` hit.
+#[test]
+fn a_title_hit_names_the_title_in_matched() {
+    let c = seeded("title-match");
+    let s = c.ok(&["find", "sandbox", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&s).expect("the payload is not JSON");
+    let hit = &v[0];
+    assert_eq!(
+        hit["title"],
+        "The sandbox named its directory from the clock"
+    );
+    assert!(hit["matched"]["title"].is_string(), "{s}");
 }

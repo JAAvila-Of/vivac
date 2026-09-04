@@ -266,6 +266,7 @@ every
 everything
 evs
 exact
+exactly
 exclusive
 exist
 exists
@@ -312,6 +313,7 @@ format
 formatter
 found
 four
+fragments
 free
 from
 front
@@ -441,6 +443,7 @@ lock
 log
 log2
 lone
+long
 longer
 looks
 loop
@@ -560,6 +563,7 @@ own
 owned
 pa
 packed
+padding
 page
 pair
 pairs
