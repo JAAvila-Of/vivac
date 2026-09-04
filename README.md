@@ -286,6 +286,18 @@ writing to a file. **The binary never phones home**, and that one is a promise
 rather than a description of the current version. The store is `.vivac/`, two
 files.
 
+## Versioning
+
+The project is in `0.x`, and while it is, **the minor is the position that
+breaks**: `0.3.x` to `0.4.0` may change a public surface, and a patch never
+does. The rule has already been spent once — `0.3.0` stopped reading the logs
+`0.1.x` and `0.2.x` wrote, and went out as a minor for that reason.
+
+**The format on disk is not settled either**, and that is what keeps `1.0`
+away. Moving the store from a folded JSON log to SQLite is a change of format
+already known to be coming, and a `1.0` before it would be promising stability
+across a migration that is on the list. `1.0` comes after the store settles.
+
 ## Contributing
 
 Not for now — neither pull requests nor issues. The reason is in
