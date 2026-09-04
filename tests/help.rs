@@ -65,3 +65,39 @@ fn the_help_announces_every_flag_add_accepts() {
         );
     }
 }
+
+// `--ref`, `--governs` and `--blocks` are not in this list: `decide`'s help
+// never announced them, before `--parent` existed or since, and widening
+// that is a separate call than the one this test is guarding.
+#[test]
+fn the_help_announces_every_flag_decide_accepts() {
+    let c = Sandbox::new_seeded("help-decide");
+    c.ok(&["push", "Ship the release", "--why", "the tag is cut"]);
+    c.ok(&["decide", "First call", "--reason", "chosen for x"]);
+    // The parser rejects what it does not know, so exit 0 here is proof that
+    // all four are accepted.
+    c.ok(&[
+        "decide",
+        "Second call",
+        "--parent",
+        "1",
+        "--reason",
+        "chosen for y",
+        "--alternative",
+        "keep the old one",
+        "--supersedes",
+        "2",
+    ]);
+    let help = c.ok(&["--help"]);
+    let decide = block(&help, "decide");
+    assert!(
+        !decide.is_empty(),
+        "the help says nothing about decide:\n{help}"
+    );
+    for flag in ["--parent", "--reason", "--alternative", "--supersedes"] {
+        assert!(
+            decide.contains(flag),
+            "decide accepts {flag} and the help does not say so:\n{decide}"
+        );
+    }
+}

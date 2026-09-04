@@ -242,6 +242,7 @@ impl Flag {
 
 pub struct Decide {
     pub title: String,
+    pub parent: Option<String>,
     pub reason: String,
     pub alternatives: Vec<String>,
     pub supersedes: Option<String>,
@@ -264,6 +265,7 @@ impl Decide {
         })?;
         Ok(Decide {
             title: title.to_string(),
+            parent: a.opt("parent").map(str::to_string),
             reason: reason.to_string(),
             alternatives: a.list("alternative"),
             supersedes: a.opt("supersedes").map(str::to_string),
