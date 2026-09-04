@@ -265,6 +265,13 @@ whether or not anybody wanted it; a tool is called only if the agent decides to.
 So the brief still arrives through `SessionStart`, where nothing has to choose
 it — `vivac_brief` is for asking again mid-session, not for the opening.
 
+**On Windows, stop the server before updating.** A running `vivac mcp` holds
+the executable open, so `cargo install vivac` cannot replace it and fails with
+an access-denied error — *os error 5* — that names neither MCP nor this
+command, and so does not lead back to the cause. Close the session that
+started the server, then install. Linux and macOS replace a running binary
+without complaining, so this one is Windows only.
+
 ## Install
 
 ```sh
