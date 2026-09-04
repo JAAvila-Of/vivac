@@ -98,7 +98,7 @@ pub(crate) fn print_json(v: serde_json::Value) -> R {
 /// Only the log gives a moment a `seq`: `ts` alone ties within the same day,
 /// and this project has had days with 23 stops on it, so a comparison by
 /// date would be wrong on exactly the days it matters.
-struct Full {
+pub(crate) struct Full {
     /// Node id -> the `seq` it was created at. The first `node.created` for
     /// an id wins, matching `Tree::apply`'s own rule for a repeated one.
     created: HashMap<String, u64>,
@@ -109,7 +109,7 @@ struct Full {
 }
 
 impl Full {
-    fn from_log(log: &[Event]) -> Full {
+    pub(crate) fn from_log(log: &[Event]) -> Full {
         let mut created = HashMap::new();
         let mut state: HashMap<String, Vec<(u64, State)>> = HashMap::new();
         for e in log {
@@ -143,7 +143,7 @@ impl Full {
 /// the `seq` of its `node.created`, and its anchor. Empty with nothing
 /// earlier to point to -- there is no version control, or the node predates
 /// every stop -- and that is a value, not a failure.
-fn anchor_of(a: &Tree, full: &Full, n: &Node) -> AnchorRef {
+pub(crate) fn anchor_of(a: &Tree, full: &Full, n: &Node) -> AnchorRef {
     let Some(&seq) = full.created.get(&n.id) else {
         return AnchorRef::default();
     };
@@ -158,7 +158,7 @@ fn anchor_of(a: &Tree, full: &Full, n: &Node) -> AnchorRef {
 /// `born_here` already lists, kept to the ones that are a decision and still
 /// open. Superseding one closes it, so a superseded decision drops out on
 /// its own.
-fn standing_of<'a>(a: &'a Tree, n: &Node) -> Vec<&'a Node> {
+pub(crate) fn standing_of<'a>(a: &'a Tree, n: &Node) -> Vec<&'a Node> {
     a.children(&n.id)
         .into_iter()
         .filter(|c| c.kind == Kind::Decision && c.state.is_open())
@@ -169,7 +169,7 @@ fn standing_of<'a>(a: &'a Tree, n: &Node) -> Vec<&'a Node> {
 /// at the `seq` `n` was born. Not by `closed`'s date: two siblings can open
 /// and close on the day `n` was born, in an order the date cannot tell
 /// apart.
-fn open_then_of<'a>(a: &'a Tree, full: &Full, n: &Node) -> Vec<&'a Node> {
+pub(crate) fn open_then_of<'a>(a: &'a Tree, full: &Full, n: &Node) -> Vec<&'a Node> {
     let (Some(&seq), Some(parent)) = (full.created.get(&n.id), n.parent.as_ref()) else {
         return vec![];
     };
