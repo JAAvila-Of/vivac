@@ -246,6 +246,13 @@ header .crumb {
   font-size: 0.85rem;
 }
 
+/* The way onward, not the way back: it hangs under the promise, so it
+   carries its margin on the other side. */
+header .onward {
+  margin: 0.55rem 0 0;
+  font-size: 0.85rem;
+}
+
 ol.spine {
   list-style: none;
   margin: 0;
@@ -369,4 +376,102 @@ ol.spine .detail h3 {
 ol.spine .detail ul.nodes > li {
   grid-template-columns: 3.6rem 1fr;
   padding: 0.35rem 0;
+}
+
+/* ---- the global graph (WEB.md 3.6) ----------------------------------- */
+
+/* A row only exists for a node with at least one child; a leaf is only
+   ever a tile, in its parent's comb. Nesting reads as indentation, the
+   same idiom the spine above uses for depth. `d194`. */
+
+ol.rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+li.row {
+  margin: 0 0 1.1rem;
+}
+
+li.row .alias {
+  margin-right: 0.6rem;
+}
+
+li.row .title {
+  display: inline;
+  margin: 0;
+  color: var(--ink-soft);
+}
+
+/* `d196`: each block is a disclosure, open by default -- the idiom `d187`
+   already fixed for the lineage, same triangle and all. */
+li.row > details {
+  margin: 0;
+}
+
+li.row > details > summary {
+  cursor: pointer;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 0.6rem;
+}
+
+li.row > details > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* The fan-out is always in the markup and only ever hidden by CSS: while
+   the block is open the comb already shows it, so `d194` still applies;
+   the moment the reader closes it, this is what is left of the shape,
+   which is `d187`'s argument for its own counts. */
+li.row > details[open] > summary .count {
+  display: none;
+}
+
+li.row > details > ol.rows {
+  margin: 0.7rem 0 0;
+  padding-left: 1.2rem;
+  border-left: 1px solid var(--rule);
+}
+
+/* The comb: one tile per direct child, in tree order. Its width carries
+   the fan-out -- nothing here counts it into a number. */
+.comb {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin: 0.4rem 0 0;
+}
+
+.tile {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  border: 1px solid var(--rule);
+  border-radius: 0.25rem;
+  background: var(--panel);
+  color: var(--ink-soft);
+  font-family: var(--mono);
+  font-size: 0.76rem;
+  text-decoration: none;
+}
+
+.tile:hover,
+.tile:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Meaning is never colour alone: closed strikes through and parked dashes
+   the border and italicises, and both also spell the state as a word in
+   `title` (DX pillar). */
+.tile.closed {
+  text-decoration: line-through;
+}
+
+.tile.parked {
+  border-style: dashed;
+  font-style: italic;
 }

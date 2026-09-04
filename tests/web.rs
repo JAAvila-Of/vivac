@@ -682,3 +682,437 @@ fn a_browser_that_only_carries_the_cookie_can_walk_from_today_to_a_lineage() {
     assert_eq!(a.status, 200, "{} -> {}", lineage, a.body);
     assert!(a.body.contains("you are here"), "{}", a.body);
 }
+
+/// `WEB.md` §3.6 over a real socket: the global graph, at the route `d194`
+/// gave it. Both spellings serve it, and a project the registry does not
+/// hold is still a 404 there too, not the page for someone else's tree.
+#[test]
+fn the_tree_page_routes_with_or_without_a_slash_and_a_bogus_project_is_still_not_found() {
+    let s = up("tree-route");
+    s._sandbox
+        .ok(&["push", "Ship the thing", "--why", "it is the goal"]);
+    let boot = call(s.port(), &s.boot_path(), &[("Host", s.host())]);
+    let token = token_from(&boot);
+    let id = s
+        ._sandbox
+        .0
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+
+    for path in [format!("/p/{id}/tree"), format!("/p/{id}/tree/")] {
+        let a = call(
+            s.port(),
+            &path,
+            &[("Host", s.host()), ("X-Vivac-Token", token.clone())],
+        );
+        assert_eq!(a.status, 200, "{path}: {}", a.body);
+    }
+
+    let bogus = call(
+        s.port(),
+        "/p/not-a-project/tree",
+        &[("Host", s.host()), ("X-Vivac-Token", token)],
+    );
+    assert_eq!(bogus.status, 404, "{}", bogus.body);
+}
+
+/// `WEB.md` §3.6: a leaf is only ever a tile and a node with a child is a
+/// tile too -- every node with a parent shows up exactly once in someone's
+/// comb, and it reaches its own lineage (§3.2) from there.
+#[test]
+fn every_child_in_the_tree_appears_exactly_once_as_a_tile_that_reaches_its_own_lineage() {
+    let s = up("tree-tiles");
+    s._sandbox
+        .ok(&["push", "Root goal", "--why", "it is the goal"]);
+    s._sandbox.ok(&[
+        "add",
+        "A branch",
+        "--why",
+        "it needs its own children",
+        "--parent",
+        "1",
+    ]);
+    s._sandbox.ok(&[
+        "add",
+        "A leaf beside it",
+        "--why",
+        "it stands alone",
+        "--parent",
+        "1",
+    ]);
+    s._sandbox.ok(&[
+        "add",
+        "A leaf below the branch",
+        "--why",
+        "it hangs off the branch",
+        "--parent",
+        "2",
+    ]);
+
+    let boot = call(s.port(), &s.boot_path(), &[("Host", s.host())]);
+    let token = token_from(&boot);
+    let id = s
+        ._sandbox
+        .0
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let a = call(
+        s.port(),
+        &format!("/p/{id}/tree"),
+        &[("Host", s.host()), ("X-Vivac-Token", token)],
+    );
+    assert_eq!(a.status, 200, "{}", a.body);
+
+    for alias in ["t2", "t3", "t4"] {
+        let needle = format!("class=\"tile\" href=\"/p/{id}/why/{alias}\"");
+        assert_eq!(
+            a.body.matches(&needle).count(),
+            1,
+            "{alias} should reach its own lineage exactly once as a tile:\n{}",
+            a.body
+        );
+    }
+}
+
+/// `WEB.md` §3.6: a leaf gets a tile and no row of its own; a node with a
+/// child gets both, because it is a tile in its parent's comb and a row
+/// where its own children hang.
+#[test]
+fn a_leaf_gets_a_tile_and_no_row_while_a_branch_gets_both() {
+    let s = up("tree-rows");
+    s._sandbox
+        .ok(&["push", "Root goal", "--why", "it is the goal"]);
+    s._sandbox.ok(&[
+        "add",
+        "A branch",
+        "--why",
+        "it needs its own children",
+        "--parent",
+        "1",
+    ]);
+    s._sandbox.ok(&[
+        "add",
+        "A leaf beside it",
+        "--why",
+        "it stands alone",
+        "--parent",
+        "1",
+    ]);
+    s._sandbox.ok(&[
+        "add",
+        "A leaf below the branch",
+        "--why",
+        "it hangs off the branch",
+        "--parent",
+        "2",
+    ]);
+
+    let boot = call(s.port(), &s.boot_path(), &[("Host", s.host())]);
+    let token = token_from(&boot);
+    let id = s
+        ._sandbox
+        .0
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let a = call(
+        s.port(),
+        &format!("/p/{id}/tree"),
+        &[("Host", s.host()), ("X-Vivac-Token", token)],
+    );
+    assert_eq!(a.status, 200, "{}", a.body);
+
+    // t3 is a leaf: a tile, and never a row header of its own.
+    assert!(
+        a.body
+            .contains(&format!("class=\"tile\" href=\"/p/{id}/why/t3\"")),
+        "{}",
+        a.body
+    );
+    assert!(
+        !a.body
+            .contains(&format!("<a href=\"/p/{id}/why/t3\">t3</a>")),
+        "{}",
+        a.body
+    );
+
+    // t2 has a child, so it is both a tile in g1's comb and a row of its own.
+    assert!(
+        a.body
+            .contains(&format!("class=\"tile\" href=\"/p/{id}/why/t2\"")),
+        "{}",
+        a.body
+    );
+    assert!(
+        a.body
+            .contains(&format!("<a href=\"/p/{id}/why/t2\">t2</a>")),
+        "{}",
+        a.body
+    );
+}
+
+/// `d196`: a row is a disclosure, open at landing so `t191`'s promise --
+/// the shape at a glance -- holds without a click. Leaves are tiles only
+/// and never a `<details>` of their own.
+#[test]
+fn every_row_with_children_carries_an_open_details_and_leaves_carry_none() {
+    let s = up("tree-details-open");
+    s._sandbox
+        .ok(&["push", "Root goal", "--why", "it is the goal"]);
+    s._sandbox.ok(&[
+        "add",
+        "A branch",
+        "--why",
+        "it needs its own children",
+        "--parent",
+        "1",
+    ]);
+    s._sandbox.ok(&[
+        "add",
+        "A leaf beside it",
+        "--why",
+        "it stands alone",
+        "--parent",
+        "1",
+    ]);
+    s._sandbox.ok(&[
+        "add",
+        "A leaf below the branch",
+        "--why",
+        "it hangs off the branch",
+        "--parent",
+        "2",
+    ]);
+
+    let boot = call(s.port(), &s.boot_path(), &[("Host", s.host())]);
+    let token = token_from(&boot);
+    let id = s
+        ._sandbox
+        .0
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let a = call(
+        s.port(),
+        &format!("/p/{id}/tree"),
+        &[("Host", s.host()), ("X-Vivac-Token", token)],
+    );
+    assert_eq!(a.status, 200, "{}", a.body);
+
+    // g1 and t2 both have children, so both are rows, and both open.
+    assert_eq!(
+        a.body.matches("<li class=\"row\">").count(),
+        2,
+        "{}",
+        a.body
+    );
+    assert_eq!(a.body.matches("<details open>").count(), 2, "{}", a.body);
+    // No block is ever closed by default: every `<details` this page
+    // writes carries `open`.
+    assert_eq!(
+        a.body.matches("<details>").count(),
+        0,
+        "a details closed by default:\n{}",
+        a.body
+    );
+}
+
+/// `d196`: the fan-out is only ever hidden by CSS, on `details[open]` --
+/// the HTML always carries it, so `curl` and a reader who closes the block
+/// see the same number either way.
+#[test]
+fn the_summary_always_carries_the_count_in_its_markup() {
+    let s = up("tree-details-count");
+    s._sandbox
+        .ok(&["push", "Root goal", "--why", "it is the goal"]);
+    s._sandbox.ok(&[
+        "add",
+        "A branch",
+        "--why",
+        "it needs its own children",
+        "--parent",
+        "1",
+    ]);
+    s._sandbox.ok(&[
+        "add",
+        "A leaf beside it",
+        "--why",
+        "it stands alone",
+        "--parent",
+        "1",
+    ]);
+    s._sandbox.ok(&[
+        "add",
+        "A leaf below the branch",
+        "--why",
+        "it hangs off the branch",
+        "--parent",
+        "2",
+    ]);
+
+    let boot = call(s.port(), &s.boot_path(), &[("Host", s.host())]);
+    let token = token_from(&boot);
+    let id = s
+        ._sandbox
+        .0
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let a = call(
+        s.port(),
+        &format!("/p/{id}/tree"),
+        &[("Host", s.host()), ("X-Vivac-Token", token)],
+    );
+    assert_eq!(a.status, 200, "{}", a.body);
+
+    // g1 has two children (t2, t3): plural. t2 has one (t4): singular.
+    assert!(
+        a.body.contains("<span class=\"count\">2 children</span>"),
+        "{}",
+        a.body
+    );
+    assert!(
+        a.body.contains("<span class=\"count\">1 child</span>"),
+        "{}",
+        a.body
+    );
+}
+
+/// DX pillar: state never rides on a colour alone. Each tile spells its
+/// state as a word in `title`, not only through its class.
+#[test]
+fn state_reaches_the_tile_as_a_word_in_its_title_attribute_not_only_as_a_class() {
+    let s = up("tree-state-words");
+    s._sandbox
+        .ok(&["push", "Root goal", "--why", "it is the goal"]);
+    s._sandbox.ok(&[
+        "add",
+        "Still open",
+        "--why",
+        "nothing settled it yet",
+        "--parent",
+        "1",
+    ]);
+    s._sandbox.ok(&[
+        "add",
+        "Already closed",
+        "--why",
+        "it shipped",
+        "--parent",
+        "1",
+    ]);
+    s._sandbox.ok(&["done", "3", "shipped it"]);
+    s._sandbox.ok(&[
+        "add",
+        "Parked for later",
+        "--why",
+        "it is not due yet",
+        "--parent",
+        "1",
+    ]);
+    s._sandbox.ok(&["park", "4", "waiting on the release"]);
+
+    let boot = call(s.port(), &s.boot_path(), &[("Host", s.host())]);
+    let token = token_from(&boot);
+    let id = s
+        ._sandbox
+        .0
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let a = call(
+        s.port(),
+        &format!("/p/{id}/tree"),
+        &[("Host", s.host()), ("X-Vivac-Token", token)],
+    );
+    assert_eq!(a.status, 200, "{}", a.body);
+    assert!(
+        a.body.contains("title=\"t2 · open · Still open\""),
+        "{}",
+        a.body
+    );
+    assert!(
+        a.body.contains("title=\"t3 · closed · Already closed\""),
+        "{}",
+        a.body
+    );
+    assert!(
+        a.body.contains("title=\"t4 · parked · Parked for later\""),
+        "{}",
+        a.body
+    );
+}
+
+/// `WEB.md` §7.4: the whole tree loads with no internet, the same as every
+/// other page.
+#[test]
+fn the_tree_page_reaches_for_nothing_off_this_machine() {
+    let s = up("tree-offline");
+    s._sandbox
+        .ok(&["push", "Ship the thing", "--why", "it is the goal"]);
+    let boot = call(s.port(), &s.boot_path(), &[("Host", s.host())]);
+    let token = token_from(&boot);
+    let id = s
+        ._sandbox
+        .0
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let a = call(
+        s.port(),
+        &format!("/p/{id}/tree"),
+        &[("Host", s.host()), ("X-Vivac-Token", token)],
+    );
+    assert_eq!(a.status, 200, "{}", a.body);
+    assert!(!a.body.contains("http://"), "{}", a.body);
+    assert!(!a.body.contains("https://"), "{}", a.body);
+    assert!(!a.body.contains("<script"), "{}", a.body);
+    assert!(!a.body.contains("<svg"), "{}", a.body);
+}
+
+/// `f189`'s test, extended: the tree the front page links to has to be
+/// reachable with nothing but the cookie a browser keeps on its own.
+#[test]
+fn a_browser_that_only_carries_the_cookie_can_walk_from_today_to_the_tree() {
+    let s = up("tree-browsing");
+    s._sandbox
+        .ok(&["push", "Ship the thing", "--why", "it is the goal"]);
+    let boot = call(s.port(), &s.boot_path(), &[("Host", s.host())]);
+    let jar = format!("vivac_session={}", token_from(&boot));
+    let id = s
+        ._sandbox
+        .0
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+
+    let today = call(
+        s.port(),
+        &format!("/p/{id}/"),
+        &[("Host", s.host()), ("Cookie", jar.clone())],
+    );
+    assert_eq!(today.status, 200, "{}", today.body);
+
+    let tree_link = hrefs_in(&today.body)
+        .into_iter()
+        .find(|h| h.contains("/tree"))
+        .unwrap_or_else(|| {
+            panic!(
+                "no link to the tree on the Today page:
+{}",
+                today.body
+            )
+        });
+    let a = call(s.port(), &tree_link, &[("Host", s.host()), ("Cookie", jar)]);
+    assert_eq!(a.status, 200, "{} -> {}", tree_link, a.body);
+}
