@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1](https://github.com/JAAvila-Of/vivac/compare/v0.4.0...v0.4.1) - 2026-09-04
+
+### Added
+
+- *(decide)* --parent, so a decision can be born where it belongs
+
+### Fixed
+
+- *(help)* decide accepts three flags its help never announced
+
 ## [0.4.0](https://github.com/JAAvila-Of/vivac/compare/v0.3.7...v0.4.0) - 2026-09-04
 
 ### Added
