@@ -8,11 +8,17 @@
 # token would be the most dangerous secret this project could hold: whoever took
 # it could publish anything, as us, to everyone who installs vivac.
 #
-# One manual step per release, and it is a consequence of that choice. GitHub
-# does not start workflow runs for events its own token caused, so the release
-# pull request opens with no checks on it, and `main` requires them all. Close
-# it and reopen it to run them. The alternative is an app or a personal token,
-# which is the credential this file exists to avoid.
+# One manual step per release, and it is a consequence of that choice. A run
+# caused by GitHub's own token is held rather than skipped: it is created and
+# parked in `action_required`, waiting for somebody to say run it, and `main`
+# requires all of them before the release pull request can be merged.
+#
+# Approving the held run is the whole step. It needs no commit, and it does not
+# need the pull request closed and reopened. Pushing a human commit to the
+# branch starts them too, but that only helps on the releases where there was
+# already a commit to make -- and reaching for it on the others means inventing
+# one, which is worse than the problem. The alternative is an app or a personal
+# token, which is the credential this file exists to avoid.
 
 name: release-plz
 
