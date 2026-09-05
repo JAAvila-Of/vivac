@@ -64,6 +64,8 @@ const ADVICE_PII: &str = "Refer to the role, not to the person nor to their path
      E.g.: the PR reviewer, the user home directory.";
 const ADVICE_ENTROPY: &str = "If it is not a key, give it a name instead of pasting the \
      value. If it is one, it does not get in: store where it lives, not what it is.";
+const ADVICE_BODY: &str = "Name the file and what was decided about it, never its content. \
+     A path and a sentence survive the paste; the body of the file does not.";
 
 /// Checks one field. `None` means it may be written.
 pub fn check_field(field: &str, text: &str) -> Option<Finding> {
@@ -75,6 +77,14 @@ pub fn check_field(field: &str, text: &str) -> Option<Finding> {
             advice: ADVICE_KEY,
         });
     }
+    if let Some(fence) = detect_fence(text) {
+        return Some(Finding {
+            rule: "fenced code block (file contents)",
+            field: field.to_string(),
+            sample: fence.sample(),
+            advice: ADVICE_BODY,
+        });
+    }
     tokens(text).find_map(|tok| check_token(field, tok))
 }
 
@@ -82,6 +92,95 @@ pub fn check_field(field: &str, text: &str) -> Option<Finding> {
 /// that is needed: the operation is refused whole.
 pub fn check_fields(fields: &[(&str, &str)]) -> Option<Finding> {
     fields.iter().find_map(|(c, t)| check_field(c, t))
+}
+
+/// An open fence, enough of it to describe without repeating it: which
+/// character opened it, the info string (a language tag, usually), and how
+/// many lines the block runs -- to the matching close if there is one, to
+/// the end of the text if there is not.
+struct Fence {
+    marker: char,
+    tag: String,
+    lines: usize,
+}
+
+/// The language tag is the caller's own text, so it is capped rather than
+/// carried whole: enough to name the language, not enough to smuggle a line
+/// of the body through the info string.
+const TAG_LIMIT: usize = 16;
+
+impl Fence {
+    fn sample(&self) -> String {
+        let marker: String = std::iter::repeat(self.marker).take(3).collect();
+        format!("{marker}{}, {} lines", self.tag, self.lines)
+    }
+}
+
+/// The mechanical proxy for "no file contents": a line that opens with three
+/// or more backticks or tildes, indented by at most three spaces -- a
+/// CommonMark fenced code block. Opening is enough; the fence does not have
+/// to close.
+///
+/// **What it does not promise.** A paste with the fence stripped out gets
+/// through untouched, and so does one indented by four spaces or more --
+/// CommonMark itself stops calling that a fence at four. Neither is an
+/// oversight. This guard has no override (see the module doc), so a rule
+/// with no way around it can only afford zero false positives, and three
+/// fence characters at the very start of a line is close to that: writing
+/// it is declaring a code block, not writing prose that happens to look
+/// like one. A threshold on line count would not be: it is a number
+/// invented today that some day rejects a legitimate note with no way to
+/// write it.
+fn detect_fence(text: &str) -> Option<Fence> {
+    let lines: Vec<&str> = text.split('\n').collect();
+    for (i, line) in lines.iter().enumerate() {
+        let Some((marker, run, tag)) = open_fence(line) else {
+            continue;
+        };
+        let end = lines
+            .iter()
+            .skip(i + 1)
+            .position(|l| is_fence_close(l, marker, run))
+            .map(|p| i + 1 + p)
+            .unwrap_or(lines.len() - 1);
+        return Some(Fence {
+            marker,
+            tag: tag.trim().chars().take(TAG_LIMIT).collect(),
+            lines: end - i + 1,
+        });
+    }
+    None
+}
+
+/// A line opens a fence when, after at most three leading spaces, it starts
+/// with a run of three or more of the same fence character. Returns the
+/// character, how many of it opened the fence, and whatever text follows on
+/// the line -- the info string.
+fn open_fence(line: &str) -> Option<(char, usize, &str)> {
+    let indent = line.chars().take_while(|c| *c == ' ').count();
+    if indent > 3 {
+        return None;
+    }
+    let rest = &line[indent..];
+    let marker = rest.chars().next()?;
+    if marker != '`' && marker != '~' {
+        return None;
+    }
+    let run = rest.chars().take_while(|c| *c == marker).count();
+    (run >= 3).then(|| (marker, run, &rest[run..]))
+}
+
+/// A line closes a fence when it matches the same shape as the opening --
+/// at most three leading spaces, a run of the same character at least as
+/// long -- with nothing but whitespace after it.
+fn is_fence_close(line: &str, marker: char, min_run: usize) -> bool {
+    let indent = line.chars().take_while(|c| *c == ' ').count();
+    if indent > 3 {
+        return false;
+    }
+    let rest = &line[indent..];
+    let run = rest.chars().take_while(|c| *c == marker).count();
+    run >= min_run && rest[run..].chars().all(char::is_whitespace)
 }
 
 fn check_token(field: &str, tok: &str) -> Option<Finding> {
@@ -341,5 +440,41 @@ mod tests {
             ("why", "ghp_16C7e42F292c6912E7710c838347Ae178B4a"),
         ]);
         assert_eq!(h.unwrap().field, "why");
+    }
+
+    #[test]
+    fn fenced_code_is_refused() {
+        assert!(refuses("```rust\nfn parse() -> bool {\n    true\n}\n```"));
+        assert!(refuses("~~~\nsome code\n~~~"));
+        // CommonMark still counts a fence indented by up to three spaces.
+        assert!(refuses("   ```\ncode\n```"));
+    }
+
+    #[test]
+    fn code_that_is_not_fenced_gets_through() {
+        // A single backtick is inline code, not a fence, and the project's
+        // own prose is full of it.
+        assert!(!refuses("run `cargo test` before pushing"));
+        // Three backticks not at the start of a line are not a fence either.
+        assert!(!refuses("it prints ```like this``` inline, not fenced"));
+    }
+
+    #[test]
+    fn the_fence_sample_does_not_carry_the_body() {
+        let h = check_field(
+            "note",
+            "```rust\nfn super_secret_function_name() -> u8 { 42 }\n```",
+        )
+        .unwrap();
+        assert!(!h.sample.contains("super"));
+        assert!(!h.sample.contains("secret"));
+        assert!(!h.sample.contains("function"));
+        assert_eq!(h.sample, "```rust, 3 lines");
+    }
+
+    #[test]
+    fn the_fence_is_found_past_the_first_line() {
+        let h = check_field("note", "Some prose here.\n```\ncode line\n```");
+        assert!(h.is_some());
     }
 }
