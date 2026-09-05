@@ -34,7 +34,14 @@ LAST_SPANISH_COMMIT = "4846499"
 OUT = "tests/data/spanish-vocabulary.txt"
 
 # The guard does not get to widen its own list.
-SKIP = {"english.rs"}
+SKIP = {"english.rs", "web_prose.rs"}
+
+# `src/web`'s own literals and comments are the surface `web_prose.rs`
+# checks, so they must not feed the list that checks them: a Spanish word
+# written there would subtract itself from the very list meant to forbid it,
+# the same hole a non-recursive `src/*.rs` was closing by accident before
+# this glob went recursive.
+SKIP_DIR = os.path.join("src", "web")
 
 
 def literal_spans(src):
@@ -115,9 +122,11 @@ def main():
             spoken_in_spanish |= words_in_literals(src)
 
     spoken_today = set()
-    for f in sorted(glob.glob("src/*.rs") + glob.glob("tests/*.rs")
+    for f in sorted(glob.glob("src/**/*.rs", recursive=True) + glob.glob("tests/*.rs")
                     + glob.glob("tests/common/*.rs")):
         if os.path.basename(f) in SKIP:
+            continue
+        if os.path.normpath(f).startswith(SKIP_DIR + os.sep):
             continue
         spoken_today |= words_in_literals(io.open(f, encoding="utf-8").read())
 

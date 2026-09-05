@@ -36,6 +36,9 @@
 //! both directions, so a word cannot linger with a licence after the last
 //! identifier that used it is gone.
 
+#[path = "common/literal_spans.rs"]
+mod literal_spans;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 const VOCABULARY: &str = "tests/data/identifier-vocabulary.txt";
@@ -90,81 +93,26 @@ fn sources() -> Vec<std::path::PathBuf> {
 ///
 /// Prose and printed strings are guarded elsewhere, and they are written in
 /// sentences rather than in identifiers: folding them in here would drag the
-/// whole English language into the vocabulary. Char literals go too. A `'"'`
-/// left in place opens a string that never closes and swallows the rest of
-/// the file, which is a silent hole in a guard rather than a failure.
+/// whole English language into the vocabulary. Char literals go too, and
+/// dropping them by span rather than by re-scanning is what keeps a `'"'`
+/// from opening a string that never closes and swallowing the rest of the
+/// file -- the parsing that decides that lives in `literal_spans` now, not
+/// here.
 fn code_only(src: &str) -> String {
-    let b: Vec<char> = src.chars().collect();
-    let quote = '\u{27}';
-    let backslash = '\u{5c}';
-    let mut out = String::with_capacity(src.len());
-    let mut i = 0;
-    while i < b.len() {
-        let c = b[i];
-        if c == '/' && b.get(i + 1) == Some(&'/') {
-            while i < b.len() && b[i] != '\n' {
-                i += 1;
-            }
-        } else if c == '/' && b.get(i + 1) == Some(&'*') {
-            i += 2;
-            while i + 1 < b.len() && !(b[i] == '*' && b[i + 1] == '/') {
-                i += 1;
-            }
-            i = (i + 2).min(b.len());
-        } else if c == 'r' && matches!(b.get(i + 1), Some('"') | Some('#')) {
-            let mut j = i + 1;
-            let mut hashes = 0;
-            while b.get(j) == Some(&'#') {
-                hashes += 1;
-                j += 1;
-            }
-            if b.get(j) == Some(&'"') {
-                j += 1;
-                while j < b.len() {
-                    if b[j] == '"' && b[j + 1..].iter().take(hashes).all(|c| *c == '#') {
-                        j += 1 + hashes;
-                        break;
-                    }
-                    j += 1;
-                }
-                i = j;
-            } else {
-                out.push(c);
-                i += 1;
-            }
-        } else if c == '"' {
-            i += 1;
-            while i < b.len() {
-                if b[i] == backslash {
-                    i += 2;
-                    continue;
-                }
-                if b[i] == '"' {
-                    i += 1;
-                    break;
-                }
-                i += 1;
-            }
-        } else if c == quote {
-            // A char literal has a closing quote; a lifetime does not.
-            let escaped = b.get(i + 1) == Some(&backslash);
-            let closes = if escaped {
-                b.get(i + 3) == Some(&quote)
-            } else {
-                b.get(i + 2) == Some(&quote)
-            };
-            if closes {
-                i += if escaped { 4 } else { 3 };
-            } else {
-                out.push(c);
-                i += 1;
-            }
-        } else {
-            out.push(c);
-            i += 1;
-        }
+    let chars: Vec<char> = src.chars().collect();
+    let mut drop = vec![false; chars.len()];
+    for (a, e) in literal_spans::literal_spans(src) {
+        drop[a..e].fill(true);
     }
-    out
+    for (a, e) in literal_spans::comment_spans(src) {
+        drop[a..e].fill(true);
+    }
+    chars
+        .iter()
+        .zip(drop)
+        .filter(|(_, d)| !*d)
+        .map(|(c, _)| *c)
+        .collect()
 }
 
 /// Splits an identifier into words: on `_`, and where a lower case letter is
