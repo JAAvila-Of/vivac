@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1](https://github.com/JAAvila-Of/vivac/compare/v0.5.0...v0.5.1) - 2026-09-05
+
+### Fixed
+
+- *(ops)* guard the session hook's untrusted fields
+
+### Other
+
+- *(web)* guard the prose in src/web's literals and comments
+
 ## [0.5.0](https://github.com/JAAvila-Of/vivac/compare/v0.4.3...v0.5.0) - 2026-09-05
 
 ### Added
