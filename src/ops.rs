@@ -1,5 +1,11 @@
 //! The operations that write. Every one goes through the redaction guard.
 //!
+//! All but one refuse outright when it finds something. The exception is the
+//! session opening: it is written by a hook, with no author present to reword
+//! anything, so it replaces the field with the name of the rule that refused
+//! it and writes the seam anyway. Losing the seam would cost more than the
+//! field is worth, and a refusal that is recorded is not a refusal in silence.
+//!
 //! Capture hangs off the seams of the work, never off a judgement of
 //! relevance. That is the one thing actually measured: over 170 real minutes,
 //! `push`/`pop` --which cannot be skipped without leaving the work half done--
@@ -112,6 +118,17 @@ fn guard_text(fields: &[(&str, &str)]) -> R {
     match redact::check_fields(fields) {
         Some(h) => Err(Failure::Redaction(Box::new(h))),
         None => Ok(()),
+    }
+}
+
+/// Text off an untrusted payload, made safe to store without failing the
+/// write. What the guard objected to never gets in; what replaces it names
+/// the rule and nothing else, so the log shows that a refusal happened
+/// without repeating what caused it.
+fn guarded_or_refused(field: &str, text: &str) -> String {
+    match redact::check_field(field, text) {
+        Some(f) => format!("refused: {}", f.rule),
+        None => text.to_string(),
     }
 }
 
@@ -914,18 +931,27 @@ pub fn auto_vivac(
 /// These are inputs and never a verdict: what counts as *following* the brief
 /// lives in whoever reads, not in the log. Storing the comparison instead of
 /// its terms would freeze a definition that may well turn out to be wrong.
+///
+/// `source` and `session` come off a payload this program did not write, so
+/// they go through the guard like any other text. Unlike everywhere else, a
+/// finding does not stop the write: the field is replaced by the rule that
+/// refused it and the opening is recorded regardless. The rest of the guard
+/// can afford to refuse because somebody is there to reword the sentence; a
+/// hook has nobody, and a hook that fails is a hook that gets switched off.
 pub fn session_started(
     ctx: &mut Ctx,
     source: &str,
     session: Option<String>,
 ) -> Result<Outcome, Failure> {
+    let source = guarded_or_refused("source", source);
+    let session = session.map(|s| guarded_or_refused("session", &s));
     // The focus the brief paints is the top of the stack: it walks the
     // ancestors of `stack.last()` and keeps the last of the lineage, which is
     // that same node again.
     let focus = ctx.tree.focus().map(|n| n.id.clone());
     let vivac = ctx.tree.vivacs.last().map(|v| v.id.clone());
     ctx.emit(vec![Body::SessionStarted {
-        source: source.to_string(),
+        source,
         focus,
         vivac,
         session,
