@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0](https://github.com/JAAvila-Of/vivac/compare/v0.4.3...v0.5.0) - 2026-09-05
+
+### Added
+
+- [**breaking**] refuse a write that opens a fenced code block
+
+### Other
+
+- the file-contents rule has a mechanism now, and a limit
+- *(web)* ban the direct path from src/web to the store
+- *(identifiers)* walk src and tests down, not just their top level
+
 ## [0.4.3](https://github.com/JAAvila-Of/vivac/compare/v0.4.2...v0.4.3) - 2026-09-05
 
 ### Added
