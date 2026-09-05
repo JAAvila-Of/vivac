@@ -321,3 +321,70 @@ fn the_vocabulary_is_sorted_and_says_nothing_twice() {
          list nobody checks. `python tools/identifier-vocabulary.py` rewrites it.\n"
     );
 }
+
+/// `f197`: `src/web` renders pure functions of domain data -- model, render,
+/// changes, event, project, failure -- to `String`, the same functions
+/// `why --full` already calls. None of the tree-walking logic lives behind
+/// the face, which is what keeps changing the face later cheap rather than a
+/// rewrite.
+///
+/// The risk was never the HTML: it is a renderer that, some week from now,
+/// resolves a fact it is missing by asking the store directly instead of
+/// through the functions the render layer already calls. That is the seam
+/// welding shut. This does not parse Rust -- it reuses `sources()` and
+/// `code_only()` from above and looks for the realistic ways that seam gets
+/// opened: `crate::store` written anywhere, and `super::store` (which also
+/// catches `super::super::store`, the form a file nested under `src/web`
+/// would need).
+///
+/// **What it does not promise.** It bans the direct path, and there is one
+/// indirect path that exists on purpose: `mod.rs` holds a
+/// `crate::project::Registry`, and `Project::open` reaches the store behind
+/// it. Somebody has to open the log, and the router is where `f197` already
+/// puts that job -- `mod.rs` and `gate.rs` are the parts it expects to
+/// survive a change of face, and the three renderers are the parts it
+/// expects to throw away. So a green run here says the renderers take no
+/// second path to disk of their own. It does not say `src/web` never reaches
+/// one.
+#[test]
+fn web_never_touches_the_store() {
+    let web = root().join("src").join("web");
+    let offenders: Vec<(String, &'static str)> = sources()
+        .into_iter()
+        .filter(|p| p.starts_with(&web))
+        .filter_map(|p| {
+            let code = code_only(&std::fs::read_to_string(&p).unwrap());
+            let form = if code.contains("crate::store") {
+                Some("crate::store")
+            } else if code.contains("super::store") {
+                Some("super::store")
+            } else {
+                None
+            };
+            form.map(|f| {
+                let where_at = p
+                    .strip_prefix(root())
+                    .unwrap_or(&p)
+                    .display()
+                    .to_string()
+                    .replace('\\', "/");
+                (where_at, f)
+            })
+        })
+        .collect();
+    assert!(
+        offenders.is_empty(),
+        "\n  {} file(s) under src/web reach into crate::store:\n\n      {}\n\n  \
+         `src/web` renders pure functions of domain data to String -- the same functions\n  \
+         `why --full` already calls -- and that is the seam that keeps changing the face\n  \
+         cheap later. A renderer that reads the store on its own has started welding the\n  \
+         presentation to the data. Resolve what is missing through the functions the render\n  \
+         layer already calls instead of adding a second path to disk.\n",
+        offenders.len(),
+        offenders
+            .iter()
+            .map(|(w, f)| format!("{w} ({f})"))
+            .collect::<Vec<_>>()
+            .join("\n      ")
+    );
+}
