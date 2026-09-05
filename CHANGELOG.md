@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.3](https://github.com/JAAvila-Of/vivac/compare/v0.4.2...v0.4.3) - 2026-09-05
+
+### Added
+
+- *(web)* draw the whole tree, so its shape can be seen at all ([#32](https://github.com/JAAvila-Of/vivac/pull/32))
+
 ## [0.4.2](https://github.com/JAAvila-Of/vivac/compare/v0.4.1...v0.4.2) - 2026-09-04
 
 ### Added
