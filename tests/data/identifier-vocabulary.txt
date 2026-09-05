@@ -127,6 +127,7 @@ carrying
 cascade
 cascaded
 case
+categories
 ceil
 cfg
 chain
@@ -169,6 +170,7 @@ come
 comes
 command
 commands
+comment
 common
 config
 connect
@@ -328,6 +330,7 @@ ffi
 field
 fields
 file
+fill
 filter
 find
 finding
@@ -493,6 +496,7 @@ list
 listed
 listener
 lists
+literal
 literals
 live
 load
@@ -640,6 +644,7 @@ pa
 packed
 padding
 page
+pages
 pair
 pairs
 panic
@@ -876,6 +881,7 @@ sorted
 source
 sources
 spanish
+spans
 spawn
 spawning
 spellings
