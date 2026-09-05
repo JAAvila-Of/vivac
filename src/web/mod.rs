@@ -22,6 +22,7 @@
 
 mod gate;
 mod today;
+mod tree;
 mod why;
 
 use crate::failure::{Failure, R};
@@ -103,6 +104,8 @@ enum Route<'a> {
     Today(&'a str),
     /// `GET /p/<id>/why/<node>` -- one node's lineage, drawn (`d145`).
     Why(&'a str, &'a str),
+    /// `GET /p/<id>/tree` -- the whole tree, drawn (`WEB.md` §3.6, `d194`).
+    Tree(&'a str),
     NotFound,
 }
 
@@ -132,6 +135,8 @@ fn route(path: &str) -> Route<'_> {
                     if !node.is_empty() && !node.contains('/') {
                         return Route::Why(id, node);
                     }
+                } else if tail == "tree" {
+                    return Route::Tree(id);
                 }
             }
             _ => {}
@@ -273,6 +278,27 @@ fn handle(gate: &mut Gate, registry: &mut Registry, request: tiny_http::Request)
                 }
                 None => respond(request, 404, TEXT, "not found\n".to_string()),
             },
+            // The whole tree, drawn (`WEB.md` §3.6). Same dance as `Today`
+            // above, and the same reason for saying nothing in the body
+            // when the store cannot be read.
+            Route::Tree(id) => match registry.by_id(id) {
+                Some(project) => {
+                    let name = project.name.clone();
+                    let key = project.id.clone();
+                    match project.current() {
+                        Ok(ctx) => {
+                            respond(request, 200, HTML, tree::tree_page(&key, &name, &ctx.tree))
+                        }
+                        Err(_) => respond(
+                            request,
+                            500,
+                            TEXT,
+                            "the store could not be read\n".to_string(),
+                        ),
+                    }
+                }
+                None => respond(request, 404, TEXT, "not found\n".to_string()),
+            },
             Route::NotFound => respond(request, 404, TEXT, "not found\n".to_string()),
         },
         Verdict::Deny(Denial::ForeignHost) | Verdict::Deny(Denial::ForeignOrigin) => {
@@ -380,15 +406,14 @@ mod tests {
         assert!(matches!(route("/p/vivac"), Route::Today("vivac")));
     }
 
-    /// The surfaces `d145` reserved a URL for and nobody has built: the
-    /// tree (`WEB.md` §3.3) and the write path (§4). Until they exist they
-    /// are 404s, not empty pages.
+    /// The write path (`WEB.md` §4) is the one surface `d145` reserved a URL
+    /// for and nobody has built yet. Until it exists it is a 404, not an
+    /// empty page.
     ///
     /// This test used to name `why/3` as the unbuilt one. It stopped being
-    /// unbuilt.
+    /// unbuilt, and then so did `tree` (`WEB.md` §3.6).
     #[test]
     fn a_path_under_a_project_that_does_not_exist_yet_is_not_found() {
-        assert!(matches!(route("/p/vivac/tree"), Route::NotFound));
         assert!(matches!(route("/p/vivac/op/push"), Route::NotFound));
     }
 
@@ -402,6 +427,14 @@ mod tests {
             route("/p/vivac/why/f4/"),
             Route::Why("vivac", "f4")
         ));
+    }
+
+    /// `WEB.md` §3.6: the global graph routes with or without the trailing
+    /// slash, the same as every other path under a project.
+    #[test]
+    fn a_tree_routes_under_its_project() {
+        assert!(matches!(route("/p/vivac/tree"), Route::Tree("vivac")));
+        assert!(matches!(route("/p/vivac/tree/"), Route::Tree("vivac")));
     }
 
     #[test]
