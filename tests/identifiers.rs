@@ -62,16 +62,22 @@ fn read_list(rel: &str) -> BTreeSet<String> {
         .collect()
 }
 
-/// Every Rust file the crate publishes.
+/// Every Rust file the crate publishes, found by walking `src` and `tests`
+/// all the way down. A subdirectory added later needs nothing added here to
+/// be seen: it was invisible once, by construction, and that is the bug this
+/// walk exists to close.
 fn sources() -> Vec<std::path::PathBuf> {
     let mut out = Vec::new();
-    for dir in ["src", "tests", "tests/common"] {
-        let Ok(entries) = std::fs::read_dir(root().join(dir)) else {
+    let mut pending: Vec<std::path::PathBuf> = vec![root().join("src"), root().join("tests")];
+    while let Some(dir) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
             continue;
         };
         for e in entries.flatten() {
             let p = e.path();
-            if p.extension().is_some_and(|x| x == "rs") {
+            if p.is_dir() {
+                pending.push(p);
+            } else if p.extension().is_some_and(|x| x == "rs") {
                 out.push(p);
             }
         }
