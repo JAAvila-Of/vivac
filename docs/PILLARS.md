@@ -189,6 +189,11 @@ tree is a map of where a system is weak and not yet fixed.**
 - **File contents are never stored.** Only paths, references and prose about
   what was decided. It is the strongest guard of all because it bounds the blast
   radius of a leak to "what was being worked on", never to "what the code is".
+  A write that opens a fenced code block is refused. The fence is the whole rule
+  on purpose: there is no `--force` to fall back on, so a rule can only afford to
+  have no false positives, and a fence is the writer stating outright that what
+  follows is not prose. A paste with no fence gets through, and that is the price
+  of having no escape hatch.
 - **No telemetry.** The binary does not phone home. Ever.
 
 ### Encryption

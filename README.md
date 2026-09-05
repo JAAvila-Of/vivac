@@ -166,8 +166,9 @@ forces a few things, and they are not negotiable:
 - **No personal data.** No email, no name, no home path. The `actor` on every
   event is an opaque identifier.
 - **No file contents.** Only paths, references and prose about what was
-  decided. It bounds the blast radius of a leak to *what was being worked on*,
-  never to *what the code is*.
+  decided. A write that opens a fenced code block is refused. It bounds the
+  blast radius of a leak to *what was being worked on*, never to *what the code
+  is*.
 - **No telemetry.** The binary does not phone home.
 
 These rules come from the [pillars](docs/PILLARS.md), which govern by
