@@ -4,9 +4,8 @@
 //! never gets in never leaks. Three things never get in: keys, personal
 //! data, and file contents.
 //!
-//! Of the three, the last is not checked here --it is enforced by having no
-//! operation at all that accepts a file body-- so this module covers the
-//! first two.
+//! All three are checked here: the first two by pattern, the third by
+//! refusing a write that opens a fenced code block.
 //!
 //! **In doubt it refuses and says why. It never stores in silence.**
 //! There is no `--force`: if the guard gets it wrong, reword the sentence.

@@ -333,3 +333,88 @@ fn an_opening_with_no_focus_records_none() {
         "it invented a focus out of an empty stack:\n{log}"
     );
 }
+
+/// A payload the guard refuses still opens the session: refusing the write
+/// outright would drop the seam in silence, and a hook has nobody standing
+/// by to reword the sentence that tripped it.
+#[test]
+fn a_refused_payload_still_opens_the_session() {
+    let c = Sandbox::new_seeded("refused-open");
+    let (out, code) = c.run_stdin(
+        &["session", "start", "--hook"],
+        r#"{"session_id":"abc-123","source":"/home/someone/.claude/projects/x"}"#,
+    );
+    assert_eq!(code, 0, "a refused field took the hook down:\n{out}");
+    let log = c.log();
+    assert!(log.contains("session.started"), "no opening:\n{log}");
+    assert!(
+        !log.contains("someone"),
+        "the refused text reached the log:\n{log}"
+    );
+    assert!(
+        log.contains(r#""source":"refused: "#),
+        "the refused field was not replaced:\n{log}"
+    );
+}
+
+/// What replaces a refused field names the rule and nothing past it, so the
+/// log shows a refusal happened without repeating what caused it.
+#[test]
+fn the_refusal_names_the_rule_not_the_text() {
+    let c = Sandbox::new_seeded("refused-rule");
+    c.run_stdin(
+        &["session", "start", "--hook"],
+        r#"{"session_id":"abc-123","source":"/home/someone/.claude/projects/x"}"#,
+    );
+    let log = c.log();
+    assert!(
+        log.contains(r#""source":"refused: path to a user home directory (personal data)""#),
+        "the rule did not land in the field as written:\n{log}"
+    );
+}
+
+/// A refused session identifier is no different from a refused source: it
+/// does not take the rest of the opening, or its sibling field, down with it.
+#[test]
+fn a_refused_session_identifier_does_not_take_the_opening_down() {
+    let c = Sandbox::new_seeded("refused-session");
+    c.run_stdin(
+        &["session", "start", "--hook"],
+        r#"{"session_id":"someone@example.com","source":"startup"}"#,
+    );
+    let log = c.log();
+    assert!(log.contains("session.started"), "no opening:\n{log}");
+    assert!(
+        log.contains(r#""source":"startup""#),
+        "the clean field was touched by its refused sibling:\n{log}"
+    );
+    assert!(
+        !log.contains("someone@example.com"),
+        "the refused session identifier reached the log:\n{log}"
+    );
+    assert!(
+        log.contains(r#""session":"refused: email address (personal data)""#),
+        "the session field was not replaced:\n{log}"
+    );
+}
+
+/// The regression that matters most: a real, UUID-shaped session identifier
+/// from Claude Code passes through untouched. This rests on `known_shape`
+/// exempting UUIDs from the entropy check.
+#[test]
+fn a_real_session_identifier_passes_through_untouched() {
+    let c = Sandbox::new_seeded("real-session");
+    c.run_stdin(
+        &["session", "start", "--hook"],
+        r#"{"session_id":"019316f8-4c2a-7b31-9f0e-8d1a2b3c4d5e","source":"startup"}"#,
+    );
+    let log = c.log();
+    assert!(
+        log.contains("019316f8-4c2a-7b31-9f0e-8d1a2b3c4d5e"),
+        "a real session identifier did not survive:\n{log}"
+    );
+    assert!(
+        !log.contains("refused:"),
+        "the guard fired on a real payload:\n{log}"
+    );
+}
