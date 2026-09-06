@@ -156,6 +156,66 @@ $ vivac done 8
   Closing it anyway leaves a trace:  vivac done 8 --force
 ```
 
+## When a premise turns out false
+
+The two edges above answer where something came from and what stops it from
+closing. There is a third case, and it is the one that rots a log: an
+assumption is refuted, and everything built on top of it stays on the page
+looking exactly as valid as it did the day before.
+
+```
+$ vivac abandon 2 "the bottleneck was I/O, never the parser" --cascade --rescue 4
+
+  a2  The parser is the bottleneck  -> abandoned
+        and 1 descendant(s) with it
+
+  Rescued, and still born from a2:
+      f4     The token cache survives the rewrite
+
+  Their lineage crosses an abandoned node on purpose: where they
+  were born does not change because it got discarded.
+```
+
+There is a fair objection to doing any of this, and it is the reason most
+tools stop at reporting the break instead of acting on it: **cutting a link
+discards intent, and nothing left behind can say what was meant.** Once the
+edge is gone the reader is guessing, and a guess written down as a fact is
+worse than a gap.
+
+The objection is right about the danger and wrong that the danger is
+unavoidable, and the whole difference is where the record lives. Intent is
+lost when the link **is** the record — remove it and there is nothing left to
+read. Here the link is not the record. The node is, and it keeps its own
+reason, its outcome and its parent.
+
+So **a rescue does not reparent.** `f4` still hangs off the assumption that
+turned out to be false, because that is where it was born, and being born
+somewhere is not undone by that place being wrong. What changes is state, not
+lineage.
+
+Which is why "what was meant" is not lost. It is one edge up, and still on the
+path:
+
+```
+$ vivac why 4
+
+  g1    Make the parser faster
+        profiles pointed at it
+        |
+        v
+  a2    The parser is the bottleneck  [abandoned]
+        measured on one file, never on the corpus
+        = the bottleneck was I/O, never the parser
+        |
+        v
+  f4    The token cache survives the rewrite
+        it is independent of why we started
+```
+
+The refuted assumption stays readable, carrying both the reason it was
+believed and the reason it fell, standing between the goal and the thing that
+outlived it. Nothing was dropped, so nothing has to be guessed.
+
 ## What it never stores
 
 A provenance tree is a map of where a system is weak and not yet fixed. That
