@@ -38,11 +38,10 @@
 use crate::args::Args;
 use crate::failure::{Failure, R};
 use crate::project::{Project, Registry};
-use crate::store::Store;
 use crate::{brief, ops, outcome, params, render};
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// The version spoken when the client does not name one.
 const PROTOCOL: &str = "2025-06-18";
@@ -469,17 +468,6 @@ fn list_argument(params: &Value, name: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Fresh for every write call, on its own store handle rather than
-/// `Project`'s cached fold: `Ctx::load_for_write` is the one a write is
-/// allowed to pay for, because unlike `Ctx::load` it never refreshes the
-/// derived index (`LOADING.md` §4 -- a write must never pay to rewrite it).
-/// `Project`'s cached tree picks the change up on its own next read, the same
-/// way it already does for a write that lands through the CLI while the
-/// server keeps running.
-fn write_ctx(root: &Path) -> Result<ops::Ctx, Failure> {
-    ops::Ctx::load_for_write(Store::open(root.to_path_buf())?)
-}
-
 /// Serialised the same way the three reads that speak JSON already are:
 /// `pretty` over a `Value`, so the model gets back data it can parse rather
 /// than the sentence `outcome::to_text` writes for a terminal.
@@ -525,7 +513,7 @@ fn call(project: &mut Project, params: &Value) -> Result<String, Failure> {
                 governs: list_argument(params, "governs"),
                 blocks: bool_argument(params, "blocks"),
             };
-            outcome_text(ops::push(&mut write_ctx(&project.root)?, p)?)
+            outcome_text(project.write(|ctx| ops::push(ctx, p))?)
         }
         "vivac_pop" => {
             let p = params::Pop {
@@ -533,7 +521,7 @@ fn call(project: &mut Project, params: &Value) -> Result<String, Failure> {
                 next: argument(params, "next").map(str::to_string),
                 force: bool_argument(params, "force"),
             };
-            outcome_text(ops::pop(&mut write_ctx(&project.root)?, p)?)
+            outcome_text(project.write(|ctx| ops::pop(ctx, p))?)
         }
         "vivac_add" => {
             let title = argument(params, "title")
@@ -548,7 +536,7 @@ fn call(project: &mut Project, params: &Value) -> Result<String, Failure> {
                 governs: list_argument(params, "governs"),
                 blocks: bool_argument(params, "blocks"),
             };
-            outcome_text(ops::add(&mut write_ctx(&project.root)?, p)?)
+            outcome_text(project.write(|ctx| ops::add(ctx, p))?)
         }
         "vivac_decide" => {
             let title = argument(params, "title")
@@ -567,7 +555,7 @@ fn call(project: &mut Project, params: &Value) -> Result<String, Failure> {
                 governs: list_argument(params, "governs"),
                 blocks: bool_argument(params, "blocks"),
             };
-            outcome_text(ops::decide(&mut write_ctx(&project.root)?, p)?)
+            outcome_text(project.write(|ctx| ops::decide(ctx, p))?)
         }
         // `id` given: the two words are unambiguous, the way `vivac note <id>
         // "<note>"` is. `id` left out: the note text takes the place a lone
@@ -587,7 +575,7 @@ fn call(project: &mut Project, params: &Value) -> Result<String, Failure> {
                     note: None,
                 },
             };
-            outcome_text(ops::note(&mut write_ctx(&project.root)?, p)?)
+            outcome_text(project.write(|ctx| ops::note(ctx, p))?)
         }
         // Same shape as `vivac_note`: with no `id`, `reason` takes the place
         // of the single word `vivac park "<reason>"` would pass, and
@@ -611,14 +599,14 @@ fn call(project: &mut Project, params: &Value) -> Result<String, Failure> {
                     reason: None,
                 },
             };
-            outcome_text(ops::park(&mut write_ctx(&project.root)?, p)?)
+            outcome_text(project.write(|ctx| ops::park(ctx, p))?)
         }
         "vivac_save" => {
             let p = params::Save {
                 label: argument(params, "label").unwrap_or("").to_string(),
                 next: argument(params, "next").unwrap_or("").to_string(),
             };
-            outcome_text(ops::save(&mut write_ctx(&project.root)?, p)?)
+            outcome_text(project.write(|ctx| ops::save(ctx, p))?)
         }
         other => Err(Failure::usage(format!(
             "no such tool: {other}. This server has: {}",
@@ -690,4 +678,239 @@ pub fn serve(root: PathBuf) -> R {
         }
     }
     Ok(())
+}
+
+/// `t192`: a write used to build a brand new `Ctx` -- store reopened, index
+/// reloaded, anchor re-walked -- on every single call, throwing away the
+/// fold `Project` already keeps warm. These tests are the other half of
+/// that fix: proof that operating on the resident tree instead of a fresh
+/// one never leaves it holding something a fresh fold would not.
+#[cfg(test)]
+mod resident_write_tests {
+    use super::*;
+    use crate::model::{Node, Tree};
+    use crate::store::Store;
+    use std::path::Path;
+
+    fn temp_project(name: &str) -> (PathBuf, Project) {
+        let root = std::env::temp_dir().join(format!(
+            "vivac-mcp-resident-{name}-{}-{}",
+            std::process::id(),
+            crate::id::ulid()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        Store::create(&root).unwrap();
+        let project = Project::open(root.clone(), "t".into(), "t".into())
+            .unwrap_or_else(|e| panic!("{}", e.message()));
+        (root, project)
+    }
+
+    fn cleanup(root: &Path) {
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    fn call_tool(project: &mut Project, name: &str, arguments: Value) -> Value {
+        let params = json!({ "name": name, "arguments": arguments });
+        let text = call(project, &params).unwrap_or_else(|e| panic!("{name}: {}", e.message()));
+        serde_json::from_str(&text).unwrap_or_else(|e| panic!("{name} did not reply JSON: {e}"))
+    }
+
+    /// A deterministic, order-independent rendering of a whole `Tree`:
+    /// `nodes_sorted` fixes the node order and every field is resolved
+    /// through the tree that owns it, so two trees folded from the same
+    /// log compare equal here even when the `HashMap`s backing them were
+    /// built in a different order.
+    fn dump_node(tree: &Tree, n: &Node) -> String {
+        format!(
+            "node num={} id={} kind={:?} state={:?} parent={:?} blocks={} \
+             forced_close={} title={:?} why={:?} note={:?} outcome={:?} \
+             opened={:?} closed={:?} refs={:?} governs={:?} flags={:?}\n",
+            n.num,
+            n.id,
+            n.kind,
+            n.state,
+            n.parent,
+            n.blocks,
+            n.forced_close,
+            n.title(tree),
+            n.why(tree),
+            n.note(tree),
+            n.outcome(tree),
+            n.opened(tree),
+            n.closed(tree),
+            n.refs(tree),
+            n.governs(tree),
+            n.flags,
+        )
+    }
+
+    fn dump_tree(tree: &Tree) -> String {
+        let mut out = format!(
+            "roots={:?} stack={:?} seq={} seq_change={} seq_vivac={} next_num={} \
+             next_vivac_num={} broken={}\n",
+            tree.roots,
+            tree.stack,
+            tree.seq,
+            tree.seq_change,
+            tree.seq_vivac,
+            tree.next_num,
+            tree.next_vivac_num,
+            tree.broken_lines,
+        );
+        for n in tree.nodes_sorted() {
+            out.push_str(&dump_node(tree, n));
+        }
+        for v in &tree.vivacs {
+            out.push_str(&format!(
+                "vivac num={} id={} seq={} kind={:?} stack={:?} working_set={:?} \
+                 next_intent={:?} anchor={:?} node_ref={:?} label={:?} ts={:?}\n",
+                v.num,
+                v.id,
+                v.seq,
+                v.kind,
+                v.stack,
+                v.working_set,
+                v.next_intent,
+                v.anchor,
+                v.node_ref,
+                v.label,
+                v.ts,
+            ));
+        }
+        out
+    }
+
+    /// The property `t192` exists for: whatever the resident tree holds
+    /// after the call, folding the log from scratch has to hold the exact
+    /// same thing.
+    fn assert_resident_matches_fresh_fold(root: &Path, project: &mut Project) {
+        let resident = dump_tree(
+            &project
+                .current()
+                .unwrap_or_else(|e| panic!("{}", e.message()))
+                .tree,
+        );
+        let fresh = dump_tree(
+            &ops::Ctx::load(Store::open(root.to_path_buf()).unwrap())
+                .unwrap_or_else(|e| panic!("{}", e.message()))
+                .tree,
+        );
+        assert_eq!(
+            resident, fresh,
+            "the resident tree diverged from a fresh fold of the same log"
+        );
+    }
+
+    #[test]
+    fn push_leaves_the_resident_tree_equal_to_a_fresh_fold() {
+        let (root, mut project) = temp_project("push");
+        call_tool(
+            &mut project,
+            "vivac_push",
+            json!({"title": "Ship it", "why": "because"}),
+        );
+        assert_resident_matches_fresh_fold(&root, &mut project);
+        cleanup(&root);
+    }
+
+    #[test]
+    fn pop_leaves_the_resident_tree_equal_to_a_fresh_fold() {
+        let (root, mut project) = temp_project("pop");
+        call_tool(
+            &mut project,
+            "vivac_push",
+            json!({"title": "Ship it", "why": "because"}),
+        );
+        call_tool(&mut project, "vivac_pop", json!({"outcome": "it shipped"}));
+        assert_resident_matches_fresh_fold(&root, &mut project);
+        cleanup(&root);
+    }
+
+    #[test]
+    fn add_leaves_the_resident_tree_equal_to_a_fresh_fold() {
+        let (root, mut project) = temp_project("add");
+        call_tool(
+            &mut project,
+            "vivac_add",
+            json!({"title": "A finding", "why": "noticed in passing"}),
+        );
+        assert_resident_matches_fresh_fold(&root, &mut project);
+        cleanup(&root);
+    }
+
+    #[test]
+    fn decide_leaves_the_resident_tree_equal_to_a_fresh_fold() {
+        let (root, mut project) = temp_project("decide");
+        call_tool(
+            &mut project,
+            "vivac_decide",
+            json!({"title": "Rotate keys", "reason": "the old ones leaked"}),
+        );
+        assert_resident_matches_fresh_fold(&root, &mut project);
+        cleanup(&root);
+    }
+
+    #[test]
+    fn note_leaves_the_resident_tree_equal_to_a_fresh_fold() {
+        let (root, mut project) = temp_project("note");
+        call_tool(
+            &mut project,
+            "vivac_push",
+            json!({"title": "Ship it", "why": "because"}),
+        );
+        call_tool(
+            &mut project,
+            "vivac_note",
+            json!({"note": "the rollback plan is untested"}),
+        );
+        assert_resident_matches_fresh_fold(&root, &mut project);
+        cleanup(&root);
+    }
+
+    #[test]
+    fn park_leaves_the_resident_tree_equal_to_a_fresh_fold() {
+        let (root, mut project) = temp_project("park");
+        call_tool(
+            &mut project,
+            "vivac_push",
+            json!({"title": "Ship it", "why": "because"}),
+        );
+        call_tool(
+            &mut project,
+            "vivac_park",
+            json!({"reason": "waiting on the security review"}),
+        );
+        assert_resident_matches_fresh_fold(&root, &mut project);
+        cleanup(&root);
+    }
+
+    #[test]
+    fn save_leaves_the_resident_tree_equal_to_a_fresh_fold() {
+        let (root, mut project) = temp_project("save");
+        call_tool(
+            &mut project,
+            "vivac_save",
+            json!({"label": "before the migration", "next": "run the reconcile"}),
+        );
+        assert_resident_matches_fresh_fold(&root, &mut project);
+        cleanup(&root);
+    }
+
+    /// The other half of `LOADING.md` §4's rule: `load_for_write` exists so
+    /// that a write never pays to rewrite the derived index, and the
+    /// resident path replacing it must not quietly start doing that.
+    #[test]
+    fn a_resident_write_never_persists_the_index() {
+        let (root, mut project) = temp_project("index");
+        call_tool(
+            &mut project,
+            "vivac_push",
+            json!({"title": "Ship it", "why": "because"}),
+        );
+        assert!(
+            !Store::open(root.clone()).unwrap().index_path().exists(),
+            "a write through the resident Ctx must never persist the index"
+        );
+        cleanup(&root);
+    }
 }

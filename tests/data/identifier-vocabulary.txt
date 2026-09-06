@@ -84,6 +84,7 @@ becomes
 before
 beginning
 below
+between
 bin
 binary
 bind
@@ -118,6 +119,8 @@ build
 but
 by
 bytes
+cache
+cached
 call
 calling
 came
@@ -155,6 +158,7 @@ claims
 clamp
 class
 clean
+cleanup
 clear
 cleared
 cli
@@ -180,6 +184,7 @@ comes
 command
 commands
 comment
+commit
 common
 config
 connect
@@ -274,6 +279,7 @@ drain
 draws
 drop
 drops
+dump
 duration
 dyn
 each
@@ -299,6 +305,7 @@ envelope
 epoch
 eprintln
 eq
+equal
 equals
 equiv
 era
@@ -462,6 +469,7 @@ init
 initial
 initialize
 inline
+inner
 input
 insert
 inside
@@ -496,6 +504,7 @@ known
 label
 lane
 last
+later
 launched
 le
 leaf
@@ -525,6 +534,7 @@ live
 load
 loaded
 local
+locate
 location
 lock
 log
@@ -588,6 +598,7 @@ mtime
 mul
 multibyte
 mut
+mutex
 name
 named
 names
@@ -703,6 +714,7 @@ persists
 person
 personal
 phrase
+picked
 picks
 pii
 piped
@@ -807,6 +819,7 @@ required
 rescue
 rescued
 rescuing
+resident
 resolve
 resolved
 resolves
@@ -898,6 +911,7 @@ short
 show
 shown
 shows
+sibling
 siblings
 sid
 sig
@@ -1026,6 +1040,7 @@ timeout
 times
 tiny
 title
+titles
 tld
 tmp
 to

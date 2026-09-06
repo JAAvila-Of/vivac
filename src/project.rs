@@ -70,6 +70,14 @@ impl Project {
     /// be built from the same read, or it can show a stretch the tree beside
     /// it does not agree with.
     pub fn current_with_log(&mut self) -> Result<(&ops::Ctx, &[Event]), Failure> {
+        self.refresh_if_stale()?;
+        Ok((&self.ctx, &self.log))
+    }
+
+    /// Re-folds from disk, but only when the log moved since the last fold
+    /// -- the same check a read already pays for, shared here so a write
+    /// pays it too instead of folding unconditionally on every call.
+    fn refresh_if_stale(&mut self) -> Result<(), Failure> {
         let now = fingerprint(&self.ctx.store.log());
         if now != self.seen {
             let (ctx, log) = ops::Ctx::load_with_log(store::Store::open(self.root.clone())?)?;
@@ -77,7 +85,27 @@ impl Project {
             self.log = log;
             self.seen = now;
         }
-        Ok((&self.ctx, &self.log))
+        Ok(())
+    }
+
+    /// Runs a write against the tree this `Project` already keeps folded,
+    /// instead of the caller building a fresh `Ctx` of its own.
+    ///
+    /// Stale first, same as a read: another process -- typically the CLI --
+    /// may have appended since the last fold, and operating on a resident
+    /// tree that has fallen behind would append at the wrong `seq` and
+    /// collide with what that process just wrote. Once `f` has run, the
+    /// fingerprint is taken again so the *next* call, read or write, does
+    /// not pay to re-fold something this one already applied in memory --
+    /// that second, avoidable fold was the actual cost `t192` measured.
+    pub fn write<T>(
+        &mut self,
+        f: impl FnOnce(&mut ops::Ctx) -> Result<T, Failure>,
+    ) -> Result<T, Failure> {
+        self.refresh_if_stale()?;
+        let result = f(&mut self.ctx);
+        self.seen = fingerprint(&self.ctx.store.log());
+        result
     }
 }
 
