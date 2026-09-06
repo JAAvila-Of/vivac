@@ -299,6 +299,78 @@ fn a_node_written_while_the_server_runs_is_seen_by_the_next_call() {
     );
 }
 
+/// The staleness check the resident write path relies on: a write from
+/// outside the server, sitting between two writes the server itself does,
+/// has to be picked up rather than overwritten. Silently ignoring it would
+/// not just lose the CLI's node -- it would append the server's own next
+/// event at a `seq` the CLI already claimed, corrupting the log for every
+/// reader from then on.
+#[test]
+fn a_write_from_another_process_between_two_mcp_writes_is_picked_up() {
+    let c = seeded("interleave");
+    let mut s = hello(&c);
+
+    let first = s.ask(
+        r#"{"jsonrpc":"2.0","id":30,"method":"tools/call","params":{"name":"vivac_add","arguments":{"title":"From MCP, before","why":"first"}}}"#,
+    );
+    assert_eq!(first["result"]["isError"], false, "{first}");
+
+    c.ok(&[
+        "add",
+        "From the CLI, in between",
+        "--why",
+        "written while the server was up",
+    ]);
+
+    let second = s.ask(
+        r#"{"jsonrpc":"2.0","id":31,"method":"tools/call","params":{"name":"vivac_add","arguments":{"title":"From MCP, after","why":"second"}}}"#,
+    );
+    assert_eq!(second["result"]["isError"], false, "{second}");
+
+    let mcp_open: Value = serde_json::from_str(&text_of(&s.ask(
+        r#"{"jsonrpc":"2.0","id":32,"method":"tools/call","params":{"name":"vivac_open","arguments":{}}}"#,
+    )))
+    .unwrap();
+    let cli_open: Value = serde_json::from_str(&c.ok(&["open", "--json"])).unwrap();
+    assert_eq!(
+        mcp_open, cli_open,
+        "the server's resident tree disagrees with a fresh fold of the same log"
+    );
+
+    let titles: Vec<&str> = mcp_open
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n["title"].as_str().unwrap())
+        .collect();
+    assert!(
+        titles.contains(&"From MCP, before")
+            && titles.contains(&"From the CLI, in between")
+            && titles.contains(&"From MCP, after"),
+        "one of the three writes is missing: {titles:?}"
+    );
+
+    // All three were added with no `--parent` of their own, so all three
+    // should have landed under the same focus. If the CLI's write did not,
+    // the resident tree treated it as attaching somewhere else instead of
+    // picking it up where it was actually written.
+    let find_by_title = |title: &str| {
+        mcp_open
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["title"] == title)
+            .unwrap_or_else(|| panic!("{title} is not in the tree: {mcp_open}"))
+            .clone()
+    };
+    let sibling = find_by_title("From MCP, before");
+    let cli_node = find_by_title("From the CLI, in between");
+    assert_eq!(
+        cli_node["parent"], sibling["parent"],
+        "the CLI's node did not land where it should: {cli_node}"
+    );
+}
+
 /// Every tool is a command the CLI already has.
 ///
 /// `INTEGRATION.md` §8 listed five that no command implements -- `ask`,

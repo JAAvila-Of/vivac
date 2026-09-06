@@ -74,6 +74,67 @@ pub struct Git {
     gitdir: PathBuf,
 }
 
+/// Where `.git` lives relative to a starting directory: the outcome of the
+/// upward walk, and nothing about the repository's live state. A `.git`
+/// does not move once a process starts, so this is safe to cache; a `HEAD`
+/// does, every commit, which is why nothing past this point is.
+#[derive(Clone)]
+struct Location {
+    root: PathBuf,
+    gitdir: PathBuf,
+}
+
+type LocationCache = std::sync::Mutex<std::collections::HashMap<PathBuf, Option<Location>>>;
+
+/// Caches `locate`'s walk by the directory it started from, for the life of
+/// the process. A long-lived server calls `detect` on the same root many
+/// times over a session -- every write used to, before `t192` -- and the
+/// walk up the filesystem is the same answer every time; only what `HEAD`
+/// holds is allowed to change underneath it.
+fn location_cache() -> &'static LocationCache {
+    static CACHE: std::sync::OnceLock<LocationCache> = std::sync::OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+fn locate_cached(root: &Path) -> Option<Location> {
+    let mut cache = location_cache().lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(hit) = cache.get(root) {
+        return hit.clone();
+    }
+    let found = locate(root);
+    cache.insert(root.to_path_buf(), found.clone());
+    found
+}
+
+/// The upward walk itself, isolated from the cache around it so the cache
+/// stays a thin wrapper over a pure function.
+fn locate(root: &Path) -> Option<Location> {
+    let mut d = root.to_path_buf();
+    loop {
+        let g = d.join(".git");
+        if g.is_dir() {
+            return Some(Location { root: d, gitdir: g });
+        }
+        if g.is_file() {
+            // Worktree or submodule: .git is a file holding `gitdir: <path>`.
+            let t = std::fs::read_to_string(&g).ok()?;
+            let p = t.trim().strip_prefix("gitdir:")?.trim();
+            let abs = if Path::new(p).is_absolute() {
+                PathBuf::from(p)
+            } else {
+                d.join(p)
+            };
+            return Some(Location {
+                root: d,
+                gitdir: abs,
+            });
+        }
+        if !d.pop() {
+            return None;
+        }
+    }
+}
+
 /// Picks an implementation by looking for a usable `.git` from `root`.
 pub fn detect(root: &Path) -> Box<dyn Anchor> {
     match Git::new(root) {
@@ -84,30 +145,10 @@ pub fn detect(root: &Path) -> Box<dyn Anchor> {
 
 impl Git {
     fn new(root: &Path) -> Option<Git> {
-        let mut d = root.to_path_buf();
-        loop {
-            let g = d.join(".git");
-            if g.is_dir() {
-                return Some(Git { root: d, gitdir: g });
-            }
-            if g.is_file() {
-                // Worktree or submodule: .git is a file holding `gitdir: <path>`.
-                let t = std::fs::read_to_string(&g).ok()?;
-                let p = t.trim().strip_prefix("gitdir:")?.trim();
-                let abs = if Path::new(p).is_absolute() {
-                    PathBuf::from(p)
-                } else {
-                    d.join(p)
-                };
-                return Some(Git {
-                    root: d,
-                    gitdir: abs,
-                });
-            }
-            if !d.pop() {
-                return None;
-            }
-        }
+        locate_cached(root).map(|l| Git {
+            root: l.root,
+            gitdir: l.gitdir,
+        })
     }
 
     /// Resolves `.git/HEAD` spawning nothing. Three cases: a direct sha
@@ -239,5 +280,44 @@ mod tests {
             .changed_since(&bogus)
             .iter()
             .all(|c| !c.file_path.is_empty()));
+    }
+
+    /// A long-lived process -- the MCP server, the web server -- calls
+    /// `detect` many times against the same root over a session in which
+    /// the agent keeps committing. Caching the walk that locates `.git`
+    /// must never turn into caching the commit it finds there: a second
+    /// `detect` on the same root, after `HEAD` moved, still has to read the
+    /// commit that is there now.
+    #[test]
+    fn a_cached_location_still_reads_the_head_a_later_commit_left() {
+        let root = std::env::temp_dir().join(format!(
+            "vivac-anchor-live-{}-{}",
+            std::process::id(),
+            crate::id::ulid()
+        ));
+        let git_dir = root.join(".git");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let first = "a".repeat(40);
+        std::fs::write(git_dir.join("HEAD"), &first).unwrap();
+
+        // First call: walks up from `root` and, from here on, caches where
+        // `.git` was found.
+        let before = detect(&root).snapshot();
+        assert_eq!(before.id, first, "the first read did not see the commit");
+
+        // A commit happens during the session.
+        let second = "b".repeat(40);
+        std::fs::write(git_dir.join("HEAD"), &second).unwrap();
+
+        // Second call: hits the cached location, but the commit it reports
+        // has to be the one that is there right now, not the one cached
+        // alongside the walk.
+        let after = detect(&root).snapshot();
+        assert_eq!(
+            after.id, second,
+            "the cached walk froze the commit instead of just the location"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
     }
 }
