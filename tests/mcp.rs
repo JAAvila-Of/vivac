@@ -1,8 +1,8 @@
 //! `vivac mcp` — the tree as tools an agent can call.
 //!
-//! `d100` is why this exists: engram is an MCP server, and taking its place
-//! means being reachable through the same door, in the tool list, with a
-//! schema. `INTEGRATION.md` §4 is why it does not claim more than that --
+//! `d100` is why this exists: the memory store this replaces is reachable
+//! over MCP, and taking its place means being reachable through the same
+//! door, in the tool list, with a schema. `INTEGRATION.md` §4 is why it does not claim more than that --
 //! tools are voluntary, and an agent under task pressure does not call them.
 //!
 //! The rule the whole thing hangs from: **standard output is the protocol**.
