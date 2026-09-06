@@ -139,21 +139,34 @@ are in the `README`.
 
 ### Storage
 
-SQLite, and it should be squeezed rather than fought:
+An append-only log, folded in memory, with a derived index beside it. `events`
+is the source of truth and the one file a command may never lose; `index` is a
+binary snapshot of a fold that already happened, and **deleting it changes no
+output, only how long the next command takes**. That asymmetry is the whole
+rule, and it is what separates an index from a second copy of the truth: the
+moment the index holds something the log does not, it has stopped being an
+index.
 
-- **WAL** so that reading does not block writing.
-- **FTS5** for text. It is what will answer most real searches.
-- **Vector** (`sqlite-vec` or equivalent) for the semantic part, and **always
-  optional**: the product has to be complete without it.
 - Indexes are thought out from the model, not bolted on when they hurt: the
   queries that matter are *ancestors of a node* and *open descendants of a
   node*, and both are recursive. Measure with a real tree, not with ten toy
   nodes.
+- Semantic search stays off the write path and is **always optional**: the
+  product has to be complete without it. That is the arbitration above, not a
+  storage choice.
 
-Until size demands otherwise, the store is an append-only log folded in memory.
-Measured on 2026-08-31: it holds the write budget up to the order of a thousand
-nodes, and at ten thousand it goes over. That is the trigger for SQLite, and now
-it is a number.
+**This section used to say SQLite, and the measurement said otherwise.** The
+reversal belongs here rather than in a changelog, because this is the document
+a rejection cites for its authority, and a document that only records the
+rejections it got right is worth less than one that records all of them. The
+trigger was real: a log folded on every call held the write budget into the
+low thousands of nodes and went over at ten thousand. What the trigger never
+settled was the remedy. Measured against the log it already had, SQLite came
+out dominated on every axis, and asked for a C compiler, seventeen more crates
+and three times the build in exchange. The same measurement found where the
+cost actually sits -- not in where the bytes live, but in a node owning its
+strings, so that folding allocates one per field -- and no storage engine
+fixes that.
 
 ### What the budget forbids
 
