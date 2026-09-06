@@ -116,10 +116,11 @@ fn initialize_answers_with_the_server_and_its_version() {
     assert!(r["result"]["capabilities"]["tools"].is_object(), "{r}");
 }
 
-/// Four, and no more. Every tool costs context in every session the agent
-/// ever opens, so the list is a budget and not a catalogue.
+/// Eleven, and no more. Every tool costs context in every session the agent
+/// ever opens, so the list is a budget and not a catalogue: four reads plus
+/// the seven writes `t118` adds, and nothing past that.
 #[test]
-fn the_tool_list_is_the_four_and_only_the_four() {
+fn the_tool_list_is_the_eleven_and_only_the_eleven() {
     let c = seeded("list");
     let mut s = hello(&c);
     let r = s.ask(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#);
@@ -128,7 +129,19 @@ fn the_tool_list_is_the_four_and_only_the_four() {
     names.sort();
     assert_eq!(
         names,
-        ["vivac_brief", "vivac_find", "vivac_open", "vivac_why"]
+        [
+            "vivac_add",
+            "vivac_brief",
+            "vivac_decide",
+            "vivac_find",
+            "vivac_note",
+            "vivac_open",
+            "vivac_park",
+            "vivac_pop",
+            "vivac_push",
+            "vivac_save",
+            "vivac_why",
+        ]
     );
     for t in &tools {
         assert!(
@@ -310,4 +323,335 @@ fn every_tool_is_a_command_the_cli_already_has() {
 {out}"
         );
     }
+}
+
+/// `abandon` and `restore` never reach `tools/list`. That is a security
+/// veto, not a gap left for later: `abandon` discards a node and every
+/// descendant it has, and doing that from a tool call would happen with
+/// nobody watching a terminal. `restore` rewrites the stack and sits on the
+/// same side of that line. If this test goes red because one of the two
+/// got added to `TOOLS`, that is the veto being crossed, not closed.
+#[test]
+fn abandon_and_restore_are_never_in_the_tool_list() {
+    let c = seeded("veto");
+    let mut s = hello(&c);
+    let r = s.ask(r#"{"jsonrpc":"2.0","id":18,"method":"tools/list"}"#);
+    let names: Vec<&str> = r["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    for word in ["vivac_abandon", "vivac_restore"] {
+        assert!(!names.contains(&word), "{word} reached the tool list");
+    }
+}
+
+/// The redaction guard lives in the ops, not in either caller, so a write
+/// through the MCP door refuses a home path exactly the way `vivac push`
+/// already does (`tests/brief.rs`'s `the_guard_covers_the_new_operations`).
+/// This is here to prove the door does not skip it.
+#[test]
+fn a_write_by_mcp_with_a_home_path_is_rejected_like_the_cli() {
+    let c = seeded("guard");
+    let mut s = hello(&c);
+    let r = s.ask(
+        r#"{"jsonrpc":"2.0","id":19,"method":"tools/call","params":{"name":"vivac_push","arguments":{"title":"Rotate","why":"see /home/someone/.config"}}}"#,
+    );
+    assert!(
+        r["error"].is_null(),
+        "it answered at the protocol level: {r}"
+    );
+    assert_eq!(r["result"]["isError"], true, "{r}");
+    assert!(
+        text_of(&r).contains("personal data"),
+        "the guard did not name itself: {}",
+        text_of(&r)
+    );
+}
+
+/// A second sandbox with the same `.vivac/` a first one already has: same
+/// actor (`init` draws one at random, so a second `init` would not agree),
+/// and -- when the caller seeds a node into `c` before calling this -- the
+/// same id for it, because `id::ulid()` is not reproducible either. Without
+/// this, comparing what the CLI wrote against what MCP wrote would only ever
+/// prove that two separate trees are two separate trees.
+fn twin_of(c: &Sandbox, name: &str) -> Sandbox {
+    let twin = Sandbox::new_empty(name);
+    let vivac_dir = twin.0.join(".vivac");
+    std::fs::create_dir_all(&vivac_dir).unwrap();
+    for entry in std::fs::read_dir(c.0.join(".vivac")).unwrap() {
+        let entry = entry.unwrap();
+        std::fs::copy(entry.path(), vivac_dir.join(entry.file_name())).unwrap();
+    }
+    twin
+}
+
+/// Every value a `node.created` or `vivac.created` event in this stream
+/// introduced, with the placeholder each one collapses to -- `<node:0>` for
+/// the first node this stream ever created, `<node:1>` for the second, and
+/// the same scheme for `<vivac:_>`. `id::ulid()` draws on the machine's own
+/// randomness, so the node or vivac an operation creates never gets the same
+/// id twice, and something has to stand in for it. A single flat `<node>`
+/// for every node would make two *different* nodes indistinguishable once
+/// collapsed, so a `parent` naming the wrong one would compare equal to a
+/// `parent` naming the right one -- numbering by order of first appearance
+/// is what keeps them apart. A node copied in from a shared setup step does
+/// show up, in the same position in both logs, so it takes the same number on
+/// both sides and still compares equal -- while staying distinguishable from
+/// every other node, which is the whole point.
+fn fresh_ids(events: &[Value]) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut nodes = 0u32;
+    let mut vivacs = 0u32;
+    for e in events {
+        let payload = &e["payload"];
+        match payload["type"].as_str() {
+            Some("node.created") => {
+                if let Some(node) = payload["node"].as_str() {
+                    out.push((node.to_string(), format!("<node:{nodes}>")));
+                    nodes += 1;
+                }
+            }
+            Some("vivac.created") => {
+                if let Some(vivac) = payload["vivac"].as_str() {
+                    out.push((vivac.to_string(), format!("<vivac:{vivacs}>")));
+                    vivacs += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Walks a `Value` end to end, replacing every string equal to `from` with
+/// `to`.
+fn replace_value(v: &mut Value, from: &str, to: &str) {
+    match v {
+        Value::String(s) if s == from => *s = to.to_string(),
+        Value::Array(items) => items.iter_mut().for_each(|e| replace_value(e, from, to)),
+        Value::Object(fields) => fields.values_mut().for_each(|e| replace_value(e, from, to)),
+        _ => {}
+    }
+}
+
+/// A sandbox's events, ready to compare across the CLI path and the MCP
+/// path: `id` and `ts` dropped, and every id `fresh_ids` found collapsed to
+/// its placeholder.
+fn tree_events(c: &Sandbox) -> Vec<Value> {
+    let mut events: Vec<Value> = c
+        .log()
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    for e in events.iter_mut() {
+        let fields = e.as_object_mut().unwrap();
+        fields.remove("id");
+        fields.remove("ts");
+    }
+    for (from, to) in fresh_ids(&events) {
+        for e in events.iter_mut() {
+            replace_value(e, &from, &to);
+        }
+    }
+    events
+}
+
+/// What makes the seven parity tests above worth trusting: `tree_events`
+/// has to be able to tell two trees apart when they differ only in which
+/// node a `parent` points at, or a `push` (or `add`, or `decide`) that
+/// latched onto the wrong node would compare equal to one that latched onto
+/// the right one, and none of the seven would ever notice. This is the one
+/// test in the file that proves nothing about the product on its own; it
+/// proves that the other seven are not proving nothing.
+#[test]
+fn a_wrong_parent_is_not_the_same_event_as_the_right_one() {
+    // `twin_of` first, so the only thing left free to differ between the
+    // two is the one field this test is about: same actor, same First and
+    // Second branch. An actor drawn twice, independently, would make every
+    // event differ for a reason that has nothing to do with `parent`.
+    let right = Sandbox::new_seeded("parent-right");
+    right.ok(&["push", "First branch", "--why", "first"]);
+    right.ok(&["pop", "done"]);
+    right.ok(&["push", "Second branch", "--why", "second"]);
+    let wrong = twin_of(&right, "parent-wrong");
+
+    right.ok(&["add", "A child", "--why", "hangs off the second branch"]);
+    wrong.ok(&[
+        "add",
+        "A child",
+        "--why",
+        "hangs off the second branch",
+        "--parent",
+        "1",
+    ]);
+
+    assert_ne!(
+        tree_events(&right),
+        tree_events(&wrong),
+        "tree_events cannot tell two different parents apart"
+    );
+}
+
+/// The criterion `t118` is built to: the same operation, done by MCP and
+/// done by the CLI on two identical trees, writes exactly the same events.
+/// Seven tests, one per tool, attack the real risk -- that a second write
+/// path quietly diverges from the first one.
+#[test]
+fn push_by_mcp_writes_the_same_events_as_push_by_the_cli() {
+    let cli = Sandbox::new_seeded("push-cli");
+    let via_mcp = twin_of(&cli, "push-mcp");
+    cli.ok(&[
+        "push",
+        "Ship the release apparatus",
+        "--why",
+        "the version was a hand edit",
+        "--type",
+        "task",
+        "--ref",
+        "R1",
+        "--governs",
+        "G1",
+        "--blocks",
+    ]);
+
+    let mut s = hello(&via_mcp);
+    let r = s.ask(
+        r#"{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"vivac_push","arguments":{"title":"Ship the release apparatus","why":"the version was a hand edit","type":"task","ref":["R1"],"governs":["G1"],"blocks":true}}}"#,
+    );
+    assert_eq!(r["result"]["isError"], false, "{r}");
+    assert_eq!(tree_events(&cli), tree_events(&via_mcp));
+}
+
+#[test]
+fn pop_by_mcp_writes_the_same_events_as_pop_by_the_cli() {
+    let cli = Sandbox::new_seeded("pop-cli");
+    cli.ok(&[
+        "push",
+        "Ship the release apparatus",
+        "--why",
+        "the version was a hand edit",
+    ]);
+    let via_mcp = twin_of(&cli, "pop-mcp");
+
+    cli.ok(&["pop", "the release went out", "--next", "watch the metrics"]);
+    let mut s = hello(&via_mcp);
+    let r = s.ask(
+        r#"{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"vivac_pop","arguments":{"outcome":"the release went out","next":"watch the metrics"}}}"#,
+    );
+    assert_eq!(r["result"]["isError"], false, "{r}");
+    assert_eq!(tree_events(&cli), tree_events(&via_mcp));
+}
+
+#[test]
+fn add_by_mcp_writes_the_same_events_as_add_by_the_cli() {
+    let cli = Sandbox::new_seeded("add-cli");
+    let via_mcp = twin_of(&cli, "add-mcp");
+    cli.ok(&[
+        "add",
+        "Guard the commit messages",
+        "--why",
+        "a malformed one does not count",
+        "--type",
+        "finding",
+        "--ref",
+        "R1",
+        "--governs",
+        "G1",
+        "--blocks",
+    ]);
+
+    let mut s = hello(&via_mcp);
+    let r = s.ask(
+        r#"{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"vivac_add","arguments":{"title":"Guard the commit messages","why":"a malformed one does not count","type":"finding","ref":["R1"],"governs":["G1"],"blocks":true}}}"#,
+    );
+    assert_eq!(r["result"]["isError"], false, "{r}");
+    assert_eq!(tree_events(&cli), tree_events(&via_mcp));
+}
+
+#[test]
+fn decide_by_mcp_writes_the_same_events_as_decide_by_the_cli() {
+    let cli = Sandbox::new_seeded("decide-cli");
+    let via_mcp = twin_of(&cli, "decide-mcp");
+    cli.ok(&[
+        "decide",
+        "Rotate release keys",
+        "--reason",
+        "the old one is in three places",
+        "--alternative",
+        "keep the old one",
+        "--ref",
+        "R1",
+        "--governs",
+        "G1",
+        "--blocks",
+    ]);
+
+    let mut s = hello(&via_mcp);
+    let r = s.ask(
+        r#"{"jsonrpc":"2.0","id":23,"method":"tools/call","params":{"name":"vivac_decide","arguments":{"title":"Rotate release keys","reason":"the old one is in three places","alternative":["keep the old one"],"ref":["R1"],"governs":["G1"],"blocks":true}}}"#,
+    );
+    assert_eq!(r["result"]["isError"], false, "{r}");
+    assert_eq!(tree_events(&cli), tree_events(&via_mcp));
+}
+
+#[test]
+fn note_by_mcp_writes_the_same_events_as_note_by_the_cli() {
+    let cli = Sandbox::new_seeded("note-cli");
+    cli.ok(&[
+        "push",
+        "Ship the release apparatus",
+        "--why",
+        "the version was a hand edit",
+    ]);
+    let via_mcp = twin_of(&cli, "note-mcp");
+
+    cli.ok(&["note", "the rollback plan is untested"]);
+    let mut s = hello(&via_mcp);
+    let r = s.ask(
+        r#"{"jsonrpc":"2.0","id":24,"method":"tools/call","params":{"name":"vivac_note","arguments":{"note":"the rollback plan is untested"}}}"#,
+    );
+    assert_eq!(r["result"]["isError"], false, "{r}");
+    assert_eq!(tree_events(&cli), tree_events(&via_mcp));
+}
+
+#[test]
+fn park_by_mcp_writes_the_same_events_as_park_by_the_cli() {
+    let cli = Sandbox::new_seeded("park-cli");
+    cli.ok(&[
+        "push",
+        "Ship the release apparatus",
+        "--why",
+        "the version was a hand edit",
+    ]);
+    let via_mcp = twin_of(&cli, "park-mcp");
+
+    cli.ok(&["park", "waiting on the security review"]);
+    let mut s = hello(&via_mcp);
+    let r = s.ask(
+        r#"{"jsonrpc":"2.0","id":25,"method":"tools/call","params":{"name":"vivac_park","arguments":{"reason":"waiting on the security review"}}}"#,
+    );
+    assert_eq!(r["result"]["isError"], false, "{r}");
+    assert_eq!(tree_events(&cli), tree_events(&via_mcp));
+}
+
+#[test]
+fn save_by_mcp_writes_the_same_events_as_save_by_the_cli() {
+    let cli = Sandbox::new_seeded("save-cli");
+    let via_mcp = twin_of(&cli, "save-mcp");
+    cli.ok(&[
+        "save",
+        "before the migration",
+        "--next",
+        "run the reconcile",
+    ]);
+
+    let mut s = hello(&via_mcp);
+    let r = s.ask(
+        r#"{"jsonrpc":"2.0","id":26,"method":"tools/call","params":{"name":"vivac_save","arguments":{"label":"before the migration","next":"run the reconcile"}}}"#,
+    );
+    assert_eq!(r["result"]["isError"], false, "{r}");
+    assert_eq!(tree_events(&cli), tree_events(&via_mcp));
 }
