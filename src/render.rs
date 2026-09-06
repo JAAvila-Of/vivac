@@ -43,10 +43,10 @@ pub(crate) fn wrap(text: &str, width: usize, indent: &str) -> Vec<String> {
     lines
 }
 
-fn label(n: &Node) -> String {
+fn label(a: &Tree, n: &Node) -> String {
     match n.state {
-        State::Active => n.title.clone(),
-        e => format!("{}  [{}]", n.title, e.word(n.kind)),
+        State::Active => n.title(a).to_string(),
+        e => format!("{}  [{}]", n.title(a), e.word(n.kind)),
     }
 }
 
@@ -57,17 +57,17 @@ fn json_node(a: &Tree, ag: &Aggregates, n: &Node) -> serde_json::Value {
         "alias": n.alias(),
         "num": n.num,
         "kind": n.kind,
-        "title": n.title,
-        "why": n.why,
+        "title": n.title(a),
+        "why": n.why(a),
         "state": n.state,
         "blocks": n.blocks,
         "parent": n.parent.as_ref().and_then(|p| a.node(p).map(|x| x.alias())),
-        "note": n.note,
-        "outcome": n.outcome,
-        "refs": n.refs,
-        "governs": n.governs,
-        "opened": n.opened,
-        "closed": n.closed,
+        "note": n.note(a),
+        "outcome": n.outcome(a),
+        "refs": n.refs(a),
+        "governs": n.governs(a),
+        "opened": n.opened(a),
+        "closed": n.closed(a),
         "false_close": n.state == State::Done && ag.blockers(&n.id) > 0,
         "open_below": r.open_count,
         "total_below": r.total,
@@ -325,17 +325,19 @@ pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
     println!();
     for (i, p) in lineage.iter().enumerate() {
         let is_last = i == lineage.len() - 1;
-        println!("  {:<6}{}", p.alias(), label(p));
-        for l in wrap(&p.why, WIDTH, "        ") {
+        println!("  {:<6}{}", p.alias(), label(a, p));
+        for l in wrap(p.why(a), WIDTH, "        ") {
             println!("{l}");
         }
-        for l in wrap(&format!("! {}", p.note), WIDTH, "        ") {
-            if !p.note.is_empty() {
+        let note = p.note(a);
+        for l in wrap(&format!("! {note}"), WIDTH, "        ") {
+            if !note.is_empty() {
                 println!("{l}");
             }
         }
-        for l in wrap(&format!("= {}", p.outcome), WIDTH, "        ") {
-            if !p.outcome.is_empty() {
+        let outcome = p.outcome(a);
+        for l in wrap(&format!("= {outcome}"), WIDTH, "        ") {
+            if !outcome.is_empty() {
                 println!("{l}");
             }
         }
@@ -366,7 +368,7 @@ pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
         if !siblings.is_empty() {
             println!("  In parallel, still open ({}):", siblings.len());
             for c in siblings {
-                println!("      {:<6} {}", c.alias(), c.title);
+                println!("      {:<6} {}", c.alias(), c.title(a));
             }
             println!();
         }
@@ -384,7 +386,7 @@ pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
                 "    {} {:<6} {}",
                 if c.blocks { '*' } else { ' ' },
                 c.alias(),
-                c.title
+                c.title(a)
             );
         }
         println!();
@@ -399,7 +401,7 @@ pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
                 pending_count.len()
             );
             for c in pending_count {
-                println!("      {:<6} {}", c.alias(), c.title);
+                println!("      {:<6} {}", c.alias(), c.title(a));
             }
             println!();
         }
@@ -426,7 +428,7 @@ fn branch(a: &Tree, ag: &Aggregates, n: &Node, prefix: &str, is_last: bool, show
         if is_last { "`-- " } else { "|-- " },
         n.state.mark(),
         n.alias(),
-        n.title
+        n.title(a)
     );
     let sig = format!("{prefix}{}", if is_last { "    " } else { "|   " });
     let children: Vec<_> = a
@@ -507,7 +509,7 @@ pub fn open(a: &Tree, args: &Args) -> R {
     );
     println!();
     for n in leaves {
-        println!("  {:<6} {}", n.alias(), n.title);
+        println!("  {:<6} {}", n.alias(), n.title(a));
         let lineage = a.ancestors(&n.id);
         if lineage.len() > 1 {
             let v: Vec<String> = lineage[..lineage.len() - 1]
@@ -602,7 +604,7 @@ pub fn triage(a: &Tree, args: &Args) -> R {
             "orphaned_by_discard": orphaned.iter().map(|(n, p)| {
                 let mut v = json_node(a, ag, n);
                 v["discarded"] = json!(p.alias());
-                v["discarded_because"] = json!(p.outcome);
+                v["discarded_because"] = json!(p.outcome(a));
                 v
             }).collect::<Vec<_>>(),
             "false_closes": false_closes.iter().map(|n| json_node(a, ag, n)).collect::<Vec<_>>(),
@@ -624,8 +626,8 @@ pub fn triage(a: &Tree, args: &Args) -> R {
             parked_nodes.len()
         );
         for n in &parked_nodes {
-            println!("    {:<6} {}", n.alias(), n.title);
-            for l in wrap(&n.outcome, WIDTH, "           ") {
+            println!("    {:<6} {}", n.alias(), n.title(a));
+            for l in wrap(n.outcome(a), WIDTH, "           ") {
                 println!("{l}");
             }
         }
@@ -638,7 +640,11 @@ pub fn triage(a: &Tree, args: &Args) -> R {
             deep.len()
         );
         for (n, d) in &deep {
-            println!("    {:<6} {:<40} depth {d}", n.alias(), clip(&n.title, 40));
+            println!(
+                "    {:<6} {:<40} depth {d}",
+                n.alias(),
+                clip(n.title(a), 40)
+            );
             // The lineage starts where the number does. Drawing it from the
             // root beside a distance to the goal would say two things at once.
             let v: Vec<String> = a
@@ -660,11 +666,11 @@ pub fn triage(a: &Tree, args: &Args) -> R {
             orphaned.len()
         );
         for (n, p) in &orphaned {
-            println!("    {:<6} {}", n.alias(), n.title);
+            println!("    {:<6} {}", n.alias(), n.title(a));
             println!(
                 "           born from {}, discarded: {}",
                 p.alias(),
-                clip(&p.outcome, 36)
+                clip(p.outcome(a), 36)
             );
         }
     }
@@ -679,7 +685,7 @@ pub fn triage(a: &Tree, args: &Args) -> R {
             println!(
                 "    {:<6} {:<40} {} blocker(s)",
                 n.alias(),
-                clip(&n.title, 40),
+                clip(n.title(a), 40),
                 ag.blockers(&n.id)
             );
         }
@@ -712,8 +718,8 @@ pub fn parked(a: &Tree, args: &Args) -> R {
     println!("  DO NOT TOUCH NOW ({})", ps.len());
     println!();
     for n in ps {
-        println!("  {:<6} {}", n.alias(), n.title);
-        for l in wrap(&n.outcome, WIDTH, "         ") {
+        println!("  {:<6} {}", n.alias(), n.title(a));
+        for l in wrap(n.outcome(a), WIDTH, "         ") {
             println!("{l}");
         }
     }
@@ -742,7 +748,7 @@ pub fn stack(a: &Tree, args: &Args) -> R {
         } else {
             ""
         };
-        println!("  {}{:<6} {}{focus}", "  ".repeat(i), n.alias(), n.title);
+        println!("  {}{:<6} {}{focus}", "  ".repeat(i), n.alias(), n.title(a));
     }
     println!();
     if stack.len() >= 6 {
@@ -802,7 +808,7 @@ pub fn stats(a: &Tree, args: &Args) -> R {
         println!();
         println!("  FALSE CLOSES ({})", false_closes.len());
         for n in false_closes {
-            println!("      {:<6} {}", n.alias(), n.title);
+            println!("      {:<6} {}", n.alias(), n.title(a));
         }
     }
     println!();
@@ -869,12 +875,12 @@ pub fn vivacs(a: &Tree, args: &Args) -> R {
 /// The title is a label; the reason, the note and the outcome are where the
 /// thinking is. A search that read only titles would find the folder and miss
 /// what is inside it.
-fn searchable(n: &Node) -> [(&'static str, &str); 4] {
+fn searchable<'t>(a: &'t Tree, n: &Node) -> [(&'static str, &'t str); 4] {
     [
-        ("title", n.title.as_str()),
-        ("why", n.why.as_str()),
-        ("note", n.note.as_str()),
-        ("outcome", n.outcome.as_str()),
+        ("title", n.title(a)),
+        ("why", n.why(a)),
+        ("note", n.note(a)),
+        ("outcome", n.outcome(a)),
     ]
 }
 
@@ -945,7 +951,7 @@ fn terms_of(query: &str) -> Result<Vec<String>, Failure> {
 fn hits_for<'t>(a: &'t Tree, terms: &[String]) -> Vec<(&'t Node, Vec<&'static str>)> {
     let mut hits: Vec<(&Node, Vec<&'static str>)> = Vec::new();
     for n in a.nodes_iter() {
-        let lowered: Vec<(&'static str, String)> = searchable(n)
+        let lowered: Vec<(&'static str, String)> = searchable(a, n)
             .iter()
             .filter(|(_, v)| !v.is_empty())
             .map(|(k, v)| (*k, v.to_lowercase()))
@@ -991,7 +997,7 @@ pub fn find_data(a: &Tree, query: &str) -> Result<serde_json::Value, Failure> {
             let fragments: serde_json::Map<String, serde_json::Value> = matched
                 .iter()
                 .map(|field| {
-                    let text = searchable(n)
+                    let text = searchable(a, n)
                         .iter()
                         .find(|(k, _)| k == field)
                         .map(|(_, v)| *v)
@@ -1003,7 +1009,7 @@ pub fn find_data(a: &Tree, query: &str) -> Result<serde_json::Value, Failure> {
                 "alias": n.alias(),
                 "kind": n.kind,
                 "state": n.state,
-                "title": n.title,
+                "title": n.title(a),
                 "lineage": lineage_of(a, n),
                 "matched": fragments,
             })
@@ -1034,7 +1040,7 @@ pub fn find(a: &Tree, args: &Args) -> R {
     );
     println!();
     for (n, matched) in hits.iter().take(20) {
-        println!("  {:<6} {}", n.alias(), n.title);
+        println!("  {:<6} {}", n.alias(), n.title(a));
         let lineage = lineage_of(a, n);
         if !lineage.is_empty() {
             println!("         via {}", lineage.join(" > "));
@@ -1042,7 +1048,7 @@ pub fn find(a: &Tree, args: &Args) -> R {
         // The title is already on the line above it. Repeating it as the
         // reason the hit came back would say nothing.
         for field in matched.iter().filter(|f| **f != "title") {
-            let text = searchable(n)
+            let text = searchable(a, n)
                 .iter()
                 .find(|(k, _)| k == field)
                 .map(|(_, v)| *v)

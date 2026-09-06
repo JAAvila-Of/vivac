@@ -41,11 +41,11 @@ use super::WEB_CSS;
 ///
 /// Everything here goes through `escape`. A title is prose somebody wrote,
 /// and a tree is allowed to hold a node called `<script>`.
-fn row(project: &str, n: &Node, note: &str, note_class: &str) -> String {
+fn row(project: &str, tree: &Tree, n: &Node, note: &str, note_class: &str) -> String {
     let mut s = format!(
         "<li><span class=\"alias\">{}</span><p class=\"title\">{}</p>",
         alias_link(project, &n.alias()),
-        escape(&n.title)
+        escape(n.title(tree))
     );
     if !note.is_empty() {
         let class = if note_class.is_empty() {
@@ -97,14 +97,14 @@ fn since_line(since: &Boundary, stops: usize) -> String {
 /// moved**: the promise is that you find out without having had to ask, and
 /// a section that vanishes when the answer is "nothing" is that question put
 /// straight back.
-fn moved_section(project: &str, changed: &Changed) -> String {
+fn moved_section(project: &str, tree: &Tree, changed: &Changed) -> String {
     let mut body = String::new();
     body.push_str(&group(
         "Opened",
         changed
             .opened
             .iter()
-            .map(|n| row(project, n, "", ""))
+            .map(|n| row(project, tree, n, "", ""))
             .collect(),
     ));
     body.push_str(&group(
@@ -120,7 +120,13 @@ fn moved_section(project: &str, changed: &Changed) -> String {
                 } else {
                     c.outcome.clone()
                 };
-                row(project, c.node, &note, if c.forced { "forced" } else { "" })
+                row(
+                    project,
+                    tree,
+                    c.node,
+                    &note,
+                    if c.forced { "forced" } else { "" },
+                )
             })
             .collect(),
     ));
@@ -135,7 +141,7 @@ fn moved_section(project: &str, changed: &Changed) -> String {
                 } else {
                     format!("{}: {}", f.flag.word(), f.reason)
                 };
-                row(project, f.node, &note, "flag")
+                row(project, tree, f.node, &note, "flag")
             })
             .collect(),
     ));
@@ -144,7 +150,7 @@ fn moved_section(project: &str, changed: &Changed) -> String {
         changed
             .moved
             .iter()
-            .map(|m| row(project, m.node, m.state.word(m.node.kind), ""))
+            .map(|m| row(project, tree, m.node, m.state.word(m.node.kind), ""))
             .collect(),
     ));
 
@@ -185,7 +191,7 @@ fn stack_section(project: &str, tree: &Tree) -> String {
                 "<li{}><span class=\"alias\">{}</span><p class=\"title\">{}{here}</p></li>\n",
                 if i == last { " class=\"here\"" } else { "" },
                 alias_link(project, &n.alias()),
-                escape(&n.title)
+                escape(n.title(tree))
             )
         })
         .collect();
@@ -205,7 +211,7 @@ fn governs_section(project: &str, tree: &Tree) -> String {
     let decisions: String = match focus {
         Some(f) => crate::brief::standing(tree, f, &on_lineage)
             .iter()
-            .map(|n| row(project, n, "", ""))
+            .map(|n| row(project, tree, n, "", ""))
             .collect(),
         // No focus, no path, so nothing reaches "this point" except what
         // governs the whole project -- which is what the invariants below
@@ -217,6 +223,7 @@ fn governs_section(project: &str, tree: &Tree) -> String {
         .map(|n| {
             row(
                 project,
+                tree,
                 n,
                 if n.flags.is_empty() { "" } else { "at risk" },
                 "flag",
@@ -247,7 +254,7 @@ fn parked_section(project: &str, tree: &Tree) -> String {
         format!(
             "<ul class=\"nodes\">\n{}</ul>\n",
             ps.iter()
-                .map(|n| row(project, n, &n.outcome, ""))
+                .map(|n| row(project, tree, n, n.outcome(tree), ""))
                 .collect::<String>()
         )
     };
@@ -286,7 +293,7 @@ pub(super) fn today_page(project: &str, name: &str, tree: &Tree, log: &[Event]) 
          </div></body></html>\n",
         name_t = escape(name),
         p = escape(project),
-        moved = moved_section(project, &changed),
+        moved = moved_section(project, tree, &changed),
         focus = stack_section(project, tree),
         governs = governs_section(project, tree),
         parked = parked_section(project, tree),

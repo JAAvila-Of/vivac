@@ -123,7 +123,7 @@ pub(crate) fn constraints<'a>(a: &'a Tree, lineage: &[&Node]) -> Vec<&'a Node> {
     v
 }
 
-fn spine(lineage: &[&Node]) -> Vec<String> {
+fn spine(a: &Tree, lineage: &[&Node]) -> Vec<String> {
     let mut v = Vec::new();
     for (i, n) in lineage.iter().enumerate() {
         let first = i == 0;
@@ -148,13 +148,15 @@ fn spine(lineage: &[&Node]) -> Vec<String> {
         v.push(format!(
             "{branch}{:<6} {}{flag}{here_mark}",
             n.alias(),
-            clip(&n.title, 44)
+            clip(n.title(a), 44)
         ));
-        if !first && !n.why.is_empty() {
-            v.push(format!("{cont}why: {}", clip(&n.why, 52)));
+        let why = n.why(a);
+        if !first && !why.is_empty() {
+            v.push(format!("{cont}why: {}", clip(why, 52)));
         }
-        if !n.governs.is_empty() {
-            v.push(format!("{cont}governs: {}", n.governs.join(" ")));
+        let governs = n.governs(a);
+        if !governs.is_empty() {
+            v.push(format!("{cont}governs: {}", governs.join(" ")));
         }
         if !is_last {
             v.push("  |".to_string());
@@ -195,9 +197,9 @@ pub(crate) fn standing<'a>(a: &'a Tree, focus: &Node, on_lineage: &HashSet<&str>
                 || n.parent
                     .as_ref()
                     .is_some_and(|p| on_lineage.contains(p.as_str()))
-                || n.governs
+                || n.governs(a)
                     .iter()
-                    .any(|g| focus.governs.iter().any(|f| crate::glob::covers(g, f)))
+                    .any(|g| focus.governs(a).iter().any(|f| crate::glob::covers(g, f)))
         })
         .collect();
     dec.sort_by_key(|n| n.num);
@@ -247,7 +249,7 @@ pub fn to_text(
         RULE.to_string(),
         String::new(),
     ]));
-    s.push(Section::fixed(spine(&lineage)));
+    s.push(Section::fixed(spine(a, &lineage)));
 
     // 3. Focus: what hangs off it unclosed. Standing decisions do not go in
     //    --they are not pending work and they have their own section (8)--,
@@ -261,7 +263,7 @@ pub fn to_text(
                 "  {} {:<6} {}",
                 if c.blocks { '*' } else { ' ' },
                 c.alias(),
-                c.title
+                c.title(a)
             )
         })
         .collect();
@@ -292,7 +294,7 @@ pub fn to_text(
         .iter()
         .map(|c| {
             let risk = if c.flags.is_empty() { "" } else { "   AT RISK" };
-            format!("  {:<6} {}{risk}", c.alias(), c.title)
+            format!("  {:<6} {}{risk}", c.alias(), c.title(a))
         })
         .collect();
     s.push(Section::fixed(heading("INVARIANTS", invariants)));
@@ -308,7 +310,7 @@ pub fn to_text(
                 .iter()
                 .any(|p| on_lineage.contains(p.id.as_str()))
         })
-        .map(|n| format!("  {:<6} {}", n.alias(), n.title))
+        .map(|n| format!("  {:<6} {}", n.alias(), n.title(a)))
         .collect();
     let mut questions = questions;
     questions.sort();
@@ -330,7 +332,12 @@ pub fn to_text(
         .iter()
         .flat_map(|n| {
             n.flags.iter().map(move |(b, reason)| {
-                format!("  {:<6} {:<10} {}", n.alias(), b.word(), clip(reason, 44))
+                format!(
+                    "  {:<6} {:<10} {}",
+                    n.alias(),
+                    b.word(),
+                    clip(a.text(*reason), 44)
+                )
             })
         })
         .collect();
@@ -365,10 +372,11 @@ pub fn to_text(
             let mut v = vec![format!(
                 "  {:<6} {:<40} {hangs_off}",
                 n.alias(),
-                clip(&n.title, 40)
+                clip(n.title(a), 40)
             )];
-            if !n.outcome.is_empty() {
-                v.push(format!("         \"{}\"", clip(&n.outcome, 56)));
+            let outcome = n.outcome(a);
+            if !outcome.is_empty() {
+                v.push(format!("         \"{}\"", clip(outcome, 56)));
             }
             v
         })
@@ -389,7 +397,7 @@ pub fn to_text(
     let dec = standing(a, focus, &on_lineage);
     let decisions: Vec<String> = dec
         .iter()
-        .map(|n| format!("  {:<6} {}", n.alias(), clip(&n.title, 52)))
+        .map(|n| format!("  {:<6} {}", n.alias(), clip(n.title(a), 52)))
         .collect();
     s.push(Section::loose(heading(
         "STANDING DECISIONS",
@@ -446,7 +454,7 @@ pub fn to_text(
     let stale_ones: Vec<String> = lineage
         .iter()
         .filter(|n| n.flags.contains_key(&crate::event::Flag::Stale))
-        .map(|n| format!("  {:<6} {}", n.alias(), n.title))
+        .map(|n| format!("  {:<6} {}", n.alias(), n.title(a)))
         .collect();
     s.push(Section::loose(heading("UNTOUCHED FOR A WHILE", stale_ones)));
 
@@ -528,7 +536,7 @@ fn no_focus(a: &Tree, project: &str, date: &str) -> Result<String, crate::failur
                 "  {:<6} {:<40} {} open below
 ",
                 m.alias(),
-                clip(&m.title, 40),
+                clip(m.title(a), 40),
                 a.counts(&m.id).open_count
             ));
         }

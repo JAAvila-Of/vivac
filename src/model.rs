@@ -12,30 +12,76 @@ use crate::event::{Body, Event, Flag, Kind, State, VivacKind};
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 
+/// A range of bytes inside `Tree`'s text arena.
+///
+/// Two integers rather than a borrowed `&str`, so a `Node` stays `Clone` and
+/// needs no lifetime of its own: the arena only ever grows, so a span handed
+/// out earlier keeps naming the same bytes for the life of the tree.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Span {
+    pub start: u32,
+    pub len: u32,
+}
+
 #[derive(Debug, Clone)]
 pub struct Node {
     pub id: String,
     pub num: u64,
     pub kind: Kind,
-    pub title: String,
+    pub title: Span,
     /// Why it was born. `push` demands it: a detour with no reason is the
     /// very failure this project attacks.
-    pub why: String,
+    pub why: Span,
     pub state: State,
     pub parent: Option<String>,
     /// The parent's closure condition. Explicit, and by default it does **not**
     /// block: forcing it leaves parents that never close. `MODEL.md` §5.
     pub blocks: bool,
-    pub note: String,
-    pub outcome: String,
-    pub refs: Vec<String>,
-    pub governs: Vec<String>,
-    pub opened: String,
-    pub closed: Option<String>,
+    pub note: Span,
+    pub outcome: Span,
+    /// A span of spans: the range, inside `Tree`'s own arena of spans, of the
+    /// individual entries. Resolved with `Tree::text_list`.
+    pub refs: Span,
+    /// Same shape as `refs`, into the same arena.
+    pub governs: Span,
+    pub opened: Span,
+    pub closed: Option<Span>,
     pub forced_close: bool,
     /// Flag -> reason. Orthogonal to state: a node can be `active` and
     /// `suspect` at the same time.
-    pub flags: BTreeMap<Flag, String>,
+    pub flags: BTreeMap<Flag, Span>,
+}
+
+impl Node {
+    /// The fields below all read a span against the `Tree` that owns the
+    /// arena it points into -- **not necessarily** the `Tree` a clone of this
+    /// `Node` was taken from, though in every call site of this crate it is
+    /// the same tree, since the arena is append-only and a span stays valid
+    /// for its whole life.
+    pub fn title<'t>(&self, tree: &'t Tree) -> &'t str {
+        tree.text(self.title)
+    }
+    pub fn why<'t>(&self, tree: &'t Tree) -> &'t str {
+        tree.text(self.why)
+    }
+    pub fn note<'t>(&self, tree: &'t Tree) -> &'t str {
+        tree.text(self.note)
+    }
+    pub fn outcome<'t>(&self, tree: &'t Tree) -> &'t str {
+        tree.text(self.outcome)
+    }
+    pub fn opened<'t>(&self, tree: &'t Tree) -> &'t str {
+        tree.text(self.opened)
+    }
+    pub fn closed<'t>(&self, tree: &'t Tree) -> Option<&'t str> {
+        self.closed.map(|s| tree.text(s))
+    }
+    pub fn refs<'t>(&self, tree: &'t Tree) -> Vec<&'t str> {
+        tree.text_list(self.refs)
+    }
+    pub fn governs<'t>(&self, tree: &'t Tree) -> Vec<&'t str> {
+        tree.text_list(self.governs)
+    }
 }
 
 /// A safe stop. Immutable: there is no event that modifies one.
@@ -105,6 +151,13 @@ impl Counts {
 
 #[derive(Debug, Default)]
 pub struct Tree {
+    /// Every node's text, appended once and never rewritten: a `Span` handed
+    /// out to a `Node` stays valid for as long as the tree does.
+    text: String,
+    /// The arena `Node::refs` and `Node::governs` point into: each entry is
+    /// itself a `Span` into `text`, so a node's own span here names a
+    /// contiguous run of them -- a span of spans.
+    spans: Vec<Span>,
     nodes: HashMap<String, Node>,
     children: HashMap<String, Vec<String>>,
     by_num: HashMap<u64, String>,
@@ -195,22 +248,27 @@ impl Tree {
                     // Repeated creation: commutative, the first one wins.
                     return;
                 }
+                let title_span = self.intern(title);
+                let why_span = self.intern(why);
+                let refs_span = self.intern_list(refs);
+                let governs_span = self.intern_list(governs);
+                let opened_span = self.intern(crate::clock::date_of(ts));
                 self.nodes.insert(
                     node.clone(),
                     Node {
                         id: node.clone(),
                         num: *num,
                         kind: *kind,
-                        title: title.clone(),
-                        why: why.clone(),
+                        title: title_span,
+                        why: why_span,
                         state: State::Active,
                         parent: parent.clone(),
                         blocks: *blocks,
-                        note: String::new(),
-                        outcome: String::new(),
-                        refs: refs.clone(),
-                        governs: governs.clone(),
-                        opened: crate::clock::date_of(ts).to_string(),
+                        note: Span::default(),
+                        outcome: Span::default(),
+                        refs: refs_span,
+                        governs: governs_span,
+                        opened: opened_span,
                         closed: None,
                         forced_close: false,
                         flags: BTreeMap::new(),
@@ -233,22 +291,26 @@ impl Tree {
                 outcome,
                 forced,
             } => {
+                // Interned **before** the mutable borrow of `self.nodes`
+                // below, so the two never overlap: `intern` needs the whole
+                // `self`, and the borrow checker cannot see that it only
+                // touches `self.text`.
+                let outcome_span = (!outcome.is_empty()).then(|| self.intern(outcome));
+                let closed_span =
+                    (!state.is_open()).then(|| self.intern(crate::clock::date_of(ts)));
                 if let Some(n) = self.nodes.get_mut(node) {
                     n.state = *state;
-                    if !outcome.is_empty() {
-                        n.outcome = outcome.clone();
+                    if let Some(s) = outcome_span {
+                        n.outcome = s;
                     }
                     n.forced_close = *forced;
-                    n.closed = if state.is_open() {
-                        None
-                    } else {
-                        Some(crate::clock::date_of(ts).to_string())
-                    };
+                    n.closed = closed_span;
                 }
             }
             Body::NodeNoted { node, note } => {
+                let note_span = self.intern(note);
                 if let Some(n) = self.nodes.get_mut(node) {
-                    n.note = note.clone();
+                    n.note = note_span;
                 }
             }
             Body::BlockChanged { node, blocks } => {
@@ -265,8 +327,9 @@ impl Tree {
                 self.stack.retain(|x| x != node);
             }
             Body::FlagRaised { node, flag, reason } => {
+                let reason_span = self.intern(reason);
                 if let Some(n) = self.nodes.get_mut(node) {
-                    n.flags.insert(*flag, reason.clone());
+                    n.flags.insert(*flag, reason_span);
                 }
             }
             Body::FlagCleared { node, flag } => {
@@ -317,6 +380,32 @@ impl Tree {
         }
     }
 
+    /// Appends `s` to the text arena and hands back the span that names it.
+    /// Append-only: nothing already interned ever moves, so a span handed
+    /// out earlier keeps pointing at the same bytes.
+    fn intern(&mut self, s: &str) -> Span {
+        let start = self.text.len() as u32;
+        self.text.push_str(s);
+        Span {
+            start,
+            len: s.len() as u32,
+        }
+    }
+
+    /// Interns every one of `items` and hands back a span of spans: the
+    /// range, inside `self.spans`, of the individual entries just written.
+    fn intern_list(&mut self, items: &[String]) -> Span {
+        let start = self.spans.len() as u32;
+        for it in items {
+            let span = self.intern(it);
+            self.spans.push(span);
+        }
+        Span {
+            start,
+            len: items.len() as u32,
+        }
+    }
+
     /// Stable order by number: two renders of the same log are identical.
     ///
     /// Only needed while folding. Live, nodes are born with an increasing
@@ -333,6 +422,20 @@ impl Tree {
 }
 
 impl Tree {
+    /// Resolves a span handed out by a `Node` to the text it names.
+    pub fn text(&self, span: Span) -> &str {
+        &self.text[span.start as usize..(span.start + span.len) as usize]
+    }
+
+    /// Resolves a span of spans -- `Node::refs`, `Node::governs` -- to the
+    /// strings it names, in the order they were written.
+    pub fn text_list(&self, span: Span) -> Vec<&str> {
+        self.spans[span.start as usize..(span.start + span.len) as usize]
+            .iter()
+            .map(|s| self.text(*s))
+            .collect()
+    }
+
     pub fn is_empty_tree(&self) -> bool {
         self.nodes.is_empty()
     }

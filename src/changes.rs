@@ -226,9 +226,9 @@ pub fn changes(tree: &Tree, log: &[Event], args: &Args) -> Result<i32, Failure> 
     result.since = boundary;
 
     if args.has("json") {
-        return print_json(as_json(&result)).map(|_| 0);
+        return print_json(as_json(tree, &result)).map(|_| 0);
     }
-    print_text(&result);
+    print_text(tree, &result);
     Ok(0)
 }
 
@@ -313,7 +313,7 @@ pub(crate) fn tail_phrase(tail: &Tail) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join(", "))
 }
 
-fn print_text(result: &Changed) {
+fn print_text(tree: &Tree, result: &Changed) {
     println!();
     println!("{}", header(&result.since, result.tail.stops));
 
@@ -324,7 +324,7 @@ fn print_text(result: &Changed) {
         println!();
         println!("  OPENED ({})", result.opened.len());
         for n in &result.opened {
-            println!("    {:<6} {}", n.alias(), n.title);
+            println!("    {:<6} {}", n.alias(), n.title(tree));
         }
     }
 
@@ -333,7 +333,7 @@ fn print_text(result: &Changed) {
         println!();
         println!("  CLOSED ({})", result.closed.len());
         for c in &result.closed {
-            println!("    {:<6} {}", c.node.alias(), c.node.title);
+            println!("    {:<6} {}", c.node.alias(), c.node.title(tree));
             let line = if c.forced {
                 if c.outcome.is_empty() {
                     "forced".to_string()
@@ -354,7 +354,7 @@ fn print_text(result: &Changed) {
         println!();
         println!("  FLAGGED ({})", result.flagged.len());
         for f in &result.flagged {
-            println!("    {:<6} {}", f.node.alias(), f.node.title);
+            println!("    {:<6} {}", f.node.alias(), f.node.title(tree));
             for l in wrap(
                 &format!("{}: {}", f.flag.word(), f.reason),
                 WIDTH,
@@ -370,9 +370,13 @@ fn print_text(result: &Changed) {
         println!();
         println!("  MOVED ({})", result.moved.len());
         for m in &result.moved {
-            println!("    {:<6} {}", m.node.alias(), m.node.title);
+            println!("    {:<6} {}", m.node.alias(), m.node.title(tree));
             let word = m.state.word(m.node.kind);
-            for l in wrap(&format!("{word}: {}", m.node.outcome), WIDTH, "           ") {
+            for l in wrap(
+                &format!("{word}: {}", m.node.outcome(tree)),
+                WIDTH,
+                "           ",
+            ) {
                 println!("{l}");
             }
         }
@@ -396,7 +400,7 @@ fn print_text(result: &Changed) {
     println!();
 }
 
-fn as_json(result: &Changed) -> serde_json::Value {
+fn as_json(tree: &Tree, result: &Changed) -> serde_json::Value {
     json!({
         // `kind` says how the boundary was chosen, not what kind of stop it
         // is: `--since v122` on a stop somebody made still reads `stop`,
@@ -413,24 +417,24 @@ fn as_json(result: &Changed) -> serde_json::Value {
         },
         "opened": result.opened.iter().map(|n| json!({
             "alias": n.alias(),
-            "title": n.title,
+            "title": n.title(tree),
             "kind": n.kind,
         })).collect::<Vec<_>>(),
         "closed": result.closed.iter().map(|c| json!({
             "alias": c.node.alias(),
-            "title": c.node.title,
+            "title": c.node.title(tree),
             "outcome": c.outcome,
             "forced": c.forced,
         })).collect::<Vec<_>>(),
         "flagged": result.flagged.iter().map(|f| json!({
             "alias": f.node.alias(),
-            "title": f.node.title,
+            "title": f.node.title(tree),
             "flag": f.flag.word(),
             "reason": f.reason,
         })).collect::<Vec<_>>(),
         "moved": result.moved.iter().map(|m| json!({
             "alias": m.node.alias(),
-            "title": m.node.title,
+            "title": m.node.title(tree),
             "state": m.state.word(m.node.kind),
         })).collect::<Vec<_>>(),
         "tail": {
