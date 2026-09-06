@@ -203,6 +203,20 @@ fn open_lists_the_fronts() {
     assert!(!v.as_array().unwrap().is_empty(), "{v}");
 }
 
+#[test]
+fn open_comes_back_as_the_json_the_cli_would_print() {
+    let c = seeded("open-json");
+    let cli_text = c.ok(&["open", "--json"]);
+    let cli: Value = serde_json::from_str(&cli_text).expect("the CLI payload is not JSON");
+    let mut s = hello(&c);
+    let r = s.ask(
+        r#"{"jsonrpc":"2.0","id":17,"method":"tools/call","params":{"name":"vivac_open","arguments":{}}}"#,
+    );
+    let t = text_of(&r);
+    let v: Value = serde_json::from_str(&t).expect("the payload is not JSON");
+    assert_eq!(v, cli, "the MCP tool and `open --json` disagree:\n{t}");
+}
+
 /// A refusal the model can read and act on, not a protocol error that only
 /// the client ever sees. `isError` is the difference.
 #[test]
