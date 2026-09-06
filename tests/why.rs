@@ -191,3 +191,38 @@ fn without_full_the_three_fields_are_absent() {
         }
     }
 }
+
+/// Strips `--full`'s three own fields from every object in `v`, wherever
+/// they sit -- `node`, any step of `path`, and inside the `standing` /
+/// `open_then` nodes nested under those.
+fn without_full_fields(v: &Value) -> Value {
+    match v {
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .filter(|(k, _)| !matches!(k.as_str(), "anchor" | "standing" | "open_then"))
+                .map(|(k, v)| (k.clone(), without_full_fields(v)))
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(items.iter().map(without_full_fields).collect()),
+        other => other.clone(),
+    }
+}
+
+/// `main.rs` loads `why` two different ways depending on `--full`, so it
+/// can it use the derived index when the log is not needed -- and the two
+/// paths have no business disagreeing about anything neither one is
+/// responsible for. This checks that directly, rather than by field
+/// presence alone: the plain read has to equal `--full`'s own output with
+/// exactly the three fields it adds removed, nothing more and nothing less.
+#[test]
+fn the_plain_read_is_full_with_its_three_fields_removed() {
+    let c = seeded("plain-equals-full-stripped");
+    let plain: Value = serde_json::from_str(&c.ok(&["why", "4", "--json"])).unwrap();
+    let full = full_json(&c, "4");
+    assert_eq!(
+        plain,
+        without_full_fields(&full),
+        "why and why --full disagree once --full's own fields are stripped:\n\
+         plain={plain}\nfull={full}"
+    );
+}

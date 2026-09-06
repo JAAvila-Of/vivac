@@ -19,6 +19,7 @@ after
 ag
 again
 aggregates
+agrees
 al
 alias
 aliases
@@ -54,6 +55,7 @@ are
 arg
 args
 argument
+arguments
 argv
 arm
 array
@@ -62,11 +64,13 @@ ascii
 ask
 asked
 asks
+assemble
 assert
 assign
 assumption
 at
 atomic
+atomically
 attribute
 auto
 automatic
@@ -98,6 +102,7 @@ born
 both
 bound
 boundary
+bounds
 box
 branch
 branching
@@ -109,6 +114,7 @@ browsing
 btree
 budget
 buf
+build
 but
 by
 bytes
@@ -138,6 +144,7 @@ char
 characters
 chars
 check
+checked
 child
 children
 civil
@@ -152,6 +159,7 @@ cleared
 cli
 clip
 clipping
+clippy
 clock
 clone
 cloned
@@ -187,6 +195,7 @@ control
 cookie
 copied
 copy
+corrupt
 cors
 count
 counted
@@ -204,6 +213,7 @@ css
 ctx
 cur
 current
+cursor
 cut
 cwd
 dash
@@ -227,6 +237,7 @@ default
 degradation
 degree
 degrees
+deleting
 denial
 denied
 deny
@@ -266,6 +277,7 @@ duration
 dyn
 each
 edges
+edit
 else
 email
 emit
@@ -336,6 +348,8 @@ find
 finding
 fingerprint
 first
+fit
+fits
 fixed
 fixture
 flag
@@ -360,6 +374,7 @@ found
 four
 fragments
 free
+fresh
 from
 front
 fronts
@@ -379,10 +394,12 @@ goal
 goals
 goes
 good
+got
 governing
 governs
 group
 groups
+grown
 guard
 guarded
 guessed
@@ -437,6 +454,7 @@ includes
 incoming
 indent
 index
+indexed
 info
 init
 initial
@@ -449,6 +467,7 @@ instant
 intent
 intern
 into
+invalid
 invariants
 invents
 io
@@ -476,6 +495,7 @@ label
 lane
 last
 launched
+le
 leaf
 leave
 leaves
@@ -501,6 +521,7 @@ literal
 literals
 live
 load
+loaded
 local
 location
 lock
@@ -520,6 +541,7 @@ lowercase
 lowered
 machine
 made
+magic
 main
 makes
 mandatory
@@ -537,6 +559,7 @@ matches
 matching
 matter
 max
+may
 mcp
 measured
 measures
@@ -559,6 +582,8 @@ moves
 mp
 ms
 msg
+mtime
+mul
 multibyte
 mut
 name
@@ -595,10 +620,12 @@ num
 number
 nums
 object
+observe
 of
 off
 offenders
 offered
+offset
 ok
 old
 older
@@ -669,6 +696,8 @@ payload
 pending
 per
 percent
+persist
+persists
 person
 personal
 phrase
@@ -676,6 +705,8 @@ picks
 pii
 piped
 placed
+placeholder
+plain
 plants
 plural
 pluralised
@@ -683,12 +714,15 @@ pop
 popped
 populated
 port
+pos
 position
 positional
 positionals
 precision
 prefix
 prefixes
+present
+preserves
 pretty
 prev
 print
@@ -731,6 +765,7 @@ reads
 real
 reason
 reconcile
+record
 records
 recv
 redact
@@ -740,11 +775,13 @@ redirects
 ref
 reference
 refname
+refresh
 refs
 refusal
 refusals
 refused
 refuses
+regenerated
 registry
 rejected
 rejects
@@ -754,6 +791,7 @@ rem
 remaining
 remembers
 remove
+removed
 rename
 render
 reopen
@@ -784,6 +822,7 @@ rev
 reverse
 review
 revived
+rewrite
 rfc3339
 rfind
 rid
@@ -793,6 +832,7 @@ room
 root
 roots
 rotate
+round
 route
 routes
 row
@@ -827,6 +867,7 @@ section
 sections
 security
 seeded
+seek
 seen
 seg
 segment
@@ -864,6 +905,7 @@ since
 single
 sits
 six
+size
 skip
 skipped
 skips
@@ -927,6 +969,7 @@ string
 strip
 struct
 sub
+subsec
 subtree
 success
 successor
@@ -943,6 +986,7 @@ suspicious
 swallowed
 sync
 system
+table
 tag
 tail
 take
@@ -969,6 +1013,7 @@ they
 this
 thread
 three
+threshold
 through
 tidy
 tight
@@ -995,6 +1040,7 @@ total
 touches
 touching
 trace
+tracked
 trailing
 trait
 transcript
@@ -1004,11 +1050,14 @@ triage
 trim
 trimmed
 trimming
+trip
 true
 truncable
 truncate
 truncated
 truncation
+trusted
+try
 ts
 turn
 twice
@@ -1031,6 +1080,7 @@ unreadable
 unrecognised
 unstable
 unstack
+until
 untouched
 unwrap
 up
@@ -1050,6 +1100,7 @@ valid
 value
 values
 var
+varied
 vec
 verb
 verbatim

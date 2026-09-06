@@ -28,16 +28,37 @@ pub struct Ctx {
 }
 
 impl Ctx {
+    /// For a command that only ever reads. `LOADING.md` §4: this is a read,
+    /// so it is free to refresh the derived index once its tail passes the
+    /// threshold -- see `index::load`.
     pub fn load(store: Store) -> Result<Ctx, Failure> {
-        Ctx::load_with_log(store).map(|(c, _)| c)
+        Ctx::load_opt(store, true)
     }
 
-    /// Same read as `load`, handing back the events instead of dropping them.
-    ///
-    /// One command needs the log itself and not only what it folds into
-    /// (`changes`), and there are two worse ways to give it that: a field on
-    /// `Ctx` that twenty-nine other commands carry and never read, or a
-    /// second full read of a file this one has already read.
+    /// For a command that may append to the log. Still free to read a warm
+    /// or stale index -- applying its tail is cheap enough for the write
+    /// budget -- but it must never pay to rewrite the file itself
+    /// (`LOADING.md` §4 "Cuándo se reescribe").
+    pub fn load_for_write(store: Store) -> Result<Ctx, Failure> {
+        Ctx::load_opt(store, false)
+    }
+
+    fn load_opt(store: Store, allow_index_refresh: bool) -> Result<Ctx, Failure> {
+        let tree = crate::index::load(&store, allow_index_refresh)?;
+        let anchor = anchor::detect(&store.root);
+        Ok(Ctx {
+            store,
+            tree,
+            anchor,
+        })
+    }
+
+    /// Same read `changes` and `why` need, handing back the events instead
+    /// of dropping them. Both need the log's own fields -- `actor`, `lane`,
+    /// the exact payload -- which the derived index does not carry, so this
+    /// always folds the whole log rather than going through `index::load`:
+    /// there is no tail to apply that would save the read those two need
+    /// anyway.
     pub fn load_with_log(store: Store) -> Result<(Ctx, Vec<Event>), Failure> {
         let (events, broken) = store.read_all()?;
         let tree = fold(&events, broken);

@@ -740,6 +740,103 @@ impl Tree {
     }
 }
 
+/// Everything a fresh `Tree` needs that is not already public on it -- the
+/// arena and the map `index.rs` rebuilds `ulid_index` and `children` from.
+/// A constructor rather than public fields, so the arena's append-only
+/// invariant stays enforced by `intern`/`intern_list` alone.
+pub(crate) struct RawParts {
+    pub text: String,
+    pub spans: Vec<Span>,
+    pub nodes: Vec<Node>,
+    pub roots: Vec<u64>,
+    pub stack: Vec<u64>,
+    pub vivacs: Vec<Vivac>,
+    pub next_vivac_num: u64,
+    pub seq: u64,
+    pub seq_change: u64,
+    pub seq_vivac: u64,
+    pub seg_new: u64,
+    pub seg_closed: u64,
+    pub seg_notes: u64,
+    pub seg_events: u64,
+    pub next_num: u64,
+    pub broken_lines: usize,
+}
+
+impl Tree {
+    /// Rebuilds a `Tree` from the derived index's own sections, without
+    /// folding a single event. `nodes` is sorted by `num` first, so a
+    /// `parent` seen earlier than its own child never happens and `children`
+    /// comes out in the same ascending order `sort_nodes` leaves it in.
+    ///
+    /// `pending` and `repeated_nums` start empty on purpose: the index is
+    /// never written while either is non-empty (`has_pending`, below, and
+    /// `LOADING.md` §4 "Un log con anomalías no lleva índice"), so a tree
+    /// loaded this way never had either to begin with.
+    pub(crate) fn from_parts(mut p: RawParts) -> Tree {
+        p.nodes.sort_by_key(|n| n.num);
+        let mut nodes = HashMap::with_capacity(p.nodes.len());
+        let mut children: HashMap<u64, Vec<u64>> = HashMap::new();
+        let mut ulid_index = HashMap::with_capacity(p.nodes.len());
+        for n in p.nodes {
+            ulid_index.insert(n.id.clone(), n.num);
+            if let Some(parent) = n.parent {
+                children.entry(parent).or_default().push(n.num);
+            }
+            nodes.insert(n.num, n);
+        }
+        Tree {
+            text: p.text,
+            spans: p.spans,
+            nodes,
+            children,
+            ulid_index,
+            pending: HashMap::new(),
+            roots: p.roots,
+            stack: p.stack,
+            vivacs: p.vivacs,
+            next_vivac_num: p.next_vivac_num,
+            seq: p.seq,
+            seq_change: p.seq_change,
+            seq_vivac: p.seq_vivac,
+            seg_new: p.seg_new,
+            seg_closed: p.seg_closed,
+            seg_notes: p.seg_notes,
+            seg_events: p.seg_events,
+            next_num: p.next_num,
+            broken_lines: p.broken_lines,
+            repeated_nums: Vec::new(),
+        }
+    }
+
+    /// The arena verbatim, for the derived index to write out. A span handed
+    /// out by any `Node` in this tree stays valid against these exact bytes.
+    pub(crate) fn raw_text(&self) -> &str {
+        &self.text
+    }
+
+    /// The spans arena `Node::refs` and `Node::governs` point into, verbatim.
+    pub(crate) fn raw_spans(&self) -> &[Span] {
+        &self.spans
+    }
+
+    /// Every node, ascending by `num` -- the order the derived index stores
+    /// its own table in, so loading it back never has to sort.
+    pub(crate) fn nodes_sorted(&self) -> Vec<&Node> {
+        let mut v: Vec<&Node> = self.nodes.values().collect();
+        v.sort_by_key(|n| n.num);
+        v
+    }
+
+    /// A forward reference still waiting on a node that has not arrived.
+    /// The derived index is never written while this is true: loading from
+    /// it skips the fold that would otherwise fix the reference up once the
+    /// node does arrive, so a persisted `pending` would stay wrong forever.
+    pub(crate) fn has_pending(&self) -> bool {
+        !self.pending.is_empty()
+    }
+}
+
 /// Subtree counts for every node, computed in one go.
 ///
 /// Asking each node for its own count walks its whole subtree, and doing

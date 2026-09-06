@@ -1,16 +1,17 @@
-//! The store: one directory, two files.
+//! The store: one directory, three files.
 //!
 //! ```text
 //! .vivac/
 //!   events    append-only log, one JSON per line   <- SOURCE OF TRUTH
 //!   config    project_id and opaque actor
+//!   index     derived projection of `events`       <- DISPOSABLE, REGENERABLE
 //! ```
 //!
-//! There is no `index.db` and no `state`. `ROADMAP.md` §4 leaves them out of
-//! Tier 0 on purpose: with dozens of nodes, folding the log in memory is
-//! instant, and SQLite lands when the performance pillar asks for it --ten
-//! thousand nodes, FTS5-- not before. Storing the stack apart would be the
-//! second home of the same state.
+//! `index` is not SQLite and not a second home for any state `events` does
+//! not already hold: deleting it changes no command's output, only how long
+//! building a `Tree` takes. `index.rs` owns its format and every rule about
+//! when it is trusted, refreshed or thrown away; this module only names
+//! where it lives.
 
 use crate::{clock, id};
 use serde::{Deserialize, Serialize};
@@ -21,6 +22,7 @@ use std::path::{Path, PathBuf};
 pub const DIR: &str = ".vivac";
 pub const LOG: &str = "events";
 pub const CONFIG: &str = "config";
+pub const INDEX: &str = "index";
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
@@ -93,6 +95,10 @@ impl Store {
 
     pub fn log(&self) -> PathBuf {
         self.root.join(DIR).join(LOG)
+    }
+
+    pub fn index_path(&self) -> PathBuf {
+        self.root.join(DIR).join(INDEX)
     }
 }
 
