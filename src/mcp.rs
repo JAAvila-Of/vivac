@@ -18,8 +18,9 @@
 //! **What this is not.** `INTEGRATION.md` §4 is blunt about it: MCP tools are
 //! voluntary, and an agent under task pressure does not call them. So this
 //! does not fix the capture problem, and it is not offered as a fix. What it
-//! answers is `d100`: engram is an MCP server, and taking its place means
-//! being reachable through the same door, in the tool list, with a schema.
+//! answers is `d100`: the memory store this replaces is reachable over MCP,
+//! and taking its place means being reachable through the same door, in the
+//! tool list, with a schema.
 //!
 //! **Reads only, for now.** The write operations return `()` and print, so
 //! the server would have nothing to report back. They keep going through the
