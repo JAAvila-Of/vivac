@@ -9,6 +9,7 @@
 use crate::args::Args;
 use crate::event::State;
 use crate::model::Tree;
+use crate::output::outln;
 
 pub fn check(a: &Tree, args: &Args) -> Result<i32, crate::failure::Failure> {
     let mut store: Vec<String> = Vec::new();
@@ -72,7 +73,7 @@ pub fn check(a: &Tree, args: &Args) -> Result<i32, crate::failure::Failure> {
     project.sort();
 
     if args.has("json") {
-        println!(
+        outln!(
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
                 "store": store,
@@ -82,35 +83,35 @@ pub fn check(a: &Tree, args: &Args) -> Result<i32, crate::failure::Failure> {
             .map_err(std::io::Error::other)?
         );
     } else {
-        println!();
+        outln!();
         if store.is_empty() && project.is_empty() {
-            println!("  No findings. {} nodes checked.", a.total());
-            println!();
+            outln!("  No findings. {} nodes checked.", a.total());
+            outln!();
         }
         if !store.is_empty() {
-            println!(
+            outln!(
                 "  STORE ({})  <- the tool is lying; it needs fixing",
                 store.len()
             );
-            println!();
+            outln!();
             for m in &store {
-                println!("      {m}");
+                outln!("      {m}");
             }
-            println!();
+            outln!();
         }
         if !project.is_empty() {
-            println!(
+            outln!(
                 "  PROJECT ({})  <- the store is fine; the work is not",
                 project.len()
             );
-            println!();
+            outln!();
             for m in &project {
-                println!("      {m}");
+                outln!("      {m}");
             }
-            println!();
-            println!("  A false close is not repaired by editing the tree: reopen what");
-            println!("  stayed open, or close it deliberately with --force.");
-            println!();
+            outln!();
+            outln!("  A false close is not repaired by editing the tree: reopen what");
+            outln!("  stayed open, or close it deliberately with --force.");
+            outln!();
         }
     }
     Ok(i32::from(!(store.is_empty() && project.is_empty())))

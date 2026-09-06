@@ -10,6 +10,7 @@
 use crate::args::Args;
 use crate::event::VivacKind;
 use crate::failure::{Failure, R};
+use crate::output::outln;
 
 /// Wraps text in the envelope Claude Code injects into the context. It is a
 /// single JSON line, with no external dependency and no `jq` in between: a
@@ -70,7 +71,7 @@ pub fn start(ctx: &mut crate::ops::Ctx, a: &Args, project: &str) -> R {
     // In hook mode the brief is captured and emitted inside the envelope. No
     // loose noise on stdout: what is not in the envelope, the agent never sees.
     let text = crate::brief::to_text(&ctx.tree, ctx.anchor.as_ref(), a, project)?;
-    println!("{}", envelope("SessionStart", &text));
+    outln!("{}", envelope("SessionStart", &text));
     // The brief goes out **first**, and the write cannot take it down. A
     // failure that left the agent with no brief would turn a hole in the
     // instrument into blindness in the product, which is a far worse trade: a
@@ -86,7 +87,7 @@ pub fn end(ctx: &mut crate::ops::Ctx, a: &Args) -> R {
     // noise to be pruned later.
     if ctx.tree.stack.is_empty() {
         if !a.has("hook") {
-            println!("  Empty stack: no stop worth saving.");
+            outln!("  Empty stack: no stop worth saving.");
         }
         return Ok(());
     }
@@ -96,7 +97,7 @@ pub fn end(ctx: &mut crate::ops::Ctx, a: &Args) -> R {
     // that repeats is not a stop, it is a log.
     if ctx.tree.seq_change <= ctx.tree.seq_vivac {
         if !a.has("hook") {
-            println!("  Nothing changed since the last stop.");
+            outln!("  Nothing changed since the last stop.");
         }
         return Ok(());
     }
@@ -105,7 +106,7 @@ pub fn end(ctx: &mut crate::ops::Ctx, a: &Args) -> R {
     let num = ctx.tree.next_vivac_num.max(1);
     crate::ops::auto_vivac(ctx, VivacKind::Auto, &next, &label)?;
     if !a.has("hook") {
-        println!("  v{num}  automatic stop at session close");
+        outln!("  v{num}  automatic stop at session close");
     }
     Ok(())
 }
@@ -153,7 +154,7 @@ pub fn dispatch(ctx: &mut crate::ops::Ctx, a: &Args, project: &str) -> R {
 /// Writing to the user's settings is an action you ask for, not one that
 /// happens by surprise.
 pub fn hooks() -> R {
-    println!(
+    outln!(
         r#"
   Paste this into the project's .claude/settings.json:
 

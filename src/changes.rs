@@ -18,6 +18,7 @@ use crate::args::Args;
 use crate::event::{Body, Event, Flag, State};
 use crate::failure::Failure;
 use crate::model::{Node, Tree, Vivac};
+use crate::output::outln;
 use crate::render::{print_json, wrap, WIDTH};
 use serde_json::json;
 
@@ -314,26 +315,26 @@ pub(crate) fn tail_phrase(tail: &Tail) -> Option<String> {
 }
 
 fn print_text(tree: &Tree, result: &Changed) {
-    println!();
-    println!("{}", header(&result.since, result.tail.stops));
+    outln!();
+    outln!("{}", header(&result.since, result.tail.stops));
 
     let mut said_something = false;
 
     if !result.opened.is_empty() {
         said_something = true;
-        println!();
-        println!("  OPENED ({})", result.opened.len());
+        outln!();
+        outln!("  OPENED ({})", result.opened.len());
         for n in &result.opened {
-            println!("    {:<6} {}", n.alias(), n.title(tree));
+            outln!("    {:<6} {}", n.alias(), n.title(tree));
         }
     }
 
     if !result.closed.is_empty() {
         said_something = true;
-        println!();
-        println!("  CLOSED ({})", result.closed.len());
+        outln!();
+        outln!("  CLOSED ({})", result.closed.len());
         for c in &result.closed {
-            println!("    {:<6} {}", c.node.alias(), c.node.title(tree));
+            outln!("    {:<6} {}", c.node.alias(), c.node.title(tree));
             let line = if c.forced {
                 if c.outcome.is_empty() {
                     "forced".to_string()
@@ -344,60 +345,60 @@ fn print_text(tree: &Tree, result: &Changed) {
                 c.outcome.clone()
             };
             for l in wrap(&line, WIDTH, "           ") {
-                println!("{l}");
+                outln!("{l}");
             }
         }
     }
 
     if !result.flagged.is_empty() {
         said_something = true;
-        println!();
-        println!("  FLAGGED ({})", result.flagged.len());
+        outln!();
+        outln!("  FLAGGED ({})", result.flagged.len());
         for f in &result.flagged {
-            println!("    {:<6} {}", f.node.alias(), f.node.title(tree));
+            outln!("    {:<6} {}", f.node.alias(), f.node.title(tree));
             for l in wrap(
                 &format!("{}: {}", f.flag.word(), f.reason),
                 WIDTH,
                 "           ",
             ) {
-                println!("{l}");
+                outln!("{l}");
             }
         }
     }
 
     if !result.moved.is_empty() {
         said_something = true;
-        println!();
-        println!("  MOVED ({})", result.moved.len());
+        outln!();
+        outln!("  MOVED ({})", result.moved.len());
         for m in &result.moved {
-            println!("    {:<6} {}", m.node.alias(), m.node.title(tree));
+            outln!("    {:<6} {}", m.node.alias(), m.node.title(tree));
             let word = m.state.word(m.node.kind);
             for l in wrap(
                 &format!("{word}: {}", m.node.outcome(tree)),
                 WIDTH,
                 "           ",
             ) {
-                println!("{l}");
+                outln!("{l}");
             }
         }
     }
 
     if let Some(t) = tail_phrase(&result.tail) {
         said_something = true;
-        println!();
-        println!("  + {t}");
+        outln!();
+        outln!("  + {t}");
     }
 
     if !said_something {
-        println!();
+        outln!();
         match &result.since {
             Boundary::Stop { vivac, .. } => {
-                println!("  Nothing has moved since {}.", vivac.alias())
+                outln!("  Nothing has moved since {}.", vivac.alias())
             }
-            Boundary::Beginning { .. } => println!("  Nothing has moved."),
+            Boundary::Beginning { .. } => outln!("  Nothing has moved."),
         }
     }
-    println!();
+    outln!();
 }
 
 fn as_json(tree: &Tree, result: &Changed) -> serde_json::Value {

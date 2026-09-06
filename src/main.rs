@@ -26,6 +26,7 @@ mod mcp;
 mod model;
 mod ops;
 mod outcome;
+mod output;
 mod params;
 mod project;
 mod reconcile;
@@ -37,6 +38,7 @@ mod web;
 
 use args::Args;
 use failure::Failure;
+use output::outln;
 
 const USAGE: &str = r#"vivac - provenance of work
 
@@ -112,7 +114,11 @@ const USAGE: &str = r#"vivac - provenance of work
 "#;
 
 fn main() {
-    std::process::exit(run());
+    let code = run();
+    // `std::process::exit` skips `Drop`, so a line still sitting in
+    // `output`'s buffer would be lost rather than reach the reader.
+    output::flush();
+    std::process::exit(code);
 }
 
 fn run() -> i32 {
@@ -126,7 +132,7 @@ fn run() -> i32 {
         return 0;
     }
     if matches!(cmd.as_str(), "-V" | "--version" | "version") {
-        println!("vivac {}", env!("CARGO_PKG_VERSION"));
+        outln!("vivac {}", env!("CARGO_PKG_VERSION"));
         return 0;
     }
     let a = Args::parse(argv.into_iter().skip(1));
@@ -135,6 +141,10 @@ fn run() -> i32 {
         Ok(code) => code,
         Err(e) => {
             let c = e.code();
+            // Whatever `dispatch` already buffered has to reach stdout
+            // before the refusal reaches stderr, or the two streams
+            // interleave out of order once a terminal merges them.
+            output::flush();
             e.print_to_stderr();
             c
         }
@@ -230,10 +240,10 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
 
     if cmd == "init" {
         let s = store::Store::create(&cwd)?;
-        println!("  vivac planted in {}", cwd.display());
-        println!("        project {}", s.config.project_id);
-        println!();
-        println!("  First node:  vivac push \"<title>\" --why \"<reason>\"");
+        outln!("  vivac planted in {}", cwd.display());
+        outln!("        project {}", s.config.project_id);
+        outln!();
+        outln!("  First node:  vivac push \"<title>\" --why \"<reason>\"");
         return Ok(0);
     }
 

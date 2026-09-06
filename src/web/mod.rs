@@ -26,6 +26,7 @@ mod tree;
 mod why;
 
 use crate::failure::{Failure, R};
+use crate::output::{flush, outln};
 use crate::project::Registry;
 use gate::{Denial, Gate, Incoming, Verdict, SESSION_COOKIE};
 use std::path::PathBuf;
@@ -353,8 +354,12 @@ pub fn serve(roots: Vec<PathBuf>, port: Option<u16>, open: bool) -> R {
     let mut registry = Registry::open(roots)?;
 
     let url = gate.boot_url();
-    println!("  vivac web listening on http://127.0.0.1:{bound_port}");
-    println!("  open this to start a session: {url}");
+    outln!("  vivac web listening on http://127.0.0.1:{bound_port}");
+    outln!("  open this to start a session: {url}");
+    // This is the one line the person starting the server needs before the
+    // loop below blocks for good, so it cannot wait in `output`'s buffer for
+    // a `main` that will not run again until the process is killed.
+    flush();
     if open {
         open_browser(&url);
     }
