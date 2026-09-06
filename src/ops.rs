@@ -89,14 +89,14 @@ fn vivac(
         .stack
         .iter()
         .filter_map(|id| ctx.tree.node(id))
-        .map(|n| (n.alias(), n.title.clone()))
+        .map(|n| (n.alias(), n.title(&ctx.tree).to_string()))
         .collect();
     let mut working_set: Vec<String> = ctx
         .tree
         .stack
         .iter()
         .filter_map(|id| ctx.tree.node(id))
-        .flat_map(|n| n.governs.iter().cloned())
+        .flat_map(|n| n.governs(&ctx.tree).into_iter().map(str::to_string))
         .collect();
     working_set.sort();
     working_set.dedup();
@@ -227,7 +227,7 @@ pub fn push(ctx: &mut Ctx, p: params::Push) -> Result<Outcome, Failure> {
         ctx.tree.roots().first().map(|root| outcome::DepthAdvice {
             depth: depth_of,
             root_alias: root.alias(),
-            root_title: root.title.clone(),
+            root_title: root.title(&ctx.tree).to_string(),
         })
     } else {
         None
@@ -263,7 +263,7 @@ pub fn pop(ctx: &mut Ctx, p: params::Pop) -> Result<Outcome, Failure> {
     let parent = match ctx.tree.node(focus.parent.as_deref().unwrap_or("")) {
         Some(parent) => Some(outcome::PoppedTo {
             alias: parent.alias(),
-            title: parent.title.clone(),
+            title: parent.title(&ctx.tree).to_string(),
             counts: ctx.tree.counts(&parent.id),
         }),
         None => None,
@@ -358,7 +358,7 @@ pub fn park(ctx: &mut Ctx, p: params::Park) -> Result<Outcome, Failure> {
     ctx.emit(evs)?;
     Ok(Outcome::Parked {
         alias: node.alias(),
-        title: node.title,
+        title: node.title(&ctx.tree).to_string(),
     })
 }
 
@@ -384,7 +384,7 @@ fn close_node(
                 pending_count.len()
             );
             for c in &pending_count {
-                m.push_str(&format!("\n      {:<6} {}", c.alias(), c.title));
+                m.push_str(&format!("\n      {:<6} {}", c.alias(), c.title(&ctx.tree)));
             }
             m.push_str(&format!(
                 "\n\n  A run closes with its findings, not with its report.\n  \
@@ -406,7 +406,7 @@ fn close_node(
     ctx.emit(evs)?;
     Ok(crate::outcome::Closed {
         alias: n.alias(),
-        title: n.title.clone(),
+        title: n.title(&ctx.tree).to_string(),
         force,
     })
 }
@@ -450,7 +450,7 @@ pub fn add(ctx: &mut Ctx, p: params::Add) -> Result<Outcome, Failure> {
         .and_then(|id| ctx.tree.node(&id))
         .map(|n| outcome::AddedUnder {
             alias: n.alias(),
-            title: n.title.clone(),
+            title: n.title(&ctx.tree).to_string(),
         });
     Ok(Outcome::Added {
         alias: format!("{}{}", kind.prefix(), num),
@@ -489,7 +489,7 @@ pub fn block(ctx: &mut Ctx, p: params::Block) -> Result<Outcome, Failure> {
         )));
     };
     let blocks = !p.off;
-    let (pa, pt) = (parent.alias(), parent.title.clone());
+    let (pa, pt) = (parent.alias(), parent.title(&ctx.tree).to_string());
     ctx.emit(vec![Body::BlockChanged {
         node: n.id.clone(),
         blocks,
@@ -523,11 +523,11 @@ pub fn promote(ctx: &mut Ctx, p: params::Promote) -> Result<Outcome, Failure> {
         .and_then(|id| ctx.tree.node(id))
         .map(|parent| outcome::StillBornFrom {
             alias: parent.alias(),
-            title: parent.title.clone(),
+            title: parent.title(&ctx.tree).to_string(),
         });
     Ok(Outcome::Promoted {
         alias: n.alias(),
-        title: n.title,
+        title: n.title(&ctx.tree).to_string(),
         parent,
     })
 }
@@ -596,11 +596,11 @@ pub fn abandon(ctx: &mut Ctx, p: params::Abandon) -> Result<Outcome, Failure> {
         let mut m = format!(
             "  {}  {}\n  has {} open descendant(s) with no rescue:\n",
             n.alias(),
-            n.title,
+            n.title(&ctx.tree),
             falling.len()
         );
         for d in &falling {
-            m.push_str(&format!("\n      {:<6} {}", d.alias(), d.title));
+            m.push_str(&format!("\n      {:<6} {}", d.alias(), d.title(&ctx.tree)));
         }
         m.push_str("\n\n  Abandon all of it:     vivac abandon ");
         m.push_str(&n.num.to_string());
@@ -619,8 +619,10 @@ pub fn abandon(ctx: &mut Ctx, p: params::Abandon) -> Result<Outcome, Failure> {
         forced: false,
     }];
     let falling_count = falling.len();
-    let saved_lines: Vec<(String, String)> =
-        saved.iter().map(|d| (d.alias(), d.title.clone())).collect();
+    let saved_lines: Vec<(String, String)> = saved
+        .iter()
+        .map(|d| (d.alias(), d.title(&ctx.tree).to_string()))
+        .collect();
     for d in falling {
         evs.push(Body::StateChanged {
             node: d.id.clone(),
@@ -643,7 +645,7 @@ pub fn abandon(ctx: &mut Ctx, p: params::Abandon) -> Result<Outcome, Failure> {
     ctx.emit(evs)?;
     Ok(Outcome::Abandoned {
         alias: n.alias(),
-        title: n.title,
+        title: n.title(&ctx.tree).to_string(),
         cascaded: (falling_count > 0).then_some(falling_count),
         rescued: saved_lines
             .into_iter()
@@ -754,7 +756,7 @@ pub fn flag(ctx: &mut Ctx, p: params::Flag) -> Result<Outcome, Failure> {
         alias: n.alias(),
         flag: flag.word().to_string(),
         change: outcome::FlagChange::Raised {
-            title: n.title,
+            title: n.title(&ctx.tree).to_string(),
             reason,
         },
     })

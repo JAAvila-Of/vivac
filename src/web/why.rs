@@ -24,13 +24,13 @@ use crate::render::{anchor_of, open_then_of, standing_of, Full};
 
 /// One node as a line inside a `<details>`: the alias links to its own
 /// lineage, so the drawing is also the way you walk the tree.
-fn link(project: &str, n: &Node) -> String {
+fn link(project: &str, tree: &Tree, n: &Node) -> String {
     format!(
         "<li><span class=\"alias\"><a href=\"/p/{p}/why/{a}\">{a}</a></span>\
          <p class=\"title\">{t}</p></li>\n",
         p = escape(project),
         a = escape(&n.alias()),
-        t = escape(&n.title)
+        t = escape(n.title(tree))
     )
 }
 
@@ -41,7 +41,7 @@ fn link(project: &str, n: &Node) -> String {
 /// the answer --nothing was decided here, nothing was left open here-- and
 /// a disclosure triangle that opens onto nothing teaches that the shape
 /// cannot be trusted.
-fn weight(project: &str, standing: &[&Node], open_then: &[&Node]) -> String {
+fn weight(project: &str, tree: &Tree, standing: &[&Node], open_then: &[&Node]) -> String {
     if standing.is_empty() && open_then.is_empty() {
         return String::new();
     }
@@ -59,14 +59,14 @@ fn weight(project: &str, standing: &[&Node], open_then: &[&Node]) -> String {
     if !standing.is_empty() {
         body.push_str("<h3>Decided here, still standing</h3>\n<ul class=\"nodes\">\n");
         for n in standing {
-            body.push_str(&link(project, n));
+            body.push_str(&link(project, tree, n));
         }
         body.push_str("</ul>\n");
     }
     if !open_then.is_empty() {
         body.push_str("<h3>Still open at that moment</h3>\n<ul class=\"nodes\">\n");
         for n in open_then {
-            body.push_str(&link(project, n));
+            body.push_str(&link(project, tree, n));
         }
         body.push_str("</ul>\n");
     }
@@ -92,7 +92,10 @@ fn facts(tree: &Tree, ag: &Aggregates, full: &Full, n: &Node) -> String {
     let mut parts = vec![
         format!("<span class=\"word\">{}</span>", n.kind.word()),
         format!("<span class=\"word\">{}</span>", n.state.word(n.kind)),
-        format!("<span class=\"when\">opened {}</span>", escape(&n.opened)),
+        format!(
+            "<span class=\"when\">opened {}</span>",
+            escape(n.opened(tree))
+        ),
     ];
     let anchor = anchor_of(tree, full, n);
     if !anchor.is_empty_tree() {
@@ -131,9 +134,14 @@ fn step(project: &str, tree: &Tree, ag: &Aggregates, full: &Full, n: &Node, here
         "<li{cls}>\n<span class=\"alias\">{alias}</span>\n<div class=\"what\">\n\
          <p class=\"title\">{title}{mark}</p>\n{facts}{weight}</div>\n</li>\n",
         cls = if here { " class=\"here\"" } else { "" },
-        title = escape(&n.title),
+        title = escape(n.title(tree)),
         facts = facts(tree, ag, full, n),
-        weight = weight(project, &standing_of(tree, n), &open_then_of(tree, full, n)),
+        weight = weight(
+            project,
+            tree,
+            &standing_of(tree, n),
+            &open_then_of(tree, full, n)
+        ),
     )
 }
 

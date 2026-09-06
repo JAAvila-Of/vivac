@@ -59,22 +59,22 @@ fn tile_class(n: &Node) -> &'static str {
 /// carries the rest -- alias, state, title -- in the separator `brief.rs`
 /// already uses, so hovering or reading the raw HTML answers "what is
 /// this" without a click.
-fn tile(project: &str, n: &Node) -> String {
+fn tile(project: &str, tree: &Tree, n: &Node) -> String {
     format!(
         "<a class=\"{cls}\" href=\"/p/{p}/why/{a}\" title=\"{a} · {w} · {t}\">{a}</a>\n",
         cls = tile_class(n),
         p = escape(project),
         a = escape(&n.alias()),
         w = escape(n.state.word(n.kind)),
-        t = escape(&n.title),
+        t = escape(n.title(tree)),
     )
 }
 
 /// The band hanging off one row: one tile per direct child, in tree order.
 /// Its width is the fan-out -- that is the whole of `d194`'s argument, so
 /// this draws it and never counts it.
-fn comb(project: &str, children: &[&Node]) -> String {
-    let tiles: String = children.iter().map(|c| tile(project, c)).collect();
+fn comb(project: &str, tree: &Tree, children: &[&Node]) -> String {
+    let tiles: String = children.iter().map(|c| tile(project, tree, c)).collect();
     format!("<div class=\"comb\">\n{tiles}</div>\n")
 }
 
@@ -99,10 +99,10 @@ fn comb(project: &str, children: &[&Node]) -> String {
 /// not also fire the label. Clicking anywhere else in the summary -- the
 /// title, the count, the triangle -- toggles as normal.
 fn row(project: &str, tree: &Tree, n: &Node, children: &[&Node]) -> String {
-    let comb_html = comb(project, children);
+    let comb_html = comb(project, tree, children);
     let nested_html = rows(project, tree, children);
     let alias = alias_link(project, &n.alias());
-    let title = escape(&n.title);
+    let title = escape(n.title(tree));
 
     // The same rule `why.rs` applies to its own disclosure: a triangle
     // that opens onto nothing teaches that the shape cannot be trusted.

@@ -447,6 +447,7 @@ insert
 inside
 instant
 intent
+intern
 into
 invariants
 invents
@@ -880,6 +881,7 @@ sort
 sorted
 source
 sources
+span
 spanish
 spans
 spawn

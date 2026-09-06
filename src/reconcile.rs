@@ -98,14 +98,17 @@ pub fn reconcile(a: &Tree, anchor: &dyn Anchor, args: &Args) -> R {
         .filter(|c| !c.file_path.replace('\\', "/").starts_with(".vivac/"))
         .collect();
 
-    let governing: Vec<&Node> = a.nodes_iter().filter(|n| !n.governs.is_empty()).collect();
+    let governing: Vec<&Node> = a
+        .nodes_iter()
+        .filter(|n| !n.governs(a).is_empty())
+        .collect();
 
     let mut verdicts: Vec<Verdict> = changes
         .iter()
         .map(|c| {
             let mut claimed_by: Vec<&Node> = governing
                 .iter()
-                .filter(|n| n.governs.iter().any(|g| glob::covers(g, &c.file_path)))
+                .filter(|n| n.governs(a).iter().any(|g| glob::covers(g, &c.file_path)))
                 .copied()
                 .collect();
             claimed_by.sort_by_key(|n| (!n.state.is_open(), n.num));
@@ -135,7 +138,7 @@ pub fn reconcile(a: &Tree, anchor: &dyn Anchor, args: &Args) -> R {
                 "changes": v.times,
                 "claimed_by": v.claimed_by.iter().map(|n| json!({
                     "alias": n.alias(),
-                    "title": n.title,
+                    "title": n.title(a),
                     "state": n.state,
                 })).collect::<Vec<_>>(),
             })
