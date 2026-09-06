@@ -331,6 +331,14 @@ agent ever opens, so the list is a budget and not a catalogue. The seven
 writes are the seams of the work — opening something, closing it, parking
 it, noting it, deciding, and the safe stop — and nothing else got in.
 
+The same budget governs what a tool hands back. `vivac_open` returns each
+front as five fields — alias, kind, state, title and lineage — rather than
+the whole node, because the answer to what is unfinished is a list of names
+and where they hang; `vivac_why` on an alias brings the rest. It used to
+return the node, which over ten thousand nodes meant 1,993,053 bytes where
+599,012 will do. A payload nobody asked for costs the same context as a tool
+nobody calls.
+
 **Nothing destructive is reachable from here, and that is deliberate.**
 `abandon` discards a node and everything below it, and through a tool that
 would happen without anybody seeing a command. It stays on the command line,

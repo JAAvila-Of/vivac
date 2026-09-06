@@ -8,12 +8,15 @@
 //! claude mcp add vivac -- vivac mcp
 //! ```
 //!
-//! **Standard output is the protocol.** Every other command in this crate
-//! prints as it goes; this one cannot. A `println!` on a path the server
+//! **Standard output is the protocol.** A `println!` on a path the server
 //! touches is not untidy, it is a malformed frame and the client hangs up. So
 //! the reads are called through their builders --`find_data`, `why_data`,
-//! `open_data`, `to_text`-- which return the answer instead of printing it.
-//! `tests/mcp.rs` guards that with a test that reads every line back.
+//! `open_data`, `to_text`-- which return the answer instead of printing it,
+//! and the server decides what reaches the wire. `tests/mcp.rs` guards that
+//! with a test that reads every line back. This used to be the one place in
+//! the crate that could not print as it goes; since `output` became the only
+//! owner of standard output there is no other, and `tests/no_println.rs`
+//! keeps it that way for reasons of its own.
 //!
 //! **What this is not.** `INTEGRATION.md` §4 is blunt about it: MCP tools are
 //! voluntary, and an agent under task pressure does not call them. So this
