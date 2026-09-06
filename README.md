@@ -330,11 +330,24 @@ than record work — closing another node, blocking, flagging, restoring a
 safe point. Those belong to whoever maintains the tree, and they have a
 terminal.
 
-There is a measured reason the writes are here at all. Starting the process
-is 8.2 ms at the median, which is more than the whole 5 ms budget the
-performance pillar sets for writing a node; over MCP the tree is already
-folded in the server and a write is an append. The command line cannot meet
-that ceiling and does not have to — it is not where the agent writes.
+The writes are here because the command line cannot be where an agent writes.
+Starting the process is 8.2 ms at the median, more than the whole 5 ms budget
+the performance pillar sets for writing a node, and no process design brings
+that down.
+
+**What this does not do yet is meet that budget.** Measured against a resident
+server, a write is 16 ms at p99 on a tree of 1,714 nodes and 93 ms on one of
+10,000 — no better than the command line once its startup is discounted, and
+at the top of that range slightly worse. The reason is that the server folds
+the tree again on every write instead of keeping the one it already has, and
+then folds it a third time on the next read, because the write it just made
+invalidated the copy it was holding. Even on a tree of ten nodes, where there
+is nothing to fold, a write is 9 ms at p99: there is a fixed cost underneath
+all of this that has not been taken apart yet.
+
+So this door is the only one where the ceiling can be met, and it does not
+meet it. Saying otherwise would be the more comfortable sentence and it would
+not be true.
 
 Hooks and MCP are not the same offer, and the difference matters. A hook fires
 whether or not anybody wanted it; a tool is called only if the agent decides to.
