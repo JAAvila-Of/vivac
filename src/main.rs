@@ -99,7 +99,7 @@ const USAGE: &str = r#"vivac - provenance of work
 
     vivac session start [--hook]              the brief, ready to inject
     vivac session end   [--hook]              automatic stop at close
-    vivac mcp                                 serve the reads over MCP
+    vivac mcp                                 serve the tree over MCP
     vivac web [--port N] [--no-open]          the tree in a browser, and
           [--project P]                       nowhere but this machine
     vivac hooks                               what to paste into settings.json
