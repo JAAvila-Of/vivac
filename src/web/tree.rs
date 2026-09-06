@@ -133,7 +133,7 @@ fn rows(project: &str, tree: &Tree, siblings: &[&Node]) -> String {
     let body: String = siblings
         .iter()
         .filter_map(|n| {
-            let children = tree.children(&n.id);
+            let children = tree.children(n.num);
             if children.is_empty() {
                 None
             } else {
@@ -362,7 +362,7 @@ mod tests {
     /// The maximum depth under `tree`'s roots, root itself at 0.
     fn max_depth(tree: &Tree) -> usize {
         fn under(tree: &Tree, n: &Node, depth: usize) -> usize {
-            tree.children(&n.id)
+            tree.children(n.num)
                 .iter()
                 .map(|c| under(tree, c, depth + 1))
                 .max()
@@ -387,7 +387,7 @@ mod tests {
 
         let mut degrees: Vec<usize> = tree
             .nodes_iter()
-            .map(|n| tree.children(&n.id).len())
+            .map(|n| tree.children(n.num).len())
             .filter(|&d| d > 0)
             .collect();
         degrees.sort_unstable_by(|a, b| b.cmp(a));

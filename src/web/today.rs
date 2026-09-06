@@ -171,7 +171,11 @@ fn moved_section(project: &str, tree: &Tree, changed: &Changed) -> String {
 /// a rule beside it: the DX pillar does not allow a meaning that only a
 /// colour or a border carries.
 fn stack_section(project: &str, tree: &Tree) -> String {
-    let stack: Vec<&Node> = tree.stack.iter().filter_map(|id| tree.node(id)).collect();
+    let stack: Vec<&Node> = tree
+        .stack
+        .iter()
+        .filter_map(|&num| tree.node_by_num(num))
+        .collect();
     if stack.is_empty() {
         return "<section id=\"focus\">\n<h2>Where you are</h2>\n\
                 <p class=\"empty\">Empty stack.</p>\n</section>\n"
@@ -204,9 +208,8 @@ fn stack_section(project: &str, tree: &Tree) -> String {
 /// picked by the same functions the brief picks them with (`WEB.md` §2).
 fn governs_section(project: &str, tree: &Tree) -> String {
     let focus = tree.focus();
-    let lineage: Vec<&Node> = focus.map(|f| tree.ancestors(&f.id)).unwrap_or_default();
-    let on_lineage: std::collections::HashSet<&str> =
-        lineage.iter().map(|n| n.id.as_str()).collect();
+    let lineage: Vec<&Node> = focus.map(|f| tree.ancestors(f.num)).unwrap_or_default();
+    let on_lineage: std::collections::HashSet<u64> = lineage.iter().map(|n| n.num).collect();
 
     let decisions: String = match focus {
         Some(f) => crate::brief::standing(tree, f, &on_lineage)

@@ -88,14 +88,14 @@ fn vivac(
         .tree
         .stack
         .iter()
-        .filter_map(|id| ctx.tree.node(id))
+        .filter_map(|&num| ctx.tree.node_by_num(num))
         .map(|n| (n.alias(), n.title(&ctx.tree).to_string()))
         .collect();
     let mut working_set: Vec<String> = ctx
         .tree
         .stack
         .iter()
-        .filter_map(|id| ctx.tree.node(id))
+        .filter_map(|&num| ctx.tree.node_by_num(num))
         .flat_map(|n| n.governs(&ctx.tree).into_iter().map(str::to_string))
         .collect();
     working_set.sort();
@@ -260,11 +260,11 @@ pub fn pop(ctx: &mut Ctx, p: params::Pop) -> Result<Outcome, Failure> {
     // below have to be read only after both, or the number comes out wrong.
     let closed = close_node(ctx, &focus, outcome_text, p.force, true)?;
     ctx.emit(vec![v])?;
-    let parent = match ctx.tree.node(focus.parent.as_deref().unwrap_or("")) {
+    let parent = match focus.parent.and_then(|p| ctx.tree.node_by_num(p)) {
         Some(parent) => Some(outcome::PoppedTo {
             alias: parent.alias(),
             title: parent.title(&ctx.tree).to_string(),
-            counts: ctx.tree.counts(&parent.id),
+            counts: ctx.tree.counts(parent.num),
         }),
         None => None,
     };
@@ -350,7 +350,7 @@ pub fn park(ctx: &mut Ctx, p: params::Park) -> Result<Outcome, Failure> {
         outcome: reason.to_string(),
         forced: false,
     });
-    if ctx.tree.stack.contains(&node.id) {
+    if ctx.tree.stack.contains(&node.num) {
         evs.push(Body::Popped {
             node: node.id.clone(),
         });
@@ -376,7 +376,7 @@ fn close_node(
     unstack: bool,
 ) -> Result<crate::outcome::Closed, Failure> {
     if !force {
-        let pending_count = ctx.tree.open_blockers(&n.id);
+        let pending_count = ctx.tree.open_blockers(n.num);
         if !pending_count.is_empty() {
             let mut m = format!(
                 "  {} CANNOT close: {} open closure condition(s)\n",
@@ -400,7 +400,7 @@ fn close_node(
         outcome: outcome.to_string(),
         forced: force,
     }];
-    if unstack && ctx.tree.stack.contains(&n.id) {
+    if unstack && ctx.tree.stack.contains(&n.num) {
         evs.push(Body::Popped { node: n.id.clone() });
     }
     ctx.emit(evs)?;
@@ -482,7 +482,7 @@ pub fn note(ctx: &mut Ctx, p: params::Note) -> Result<Outcome, Failure> {
 
 pub fn block(ctx: &mut Ctx, p: params::Block) -> Result<Outcome, Failure> {
     let n = ctx.resolve(&p.id)?.clone();
-    let Some(parent) = n.parent.as_ref().and_then(|p| ctx.tree.node(p)) else {
+    let Some(parent) = n.parent.and_then(|p| ctx.tree.node_by_num(p)) else {
         return Err(Failure::usage(format!(
             "{} is the root: there is no parent to block.",
             n.alias()
@@ -519,8 +519,7 @@ pub fn promote(ctx: &mut Ctx, p: params::Promote) -> Result<Outcome, Failure> {
     ctx.emit(vec![Body::Promoted { node: n.id.clone() }])?;
     let parent = n
         .parent
-        .as_ref()
-        .and_then(|id| ctx.tree.node(id))
+        .and_then(|id| ctx.tree.node_by_num(id))
         .map(|parent| outcome::StillBornFrom {
             alias: parent.alias(),
             title: parent.title(&ctx.tree).to_string(),
@@ -565,27 +564,27 @@ pub fn abandon(ctx: &mut Ctx, p: params::Abandon) -> Result<Outcome, Failure> {
             .tree
             .resolve(&s)
             .ok_or_else(|| Failure::usage(format!("no such node: {s}")))?;
-        let (rid, ralias) = (r.id.clone(), r.alias());
+        let (rid, r_num, ralias) = (r.id.clone(), r.num, r.alias());
         if rid == n.id {
             return Err(Failure::usage(format!(
                 "{ralias} is the one being abandoned; it cannot be rescued from itself"
             )));
         }
-        if !ctx.tree.descendants(&n.id).iter().any(|d| d.id == rid) {
+        if !ctx.tree.descendants(n.num).iter().any(|d| d.id == rid) {
             return Err(Failure::usage(format!(
                 "{ralias} does not hang off {}: there is nothing to rescue it from",
                 n.alias()
             )));
         }
         rescued.insert(rid.clone());
-        for d in ctx.tree.descendants(&rid) {
+        for d in ctx.tree.descendants(r_num) {
             rescued.insert(d.id.clone());
         }
     }
 
     let (falling, saved): (Vec<&Node>, Vec<&Node>) = ctx
         .tree
-        .descendants(&n.id)
+        .descendants(n.num)
         .into_iter()
         .filter(|d| d.state.is_open())
         .partition(|d| !rescued.contains(&d.id));
@@ -634,10 +633,15 @@ pub fn abandon(ctx: &mut Ctx, p: params::Abandon) -> Result<Outcome, Failure> {
     // The stack is the path to the focus and cannot cross an abandoned node,
     // so everything hanging off the abandoned one leaves it --the rescued
     // included, which stays alive but stops being on the path--.
-    let mut out_of_scope: Vec<String> = vec![n.id.clone()];
-    out_of_scope.extend(ctx.tree.descendants(&n.id).iter().map(|d| d.id.clone()));
-    for id in out_of_scope {
-        if ctx.tree.stack.contains(&id) {
+    let mut out_of_scope: Vec<(u64, String)> = vec![(n.num, n.id.clone())];
+    out_of_scope.extend(
+        ctx.tree
+            .descendants(n.num)
+            .iter()
+            .map(|d| (d.num, d.id.clone())),
+    );
+    for (num, id) in out_of_scope {
+        if ctx.tree.stack.contains(&num) {
             evs.push(Body::Popped { node: id });
         }
     }
@@ -679,18 +683,19 @@ pub fn focus(ctx: &mut Ctx, p: params::Focus) -> Result<Outcome, Failure> {
         }
     }
 
-    let lineage: Vec<String> = ctx
+    let lineage: Vec<(u64, String)> = ctx
         .tree
-        .ancestors(&n.id)
+        .ancestors(n.num)
         .iter()
-        .map(|p| p.id.clone())
+        .map(|p| (p.num, p.id.clone()))
         .collect();
     let mut evs: Vec<Body> = ctx
         .tree
         .stack
         .iter()
-        .filter(|id| !lineage.contains(id))
-        .map(|id| Body::Popped { node: id.clone() })
+        .filter(|num| !lineage.iter().any(|(lineage_num, _)| lineage_num == *num))
+        .filter_map(|&num| ctx.tree.node_by_num(num))
+        .map(|n| Body::Popped { node: n.id.clone() })
         .collect();
     if !n.state.is_open() {
         evs.push(Body::StateChanged {
@@ -700,8 +705,8 @@ pub fn focus(ctx: &mut Ctx, p: params::Focus) -> Result<Outcome, Failure> {
             forced: false,
         });
     }
-    for id in &lineage {
-        if !ctx.tree.stack.contains(id) {
+    for (num, id) in &lineage {
+        if !ctx.tree.stack.contains(num) {
             evs.push(Body::Pushed { node: id.clone() });
         }
     }
@@ -849,7 +854,7 @@ pub fn restore(ctx: &mut Ctx, p: params::Restore) -> Result<Outcome, Failure> {
     for (alias, title) in &v.stack {
         let state = match ctx.tree.resolve(alias) {
             Some(n) if n.state.is_open() => {
-                lineage.push(n.id.clone());
+                lineage.push((n.num, n.id.clone()));
                 continue;
             }
             Some(n) => n.state.word(n.kind).to_string(),
@@ -865,11 +870,12 @@ pub fn restore(ctx: &mut Ctx, p: params::Restore) -> Result<Outcome, Failure> {
         .tree
         .stack
         .iter()
-        .filter(|id| !lineage.contains(id))
-        .map(|id| Body::Popped { node: id.clone() })
+        .filter(|num| !lineage.iter().any(|(lineage_num, _)| lineage_num == *num))
+        .filter_map(|&num| ctx.tree.node_by_num(num))
+        .map(|n| Body::Popped { node: n.id.clone() })
         .collect();
-    for id in &lineage {
-        if !ctx.tree.stack.contains(id) {
+    for (num, id) in &lineage {
+        if !ctx.tree.stack.contains(num) {
             evs.push(Body::Pushed { node: id.clone() });
         }
     }

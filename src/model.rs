@@ -33,7 +33,15 @@ pub struct Node {
     /// very failure this project attacks.
     pub why: Span,
     pub state: State,
-    pub parent: Option<String>,
+    /// The parent's `num`, not its ULID: the edge is an integer, the same as
+    /// `children`, `roots` and `stack`. When the parent's ULID has no node
+    /// yet -- a hand edit whose child's line landed first, or a broken line
+    /// that swallowed the parent's own -- this holds a value nothing else
+    /// ever answers to, minted by `Tree::resolve_pending`. If the parent
+    /// does show up later, `Tree::apply_pending` rewrites it to the real
+    /// `num`; if it never does, this keeps meaning exactly what it means
+    /// today: no node here.
+    pub parent: Option<u64>,
     /// The parent's closure condition. Explicit, and by default it does **not**
     /// block: forcing it leaves parents that never close. `MODEL.md` §5.
     pub blocks: bool,
@@ -125,6 +133,20 @@ impl Node {
     }
 }
 
+/// A `num` two different ULIDs both claimed -- a hand edit, since the log
+/// itself only ever hands one out once. Recorded rather than silently
+/// resolved: once `num` is the key `nodes` is stored under, only one of the
+/// two can ever live there, so a scan over what survives cannot see the one
+/// that lost. `check` used to find this by scanning; now it reads this.
+#[derive(Debug, Clone)]
+pub struct RepeatedNum {
+    pub num: u64,
+    /// The alias of the node that kept the number.
+    pub first: String,
+    /// The alias the second claimant would have had.
+    pub second: String,
+}
+
 #[derive(Debug, Default, Clone, Copy, serde::Serialize)]
 pub struct Counts {
     pub total: usize,
@@ -158,11 +180,27 @@ pub struct Tree {
     /// itself a `Span` into `text`, so a node's own span here names a
     /// contiguous run of them -- a span of spans.
     spans: Vec<Span>,
-    nodes: HashMap<String, Node>,
-    children: HashMap<String, Vec<String>>,
-    by_num: HashMap<u64, String>,
-    pub roots: Vec<String>,
-    pub stack: Vec<String>,
+    /// Keyed by `num`, not by the 26-byte ULID: measured, that is 7.51 ms
+    /// median to build over 10 000 nodes against 1.58 with `num`, and the
+    /// write budget is 5. `by_num` does not survive next to it -- with `num`
+    /// as the key it would only be `nodes` again, one hop further away.
+    nodes: HashMap<u64, Node>,
+    children: HashMap<u64, Vec<u64>>,
+    /// A ULID resolves here to the `num` a node was actually created under.
+    /// Built during the fold, one entry per `NodeCreated` applied -- never
+    /// for a reference that only ever names a node, such as a dangling
+    /// `parent`. That is what lets a lookup that finds nothing mean "this
+    /// ULID has no node" rather than requiring a second pass once the fold
+    /// is done: `apply` is also what the live write path calls, one event at
+    /// a time, and there is no "done" to wait for there.
+    ulid_index: HashMap<String, u64>,
+    /// A ULID named as a `parent` or `stack.pushed` before its own
+    /// `node.created` arrived (if it ever does), mapped to the `num`
+    /// `resolve_pending` minted for it while waiting. Empty on a
+    /// well-formed log: nothing here is on any hot path a real write takes.
+    pending: HashMap<String, u64>,
+    pub roots: Vec<u64>,
+    pub stack: Vec<u64>,
     pub vivacs: Vec<Vivac>,
     pub next_vivac_num: u64,
     pub seq: u64,
@@ -186,6 +224,9 @@ pub struct Tree {
     pub seg_events: u64,
     pub next_num: u64,
     pub broken_lines: usize,
+    /// Every `num` a hand edit handed to two different ULIDs, in the order
+    /// the fold met the second claimant. Empty on a well-formed log.
+    pub repeated_nums: Vec<RepeatedNum>,
 }
 
 pub fn fold(events: &[Event], broken: usize) -> Tree {
@@ -244,8 +285,25 @@ impl Tree {
                 refs,
                 governs,
             } => {
-                if self.nodes.contains_key(node) {
+                if self.ulid_index.contains_key(node) {
                     // Repeated creation: commutative, the first one wins.
+                    return;
+                }
+                if let Some(current) = self.nodes.get(num) {
+                    // Two different ULIDs claiming the same `num` -- a hand
+                    // edit, since `next_num` never repeats one on its own.
+                    // With `num` as the key, the second one cannot be kept
+                    // beside the first the way two different ULIDs used to
+                    // sit side by side: one of them has to give way, and the
+                    // same rule as above decides which -- the first stands.
+                    // What used to be findable by scanning `nodes` afterwards
+                    // is recorded here instead, since the losing side never
+                    // makes it into that scan.
+                    self.repeated_nums.push(RepeatedNum {
+                        num: *num,
+                        first: current.alias(),
+                        second: format!("{}{}", kind.prefix(), num),
+                    });
                     return;
                 }
                 let title_span = self.intern(title);
@@ -253,8 +311,9 @@ impl Tree {
                 let refs_span = self.intern_list(refs);
                 let governs_span = self.intern_list(governs);
                 let opened_span = self.intern(crate::clock::date_of(ts));
+                let parent_num = parent.as_deref().map(|p| self.resolve_pending(p));
                 self.nodes.insert(
-                    node.clone(),
+                    *num,
                     Node {
                         id: node.clone(),
                         num: *num,
@@ -262,7 +321,7 @@ impl Tree {
                         title: title_span,
                         why: why_span,
                         state: State::Active,
-                        parent: parent.clone(),
+                        parent: parent_num,
                         blocks: *blocks,
                         note: Span::default(),
                         outcome: Span::default(),
@@ -274,16 +333,15 @@ impl Tree {
                         flags: BTreeMap::new(),
                     },
                 );
-                self.by_num.insert(*num, node.clone());
+                self.ulid_index.insert(node.clone(), *num);
                 self.next_num = self.next_num.max(*num + 1);
-                match parent {
-                    Some(p) => self
-                        .children
-                        .entry(p.clone())
-                        .or_default()
-                        .push(node.clone()),
-                    None => self.roots.push(node.clone()),
+                match parent_num {
+                    Some(p) => self.children.entry(p).or_default().push(*num),
+                    None => self.roots.push(*num),
                 }
+                // Whatever named this ULID before it existed -- a child's
+                // `parent`, a `stack.pushed` -- gets fixed up now.
+                self.apply_pending(node, *num);
             }
             Body::StateChanged {
                 node,
@@ -298,7 +356,8 @@ impl Tree {
                 let outcome_span = (!outcome.is_empty()).then(|| self.intern(outcome));
                 let closed_span =
                     (!state.is_open()).then(|| self.intern(crate::clock::date_of(ts)));
-                if let Some(n) = self.nodes.get_mut(node) {
+                let num = self.resolve_ulid(node);
+                if let Some(n) = self.nodes.get_mut(&num) {
                     n.state = *state;
                     if let Some(s) = outcome_span {
                         n.outcome = s;
@@ -309,31 +368,42 @@ impl Tree {
             }
             Body::NodeNoted { node, note } => {
                 let note_span = self.intern(note);
-                if let Some(n) = self.nodes.get_mut(node) {
+                let num = self.resolve_ulid(node);
+                if let Some(n) = self.nodes.get_mut(&num) {
                     n.note = note_span;
                 }
             }
             Body::BlockChanged { node, blocks } => {
-                if let Some(n) = self.nodes.get_mut(node) {
+                let num = self.resolve_ulid(node);
+                if let Some(n) = self.nodes.get_mut(&num) {
                     n.blocks = *blocks;
                 }
             }
             Body::Pushed { node } => {
-                if !self.stack.contains(node) {
-                    self.stack.push(node.clone());
+                // Unlike the lookups below, this persists: a `num` landing
+                // on `stack` outlives the event that put it there, so a
+                // node pushed before its own `node.created` needs the same
+                // fix-up-on-arrival treatment as a forward-referenced
+                // `parent` gets.
+                let num = self.resolve_pending(node);
+                if !self.stack.contains(&num) {
+                    self.stack.push(num);
                 }
             }
             Body::Popped { node } => {
-                self.stack.retain(|x| x != node);
+                let num = self.resolve_ulid(node);
+                self.stack.retain(|&x| x != num);
             }
             Body::FlagRaised { node, flag, reason } => {
                 let reason_span = self.intern(reason);
-                if let Some(n) = self.nodes.get_mut(node) {
+                let num = self.resolve_ulid(node);
+                if let Some(n) = self.nodes.get_mut(&num) {
                     n.flags.insert(*flag, reason_span);
                 }
             }
             Body::FlagCleared { node, flag } => {
-                if let Some(n) = self.nodes.get_mut(node) {
+                let num = self.resolve_ulid(node);
+                if let Some(n) = self.nodes.get_mut(&num) {
                     n.flags.remove(flag);
                 }
             }
@@ -364,19 +434,81 @@ impl Tree {
                 });
             }
             Body::Promoted { node } => {
-                if let Some(n) = self.nodes.get_mut(node) {
+                let num = self.resolve_ulid(node);
+                if let Some(n) = self.nodes.get_mut(&num) {
                     n.kind = Kind::Goal;
                 }
                 // The stack is cut at the promoted node: it becomes the root
                 // of its own. The provenance chain is untouched: where it was
                 // born does not change because its rank did.
-                if let Some(i) = self.stack.iter().position(|x| x == node) {
+                if let Some(i) = self.stack.iter().position(|&x| x == num) {
                     self.stack.drain(..i);
                 }
             }
             // An opening moves nothing in the tree. What it does to the
             // counters is decided above, and it is deliberate.
             Body::SessionStarted { .. } => {}
+        }
+    }
+
+    /// The `num` a ULID lives under, or `u64::MAX` when nothing has been
+    /// created under it yet. Read-only, and that is enough for every event
+    /// that only ever *acts* on a node -- `state.changed`, `flag.raised`,
+    /// `stack.popped`, and the rest: if the ULID names nothing right now,
+    /// there is nothing for a later `node.created` to complete, because
+    /// none of these leave anything behind for it to find. `u64::MAX` is
+    /// never a real `num`, so a lookup against it always comes back empty,
+    /// the same answer a ULID that resolves to nothing gives today.
+    ///
+    /// `parent` and `stack.pushed` are different: both persist the ULID as
+    /// a `num` that outlives this event, so a miss there has to be
+    /// completable later. That is `resolve_pending`, below.
+    fn resolve_ulid(&self, ulid: &str) -> u64 {
+        self.ulid_index.get(ulid).copied().unwrap_or(u64::MAX)
+    }
+
+    /// The `num` a ULID names, minting one the first time it is asked for
+    /// one it cannot yet answer: a hand-edited log where a child's line
+    /// landed before its parent's, or a `stack.pushed` naming a node not
+    /// created yet. The minted `num` is never a real one -- those only ever
+    /// grow from one -- so a reference that never resolves just keeps
+    /// pointing at a `num` nothing answers to, which is exactly what "does
+    /// not exist" already means. If it does resolve, `apply_pending`
+    /// rewrites every place this landed to the real thing.
+    fn resolve_pending(&mut self, ulid: &str) -> u64 {
+        if let Some(&num) = self.ulid_index.get(ulid) {
+            return num;
+        }
+        if let Some(&num) = self.pending.get(ulid) {
+            return num;
+        }
+        let num = u64::MAX - self.pending.len() as u64;
+        self.pending.insert(ulid.to_string(), num);
+        num
+    }
+
+    /// Rewrites every reference `ulid` was minted a `num` for, now that its
+    /// own `node.created` has arrived under `num`: another node's `parent`,
+    /// the `children` bucket it was filed under while pending, and any
+    /// matching slot on `stack`. A ULID nothing was waiting on leaves this
+    /// a no-op, which is the common case -- a well-formed log never has
+    /// anything here to fix.
+    fn apply_pending(&mut self, ulid: &str, num: u64) {
+        let Some(was) = self.pending.remove(ulid) else {
+            return;
+        };
+        for other in self.nodes.values_mut() {
+            if other.parent == Some(was) {
+                other.parent = Some(num);
+            }
+        }
+        if let Some(kids) = self.children.remove(&was) {
+            self.children.entry(num).or_default().extend(kids);
+        }
+        for slot in self.stack.iter_mut() {
+            if *slot == was {
+                *slot = num;
+            }
         }
     }
 
@@ -410,14 +542,15 @@ impl Tree {
     ///
     /// Only needed while folding. Live, nodes are born with an increasing
     /// number, so appending at the end already leaves the right order.
+    ///
+    /// A plain sort of the entries themselves, now that they are the number:
+    /// looking one up in a side table -- what this did while `children` held
+    /// ULIDs -- would be sorting by the same value through an extra hop.
     pub fn sort_nodes(&mut self) {
-        let nums: std::collections::HashMap<String, u64> =
-            self.nodes.iter().map(|(k, n)| (k.clone(), n.num)).collect();
         for v in self.children.values_mut() {
-            v.sort_by_key(|id| nums.get(id).copied().unwrap_or(0));
+            v.sort();
         }
-        self.roots
-            .sort_by_key(|id| nums.get(id).copied().unwrap_or(0));
+        self.roots.sort();
     }
 }
 
@@ -444,8 +577,18 @@ impl Tree {
         self.nodes.len()
     }
 
+    /// Looks a node up by the ULID an event names it with. This is the
+    /// boundary between the two: everywhere inside `Tree` an edge is a
+    /// `num`, and an event is the one place a ULID still arrives from
+    /// outside and has to be translated.
     pub fn node(&self, id: &str) -> Option<&Node> {
-        self.nodes.get(id)
+        self.ulid_index.get(id).and_then(|num| self.nodes.get(num))
+    }
+
+    /// Looks a node up by the `num` another node's own field already holds --
+    /// `parent`, `roots`, `stack` -- with no ULID in between.
+    pub fn node_by_num(&self, num: u64) -> Option<&Node> {
+        self.nodes.get(&num)
     }
 
     pub fn nodes_iter(&self) -> impl Iterator<Item = &Node> {
@@ -458,7 +601,7 @@ impl Tree {
     pub fn resolve(&self, s: &str) -> Option<&Node> {
         let clean = s.trim().trim_start_matches('#');
         if let Ok(n) = clean.parse::<u64>() {
-            return self.by_num.get(&n).and_then(|id| self.nodes.get(id));
+            return self.nodes.get(&n);
         }
         // By character, not by byte. `&clean[1..]` aborts the whole process
         // when the first letter is multibyte --and the tree these ids live in
@@ -469,19 +612,15 @@ impl Tree {
         let rest = rest.as_str();
         if !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()) {
             if let Ok(n) = rest.parse::<u64>() {
-                return self
-                    .by_num
-                    .get(&n)
-                    .and_then(|id| self.nodes.get(id))
-                    .filter(|nd| nd.kind.prefix() == prefix);
+                return self.nodes.get(&n).filter(|nd| nd.kind.prefix() == prefix);
             }
         }
-        self.nodes.get(clean)
+        self.node(clean)
     }
 
-    pub fn children(&self, id: &str) -> Vec<&Node> {
+    pub fn children(&self, num: u64) -> Vec<&Node> {
         self.children
-            .get(id)
+            .get(&num)
             .map(|v| v.iter().filter_map(|i| self.nodes.get(i)).collect())
             .unwrap_or_default()
     }
@@ -496,16 +635,16 @@ impl Tree {
     /// Node to root, reversed: root first. This is the path `why` walks.
     /// The `seen` set is not paranoia: a hand-edited log can hold a cycle,
     /// and hanging would be worse than giving a short path.
-    pub fn ancestors(&self, id: &str) -> Vec<&Node> {
+    pub fn ancestors(&self, num: u64) -> Vec<&Node> {
         let mut lineage = Vec::new();
         let mut seen = std::collections::HashSet::new();
-        let mut cur = self.nodes.get(id);
+        let mut cur = self.nodes.get(&num);
         while let Some(n) = cur {
-            if !seen.insert(&n.id) {
+            if !seen.insert(n.num) {
                 break;
             }
             lineage.push(n);
-            cur = n.parent.as_deref().and_then(|p| self.nodes.get(p));
+            cur = n.parent.and_then(|p| self.nodes.get(&p));
         }
         lineage.reverse();
         lineage
@@ -520,8 +659,8 @@ impl Tree {
     /// reparenting it (`d33`), so the birth chain stays exactly as long as it
     /// was. What promoting does change is which goal the nodes below answer
     /// to, and this is where that shows up (`f156`).
-    pub fn under_goal(&self, id: &str) -> Vec<&Node> {
-        let lineage = self.ancestors(id);
+    pub fn under_goal(&self, num: u64) -> Vec<&Node> {
+        let lineage = self.ancestors(num);
         let cut = lineage
             .iter()
             .rposition(|n| n.kind == Kind::Goal)
@@ -529,17 +668,17 @@ impl Tree {
         lineage[cut..].to_vec()
     }
 
-    pub fn descendants(&self, id: &str) -> Vec<&Node> {
+    pub fn descendants(&self, num: u64) -> Vec<&Node> {
         let mut out = Vec::new();
-        let mut stack = vec![id.to_string()];
+        let mut stack = vec![num];
         let mut seen = std::collections::HashSet::new();
         while let Some(cur) = stack.pop() {
-            for h in self.children.get(&cur).map(|v| v.as_slice()).unwrap_or(&[]) {
-                if seen.insert(h.clone()) {
-                    if let Some(n) = self.nodes.get(h) {
+            for &h in self.children.get(&cur).map(|v| v.as_slice()).unwrap_or(&[]) {
+                if seen.insert(h) {
+                    if let Some(n) = self.nodes.get(&h) {
                         out.push(n);
                     }
-                    stack.push(h.clone());
+                    stack.push(h);
                 }
             }
         }
@@ -552,15 +691,15 @@ impl Tree {
     /// **Transitive on purpose**: a blocking grandchild blocks the grandparent.
     /// Without that, slipping one node in between is enough to skip the guard
     /// by accident, which is exactly how a false close gets in.
-    pub fn open_blockers(&self, id: &str) -> Vec<&Node> {
-        self.descendants(id)
+    pub fn open_blockers(&self, num: u64) -> Vec<&Node> {
+        self.descendants(num)
             .into_iter()
             .filter(|n| n.blocks && n.state.is_open())
             .collect()
     }
 
-    pub fn counts(&self, id: &str) -> Counts {
-        let d = self.descendants(id);
+    pub fn counts(&self, num: u64) -> Counts {
+        let d = self.descendants(num);
         Counts {
             total: d.len(),
             open_count: d.iter().filter(|n| n.state == State::Active).count(),
@@ -593,7 +732,7 @@ impl Tree {
     }
 
     pub fn focus(&self) -> Option<&Node> {
-        self.stack.last().and_then(|id| self.nodes.get(id))
+        self.stack.last().and_then(|&num| self.nodes.get(&num))
     }
 
     pub fn stack_depth(&self) -> usize {
@@ -613,18 +752,18 @@ impl Tree {
 /// model instead of bolted on when it hurts.
 #[derive(Debug, Default)]
 pub struct Aggregates {
-    counts: HashMap<String, Counts>,
-    blockers: HashMap<String, usize>,
+    counts: HashMap<u64, Counts>,
+    blockers: HashMap<u64, usize>,
     pub max_depth: usize,
 }
 
 impl Aggregates {
-    pub fn counts(&self, id: &str) -> Counts {
-        self.counts.get(id).copied().unwrap_or_default()
+    pub fn counts(&self, num: u64) -> Counts {
+        self.counts.get(&num).copied().unwrap_or_default()
     }
 
-    pub fn blockers(&self, id: &str) -> usize {
-        self.blockers.get(id).copied().unwrap_or(0)
+    pub fn blockers(&self, num: u64) -> usize {
+        self.blockers.get(&num).copied().unwrap_or(0)
     }
 }
 
@@ -634,20 +773,16 @@ impl Tree {
 
         // Orphans hang off no root. They get walked anyway: a broken tree has
         // to stay inspectable, which is what `check` is for.
-        let mut entries: Vec<&String> = self.roots.iter().collect();
+        let mut entries: Vec<u64> = self.roots.clone();
         entries.extend(
             self.nodes
                 .values()
-                .filter(|n| {
-                    n.parent
-                        .as_ref()
-                        .is_some_and(|p| !self.nodes.contains_key(p))
-                })
-                .map(|n| &n.id),
+                .filter(|n| n.parent.is_some_and(|p| !self.nodes.contains_key(&p)))
+                .map(|n| n.num),
         );
 
-        let mut order: Vec<(&String, usize)> = Vec::with_capacity(self.nodes.len());
-        let mut stack: Vec<(&String, usize)> = entries.into_iter().map(|id| (id, 1)).collect();
+        let mut order: Vec<(u64, usize)> = Vec::with_capacity(self.nodes.len());
+        let mut stack: Vec<(u64, usize)> = entries.into_iter().map(|id| (id, 1)).collect();
         let mut seen = std::collections::HashSet::new();
         while let Some((id, depth_of)) = stack.pop() {
             if !seen.insert(id) {
@@ -655,8 +790,8 @@ impl Tree {
             }
             ag.max_depth = ag.max_depth.max(depth_of);
             order.push((id, depth_of));
-            if let Some(hs) = self.children.get(id) {
-                stack.extend(hs.iter().map(|h| (h, depth_of + 1)));
+            if let Some(hs) = self.children.get(&id) {
+                stack.extend(hs.iter().map(|&h| (h, depth_of + 1)));
             }
         }
 
@@ -665,8 +800,8 @@ impl Tree {
         for (id, _) in order.iter().rev() {
             let mut r = Counts::default();
             let mut b = 0usize;
-            for h in self.children.get(*id).map(|v| v.as_slice()).unwrap_or(&[]) {
-                let Some(child) = self.nodes.get(h) else {
+            for &h in self.children.get(id).map(|v| v.as_slice()).unwrap_or(&[]) {
+                let Some(child) = self.nodes.get(&h) else {
                     continue;
                 };
                 let hr = ag.counts(h);
@@ -676,8 +811,8 @@ impl Tree {
                 r.parked_nodes += hr.parked_nodes + usize::from(child.state == State::Suspended);
                 b += ag.blockers(h) + usize::from(child.blocks && child.state == State::Active);
             }
-            ag.counts.insert((*id).clone(), r);
-            ag.blockers.insert((*id).clone(), b);
+            ag.counts.insert(*id, r);
+            ag.blockers.insert(*id, b);
         }
         ag
     }
@@ -766,8 +901,8 @@ mod tests {
             node(4, 4, Kind::Task, Some("n3")),
         ];
         let tree = fold(&events, 0);
-        assert_eq!(tree.ancestors("n4").len(), 4);
-        let under: Vec<u64> = tree.under_goal("n4").iter().map(|n| n.num).collect();
+        assert_eq!(tree.ancestors(4).len(), 4);
+        let under: Vec<u64> = tree.under_goal(4).iter().map(|n| n.num).collect();
         assert_eq!(under, vec![3, 4]);
     }
 
@@ -781,7 +916,7 @@ mod tests {
             node(3, 3, Kind::Goal, Some("n2")),
         ];
         let tree = fold(&events, 0);
-        assert_eq!(tree.under_goal("n3").len(), 1);
+        assert_eq!(tree.under_goal(3).len(), 1);
     }
 
     /// With no goal anywhere above it there is nothing nearer to count from,
@@ -795,7 +930,7 @@ mod tests {
             node(3, 3, Kind::Task, Some("n2")),
         ];
         let tree = fold(&events, 0);
-        assert_eq!(tree.under_goal("n3").len(), 3);
+        assert_eq!(tree.under_goal(3).len(), 3);
     }
 
     /// `changes` measures a stretch from a vivac's own seq. Without it, the
@@ -833,5 +968,94 @@ mod tests {
         let events = vec![stop_of_kind(1, VivacKind::Auto)];
         let tree = fold(&events, 0);
         assert!(tree.last_manual_vivac().is_none());
+    }
+
+    /// Unlike `node`, the ULID is given rather than derived from `num`: the
+    /// one test that wants two different ULIDs to claim the same `num`
+    /// cannot ask for that through a helper that ties the two together.
+    fn node_with_id(seq: u64, ulid: &str, num: u64, kind: Kind, parent: Option<&str>) -> Event {
+        Event {
+            seq,
+            id: format!("e{seq}"),
+            ts: "2026-09-03T10:00:00Z".to_string(),
+            actor: "a".to_string(),
+            lane: "main".to_string(),
+            payload: Body::NodeCreated {
+                node: ulid.to_string(),
+                num,
+                kind,
+                title: format!("Node {num}"),
+                why: "it is needed".to_string(),
+                parent: parent.map(str::to_string),
+                blocks: false,
+                refs: vec![],
+                governs: vec![],
+            },
+        }
+    }
+
+    fn pushed(seq: u64, ulid: &str) -> Event {
+        Event {
+            seq,
+            id: format!("e{seq}"),
+            ts: "2026-09-03T10:00:00Z".to_string(),
+            actor: "a".to_string(),
+            lane: "main".to_string(),
+            payload: Body::Pushed {
+                node: ulid.to_string(),
+            },
+        }
+    }
+
+    /// A hand-edited log can put a child's line before its parent's -- the
+    /// parent's own line moved, or was appended out of order. Resolving the
+    /// reference once, at the moment the child is folded, would leave it
+    /// pointing at nothing forever even though the parent arrives two lines
+    /// later: that used to be true of a `stack.pushed` naming the same not-
+    /// yet-created node too, since `stack` now holds a `num` rather than the
+    /// ULID that would have resolved itself once looked up fresh. Both have
+    /// to land where resolving in order already does.
+    #[test]
+    fn a_parent_and_a_push_named_before_the_node_exists_still_resolve() {
+        let events = vec![
+            node(1, 2, Kind::Task, Some("n1")), // "n1" does not exist yet
+            pushed(2, "n1"),                    // nor here
+            node(3, 1, Kind::Goal, None),       // created last
+        ];
+        let tree = fold(&events, 0);
+        let child = tree.node_by_num(2).expect("the child was created");
+        assert_eq!(child.parent, Some(1), "the parent resolves once it exists");
+        assert_eq!(tree.stack, vec![1], "the push resolves the same way");
+        assert!(
+            !tree.roots.contains(&2),
+            "a resolved parent is not the same as none"
+        );
+        let siblings: Vec<u64> = tree.children(1).iter().map(|n| n.num).collect();
+        assert_eq!(siblings, vec![2], "the edge lands under the real parent");
+    }
+
+    /// A hand edit can also hand two different ULIDs the same `num`. With
+    /// `num` as `nodes`' own key only the first can live there, so `check`
+    /// can no longer find the second by scanning survivors -- it has to be
+    /// recorded at the moment it loses.
+    #[test]
+    fn a_repeated_number_stays_with_the_first_and_records_the_second() {
+        let events = vec![
+            node_with_id(1, "n1", 1, Kind::Task, None),
+            node_with_id(2, "n2", 1, Kind::Finding, None), // also claims num 1
+        ];
+        let tree = fold(&events, 0);
+        assert_eq!(tree.total(), 1, "the second claimant never lives here");
+        let current = tree.node_by_num(1).expect("the first keeps the slot");
+        assert_eq!(current.id, "n1");
+        assert!(
+            tree.node("n2").is_none(),
+            "the loser is not reachable by its own ULID either"
+        );
+        assert_eq!(tree.repeated_nums.len(), 1);
+        let repeated = &tree.repeated_nums[0];
+        assert_eq!(repeated.num, 1);
+        assert_eq!(repeated.first, "t1");
+        assert_eq!(repeated.second, "f1");
     }
 }

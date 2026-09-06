@@ -105,7 +105,7 @@ fn facts(tree: &Tree, ag: &Aggregates, full: &Full, n: &Node) -> String {
             escape(anchor.short())
         ));
     }
-    let open_below = ag.counts(&n.id).open_count;
+    let open_below = ag.counts(n.num).open_count;
     if open_below > 0 {
         parts.push(format!(
             "<span class=\"count\">{open_below} open below</span>"
@@ -161,7 +161,7 @@ pub(super) fn why_page(
     // tree, and a seven-step spine would otherwise walk it seven times for
     // an answer that does not change between them.
     let ag = tree.aggregates();
-    let path = tree.ancestors(&target.id);
+    let path = tree.ancestors(target.num);
     let last = path.len().saturating_sub(1);
     let spine: String = path
         .iter()
