@@ -161,7 +161,7 @@ pub fn hooks() -> R {
   {{
     "hooks": {{
       "SessionStart": [
-        {{ "hooks": [{{ "type": "command", "command": "vivac session start --hook" }}] }}
+        {{ "matcher": "*", "hooks": [{{ "type": "command", "command": "vivac session start --hook" }}] }}
       ],
       "Stop": [
         {{ "hooks": [{{ "type": "command", "command": "vivac session end --hook" }}] }}
@@ -169,7 +169,9 @@ pub fn hooks() -> R {
     }}
   }}
 
-  SessionStart injects the brief into the agent's context.
+  SessionStart injects the brief into the agent's context, and fires again
+  after a compaction -- exactly when the brief has the most work to do
+  picking the thread back up.
   Stop leaves an automatic stop with the stack as it stood.
 
   Both stay quiet and exit 0 where there is no .vivac/, so they can be left
