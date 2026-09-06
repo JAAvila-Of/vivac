@@ -269,7 +269,7 @@ agent calls.
 | `brief` | 20.5 / 36.0 | 1.0 / 2.7 |
 | `why` | 22.7 / 28.0 | 3.8 / 6.6 |
 | `find` | 22.7 / 33.4 | 6.6 / 9.1 |
-| `open` | 37.7 / 59.5 | 49.6 / 93.5 |
+| `open` | 37.7 / 59.5 | 15.4 / 22.9 |
 | `tree` | **51.8 / 82.5** | not a tool |
 
 A write is p99 1.1 ms at that size, and it does not grow with the tree: over

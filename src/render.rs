@@ -239,9 +239,18 @@ pub fn why_data(a: &Tree, id: &str) -> Result<serde_json::Value, Failure> {
     why_data_impl(a, None, id)
 }
 
-/// The open fronts as data.
+/// A front, identified by its alias and where it hangs, not the node itself:
+/// `why` on the alias brings the rest.
+///
+/// This used to be `json_node`'s eighteen keys plus `lineage`, the same
+/// shape `why` needs because `why` is asked for exactly that prose. The
+/// prose `open` prints was already the right shape -- alias, title, path --
+/// and the data was not; `d172` made the same fix for `find` first, down to
+/// dropping `matched`, which has no analogue here because there is no query.
+/// Measured over the same 10,000-node tree, both numbers from the same
+/// harness: the MCP payload was 1,993,053 bytes and is now 599,012, 30% of
+/// what it cost before.
 pub fn open_data(a: &Tree) -> serde_json::Value {
-    let ag = &a.aggregates();
     let mut leaves: Vec<&Node> = a
         .nodes_iter()
         .filter(|n| n.is_front() && !a.children(n.num).iter().any(|c| c.is_front()))
@@ -249,18 +258,13 @@ pub fn open_data(a: &Tree) -> serde_json::Value {
     leaves.sort_by_key(|n| n.num);
     json!(leaves
         .iter()
-        .map(|n| {
-            let mut v = json_node(a, ag, n);
-            v["lineage"] = json!(a
-                .ancestors(n.num)
-                .iter()
-                .rev()
-                .skip(1)
-                .rev()
-                .map(|p| p.alias())
-                .collect::<Vec<_>>());
-            v
-        })
+        .map(|n| json!({
+            "alias": n.alias(),
+            "kind": n.kind,
+            "state": n.state,
+            "title": n.title(a),
+            "lineage": lineage_of(a, n),
+        }))
         .collect::<Vec<_>>())
 }
 
