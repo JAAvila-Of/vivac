@@ -21,6 +21,7 @@ mod failure;
 mod glob;
 mod id;
 mod import;
+mod index;
 mod mcp;
 mod model;
 mod ops;
@@ -287,25 +288,49 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         return changes::changes(&ctx.tree, &log, a);
     }
 
-    // Its own load too, for the same reason: `--full` answers "who was
-    // still open when this was born", and the folded `Tree` has already
-    // forgotten that once a node closes. The "one word of its own" limit
-    // is checked here rather than left to the generic path below, so
-    // `vivac why t1 extra` still refuses it exactly as it always has.
+    // `--full` answers "who was still open when this was born", and the
+    // folded `Tree` has already forgotten that once a node closes -- only
+    // that path needs the raw log, so only that path pays for reading it.
+    // Without `--full`, `why` is exactly the read `LOADING.md`'s budget
+    // names by name, and it goes through the index like every other one.
+    // The "one word of its own" limit is checked here rather than left to
+    // the generic path below, so `vivac why t1 extra` still refuses it
+    // exactly as it always has -- after the load, on both paths, so a
+    // store that cannot be opened is still reported before a usage error
+    // that was already true beforehand.
     if cmd == "why" {
-        let (ctx, log) = ops::Ctx::load_with_log(store::Store::open(root)?)?;
-        if let [first, ..] = a.extra(1) {
-            return Err(Failure::usage(format!(
-                "{cmd} does not take \"{first}\".
+        let extra_word = |a: &Args| -> Result<(), Failure> {
+            if let [first, ..] = a.extra(1) {
+                return Err(Failure::usage(format!(
+                    "{cmd} does not take \"{first}\".
 
   It takes one word of its own. Everything else goes behind a --flag, and a flag
   that repeats is written out again:  --governs a --governs b"
-            )));
+                )));
+            }
+            Ok(())
+        };
+        if a.has("full") {
+            let (ctx, log) = ops::Ctx::load_with_log(store::Store::open(root)?)?;
+            extra_word(a)?;
+            return render::why(&ctx.tree, &log, a).map(|_| 0);
         }
-        return render::why(&ctx.tree, &log, a).map(|_| 0);
+        let ctx = ops::Ctx::load(store::Store::open(root)?)?;
+        extra_word(a)?;
+        return render::why(&ctx.tree, &[], a).map(|_| 0);
     }
 
-    let mut ctx = ops::Ctx::load(store::Store::open(root)?)?;
+    // `may_append` is checked here, once, rather than passed down: it is
+    // exactly the set `write_op` below already dispatches, plus `session`
+    // and `import`, which append through a path of their own. `LOADING.md`
+    // §4 "Cuándo se reescribe": a command that might write must never pay
+    // to rewrite the derived index, even though reading a warm or stale one
+    // stays free either way.
+    let mut ctx = if may_append(cmd) {
+        ops::Ctx::load_for_write(store::Store::open(root)?)?
+    } else {
+        ops::Ctx::load(store::Store::open(root)?)?
+    };
 
     // `check` is the only one with an exit code of its own: it separates
     // store corruption from a finding about the project.
@@ -375,6 +400,32 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         }
     };
     r.map(|_| 0)
+}
+
+/// Whether `cmd` might append to the log this run: the fourteen names
+/// `write_op` below matches, plus `session` (a hook can write an opening or
+/// an automatic stop) and `import` (writes the events it brings in). Every
+/// other command only ever reads.
+fn may_append(cmd: &str) -> bool {
+    matches!(
+        cmd,
+        "push"
+            | "pop"
+            | "done"
+            | "park"
+            | "add"
+            | "note"
+            | "block"
+            | "promote"
+            | "abandon"
+            | "focus"
+            | "flag"
+            | "decide"
+            | "save"
+            | "restore"
+            | "session"
+            | "import"
+    )
 }
 
 /// The fourteen write operations, matched once so that printing an `Outcome`
