@@ -305,21 +305,36 @@ the global configuration without getting in the way of other projects.
 
 ## MCP
 
-The reads, as tools an agent can call:
+The tree as tools an agent can call:
 
 ```sh
 claude mcp add vivac -- vivac mcp
 ```
 
-Four of them today — `vivac_brief`, `vivac_find`, `vivac_why`, `vivac_open`. It
-speaks JSON-RPC over standard input and adds no dependency: the server is the
-binary you already installed, and the writes keep going through the CLI.
+Eleven of them: four reads — `vivac_brief`, `vivac_find`, `vivac_why`,
+`vivac_open` — and seven writes — `vivac_push`, `vivac_pop`, `vivac_add`,
+`vivac_decide`, `vivac_note`, `vivac_park`, `vivac_save`. It speaks JSON-RPC
+over standard input and adds no dependency: the server is the binary you
+already installed.
 
-Four because every tool costs context in every session, and that is a real
-cost. It is not, however, a reason to ship a short list forever: the budget
-belongs to whoever launches the server, not to whoever wrote it. The writes
-belong here too, behind a flag that says how much of the surface this session
-should see.
+Eleven and not more, because every tool costs context in every session the
+agent ever opens, so the list is a budget and not a catalogue. The seven
+writes are the seams of the work — opening something, closing it, parking
+it, noting it, deciding, and the safe stop — and nothing else got in.
+
+**Nothing destructive is reachable from here, and that is deliberate.**
+`abandon` discards a node and everything below it, and through a tool that
+would happen without anybody seeing a command. It stays on the command line,
+where somebody is looking. So do the operations that reshape a tree rather
+than record work — closing another node, blocking, flagging, restoring a
+safe point. Those belong to whoever maintains the tree, and they have a
+terminal.
+
+There is a measured reason the writes are here at all. Starting the process
+is 8.2 ms at the median, which is more than the whole 5 ms budget the
+performance pillar sets for writing a node; over MCP the tree is already
+folded in the server and a write is an append. The command line cannot meet
+that ceiling and does not have to — it is not where the agent writes.
 
 Hooks and MCP are not the same offer, and the difference matters. A hook fires
 whether or not anybody wanted it; a tool is called only if the agent decides to.
