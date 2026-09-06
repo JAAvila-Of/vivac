@@ -15,6 +15,7 @@ use crate::brief::clip;
 use crate::event::{Body, Event, Kind, State};
 use crate::failure::{Failure, R};
 use crate::model::{Aggregates, Node, Tree};
+use crate::output::outln;
 use serde_json::json;
 use std::collections::HashMap;
 
@@ -75,7 +76,7 @@ fn json_node(a: &Tree, ag: &Aggregates, n: &Node) -> serde_json::Value {
 }
 
 pub(crate) fn print_json(v: serde_json::Value) -> R {
-    println!(
+    outln!(
         "{}",
         serde_json::to_string_pretty(&v).map_err(std::io::Error::other)?
     );
@@ -274,13 +275,13 @@ pub fn open_data(a: &Tree) -> serde_json::Value {
 fn print_full_of(a: &Tree, full: &Full, n: &Node) {
     let anchor = anchor_of(a, full, n);
     if anchor.is_empty_tree() {
-        println!("        anchor: none");
+        outln!("        anchor: none");
     } else {
-        println!("        anchor: {} ({})", anchor.short(), anchor.kind);
+        outln!("        anchor: {} ({})", anchor.short(), anchor.kind);
     }
     let standing = standing_of(a, n);
     if !standing.is_empty() {
-        println!(
+        outln!(
             "        standing ({}): {}",
             standing.len(),
             standing
@@ -292,7 +293,7 @@ fn print_full_of(a: &Tree, full: &Full, n: &Node) {
     }
     let open_then = open_then_of(a, full, n);
     if !open_then.is_empty() {
-        println!(
+        outln!(
             "        open then ({}): {}",
             open_then.len(),
             open_then
@@ -322,26 +323,26 @@ pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
         });
     }
 
-    println!();
-    println!("  Why we are here  ->  {}", n.alias());
-    println!("  {}", "-".repeat(66));
-    println!();
+    outln!();
+    outln!("  Why we are here  ->  {}", n.alias());
+    outln!("  {}", "-".repeat(66));
+    outln!();
     for (i, p) in lineage.iter().enumerate() {
         let is_last = i == lineage.len() - 1;
-        println!("  {:<6}{}", p.alias(), label(a, p));
+        outln!("  {:<6}{}", p.alias(), label(a, p));
         for l in wrap(p.why(a), WIDTH, "        ") {
-            println!("{l}");
+            outln!("{l}");
         }
         let note = p.note(a);
         for l in wrap(&format!("! {note}"), WIDTH, "        ") {
             if !note.is_empty() {
-                println!("{l}");
+                outln!("{l}");
             }
         }
         let outcome = p.outcome(a);
         for l in wrap(&format!("= {outcome}"), WIDTH, "        ") {
             if !outcome.is_empty() {
-                println!("{l}");
+                outln!("{l}");
             }
         }
         if let Some(f) = &full {
@@ -350,16 +351,16 @@ pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
         if !is_last {
             let f = ag.counts(p.num).phrase();
             if !f.is_empty() {
-                println!("        ({f} below)");
+                outln!("        ({f} below)");
             }
-            println!("        |");
-            println!("        v");
+            outln!("        |");
+            outln!("        v");
         } else {
-            println!();
-            println!("        ^^^ you are here");
+            outln!();
+            outln!("        ^^^ you are here");
         }
     }
-    println!();
+    outln!();
 
     // "we had ten things to review, we are on the first"
     if let Some(parent) = n.parent {
@@ -369,11 +370,11 @@ pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
             .filter(|c| c.id != n.id && c.state.is_open())
             .collect();
         if !siblings.is_empty() {
-            println!("  In parallel, still open ({}):", siblings.len());
+            outln!("  In parallel, still open ({}):", siblings.len());
             for c in siblings {
-                println!("      {:<6} {}", c.alias(), c.title(a));
+                outln!("      {:<6} {}", c.alias(), c.title(a));
             }
-            println!();
+            outln!();
         }
     }
 
@@ -383,30 +384,30 @@ pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
         .filter(|c| c.state.is_open())
         .collect();
     if !kids.is_empty() {
-        println!("  Born here and still open ({}):", kids.len());
+        outln!("  Born here and still open ({}):", kids.len());
         for c in kids {
-            println!(
+            outln!(
                 "    {} {:<6} {}",
                 if c.blocks { '*' } else { ' ' },
                 c.alias(),
                 c.title(a)
             );
         }
-        println!();
+        outln!();
     }
 
     for p in &lineage {
         let pending_count = a.open_blockers(p.num);
         if !pending_count.is_empty() && p.state.is_open() {
-            println!(
+            outln!(
                 "  {} does not close until these close ({}):",
                 p.alias(),
                 pending_count.len()
             );
             for c in pending_count {
-                println!("      {:<6} {}", c.alias(), c.title(a));
+                outln!("      {:<6} {}", c.alias(), c.title(a));
             }
-            println!();
+            outln!();
         }
     }
     Ok(())
@@ -426,7 +427,7 @@ fn branch(a: &Tree, ag: &Aggregates, n: &Node, prefix: &str, is_last: bool, show
         ));
     }
     let mark = if n.blocks { "* " } else { "" };
-    println!(
+    outln!(
         "{prefix}{}[{}] {:<6} {mark}{}{tail}",
         if is_last { "`-- " } else { "|-- " },
         n.state.mark(),
@@ -469,18 +470,18 @@ pub fn tree(a: &Tree, args: &Args) -> R {
             .collect::<Vec<_>>()));
     }
     if a.is_empty_tree() {
-        println!("  Empty tree.  vivac push \"<title>\" --why \"<reason>\"");
+        outln!("  Empty tree.  vivac push \"<title>\" --why \"<reason>\"");
         return Ok(());
     }
     let show_all = args.has("all");
-    println!();
+    outln!();
     for (i, n) in roots.iter().enumerate() {
         branch(a, ag, n, "  ", i == roots.len() - 1, show_all);
     }
-    println!();
+    outln!();
     if !show_all {
-        println!("  (closed nodes with no open descendants hidden; --all shows them)");
-        println!();
+        outln!("  (closed nodes with no open descendants hidden; --all shows them)");
+        outln!();
     }
     Ok(())
 }
@@ -501,25 +502,25 @@ pub fn open(a: &Tree, args: &Args) -> R {
         return print_json(open_data(a));
     }
     if leaves.is_empty() && standing == 0 {
-        println!("  Nothing open.");
+        outln!("  Nothing open.");
         return Ok(());
     }
-    println!();
-    println!(
+    outln!();
+    outln!(
         "  {} open front{}",
         leaves.len(),
         if leaves.len() == 1 { "" } else { "s" },
     );
-    println!();
+    outln!();
     for n in leaves {
-        println!("  {:<6} {}", n.alias(), n.title(a));
+        outln!("  {:<6} {}", n.alias(), n.title(a));
         let lineage = a.ancestors(n.num);
         if lineage.len() > 1 {
             let v: Vec<String> = lineage[..lineage.len() - 1]
                 .iter()
                 .map(|p| p.alias())
                 .collect();
-            println!("         via {}", v.join(" > "));
+            outln!("         via {}", v.join(" > "));
         }
     }
     // They are not fronts, but making them vanish without saying so would be
@@ -530,10 +531,10 @@ pub fn open(a: &Tree, args: &Args) -> R {
         } else {
             format!("{standing} standing decisions, which are not work")
         };
-        println!();
-        println!("  + {phrase}   vivac brief");
+        outln!();
+        outln!("  + {phrase}   vivac brief");
     }
-    println!();
+    outln!();
     Ok(())
 }
 
@@ -616,34 +617,34 @@ pub fn triage(a: &Tree, args: &Args) -> R {
 
     let total = parked_nodes.len() + deep.len() + orphaned.len() + false_closes.len();
     if total == 0 {
-        println!("  Nothing to prune.");
+        outln!("  Nothing to prune.");
         return Ok(());
     }
-    println!();
-    println!("  TRIAGE - {total} thing(s) to look at");
+    outln!();
+    outln!("  TRIAGE - {total} thing(s) to look at");
 
     if !parked_nodes.is_empty() {
-        println!();
-        println!(
+        outln!();
+        outln!(
             "  PARKED ({})                       focus <id>  |  abandon <id>",
             parked_nodes.len()
         );
         for n in &parked_nodes {
-            println!("    {:<6} {}", n.alias(), n.title(a));
+            outln!("    {:<6} {}", n.alias(), n.title(a));
             for l in wrap(n.outcome(a), WIDTH, "           ") {
-                println!("{l}");
+                outln!("{l}");
             }
         }
     }
 
     if !deep.is_empty() {
-        println!();
-        println!(
+        outln!();
+        outln!(
             "  6 OR MORE FROM ITS GOAL ({})      promote <id>",
             deep.len()
         );
         for (n, d) in &deep {
-            println!(
+            outln!(
                 "    {:<6} {:<40} depth {d}",
                 n.alias(),
                 clip(n.title(a), 40)
@@ -658,19 +659,19 @@ pub fn triage(a: &Tree, args: &Args) -> R {
                 .rev()
                 .map(|p| p.alias())
                 .collect();
-            println!("           via {}", v.join(" > "));
+            outln!("           via {}", v.join(" > "));
         }
     }
 
     if !orphaned.is_empty() {
-        println!();
-        println!(
+        outln!();
+        outln!(
             "  SURVIVED A DISCARD ({})           abandon <id>  |  promote <id>",
             orphaned.len()
         );
         for (n, p) in &orphaned {
-            println!("    {:<6} {}", n.alias(), n.title(a));
-            println!(
+            outln!("    {:<6} {}", n.alias(), n.title(a));
+            outln!(
                 "           born from {}, discarded: {}",
                 p.alias(),
                 clip(p.outcome(a), 36)
@@ -679,13 +680,13 @@ pub fn triage(a: &Tree, args: &Args) -> R {
     }
 
     if !false_closes.is_empty() {
-        println!();
-        println!(
+        outln!();
+        outln!(
             "  FALSE CLOSES ({})                 close what is left, or --force",
             false_closes.len()
         );
         for n in &false_closes {
-            println!(
+            outln!(
                 "    {:<6} {:<40} {} blocker(s)",
                 n.alias(),
                 clip(n.title(a), 40),
@@ -693,7 +694,7 @@ pub fn triage(a: &Tree, args: &Args) -> R {
             );
         }
     }
-    println!();
+    outln!();
     Ok(())
 }
 
@@ -714,19 +715,19 @@ pub fn parked(a: &Tree, args: &Args) -> R {
             .collect::<Vec<_>>()));
     }
     if ps.is_empty() {
-        println!("  Nothing parked.");
+        outln!("  Nothing parked.");
         return Ok(());
     }
-    println!();
-    println!("  DO NOT TOUCH NOW ({})", ps.len());
-    println!();
+    outln!();
+    outln!("  DO NOT TOUCH NOW ({})", ps.len());
+    outln!();
     for n in ps {
-        println!("  {:<6} {}", n.alias(), n.title(a));
+        outln!("  {:<6} {}", n.alias(), n.title(a));
         for l in wrap(n.outcome(a), WIDTH, "         ") {
-            println!("{l}");
+            outln!("{l}");
         }
     }
-    println!();
+    outln!();
     Ok(())
 }
 
@@ -745,26 +746,26 @@ pub fn stack(a: &Tree, args: &Args) -> R {
         }));
     }
     if stack.is_empty() {
-        println!("  Empty stack.  vivac push \"<title>\" --why \"<reason>\"");
+        outln!("  Empty stack.  vivac push \"<title>\" --why \"<reason>\"");
         return Ok(());
     }
-    println!();
+    outln!();
     for (i, n) in stack.iter().enumerate() {
         let focus = if i == stack.len() - 1 {
             "   <- focus"
         } else {
             ""
         };
-        println!("  {}{:<6} {}{focus}", "  ".repeat(i), n.alias(), n.title(a));
+        outln!("  {}{:<6} {}{focus}", "  ".repeat(i), n.alias(), n.title(a));
     }
-    println!();
+    outln!();
     if stack.len() >= 6 {
-        println!(
+        outln!(
             "  Stack {} levels deep. Almost never lack of discipline: usually",
             stack.len()
         );
-        println!("  the root goal moved and nobody re-rooted.  vivac promote");
-        println!();
+        outln!("  the root goal moved and nobody re-rooted.  vivac promote");
+        outln!();
     }
     Ok(())
 }
@@ -797,28 +798,28 @@ pub fn stats(a: &Tree, args: &Args) -> R {
             "false_closes": false_closes.iter().map(|n| json_node(a, ag, n)).collect::<Vec<_>>(),
         }));
     }
-    println!();
-    println!("  nodes          {}", a.total());
+    outln!();
+    outln!("  nodes          {}", a.total());
     for (k, v) in &by_state {
-        println!("  {k:<14} {v}");
+        outln!("  {k:<14} {v}");
     }
-    println!("  depth          {depth_of}");
-    println!("  roots          {}", a.roots().len());
-    println!("  stack          {}", a.stack_depth());
+    outln!("  depth          {depth_of}");
+    outln!("  roots          {}", a.roots().len());
+    outln!("  stack          {}", a.stack_depth());
     if orphans > 0 {
-        println!("  ORPHANS        {orphans}  <- broken provenance");
+        outln!("  ORPHANS        {orphans}  <- broken provenance");
     }
     if a.broken_lines > 0 {
-        println!("  broken lines   {}  <- in .vivac/events", a.broken_lines);
+        outln!("  broken lines   {}  <- in .vivac/events", a.broken_lines);
     }
     if !false_closes.is_empty() {
-        println!();
-        println!("  FALSE CLOSES ({})", false_closes.len());
+        outln!();
+        outln!("  FALSE CLOSES ({})", false_closes.len());
         for n in false_closes {
-            println!("      {:<6} {}", n.alias(), n.title(a));
+            outln!("      {:<6} {}", n.alias(), n.title(a));
         }
     }
-    println!();
+    outln!();
     Ok(())
 }
 
@@ -845,17 +846,17 @@ pub fn vivacs(a: &Tree, args: &Args) -> R {
             .collect::<Vec<_>>()));
     }
     if a.vivacs.is_empty() {
-        println!("  No stops yet.  vivac save \"<label>\"");
+        outln!("  No stops yet.  vivac save \"<label>\"");
         return Ok(());
     }
-    println!();
+    outln!();
     for v in a.vivacs.iter().rev().take(20) {
         let top = v
             .stack
             .last()
             .map(|(al, t)| format!("{al}  {t}"))
             .unwrap_or_else(|| "empty stack".into());
-        println!(
+        outln!(
             "  {:<5} {:<7} {}  {}",
             v.alias(),
             v.kind.word(),
@@ -863,17 +864,17 @@ pub fn vivacs(a: &Tree, args: &Args) -> R {
             top
         );
         if !v.label.is_empty() {
-            println!("           {}", v.label);
+            outln!("           {}", v.label);
         }
         if !v.next_intent.is_empty() {
-            println!("           you were about to: {}", v.next_intent);
+            outln!("           you were about to: {}", v.next_intent);
         }
     }
     if a.vivacs.len() > 20 {
-        println!();
-        println!("  ... and {} more", a.vivacs.len() - 20);
+        outln!();
+        outln!("  ... and {} more", a.vivacs.len() - 20);
     }
-    println!();
+    outln!();
     Ok(())
 }
 
@@ -1035,22 +1036,22 @@ pub fn find(a: &Tree, args: &Args) -> R {
     let hits = hits_for(a, &terms);
 
     if hits.is_empty() {
-        println!("  Nothing matches \"{query}\".");
+        outln!("  Nothing matches \"{query}\".");
         return Ok(());
     }
-    println!();
-    println!(
+    outln!();
+    outln!(
         "  {} match{} for \"{}\"",
         hits.len(),
         if hits.len() == 1 { "" } else { "es" },
         query,
     );
-    println!();
+    outln!();
     for (n, matched) in hits.iter().take(20) {
-        println!("  {:<6} {}", n.alias(), n.title(a));
+        outln!("  {:<6} {}", n.alias(), n.title(a));
         let lineage = lineage_of(a, n);
         if !lineage.is_empty() {
-            println!("         via {}", lineage.join(" > "));
+            outln!("         via {}", lineage.join(" > "));
         }
         // The title is already on the line above it. Repeating it as the
         // reason the hit came back would say nothing.
@@ -1060,16 +1061,16 @@ pub fn find(a: &Tree, args: &Args) -> R {
                 .find(|(k, _)| k == field)
                 .map(|(_, v)| *v)
                 .unwrap_or_default();
-            println!("         {}: {}", field, snippet(text, &terms, WIDTH));
+            outln!("         {}: {}", field, snippet(text, &terms, WIDTH));
         }
     }
     if hits.len() > 20 {
-        println!();
-        println!(
+        outln!();
+        outln!(
             "  ... and {} more   vivac find \"...\" --json",
             hits.len() - 20
         );
     }
-    println!();
+    outln!();
     Ok(())
 }

@@ -13,6 +13,7 @@ use crate::args::Args;
 use crate::event::{Body, Event, Kind, State};
 use crate::failure::{Failure, R};
 use crate::ops::Ctx;
+use crate::output::outln;
 use crate::{id, redact};
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -173,9 +174,9 @@ pub fn import(ctx: &mut Ctx, args: &Args) -> R {
 
     let total = nodes.len();
     ctx.store.write_raw(&events)?;
-    println!("  {total} nodes imported from {file_path}");
-    println!("        {} events written to .vivac/events", events.len());
-    println!();
-    println!("  Review what the spike could not see:  vivac check");
+    outln!("  {total} nodes imported from {file_path}");
+    outln!("        {} events written to .vivac/events", events.len());
+    outln!();
+    outln!("  Review what the spike could not see:  vivac check");
     Ok(())
 }

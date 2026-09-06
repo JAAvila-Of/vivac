@@ -446,7 +446,11 @@ mod tests {
 
         assert!(std::fs::metadata(&real_path).unwrap().len() > 0);
         assert!(std::fs::metadata(&even_path).unwrap().len() > 0);
-        println!("real shape:  {}", real_path.display());
-        println!("even shape:  {}", even_path.display());
+        // Diagnostic only, for the person reading the test output by hand --
+        // `eprintln!` rather than `outln!` because nothing in a test binary
+        // ever calls `output::flush`, and a line sitting in that buffer
+        // forever is a line the owner never sees.
+        eprintln!("real shape:  {}", real_path.display());
+        eprintln!("even shape:  {}", even_path.display());
     }
 }

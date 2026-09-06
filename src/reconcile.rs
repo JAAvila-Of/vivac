@@ -28,6 +28,7 @@ use crate::brief::clip;
 use crate::failure::R;
 use crate::glob;
 use crate::model::{Node, Tree, Vivac};
+use crate::output::outln;
 use crate::render::print_json;
 use serde_json::json;
 
@@ -70,23 +71,23 @@ fn reference<'a>(a: &'a Tree, args: &Args) -> Result<Option<&'a Vivac>, crate::f
 
 pub fn reconcile(a: &Tree, anchor: &dyn Anchor, args: &Args) -> R {
     let Some(since) = reference(a, args)? else {
-        println!();
-        println!("  No stop to measure from: this tree has no vivacs yet.");
-        println!();
-        println!("      vivac save \"<label>\"");
-        println!();
+        outln!();
+        outln!("  No stop to measure from: this tree has no vivacs yet.");
+        outln!();
+        outln!("      vivac save \"<label>\"");
+        outln!();
         return Ok(());
     };
 
     if since.anchor.is_empty_tree() {
-        println!();
-        println!(
+        outln!();
+        outln!(
             "  {} has no anchor, so there is no history to read.",
             since.alias()
         );
-        println!("  Without version control the tree cannot be contradicted; that is");
-        println!("  the floor of the product and not a failure.");
-        println!();
+        outln!("  Without version control the tree cannot be contradicted; that is");
+        outln!("  the floor of the product and not a failure.");
+        outln!();
         return Ok(());
     }
 
@@ -155,8 +156,8 @@ pub fn reconcile(a: &Tree, anchor: &dyn Anchor, args: &Args) -> R {
         }));
     }
 
-    println!();
-    println!(
+    outln!();
+    outln!(
         "  RECONCILE - since {} {}, {}",
         since.alias(),
         since.anchor.short(),
@@ -164,9 +165,9 @@ pub fn reconcile(a: &Tree, anchor: &dyn Anchor, args: &Args) -> R {
     );
 
     if verdicts.is_empty() {
-        println!();
-        println!("  Nothing changed. The tree and the work agree.");
-        println!();
+        outln!();
+        outln!("  Nothing changed. The tree and the work agree.");
+        outln!();
         return Ok(());
     }
 
@@ -174,13 +175,13 @@ pub fn reconcile(a: &Tree, anchor: &dyn Anchor, args: &Args) -> R {
     // where a list of every file is the least useful thing to print. Say the
     // real problem once instead of repeating a symptom per line.
     if governing.is_empty() {
-        println!();
-        println!("  No node declares what it governs, so nothing here can be claimed.");
-        println!("  Until some node says which files it owns, this command has nothing");
-        println!("  to compare the work against.");
-        println!();
-        println!("      vivac push \"<title>\" --why \"<reason>\" --governs \"src/auth/**\"");
-        println!();
+        outln!();
+        outln!("  No node declares what it governs, so nothing here can be claimed.");
+        outln!("  Until some node says which files it owns, this command has nothing");
+        outln!("  to compare the work against.");
+        outln!();
+        outln!("      vivac push \"<title>\" --why \"<reason>\" --governs \"src/auth/**\"");
+        outln!();
         return Ok(());
     }
 
@@ -213,18 +214,18 @@ pub fn reconcile(a: &Tree, anchor: &dyn Anchor, args: &Args) -> R {
                 .join(" ")
         });
     } else if !live.is_empty() {
-        println!();
-        println!(
+        outln!();
+        outln!(
             "  {} under work that is open, which is what is supposed to happen.  --all",
             plural(live.len(), "file", "files")
         );
     }
 
     if unclaimed.is_empty() && stale.is_empty() {
-        println!();
-        println!("  Nothing to reconcile.");
+        outln!();
+        outln!("  Nothing to reconcile.");
     }
-    println!();
+    outln!();
     Ok(())
 }
 
@@ -232,8 +233,8 @@ fn section(title: &str, action: &str, rows: &[&Verdict], note: impl Fn(&Verdict)
     if rows.is_empty() {
         return;
     }
-    println!();
-    println!(
+    outln!();
+    outln!(
         "{}",
         format!(
             "  {} ({}){}{}",
@@ -247,12 +248,12 @@ fn section(title: &str, action: &str, rows: &[&Verdict], note: impl Fn(&Verdict)
     for v in rows.iter().take(SHOWN) {
         // Trimmed, because a row with no note would otherwise carry the
         // column padding out to the edge of the line.
-        println!(
+        outln!(
             "{}",
             format!("    {:<44} {:>3}  {}", clip(&v.file, 44), v.times, note(v)).trim_end()
         );
     }
     if rows.len() > SHOWN {
-        println!("    + {} more   --json", rows.len() - SHOWN);
+        outln!("    + {} more   --json", rows.len() - SHOWN);
     }
 }

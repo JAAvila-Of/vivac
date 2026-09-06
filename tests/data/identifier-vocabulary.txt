@@ -464,6 +464,7 @@ incoming
 indent
 index
 indexed
+indices
 info
 init
 initial
@@ -552,6 +553,7 @@ lower
 lowercase
 lowered
 machine
+macro
 made
 magic
 main
@@ -671,6 +673,7 @@ other
 others
 out
 outcome
+outln
 output
 over
 own
@@ -856,6 +859,7 @@ rpc
 rposition
 rsplit
 rule
+rules
 run
 runs
 said
@@ -919,6 +923,7 @@ sign
 silence
 since
 single
+sites
 sits
 six
 size
@@ -1076,6 +1081,7 @@ truncation
 trusted
 try
 ts
+tt
 turn
 twice
 twin
@@ -1164,6 +1170,7 @@ wrap
 wrapping
 write
 writeln
+writer
 writes
 written
 wrong
