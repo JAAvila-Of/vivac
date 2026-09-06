@@ -266,21 +266,20 @@ agent calls.
 
 | | CLI | MCP |
 |---|---|---|
-| `brief` | 20.5 / 36.0 | 1.0 / 2.7 |
-| `why` | 22.7 / 28.0 | 3.8 / 6.6 |
-| `find` | 22.7 / 33.4 | 6.6 / 9.1 |
-| `open` | 37.7 / 59.5 | 15.4 / 22.9 |
-| `tree` | **51.8 / 82.5** | not a tool |
+| `brief` | 20.0 / 26.4 | 1.1 / 2.1 |
+| `why` | 21.4 / 34.6 | 3.7 / 5.8 |
+| `open` | 21.1 / 28.1 | 14.6 / 19.5 |
+| `find` | 24.0 / 47.8 | 7.3 / 10.6 |
+| `tree` | 30.0 / 51.3 | not a tool |
 
 A write is p99 1.1 ms at that size, and it does not grow with the tree: over
 MCP the server appends against the tree it is already holding.
 
-**`tree` is over the read budget**, and over it at the median rather than in
-the tail. The ceiling is 50 ms over ten thousand nodes, and the reason the
-pillar gives for that ceiling -- this is interactive reading -- settles the
-yardstick too: a person waits for the whole command, so starting the process
-is part of what they wait for. Discounting it would buy a pass and change
-nothing about the wait.
+`tree` sits on the 50 ms ceiling rather than under it. The median passes with
+room; the tail comes in at 51.3, over by about 2.6% -- near enough that a
+busier machine moves it either way, which is not the same thing as passing.
+Most of what used to be there was never the store: it was one write syscall
+per line of output, and the crate now buffers and flushes once.
 
 Not there yet: search across projects, export, team mode.
 
