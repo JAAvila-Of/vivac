@@ -686,16 +686,40 @@ impl Tree {
         out
     }
 
-    /// Open descendants marked as a closure condition.
+    /// Open blockers of `num`: the nodes that keep it from closing.
     ///
-    /// **Transitive on purpose**: a blocking grandchild blocks the grandparent.
-    /// Without that, slipping one node in between is enough to skip the guard
-    /// by accident, which is exactly how a false close gets in.
+    /// `blocks` says *this node keeps its own parent from closing*, not *any
+    /// ancestor*. So `X` only counts as a blocker of `num` if there is a
+    /// chain `X -> ... -> num` in which **every** link has `blocks == true`
+    /// -- each one forwards the block to its own parent in turn. A child
+    /// with `blocks == false` cuts the chain there: nothing beneath it can
+    /// reach `num`, no matter what `blocks` says further down (`f237`).
+    ///
+    /// The chain descends through a blocking child regardless of that
+    /// child's own state, open or closed -- only `blocks` cuts it, never
+    /// `state`. A forced close on one link does not hide what is still open
+    /// beneath it; it is only excluded from the result once it is itself
+    /// closed.
     pub fn open_blockers(&self, num: u64) -> Vec<&Node> {
-        self.descendants(num)
-            .into_iter()
-            .filter(|n| n.blocks && n.state.is_open())
-            .collect()
+        let mut out = Vec::new();
+        let mut stack = vec![num];
+        let mut seen = std::collections::HashSet::new();
+        while let Some(cur) = stack.pop() {
+            for &h in self.children.get(&cur).map(|v| v.as_slice()).unwrap_or(&[]) {
+                if seen.insert(h) {
+                    if let Some(n) = self.nodes.get(&h) {
+                        if n.blocks {
+                            if n.state.is_open() {
+                                out.push(n);
+                            }
+                            stack.push(h);
+                        }
+                    }
+                }
+            }
+        }
+        out.sort_by_key(|n| n.num);
+        out
     }
 
     pub fn counts(&self, num: u64) -> Counts {
@@ -906,7 +930,15 @@ impl Tree {
                 r.open_count += hr.open_count + usize::from(child.state == State::Active);
                 r.closed_count += hr.closed_count + usize::from(child.state == State::Done);
                 r.parked_nodes += hr.parked_nodes + usize::from(child.state == State::Suspended);
-                b += ag.blockers(h) + usize::from(child.blocks && child.state == State::Active);
+                // Same chain rule as `open_blockers` (`f237`): a count only
+                // crosses `child` into `b` when `child` itself blocks. A
+                // non-blocking child cuts the chain here exactly as it does
+                // there, so `blockers(num)` and `open_blockers(num).len()`
+                // stay two views of the one definition rather than two
+                // definitions that can drift apart.
+                if child.blocks {
+                    b += ag.blockers(h) + usize::from(child.state == State::Active);
+                }
             }
             ag.counts.insert(*id, r);
             ag.blockers.insert(*id, b);
@@ -1154,5 +1186,153 @@ mod tests {
         assert_eq!(repeated.num, 1);
         assert_eq!(repeated.first, "t1");
         assert_eq!(repeated.second, "f1");
+    }
+
+    /// Like `node`, but `blocks` is true rather than always false, so a
+    /// scenario can name which links in a chain actually forward a block.
+    fn node_that_blocks(seq: u64, num: u64, kind: Kind, parent: Option<&str>) -> Event {
+        Event {
+            seq,
+            id: format!("e{seq}"),
+            ts: "2026-09-03T10:00:00Z".to_string(),
+            actor: "a".to_string(),
+            lane: "main".to_string(),
+            payload: Body::NodeCreated {
+                node: format!("n{num}"),
+                num,
+                kind,
+                title: format!("Node {num}"),
+                why: "it is needed".to_string(),
+                parent: parent.map(str::to_string),
+                blocks: true,
+                refs: vec![],
+                governs: vec![],
+            },
+        }
+    }
+
+    /// Moves the node minted by `node` or `node_that_blocks` under `num` to
+    /// `State::Done`.
+    fn closed(seq: u64, num: u64) -> Event {
+        Event {
+            seq,
+            id: format!("e{seq}"),
+            ts: "2026-09-03T10:05:00Z".to_string(),
+            actor: "a".to_string(),
+            lane: "main".to_string(),
+            payload: Body::StateChanged {
+                node: format!("n{num}"),
+                state: State::Done,
+                outcome: "done".to_string(),
+                forced: false,
+            },
+        }
+    }
+
+    /// `f237`: `open_blockers` used to walk every descendant and filter by
+    /// `blocks`, no matter what sat between it and the ancestor. Here `T`
+    /// does not block `P` (`blocks = false`), so `C` underneath it -- open,
+    /// with `blocks = true` -- must not count either: the link that would
+    /// carry it up to `P` does not forward a block. `P` is closed, mirroring
+    /// the real case this defect was found from.
+    #[test]
+    fn a_child_that_does_not_block_stops_the_chain() {
+        let events = vec![
+            node(1, 1, Kind::Goal, None),                      // P
+            node(2, 2, Kind::Task, Some("n1")),                // T, blocks = false
+            node_that_blocks(3, 3, Kind::Finding, Some("n2")), // C, blocks = true, open
+            closed(4, 1),                                      // P closes
+        ];
+        let tree = fold(&events, 0);
+        assert!(
+            tree.open_blockers(1).is_empty(),
+            "T does not block P, so nothing under T can block P either"
+        );
+    }
+
+    /// The chain that does carry a block all the way up: every link between
+    /// `C` and `P` has `blocks = true`. `T` blocks `P` on its own already;
+    /// `C` blocks `P` too, but only because `T`'s own link forwards it --
+    /// which is exactly what the chain rule requires and what `f237`'s
+    /// buggy version got right for the wrong reason (it never checked `T`
+    /// at all).
+    #[test]
+    fn a_chain_where_every_link_blocks_reaches_the_top() {
+        let events = vec![
+            node(1, 1, Kind::Goal, None),                      // P
+            node_that_blocks(2, 2, Kind::Task, Some("n1")),    // T, blocks = true, open
+            node_that_blocks(3, 3, Kind::Finding, Some("n2")), // C, blocks = true, open
+        ];
+        let tree = fold(&events, 0);
+        let nums: Vec<u64> = tree.open_blockers(1).iter().map(|n| n.num).collect();
+        assert_eq!(
+            nums,
+            vec![2, 3],
+            "both T (direct) and C (through T's own block) reach P"
+        );
+    }
+
+    /// A link that is itself closed still forwards what is open beneath it:
+    /// forcing `T` shut does not erase what `C` still owes `P`.
+    #[test]
+    fn a_closed_link_does_not_stop_what_blocks_under_it() {
+        let events = vec![
+            node(1, 1, Kind::Goal, None),                      // P
+            node_that_blocks(2, 2, Kind::Task, Some("n1")),    // T, blocks = true
+            node_that_blocks(3, 3, Kind::Finding, Some("n2")), // C, blocks = true, open
+            closed(4, 2),                                      // T closes
+        ];
+        let tree = fold(&events, 0);
+        let nums: Vec<u64> = tree.open_blockers(1).iter().map(|n| n.num).collect();
+        assert_eq!(nums, vec![3], "T closing does not stop C from blocking P");
+    }
+
+    /// The output stays sorted by `num` across more than one blocking chain,
+    /// same as before the fix.
+    #[test]
+    fn open_blockers_from_two_chains_come_back_sorted() {
+        let events = vec![
+            node(1, 1, Kind::Goal, None),                      // P
+            node_that_blocks(2, 4, Kind::Finding, Some("n1")), // second branch, minted first
+            node_that_blocks(3, 2, Kind::Finding, Some("n1")), // first branch, minted second
+        ];
+        let tree = fold(&events, 0);
+        let nums: Vec<u64> = tree.open_blockers(1).iter().map(|n| n.num).collect();
+        assert_eq!(nums, vec![2, 4]);
+    }
+
+    /// `Aggregates::blockers` and `Tree::open_blockers` answer the same
+    /// question -- how many open blockers does this node have -- from two
+    /// different passes over the tree, one a count and one a list. `f237`
+    /// showed what happens when only one of the two gets the chain rule: the
+    /// binary starts disagreeing with itself. A tree mixing a cut-off branch
+    /// (`blocks = false`), a chain that reaches the top, and a closed link
+    /// that still forwards what is under it is exactly the shape that would
+    /// tell the two implementations apart if only one of them had the fix.
+    #[test]
+    fn the_blockers_count_agrees_with_open_blockers_on_every_node() {
+        let events = vec![
+            node(1, 1, Kind::Goal, None),                      // P
+            node(2, 2, Kind::Task, Some("n1")),                // T1, blocks = false: cut off
+            node_that_blocks(3, 3, Kind::Finding, Some("n2")), // C1, under the cut branch
+            node_that_blocks(4, 4, Kind::Task, Some("n1")),    // T2, blocks = true, open
+            node_that_blocks(5, 5, Kind::Finding, Some("n4")), // C2, blocks = true, open
+            node_that_blocks(6, 6, Kind::Finding, Some("n4")), // C3, blocks = true, closes below
+            node_that_blocks(7, 7, Kind::Finding, Some("n6")), // C4, under the closed C3
+            node_that_blocks(8, 8, Kind::Task, Some("n1")),    // T3, blocks = true, closes below
+            node_that_blocks(9, 9, Kind::Finding, Some("n8")), // C5, under the closed T3
+            closed(10, 6),                                     // C3 closes
+            closed(11, 8),                                     // T3 closes
+        ];
+        let tree = fold(&events, 0);
+        let ag = tree.aggregates();
+        for n in tree.nodes_iter() {
+            assert_eq!(
+                ag.blockers(n.num),
+                tree.open_blockers(n.num).len(),
+                "node {} disagrees between the aggregate count and the list",
+                n.num
+            );
+        }
     }
 }
