@@ -259,20 +259,30 @@ The spine — the path from the root to the focus — is **never truncated**: if
 does not fit the budget it comes out anyway, and the warning says that what is
 left over is tree, not render.
 
-Measured on this machine, excluding process startup:
+Measured on this machine at ten thousand nodes, 200 calls per cell, p50 / p99
+in milliseconds. The CLI column starts a fresh process every time and includes
+the ~8.5 ms that costs; the MCP column is a resident server, which is how an
+agent calls.
 
-| nodes | `push` | `brief` | `tree` |
-|---|---|---|---|
-| 100 | ~5 ms | ~5 ms | ~5 ms |
-| 1,000 | ~11 ms | ~10 ms | ~13 ms |
-| 10,000 | ~54 ms | ~63 ms | ~95 ms |
+| | CLI | MCP |
+|---|---|---|
+| `brief` | 20.5 / 36.0 | 1.0 / 2.7 |
+| `why` | 22.7 / 28.0 | 3.8 / 6.6 |
+| `find` | 22.7 / 33.4 | 6.6 / 9.1 |
+| `open` | 37.7 / 59.5 | 49.6 / 93.5 |
+| `tree` | **51.8 / 82.5** | not a tool |
 
-The write budget is p99 < 5 ms and the read budget < 50 ms over 10,000 nodes.
-In the low hundreds of nodes it holds, and from there up it degrades linearly
-with the size of the log, which is read whole on every call. **That is where
-SQLite comes in**, and now it has a number instead of a hunch.
+A write is p99 1.1 ms at that size, and it does not grow with the tree: over
+MCP the server appends against the tree it is already holding.
 
-Not there yet: search across projects, cascading invalidation, team mode.
+**`tree` is over the read budget**, and over it at the median rather than in
+the tail. The ceiling is 50 ms over ten thousand nodes, and the reason the
+pillar gives for that ceiling -- this is interactive reading -- settles the
+yardstick too: a person waits for the whole command, so starting the process
+is part of what they wait for. Discounting it would buy a pass and change
+nothing about the wait.
+
+Not there yet: search across projects, export, team mode.
 
 **0.3.0 does not read a log written by 0.1.x or 0.2.x.** The tool was written
 in Spanish and those releases stored the event fields under Spanish names,
@@ -370,8 +380,9 @@ From source, `cargo install --path .` inside the repo.
 
 No background process, and no network in the write path — `push` is the binary
 writing to a file. **The binary never phones home**, and that one is a promise
-rather than a description of the current version. The store is `.vivac/`, two
-files.
+rather than a description of the current version. The store is `.vivac/`,
+three files: the log, the config, and a derived index that can be deleted
+without changing any command's output.
 
 ## Versioning
 
@@ -381,9 +392,12 @@ does. The rule has already been spent once — `0.3.0` stopped reading the logs
 `0.1.x` and `0.2.x` wrote, and went out as a minor for that reason.
 
 **The format on disk is not settled either**, and that is what keeps `1.0`
-away. Moving the store from a folded JSON log to SQLite is a change of format
-already known to be coming, and a `1.0` before it would be promising stability
-across a migration that is on the list. `1.0` comes after the store settles.
+away. It was going to settle by moving into SQLite; the measurement rejected
+that, and [`docs/PILLARS.md`](docs/PILLARS.md) records the reversal where the
+doctrine lives. What is left is smaller than a migration and still open: the
+read cost turned out to sit in how a node is built rather than in where its
+bytes are stored, and that is not something a `1.0` should promise stability
+across before it is answered. `1.0` comes after the store settles.
 
 ## Contributing
 
