@@ -21,13 +21,23 @@ pub fn check(a: &Tree, args: &Args) -> Result<i32, crate::failure::Failure> {
         ));
     }
 
-    let mut nums = std::collections::HashMap::new();
+    // One ULID, one `num`. With `num` as `Tree`'s own storage key, only the
+    // first of two claimants ever makes it into `nodes_iter` below -- the
+    // fold records the second at the moment it loses, since a scan
+    // afterwards has nothing left to see.
+    for d in &a.repeated_nums {
+        store.push(format!(
+            "number {} repeated: {} and {}",
+            d.num, d.first, d.second
+        ));
+    }
+
     for n in a.nodes_iter() {
         // Invariant 11: provenance is a tree. The schema already rules out two
         // parents --`spawns` travels inside the node-- so the only thing that
         // can break here is the parent not existing.
-        if let Some(p) = &n.parent {
-            if a.node(p).is_none() {
+        if let Some(p) = n.parent {
+            if a.node_by_num(p).is_none() {
                 store.push(format!(
                     "{} points at a parent that does not exist",
                     n.alias()
@@ -36,17 +46,9 @@ pub fn check(a: &Tree, args: &Args) -> Result<i32, crate::failure::Failure> {
         }
         // Invariant 1: acyclic. If the path to the root does not end at a node
         // with no parent, it is going in circles.
-        let lineage = a.ancestors(&n.id);
+        let lineage = a.ancestors(n.num);
         if lineage.first().is_some_and(|r| r.parent.is_some()) {
             store.push(format!("{} sits in a provenance cycle", n.alias()));
-        }
-        if let Some(other) = nums.insert(n.num, n.alias()) {
-            store.push(format!(
-                "number {} repeated: {} and {}",
-                n.num,
-                other,
-                n.alias()
-            ));
         }
         // Invariant 10: false close.
         //
@@ -55,8 +57,8 @@ pub fn check(a: &Tree, args: &Args) -> Result<i32, crate::failure::Failure> {
         // --a lane being abandoned-- and what was asked was that they be a
         // decision and not an oversight. The trace is in the event and the
         // render still marks it; what it does not do is break CI every day.
-        if n.state == State::Done && !n.forced_close && !a.open_blockers(&n.id).is_empty() {
-            let pending_count = a.open_blockers(&n.id);
+        if n.state == State::Done && !n.forced_close && !a.open_blockers(n.num).is_empty() {
+            let pending_count = a.open_blockers(n.num);
             let aliases: Vec<String> = pending_count.iter().map(|c| c.alias()).collect();
             project.push(format!(
                 "{} is closed with {} open condition(s): {}",

@@ -51,7 +51,7 @@ fn label(a: &Tree, n: &Node) -> String {
 }
 
 fn json_node(a: &Tree, ag: &Aggregates, n: &Node) -> serde_json::Value {
-    let r = ag.counts(&n.id);
+    let r = ag.counts(n.num);
     json!({
         "id": n.id,
         "alias": n.alias(),
@@ -61,14 +61,14 @@ fn json_node(a: &Tree, ag: &Aggregates, n: &Node) -> serde_json::Value {
         "why": n.why(a),
         "state": n.state,
         "blocks": n.blocks,
-        "parent": n.parent.as_ref().and_then(|p| a.node(p).map(|x| x.alias())),
+        "parent": n.parent.and_then(|p| a.node_by_num(p).map(|x| x.alias())),
         "note": n.note(a),
         "outcome": n.outcome(a),
         "refs": n.refs(a),
         "governs": n.governs(a),
         "opened": n.opened(a),
         "closed": n.closed(a),
-        "false_close": n.state == State::Done && ag.blockers(&n.id) > 0,
+        "false_close": n.state == State::Done && ag.blockers(n.num) > 0,
         "open_below": r.open_count,
         "total_below": r.total,
     })
@@ -159,7 +159,7 @@ pub(crate) fn anchor_of(a: &Tree, full: &Full, n: &Node) -> AnchorRef {
 /// open. Superseding one closes it, so a superseded decision drops out on
 /// its own.
 pub(crate) fn standing_of<'a>(a: &'a Tree, n: &Node) -> Vec<&'a Node> {
-    a.children(&n.id)
+    a.children(n.num)
         .into_iter()
         .filter(|c| c.kind == Kind::Decision && c.state.is_open())
         .collect()
@@ -170,7 +170,7 @@ pub(crate) fn standing_of<'a>(a: &'a Tree, n: &Node) -> Vec<&'a Node> {
 /// and close on the day `n` was born, in an order the date cannot tell
 /// apart.
 pub(crate) fn open_then_of<'a>(a: &'a Tree, full: &Full, n: &Node) -> Vec<&'a Node> {
-    let (Some(&seq), Some(parent)) = (full.created.get(&n.id), n.parent.as_ref()) else {
+    let (Some(&seq), Some(parent)) = (full.created.get(&n.id), n.parent) else {
         return vec![];
     };
     a.children(parent)
@@ -211,14 +211,13 @@ fn why_data_impl(a: &Tree, full: Option<&Full>, id: &str) -> Result<serde_json::
     let n = a
         .resolve(id)
         .ok_or_else(|| Failure::usage(format!("No such node: {id}.")))?;
-    let lineage = a.ancestors(&n.id);
+    let lineage = a.ancestors(n.num);
     let node_json = |x: &Node| match full {
         Some(f) => json_node_full(a, ag, f, x),
         None => json_node(a, ag, x),
     };
     let siblings: Vec<_> = n
         .parent
-        .as_ref()
         .map(|p| a.children(p))
         .unwrap_or_default()
         .into_iter()
@@ -229,9 +228,9 @@ fn why_data_impl(a: &Tree, full: Option<&Full>, id: &str) -> Result<serde_json::
         "node": node_json(n),
         "path": lineage.iter().map(|x| node_json(x)).collect::<Vec<_>>(),
         "in_parallel": siblings,
-        "born_here": a.children(&n.id).iter().filter(|c| c.state.is_open())
+        "born_here": a.children(n.num).iter().filter(|c| c.state.is_open())
             .map(|c| json_node(a, ag, c)).collect::<Vec<_>>(),
-        "blockers": a.open_blockers(&n.id).iter()
+        "blockers": a.open_blockers(n.num).iter()
             .map(|c| json_node(a, ag, c)).collect::<Vec<_>>(),
     }))
 }
@@ -245,7 +244,7 @@ pub fn open_data(a: &Tree) -> serde_json::Value {
     let ag = &a.aggregates();
     let mut leaves: Vec<&Node> = a
         .nodes_iter()
-        .filter(|n| n.is_front() && !a.children(&n.id).iter().any(|c| c.is_front()))
+        .filter(|n| n.is_front() && !a.children(n.num).iter().any(|c| c.is_front()))
         .collect();
     leaves.sort_by_key(|n| n.num);
     json!(leaves
@@ -253,7 +252,7 @@ pub fn open_data(a: &Tree) -> serde_json::Value {
         .map(|n| {
             let mut v = json_node(a, ag, n);
             v["lineage"] = json!(a
-                .ancestors(&n.id)
+                .ancestors(n.num)
                 .iter()
                 .rev()
                 .skip(1)
@@ -309,7 +308,7 @@ pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
     let n = a
         .resolve(s)
         .ok_or_else(|| Failure::usage(format!("No such node: {s}.")))?;
-    let lineage = a.ancestors(&n.id);
+    let lineage = a.ancestors(n.num);
     let full = args.has("full").then(|| Full::from_log(log));
 
     if args.has("json") {
@@ -345,7 +344,7 @@ pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
             print_full_of(a, f, p);
         }
         if !is_last {
-            let f = ag.counts(&p.id).phrase();
+            let f = ag.counts(p.num).phrase();
             if !f.is_empty() {
                 println!("        ({f} below)");
             }
@@ -359,7 +358,7 @@ pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
     println!();
 
     // "we had ten things to review, we are on the first"
-    if let Some(parent) = n.parent.as_ref() {
+    if let Some(parent) = n.parent {
         let siblings: Vec<_> = a
             .children(parent)
             .into_iter()
@@ -375,7 +374,7 @@ pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
     }
 
     let kids: Vec<_> = a
-        .children(&n.id)
+        .children(n.num)
         .into_iter()
         .filter(|c| c.state.is_open())
         .collect();
@@ -393,7 +392,7 @@ pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
     }
 
     for p in &lineage {
-        let pending_count = a.open_blockers(&p.id);
+        let pending_count = a.open_blockers(p.num);
         if !pending_count.is_empty() && p.state.is_open() {
             println!(
                 "  {} does not close until these close ({}):",
@@ -410,13 +409,13 @@ pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
 }
 
 fn branch(a: &Tree, ag: &Aggregates, n: &Node, prefix: &str, is_last: bool, show_all: bool) {
-    let f = ag.counts(&n.id).phrase();
+    let f = ag.counts(n.num).phrase();
     let mut tail = if f.is_empty() {
         String::new()
     } else {
         format!("   ({f})")
     };
-    let pending_count = ag.blockers(&n.id);
+    let pending_count = ag.blockers(n.num);
     if n.state == State::Done && pending_count > 0 {
         tail.push_str(&format!(
             "   <== FALSE CLOSE: {pending_count} open condition(s)"
@@ -432,9 +431,9 @@ fn branch(a: &Tree, ag: &Aggregates, n: &Node, prefix: &str, is_last: bool, show
     );
     let sig = format!("{prefix}{}", if is_last { "    " } else { "|   " });
     let children: Vec<_> = a
-        .children(&n.id)
+        .children(n.num)
         .into_iter()
-        .filter(|h| show_all || h.state.is_open() || ag.counts(&h.id).open_count > 0)
+        .filter(|h| show_all || h.state.is_open() || ag.counts(h.num).open_count > 0)
         .collect();
     for (i, h) in children.iter().enumerate() {
         branch(a, ag, h, &sig, i == children.len() - 1, show_all);
@@ -444,7 +443,7 @@ fn branch(a: &Tree, ag: &Aggregates, n: &Node, prefix: &str, is_last: bool, show
 fn subtree_json(a: &Tree, ag: &Aggregates, n: &Node) -> serde_json::Value {
     let mut v = json_node(a, ag, n);
     v["children"] = json!(a
-        .children(&n.id)
+        .children(n.num)
         .iter()
         .map(|h| subtree_json(a, ag, h))
         .collect::<Vec<_>>());
@@ -487,7 +486,7 @@ pub fn tree(a: &Tree, args: &Args) -> R {
 pub fn open(a: &Tree, args: &Args) -> R {
     let mut leaves: Vec<&Node> = a
         .nodes_iter()
-        .filter(|n| n.is_front() && !a.children(&n.id).iter().any(|c| c.is_front()))
+        .filter(|n| n.is_front() && !a.children(n.num).iter().any(|c| c.is_front()))
         .collect();
     leaves.sort_by_key(|n| n.num);
     let standing = a
@@ -510,7 +509,7 @@ pub fn open(a: &Tree, args: &Args) -> R {
     println!();
     for n in leaves {
         println!("  {:<6} {}", n.alias(), n.title(a));
-        let lineage = a.ancestors(&n.id);
+        let lineage = a.ancestors(n.num);
         if lineage.len() > 1 {
             let v: Vec<String> = lineage[..lineage.len() - 1]
                 .iter()
@@ -556,7 +555,7 @@ pub fn triage(a: &Tree, args: &Args) -> R {
     let mut deep: Vec<(&Node, usize)> = a
         .nodes_iter()
         .filter(|n| n.is_front())
-        .map(|n| (n, a.under_goal(&n.id).len()))
+        .map(|n| (n, a.under_goal(n.num).len()))
         .filter(|(_, d)| *d >= 6)
         .collect();
 
@@ -569,7 +568,7 @@ pub fn triage(a: &Tree, args: &Args) -> R {
         .nodes_iter()
         .filter(|n| n.is_front())
         .filter_map(|n| {
-            let p = a.node(n.parent.as_deref()?)?;
+            let p = a.node_by_num(n.parent?)?;
             (p.state == State::Abandoned).then_some((n, p))
         })
         .collect();
@@ -582,7 +581,7 @@ pub fn triage(a: &Tree, args: &Args) -> R {
     // already closed: that is the case that took 26 days to spot.
     let mut false_closes: Vec<&Node> = a
         .nodes_iter()
-        .filter(|n| n.state == State::Done && !n.forced_close && ag.blockers(&n.id) > 0)
+        .filter(|n| n.state == State::Done && !n.forced_close && ag.blockers(n.num) > 0)
         .collect();
 
     parked_nodes.sort_by_key(|n| n.num);
@@ -648,7 +647,7 @@ pub fn triage(a: &Tree, args: &Args) -> R {
             // The lineage starts where the number does. Drawing it from the
             // root beside a distance to the goal would say two things at once.
             let v: Vec<String> = a
-                .under_goal(&n.id)
+                .under_goal(n.num)
                 .iter()
                 .rev()
                 .skip(1)
@@ -686,7 +685,7 @@ pub fn triage(a: &Tree, args: &Args) -> R {
                 "    {:<6} {:<40} {} blocker(s)",
                 n.alias(),
                 clip(n.title(a), 40),
-                ag.blockers(&n.id)
+                ag.blockers(n.num)
             );
         }
     }
@@ -730,7 +729,11 @@ pub fn parked(a: &Tree, args: &Args) -> R {
 /// `stack` — where you are right now, from the root to the focus.
 pub fn stack(a: &Tree, args: &Args) -> R {
     let ag = &a.aggregates();
-    let stack: Vec<&Node> = a.stack.iter().filter_map(|id| a.node(id)).collect();
+    let stack: Vec<&Node> = a
+        .stack
+        .iter()
+        .filter_map(|&num| a.node_by_num(num))
+        .collect();
     if args.has("json") {
         return print_json(json!({
             "depth": stack.len(),
@@ -769,10 +772,10 @@ pub fn stats(a: &Tree, args: &Args) -> R {
     let mut false_closes = Vec::new();
     for n in a.nodes_iter() {
         *by_state.entry(n.state.word(n.kind)).or_insert(0usize) += 1;
-        if n.parent.as_ref().is_some_and(|p| a.node(p).is_none()) {
+        if n.parent.is_some_and(|p| a.node_by_num(p).is_none()) {
             orphans += 1;
         }
-        if n.state == State::Done && ag.blockers(&n.id) > 0 {
+        if n.state == State::Done && ag.blockers(n.num) > 0 {
             false_closes.push(n);
         }
     }
@@ -974,7 +977,7 @@ fn hits_for<'t>(a: &'t Tree, terms: &[String]) -> Vec<(&'t Node, Vec<&'static st
 }
 
 fn lineage_of(a: &Tree, n: &Node) -> Vec<String> {
-    let line = a.ancestors(&n.id);
+    let line = a.ancestors(n.num);
     line[..line.len().saturating_sub(1)]
         .iter()
         .map(|p| p.alias())

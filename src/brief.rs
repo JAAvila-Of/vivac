@@ -97,8 +97,7 @@ fn heading(title: &str, body: Vec<String>) -> Vec<String> {
 /// the computation from O(depth) into O(graph), and would lose the property
 /// that inheritance is legible by looking at the stack on screen.
 pub(crate) fn constraints<'a>(a: &'a Tree, lineage: &[&Node]) -> Vec<&'a Node> {
-    let on_lineage: std::collections::HashSet<&str> =
-        lineage.iter().map(|n| n.id.as_str()).collect();
+    let on_lineage: HashSet<u64> = lineage.iter().map(|n| n.num).collect();
     let mut v: Vec<&Node> = a
         .nodes_iter()
         .filter(|n| n.kind == Kind::Constraint && n.state.is_open())
@@ -109,13 +108,12 @@ pub(crate) fn constraints<'a>(a: &'a Tree, lineage: &[&Node]) -> Vec<&'a Node> {
             // strongest form of that, not a weaker one.
             let project_wide = n.parent.is_none()
                 || n.parent
-                    .as_ref()
-                    .and_then(|p| a.node(p))
+                    .and_then(|p| a.node_by_num(p))
                     .is_some_and(|p| p.parent.is_none());
             project_wide
-                || a.ancestors(&n.id)
+                || a.ancestors(n.num)
                     .iter()
-                    .any(|p| on_lineage.contains(p.id.as_str()))
+                    .any(|p| on_lineage.contains(&p.num))
         })
         .collect();
     // At risk first --the ones carrying a flag-- and then by alias.
@@ -187,16 +185,14 @@ pub(crate) fn clip(s: &str, n: usize) -> String {
 /// below then keeps only the project-level ones, which is the right answer
 /// rather than a degraded one -- a decision that governs the whole product
 /// hangs off nothing, so it stays reachable from an empty path.
-pub(crate) fn standing<'a>(a: &'a Tree, focus: &Node, on_lineage: &HashSet<&str>) -> Vec<&'a Node> {
+pub(crate) fn standing<'a>(a: &'a Tree, focus: &Node, on_lineage: &HashSet<u64>) -> Vec<&'a Node> {
     let mut dec: Vec<&Node> = a
         .nodes_iter()
         .filter(|n| n.kind == Kind::Decision && n.state.is_open())
         .filter(|n| {
             n.parent.is_none()
-                || on_lineage.contains(n.id.as_str())
-                || n.parent
-                    .as_ref()
-                    .is_some_and(|p| on_lineage.contains(p.as_str()))
+                || on_lineage.contains(&n.num)
+                || n.parent.is_some_and(|p| on_lineage.contains(&p))
                 || n.governs(a)
                     .iter()
                     .any(|g| focus.governs(a).iter().any(|f| crate::glob::covers(g, f)))
@@ -232,7 +228,7 @@ pub fn to_text(
         .unwrap_or(BUDGET);
 
     let lineage: Vec<&Node> = match a.stack.last() {
-        Some(id) => a.ancestors(id),
+        Some(&num) => a.ancestors(num),
         None => vec![],
     };
 
@@ -255,7 +251,7 @@ pub fn to_text(
     //    --they are not pending work and they have their own section (8)--,
     //    and whatever hangs further down is counted without being listed.
     let mut children: Vec<String> = a
-        .children(&focus.id)
+        .children(focus.num)
         .into_iter()
         .filter(|c| c.is_front())
         .map(|c| {
@@ -272,15 +268,15 @@ pub fn to_text(
     // the whole tree, which is exactly the noise the focus exists to keep
     // out.
     let direct: std::collections::HashSet<&str> = a
-        .children(&focus.id)
+        .children(focus.num)
         .iter()
         .map(|c| c.id.as_str())
         .collect();
     let deep = a
-        .descendants(&focus.id)
+        .descendants(focus.num)
         .into_iter()
         .filter(|n| n.is_front() && !direct.contains(n.id.as_str()))
-        .filter(|n| !a.children(&n.id).iter().any(|c| c.is_front()))
+        .filter(|n| !a.children(n.num).iter().any(|c| c.is_front()))
         .count();
     if deep > 0 {
         children.push(format!(
@@ -300,15 +296,14 @@ pub fn to_text(
     s.push(Section::fixed(heading("INVARIANTS", invariants)));
 
     // 5. Blocking questions: all of them, untruncated.
-    let on_lineage: std::collections::HashSet<&str> =
-        lineage.iter().map(|n| n.id.as_str()).collect();
+    let on_lineage: HashSet<u64> = lineage.iter().map(|n| n.num).collect();
     let questions: Vec<String> = a
         .nodes_iter()
         .filter(|n| n.kind == Kind::Question && n.state.is_open() && n.blocks)
         .filter(|n| {
-            a.ancestors(&n.id)
+            a.ancestors(n.num)
                 .iter()
-                .any(|p| on_lineage.contains(p.id.as_str()))
+                .any(|p| on_lineage.contains(&p.num))
         })
         .map(|n| format!("  {:<6} {}", n.alias(), n.title(a)))
         .collect();
@@ -321,10 +316,7 @@ pub fn to_text(
         .nodes_iter()
         .filter(|n| !n.flags.is_empty())
         .filter(|n| {
-            on_lineage.contains(n.id.as_str())
-                || n.parent
-                    .as_ref()
-                    .is_some_and(|p| on_lineage.contains(p.as_str()))
+            on_lineage.contains(&n.num) || n.parent.is_some_and(|p| on_lineage.contains(&p))
         })
         .collect();
     flagged.sort_by_key(|n| n.num);
@@ -352,11 +344,11 @@ pub fn to_text(
         .nodes_iter()
         .filter(|n| n.state == State::Suspended)
         .filter(|n| {
-            a.ancestors(&n.id)
+            a.ancestors(n.num)
                 .iter()
                 .rev()
                 .skip(1)
-                .any(|p| on_lineage.contains(p.id.as_str()))
+                .any(|p| on_lineage.contains(&p.num))
         })
         .collect();
     parked_nodes.sort_by_key(|n| n.num);
@@ -365,8 +357,7 @@ pub fn to_text(
         .flat_map(|n| {
             let hangs_off = n
                 .parent
-                .as_ref()
-                .and_then(|p| a.node(p))
+                .and_then(|p| a.node_by_num(p))
                 .map(|p| format!("hangs off {}", p.alias()))
                 .unwrap_or_default();
             let mut v = vec![format!(
@@ -537,7 +528,7 @@ fn no_focus(a: &Tree, project: &str, date: &str) -> Result<String, crate::failur
 ",
                 m.alias(),
                 clip(m.title(a), 40),
-                a.counts(&m.id).open_count
+                a.counts(m.num).open_count
             ));
         }
     }
