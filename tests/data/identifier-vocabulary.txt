@@ -186,6 +186,7 @@ commands
 comment
 commit
 common
+compaction
 config
 connect
 const
@@ -236,6 +237,7 @@ decide
 decided
 decision
 decisions
+declares
 decoded
 dedup
 deep
@@ -332,6 +334,7 @@ exit
 expand
 expect
 expected
+explains
 extend
 extension
 extra
@@ -569,6 +572,7 @@ markup
 mask
 match
 matched
+matcher
 matches
 matching
 matter
@@ -706,6 +710,7 @@ parts
 pass
 passes
 past
+pasted
 path
 pattern
 payload

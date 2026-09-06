@@ -418,3 +418,78 @@ fn a_real_session_identifier_passes_through_untouched() {
         "the guard fired on a real payload:\n{log}"
     );
 }
+
+/// The block `vivac hooks` prints, pulled out of the surrounding prose and
+/// indentation so it can be handed to a JSON parser exactly as pasted.
+fn pasted_block(out: &str) -> serde_json::Value {
+    let start = out
+        .find('{')
+        .unwrap_or_else(|| panic!("no `{{` in:\n{out}"));
+    let mut depth = 0i32;
+    let mut end = None;
+    for (i, c) in out[start..].char_indices() {
+        match c {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = Some(start + i + 1);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let end = end.unwrap_or_else(|| panic!("the braces in the pasted block never close:\n{out}"));
+    serde_json::from_str(&out[start..end])
+        .unwrap_or_else(|e| panic!("the pasted block is not valid JSON: {e}\n{out}"))
+}
+
+/// `SessionStart` fires on five sources, not one: `startup`, `resume`,
+/// `clear`, `compact` and `fork`. It already matched all of them with the
+/// matcher field left out, which is documented to mean the same thing as
+/// `"*"` -- but nothing said so, and nobody reading the pasted config could
+/// tell the omission was deliberate. `d260` makes it explicit.
+#[test]
+fn the_pasted_config_declares_the_matcher_that_covers_every_session_start_source() {
+    let c = Sandbox::new_empty("hooks-matcher");
+    let out = c.ok(&["hooks"]);
+    let v = pasted_block(&out);
+    let entry = &v["hooks"]["SessionStart"][0];
+    assert_eq!(
+        entry["matcher"], "*",
+        "the SessionStart entry does not declare a match-all matcher:\n{out}"
+    );
+}
+
+/// `Stop` has one matcher and this task has nothing to do with it: the change
+/// is scoped to `SessionStart`, and `Stop` has to come out exactly as it went
+/// in.
+#[test]
+fn the_pasted_config_leaves_stop_untouched() {
+    let c = Sandbox::new_empty("hooks-stop-untouched");
+    let out = c.ok(&["hooks"]);
+    let v = pasted_block(&out);
+    let entry = &v["hooks"]["Stop"][0];
+    assert!(
+        entry.get("matcher").is_none(),
+        "Stop grew a matcher nobody asked it to:\n{out}"
+    );
+    assert_eq!(
+        entry["hooks"][0]["command"], "vivac session end --hook",
+        "the Stop command changed:\n{out}"
+    );
+}
+
+/// The prose has to say why: `SessionStart` also fires after a compaction,
+/// which is exactly when the brief is doing the most work re-establishing
+/// the thread.
+#[test]
+fn the_pasted_config_prose_explains_the_compaction_case() {
+    let c = Sandbox::new_empty("hooks-prose");
+    let out = c.ok(&["hooks"]);
+    assert!(
+        out.contains("compact"),
+        "the prose never mentions compaction, so the matcher looks arbitrary:\n{out}"
+    );
+}
