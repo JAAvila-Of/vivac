@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const FILE: &str = "projects";
 
@@ -70,6 +70,18 @@ fn try_note(store_dir: &Path, project_id: &str, root: &Path) -> std::io::Result<
     }
     contents.projects.insert(project_id.to_string(), value);
     write(store_dir, &path, &contents)
+}
+
+/// Every root the registry currently points at, in no particular order.
+/// `find --everywhere` (`d273`) is the first reader that wants the roots
+/// themselves rather than the id each one is keyed by, so the map's keys
+/// stay inside this module the way `note`'s already do.
+pub fn roots(store_dir: &Path) -> Vec<PathBuf> {
+    read(&store_dir.join(FILE))
+        .projects
+        .into_values()
+        .map(PathBuf::from)
+        .collect()
 }
 
 fn read(path: &Path) -> Contents {

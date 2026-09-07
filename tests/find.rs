@@ -211,3 +211,193 @@ fn a_title_hit_names_the_title_in_matched() {
     );
     assert!(hit["matched"]["title"].is_string(), "{s}");
 }
+
+/// `find --everywhere` — the registry-wide fan-out (`d273`). `--everywhere`
+/// reads the registry instead of the tree underfoot, so proving it needs
+/// two or more projects sharing one `VIVAC_HOME`, which is what
+/// `Sandbox::new_seeded_in` is for.
+fn project_name(c: &Sandbox) -> String {
+    c.0.file_name().unwrap().to_string_lossy().into_owned()
+}
+
+/// Pushes one node and registers the project.
+///
+/// Registration is a side effect of *using* a project (`t265`), and the
+/// push that seeds a fresh store cannot trigger its own: at the moment it
+/// runs, the event it is about to write is not on disk yet, so there is no
+/// first event id to key the registry by. The `stack` after it is the
+/// first command that finds one.
+fn seed(c: &Sandbox, title: &str, why: &str) {
+    c.ok(&["push", title, "--why", why]);
+    c.ok(&["stack"]);
+}
+
+#[test]
+fn a_query_matching_in_two_projects_shows_both_with_their_own_names() {
+    let a = Sandbox::new_seeded("ew-both-a");
+    seed(
+        &a,
+        "Ship the release apparatus",
+        "the version was a hand edit",
+    );
+    let b = Sandbox::new_seeded_in("ew-both-b", a.global_home());
+    seed(&b, "Guard the release notes", "the version was a hand edit");
+    let (name_a, name_b) = (project_name(&a), project_name(&b));
+
+    let s = b.ok(&["find", "hand edit", "--everywhere"]);
+
+    assert!(s.contains(&name_a), "{s}");
+    assert!(s.contains(&name_b), "{s}");
+    assert!(s.contains("Ship the release apparatus"), "{s}");
+    assert!(s.contains("Guard the release notes"), "{s}");
+}
+
+#[test]
+fn a_query_matching_in_one_project_only_prints_that_project() {
+    let a = Sandbox::new_seeded("ew-one-a");
+    seed(
+        &a,
+        "Ship the release apparatus",
+        "the version was a hand edit",
+    );
+    let b = Sandbox::new_seeded_in("ew-one-b", a.global_home());
+    seed(
+        &b,
+        "Guard the commit messages",
+        "a malformed one does not fail loudly",
+    );
+    let (name_a, name_b) = (project_name(&a), project_name(&b));
+
+    let s = b.ok(&["find", "apparatus", "--everywhere"]);
+
+    assert!(s.contains(&name_a), "{s}");
+    assert!(
+        !s.contains(&name_b),
+        "the project with no hit was printed anyway:\n{s}"
+    );
+}
+
+#[test]
+fn everywhere_hits_carry_the_six_keys_plus_project() {
+    let a = Sandbox::new_seeded("ew-keys-a");
+    seed(
+        &a,
+        "Ship the release apparatus",
+        "the version was a hand edit",
+    );
+
+    let s = a.ok(&["find", "apparatus", "--everywhere", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&s).expect("the payload is not JSON");
+    let hit = v[0].as_object().expect("a hit is not an object");
+    let mut keys: Vec<&str> = hit.keys().map(String::as_str).collect();
+    keys.sort();
+    assert_eq!(
+        keys,
+        ["alias", "kind", "lineage", "matched", "project", "state", "title"],
+        "{s}"
+    );
+}
+
+#[test]
+fn everywhere_project_is_the_bare_directory_name_with_no_separator() {
+    let a = Sandbox::new_seeded("ew-name-a");
+    seed(
+        &a,
+        "Ship the release apparatus",
+        "the version was a hand edit",
+    );
+    let name_a = project_name(&a);
+
+    let s = a.ok(&["find", "apparatus", "--everywhere", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&s).expect("the payload is not JSON");
+    let project = v[0]["project"].as_str().expect("project is not a string");
+
+    assert_eq!(project, name_a, "{s}");
+    assert!(!project.contains('/'), "{s}");
+    assert!(!project.contains('\\'), "{s}");
+}
+
+#[test]
+fn a_vanished_root_is_reported_and_the_others_still_answer() {
+    let a = Sandbox::new_seeded("ew-gone-a");
+    seed(
+        &a,
+        "Ship the release apparatus",
+        "the version was a hand edit",
+    );
+    let b = Sandbox::new_seeded_in("ew-gone-b", a.global_home());
+    seed(
+        &b,
+        "Guard the commit messages",
+        "a malformed one does not fail loudly",
+    );
+    let name_a = project_name(&a);
+    std::fs::remove_dir_all(&a.0).unwrap();
+
+    let (s, code) = b.run(&["find", "commit", "--everywhere"]);
+
+    assert_eq!(code, 0, "{s}");
+    assert!(s.contains("Guard the commit messages"), "{s}");
+    assert!(s.contains(&name_a), "the vanished root was not named:\n{s}");
+
+    // `a`'s directory is already gone; `Sandbox::drop` swallows a second
+    // attempt at removing it.
+}
+
+#[test]
+fn an_empty_registry_says_nothing_matched() {
+    let c = Sandbox::new_empty("ew-empty");
+
+    let (s, code) = c.run(&["find", "anything", "--everywhere"]);
+
+    assert_eq!(code, 0, "{s}");
+    assert!(s.to_lowercase().contains("nothing"), "{s}");
+}
+
+#[test]
+fn everywhere_works_from_a_directory_with_no_project_above_it() {
+    let a = Sandbox::new_seeded("ew-nowhere-a");
+    seed(
+        &a,
+        "Ship the release apparatus",
+        "the version was a hand edit",
+    );
+    let outside = Sandbox::new_empty_in("ew-nowhere-outside", a.global_home());
+    assert!(!outside.0.join(".vivac").exists());
+
+    let (s, code) = outside.run(&["find", "apparatus", "--everywhere"]);
+
+    assert_eq!(code, 0, "{s}");
+    assert!(s.contains("Ship the release apparatus"), "{s}");
+}
+
+/// The constraint `d273` exists to guard: searching from one project must
+/// never write inside another project's `.vivac/`. `allow_persist: false`
+/// is the mechanism; this is what would catch it slipping.
+#[test]
+fn the_foreign_index_is_never_written() {
+    let a = Sandbox::new_seeded("ew-guard-a");
+    a.ok(&[
+        "push",
+        "Ship the release apparatus",
+        "--why",
+        "the version was a hand edit",
+    ]);
+    // Forces `a`'s derived index to exist: a plain read persists it on the
+    // first load, and `push` above only ever loaded for a write.
+    a.ok(&["stack"]);
+    let index_path = a.0.join(".vivac").join("index");
+    let before = std::fs::metadata(&index_path).expect("no index to guard");
+
+    let outside = Sandbox::new_empty_in("ew-guard-outside", a.global_home());
+    let s = outside.ok(&["find", "apparatus", "--everywhere"]);
+    assert!(s.contains("Ship the release apparatus"), "{s}");
+
+    let after = std::fs::metadata(&index_path).expect("the index disappeared");
+    assert_eq!(before.len(), after.len(), "the foreign index changed size");
+    assert_eq!(
+        before.modified().unwrap(),
+        after.modified().unwrap(),
+        "the foreign index was rewritten"
+    );
+}

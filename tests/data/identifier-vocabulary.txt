@@ -328,6 +328,7 @@ events
 ever
 every
 everything
+everywhere
 evs
 exact
 exactly
@@ -692,6 +693,7 @@ out
 outcome
 outln
 output
+outside
 over
 own
 owned
@@ -746,6 +748,7 @@ plain
 plants
 plural
 pluralised
+plus
 pop
 popped
 populated
@@ -837,6 +840,7 @@ repeated
 replace
 replaced
 reply
+reported
 request
 requested
 required
@@ -906,6 +910,7 @@ secs
 section
 sections
 security
+seed
 seeded
 seek
 seen
@@ -914,6 +919,7 @@ segment
 self
 sense
 sentence
+separator
 separators
 seq
 sequence
@@ -1120,6 +1126,7 @@ under
 unique
 unix
 unknown
+unreachable
 unreadable
 unrecognised
 unstable
@@ -1146,6 +1153,7 @@ val
 valid
 value
 values
+vanished
 var
 varied
 vec

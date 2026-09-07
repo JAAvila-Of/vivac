@@ -85,7 +85,9 @@ const USAGE: &str = r#"vivac - provenance of work
                                               per step of the path
     vivac tree [id] [--all]                   the tree, with false closes marked
     vivac open                                open fronts and their lineage
-    vivac find "<text>"                       every node whose words match
+    vivac find "<text>" [--everywhere]        every node whose words match
+                                              --everywhere: every project
+                                              the registry knows
     vivac stack                               where you are right now
     vivac parked                              DO NOT TOUCH NOW
     vivac triage                              what can be pruned, and with what
@@ -207,11 +209,14 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         "init" | "hooks" | "mcp" => &[],
         // The reads that speak JSON, spelled out. No shorthand: a shorthand
         // is what let the brief claim it for two releases.
-        "open" | "stack" | "parked" | "triage" | "stats" | "vivacs" | "find" | "check" => &["json"],
+        "open" | "stack" | "parked" | "triage" | "stats" | "vivacs" | "check" => &["json"],
         // `--full` is its own on top of `--json`, so `why` cannot share the
         // arm above without granting every other read a flag it does not
         // read.
         "why" => &["json", "full"],
+        // `--everywhere` is `find`'s own for the same reason: the registry
+        // fan-out (`d273`) is not something any other read takes.
+        "find" => &["json", "everywhere"],
         "park" | "promote" | "note" | "import" | "restore" => &[],
         _ => &[],
     };
@@ -250,6 +255,14 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
 
     if cmd == "hooks" {
         return session::hooks().map(|_| 0);
+    }
+
+    // `--everywhere` reads the registry instead of the tree underfoot, so
+    // it has to work with no root at all -- the same reason `init` and
+    // `hooks` return up here rather than past the check below. `d273`,
+    // first half.
+    if cmd == "find" && a.has("everywhere") {
+        return render::find_everywhere(a).map(|_| 0);
     }
 
     let Some(root) = store::find_root(&cwd) else {
