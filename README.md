@@ -254,6 +254,18 @@ note or outcome holds all of the words, newest first, each with the lineage it
 hangs from. Closed nodes are included on purpose: what you go looking for
 months later is usually finished.
 
+`find --everywhere` asks the same question of every project this machine has
+seen rather than the one you are standing in. It reads the registry, so it
+works from anywhere, including a directory with no tree above it at all, and
+it groups the answer by project because an alias only means something inside
+its own tree. It reads each project's index instead of folding its log, and it
+never writes: searching from one project does not touch another's `.vivac/`.
+
+An alias from another tree is not addressable on its own, so `why` takes
+`--project`, naming a project by its directory name or by a path. A name that
+matches two projects is refused rather than guessed, because answering about
+the wrong tree looks exactly like answering about the right one.
+
 The `brief` is deterministic by contract: same log, same `--now`, same bytes.
 The spine — the path from the root to the focus — is **never truncated**: if it
 does not fit the budget it comes out anyway, and the warning says that what is
@@ -294,7 +306,7 @@ that cannot cache. What did come out of chasing it is real and stayed -- most of
 the cost that was there was one write syscall per line of output, and the crate
 now buffers and flushes once.
 
-Not there yet: search across projects, export, team mode.
+Not there yet: team mode.
 
 **0.3.0 does not read a log written by 0.1.x or 0.2.x.** The tool was written
 in Spanish and those releases stored the event fields under Spanish names,
@@ -351,6 +363,16 @@ and where they hang; `vivac_why` on an alias brings the rest. It used to
 return the node, which over ten thousand nodes meant 1,993,053 bytes where
 599,012 will do. A payload nobody asked for costs the same context as a tool
 nobody calls.
+
+`vivac_find` takes `everywhere` and `vivac_why` takes `project`, the same two
+questions the command line answers. They arrived together on purpose: a hit
+from another tree carries an alias, an alias means nothing outside the tree
+that issued it, and finding without being able to open would be half an
+answer. **What crosses is the project's name, never its path** — a path carries
+whatever the account and its directories happen to be called, and through a
+tool that lands in a model's context. No write tool takes a project: writing
+into a tree you are not standing in is a larger permission than reading one,
+and nobody has asked for it.
 
 **Nothing destructive is reachable from here, and that is deliberate.**
 `abandon` discards a node and everything below it, and through a tool that
@@ -423,6 +445,20 @@ It holds absolute paths and it stays here. Nothing sends it anywhere, and it
 lives outside every project, so no repository carries it off by accident.
 Deleting it costs you the list until each tree is next used, and costs no tree
 anything at all.
+
+## Getting it all out
+
+`vivac tree --json` prints the whole tree: every node with its reason, its
+note, its outcome, what it refers to and what it governs. It is not the
+filtered view `tree` shows a person — the JSON ignores `--all` and carries the
+closed and the parked as well, because an export that quietly drops what
+finished is not one.
+
+The log underneath, `.vivac/events`, is plain JSON lines and nothing stops you
+reading it. What is not written down anywhere is what a line means, and that is
+on purpose rather than an oversight: the format is still moving, which is what
+keeps `1.0` away, and documenting it as a promise is how it would stop being
+able to move.
 
 ## Versioning
 
