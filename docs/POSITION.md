@@ -112,14 +112,18 @@ some are things it owes.
 
 ### Better today, and that is a debt
 
-- **Recall across everything you have ever done.** `vivac find` searches every
-  field that carries meaning, closed nodes included, and returns each hit with
-  the lineage it hangs from. What it does not do yet is cross projects: it
-  answers about one tree, and a memory store answers about all of them at once.
-- **Scale.** A store holding tens of thousands of records and answering in
-  milliseconds is a different engine from a log folded on every call. The
-  numbers are in the [README](../README.md#status), and they say where the
-  ceiling is.
+- **Recall by meaning rather than by words.** `find` returns every node whose
+  text holds all of the words, closed nodes included, each with the lineage it
+  hangs from, and `--everywhere` asks that of every project on the machine.
+  What it does not do is match a question to an answer that says the same thing
+  in different words. Where that would go is already settled — never on the
+  write path — and the tool answers without it.
+- **Scale.** This used to say that a store answering in milliseconds is a
+  different engine from a log folded on every call. The log stopped being
+  folded on every call: a derived index sits beside it, and the
+  [numbers](../README.md#status) are measured with it in place. What is still
+  true is narrower. A tree is read whole into memory, and nothing here has been
+  asked to hold a hundred thousand nodes.
 - **Noticing that a record went stale.** Some memory stores attach a review
   date to each record by type and surface what is due. Here that is
   `vivac flag <id> stale`, by hand — which is worse, and known to be worse.
