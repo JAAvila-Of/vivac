@@ -302,6 +302,7 @@ encoded
 end
 ends
 english
+enter
 entries
 entropy
 entry
@@ -518,6 +519,7 @@ known
 label
 lane
 last
+late
 later
 launched
 le
@@ -822,6 +824,7 @@ refused
 refuses
 regenerated
 registering
+registers
 registry
 rejected
 rejects
