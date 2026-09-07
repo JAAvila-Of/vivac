@@ -50,6 +50,7 @@ apart
 appear
 appears
 append
+appends
 apply
 are
 arg
@@ -89,6 +90,7 @@ bin
 binary
 bind
 binding
+blank
 blessed
 block
 blocked
@@ -122,6 +124,7 @@ bytes
 cache
 cached
 call
+caller
 calling
 came
 can
@@ -197,6 +200,7 @@ cont
 contained
 contains
 content
+contents
 continue
 control
 cookie
@@ -262,6 +266,7 @@ determinism
 deterministic
 diff
 difference
+different
 digit
 dir
 direct
@@ -375,6 +380,7 @@ fn
 focus
 focused
 fold
+folding
 for
 force
 forced
@@ -392,6 +398,7 @@ front
 fronts
 fs
 full
+garbage
 gate
 gates
 get
@@ -402,6 +409,7 @@ gitdir
 given
 gives
 glob
+global
 goal
 goals
 goes
@@ -476,6 +484,7 @@ inline
 inner
 input
 insert
+inserted
 inside
 instant
 intent
@@ -579,6 +588,7 @@ matter
 max
 may
 mcp
+means
 measured
 measures
 mem
@@ -623,7 +633,9 @@ next
 no
 node
 nodes
+non
 none
+nonexistent
 normalized
 not
 note
@@ -726,6 +738,7 @@ picked
 picks
 pii
 piped
+place
 placed
 placeholder
 plain
@@ -804,6 +817,7 @@ refusals
 refused
 refuses
 regenerated
+registering
 registry
 rejected
 rejects
@@ -820,6 +834,7 @@ reopen
 repeat
 repeated
 replace
+replaced
 reply
 request
 requested
@@ -1111,7 +1126,9 @@ unstack
 until
 untouched
 unwrap
+unwritable
 up
+updates
 upper
 uppercase
 upto
@@ -1121,6 +1138,7 @@ usage
 use
 used
 user
+userprofile
 usize
 utf8
 val
@@ -1162,6 +1180,7 @@ whose
 why
 wide
 width
+wins
 with
 without
 word

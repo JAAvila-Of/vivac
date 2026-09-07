@@ -28,6 +28,7 @@ impl Server {
     fn start(c: &Sandbox) -> Server {
         let mut child = Command::new(BIN)
             .current_dir(&c.0)
+            .env("VIVAC_HOME", c.global_home())
             .arg("mcp")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

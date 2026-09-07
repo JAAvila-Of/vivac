@@ -4,7 +4,7 @@
 //! temporary directory. Every test seeds its own tree, because a shared one
 //! would make execution order matter.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const BIN: &str = env!("CARGO_BIN_EXE_vivac");
@@ -35,7 +35,7 @@ fn unique(prefix: &str, name: &str) -> PathBuf {
     ))
 }
 
-pub struct Sandbox(pub PathBuf);
+pub struct Sandbox(pub PathBuf, PathBuf);
 
 impl Sandbox {
     /// A directory with no `.vivac/`. For proving the tool stays quiet where
@@ -47,20 +47,31 @@ impl Sandbox {
     pub fn new_empty(name: &str) -> Sandbox {
         let d = unique("v", name);
         std::fs::create_dir_all(&d).unwrap();
-        Sandbox(d)
+        Sandbox(d, unique("v-home", name))
     }
 
     pub fn new_seeded(name: &str) -> Sandbox {
         let d = unique("t", name);
         std::fs::create_dir_all(&d).unwrap();
-        let c = Sandbox(d);
+        let c = Sandbox(d, unique("t-home", name));
         c.ok(&["init"]);
         c
+    }
+
+    /// Where `VIVAC_HOME` points for every subprocess this sandbox spawns.
+    ///
+    /// A sibling temporary directory, unique to this sandbox and never
+    /// created up front: `t265`'s registry only writes here on its own, and
+    /// this is what keeps that write off the machine running the suite.
+    #[allow(dead_code)]
+    pub fn global_home(&self) -> &Path {
+        &self.1
     }
 
     pub fn run(&self, args: &[&str]) -> (String, i32) {
         let o = Command::new(BIN)
             .current_dir(&self.0)
+            .env("VIVAC_HOME", &self.1)
             .args(args)
             .output()
             .unwrap();
@@ -82,6 +93,7 @@ impl Sandbox {
         use std::io::Write;
         let mut child = Command::new(BIN)
             .current_dir(&self.0)
+            .env("VIVAC_HOME", &self.1)
             .args(args)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
@@ -112,5 +124,6 @@ impl Sandbox {
 impl Drop for Sandbox {
     fn drop(&mut self) {
         std::fs::remove_dir_all(&self.0).ok();
+        std::fs::remove_dir_all(&self.1).ok();
     }
 }
