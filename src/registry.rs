@@ -14,6 +14,7 @@
 //! and never allowed to turn a working command into a failing one: see
 //! `note`.
 
+use crate::failure::Failure;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -82,6 +83,37 @@ pub fn roots(store_dir: &Path) -> Vec<PathBuf> {
         .into_values()
         .map(PathBuf::from)
         .collect()
+}
+
+/// Resolves `--project`'s value against the registry: a bare name -- the
+/// directory's own base name, exactly what `find --everywhere` prints --
+/// tried first, and a path otherwise. `d273`'s second half: a hit
+/// `find --everywhere` returns names its project this way, and this is what
+/// lets `why` open it.
+///
+/// Two roots can carry the same base name, and choosing between them would
+/// answer a question about the wrong tree while looking right, so a name
+/// that matches more than one root refuses instead of guessing. The message
+/// never names the candidates by path -- the security pillar allows nothing
+/// but a project's name across this boundary, and two candidates sharing a
+/// name have no path-free way to tell apart, so the count is what it names.
+/// A name that matches no root falls through to being read as a path;
+/// `Store::open` is what answers whether that path holds a project at all.
+pub fn resolve(spec: &str) -> Result<PathBuf, Failure> {
+    let known = crate::store::store_dir()
+        .map(|d| roots(&d))
+        .unwrap_or_default();
+    let mut matches: Vec<PathBuf> = known
+        .into_iter()
+        .filter(|root| crate::render::project_name(root) == spec)
+        .collect();
+    match matches.len() {
+        1 => Ok(matches.remove(0)),
+        0 => Ok(PathBuf::from(spec)),
+        n => Err(Failure::usage(format!(
+            "\"{spec}\" names {n} projects on this machine. Pass a path instead."
+        ))),
+    }
 }
 
 fn read(path: &Path) -> Contents {

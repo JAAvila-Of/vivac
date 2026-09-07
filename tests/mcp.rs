@@ -181,6 +181,37 @@ fn find_comes_back_as_the_json_the_cli_would_print() {
     assert_eq!(v, cli, "the MCP tool and `find --json` disagree:\n{t}");
 }
 
+/// `d273`'s second half, on `vivac_find`: `everywhere` fans the search out
+/// over the registry instead of the resident project alone, and it has to
+/// answer exactly what `find --everywhere --json` does -- `d172`'s tie,
+/// carried past one project.
+#[test]
+fn find_with_everywhere_returns_what_the_cli_returns() {
+    let a = seeded("mcp-ew-a");
+    let b = Sandbox::new_seeded_in("mcp-ew-b", a.global_home());
+    b.ok(&[
+        "push",
+        "Guard the release notes",
+        "--why",
+        "the version was a hand edit",
+    ]);
+    b.ok(&["stack"]);
+
+    let cli_text = b.ok(&["find", "hand edit", "--everywhere", "--json"]);
+    let cli: Value = serde_json::from_str(&cli_text).expect("the CLI payload is not JSON");
+
+    let mut s = hello(&b);
+    let r = s.ask(
+        r#"{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"vivac_find","arguments":{"query":"hand edit","everywhere":true}}}"#,
+    );
+    let t = text_of(&r);
+    let v: Value = serde_json::from_str(&t).expect("the payload is not JSON");
+    assert_eq!(
+        v, cli,
+        "the MCP tool and `find --everywhere --json` disagree:\n{t}"
+    );
+}
+
 #[test]
 fn why_carries_the_path_down_from_the_goal() {
     let c = seeded("why");
@@ -191,6 +222,30 @@ fn why_carries_the_path_down_from_the_goal() {
     let v: Value = serde_json::from_str(&text_of(&r)).unwrap();
     assert_eq!(v["node"]["title"], "Guard the commit messages");
     assert!(v["path"].as_array().unwrap().len() >= 2, "{v}");
+}
+
+/// `d273`'s second half, on `vivac_why`: `project` opens a node that lives
+/// in another tree, and it has to answer exactly what `why --project --json`
+/// does on the CLI.
+#[test]
+fn why_with_project_returns_what_the_cli_returns() {
+    let a = seeded("mcp-wp-a");
+    let name_a = a.0.file_name().unwrap().to_string_lossy().into_owned();
+    let b = Sandbox::new_seeded_in("mcp-wp-b", a.global_home());
+
+    let cli_text = b.ok(&["why", "t2", "--project", &name_a, "--json"]);
+    let cli: Value = serde_json::from_str(&cli_text).expect("the CLI payload is not JSON");
+
+    let mut s = hello(&b);
+    let r = s.ask(&format!(
+        r#"{{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{{"name":"vivac_why","arguments":{{"id":"t2","project":"{name_a}"}}}}}}"#
+    ));
+    let t = text_of(&r);
+    let v: Value = serde_json::from_str(&t).expect("the payload is not JSON");
+    assert_eq!(
+        v, cli,
+        "the MCP tool and `why --project --json` disagree:\n{t}"
+    );
 }
 
 #[test]
@@ -383,6 +438,70 @@ fn a_write_from_another_process_between_two_mcp_writes_is_picked_up() {
     assert_eq!(
         cli_node["parent"], sibling["parent"],
         "the CLI's node did not land where it should: {cli_node}"
+    );
+}
+
+/// `t192`'s own guarantee -- the resident tree never disagrees with a fresh
+/// fold of its own log -- has to survive `d273`'s second half untouched.
+/// `vivac_why`'s `project` argument reads a tree that is not the server's
+/// own, through the local index rather than the resident `Project`, and
+/// nothing about answering that foreign read may disturb the fold this
+/// server actually holds.
+#[test]
+fn a_foreign_project_read_leaves_the_resident_tree_untouched() {
+    let c = seeded("foreign-untouched");
+    let foreign = Sandbox::new_seeded_in("foreign-untouched-other", c.global_home());
+    foreign.ok(&[
+        "push",
+        "Foreign root",
+        "--why",
+        "lives in another tree entirely",
+    ]);
+    foreign.ok(&["stack"]);
+    let foreign_name = foreign
+        .0
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+
+    let mut s = hello(&c);
+
+    let before = s.ask(
+        r#"{"jsonrpc":"2.0","id":40,"method":"tools/call","params":{"name":"vivac_add","arguments":{"title":"Before the foreign read","why":"a"}}}"#,
+    );
+    assert_eq!(before["result"]["isError"], false, "{before}");
+
+    let cross = s.ask(&format!(
+        r#"{{"jsonrpc":"2.0","id":41,"method":"tools/call","params":{{"name":"vivac_why","arguments":{{"id":"1","project":"{foreign_name}"}}}}}}"#
+    ));
+    assert_eq!(cross["result"]["isError"], false, "{cross}");
+    assert!(text_of(&cross).contains("Foreign root"), "{cross}");
+
+    let after = s.ask(
+        r#"{"jsonrpc":"2.0","id":42,"method":"tools/call","params":{"name":"vivac_add","arguments":{"title":"After the foreign read","why":"b"}}}"#,
+    );
+    assert_eq!(after["result"]["isError"], false, "{after}");
+
+    let mcp_open: Value = serde_json::from_str(&text_of(&s.ask(
+        r#"{"jsonrpc":"2.0","id":43,"method":"tools/call","params":{"name":"vivac_open","arguments":{}}}"#,
+    )))
+    .unwrap();
+    let cli_open: Value = serde_json::from_str(&c.ok(&["open", "--json"])).unwrap();
+    assert_eq!(
+        mcp_open, cli_open,
+        "a foreign read disturbed the resident tree's fold"
+    );
+
+    let titles: Vec<&str> = mcp_open
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n["title"].as_str().unwrap())
+        .collect();
+    assert!(
+        titles.contains(&"Before the foreign read") && titles.contains(&"After the foreign read"),
+        "one of the two resident writes went missing around the foreign read: {titles:?}"
     );
 }
 
