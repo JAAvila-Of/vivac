@@ -50,10 +50,35 @@ impl Sandbox {
         Sandbox(d, unique("v-home", name))
     }
 
+    /// Like [`Self::new_empty`], but pointed at a `VIVAC_HOME` a caller
+    /// already holds instead of a fresh one of its own. `find --everywhere`
+    /// has to work from here: it reads the registry, not the tree
+    /// underfoot, and this is the directory with no tree underfoot at all.
+    #[allow(dead_code)]
+    pub fn new_empty_in(name: &str, home: &Path) -> Sandbox {
+        let d = unique("v", name);
+        std::fs::create_dir_all(&d).unwrap();
+        Sandbox(d, home.to_path_buf())
+    }
+
     pub fn new_seeded(name: &str) -> Sandbox {
         let d = unique("t", name);
         std::fs::create_dir_all(&d).unwrap();
         let c = Sandbox(d, unique("t-home", name));
+        c.ok(&["init"]);
+        c
+    }
+
+    /// A seeded project registered into a `VIVAC_HOME` a caller already
+    /// holds, rather than one of its own. `find --everywhere` (`d273`)
+    /// answers from the registry, so proving it needs two or more projects
+    /// sharing one -- everything else in this file keeps each sandbox's
+    /// home to itself, which is exactly wrong for that question.
+    #[allow(dead_code)]
+    pub fn new_seeded_in(name: &str, home: &Path) -> Sandbox {
+        let d = unique("t", name);
+        std::fs::create_dir_all(&d).unwrap();
+        let c = Sandbox(d, home.to_path_buf());
         c.ok(&["init"]);
         c
     }

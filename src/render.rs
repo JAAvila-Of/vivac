@@ -997,31 +997,37 @@ fn lineage_of(a: &Tree, n: &Node) -> Vec<String> {
 /// cost 8.7 times its own prose and now costs 1.7. `matched` carries the
 /// fragment `snippet` would print rather than the whole field, for the same
 /// reason.
+///
+/// The six fields a hit carries, shared with [`find_data_everywhere`] so the
+/// shape stays in exactly one place: `d273` adds a `project` field beside
+/// this one rather than widening it.
+fn hit_json(a: &Tree, n: &Node, matched: &[&'static str], terms: &[String]) -> serde_json::Value {
+    let fragments: serde_json::Map<String, serde_json::Value> = matched
+        .iter()
+        .map(|field| {
+            let text = searchable(a, n)
+                .iter()
+                .find(|(k, _)| k == field)
+                .map(|(_, v)| *v)
+                .unwrap_or_default();
+            (field.to_string(), json!(snippet(text, terms, WIDTH)))
+        })
+        .collect();
+    json!({
+        "alias": n.alias(),
+        "kind": n.kind,
+        "state": n.state,
+        "title": n.title(a),
+        "lineage": lineage_of(a, n),
+        "matched": fragments,
+    })
+}
+
 pub fn find_data(a: &Tree, query: &str) -> Result<serde_json::Value, Failure> {
     let terms = terms_of(query)?;
     Ok(json!(hits_for(a, &terms)
         .iter()
-        .map(|(n, matched)| {
-            let fragments: serde_json::Map<String, serde_json::Value> = matched
-                .iter()
-                .map(|field| {
-                    let text = searchable(a, n)
-                        .iter()
-                        .find(|(k, _)| k == field)
-                        .map(|(_, v)| *v)
-                        .unwrap_or_default();
-                    (field.to_string(), json!(snippet(text, &terms, WIDTH)))
-                })
-                .collect();
-            json!({
-                "alias": n.alias(),
-                "kind": n.kind,
-                "state": n.state,
-                "title": n.title(a),
-                "lineage": lineage_of(a, n),
-                "matched": fragments,
-            })
-        })
+        .map(|(n, matched)| hit_json(a, n, matched, &terms))
         .collect::<Vec<_>>()))
 }
 
@@ -1072,5 +1078,133 @@ pub fn find(a: &Tree, args: &Args) -> R {
         );
     }
     outln!();
+    Ok(())
+}
+
+/// The directory's own name, as `d146` defines it: never the path it sits
+/// under, because an absolute path names the account and the machine it
+/// runs on and the security pillar allows neither into a result.
+fn project_name(root: &std::path::Path) -> String {
+    root.file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "-".into())
+}
+
+/// The JSON twin of [`find_everywhere`]: every hit [`hit_json`] already
+/// knows how to build, plus the project it came from. A separate builder
+/// rather than a wider `find_data`, the same call `d172` made when `find`
+/// stopped sharing `json_node`.
+fn find_data_everywhere(projects: &[(String, Tree)], terms: &[String]) -> serde_json::Value {
+    let mut hits = Vec::new();
+    for (name, tree) in projects {
+        for (n, matched) in hits_for(tree, terms) {
+            let mut hit = hit_json(tree, n, &matched, terms);
+            if let serde_json::Value::Object(fields) = &mut hit {
+                fields.insert("project".to_string(), json!(name));
+            }
+            hits.push(hit);
+        }
+    }
+    json!(hits)
+}
+
+/// `find`, fanned out over every project the registry knows about instead
+/// of only the one under foot. `d273`'s first half.
+///
+/// Each tree loads through the local index with `allow_persist: false`:
+/// searching from one project must never write inside another project's
+/// `.vivac/`. A root that fails to open -- moved, deleted, unreadable -- is
+/// not skipped: `d201` settled that a vanished root going quiet loses
+/// exactly the answer somebody came for, so it is counted and named instead.
+///
+/// A bare alias means nothing across trees -- `d100` exists in three of them
+/// and names three different decisions -- so text output groups hits by
+/// project rather than running them together.
+pub fn find_everywhere(a: &Args) -> R {
+    let query = a
+        .positional(0)
+        .ok_or_else(|| Failure::usage("usage: vivac find \"<text>\"".to_string()))?;
+    let terms = terms_of(query)?;
+
+    let known_roots = crate::store::store_dir()
+        .map(|d| crate::registry::roots(&d))
+        .unwrap_or_default();
+
+    let mut projects: Vec<(String, Tree)> = Vec::new();
+    let mut unreachable: Vec<String> = Vec::new();
+    for root in known_roots {
+        let name = project_name(&root);
+        match crate::store::Store::open(root).and_then(|s| crate::index::load(&s, false)) {
+            Ok(tree) => projects.push((name, tree)),
+            Err(_) => unreachable.push(name),
+        }
+    }
+    projects.sort_by(|x, y| x.0.cmp(&y.0));
+    unreachable.sort();
+
+    if a.has("json") {
+        return print_json(find_data_everywhere(&projects, &terms));
+    }
+
+    type ProjectHits<'t> = (&'t str, &'t Tree, Vec<(&'t Node, Vec<&'static str>)>);
+    let sections: Vec<ProjectHits> = projects
+        .iter()
+        .filter_map(|(name, tree)| {
+            let hits = hits_for(tree, &terms);
+            (!hits.is_empty()).then_some((name.as_str(), tree, hits))
+        })
+        .collect();
+    let total: usize = sections.iter().map(|(_, _, hits)| hits.len()).sum();
+
+    if total == 0 {
+        outln!("  Nothing matches \"{query}\".");
+    } else {
+        outln!();
+        outln!(
+            "  {} match{} for \"{}\" across {} project{}",
+            total,
+            if total == 1 { "" } else { "es" },
+            query,
+            sections.len(),
+            if sections.len() == 1 { "" } else { "s" },
+        );
+        for (name, tree, hits) in &sections {
+            outln!();
+            outln!("  {name}");
+            for (n, matched) in hits.iter().take(20) {
+                outln!("    {:<6} {}", n.alias(), n.title(tree));
+                let lineage = lineage_of(tree, n);
+                if !lineage.is_empty() {
+                    outln!("           via {}", lineage.join(" > "));
+                }
+                for field in matched.iter().filter(|f| **f != "title") {
+                    let text = searchable(tree, n)
+                        .iter()
+                        .find(|(k, _)| k == field)
+                        .map(|(_, v)| *v)
+                        .unwrap_or_default();
+                    outln!("           {}: {}", field, snippet(text, &terms, WIDTH));
+                }
+            }
+            if hits.len() > 20 {
+                outln!(
+                    "    ... and {} more   vivac find \"...\" --everywhere --json",
+                    hits.len() - 20
+                );
+            }
+        }
+        outln!();
+    }
+
+    if !unreachable.is_empty() {
+        outln!(
+            "  {} project{} unreachable: {}",
+            unreachable.len(),
+            if unreachable.len() == 1 { "" } else { "s" },
+            unreachable.join(", ")
+        );
+        outln!();
+    }
+
     Ok(())
 }
