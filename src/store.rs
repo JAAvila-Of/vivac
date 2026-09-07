@@ -98,10 +98,19 @@ pub struct Store {
 
 /// Walks up from `from_dir` looking for a `.vivac/`. No daemon and no environment
 /// variable: the same rule as git, already in everyone's fingers.
+///
+/// The global store is a `.vivac/` as well, and it sits in the home directory,
+/// so without this it answers the walk: any directory under a home and outside
+/// a project resolves to the home itself, and a `push` there writes into the
+/// global store instead of refusing. `d206` already said the upward search must
+/// not find it, and this is that sentence. It asks what the directory holds
+/// rather than where it sits, because `VIVAC_HOME` can move the store and a
+/// rule that compared paths would fail exactly when somebody moved it.
 pub fn find_root(from_dir: &Path) -> Option<PathBuf> {
     let mut d = from_dir.to_path_buf();
     loop {
-        if d.join(DIR).is_dir() {
+        let candidate = d.join(DIR);
+        if candidate.is_dir() && !crate::registry::marks_global_store(&candidate) {
             return Some(d);
         }
         if !d.pop() {
@@ -253,6 +262,35 @@ mod tests {
         assert!(find_root(&depth_of).is_none());
         Store::create(&tmp).unwrap();
         assert_eq!(find_root(&depth_of).unwrap(), tmp);
+        fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn the_global_store_does_not_answer_the_walk() {
+        // The collision as it shipped: the global store is a `.vivac/` too, so
+        // a directory with no project above it resolved to the home directory
+        // and wrote there without saying so.
+        let tmp = std::env::temp_dir().join(format!("vivac-t-{}", id::ulid()));
+        let deep = tmp.join("a").join("b");
+        fs::create_dir_all(&deep).unwrap();
+        Store::create(&tmp).unwrap();
+        assert_eq!(find_root(&deep).unwrap(), tmp);
+        crate::registry::note(&tmp.join(DIR), "01aaaaaaaaaaaaaaaaaaaaaaaa", &deep);
+        assert_ne!(find_root(&deep), Some(tmp.clone()));
+        fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn a_project_under_the_global_store_still_wins() {
+        // Skipping the global store must not cost a real project below it.
+        let tmp = std::env::temp_dir().join(format!("vivac-t-{}", id::ulid()));
+        let project = tmp.join("work");
+        let deep = project.join("src").join("deep");
+        fs::create_dir_all(&deep).unwrap();
+        Store::create(&tmp).unwrap();
+        crate::registry::note(&tmp.join(DIR), "01aaaaaaaaaaaaaaaaaaaaaaaa", &project);
+        Store::create(&project).unwrap();
+        assert_eq!(find_root(&deep).unwrap(), project);
         fs::remove_dir_all(&tmp).ok();
     }
 

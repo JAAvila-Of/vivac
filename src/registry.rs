@@ -21,6 +21,14 @@ use std::io::Write;
 use std::path::Path;
 
 const FILE: &str = "projects";
+
+/// Whether this `.vivac/` is the global store rather than a project's.
+/// The registry is the mark: nothing else writes that file, and asking
+/// what a directory holds keeps working after `VIVAC_HOME` moves it,
+/// which comparing paths would not.
+pub fn marks_global_store(dir: &Path) -> bool {
+    dir.join(FILE).is_file()
+}
 const VERSION: u32 = 1;
 
 #[derive(Debug, Serialize, Deserialize)]
