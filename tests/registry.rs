@@ -53,6 +53,44 @@ fn the_first_write_registers_the_project() {
     );
 }
 
+/// Before the upward search learned to skip it, a directory under the home and
+/// outside any project resolved to the home itself, so the home went into the
+/// registry as a project and stayed there. The walk no longer does that, but a
+/// registry written while it did is still on disk and still names such a root.
+/// Reading the list has to skip it, or the fan-out opens the global store as
+/// though it were somebody's work -- which, once that store also holds the tree
+/// for what has no project, it would then search.
+#[test]
+fn the_global_store_never_comes_back_as_a_project() {
+    let home = std::env::temp_dir().join(format!(
+        "vivac-reg-global-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let plain = Sandbox::new_seeded_in("reg-global-plain", &home);
+    let store = Sandbox::new_seeded_in("reg-global-store", &home);
+    plain.ok(&["push", "shared word", "--why", "so both trees match"]);
+    store.ok(&["push", "shared word", "--why", "so both trees match"]);
+    let asker = Sandbox::new_empty_in("reg-global-asker", &home);
+    // Both are ordinary projects, and both answer.
+    let before = asker.ok(&["find", "shared", "--everywhere"]);
+    assert!(
+        before.contains("2 projects"),
+        "both to begin with: {before}"
+    );
+    // Now one of them is the global store: it holds the registry, which is the
+    // only thing that ever marks one, and nothing else writes that file.
+    std::fs::write(store.0.join(".vivac").join("projects"), "{}").unwrap();
+    let after = asker.ok(&["find", "shared", "--everywhere"]);
+    assert!(
+        after.contains("1 project") && !after.contains("2 projects"),
+        "the global store must not answer as a project: {after}"
+    );
+}
+
 /// The other half of the same rule: planting a tree is not using it, and a
 /// directory with `init` run in it and nothing else is not a project anybody
 /// has worked in. It stays out until it has something to say.
