@@ -66,6 +66,7 @@ as
 ascii
 ask
 asked
+asker
 asks
 assemble
 assert

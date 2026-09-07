@@ -82,6 +82,7 @@ pub fn roots(store_dir: &Path) -> Vec<PathBuf> {
         .projects
         .into_values()
         .map(PathBuf::from)
+        .filter(|r| !marks_global_store(&r.join(crate::store::DIR)))
         .collect()
 }
 
