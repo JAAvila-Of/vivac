@@ -391,6 +391,26 @@ rather than a description of the current version. The store is `.vivac/`,
 three files: the log, the config, and a derived index that can be deleted
 without changing any command's output.
 
+There is a second place, and it is the only thing this binary puts in your
+home directory: `~/.vivac/`, one per machine, holding a registry of the trees
+the machine has seen. A project enters it by being used — every command
+already knows the root it is standing in, so registering it is an effect of
+the work rather than a step to remember, and nothing goes looking through your
+disk. Entries are keyed by the id of each project's first event, so moving a
+directory reads as the same project at a new path instead of a second one.
+`VIVAC_HOME` points the whole thing elsewhere.
+
+The search that finds a project walks up looking for a `.vivac/`, and this
+is one, so it skips it: a directory under your home with no project above it
+refuses rather than resolving to your home. What it skips is recognised by
+holding the registry, not by sitting at a particular path, which is what
+keeps the rule true once `VIVAC_HOME` has moved the store.
+
+It holds absolute paths and it stays here. Nothing sends it anywhere, and it
+lives outside every project, so no repository carries it off by accident.
+Deleting it costs you the list until each tree is next used, and costs no tree
+anything at all.
+
 ## Versioning
 
 The project is in `0.x`, and while it is, **the minor is the position that
