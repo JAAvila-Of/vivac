@@ -116,12 +116,31 @@ const USAGE: &str = r#"vivac - provenance of work
     0 fine   1 the model refuses   2 usage   3 redaction guard   4 no .vivac
 "#;
 
+/// A root that reached the registry with no identity to be keyed by, kept so
+/// the attempt can be made again once the command has run. See `note_late`.
+static LATE_ROOT: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
 fn main() {
     let code = run();
+    note_late();
     // `std::process::exit` skips `Drop`, so a line still sitting in
     // `output`'s buffer would be lost rather than reach the reader.
     output::flush();
     std::process::exit(code);
+}
+
+/// The second and last attempt to register a project whose log was empty when
+/// the command started. An empty tree has no identity under `d201` and must not
+/// get one; a tree whose first node was planted a moment ago does, and this is
+/// where it exists. Still silent, and still unable to fail anything: the command
+/// has already produced its answer by the time this runs.
+fn note_late() {
+    let (Some(root), Some(store_dir)) = (LATE_ROOT.get(), store::store_dir()) else {
+        return;
+    };
+    if let Some(project_id) = store::first_event_id(root) {
+        registry::note(&store_dir, &project_id, root);
+    }
 }
 
 fn run() -> i32 {
@@ -277,11 +296,20 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
     // A side effect of using a project, not a step of any one command: every
     // command past this point runs once per process, so this is where the
     // registry learns where the project lives. It never fails the command
-    // that triggered it -- `registry::note` swallows its own errors -- and a
-    // project with no events yet has no id to be keyed by, so it is skipped.
+    // that triggered it -- `registry::note` swallows its own errors.
+    //
+    // A tree that was just planted has no first event, so nothing to be keyed
+    // by, and this used to end there. It cannot: the command about to run is
+    // often the one that writes that first event, so the project stayed out of
+    // the registry -- and out of `find --everywhere` -- until whatever came
+    // next, without saying so. `f277`. So the root is kept and tried again on
+    // the way out, where the event exists.
     if let Some(store_dir) = store::store_dir() {
-        if let Some(project_id) = store::first_event_id(&root) {
-            registry::note(&store_dir, &project_id, &root);
+        match store::first_event_id(&root) {
+            Some(project_id) => registry::note(&store_dir, &project_id, &root),
+            None => {
+                let _ = LATE_ROOT.set(root.clone());
+            }
         }
     }
     // The server outlives its calls and it is not the only writer, so it
