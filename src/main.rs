@@ -31,6 +31,7 @@ mod params;
 mod project;
 mod reconcile;
 mod redact;
+mod registry;
 mod render;
 mod session;
 mod store;
@@ -260,6 +261,16 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         }
         return Err(Failure::NoStore);
     };
+    // A side effect of using a project, not a step of any one command: every
+    // command past this point runs once per process, so this is where the
+    // registry learns where the project lives. It never fails the command
+    // that triggered it -- `registry::note` swallows its own errors -- and a
+    // project with no events yet has no id to be keyed by, so it is skipped.
+    if let Some(store_dir) = store::store_dir() {
+        if let Some(project_id) = store::first_event_id(&root) {
+            registry::note(&store_dir, &project_id, &root);
+        }
+    }
     // The server outlives its calls and it is not the only writer, so it
     // loads the tree itself and reloads it when the log moves. Everything
     // below assumes one command, one process, one fold.

@@ -15,6 +15,7 @@
 
 use crate::{clock, id};
 use serde::{Deserialize, Serialize};
+use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -23,6 +24,53 @@ pub const DIR: &str = ".vivac";
 pub const LOG: &str = "events";
 pub const CONFIG: &str = "config";
 pub const INDEX: &str = "index";
+
+/// Where the global store lives, read from the environment.
+///
+/// `VIVAC_HOME` names the directory itself, the same shape as `CARGO_HOME`:
+/// unset, it defaults to `$HOME/.cargo` and, set, *is* the directory. A Rust
+/// developer already knows the rule.
+pub fn store_dir() -> Option<PathBuf> {
+    resolve_store_dir(
+        std::env::var_os("VIVAC_HOME").as_deref(),
+        std::env::var_os("HOME").as_deref(),
+        std::env::var_os("USERPROFILE").as_deref(),
+    )
+}
+
+/// Pure: given the three variables, where does the store go?
+///
+/// Split from `store_dir` so the tests never mutate the environment.
+/// `std::env::set_var` is process-global and the test harness runs threads in
+/// parallel; two tests setting `VIVAC_HOME` would race and the failure would
+/// be intermittent, which is worse than no test at all.
+fn resolve_store_dir(
+    vivac_home: Option<&OsStr>,
+    home: Option<&OsStr>,
+    userprofile: Option<&OsStr>,
+) -> Option<PathBuf> {
+    if let Some(v) = non_blank(vivac_home) {
+        return Some(PathBuf::from(v));
+    }
+    if let Some(h) = non_blank(home) {
+        return Some(PathBuf::from(h).join(DIR));
+    }
+    if let Some(u) = non_blank(userprofile) {
+        return Some(PathBuf::from(u).join(DIR));
+    }
+    None
+}
+
+/// `None` for a variable that is unset, empty or made only of whitespace: an
+/// exported-but-empty variable is a common shell accident, and treating it as
+/// "the store is at the filesystem root" would be actively harmful.
+fn non_blank(v: Option<&OsStr>) -> Option<&OsStr> {
+    let v = v?;
+    match v.to_str() {
+        Some(s) if s.trim().is_empty() => None,
+        _ => Some(v),
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
@@ -60,6 +108,20 @@ pub fn find_root(from_dir: &Path) -> Option<PathBuf> {
             return None;
         }
     }
+}
+
+/// The `id` of line 1 of `<root>/.vivac/events`, without folding the rest of
+/// the log. An empty log, an unreadable file or a first line that will not
+/// parse all come back `None`; the caller decides what that means.
+pub fn first_event_id(root: &Path) -> Option<String> {
+    let f = File::open(root.join(DIR).join(LOG)).ok()?;
+    let mut line = String::new();
+    BufReader::new(f).read_line(&mut line).ok()?;
+    if line.trim().is_empty() {
+        return None;
+    }
+    let e: crate::event::Event = serde_json::from_str(line.trim_end()).ok()?;
+    Some(e.id)
 }
 
 impl Store {
@@ -206,5 +268,87 @@ mod tests {
         std::env::var("USERNAME")
             .or_else(|_| std::env::var("USER"))
             .unwrap_or_default()
+    }
+
+    #[test]
+    fn vivac_home_wins_and_is_used_as_is() {
+        let got = resolve_store_dir(
+            Some(OsStr::new("/somewhere/store")),
+            Some(OsStr::new("/home/anyone")),
+            Some(OsStr::new("C:\\Users\\anyone")),
+        );
+        assert_eq!(got, Some(PathBuf::from("/somewhere/store")));
+    }
+
+    #[test]
+    fn blank_vivac_home_falls_through() {
+        let got = resolve_store_dir(
+            Some(OsStr::new("   ")),
+            Some(OsStr::new("/home/anyone")),
+            None,
+        );
+        assert_eq!(got, Some(PathBuf::from("/home/anyone").join(DIR)));
+    }
+
+    #[test]
+    fn home_alone_appends_dir() {
+        let got = resolve_store_dir(None, Some(OsStr::new("/home/anyone")), None);
+        assert_eq!(got, Some(PathBuf::from("/home/anyone").join(DIR)));
+    }
+
+    #[test]
+    fn userprofile_used_when_home_is_absent() {
+        let got = resolve_store_dir(None, None, Some(OsStr::new("C:\\Users\\anyone")));
+        assert_eq!(got, Some(PathBuf::from("C:\\Users\\anyone").join(DIR)));
+    }
+
+    #[test]
+    fn home_wins_over_userprofile() {
+        let got = resolve_store_dir(
+            None,
+            Some(OsStr::new("/home/anyone")),
+            Some(OsStr::new("C:\\Users\\anyone")),
+        );
+        assert_eq!(got, Some(PathBuf::from("/home/anyone").join(DIR)));
+    }
+
+    #[test]
+    fn nothing_set_means_no_global_store() {
+        assert_eq!(resolve_store_dir(None, None, None), None);
+    }
+
+    #[test]
+    fn first_event_id_on_an_empty_log_is_none() {
+        let tmp = std::env::temp_dir().join(format!("vivac-fe-{}", id::ulid()));
+        Store::create(&tmp).unwrap();
+        assert_eq!(first_event_id(&tmp), None);
+        fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn first_event_id_reads_line_one_without_folding() {
+        let tmp = std::env::temp_dir().join(format!("vivac-fe-{}", id::ulid()));
+        let s = Store::create(&tmp).unwrap();
+        // A log large enough that folding the whole thing would be visible
+        // in the timing, if this ever regressed into calling `read_all`.
+        for _ in 0..500 {
+            s.append(
+                vec![crate::event::Body::NodeNoted {
+                    node: "t1".into(),
+                    note: "filler".into(),
+                }],
+                0,
+            )
+            .unwrap();
+        }
+        let first_line = fs::read_to_string(s.log())
+            .unwrap()
+            .lines()
+            .next()
+            .unwrap()
+            .to_string();
+        let want: crate::event::Event = serde_json::from_str(&first_line).unwrap();
+        assert_eq!(first_event_id(&tmp), Some(want.id));
+        fs::remove_dir_all(&tmp).ok();
     }
 }

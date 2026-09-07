@@ -35,15 +35,19 @@ struct Server {
 }
 
 impl Server {
-    fn start(dir: &std::path::Path) -> Server {
-        Server::start_serving(dir, &[])
+    fn start(sandbox: &Sandbox) -> Server {
+        Server::start_serving(&sandbox.0, sandbox.global_home(), &[])
     }
 
     /// Like `start`, but naming the roots to serve with one `--project` per
     /// directory, so a server can be asked to serve more than the one it
     /// starts in. `dir` is still the working directory: `vivac web` needs a
     /// tree at or above its cwd regardless of what `--project` names.
-    fn start_serving(dir: &std::path::Path, roots: &[&std::path::Path]) -> Server {
+    fn start_serving(
+        dir: &std::path::Path,
+        home: &std::path::Path,
+        roots: &[&std::path::Path],
+    ) -> Server {
         let port = free_port();
         let mut args: Vec<std::ffi::OsString> = vec![
             "web".into(),
@@ -57,6 +61,7 @@ impl Server {
         }
         let mut child = Command::new(BIN)
             .current_dir(dir)
+            .env("VIVAC_HOME", home)
             .args(&args)
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -242,7 +247,7 @@ fn hrefs_in(body: &str) -> Vec<String> {
 
 fn up(name: &str) -> Up {
     let sandbox = Sandbox::new_seeded(name);
-    let server = Server::start(&sandbox.0);
+    let server = Server::start(&sandbox);
     Up {
         server,
         _sandbox: sandbox,
@@ -273,7 +278,7 @@ impl UpMany {
 fn up_many(names: &[&str]) -> UpMany {
     let sandboxes: Vec<Sandbox> = names.iter().map(|n| Sandbox::new_seeded(n)).collect();
     let roots: Vec<&std::path::Path> = sandboxes.iter().map(|s| s.0.as_path()).collect();
-    let server = Server::start_serving(&sandboxes[0].0, &roots);
+    let server = Server::start_serving(&sandboxes[0].0, sandboxes[0].global_home(), &roots);
     UpMany {
         server,
         _sandboxes: sandboxes,
