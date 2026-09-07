@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0](https://github.com/JAAvila-Of/vivac/compare/v0.5.1...v0.6.0) - 2026-09-07
+
+### Added
+
+- *(mcp)* the tools can reach a node in another tree ([#63](https://github.com/JAAvila-Of/vivac/pull/63))
+- *(find)* --everywhere searches the trees the machine knows ([#61](https://github.com/JAAvila-Of/vivac/pull/61))
+- *(registry)* a project enters by being used, keyed by its first event ([#58](https://github.com/JAAvila-Of/vivac/pull/58))
+- *(open)* [**breaking**] the fronts come back as fronts, not as whole nodes ([#53](https://github.com/JAAvila-Of/vivac/pull/53))
+- *(mcp)* the seven capture seams become tools an agent can call ([#47](https://github.com/JAAvila-Of/vivac/pull/47))
+- *(store)* the tree loads from a derived index, not the whole log ([#43](https://github.com/JAAvila-Of/vivac/pull/43))
+
+### Fixed
+
+- *(registry)* the global store came back from the list as a project ([#66](https://github.com/JAAvila-Of/vivac/pull/66))
+- *(registry)* a new project waited a command too long to be registered ([#62](https://github.com/JAAvila-Of/vivac/pull/62))
+- *(store)* the global store answered the upward search ([#59](https://github.com/JAAvila-Of/vivac/pull/59))
+- *(model)* a blocker only reaches an ancestor through blocking links ([#44](https://github.com/JAAvila-Of/vivac/pull/44))
+
+### Other
+
+- *(position)* two of the three debts had been paid and were still owed ([#67](https://github.com/JAAvila-Of/vivac/pull/67))
+- *(readme)* what shipped today, and what was never missing ([#65](https://github.com/JAAvila-Of/vivac/pull/65))
+- *(readme)* the read numbers were taken on a tree that cannot cache ([#64](https://github.com/JAAvila-Of/vivac/pull/64))
+- *(readme)* the store in your home had no public prose ([#60](https://github.com/JAAvila-Of/vivac/pull/60))
+- *(mcp)* three shipped changes left their prose behind ([#57](https://github.com/JAAvila-Of/vivac/pull/57))
+- *(hooks)* spell out the matcher instead of relying on its absence ([#56](https://github.com/JAAvila-Of/vivac/pull/56))
+- *(readme)* re-measure the whole table rather than patch two cells ([#55](https://github.com/JAAvila-Of/vivac/pull/55))
+- *(output)* one owner of stdout instead of a flush per line ([#54](https://github.com/JAAvila-Of/vivac/pull/54))
+- *(readme)* the status section outlived the measurements it quoted ([#52](https://github.com/JAAvila-Of/vivac/pull/52))
+- *(pillars)* the storage section still promised a rejected migration ([#51](https://github.com/JAAvila-Of/vivac/pull/51))
+- *(readme)* the write budget holds now, so say that instead ([#50](https://github.com/JAAvila-Of/vivac/pull/50))
+- *(mcp)* a write uses the tree the server already has ([#49](https://github.com/JAAvila-Of/vivac/pull/49))
+- *(readme)* the MCP write path does not meet the budget, say so ([#48](https://github.com/JAAvila-Of/vivac/pull/48))
+- *(readme)* what happens when a premise turns out false ([#46](https://github.com/JAAvila-Of/vivac/pull/46))
+- *(mcp)* say what the server replaces without naming it ([#45](https://github.com/JAAvila-Of/vivac/pull/45))
+- *(model)* the tree's edges are numbers, not ULID strings ([#42](https://github.com/JAAvila-Of/vivac/pull/42))
+- *(model)* the tree owns its text and the nodes hold spans into it ([#40](https://github.com/JAAvila-Of/vivac/pull/40))
+
 ## [0.5.1](https://github.com/JAAvila-Of/vivac/compare/v0.5.0...v0.5.1) - 2026-09-05
 
 ### Fixed
