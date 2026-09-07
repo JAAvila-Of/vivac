@@ -260,26 +260,39 @@ does not fit the budget it comes out anyway, and the warning says that what is
 left over is tree, not render.
 
 Measured on this machine at ten thousand nodes, 200 calls per cell, p50 / p99
-in milliseconds. The CLI column starts a fresh process every time and includes
-the ~8.5 ms that costs; the MCP column is a resident server, which is how an
-agent calls.
+in milliseconds, on a tree with its derived index in place — which is what a
+tree has after the first read of it. The CLI column starts a fresh process
+every time and includes the ~8.5 ms that costs; the MCP column is a resident
+server, which is how an agent calls.
 
 | | CLI | MCP |
 |---|---|---|
-| `brief` | 20.0 / 26.4 | 1.1 / 2.1 |
-| `why` | 21.4 / 34.6 | 3.7 / 5.8 |
-| `open` | 21.1 / 28.1 | 14.6 / 19.5 |
-| `find` | 24.0 / 47.8 | 7.3 / 10.6 |
-| `tree` | 30.0 / 51.3 | not a tool |
+| `brief` | 16.9 / 23.7 | 1.1 / 2.1 |
+| `why` | 17.6 / 23.5 | 3.7 / 5.8 |
+| `open` | 19.3 / 25.8 | 14.6 / 19.5 |
+| `find` | 17.1 / 23.6 | 7.3 / 10.6 |
+| `tree` | 21.7 / 41.3 | not a tool |
 
 A write is p99 1.1 ms at that size, and it does not grow with the tree: over
 MCP the server appends against the tree it is already holding.
 
-`tree` sits on the 50 ms ceiling rather than under it. The median passes with
-room; the tail comes in at 51.3, over by about 2.6% -- near enough that a
-busier machine moves it either way, which is not the same thing as passing.
-Most of what used to be there was never the store: it was one write syscall
-per line of output, and the crate now buffers and flushes once.
+**The CLI column used to read worse, and the tool was not.** The fixture those
+numbers came from could never keep a derived index. The index is only written
+when every id in the log has the shape a real one has, and the generator that
+built the fixture emitted short ones, so the write declined every time and said
+nothing about declining. Every call folded the whole log -- the cold path, which
+a real tree takes once and then stops taking.
+
+Side by side on one machine, one tree, one size, with nothing different but
+whether the index could be kept: `tree` came back 50.7 / 62.8 without it and
+22.4 / 29.4 with it. `why` came back 50.5 / 95.3 against 17.5 / 23.5.
+
+So the reading budget was never being missed. `tree` was reported at 51.3 at the
+tail, a hair over the 50 ms ceiling, and that was enough to open a question about
+whether the ceiling was the right one. It was: the number was taken on a tree
+that cannot cache. What did come out of chasing it is real and stayed -- most of
+the cost that was there was one write syscall per line of output, and the crate
+now buffers and flushes once.
 
 Not there yet: search across projects, export, team mode.
 
