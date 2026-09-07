@@ -231,8 +231,10 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         "open" | "stack" | "parked" | "triage" | "stats" | "vivacs" | "check" => &["json"],
         // `--full` is its own on top of `--json`, so `why` cannot share the
         // arm above without granting every other read a flag it does not
-        // read.
-        "why" => &["json", "full"],
+        // read. `--project` is `d273`'s second half: it answers from
+        // another tree entirely, the same fan-out `find --everywhere`
+        // already reads the registry for.
+        "why" => &["json", "full", "project"],
         // `--everywhere` is `find`'s own for the same reason: the registry
         // fan-out (`d273`) is not something any other read takes.
         "find" => &["json", "everywhere"],
@@ -372,6 +374,29 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
             }
             Ok(())
         };
+        // `--project` answers from another tree entirely: `d273`'s second
+        // half. It resolves against the registry the same way
+        // `find --everywhere` reads it, and the tree loads through the
+        // local index with `allow_persist: false` for the same reason --
+        // opening another project's node must never write inside that
+        // project's `.vivac/`. `--full` needs the raw log (`Full::from_log`)
+        // and a foreign log is never read that way, so the two refuse each
+        // other instead of `--full` silently answering half its question.
+        if let Some(spec) = a.opt("project") {
+            let foreign_root = registry::resolve(spec)?;
+            let tree = index::load(&store::Store::open(foreign_root)?, false)?;
+            extra_word(a)?;
+            if a.has("full") {
+                return Err(Failure::usage(
+                    "why --project does not take --full: --full reads the whole log, \
+                     and a foreign project's log is never read that way.
+
+  Drop --full or drop --project."
+                        .to_string(),
+                ));
+            }
+            return render::why(&tree, &[], a).map(|_| 0);
+        }
         if a.has("full") {
             let (ctx, log) = ops::Ctx::load_with_log(store::Store::open(root)?)?;
             extra_word(a)?;

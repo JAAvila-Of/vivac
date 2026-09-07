@@ -34,6 +34,7 @@ alphanumeric
 already
 alternatives
 always
+ambiguous
 among
 an
 ancestor
@@ -44,6 +45,7 @@ announces
 another
 answer
 answered
+answering
 answers
 any
 apart
@@ -129,6 +131,7 @@ calling
 came
 can
 candidate
+candidates
 cannot
 canonicalize
 capacity
@@ -425,6 +428,7 @@ grown
 guard
 guarded
 guessed
+half
 hand
 handle
 hands
@@ -771,6 +775,7 @@ println
 prints
 problem
 process
+proj
 project
 projects
 promote
@@ -820,6 +825,7 @@ refresh
 refs
 refusal
 refusals
+refuse
 refused
 refuses
 regenerated
@@ -980,6 +986,7 @@ spanish
 spans
 spawn
 spawning
+spec
 spellings
 spent
 spine
@@ -1080,6 +1087,7 @@ tld
 tmp
 to
 today
+together
 tok
 token
 tokens
@@ -1098,6 +1106,7 @@ trait
 transcript
 travels
 tree
+trees
 triage
 trim
 trimmed
@@ -1124,6 +1133,7 @@ u64
 u8
 ulid
 ulids
+unchanged
 unclaimed
 under
 unique
@@ -1178,6 +1188,7 @@ walk
 want
 warning
 was
+way
 web
 weight
 what

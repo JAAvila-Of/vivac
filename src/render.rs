@@ -1084,7 +1084,12 @@ pub fn find(a: &Tree, args: &Args) -> R {
 /// The directory's own name, as `d146` defines it: never the path it sits
 /// under, because an absolute path names the account and the machine it
 /// runs on and the security pillar allows neither into a result.
-fn project_name(root: &std::path::Path) -> String {
+///
+/// `pub(crate)` rather than private since `d273`'s second half: `registry`
+/// resolves `--project`'s value against the same bare name this hands back,
+/// so a hit `find --everywhere` prints is exactly what `why --project` then
+/// takes.
+pub(crate) fn project_name(root: &std::path::Path) -> String {
     root.file_name()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "-".into())
@@ -1106,6 +1111,28 @@ fn find_data_everywhere(projects: &[(String, Tree)], terms: &[String]) -> serde_
         }
     }
     json!(hits)
+}
+
+/// [`find_everywhere`]'s JSON, with no `Args` to read it from: what
+/// `vivac_find`'s `everywhere` argument calls through the MCP server. The
+/// same read `find --everywhere --json` runs, so the two can never drift
+/// apart -- `d172`'s tie, carried past one project.
+pub fn find_everywhere_data(query: &str) -> Result<serde_json::Value, Failure> {
+    let terms = terms_of(query)?;
+    let known_roots = crate::store::store_dir()
+        .map(|d| crate::registry::roots(&d))
+        .unwrap_or_default();
+    let mut projects: Vec<(String, Tree)> = Vec::new();
+    for root in known_roots {
+        let name = project_name(&root);
+        if let Ok(tree) =
+            crate::store::Store::open(root).and_then(|s| crate::index::load(&s, false))
+        {
+            projects.push((name, tree));
+        }
+    }
+    projects.sort_by(|x, y| x.0.cmp(&y.0));
+    Ok(find_data_everywhere(&projects, &terms))
 }
 
 /// `find`, fanned out over every project the registry knows about instead

@@ -41,7 +41,7 @@
 use crate::args::Args;
 use crate::failure::{Failure, R};
 use crate::project::{Project, Registry};
-use crate::{brief, ops, outcome, params, render};
+use crate::{brief, index, ops, outcome, params, registry, render, store};
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
@@ -97,24 +97,42 @@ const TOOLS: &[Tool] = &[
                       note or outcome contains all of the terms, newest first, each with \
                       the lineage it hangs from. Closed nodes are included: what you look \
                       for months later is usually finished.",
-        args: &[Arg {
-            name: "query",
-            kind: ArgKind::Str,
-            required: true,
-            description: "Words to look for. Every one of them has to appear.",
-        }],
+        args: &[
+            Arg {
+                name: "query",
+                kind: ArgKind::Str,
+                required: true,
+                description: "Words to look for. Every one of them has to appear.",
+            },
+            Arg {
+                name: "everywhere",
+                kind: ArgKind::Bool,
+                required: false,
+                description: "Searches every project on the machine rather than this one.",
+            },
+        ],
     },
     Tool {
         name: "vivac_why",
         description: "Why a node exists: the chain from the goal down to it, what is open \
                       in parallel, what was born from it, and what blocks it from closing. \
                       This is the question the whole tool exists to answer.",
-        args: &[Arg {
-            name: "id",
-            kind: ArgKind::Str,
-            required: true,
-            description: "The node as the tree names it: g1, t12, f74, d29.",
-        }],
+        args: &[
+            Arg {
+                name: "id",
+                kind: ArgKind::Str,
+                required: true,
+                description: "The node as the tree names it: g1, t12, f74, d29.",
+            },
+            Arg {
+                name: "project",
+                kind: ArgKind::Str,
+                required: false,
+                description: "Opens a node that lives in another tree: a project name from \
+                              `vivac_find`'s `everywhere`, since an alias only means \
+                              something inside its own tree.",
+            },
+        ],
     },
     Tool {
         name: "vivac_open",
@@ -492,13 +510,24 @@ fn call(project: &mut Project, params: &Value) -> Result<String, Failure> {
             let query = argument(params, "query")
                 .ok_or_else(|| missing("query"))?
                 .to_string();
-            pretty(render::find_data(&project.current()?.tree, &query)?)
+            if bool_argument(params, "everywhere") {
+                pretty(render::find_everywhere_data(&query)?)
+            } else {
+                pretty(render::find_data(&project.current()?.tree, &query)?)
+            }
         }
         "vivac_why" => {
             let id = argument(params, "id")
                 .ok_or_else(|| missing("id"))?
                 .to_string();
-            pretty(render::why_data(&project.current()?.tree, &id)?)
+            match argument(params, "project") {
+                Some(spec) => {
+                    let foreign_root = registry::resolve(spec)?;
+                    let tree = index::load(&store::Store::open(foreign_root)?, false)?;
+                    pretty(render::why_data(&tree, &id)?)
+                }
+                None => pretty(render::why_data(&project.current()?.tree, &id)?),
+            }
         }
         "vivac_open" => pretty(render::open_data(&project.current()?.tree)),
         "vivac_push" => {
