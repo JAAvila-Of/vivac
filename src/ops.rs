@@ -245,7 +245,14 @@ pub fn push(ctx: &mut Ctx, p: params::Push) -> Result<Outcome, Failure> {
     // §6.1: intervene, never block. A deep stack is almost never lack of
     // discipline: the root goal moved and nobody re-rooted.
     let advice = if depth_of >= 4 {
-        ctx.tree.roots().first().map(|root| outcome::DepthAdvice {
+        // The node named is the **bottom of this stack**, never the tree's
+        // first root: the number measures the stack (`f156`), so taking the
+        // number from one place and the node from another gives a true count
+        // pointing at the wrong goal. It showed up as soon as there was more
+        // than one root -- which is what `promote` exists to make -- and the
+        // advice named whichever root was written first, closed or not
+        // (`f331`).
+        ctx.tree.stack_bottom().map(|root| outcome::DepthAdvice {
             depth: depth_of,
             root_alias: root.alias(),
             root_title: root.title(&ctx.tree).to_string(),

@@ -759,6 +759,15 @@ impl Tree {
         self.stack.last().and_then(|&num| self.nodes.get(&num))
     }
 
+    /// `focus`'s counterpart at the other end: the node this stack was opened
+    /// from. `push` on an empty stack has no parent and is forced to a goal,
+    /// so the bottom is a root goal, and the distance up to it is exactly what
+    /// `stack_depth` counts -- which is why the depth advice has to name this
+    /// one and not the tree's first root (`f156`, `f331`).
+    pub fn stack_bottom(&self) -> Option<&Node> {
+        self.stack.first().and_then(|&num| self.nodes.get(&num))
+    }
+
     pub fn stack_depth(&self) -> usize {
         self.stack.len()
     }
