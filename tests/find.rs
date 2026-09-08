@@ -401,3 +401,261 @@ fn the_foreign_index_is_never_written() {
         "the foreign index was rewritten"
     );
 }
+
+// `d362` — hits sort by field first, subtree size second, and recency only
+// as the last tiebreak. The five tests below defend the three positions of
+// that tuple and the two places the order has to hold: the JSON payload and
+// the `--everywhere` fan-out.
+
+/// The field a hit lands in outranks *both* how much tree it holds up and
+/// how recent it is -- not recency alone. The why-hit node is the one with
+/// two children hung off it, so it also has the larger subtree, and it is
+/// the older of the two; the title-hit node is a newer, childless sibling.
+/// If the field did not dominate, the second key -- subtree size -- would
+/// put the why-hit node first on its own, and this would not catch it.
+#[test]
+fn a_title_hit_wins_over_a_why_hit() {
+    let c = Sandbox::new_seeded("rank-field");
+    c.ok(&[
+        "push",
+        "Foundational topic",
+        "--why",
+        "the widget carries the whole argument here",
+    ]);
+    c.ok(&[
+        "add",
+        "Support child one",
+        "--parent",
+        "1",
+        "--why",
+        "just support",
+    ]);
+    c.ok(&[
+        "add",
+        "Support child two",
+        "--parent",
+        "1",
+        "--why",
+        "just support",
+    ]);
+    c.ok(&[
+        "add",
+        "Widget in the headline",
+        "--parent",
+        "1",
+        "--why",
+        "no relation at all",
+        "--type",
+        "task",
+    ]);
+    let s = c.ok(&["find", "widget"]);
+    let title_hit = s
+        .find("Widget in the headline")
+        .expect("the title hit is missing");
+    let why_hit = s
+        .find("Foundational topic")
+        .expect("the why hit is missing");
+    assert!(
+        title_hit < why_hit,
+        "the title hit did not lead despite holding up less subtree and being newer:\n{s}"
+    );
+}
+
+/// Within the same field, the node that holds up more tree wins over the
+/// one that is merely newer. Two children are hung off the older node so
+/// its subtree total is the larger of the two, and the newer, childless
+/// node still has to come second.
+#[test]
+fn the_older_node_wins_with_more_subtree() {
+    let c = Sandbox::new_seeded("rank-subtree");
+    c.ok(&[
+        "push",
+        "Foundational item",
+        "--why",
+        "the gadget carries real weight",
+    ]);
+    c.ok(&[
+        "add",
+        "Support child one",
+        "--parent",
+        "1",
+        "--why",
+        "supporting detail",
+    ]);
+    c.ok(&[
+        "add",
+        "Support child two",
+        "--parent",
+        "1",
+        "--why",
+        "supporting detail",
+    ]);
+    c.ok(&[
+        "add",
+        "Fresh item",
+        "--parent",
+        "1",
+        "--why",
+        "a gadget appears here too",
+        "--type",
+        "task",
+    ]);
+    let s = c.ok(&["find", "gadget"]);
+    let more_subtree = s
+        .find("Foundational item")
+        .expect("the more-subtree hit is missing");
+    let leaf_hit = s.find("Fresh item").expect("the leaf hit is missing");
+    assert!(
+        more_subtree < leaf_hit,
+        "the node with more subtree did not lead:\n{s}"
+    );
+}
+
+/// With the field and the subtree total tied, the later node wins: today's
+/// behaviour, degraded to the last tiebreak. The two matching nodes are
+/// siblings, both leaves, so a subtree total of zero ties them and only
+/// recency can tell them apart -- a parent and its own child never tie,
+/// since a parent's subtree always holds more than the child's.
+#[test]
+fn the_later_node_wins_when_field_and_subtree_are_equal() {
+    let c = Sandbox::new_seeded("rank-recency");
+    c.ok(&["push", "Root node", "--why", "an unrelated reason"]);
+    c.ok(&[
+        "add",
+        "Alpha node",
+        "--parent",
+        "1",
+        "--why",
+        "the gizmo is mentioned here",
+        "--type",
+        "task",
+    ]);
+    c.ok(&[
+        "add",
+        "Beta node",
+        "--parent",
+        "1",
+        "--why",
+        "the gizmo is mentioned again",
+        "--type",
+        "task",
+    ]);
+    let s = c.ok(&["find", "gizmo"]);
+    let later = s.find("Beta node").expect("the later hit is missing");
+    let older = s.find("Alpha node").expect("the older hit is missing");
+    assert!(later < older, "the later node did not lead:\n{s}");
+}
+
+/// `find --json` is a second reader of the same order `hits_for` builds, not
+/// a second implementation of it. A search that spreads across two fields
+/// and two subtree sizes proves the two never drift apart.
+#[test]
+fn json_hits_are_in_the_same_order_as_the_text_hits() {
+    let c = Sandbox::new_seeded("rank-json-order");
+    c.ok(&["push", "Alpha owl mention", "--why", "an unrelated reason"]);
+    c.ok(&[
+        "add",
+        "Beta node",
+        "--why",
+        "an owl shows up only here",
+        "--type",
+        "task",
+    ]);
+    c.ok(&[
+        "add",
+        "Owl in the title here",
+        "--why",
+        "another unrelated reason",
+        "--type",
+        "task",
+    ]);
+    let text = c.ok(&["find", "owl"]);
+    let json_text = c.ok(&["find", "owl", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&json_text).expect("the payload is not JSON");
+    // Compared by title, not by alias: a hit's alias also shows up inside
+    // the "via <alias>" lineage line of any other hit under the same
+    // parent, so searching the text for a bare alias can land on someone
+    // else's line. A title never does.
+    let titles: Vec<String> = v
+        .as_array()
+        .expect("the payload is not a list")
+        .iter()
+        .map(|h| h["title"].as_str().expect("a hit has no title").to_string())
+        .collect();
+    assert!(
+        titles.len() >= 3,
+        "need at least three hits to prove an order:\n{text}"
+    );
+    let mut by_position: Vec<(usize, &String)> = titles
+        .iter()
+        .map(|title| {
+            (
+                text.find(title.as_str())
+                    .unwrap_or_else(|| panic!("{title} is missing from the text output:\n{text}")),
+                title,
+            )
+        })
+        .collect();
+    by_position.sort_by_key(|(pos, _)| *pos);
+    let text_order: Vec<&String> = by_position.into_iter().map(|(_, title)| title).collect();
+    let json_order: Vec<&String> = titles.iter().collect();
+    assert_eq!(
+        json_order, text_order,
+        "json and text disagree on order:\ntext:\n{text}\njson:\n{json_text}"
+    );
+}
+
+/// `find --everywhere` (`d273`) fans the same search out over the registry;
+/// the ordering rule has to travel with it inside each project's own
+/// section, not just on the single-project path. Same inversion as
+/// [`a_title_hit_wins_over_a_why_hit`]: the why-hit node carries the larger
+/// subtree and is the older of the two, and the title-hit node still has to
+/// lead.
+#[test]
+fn find_everywhere_has_the_same_order_inside_each_project() {
+    let a = Sandbox::new_seeded("rank-everywhere");
+    a.ok(&[
+        "push",
+        "Foundational topic",
+        "--why",
+        "the crocodile carries the whole argument here",
+    ]);
+    a.ok(&[
+        "add",
+        "Support child one",
+        "--parent",
+        "1",
+        "--why",
+        "just support",
+    ]);
+    a.ok(&[
+        "add",
+        "Support child two",
+        "--parent",
+        "1",
+        "--why",
+        "just support",
+    ]);
+    a.ok(&[
+        "add",
+        "Crocodile in the headline",
+        "--parent",
+        "1",
+        "--why",
+        "no relation at all",
+        "--type",
+        "task",
+    ]);
+    a.ok(&["stack"]);
+    let s = a.ok(&["find", "crocodile", "--everywhere"]);
+    let title_hit = s
+        .find("Crocodile in the headline")
+        .expect("the title hit is missing");
+    let why_hit = s
+        .find("Foundational topic")
+        .expect("the why hit is missing");
+    assert!(
+        title_hit < why_hit,
+        "the title hit did not lead inside the project despite holding up less subtree and being newer:\n{s}"
+    );
+}

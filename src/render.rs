@@ -961,8 +961,11 @@ fn snippet(text: &str, terms: &[String], width: usize) -> String {
 /// look for months later is usually finished, and a search that stopped at
 /// the open fronts would be a to-do list rather than a memory.
 ///
-/// Newest first, because a search over a tree that has been running for
-/// months is answered from the end far more often than from the beginning.
+/// Order is not recency. Newest-first was the first answer, and it is the
+/// wrong one for the search a memory is actually asked to do: the hits that
+/// founded a subject are the oldest of them, and they were arriving last.
+/// `d362` orders by what a hit is about first, by how much tree it holds up
+/// second, and by recency only as the last tiebreak.
 fn terms_of(query: &str) -> Result<Vec<String>, Failure> {
     let terms: Vec<String> = query.split_whitespace().map(|t| t.to_lowercase()).collect();
     if terms.is_empty() {
@@ -971,8 +974,50 @@ fn terms_of(query: &str) -> Result<Vec<String>, Failure> {
     Ok(terms)
 }
 
-/// Every node that matches, newest first, each with the fields it hit on.
-fn hits_for<'t>(a: &'t Tree, terms: &[String]) -> Vec<(&'t Node, Vec<&'static str>)> {
+/// Where a field lands in the order [`hits_for`] sorts by: title first, why
+/// second, note and outcome tied for last. A function rather than the
+/// position `searchable` returns the field at, because note and outcome tie
+/// and a position has no room for one.
+fn field_order(field: &str) -> u8 {
+    match field {
+        "title" => 0,
+        "why" => 1,
+        _ => 2,
+    }
+}
+
+/// Every node that matches, best first, each with the fields it hit on.
+///
+/// Three keys, read in order, with no weights and no tunable constants.
+///
+/// **What the hit is about.** A term in the title is what the node is
+/// called; a term in the reason is what the node argued; a term in a note
+/// or an outcome is what happened along the way. The first of those
+/// answers "where was this decided" better than the last, so the field of
+/// the best hit dominates everything else. The note and the outcome tie:
+/// both are what came after the argument.
+///
+/// **How much tree it holds up.** Among nodes that hit on the same field
+/// the question is which one founded the subject, and the tree already
+/// knows: the one everything else hangs off. `Aggregates` has the subtree
+/// total of every node from a pass that is already linear, so this costs
+/// a lookup.
+///
+/// **Recency**, last. It was the whole order before `d362` and it is a
+/// tiebreak now: a search over a tree that has run for months is answered
+/// from the end often enough to be worth keeping, and never often enough
+/// to outrank what the hit is about.
+///
+/// What is deliberately absent is a relevance score. Term frequency, IDF
+/// and length normalization are what BM25 would add, and here IDF is inert
+/// -- every term has to appear, so every hit contains all of them -- while
+/// length normalization is inverted: it penalizes long fields as diluted,
+/// and in this corpus a long reason is the reasoning.
+fn hits_for<'t>(
+    a: &'t Tree,
+    ag: &Aggregates,
+    terms: &[String],
+) -> Vec<(&'t Node, Vec<&'static str>)> {
     let mut hits: Vec<(&Node, Vec<&'static str>)> = Vec::new();
     for n in a.nodes_iter() {
         let lowered: Vec<(&'static str, String)> = searchable(a, n)
@@ -993,7 +1038,13 @@ fn hits_for<'t>(a: &'t Tree, terms: &[String]) -> Vec<(&'t Node, Vec<&'static st
             .collect();
         hits.push((n, matched));
     }
-    hits.sort_by_key(|(n, _)| std::cmp::Reverse(n.num));
+    hits.sort_by_key(|(n, matched)| {
+        (
+            field_order(matched[0]),
+            std::cmp::Reverse(ag.counts(n.num).total),
+            std::cmp::Reverse(n.num),
+        )
+    });
     hits
 }
 
@@ -1041,7 +1092,8 @@ fn hit_json(a: &Tree, n: &Node, matched: &[&'static str], terms: &[String]) -> s
 
 pub fn find_data(a: &Tree, query: &str) -> Result<serde_json::Value, Failure> {
     let terms = terms_of(query)?;
-    Ok(json!(hits_for(a, &terms)
+    let ag = &a.aggregates();
+    Ok(json!(hits_for(a, ag, &terms)
         .iter()
         .map(|(n, matched)| hit_json(a, n, matched, &terms))
         .collect::<Vec<_>>()))
@@ -1055,7 +1107,8 @@ pub fn find(a: &Tree, args: &Args) -> R {
     if args.has("json") {
         return print_json(find_data(a, query)?);
     }
-    let hits = hits_for(a, &terms);
+    let ag = &a.aggregates();
+    let hits = hits_for(a, ag, &terms);
 
     if hits.is_empty() {
         outln!("  Nothing matches \"{query}\".");
@@ -1118,7 +1171,8 @@ pub(crate) fn project_name(root: &std::path::Path) -> String {
 fn find_data_everywhere(projects: &[(String, Tree)], terms: &[String]) -> serde_json::Value {
     let mut hits = Vec::new();
     for (name, tree) in projects {
-        for (n, matched) in hits_for(tree, terms) {
+        let ag = &tree.aggregates();
+        for (n, matched) in hits_for(tree, ag, terms) {
             let mut hit = hit_json(tree, n, &matched, terms);
             if let serde_json::Value::Object(fields) = &mut hit {
                 fields.insert("project".to_string(), json!(name));
@@ -1193,7 +1247,8 @@ pub fn find_everywhere(a: &Args) -> R {
     let sections: Vec<ProjectHits> = projects
         .iter()
         .filter_map(|(name, tree)| {
-            let hits = hits_for(tree, &terms);
+            let ag = &tree.aggregates();
+            let hits = hits_for(tree, ag, &terms);
             (!hits.is_empty()).then_some((name.as_str(), tree, hits))
         })
         .collect();
