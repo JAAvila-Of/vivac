@@ -98,6 +98,9 @@ prose, never parsed.
 **And the maintainer looks.** `vivac web` draws the tree in a browser, on this
 machine and nowhere else: a server somebody starts and that dies when they
 close it, bound to `127.0.0.1`, reachable through a one-time key it prints.
+It opens from any directory, including one that is no project at all: the
+roots come from the same registry `find --everywhere` reads, and the working
+directory decides one thing only, which is where `/` lands.
 
 ```sh
 vivac web           the tree in a browser, on this machine and nowhere else
@@ -109,10 +112,13 @@ walked around, and anything that goes wrong on a page has a command that
 repeats it. If a page needs something the command line does not have, that
 thing gets built on the command line first.
 
-Today it serves one page: what moved while you were not looking. It is there
-because a context budget and a screen are not the same problem. The `brief`
-answers *where am I* in a few hundred tokens and does it well; it was never
-going to answer *what changed under me while I was not asking*.
+Where it lands is the index: which project moved, and which has been sitting
+still, without going in to ask them one at a time. Inside a project, what
+moved there while you were not looking, one node's lineage, and the whole
+tree. They are there because a context budget and a screen are not the same
+problem. The `brief` answers *where am I* in a few hundred tokens and does it
+well; it was never going to answer *what changed under me while I was not
+asking*.
 
 **And there are safe stops.** A vivac is the bivouac partway up a climb: a
 coherent state, with the stack frozen and the identity of the code at that
