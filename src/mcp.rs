@@ -94,9 +94,12 @@ const TOOLS: &[Tool] = &[
     Tool {
         name: "vivac_find",
         description: "Search the provenance tree. Returns every node whose title, reason, \
-                      note or outcome contains all of the terms, newest first, each with \
-                      the lineage it hangs from. Closed nodes are included: what you look \
-                      for months later is usually finished.",
+                      note or outcome contains all of the terms, best first, each with \
+                      the lineage it hangs from. Ranking is not recency: a hit in the \
+                      title outranks a hit in a note, a node holding up more tree \
+                      outranks one holding up less, and recency is only the last \
+                      tiebreak. Closed nodes are included: what you look for months \
+                      later is usually finished.",
         args: &[
             Arg {
                 name: "query",
