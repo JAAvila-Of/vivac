@@ -760,10 +760,16 @@ impl Tree {
     }
 
     /// `focus`'s counterpart at the other end: the node this stack was opened
-    /// from. `push` on an empty stack has no parent and is forced to a goal,
-    /// so the bottom is a root goal, and the distance up to it is exactly what
-    /// `stack_depth` counts -- which is why the depth advice has to name this
-    /// one and not the tree's first root (`f156`, `f331`).
+    /// from. The distance up to it is exactly what `stack_depth` counts, which
+    /// is why the depth advice has to name this one and not the tree's first
+    /// root (`f156`, `f331`).
+    ///
+    /// Usually a root goal, and not by invariant. `push` with nothing open has
+    /// no parent and is forced to a goal, and `focus` lays the whole lineage
+    /// down so the bottom is that lineage's root -- but a root reached by
+    /// `promote` is whatever kind it already was, and `restore` leaves out a
+    /// saved entry whose node is gone, the bottom included. Nothing here reads
+    /// the kind, and nothing should start.
     pub fn stack_bottom(&self) -> Option<&Node> {
         self.stack.first().and_then(|&num| self.nodes.get(&num))
     }
