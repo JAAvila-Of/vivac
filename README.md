@@ -80,7 +80,7 @@ vivac brief         where you are, what governs this point, what NOT to touch
 vivac why 11        the path from the root, narrated
 vivac tree          the tree, with false closes marked
 vivac open          the open fronts, each with its lineage
-vivac find cache    every node whose text holds all the words, newest first
+vivac find cache    every node whose text holds all the words, best first
 vivac stack         the focus stack
 vivac parked        DO NOT TOUCH NOW
 vivac triage        what can be pruned, and with which command
@@ -250,9 +250,17 @@ the nodes declare. It reports and never writes: it can say nobody claims a
 file, and it cannot say which thread that file belongs to.
 
 `find` is the other half of reading. It returns every node whose title, reason,
-note or outcome holds all of the words, newest first, each with the lineage it
+note or outcome holds all of the words, best first, each with the lineage it
 hangs from. Closed nodes are included on purpose: what you go looking for
 months later is usually finished.
+
+**Ranking is not recency**, and the difference is the whole point. Newest-first
+answers "what was I just doing"; a search answers "where was this decided", and
+the nodes that decided something are the old ones. So three keys, read in
+order: the field the term hit -- a title outranks a reason, a reason outranks a
+note or an outcome -- then how much tree the node holds up, and only then how
+recent it is. No weights, no tunable constants: the judgement is in the order
+of the keys, where it can be argued with.
 
 `find --everywhere` asks the same question of every project this machine has
 seen rather than the one you are standing in. It reads the registry, so it
