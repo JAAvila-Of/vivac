@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.2](https://github.com/JAAvila-Of/vivac/compare/v0.6.1...v0.6.2) - 2026-09-08
+
+### Documentation
+
+- *(model)* stop claiming the stack bottom is always a goal ([#74](https://github.com/JAAvila-Of/vivac/pull/74))
+
+### Fixed
+
+- *(push)* name the goal this stack came from, not the first root ([#70](https://github.com/JAAvila-Of/vivac/pull/70))
+
+### Internal
+
+- *(release)* group the invisible types instead of dropping them ([#73](https://github.com/JAAvila-Of/vivac/pull/73))
+- *(release)* group the changelog by type instead of one Other bin ([#71](https://github.com/JAAvila-Of/vivac/pull/71))
+
 ## [0.6.1](https://github.com/JAAvila-Of/vivac/compare/v0.6.0...v0.6.1) - 2026-09-08
 
 ### Other
