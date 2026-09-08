@@ -1,0 +1,27 @@
+# How a commit message becomes a changelog section.
+#
+# With no parsers of its own, release-plz groups `feat` and `fix` and drops
+# every other type into "Other". In 0.6.0 that bin held fifteen of the
+# twenty-three entries: a README correction and the rewrite of the read path
+# sat side by side with nothing to tell them apart. A section holding two
+# thirds of a release has stopped sorting anything, and a reader asking what
+# changed has to read all of it to find out.
+#
+# The order of this list is the order of the sections. `filter_commits` stays
+# off, which is the default, so a type missing from here still reaches the
+# changelog ungrouped -- it can lose its section, never its entry.
+
+[changelog]
+commit_parsers = [
+    { message = "^feat", group = "Added" },
+    { message = "^fix", group = "Fixed" },
+    { message = "^perf", group = "Performance" },
+    { message = "^revert", group = "Reverted" },
+    { message = "^refactor", group = "Changed" },
+    { message = "^build", group = "Changed" },
+    { message = "^docs", group = "Documentation" },
+    # Invisible from outside the repository: a test, a workflow, a bump of
+    # something the build uses. `build` is not here on purpose -- a dependency
+    # or an MSRV change is felt by whoever installs this.
+    { message = "^(test|ci|chore)", skip = true },
+]
