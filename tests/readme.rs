@@ -311,3 +311,59 @@ fn the_readme_does_not_call_missing_what_the_binary_already_does() {
         );
     }
 }
+
+/// The routes `vivac web` answers, held still.
+///
+/// `SERVERS` says why `web` is never run here: standing a server up inside
+/// this file is not what it does, so the web is checked through `--help` and
+/// nothing else. `f376` is the cost of that. Every claim the README makes
+/// about the web falls outside the one guard that holds the README honest,
+/// and `f375` is what the cost looked like -- "it serves one page" was true
+/// the day it was written, went false the day the lineage and the tree
+/// landed, and rode inside five releases with all seven checks green.
+///
+/// `NotFound` is not a page. It is in the list because it is in the enum,
+/// and a list that quietly drops a variant is a list that stops noticing.
+const ROUTES: [&str; 5] = ["Index", "NotFound", "Today", "Tree", "Why"];
+
+/// The variant names of `Route`, read off the source.
+fn route_variants() -> BTreeSet<String> {
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("web")
+        .join("mod.rs");
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let at = text.find("enum Route").expect("no Route in src/web/mod.rs");
+    let body = &text[at..];
+    let end = body.find("\n}").expect("Route never closes");
+    body[..end]
+        .lines()
+        .skip(1)
+        .map(str::trim)
+        .filter(|l| !l.starts_with("//"))
+        .filter_map(|l| {
+            let name: String = l.chars().take_while(|c| c.is_alphanumeric()).collect();
+            (!name.is_empty()).then_some(name)
+        })
+        .collect()
+}
+
+/// A tripwire, and the difference from the rest of this file matters.
+///
+/// Every other test here reads the binary and decides whether the README is
+/// true. This one cannot. It never opens the README, and it could not judge
+/// that paragraph if it did -- what the pages are called is not what the
+/// prose claims about them. All it does is fail on the day the set of pages
+/// changes, which is the day somebody has to go and read what was written
+/// about them. That day was 4-sep-2026 and nothing marked it.
+#[test]
+fn the_set_of_pages_has_not_changed_behind_the_readme() {
+    let known: BTreeSet<String> = ROUTES.iter().map(|s| (*s).to_string()).collect();
+    assert_eq!(
+        route_variants(),
+        known,
+        "the routes changed. Nothing here can tell whether the README still \
+         describes them, so read what it says about the web -- and section 3 \
+         of WEB.md -- before you update this list."
+    );
+}
