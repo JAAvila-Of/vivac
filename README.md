@@ -73,6 +73,23 @@ vivac pop "reproduced: expires at 300s, not 3600"
 vivac pop "adapter fixed"
 ```
 
+Not all of it happens on the stack. A node can be recorded without stepping
+into it, a decision can carry what it rejected, and a node can be marked
+without its state changing:
+
+```sh
+vivac add "Retry policy is undecided" --parent 1 --why "the adapter needs it"
+vivac decide "Expiry stays at 300s" --reason "the session bug was never expiry"
+vivac note "the corpus run is what settled it"
+vivac flag 2 review --why "measured on one file, never on the corpus"
+vivac promote 2
+vivac park 2 "waiting on the corpus run"
+```
+
+`decide` takes `--alternative` for what was turned down and `--supersedes` for
+the decision it replaces, so a reversal reads from either end. `block` marks a
+node as something its parent cannot close over, and `--off` takes it back.
+
 **The maintainer reads.**
 
 ```sh
@@ -95,6 +112,12 @@ interface in the way, and every one of those reads takes `--json` — every one
 but the `brief`, which is written to be injected into a session and read as
 prose, never parsed.
 
+Two of them carry more than the line suggests. `why --full` adds the anchor,
+the standing decisions and the open siblings at every step of the path, which
+is the difference between a route and a briefing. `check --gates` widens the
+invariants from this tree to every tree on the machine that nobody has opened,
+because a tree nobody opens is where an invariant goes to break quietly.
+
 **And the maintainer looks.** `vivac web` draws the tree in a browser, on this
 machine and nowhere else: a server somebody starts and that dies when they
 close it, bound to `127.0.0.1`, reachable through a one-time key it prints.
@@ -106,11 +129,15 @@ directory decides one thing only, which is where `/` lands.
 vivac web           the tree in a browser, on this machine and nowhere else
 ```
 
-It has **no functions of its own.** Every page calls the same function the
-command calls, so there is no second write path for the redaction guard to be
-walked around, and anything that goes wrong on a page has a command that
-repeats it. If a page needs something the command line does not have, that
-thing gets built on the command line first.
+It has **no functions of its own.** If a page needs something the command line
+does not have, that thing gets built on the command line first, so there is no
+second write path for the redaction guard to be walked around and anything that
+goes wrong on a page has a command that repeats it.
+
+The drawing of the tree is the one place that is not yet held to that, and it
+is a debt rather than a design: the page walks the tree itself instead of
+calling what `vivac tree` calls, so one shape has two implementations and
+nothing compares them. Naming it here costs less than finding it later.
 
 Where it lands is the index: which project moved, and which has been sitting
 still, without going in to ask them one at a time. Inside a project, what
@@ -127,6 +154,7 @@ moment. `push`, `pop` and `park` leave one without anybody asking.
 ```sh
 vivac save "before touching the adapter" --next "extract the validator"
 vivac restore v14   rebuilds the stack and says what changed since
+vivac vivacs        the stops, latest first
 ```
 
 `restore` **never touches the working tree**. Mixing context navigation with
@@ -280,6 +308,15 @@ An alias from another tree is not addressable on its own, so `why` takes
 matches two projects is refused rather than guessed, because answering about
 the wrong tree looks exactly like answering about the right one.
 
+The browser face came after those and answers the same way. It opens from any
+directory, including one with no tree above it at all: the roots come from that
+same registry, and where you are standing decides only where `/` lands -- on
+the project you are inside, or on the index of all of them when you are inside
+none. A project answers to its own name while that name belongs to one project
+and to the id of its first event always, which is the form a saved link should
+carry. A name two projects share resolves to neither and returns the page that
+lets you pick, for the reason `--project` refuses to guess on the command line.
+
 The `brief` is deterministic by contract: same log, same `--now`, same bytes.
 The spine — the path from the root to the focus — is **never truncated**: if it
 does not fit the budget it comes out anyway, and the warning says that what is
@@ -287,20 +324,34 @@ left over is tree, not render.
 
 Measured on this machine at ten thousand nodes, 200 calls per cell, p50 / p99
 in milliseconds, on a tree with its derived index in place — which is what a
-tree has after the first read of it. The CLI column starts a fresh process
-every time and includes the ~8.5 ms that costs; the MCP column is a resident
+tree has after the first read of it. The CLI columns start a fresh process
+every time and include the ~8.5 ms that costs; the MCP columns are a resident
 server, which is how an agent calls.
 
-| | CLI | MCP |
-|---|---|---|
-| `brief` | 16.9 / 23.7 | 1.1 / 2.1 |
-| `why` | 17.6 / 23.5 | 3.7 / 5.8 |
-| `open` | 19.3 / 25.8 | 14.6 / 19.5 |
-| `find` | 17.1 / 23.6 | 7.3 / 10.6 |
-| `tree` | 21.7 / 41.3 | not a tool |
+**And it is measured twice, because a number was hiding a variable.** What
+`open` and `tree` cost is governed less by how many nodes a tree holds than by
+how many of them are still open, and the shape of the tree is the one parameter
+these numbers never named. So both shapes, at one size:
 
-A write is p99 1.1 ms at that size, and it does not grow with the tree: over
-MCP the server appends against the tree it is already holding.
+| | CLI, 2% open | CLI, 50% open | MCP, 2% open | MCP, 50% open |
+|---|---|---|---|---|
+| `brief` | 15.2 / 28.2 | 24.8 / 34.0 | 0.2 / 0.4 | 3.2 / 3.7 |
+| `why` | 17.7 / 25.1 | 17.5 / 25.6 | 2.8 / 3.6 | 2.8 / 3.9 |
+| `open` | 15.4 / 19.7 | **50.9 / 58.5** | 0.8 / 1.0 | 31.4 / 38.7 |
+| `find` | 20.3 / 23.4 | 19.6 / 26.9 | 5.7 / 7.1 | 5.6 / 9.8 |
+| `tree` | 18.1 / 20.0 | **46.6 / 60.8** | not a tool | not a tool |
+
+**The performance pillar gives a read 50 ms at ten thousand nodes, and the
+right-hand shape misses it.** `open` misses it at the median. That is not
+something a release broke: it was equally true of the numbers printed here
+before, which simply never said which shape they were taken on, so nobody could
+have checked. The tree this project keeps of itself is 38% open, which is the
+wrong side of that table. Whether a tree stays that open on the way to ten
+thousand nodes is not measured, and saying so costs less than assuming it
+either way.
+
+A write is p99 0.6 ms at that size over MCP, and it does not grow with the
+tree: the server appends against the tree it is already holding.
 
 **The CLI column used to read worse, and the tool was not.** The fixture those
 numbers came from could never keep a derived index. The index is only written
@@ -313,12 +364,13 @@ Side by side on one machine, one tree, one size, with nothing different but
 whether the index could be kept: `tree` came back 50.7 / 62.8 without it and
 22.4 / 29.4 with it. `why` came back 50.5 / 95.3 against 17.5 / 23.5.
 
-So the reading budget was never being missed. `tree` was reported at 51.3 at the
-tail, a hair over the 50 ms ceiling, and that was enough to open a question about
-whether the ceiling was the right one. It was: the number was taken on a tree
-that cannot cache. What did come out of chasing it is real and stayed -- most of
-the cost that was there was one write syscall per line of output, and the crate
-now buffers and flushes once.
+That chase concluded the reading budget was never being missed, and it was the
+right answer to a smaller question than the one worth asking. The 51.3 ms tail
+it set out to explain really did come from a tree that could not cache. The
+ceiling is missed anyway once half the tree is open, which nothing was looking
+for, because the shape was never a number anybody wrote down. What did come out
+of the chase is real and stayed: most of the cost was one write syscall per line
+of output, and the crate now buffers and flushes once.
 
 Not there yet: team mode.
 
@@ -350,6 +402,11 @@ no end-of-session event — so the stop is only saved if the tree changed since
 the previous one: a stop that repeats identically is not a stop, it is a log.
 Both stay quiet and exit 0 where there is no `.vivac/`, so they can be left in
 the global configuration without getting in the way of other projects.
+
+What they call is `vivac session start` and `vivac session end`, which are
+commands like any other. `--hook` is what makes them speak the hook protocol
+rather than to a person, so the same behaviour is available to anything that is
+not Claude Code, and the pair can be run by hand to see what a hook would do.
 
 ## MCP
 
@@ -402,7 +459,7 @@ the performance pillar sets for writing a node, and no process design brings
 that down.
 
 Over MCP the server folds the tree once and keeps it, so a write is an
-append against a tree that is already there: **1.1 ms at p99 over ten
+append against a tree that is already there: **0.6 ms at p99 over ten
 thousand nodes**, and flat in the size of the tree, because what used to grow
 with it was the fold. A read straight after a write no longer pays for a
 second one either.
@@ -468,6 +525,10 @@ filtered view `tree` shows a person — the JSON ignores `--all` and carries the
 closed and the parked as well, because an export that quietly drops what
 finished is not one.
 
+`vivac import <tree.json>` is the way back in, and it is how the trees that
+predate this binary got here: it reads a tree in that JSON shape and writes the
+log a tree of that shape would have written.
+
 The log underneath, `.vivac/events`, is plain JSON lines and nothing stops you
 reading it. What is not written down anywhere is what a line means, and that is
 on purpose rather than an oversight: the format is still moving, which is what
@@ -478,8 +539,12 @@ able to move.
 
 The project is in `0.x`, and while it is, **the minor is the position that
 breaks**: `0.3.x` to `0.4.0` may change a public surface, and a patch never
-does. The rule has already been spent once — `0.3.0` stopped reading the logs
-`0.1.x` and `0.2.x` wrote, and went out as a minor for that reason.
+does. The rule has been spent four times — `0.3.0` stopped reading the logs `0.1.x`
+and `0.2.x` wrote, `0.4.0` made `find` hand back handles rather than whole
+nodes, `0.5.0` began refusing a write that opens a fenced code block, and
+`0.6.0` made `open` hand back fronts rather than whole nodes. Each went out as
+a minor for that reason, and counting them here is cheaper than counting them
+once and letting the sentence go stale.
 
 **The format on disk is not settled either**, and that is what keeps `1.0`
 away. It was going to settle by moving into SQLite; the measurement rejected
