@@ -86,6 +86,7 @@ baskets
 be
 becomes
 before
+began
 beginning
 below
 between
@@ -106,6 +107,7 @@ bool
 boot
 born
 both
+bottom
 bound
 boundary
 bounds
@@ -260,6 +262,7 @@ deny
 depth
 deref
 derive
+descend
 descendants
 description
 deserialize
@@ -943,6 +946,7 @@ serves
 serving
 session
 set
+several
 sha
 shannon
 shape
@@ -1226,4 +1230,5 @@ wrote
 yet
 yoe
 you
+your
 zip
