@@ -5,9 +5,23 @@
 //! about the project**: the store is fine and what is wrong is the work,
 //! which was called finished without being finished. Both exit non-zero
 //! --this belongs in CI-- but they are not counted together.
+//!
+//! `--gates` adds a third category, and it follows the same split: the store
+//! is fine and **nothing is delivering it**. `d350`/`d351` settled what that
+//! means for `MODEL.md` Tier 0 -- the one gate that matters is whether the
+//! brief reaches the agent at all, the MCP is not a gate, and it is measured
+//! off each project's own log rather than the host's configuration: the hook
+//! writes `session.started` when it fires.
+//!
+//! A project reports here when every node it holds was written before the
+//! first session was ever opened -- including a log that never opened one at
+//! all. "Zero openings, ever" is not the criterion, and a real tree is why:
+//! it held one opening, eight days *after* its last node. That single late
+//! opening cleared a "never opened" filter while every node in the tree had
+//! in fact been written with no brief in front of anybody.
 
 use crate::args::Args;
-use crate::event::State;
+use crate::event::{Body, State};
 use crate::model::Tree;
 use crate::output::outln;
 
@@ -72,19 +86,65 @@ pub fn check(a: &Tree, args: &Args) -> Result<i32, crate::failure::Failure> {
     store.sort();
     project.sort();
 
+    // Read only when asked: without `--gates` this never touches the
+    // registry or any other project's log, and the JSON and the exit code
+    // stay exactly what they were before this flag existed.
+    let mut gates: Vec<String> = Vec::new();
+    if args.has("gates") {
+        if let Some(store_dir) = crate::store::store_dir() {
+            for root in crate::registry::roots(&store_dir) {
+                let Ok(project_store) = crate::store::Store::open(root.clone()) else {
+                    continue;
+                };
+                let Ok((events, _)) = project_store.read_all() else {
+                    continue;
+                };
+                let mut nodes = 0u64;
+                let mut before_first_opening = 0u64;
+                let mut opened = false;
+                for e in &events {
+                    match &e.payload {
+                        Body::NodeCreated { .. } => {
+                            nodes += 1;
+                            if !opened {
+                                before_first_opening += 1;
+                            }
+                        }
+                        Body::SessionStarted { .. } => opened = true,
+                        _ => {}
+                    }
+                }
+                if nodes > 0 && before_first_opening == nodes {
+                    gates.push(format!(
+                        "{}: {} nodes written, and not one after a session ever opened",
+                        crate::render::project_name(&root),
+                        nodes
+                    ));
+                }
+            }
+        }
+        gates.sort();
+    }
+    let ok = store.is_empty() && project.is_empty() && gates.is_empty();
+
     if args.has("json") {
+        let mut payload = serde_json::json!({
+            "store": store,
+            "project": project,
+            "ok": ok,
+        });
+        if args.has("gates") {
+            if let serde_json::Value::Object(fields) = &mut payload {
+                fields.insert("gates".to_string(), serde_json::json!(gates));
+            }
+        }
         outln!(
             "{}",
-            serde_json::to_string_pretty(&serde_json::json!({
-                "store": store,
-                "project": project,
-                "ok": store.is_empty() && project.is_empty(),
-            }))
-            .map_err(std::io::Error::other)?
+            serde_json::to_string_pretty(&payload).map_err(std::io::Error::other)?
         );
     } else {
         outln!();
-        if store.is_empty() && project.is_empty() {
+        if ok {
             outln!("  No findings. {} nodes checked.", a.total());
             outln!();
         }
@@ -113,6 +173,20 @@ pub fn check(a: &Tree, args: &Args) -> Result<i32, crate::failure::Failure> {
             outln!("  stayed open, or close it deliberately with --force.");
             outln!();
         }
+        if !gates.is_empty() {
+            outln!(
+                "  GATES ({})  <- the store is fine; nothing delivers it",
+                gates.len()
+            );
+            outln!();
+            for m in &gates {
+                outln!("      {m}");
+            }
+            outln!();
+            outln!("  A tree nobody opens is a tree nobody reads. Run  vivac hooks  inside");
+            outln!("  that project and paste what it prints.");
+            outln!();
+        }
     }
-    Ok(i32::from(!(store.is_empty() && project.is_empty())))
+    Ok(i32::from(!ok))
 }

@@ -96,7 +96,8 @@ const USAGE: &str = r#"vivac - provenance of work
     vivac changes [--since <v>|manual]        what moved since a stop, or
                                               since the last one you made
     vivac stats                               numbers
-    vivac check                               invariants; belongs in CI
+    vivac check [--gates]                     invariants; belongs in CI
+          --gates    also every tree on this machine that nobody opens
 
   Session
 
@@ -228,7 +229,10 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         "init" | "hooks" | "mcp" => &[],
         // The reads that speak JSON, spelled out. No shorthand: a shorthand
         // is what let the brief claim it for two releases.
-        "open" | "stack" | "parked" | "triage" | "stats" | "vivacs" | "check" => &["json"],
+        "open" | "stack" | "parked" | "triage" | "stats" | "vivacs" => &["json"],
+        // `--gates` is its own on top of `--json`: the machine-wide scan
+        // `d351` adds is nothing the other reads in this arm take.
+        "check" => &["json", "gates"],
         // `--full` is its own on top of `--json`, so `why` cannot share the
         // arm above without granting every other read a flag it does not
         // read. `--project` is `d273`'s second half: it answers from
