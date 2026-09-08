@@ -7,9 +7,13 @@
 # thirds of a release has stopped sorting anything, and a reader asking what
 # changed has to read all of it to find out.
 #
-# The order of this list is the order of the sections. `filter_commits` stays
-# off, which is the default, so a type missing from here still reaches the
-# changelog ungrouped -- it can lose its section, never its entry.
+# The order of this list is the order of the sections, and nothing here skips.
+# `skip` looked right for the types nobody outside the repository can see, and
+# it is the wrong tool: it drops the entry without dropping the release, so a
+# version whose commits were all skipped ships with no line here at all -- not
+# even a heading. `filter_commits` stays off too, which is the default, so a
+# type missing from this list still reaches the changelog ungrouped. Between
+# them: an entry can lose its section, never its release.
 
 [changelog]
 commit_parsers = [
@@ -20,8 +24,10 @@ commit_parsers = [
     { message = "^refactor", group = "Changed" },
     { message = "^build", group = "Changed" },
     { message = "^docs", group = "Documentation" },
-    # Invisible from outside the repository: a test, a workflow, a bump of
-    # something the build uses. `build` is not here on purpose -- a dependency
-    # or an MSRV change is felt by whoever installs this.
-    { message = "^(test|ci|chore)", skip = true },
+    # Invisible from outside the repository, and grouped rather than skipped:
+    # skipping is a property of the changelog and not of the release, so a
+    # release whose commits were all skipped gets a version number that this
+    # file never mentions. `build` is not in here on purpose -- a dependency
+    # or a language version is felt by whoever installs this.
+    { message = "^(test|ci|chore)", group = "Internal" },
 ]
