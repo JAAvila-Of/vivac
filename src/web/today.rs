@@ -8,27 +8,174 @@
 
 use super::{alias_link, escape};
 use crate::changes::{self, Boundary, Changed};
+use crate::event::Kind;
 use crate::event::{Event, State};
 use crate::model::{Node, Tree};
 
-/// The index: a link per project, the `name` as its text and the `id` in
-/// its `href`. Reached only with two or more projects -- with exactly one,
-/// `handle` redirects there instead of listing it (`d145`).
-pub(super) fn index_page(projects: &[crate::project::Project]) -> String {
-    let items: String = projects
-        .iter()
-        .map(|p| {
-            format!(
-                "<li><a href=\"/p/{}/\">{}</a></li>\n",
-                escape(&p.id),
-                escape(&p.name)
-            )
-        })
-        .collect();
+/// One project as the index sees it: the four fields `d200` admitted, and
+/// the link to reach it by.
+///
+/// Four and no more, and each one was argued against the promise: the name
+/// so you know which it is, the focus so you know what it was doing, the
+/// blocked count because a blocked front is the commonest reason a project
+/// stops without anyone noticing, and the silence because that is the whole
+/// question. `d200` says a counter that cannot answer the promise does not
+/// get in, so nothing else does.
+struct Line {
+    href: String,
+    name: String,
+    focus: Option<String>,
+    blocked: usize,
+    quiet: Option<i64>,
+}
+
+/// Reads one project into a [`Line`], re-folding it if the log moved.
+///
+/// The link prefers the ULID (`d374`): it is the form that keeps working
+/// when a second project of the same name joins the registry, and the index
+/// is exactly the page that shows both of them at once. A tree with no first
+/// event has no ULID yet, and falls back to the readable form -- which is
+/// unambiguous or it would not be reachable from here anyway.
+fn line(p: &mut crate::project::Project) -> Line {
+    // Both read before the fold is borrowed, which is what the refresh below
+    // needs `p` mutably for.
+    let name = p.name.clone();
+    let href = p.slug.clone();
+    let Ok((ctx, log)) = p.current_with_log() else {
+        // A store that cannot be read is still a project the reader has:
+        // saying so is the answer, and dropping the row would hide it.
+        return Line {
+            href,
+            name,
+            focus: None,
+            blocked: 0,
+            quiet: None,
+        };
+    };
+    let href = log.first().map(|e| e.id.clone()).unwrap_or(href);
+    let tree = &ctx.tree;
+    let focus = tree
+        .focus()
+        .map(|n| format!("{}  {}", n.alias(), n.title(tree)));
+    let blocked = tree
+        .nodes_iter()
+        .filter(|n| n.kind == Kind::Question && n.state.is_open() && n.blocks)
+        .count();
+    let quiet = log
+        .last()
+        .and_then(|e| crate::clock::days_between(&e.ts, &crate::clock::now_rfc3339()));
+    Line {
+        href,
+        name,
+        focus,
+        blocked,
+        quiet,
+    }
+}
+
+/// How long the silence reads. Days and not hours: the promise is about a
+/// project that has been still for *days*, and an hour count would invite
+/// reading this page for movement it is not measuring.
+fn silence(days: Option<i64>) -> String {
+    match days {
+        None => "never written to".to_string(),
+        Some(d) if d <= 0 => "moved today".to_string(),
+        Some(1) => "moved yesterday".to_string(),
+        Some(d) => format!("moved {d} days ago"),
+    }
+}
+
+/// One row, shared by the index and by the page that asks which of two
+/// projects you meant. **No path ever appears here.** The security pillar
+/// allows a project's name across this boundary and nothing else, and a real
+/// path carries the name of whoever owns the machine.
+fn project_row(l: &Line) -> String {
+    let focus = match &l.focus {
+        Some(f) => format!("<p class=\"title\">{}</p>", escape(f)),
+        None => "<p class=\"note\">no focus</p>".to_string(),
+    };
+    // Zero blocked fronts is said by not saying it. The count earns its
+    // place on the row when it is the reason a project stopped; printed as
+    // `0` on every row it would only be furniture.
+    let blocked = if l.blocked == 0 {
+        String::new()
+    } else if l.blocked == 1 {
+        " &middot; 1 blocked".to_string()
+    } else {
+        format!(" &middot; {} blocked", l.blocked)
+    };
     format!(
-        "<!doctype html>\n\
-         <html><head><meta charset=\"utf-8\"></head>\n\
-         <body><ul>\n{items}</ul></body></html>\n"
+        "<li><span class=\"alias\"><a href=\"/p/{href}/\">{name}</a></span>
+         {focus}<p class=\"note\">{quiet}{blocked}</p></li>
+",
+        href = escape(&l.href),
+        name = escape(&l.name),
+        quiet = silence(l.quiet),
+    )
+}
+
+/// The page shell both listings share.
+fn listing(title: &str, promise: &str, rows: String, footer: &str) -> String {
+    format!(
+        "<!doctype html>
+         <html lang=\"en\"><head><meta charset=\"utf-8\">
+         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
+         <title>{t}</title>
+         <style>
+{WEB_CSS}</style></head>
+         <body><div class=\"page\">
+         <header><h1>{t}</h1>
+         <p class=\"promise\">{promise}</p></header>
+         <main><ul class=\"nodes\">
+{rows}</ul></main>
+         <footer>{footer}</footer>
+         </div></body></html>
+",
+        t = escape(title),
+    )
+}
+
+/// The index of projects (`d199`, `d200`).
+///
+/// Its promise, written before it was built and kept here where it can be
+/// read against what the page does: **which project moved, and which one has
+/// been sitting still, without going in to ask.** It passes the burden of
+/// proof the same way the web did as a whole -- the CLI answers this already,
+/// project by project, and still does not arrive, because the cost is not
+/// reading but knowing where to look. Eight `cd` is what "being available is
+/// not arriving" looks like.
+///
+/// Reached when the working directory is not inside a project (`d199`). It
+/// used to be a bare `<ul>` of links with no stylesheet, no title and no
+/// viewport, which answered nothing a `cd` did not.
+pub(super) fn index_page(projects: &mut [crate::project::Project]) -> String {
+    let rows: String = projects.iter_mut().map(|p| project_row(&line(p))).collect();
+    listing(
+        "Projects",
+        "Which project moved, and which one has been sitting still.",
+        rows,
+        "The same reading in a terminal, one project at a time:          <code>vivac open</code>",
+    )
+}
+
+/// The answer to a name more than one project carries (`d374`).
+///
+/// It refuses rather than guesses, which is what `registry::resolve` already
+/// does for `--project` on the CLI. What the web can do and the command
+/// cannot is *say which is which without naming a path*: the CLI concluded
+/// that two candidates sharing a name have no path-free way to tell apart,
+/// and that is true of a one-line error and false of a page -- the focus and
+/// the silence separate them, and neither is a path.
+pub(super) fn choose_page(projects: &mut [crate::project::Project], which: &[usize]) -> String {
+    let rows: String = which
+        .iter()
+        .map(|&i| project_row(&line(&mut projects[i])))
+        .collect();
+    listing(
+        "Which one?",
+        "More than one project goes by that name, so this page picks none of them.",
+        rows,
+        "The link under each name is permanent: it carries the project's own          id, so it keeps opening this tree even when another of the same name          joins.",
     )
 }
 

@@ -14,6 +14,7 @@ added
 addr
 adds
 admit
+admitted
 advice
 after
 ag
@@ -81,9 +82,11 @@ automatic
 aws
 back
 backslash
+backwards
 bare
 baskets
 be
+beats
 becomes
 before
 began
@@ -160,6 +163,8 @@ check
 checked
 child
 children
+choice
+choose
 civil
 claim
 claimed
@@ -186,7 +191,6 @@ cmp
 code
 collect
 collections
-collisions
 comb
 come
 comes
@@ -233,6 +237,7 @@ current
 cursor
 cut
 cwd
+d200
 dash
 dashes
 data
@@ -349,6 +354,7 @@ expand
 expect
 expected
 explains
+explicit
 extend
 extension
 extra
@@ -390,6 +396,7 @@ focus
 focused
 fold
 folding
+footer
 for
 force
 forced
@@ -422,6 +429,7 @@ global
 goal
 goals
 goes
+going
 good
 got
 governing
@@ -431,6 +439,7 @@ groups
 grown
 guard
 guarded
+guess
 guessed
 half
 hand
@@ -438,6 +447,7 @@ handle
 hands
 hang
 hangs
+happens
 has
 hash
 hashes
@@ -460,8 +470,11 @@ home
 hook
 hooks
 host
+hours
 how
+however
 hr
+href
 hrefs
 hs
 html
@@ -518,6 +531,7 @@ join
 json
 just
 jwt
+keep
 key
 keys
 kids
@@ -525,6 +539,7 @@ kill
 kind
 known
 label
+landing
 lane
 last
 late
@@ -532,6 +547,7 @@ later
 launched
 le
 leaf
+leap
 leave
 leaves
 left
@@ -551,6 +567,7 @@ links
 list
 listed
 listener
+listing
 lists
 literal
 literals
@@ -615,6 +632,7 @@ missing
 mod
 model
 modified
+month
 more
 move
 moved
@@ -637,6 +655,7 @@ ne
 nearest
 needle
 needs
+negative
 nested
 net
 never
@@ -742,6 +761,7 @@ payload
 pending
 per
 percent
+permanent
 persist
 persists
 person
@@ -782,6 +802,7 @@ process
 proj
 project
 projects
+promise
 promote
 promoted
 promoting
@@ -862,7 +883,6 @@ rescued
 rescuing
 resident
 resolve
-resolved
 resolves
 respects
 respond
@@ -952,6 +972,7 @@ shannon
 shape
 shaped
 share
+shared
 short
 show
 shown
@@ -959,6 +980,7 @@ shows
 sibling
 siblings
 sid
+side
 sig
 sign
 silence
@@ -969,7 +991,6 @@ sits
 six
 size
 skip
-skipped
 skips
 slash
 slashes
@@ -977,6 +998,8 @@ sleep
 slice
 slot
 slots
+slug
+slugs
 snapshot
 snippet
 so
@@ -1000,6 +1023,7 @@ src
 stable
 stack
 stale
+stamp
 standard
 standing
 stands
@@ -1053,11 +1077,11 @@ table
 tag
 tail
 take
-taken
 takes
 target
 task
 tcp
+tells
 temp
 term
 terminal
@@ -1129,6 +1153,7 @@ tt
 turn
 twice
 twin
+twins
 two
 type
 u128
@@ -1138,6 +1163,7 @@ u64
 u8
 ulid
 ulids
+unambiguous
 unchanged
 unclaimed
 under
@@ -1231,4 +1257,5 @@ yet
 yoe
 you
 your
+zero
 zip
