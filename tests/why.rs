@@ -226,3 +226,109 @@ fn the_plain_read_is_full_with_its_three_fields_removed() {
          plain={plain}\nfull={full}"
     );
 }
+
+/// `d330`: the plain, non-JSON render of `why` clips an ancestor's body so
+/// that reading a deep node no longer drags eleven whole ancestor bodies
+/// along with it. `--full` keeps giving the body of every step whole, and
+/// the node actually asked about is never clipped, in either mode.
+///
+/// Each field carries its own open/close marker pair around filler long
+/// enough to cross the clip length, so a bug that clips the wrong field, or
+/// clips a field partway through the open marker, fails for a distinct
+/// reason instead of one test standing in for three.
+const ANCESTOR_PADDING: &str =
+    "filler word after filler word after filler word after filler word after filler word after filler word after filler word after filler word after";
+fn long_field(tag: &str) -> String {
+    format!("{tag}-open {ANCESTOR_PADDING} {tag}-close")
+}
+
+/// The root carries a why, a note and an outcome that all run well past the
+/// clip length used for an ancestor's body. The target is a plain child
+/// added under the root by id, once the root itself has already closed, so
+/// closing the root does not have to fight the stack for focus.
+fn seeded_with_long_bodies(name: &str) -> Sandbox {
+    let c = Sandbox::new_seeded(name);
+    c.ok(&[
+        "push",
+        "Root ancestor with a long body",
+        "--why",
+        &long_field("anc-why"),
+    ]);
+    c.ok(&["note", "1", &long_field("anc-note")]);
+    c.ok(&["done", "1", &long_field("anc-outcome")]);
+    c.ok(&[
+        "add",
+        "The target node",
+        "--parent",
+        "1",
+        "--why",
+        &long_field("tgt-why"),
+    ]);
+    c.ok(&["note", "2", &long_field("tgt-note")]);
+    c.ok(&["done", "2", &long_field("tgt-outcome")]);
+    c
+}
+
+#[test]
+fn full_prints_the_ancestor_body_whole() {
+    let c = seeded_with_long_bodies("ancestor-full");
+    let s = c.ok(&["why", "2", "--full"]);
+    assert!(
+        s.contains("anc-why-close"),
+        "--full dropped the tail of the ancestor's why:\n{s}"
+    );
+    assert!(
+        s.contains("anc-note-close"),
+        "--full dropped the tail of the ancestor's note:\n{s}"
+    );
+    assert!(
+        s.contains("anc-outcome-close"),
+        "--full dropped the tail of the ancestor's outcome:\n{s}"
+    );
+}
+
+#[test]
+fn without_full_the_ancestor_body_is_truncated() {
+    let c = seeded_with_long_bodies("ancestor-clipped");
+    let s = c.ok(&["why", "2"]);
+    assert!(
+        s.contains("anc-why-open"),
+        "the start of the ancestor's why should still be there:\n{s}"
+    );
+    assert!(
+        !s.contains("anc-why-close"),
+        "the ancestor's why should have been clipped:\n{s}"
+    );
+    assert!(
+        !s.contains("anc-note-close"),
+        "the ancestor's note should have been clipped:\n{s}"
+    );
+    assert!(
+        !s.contains("anc-outcome-close"),
+        "the ancestor's outcome should have been clipped:\n{s}"
+    );
+    assert!(
+        s.contains("..."),
+        "a clipped body needs its own truncation mark visible:\n{s}"
+    );
+}
+
+#[test]
+fn the_requested_node_prints_whole_with_or_without_full() {
+    let c = seeded_with_long_bodies("target-whole");
+    for args in [&["why", "2"][..], &["why", "2", "--full"][..]] {
+        let s = c.ok(args);
+        assert!(
+            s.contains("tgt-why-close"),
+            "{args:?} clipped the requested node's own why:\n{s}"
+        );
+        assert!(
+            s.contains("tgt-note-close"),
+            "{args:?} clipped the requested node's own note:\n{s}"
+        );
+        assert!(
+            s.contains("tgt-outcome-close"),
+            "{args:?} clipped the requested node's own outcome:\n{s}"
+        );
+    }
+}
