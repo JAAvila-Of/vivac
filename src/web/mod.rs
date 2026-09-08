@@ -27,7 +27,7 @@ mod why;
 
 use crate::failure::{Failure, R};
 use crate::output::{flush, outln};
-use crate::project::Registry;
+use crate::project::{Named, Registry};
 use gate::{Denial, Gate, Incoming, Verdict, SESSION_COOKIE};
 use std::path::PathBuf;
 
@@ -206,7 +206,39 @@ fn redirect_with(request: tiny_http::Request, location: &str, extra: Option<tiny
     let _ = request.respond(response);
 }
 
-fn handle(gate: &mut Gate, registry: &mut Registry, request: tiny_http::Request) {
+/// The two answers that are not "one project", shared by the three routes
+/// under `/p/<id>/` so each of them only has to say what it does with the
+/// one it got (`d374`).
+///
+/// An id the registry does not carry is a 404 and the id does not come back
+/// in the body. A name more than one root carries is `300 Multiple Choices`,
+/// which is the one status that means exactly this: the server understood,
+/// and is handing the choice back rather than making it. The status matters
+/// beyond politeness here -- one of this product's two audiences reads codes,
+/// not pages, and a 200 would tell it the question had been answered.
+fn not_one(request: tiny_http::Request, registry: &mut Registry, named: Named) {
+    match named {
+        Named::Ambiguous(which) => {
+            let page = today::choose_page(registry.all(), &which);
+            respond(request, 300, HTML, page)
+        }
+        _ => respond(
+            request,
+            404,
+            TEXT,
+            "not found
+"
+            .to_string(),
+        ),
+    }
+}
+
+fn handle(
+    gate: &mut Gate,
+    registry: &mut Registry,
+    landing: Option<&str>,
+    request: tiny_http::Request,
+) {
     let path = request.url().to_string();
     let host = header_value(request.headers(), "host").map(str::to_string);
     let origin = header_value(request.headers(), "origin").map(str::to_string);
@@ -222,16 +254,26 @@ fn handle(gate: &mut Gate, registry: &mut Registry, request: tiny_http::Request)
     match gate.admit(&incoming) {
         Verdict::Boot => boot_redirect(request, gate.token()),
         Verdict::Serve => match route(&path) {
-            Route::Index => match registry.projects() {
-                [one] => redirect(request, &format!("/p/{}/", one.id)),
-                many => respond(request, 200, HTML, today::index_page(many)),
+            // `d199`: `/` is still the index, and what changed is where the
+            // redirect goes -- from "the only project" to "the one the
+            // working directory is inside, if it is inside one". Started
+            // from anywhere else, the index is the answer even with a single
+            // project, because then the reader did not come here from a
+            // project and has not said which one they meant.
+            Route::Index => match landing {
+                Some(id) => redirect(request, &format!("/p/{}/", id)),
+                None => {
+                    let page = today::index_page(registry.all());
+                    respond(request, 200, HTML, page)
+                }
             },
-            Route::Today(id) => match registry.by_id(id) {
-                Some(project) => {
+            Route::Today(id) => match registry.named(id) {
+                Named::One(i) => {
+                    let project = registry.at(i);
                     // Cloned before the refresh below borrows the project
                     // mutably, which is the same dance `mcp` does.
                     let name = project.name.clone();
-                    let key = project.id.clone();
+                    let key = id.to_string();
                     match project.current_with_log() {
                         Ok((ctx, log)) => {
                             let page = today::today_page(&key, &name, &ctx.tree, log);
@@ -251,15 +293,16 @@ fn handle(gate: &mut Gate, registry: &mut Registry, request: tiny_http::Request)
                         ),
                     }
                 }
-                None => respond(request, 404, TEXT, "not found\n".to_string()),
+                other => not_one(request, registry, other),
             },
             // The lineage of one node (`WEB.md` §3.2). Same dance as
             // `Today` above, and the same reason for saying nothing in the
             // body when the store cannot be read.
-            Route::Why(id, node) => match registry.by_id(id) {
-                Some(project) => {
+            Route::Why(id, node) => match registry.named(id) {
+                Named::One(i) => {
+                    let project = registry.at(i);
                     let name = project.name.clone();
-                    let key = project.id.clone();
+                    let key = id.to_string();
                     match project.current_with_log() {
                         Ok((ctx, log)) => match why::why_page(&key, &name, &ctx.tree, log, node) {
                             Some(page) => respond(request, 200, HTML, page),
@@ -277,15 +320,16 @@ fn handle(gate: &mut Gate, registry: &mut Registry, request: tiny_http::Request)
                         ),
                     }
                 }
-                None => respond(request, 404, TEXT, "not found\n".to_string()),
+                other => not_one(request, registry, other),
             },
             // The whole tree, drawn (`WEB.md` §3.6). Same dance as `Today`
             // above, and the same reason for saying nothing in the body
             // when the store cannot be read.
-            Route::Tree(id) => match registry.by_id(id) {
-                Some(project) => {
+            Route::Tree(id) => match registry.named(id) {
+                Named::One(i) => {
+                    let project = registry.at(i);
                     let name = project.name.clone();
-                    let key = project.id.clone();
+                    let key = id.to_string();
                     match project.current() {
                         Ok(ctx) => {
                             respond(request, 200, HTML, tree::tree_page(&key, &name, &ctx.tree))
@@ -298,7 +342,7 @@ fn handle(gate: &mut Gate, registry: &mut Registry, request: tiny_http::Request)
                         ),
                     }
                 }
-                None => respond(request, 404, TEXT, "not found\n".to_string()),
+                other => not_one(request, registry, other),
             },
             Route::NotFound => respond(request, 404, TEXT, "not found\n".to_string()),
         },
@@ -339,7 +383,11 @@ fn open_browser(url: &str) {
 
 /// Binds `127.0.0.1` -- and nothing else; there is no flag for another
 /// address -- serves `roots`, and blocks until the process is killed.
-pub fn serve(roots: Vec<PathBuf>, port: Option<u16>, open: bool) -> R {
+/// `cwd_root` is the project the working directory sits inside, if it sits
+/// inside one. It is where `/` lands (`d199`); `None` means the server was
+/// started from somewhere that is not a project, which is the case the whole
+/// decision exists for, and then `/` is the index.
+pub fn serve(roots: Vec<PathBuf>, cwd_root: Option<PathBuf>, port: Option<u16>, open: bool) -> R {
     let server = tiny_http::Server::http(("127.0.0.1", port.unwrap_or(0)))
         .map_err(|e| Failure::Io(std::io::Error::other(e)))?;
     let bound_port = server
@@ -352,6 +400,23 @@ pub fn serve(roots: Vec<PathBuf>, port: Option<u16>, open: bool) -> R {
     // the gate's `Host`/`Origin` checks are pinned to it.
     let mut gate = Gate::new(bound_port)?;
     let mut registry = Registry::open(roots)?;
+
+    // Resolved once: the registry does not change while the server is up,
+    // and canonicalizing per request would put a filesystem call on the one
+    // path the gate is watching. Prefers the ULID for the same reason the
+    // index does -- the landing link is the one a person bookmarks.
+    let landing: Option<String> = cwd_root.and_then(|c| {
+        let key = std::fs::canonicalize(&c).unwrap_or(c);
+        registry
+            .all()
+            .iter()
+            .find(|p| std::fs::canonicalize(&p.root).unwrap_or_else(|_| p.root.clone()) == key)
+            .map(|p| {
+                p.ulid()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| p.slug.clone())
+            })
+    });
 
     let url = gate.boot_url();
     outln!("  vivac web listening on http://127.0.0.1:{bound_port}");
@@ -369,7 +434,7 @@ pub fn serve(roots: Vec<PathBuf>, port: Option<u16>, open: bool) -> R {
     // one request, and there is exactly one user of this process.
     loop {
         let request = server.recv().map_err(Failure::Io)?;
-        handle(&mut gate, &mut registry, request);
+        handle(&mut gate, &mut registry, landing.as_deref(), request);
     }
 }
 

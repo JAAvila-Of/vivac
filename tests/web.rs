@@ -41,8 +41,9 @@ impl Server {
 
     /// Like `start`, but naming the roots to serve with one `--project` per
     /// directory, so a server can be asked to serve more than the one it
-    /// starts in. `dir` is still the working directory: `vivac web` needs a
-    /// tree at or above its cwd regardless of what `--project` names.
+    /// starts in. `dir` is still the working directory, and since `d199`
+    /// that is all it is: `vivac web` no longer needs a tree at or above its
+    /// cwd, and what the cwd decides now is only where `/` lands.
     fn start_serving(
         dir: &std::path::Path,
         home: &std::path::Path,
@@ -275,10 +276,13 @@ impl UpMany {
     }
 }
 
+/// Started from a directory that is not any of them, because since `d199`
+/// that is what reaches the index: from inside a project, `/` lands on that
+/// project instead of listing.
 fn up_many(names: &[&str]) -> UpMany {
     let sandboxes: Vec<Sandbox> = names.iter().map(|n| Sandbox::new_seeded(n)).collect();
     let roots: Vec<&std::path::Path> = sandboxes.iter().map(|s| s.0.as_path()).collect();
-    let server = Server::start_serving(&sandboxes[0].0, sandboxes[0].global_home(), &roots);
+    let server = Server::start_serving(&std::env::temp_dir(), sandboxes[0].global_home(), &roots);
     UpMany {
         server,
         _sandboxes: sandboxes,
@@ -1120,4 +1124,199 @@ fn a_browser_that_only_carries_the_cookie_can_walk_from_today_to_the_tree() {
         });
     let a = call(s.port(), &tree_link, &[("Host", s.host()), ("Cookie", jar)]);
     assert_eq!(a.status, 200, "{} -> {}", tree_link, a.body);
+}
+
+// ---------------------------------------------------------------------------
+// `d199`, `d200` and `d374`: the index of projects, and what a URL's `<id>`
+// names. Everything below is about the two ways in and the answer to an
+// ambiguous one.
+// ---------------------------------------------------------------------------
+
+/// The id the registry keys a project by, read the way the registry reads it:
+/// the id of its first event. Not `config.project_id`, which `f266`
+/// disqualified because a missing `config` is silently regenerated.
+fn first_event_id(root: &std::path::Path) -> String {
+    let log = std::fs::read_to_string(root.join(".vivac").join("events")).unwrap();
+    let line = log.lines().next().expect("a tree with no events has no id");
+    let at = line.find("\"id\":\"").expect("no id on the first event") + 6;
+    let rest = &line[at..];
+    rest[..rest.find('"').unwrap()].to_string()
+}
+
+/// Two projects whose directories carry the *same* name, which `Sandbox` will
+/// not produce on its own because it keeps every name unique. They share one
+/// `VIVAC_HOME`, so one registry holds both.
+fn twins(name: &str) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+    let home = std::env::temp_dir().join(format!("t-home-twins-{name}"));
+    std::fs::create_dir_all(&home).unwrap();
+    let mut roots = Vec::new();
+    for side in ["a", "b"] {
+        let d = std::env::temp_dir()
+            .join(format!("t-twins-{name}-{side}"))
+            .join("same-name");
+        std::fs::create_dir_all(&d).unwrap();
+        let ok = Command::new(BIN)
+            .current_dir(&d)
+            .env("VIVAC_HOME", &home)
+            .args(["init"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok, "init failed in a twin");
+        roots.push(d);
+    }
+    (home, roots[0].clone(), roots[1].clone())
+}
+
+/// `d199`: the server opens from a directory that is not a project at all.
+///
+/// This used to be impossible for a reason no error explained: `main` looked
+/// for a tree at or above the cwd and returned `NoStore` before the `web`
+/// branch was ever reached, so the command died in a directory it had no
+/// business needing a tree in. That the server answers here at all is half of
+/// what this asserts; the other half is that `/` is then the index, because
+/// there is no "the project" to land on.
+#[test]
+fn started_outside_a_project_the_index_is_what_answers() {
+    let one = Sandbox::new_seeded("outside-one");
+    let two = Sandbox::new_seeded_in("outside-two", one.global_home());
+    let server = Server::start_serving(
+        &std::env::temp_dir(),
+        one.global_home(),
+        &[one.0.as_path(), two.0.as_path()],
+    );
+    let boot = call(server.port, &server.boot_path(), &[("Host", server.host())]);
+    let token = token_from(&boot);
+    let a = call(
+        server.port,
+        "/",
+        &[("Host", server.host()), ("X-Vivac-Token", token)],
+    );
+    assert_eq!(a.status, 200, "{}", a.body);
+    let one_name = one.0.file_name().unwrap().to_string_lossy().into_owned();
+    let two_name = two.0.file_name().unwrap().to_string_lossy().into_owned();
+    assert!(a.body.contains(&one_name), "{}", a.body);
+    assert!(a.body.contains(&two_name), "{}", a.body);
+}
+
+/// `d200`: the index is a page, not the bare `<ul>` it used to be.
+///
+/// The list of links had no stylesheet, no `<title>` and no viewport, which
+/// made it the only surface here that was not one. It also said nothing a
+/// `cd` did not already say, and the promise it now has to keep is that you
+/// can see which project moved and which has been sitting still.
+#[test]
+fn the_index_is_a_page_and_carries_what_d200_admitted() {
+    let one = Sandbox::new_seeded("index-fields-one");
+    let two = Sandbox::new_seeded_in("index-fields-two", one.global_home());
+    two.ok(&["push", "Ship the thing", "--why", "it is the goal"]);
+    let server = Server::start_serving(
+        &std::env::temp_dir(),
+        one.global_home(),
+        &[one.0.as_path(), two.0.as_path()],
+    );
+    let boot = call(server.port, &server.boot_path(), &[("Host", server.host())]);
+    let token = token_from(&boot);
+    let a = call(
+        server.port,
+        "/",
+        &[("Host", server.host()), ("X-Vivac-Token", token)],
+    );
+    assert_eq!(a.status, 200, "{}", a.body);
+    assert!(a.body.contains("<title>"), "no title: {}", a.body);
+    assert!(a.body.contains("<style>"), "no stylesheet: {}", a.body);
+    assert!(
+        a.body.contains("width=device-width"),
+        "no viewport: {}",
+        a.body
+    );
+    // The focus: one of `d200`'s four, and the one that says what a project
+    // was doing when it stopped.
+    assert!(a.body.contains("Ship the thing"), "no focus: {}", a.body);
+    // The silence, which is the field the promise is actually about.
+    assert!(a.body.contains("moved today"), "no silence: {}", a.body);
+    // And the project with nothing in it says so rather than being blank.
+    assert!(a.body.contains("no focus"), "{}", a.body);
+}
+
+/// `d374`: the permanent form of the URL opens the project.
+#[test]
+fn a_project_opens_by_its_permanent_id() {
+    let s = up("permanent-id");
+    s._sandbox
+        .ok(&["push", "Root goal", "--why", "it is the goal"]);
+    let ulid = first_event_id(&s._sandbox.0);
+    let boot = call(s.port(), &s.boot_path(), &[("Host", s.host())]);
+    let token = token_from(&boot);
+    let a = call(
+        s.port(),
+        &format!("/p/{ulid}/"),
+        &[("Host", s.host()), ("X-Vivac-Token", token)],
+    );
+    assert_eq!(a.status, 200, "{}", a.body);
+    assert!(a.body.contains("Root goal"), "{}", a.body);
+}
+
+/// `d374`: a name more than one project carries is answered with the choice,
+/// never with a guess.
+///
+/// The `-2` this replaces made the second twin reachable at `same-name-2`,
+/// and `f373` showed what that cost: the suffix was positional, so the first
+/// twin leaving the registry handed its URL to the second and a saved link
+/// opened the wrong tree without an error.
+#[test]
+fn a_name_two_projects_share_is_a_choice_and_not_a_guess() {
+    let (home, a_root, b_root) = twins("choice");
+    let server = Server::start_serving(
+        &std::env::temp_dir(),
+        &home,
+        &[a_root.as_path(), b_root.as_path()],
+    );
+    let boot = call(server.port, &server.boot_path(), &[("Host", server.host())]);
+    let token = token_from(&boot);
+    let a = call(
+        server.port,
+        "/p/same-name/",
+        &[("Host", server.host()), ("X-Vivac-Token", token)],
+    );
+    assert_eq!(a.status, 300, "{}", a.body);
+    // The `-2` is gone: nothing here invents a second spelling.
+    assert!(!a.body.contains("same-name-2"), "{}", a.body);
+}
+
+/// The security pillar allows a project's *name* across this boundary and
+/// nothing else. A real path carries the name of whoever owns the machine,
+/// so the page that has to tell two identically named projects apart is
+/// exactly the one where a path would be easiest to reach for.
+#[test]
+fn the_choice_tells_them_apart_without_naming_a_path() {
+    let (home, a_root, b_root) = twins("no-paths");
+    let server = Server::start_serving(
+        &std::env::temp_dir(),
+        &home,
+        &[a_root.as_path(), b_root.as_path()],
+    );
+    let boot = call(server.port, &server.boot_path(), &[("Host", server.host())]);
+    let token = token_from(&boot);
+    let a = call(
+        server.port,
+        "/p/same-name/",
+        &[("Host", server.host()), ("X-Vivac-Token", token)],
+    );
+    for root in [&a_root, &b_root] {
+        let parent = root.parent().unwrap().to_string_lossy().into_owned();
+        assert!(
+            !a.body.contains(&parent),
+            "a path reached the page: {}",
+            a.body
+        );
+        // The other spelling of the separator too: a fragment is a leak.
+        assert!(
+            !a.body.contains(&parent.replace('\\', "/")),
+            "a path reached the page: {}",
+            a.body
+        );
+    }
 }

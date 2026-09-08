@@ -32,10 +32,16 @@ fn fingerprint(log: &std::path::Path) -> (u64, Option<SystemTime>) {
 /// One root, folded, with enough of a fingerprint to know when it moved.
 pub struct Project {
     pub root: PathBuf,
-    /// What goes in a URL: the directory's name with every run of characters
-    /// outside `A-Za-z0-9._-` collapsed to a single `-`. Unique across the
-    /// registry, because a link that has been saved is permanent.
-    pub id: String,
+    /// The readable half of a URL: the directory's name with every run of
+    /// characters outside `A-Za-z0-9._-` collapsed to a single `-`. **Not
+    /// unique** -- two directories with the same name share it, and `d374`
+    /// says an ambiguous one is refused rather than guessed at. It used to
+    /// be made unique with a `-2` suffix; `f373` measured what that cost:
+    /// the suffix is positional, so the first root leaving the registry
+    /// handed its URL to the second and a saved link opened the wrong tree
+    /// without an error.
+    pub slug: String,
+
     /// The directory's name as it is on disk, which is what a page shows.
     pub name: String,
     ctx: ops::Ctx,
@@ -47,17 +53,35 @@ pub struct Project {
 }
 
 impl Project {
-    pub fn open(root: PathBuf, name: String, id: String) -> Result<Project, Failure> {
+    pub fn open(root: PathBuf, name: String, slug: String) -> Result<Project, Failure> {
         let (ctx, log) = ops::Ctx::load_with_log(store::Store::open(root.clone())?)?;
         let seen = fingerprint(&ctx.store.log());
         Ok(Project {
             root,
-            id,
+            slug,
             name,
             ctx,
             log,
             seen,
         })
+    }
+
+    /// The permanent half of this project's URL: the id of its first event,
+    /// which is what the registry is keyed by. `None` for a tree nobody has
+    /// written to yet -- it has nothing to be keyed by, and nothing worth
+    /// linking to either.
+    ///
+    /// The first event and **not** `Config::project_id`, which `f266`
+    /// disqualified: `Store::open` silently regenerates a missing `config`,
+    /// so deleting one file mints a fresh id for a tree that already has one.
+    /// The log is append-only and cannot do that.
+    ///
+    /// Read off the fold rather than kept in a field, and the difference is
+    /// not tidiness: a field is filled once at `open`, so a tree that was
+    /// empty when the server started would never gain a permanent id while
+    /// it ran, however many events it wrote. This answer moves with the log.
+    pub fn ulid(&self) -> Option<&str> {
+        self.log.first().map(|e| e.id.as_str())
     }
 
     /// The tree as it is on disk right now: re-folds when the log moved.
@@ -122,7 +146,7 @@ impl Registry {
             ));
         }
         let unique = dedup_by_target(roots);
-        let pairs = assign_names_and_ids(&unique);
+        let pairs = assign_names_and_slugs(&unique);
         let mut projects = Vec::with_capacity(unique.len());
         for (root, (name, id)) in unique.into_iter().zip(pairs) {
             projects.push(Project::open(root, name, id)?);
@@ -136,17 +160,39 @@ impl Registry {
         &mut self.projects[0]
     }
 
-    /// The project a URL's `id` names, if the registry has one. The `id` is
-    /// compared against what the registry already holds and never handed to
-    /// the filesystem, which is what makes a `..` in a path uninteresting.
-    pub fn by_id(&mut self, id: &str) -> Option<&mut Project> {
-        self.projects.iter_mut().find(|p| p.id == id)
+    /// What a URL's `<id>` names here. The `id` is compared against what the
+    /// registry already holds and never handed to the filesystem, which is
+    /// what makes a `..` in a path uninteresting.
+    /// Takes `&mut` for one reason: a project with no permanent id yet is
+    /// one event away from having one, so it is re-read before being
+    /// answered about. A project that already has one is left alone, because
+    /// the log is append-only and a first event never becomes a different
+    /// one. The cost is a `stat` per still-empty tree, and only until its
+    /// first write.
+    pub fn named(&mut self, id: &str) -> Named {
+        for p in &mut self.projects {
+            if p.ulid().is_none() {
+                let _ = p.current();
+            }
+        }
+        let slugs: Vec<String> = self.projects.iter().map(|p| p.slug.clone()).collect();
+        let ulids: Vec<Option<String>> = self
+            .projects
+            .iter()
+            .map(|p| p.ulid().map(str::to_string))
+            .collect();
+        name_or_ulid(id, &slugs, &ulids)
     }
 
-    /// Every project in the registry, in the order the roots were given. The
-    /// index page pairs each `id` with its `name` from here.
-    pub fn projects(&self) -> &[Project] {
-        &self.projects
+    /// The project at a position [`named`] handed back.
+    pub fn at(&mut self, i: usize) -> &mut Project {
+        &mut self.projects[i]
+    }
+
+    /// Every project this process serves. `&mut` because the index page
+    /// reads each one's tree, and reading re-folds when the log moved.
+    pub fn all(&mut self) -> &mut [Project] {
+        &mut self.projects
     }
 }
 
@@ -185,110 +231,120 @@ fn sanitize(name: &str) -> String {
     out
 }
 
-/// The name and the id each root goes by. Its own function because the rule
+/// What a URL's `<id>` named, once the registry has been asked.
+///
+/// Its own type rather than an `Option` because "no project" and "more than
+/// one project" are different answers and `d374` gives them different pages:
+/// one is a 404, the other is a choice the reader makes.
+pub enum Named {
+    /// Exactly one, at this position in the registry.
+    One(usize),
+    /// Several, at these positions. Nothing here picks between them.
+    Ambiguous(Vec<usize>),
+    Unknown,
+}
+
+/// The rule `d374` decided, as a function over what the registry holds, so
+/// the tests aim at it and not at a socket.
+///
+/// The permanent form wins first: a `<ulid>` is compared before any name, so
+/// a saved link keeps opening the tree it was saved from even after another
+/// project of the same name joins the registry. Then the readable form, and
+/// a name held by more than one root resolves to none of them -- which is
+/// what `registry::resolve` already does for `--project` on the CLI, for the
+/// same reason: answering about the wrong tree while looking right is worse
+/// than not answering.
+///
+/// Matching is exact, with no case folding. Crockford base32 is defined
+/// case-insensitively, but nothing here ever emits an uppercase ULID and a
+/// permanent link is copied rather than typed, so the leniency would only
+/// widen what the one security-watched path accepts.
+///
+/// Two roots can carry the same ULID -- a copied directory carries a copied
+/// log -- and that is `Ambiguous` too, deliberately: `d201` says it is
+/// detected and reported, never guessed at.
+fn name_or_ulid(id: &str, slugs: &[String], ulids: &[Option<String>]) -> Named {
+    let by_ulid: Vec<usize> = ulids
+        .iter()
+        .enumerate()
+        .filter(|(_, u)| u.as_deref() == Some(id))
+        .map(|(i, _)| i)
+        .collect();
+    let hits = if by_ulid.is_empty() {
+        slugs
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| *s == id)
+            .map(|(i, _)| i)
+            .collect()
+    } else {
+        by_ulid
+    };
+    match hits.len() {
+        0 => Named::Unknown,
+        1 => Named::One(hits[0]),
+        _ => Named::Ambiguous(hits),
+    }
+}
+
+/// The name and the slug each root goes by. Its own function because the rule
 /// is the whole point of the registry, and because it is what the tests aim
 /// at.
 ///
-/// Collisions are resolved on the `id`, never on the `name`: the `id` is the
-/// only one of the two that has to be unique, because it is the one that
-/// goes in a URL.
-fn assign_names_and_ids(roots: &[PathBuf]) -> Vec<(String, String)> {
-    let names: Vec<String> = roots
+/// **Nothing is made unique here**, which is the change `d374` brought. The
+/// slug used to gain a `-2` when two directories shared a name; `f373` showed
+/// that suffix was positional, so it moved when the registry changed and a
+/// saved link silently opened the other project. Uniqueness lives on the
+/// ULID now, and ambiguity on the name is answered rather than papered over.
+fn assign_names_and_slugs(roots: &[PathBuf]) -> Vec<(String, String)> {
+    roots
         .iter()
         .map(|r| {
-            r.file_name()
+            let name = r
+                .file_name()
                 .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "-".into())
+                .unwrap_or_else(|| "-".into());
+            let slug = sanitize(&name);
+            (name, slug)
         })
-        .collect();
-    let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut pairs = Vec::with_capacity(names.len());
-    for name in &names {
-        let bare = sanitize(name);
-        let id = if used.contains(&bare) {
-            let mut suffix = 2;
-            loop {
-                let candidate = format!("{bare}-{suffix}");
-                if !used.contains(&candidate) {
-                    break candidate;
-                }
-                suffix += 1;
-            }
-        } else {
-            bare
-        };
-        used.insert(id.clone());
-        pairs.push((name.clone(), id));
-    }
-    pairs
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn ids_of(pairs: Vec<(String, String)>) -> Vec<String> {
-        pairs.into_iter().map(|(_, id)| id).collect()
+    fn slugs_of(pairs: Vec<(String, String)>) -> Vec<String> {
+        pairs.into_iter().map(|(_, slug)| slug).collect()
     }
 
     #[test]
     fn a_single_root_gets_its_bare_directory_name() {
-        let ids = ids_of(assign_names_and_ids(&[PathBuf::from("/work/vivac")]));
-        assert_eq!(ids, vec!["vivac".to_string()]);
+        let slugs = slugs_of(assign_names_and_slugs(&[PathBuf::from("/work/vivac")]));
+        assert_eq!(slugs, vec!["vivac".to_string()]);
     }
 
     #[test]
-    fn two_roots_with_the_same_directory_name_get_a_number() {
-        let ids = ids_of(assign_names_and_ids(&[
+    fn two_roots_with_the_same_directory_name_keep_the_same_slug() {
+        // The `-2` this used to hand out was positional, and `f373` showed
+        // the first root leaving the registry passed its URL to the second.
+        // They collide on purpose now, and `name_or_ulid` refuses to guess.
+        let slugs = slugs_of(assign_names_and_slugs(&[
             PathBuf::from("/a/vivac"),
             PathBuf::from("/b/vivac"),
         ]));
-        assert_eq!(ids, vec!["vivac".to_string(), "vivac-2".to_string()]);
-    }
-
-    #[test]
-    fn three_roots_with_the_same_directory_name_count_up() {
-        let ids = ids_of(assign_names_and_ids(&[
-            PathBuf::from("/a/vivac"),
-            PathBuf::from("/b/vivac"),
-            PathBuf::from("/c/vivac"),
-        ]));
-        assert_eq!(
-            ids,
-            vec![
-                "vivac".to_string(),
-                "vivac-2".to_string(),
-                "vivac-3".to_string(),
-            ]
-        );
+        assert_eq!(slugs, vec!["vivac".to_string(), "vivac".to_string()]);
     }
 
     #[test]
     fn a_root_with_no_directory_name_falls_back_to_a_dash() {
-        let ids = ids_of(assign_names_and_ids(&[PathBuf::from("/")]));
-        assert_eq!(ids, vec!["-".to_string()]);
+        let slugs = slugs_of(assign_names_and_slugs(&[PathBuf::from("/")]));
+        assert_eq!(slugs, vec!["-".to_string()]);
     }
 
     #[test]
-    fn a_suffix_that_is_already_taken_is_skipped() {
-        let ids = ids_of(assign_names_and_ids(&[
-            PathBuf::from("/x/a"),
-            PathBuf::from("/y/a"),
-            PathBuf::from("/z/a-2"),
-        ]));
-        let mut sorted = ids.clone();
-        sorted.sort();
-        sorted.dedup();
-        assert_eq!(
-            sorted.len(),
-            ids.len(),
-            "a duplicate id slipped through: {ids:?}"
-        );
-    }
-
-    #[test]
-    fn a_name_with_characters_a_url_cannot_carry_becomes_an_id_that_can() {
-        let pairs = assign_names_and_ids(&[PathBuf::from("/work/my repo#1")]);
+    fn a_name_with_characters_a_url_cannot_carry_becomes_a_slug_that_can() {
+        let pairs = assign_names_and_slugs(&[PathBuf::from("/work/my repo#1")]);
         assert_eq!(
             pairs,
             vec![("my repo#1".to_string(), "my-repo-1".to_string())]
@@ -296,22 +352,104 @@ mod tests {
     }
 
     #[test]
-    fn collisions_are_resolved_on_the_id_and_the_names_are_left_alone() {
+    fn the_name_is_left_alone_however_the_slug_comes_out() {
         let pairs =
-            assign_names_and_ids(&[PathBuf::from("/a/my repo"), PathBuf::from("/b/my-repo")]);
+            assign_names_and_slugs(&[PathBuf::from("/a/my repo"), PathBuf::from("/b/my-repo")]);
         assert_eq!(
             pairs,
             vec![
                 ("my repo".to_string(), "my-repo".to_string()),
-                ("my-repo".to_string(), "my-repo-2".to_string()),
+                ("my-repo".to_string(), "my-repo".to_string()),
             ]
         );
     }
 
     #[test]
-    fn a_name_with_nothing_a_url_can_carry_still_gets_an_id() {
-        let pairs = assign_names_and_ids(&[PathBuf::from("/work/###")]);
+    fn a_name_with_nothing_a_url_can_carry_still_gets_a_slug() {
+        let pairs = assign_names_and_slugs(&[PathBuf::from("/work/###")]);
         assert!(!pairs[0].1.is_empty());
+    }
+
+    fn slugs(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn ulids(v: &[Option<&str>]) -> Vec<Option<String>> {
+        v.iter().map(|u| u.map(|s| s.to_string())).collect()
+    }
+
+    #[test]
+    fn an_unambiguous_name_names_its_project() {
+        let n = name_or_ulid("ridge", &slugs(&["vivac", "ridge"]), &ulids(&[None, None]));
+        assert!(matches!(n, Named::One(1)));
+    }
+
+    #[test]
+    fn a_name_two_roots_share_names_them_all_and_picks_none() {
+        let n = name_or_ulid(
+            "vivac",
+            &slugs(&["vivac", "ridge", "vivac"]),
+            &ulids(&[None, None, None]),
+        );
+        match n {
+            Named::Ambiguous(which) => assert_eq!(which, vec![0, 2]),
+            _ => panic!("an ambiguous name resolved to something"),
+        }
+    }
+
+    #[test]
+    fn a_ulid_resolves_even_when_the_name_it_carries_is_shared() {
+        // The whole point of the permanent form: this is the case where the
+        // readable one cannot answer.
+        let n = name_or_ulid(
+            "01m1b46bb82zxqrr24twpk12rw",
+            &slugs(&["vivac", "vivac"]),
+            &ulids(&[
+                Some("01m1zjvaj05n6tp9cw1aq1wq8h"),
+                Some("01m1b46bb82zxqrr24twpk12rw"),
+            ]),
+        );
+        assert!(matches!(n, Named::One(1)));
+    }
+
+    #[test]
+    fn a_ulid_beats_a_name_that_happens_to_match_it() {
+        let n = name_or_ulid(
+            "01m1b46bb82zxqrr24twpk12rw",
+            &slugs(&["01m1b46bb82zxqrr24twpk12rw", "other"]),
+            &ulids(&[None, Some("01m1b46bb82zxqrr24twpk12rw")]),
+        );
+        assert!(matches!(n, Named::One(1)), "the readable form won");
+    }
+
+    #[test]
+    fn two_roots_carrying_the_same_ulid_are_reported_not_guessed() {
+        // A copied directory carries a copied log. `d201` says this is
+        // detected and said out loud, never resolved to one of the two.
+        let n = name_or_ulid(
+            "01m1b46bb82zxqrr24twpk12rw",
+            &slugs(&["vivac", "vivac-copy"]),
+            &ulids(&[
+                Some("01m1b46bb82zxqrr24twpk12rw"),
+                Some("01m1b46bb82zxqrr24twpk12rw"),
+            ]),
+        );
+        match n {
+            Named::Ambiguous(which) => assert_eq!(which, vec![0, 1]),
+            _ => panic!("a duplicated ULID resolved to one project"),
+        }
+    }
+
+    #[test]
+    fn an_id_nothing_carries_names_nothing() {
+        let n = name_or_ulid("nope", &slugs(&["vivac"]), &ulids(&[Some("01m1")]));
+        assert!(matches!(n, Named::Unknown));
+    }
+
+    #[test]
+    fn a_tree_with_no_first_event_is_never_matched_by_an_empty_id() {
+        let n = name_or_ulid("", &slugs(&["vivac"]), &ulids(&[None]));
+        assert!(matches!(n, Named::Unknown));
     }
 
     #[test]
@@ -322,7 +460,23 @@ mod tests {
         let want = tmp.file_name().unwrap().to_string_lossy().into_owned();
         let mut registry = Registry::open(vec![tmp.clone(), tmp.clone()])
             .unwrap_or_else(|e| panic!("{}", e.message()));
-        assert_eq!(registry.first().id, want);
+        assert_eq!(registry.first().slug, want);
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn a_tree_with_no_events_yet_has_no_permanent_id() {
+        // `main.rs` calls this the late root: the command about to run is
+        // often the one that writes the first event, so between `init` and
+        // that write there is nothing to be keyed by. The readable form is
+        // the only way in until then, and that is correct rather than
+        // degraded -- there is nothing to link to yet.
+        let tmp = std::env::temp_dir().join(format!("vivac-project-u-{}", crate::id::ulid()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        store::Store::create(&tmp).unwrap();
+        let mut registry =
+            Registry::open(vec![tmp.clone()]).unwrap_or_else(|e| panic!("{}", e.message()));
+        assert_eq!(registry.first().ulid(), None);
         std::fs::remove_dir_all(&tmp).ok();
     }
 }

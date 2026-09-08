@@ -290,6 +290,45 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         return render::find_everywhere(a).map(|_| 0);
     }
 
+    // `web` opens from any directory (`d199`), so it returns up here for the
+    // same reason `find --everywhere` does: its roots come from the registry
+    // rather than from the tree underfoot, and there may be no tree underfoot
+    // at all. What the working directory still decides is where `/` lands.
+    //
+    // Same reason as `mcp` for building its own registry, over one or more
+    // roots instead of one: the server outlives this call, so it cannot take
+    // the `ctx` below.
+    if cmd == "web" {
+        let explicit: Vec<std::path::PathBuf> = a
+            .list("project")
+            .iter()
+            .map(std::path::PathBuf::from)
+            .collect();
+        let cwd_root = store::find_root(&cwd);
+        let roots = if explicit.is_empty() {
+            // The registry is where "every project on this machine" is
+            // written down. The one underfoot can still be missing from it --
+            // a tree whose first use since the registry existed is this very
+            // command -- so it goes in unconditionally; `Registry::open`
+            // collapses the duplicate by canonical path.
+            let mut from_registry = store::store_dir()
+                .map(|d| registry::roots(&d))
+                .unwrap_or_default();
+            from_registry.extend(cwd_root.clone());
+            from_registry
+        } else {
+            explicit
+        };
+        let port =
+            match a.opt("port") {
+                None => None,
+                Some(p) => Some(p.parse::<u16>().map_err(|_| {
+                    Failure::usage(format!("--port needs a port number, not \"{p}\""))
+                })?),
+            };
+        return web::serve(roots, cwd_root, port, !a.has("no-open")).map(|_| 0);
+    }
+
     let Some(root) = store::find_root(&cwd) else {
         // The hooks stay quiet where there is no tree. One that fails in
         // every unrelated directory gets switched off within two days, and
@@ -323,28 +362,6 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
     // below assumes one command, one process, one fold.
     if cmd == "mcp" {
         return mcp::serve(root).map(|_| 0);
-    }
-
-    // Same reason as `mcp`, over one or more roots instead of one: the
-    // server keeps running after this call returns, so it builds its own
-    // registry rather than taking the `ctx` below.
-    if cmd == "web" {
-        let mut roots: Vec<std::path::PathBuf> = a
-            .list("project")
-            .iter()
-            .map(std::path::PathBuf::from)
-            .collect();
-        if roots.is_empty() {
-            roots.push(root);
-        }
-        let port =
-            match a.opt("port") {
-                None => None,
-                Some(p) => Some(p.parse::<u16>().map_err(|_| {
-                    Failure::usage(format!("--port needs a port number, not \"{p}\""))
-                })?),
-            };
-        return web::serve(roots, port, !a.has("no-open")).map(|_| 0);
     }
 
     // Its own load, ahead of the generic one below, for the same reason as
