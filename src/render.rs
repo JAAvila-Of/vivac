@@ -21,6 +21,12 @@ use std::collections::HashMap;
 
 pub(crate) const WIDTH: usize = 62;
 
+/// `d330`: how much of an ancestor's why/note/outcome survives in `why`
+/// without `--full`. Matches `WIDTH` on purpose -- a clipped ancestor
+/// collapses to roughly one wrapped line -- and it never applies to the
+/// node actually asked about, which stays whole with or without `--full`.
+const ANCESTOR_CLIP: usize = WIDTH;
+
 pub(crate) fn wrap(text: &str, width: usize, indent: &str) -> Vec<String> {
     if text.trim().is_empty() {
         return vec![];
@@ -329,18 +335,28 @@ pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
     outln!();
     for (i, p) in lineage.iter().enumerate() {
         let is_last = i == lineage.len() - 1;
+        // The node actually asked about prints whole either way; an
+        // ancestor's body only survives whole under `--full`.
+        let clip_body = !is_last && full.is_none();
+        let body = |text: &str| {
+            if clip_body {
+                clip(text, ANCESTOR_CLIP)
+            } else {
+                text.to_string()
+            }
+        };
         outln!("  {:<6}{}", p.alias(), label(a, p));
-        for l in wrap(p.why(a), WIDTH, "        ") {
+        for l in wrap(&body(p.why(a)), WIDTH, "        ") {
             outln!("{l}");
         }
         let note = p.note(a);
-        for l in wrap(&format!("! {note}"), WIDTH, "        ") {
+        for l in wrap(&format!("! {}", body(note)), WIDTH, "        ") {
             if !note.is_empty() {
                 outln!("{l}");
             }
         }
         let outcome = p.outcome(a);
-        for l in wrap(&format!("= {outcome}"), WIDTH, "        ") {
+        for l in wrap(&format!("= {}", body(outcome)), WIDTH, "        ") {
             if !outcome.is_empty() {
                 outln!("{l}");
             }
