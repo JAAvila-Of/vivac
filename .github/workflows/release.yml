@@ -124,18 +124,31 @@ jobs:
           retention-days: 1
 
   # Needs every build, so a release never ships three binaries out of five.
-  # A pull request and a dispatch with no tag build and upload nothing: the
-  # second condition is redundant under GitHub's comparison rules and is here
-  # so that reading the file is enough to know a pull request cannot publish.
+  #
+  # The condition says which events may upload, never whether there is a tag,
+  # and that distinction is the whole lesson of v0.6.8. This job used to read
+  # `inputs.tag != ''`, so a caller that lost the tag got a green run with the
+  # upload skipped and a release with no binaries -- the failure this file
+  # exists to end, arriving quietly through the file itself. A call has to
+  # carry a tag; if it does not, that is a bug, and a bug is not a skip. So
+  # `push` -- the event behind every workflow_call from release-plz.yml --
+  # always enters, and the first step below fails loudly on an empty tag. A
+  # dispatch with no tag is the one case where nothing to upload is the
+  # intent, and a pull request never publishes.
   publish:
     needs: build
-    if: inputs.tag != '' && github.event_name != 'pull_request'
+    if: github.event_name == 'push' || inputs.tag != ''
     runs-on: ubuntu-latest
     permissions:
       contents: write
       id-token: write
       attestations: write
     steps:
+      - name: A release without its binaries is the bug, so say so
+        if: inputs.tag == ''
+        run: |
+          echo "Called with no tag. The release exists; its binaries do not." >&2
+          exit 1
       - uses: actions/download-artifact@v8
         with:
           path: dist
