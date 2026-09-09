@@ -263,7 +263,12 @@ pub fn open_data(a: &Tree) -> serde_json::Value {
         .nodes_iter()
         .filter(|n| n.is_front() && !a.children(n.num).iter().any(|c| c.is_front()))
         .collect();
-    leaves.sort_by_key(|n| {
+    // `sort_by_cached_key` and not `sort_by_key`: the second calls the key
+    // function O(n log n) times, and this key goes to the aggregate map every
+    // time it is called. It was measured, and the difference did not come up
+    // out of the noise on this machine -- so it is here for being the right
+    // primitive against a key that costs a lookup, not for a number.
+    leaves.sort_by_cached_key(|n| {
         (
             !n.blocks,
             std::cmp::Reverse(ag.counts(n.num).total),
@@ -526,7 +531,12 @@ pub fn open(a: &Tree, args: &Args) -> R {
         .nodes_iter()
         .filter(|n| n.is_front() && !a.children(n.num).iter().any(|c| c.is_front()))
         .collect();
-    leaves.sort_by_key(|n| {
+    // `sort_by_cached_key` and not `sort_by_key`: the second calls the key
+    // function O(n log n) times, and this key goes to the aggregate map every
+    // time it is called. It was measured, and the difference did not come up
+    // out of the noise on this machine -- so it is here for being the right
+    // primitive against a key that costs a lookup, not for a number.
+    leaves.sort_by_cached_key(|n| {
         (
             !n.blocks,
             std::cmp::Reverse(ag.counts(n.num).total),
