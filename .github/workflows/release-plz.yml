@@ -63,7 +63,7 @@ jobs:
       id-token: write
     outputs:
       created: ${{ steps.release-plz.outputs.releases_created }}
-      tag: ${{ steps.release-plz.outputs.tag }}
+      tag: ${{ steps.released.outputs.tag }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -76,6 +76,24 @@ jobs:
           command: release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # The tag comes out of the JSON and not out of an output called `tag`,
+      # because the version pinned above has no such output -- it reports
+      # `prs`, `pr`, `releases`, `prs_created` and `releases_created`, and
+      # nothing else. v0.6.8 shipped with no binaries for exactly that reason:
+      # the missing output read as an empty tag and the upload skipped itself
+      # in silence. `jq -e` is the point of this step: if the shape of that
+      # JSON ever changes, this fails here and says so, rather than handing
+      # the next job an empty string it will quietly do nothing with.
+      - name: Read the tag out of what release-plz reported
+        id: released
+        if: steps.release-plz.outputs.releases_created == 'true'
+        env:
+          RELEASES: ${{ steps.release-plz.outputs.releases }}
+        run: |
+          set -euo pipefail
+          printf 'released: %s\n' "$RELEASES"
+          tag=$(printf '%s' "$RELEASES" | jq -er '.[0].tag')
+          printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
 
   # The precompiled binaries, in this same run. They cannot hang off the tag:
   # GitHub starts no workflow for an event caused by its own token, and this
