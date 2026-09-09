@@ -431,10 +431,15 @@ fn rows(project: &str, tree: &Tree, map: &Map, ag: &Aggregates) -> String {
             0 => String::new(),
             c => format!("<span class=\"fan\">{c}</span>"),
         };
+        // The `*` goes *inside* the alias, which is where `vivac tree` puts
+        // it and where the old tile put it. Outside, it was a fifth child of
+        // a four-column grid: a row whose node blocks pushed its title into
+        // the next column and its fan-out off the end, so the whole list
+        // went crooked wherever one of the 31 blockers landed.
         out.push_str(&format!(
             "<li class=\"{class}\" id=\"{id}\" data-stop=\"{i}\">\
              <a class=\"alias {c}\" href=\"/p/{p}/why/{id}\" \
-             title=\"{id} · {w}{b} · {t}\">{id}</a>{mark}\
+             title=\"{id} · {w}{b} · {t}\">{id}{mark}</a>\
              <span class=\"title\">{t}</span>{notes}{fan}</li>\n",
             c = map.colour(s.line),
             id = escape(&alias),
@@ -1052,6 +1057,13 @@ mod tests {
         let page = map_page("vivac", "vivac", &blocked_shape());
         assert_eq!(page.matches("class=\"mark\"").count(), 1);
         assert!(page.contains("· blocking ·"), "the word, not only the mark");
+        // Inside the alias, not beside it. A row is a four-column grid and
+        // the mark was a fifth child of it, so every one of the 31 blockers
+        // on the real tree shunted its own title one column to the right.
+        assert!(
+            page.contains("*</span></a>"),
+            "the mark has to close before the alias does:\n{page}"
+        );
         assert_eq!(
             page.matches("class=\"waits\"").count(),
             2,

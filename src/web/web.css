@@ -684,7 +684,11 @@ li.stop.parked .title {
   font-style: italic;
 }
 
+/* Both of these are optional on a row, and a grid places what it is given
+   in the next free column. Naming their columns is what keeps a row with no
+   note count from putting its fan-out where the note count goes. */
 li.stop .fan {
+  grid-column: 4;
   color: var(--ink-faint);
   font-family: var(--mono);
   font-size: 0.7rem;
@@ -693,6 +697,7 @@ li.stop .fan {
 }
 
 li.stop .notes {
+  grid-column: 3;
   color: var(--warn);
   font-family: var(--mono);
   font-size: 0.64rem;
