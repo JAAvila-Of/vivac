@@ -341,14 +341,15 @@ these numbers never named. So both shapes, at one size:
 | `find` | 20.3 / 23.4 | 19.6 / 26.9 | 5.7 / 7.1 | 5.6 / 9.8 |
 | `tree` | 18.1 / 20.0 | **46.6 / 60.8** | not a tool | not a tool |
 
-**The performance pillar gives a read 50 ms at ten thousand nodes, and the
-right-hand shape misses it.** `open` misses it at the median. That is not
-something a release broke: it was equally true of the numbers printed here
-before, which simply never said which shape they were taken on, so nobody could
-have checked. The tree this project keeps of itself is 38% open, which is the
-wrong side of that table. Whether a tree stays that open on the way to ten
-thousand nodes is not measured, and saying so costs less than assuming it
-either way.
+**The performance pillar gives a read 50 ms, and the right-hand shape misses
+it.** `open` misses it at the median. That is not something a release broke: it
+was equally true of the numbers printed here before, which simply never said
+which shape they were taken on, so nobody could have checked. The ceiling used
+to be written against the node count, which is not what moves these three; it
+counts open fronts now, and `docs/PILLARS.md` says why. The tree this project
+keeps of itself is 38% open, which is the wrong side of that table. Whether a
+tree stays that open on the way to ten thousand nodes is not measured, and
+saying so costs less than assuming it either way.
 
 A write is p99 0.6 ms at that size over MCP, and it does not grow with the
 tree: the server appends against the tree it is already holding.

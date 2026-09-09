@@ -133,9 +133,42 @@ are in the `README`.
 | Operation | Ceiling | Why |
 |---|---|---|
 | writing a node (`add`, `done`, `note`) | **p99 < 5 ms** | it sits on the critical path of the agent's turn |
-| `why` / `tree` over 10,000 nodes | **< 50 ms** | it is interactive reading; above that you feel it |
+| `why` over 10,000 nodes | **< 50 ms** | it is interactive reading; above that you feel it |
+| `brief` / `open` / `tree`, counted in **open fronts** and not in nodes | **< 50 ms**, and **missed today** at half of ten thousand open | the same reading; what these three walk is the open part of the tree |
 | text search | **< 100 ms** | same |
 | semantic search | off the critical path | see the arbitration above |
+
+**The third row used to be half of the second, and it counted the wrong
+thing.** The ceiling read *`why` / `tree` over 10,000 nodes*, and what `brief`,
+`open` and `tree` cost is not governed by how many nodes a tree holds but by
+how many of them are still open. At ten thousand nodes the same binary comes
+back inside the ceiling with a fiftieth of the tree open and over it with half,
+so a ceiling written against the node count was met and missed at once by code
+that had not changed, and neither number was wrong. A ceiling stated against a
+variable that does not move the cost cannot be enforced, and cannot even be
+checked: *is `open` over budget?* had no answer here, and that it had none is
+the whole defect.
+
+**The variable was already written down, one section below.** Storage names the
+two queries that matter as *ancestors of a node* and *open descendants of a
+node*. The first is `why`, and it holds flat across both shapes because a
+lineage is bounded by depth rather than by how much is open. The second is the
+other three. The document knew which two shapes exist and set its ceiling
+against neither.
+
+**`brief` and `open` were not in this table at all**, which was an omission and
+not a decision: the `Why` column says interactive reading, `brief` opens every
+session, and a read does not escape the ceiling by never having been typed in
+here. Where the line crosses is unmeasured -- it holds at a fiftieth of the
+tree open and is missed at half -- and the honest form of that is the row above
+rather than a threshold nobody took.
+
+**A missed budget is still not a licence.** This one kills a feature before it
+exists, and these three shipped under a ceiling that never named them, so what
+it makes now is a finding to answer rather than an execution to carry out. Nor
+does it follow that the answer is *make it faster*: half of a ten thousand node
+tree open is a number no list answers at any speed, and that question belongs
+to UX, which asks it separately and can also kill.
 
 ### Storage
 
