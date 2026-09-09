@@ -341,6 +341,7 @@ equal
 equals
 equiv
 era
+erase
 err
 error
 escape

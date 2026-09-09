@@ -70,6 +70,10 @@ fn json_node(a: &Tree, ag: &Aggregates, n: &Node) -> serde_json::Value {
         "blocks": n.blocks,
         "parent": n.parent.and_then(|p| a.node_by_num(p).map(|x| x.alias())),
         "note": n.note(a),
+        "notes": n.notes(a)
+            .iter()
+            .map(|(at, text)| json!({"at": at, "note": text}))
+            .collect::<Vec<_>>(),
         "outcome": n.outcome(a),
         "refs": n.refs(a),
         "governs": n.governs(a),
@@ -377,10 +381,25 @@ pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
         for l in wrap(&body(p.why(a)), WIDTH, "        ") {
             outln!("{l}");
         }
-        let note = p.note(a);
-        for l in wrap(&format!("! {}", body(note)), WIDTH, "        ") {
-            if !note.is_empty() {
-                outln!("{l}");
+        let notes = p.notes(a);
+        if notes.len() > 1 {
+            // Two or more: each one gets its own line and its own date, or
+            // there would be no way to tell which correction landed when.
+            // With exactly one, a date says nothing a lone note does not
+            // already say by being there -- `f186`'s own argument for
+            // dropping the lineage's empty anchor.
+            for (at, text) in &notes {
+                let date = crate::clock::date_of(at);
+                for l in wrap(&format!("! [{date}] {}", body(text)), WIDTH, "        ") {
+                    outln!("{l}");
+                }
+            }
+        } else {
+            let note = p.note(a);
+            for l in wrap(&format!("! {}", body(note)), WIDTH, "        ") {
+                if !note.is_empty() {
+                    outln!("{l}");
+                }
             }
         }
         let outcome = p.outcome(a);
@@ -974,16 +993,17 @@ pub fn vivacs(a: &Tree, args: &Args) -> R {
 
 /// The fields of a node that carry meaning, in the order a reader wants them.
 ///
-/// The title is a label; the reason, the note and the outcome are where the
+/// The title is a label; the reason, the notes and the outcome are where the
 /// thinking is. A search that read only titles would find the folder and miss
 /// what is inside it.
-fn searchable<'t>(a: &'t Tree, n: &Node) -> [(&'static str, &'t str); 4] {
-    [
-        ("title", n.title(a)),
-        ("why", n.why(a)),
-        ("note", n.note(a)),
-        ("outcome", n.outcome(a)),
-    ]
+///
+/// `f389`: every note lives here, not only the latest, or the search that
+/// reads this misses the same 37 percent `why` used to.
+fn searchable<'t>(a: &'t Tree, n: &Node) -> Vec<(&'static str, &'t str)> {
+    let mut fields = vec![("title", n.title(a)), ("why", n.why(a))];
+    fields.extend(n.notes(a).into_iter().map(|(_, text)| ("note", text)));
+    fields.push(("outcome", n.outcome(a)));
+    fields
 }
 
 /// A window of `width` characters around the first term that hit.
@@ -1109,10 +1129,17 @@ fn hits_for<'t>(
         {
             continue;
         }
+        // `d390`: `note` can now appear more than once in `lowered`, one
+        // entry per note. Deduped here, or a term two notes both carry would
+        // print the same `note:` line once per note that hit rather than
+        // once per field, the way `field_order` already assumes a hit names
+        // each field at most once.
+        let mut seen_fields = std::collections::HashSet::new();
         let matched: Vec<&'static str> = lowered
             .iter()
             .filter(|(_, v)| terms.iter().any(|t| v.contains(t.as_str())))
             .map(|(k, _)| *k)
+            .filter(|k| seen_fields.insert(*k))
             .collect();
         hits.push((n, matched));
     }

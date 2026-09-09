@@ -66,6 +66,34 @@ fn a_word_only_in_a_note_is_found() {
     assert!(s.contains("Guard the commit messages"), "{s}");
 }
 
+/// `f389`: a second note used to overwrite the first everywhere, taking 84
+/// notes out of reach of `find` on the real tree. The old note has to stay
+/// searchable once a newer one arrives (`d390`).
+#[test]
+fn a_word_only_in_an_old_note_is_still_found() {
+    let c = seeded("old-note");
+    c.ok(&["note", "t2", "the fixtures live under tests/data"]);
+    c.ok(&["note", "t2", "a correction that names none of that"]);
+    let s = c.ok(&["find", "fixtures"]);
+    assert!(s.contains("Guard the commit messages"), "{s}");
+}
+
+/// A term that lives in two different notes on the same node is still one
+/// hit on one field: `find` names `note` once per hit, never once per note
+/// that happened to contain it.
+#[test]
+fn a_term_in_two_notes_prints_the_note_field_once() {
+    let c = seeded("dup-note");
+    c.ok(&["note", "t2", "the fixtures live under tests/data"]);
+    c.ok(&["note", "t2", "a reminder that fixtures still live there"]);
+    let s = c.ok(&["find", "fixtures"]);
+    assert_eq!(
+        s.matches("note:").count(),
+        1,
+        "the note field printed once per note instead of once per hit:\n{s}"
+    );
+}
+
 /// What you look for months later is usually finished. A search that stopped
 /// at the open fronts would be a to-do list, not a memory.
 #[test]

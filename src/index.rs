@@ -48,7 +48,7 @@
 
 use crate::anchor::AnchorRef;
 use crate::event::{Event, Flag, Kind, State, VivacKind};
-use crate::model::{fold, Node, RawParts, Span, Tree, Vivac};
+use crate::model::{fold, Node, Note, RawParts, Span, Tree, Vivac};
 use crate::store::Store;
 use std::collections::BTreeMap;
 use std::fs::{self, File};
@@ -56,12 +56,33 @@ use std::io::{BufRead, BufReader, Seek, SeekFrom, Write as IoWrite};
 use std::path::Path;
 
 const MAGIC: u64 = u64::from_le_bytes(*b"vivacIDX");
-const FORMAT_VERSION: u32 = 1;
+// `d390`: a node's notes went from one `Span` to a table of them, the same
+// shape change `flags` already went through. `Header::parse` refuses any
+// version but this one and `try_load_index` falls back to folding the log,
+// which is the sede -- so bumping this needs no migration and no command.
+const FORMAT_VERSION: u32 = 2;
 const ULID_LEN: usize = 26;
 const SPAN_LEN: usize = 8;
 const FLAG_RECORD_LEN: usize = 1 + SPAN_LEN;
-const NODE_RECORD_LEN: usize =
-    ULID_LEN + 8 + 1 + 1 + 8 + 1 + 1 + SPAN_LEN * 5 + 1 + SPAN_LEN + SPAN_LEN + SPAN_LEN + 4 + 4;
+/// A note's own moment and text, mirroring `FLAG_RECORD_LEN`'s shape: no tag
+/// byte, since a note carries no enum the way a flag carries its kind.
+const NOTE_RECORD_LEN: usize = SPAN_LEN * 2;
+const NODE_RECORD_LEN: usize = ULID_LEN
+    + 8
+    + 1
+    + 1
+    + 8
+    + 1
+    + 1
+    + SPAN_LEN * 4
+    + 1
+    + SPAN_LEN
+    + SPAN_LEN
+    + SPAN_LEN
+    + 4
+    + 4
+    + 4
+    + 4;
 
 /// `LOADING.md` §4 "El umbral, con su número": a stale index is left alone
 /// below this many pending events, because applying them in memory is cheap
@@ -396,12 +417,14 @@ struct Header {
     node_count: u64,
     spans_count: u64,
     flags_count: u64,
+    notes_count: u64,
     roots_count: u64,
     stack_count: u64,
     vivac_count: u64,
     nodes_offset: u64,
     spans_offset: u64,
     flags_offset: u64,
+    notes_offset: u64,
     roots_offset: u64,
     stack_offset: u64,
     vivacs_offset: u64,
@@ -441,12 +464,14 @@ impl Header {
             node_count: c.u64()?,
             spans_count: c.u64()?,
             flags_count: c.u64()?,
+            notes_count: c.u64()?,
             roots_count: c.u64()?,
             stack_count: c.u64()?,
             vivac_count: c.u64()?,
             nodes_offset: c.u64()?,
             spans_offset: c.u64()?,
             flags_offset: c.u64()?,
+            notes_offset: c.u64()?,
             roots_offset: c.u64()?,
             stack_offset: c.u64()?,
             vivacs_offset: c.u64()?,
@@ -477,6 +502,9 @@ impl Header {
             return None;
         }
         if !fits(self.flags_offset, self.flags_count, FLAG_RECORD_LEN as u64)? {
+            return None;
+        }
+        if !fits(self.notes_offset, self.notes_count, NOTE_RECORD_LEN as u64)? {
             return None;
         }
         if !fits(self.roots_offset, self.roots_count, 8)? {
@@ -521,12 +549,14 @@ fn write_header(buf: &mut Vec<u8>, h: &Header) {
     write_u64(buf, h.node_count);
     write_u64(buf, h.spans_count);
     write_u64(buf, h.flags_count);
+    write_u64(buf, h.notes_count);
     write_u64(buf, h.roots_count);
     write_u64(buf, h.stack_count);
     write_u64(buf, h.vivac_count);
     write_u64(buf, h.nodes_offset);
     write_u64(buf, h.spans_offset);
     write_u64(buf, h.flags_offset);
+    write_u64(buf, h.notes_offset);
     write_u64(buf, h.roots_offset);
     write_u64(buf, h.stack_offset);
     write_u64(buf, h.vivacs_offset);
@@ -558,12 +588,14 @@ fn header_len() -> usize {
         node_count: 0,
         spans_count: 0,
         flags_count: 0,
+        notes_count: 0,
         roots_count: 0,
         stack_count: 0,
         vivac_count: 0,
         nodes_offset: 0,
         spans_offset: 0,
         flags_offset: 0,
+        notes_offset: 0,
         roots_offset: 0,
         stack_offset: 0,
         vivacs_offset: 0,
@@ -771,7 +803,6 @@ struct NodeRaw {
     forced_close: bool,
     title: Span,
     why: Span,
-    note: Span,
     outcome: Span,
     opened: Span,
     closed: Option<Span>,
@@ -779,9 +810,19 @@ struct NodeRaw {
     governs: Span,
     flags_offset: u32,
     flags_count: u32,
+    notes_offset: u32,
+    notes_count: u32,
 }
 
-fn write_node_record(buf: &mut Vec<u8>, n: &Node, flags_buf: &mut Vec<u8>, flags_cursor: &mut u32) {
+#[allow(clippy::too_many_arguments)]
+fn write_node_record(
+    buf: &mut Vec<u8>,
+    n: &Node,
+    flags_buf: &mut Vec<u8>,
+    flags_cursor: &mut u32,
+    notes_buf: &mut Vec<u8>,
+    notes_cursor: &mut u32,
+) {
     let start = buf.len();
     write_ulid(buf, &n.id);
     write_u64(buf, n.num);
@@ -792,7 +833,6 @@ fn write_node_record(buf: &mut Vec<u8>, n: &Node, flags_buf: &mut Vec<u8>, flags
     write_bool(buf, n.forced_close);
     write_span(buf, n.title);
     write_span(buf, n.why);
-    write_span(buf, n.note);
     write_span(buf, n.outcome);
     write_span(buf, n.opened);
     match n.closed {
@@ -807,15 +847,24 @@ fn write_node_record(buf: &mut Vec<u8>, n: &Node, flags_buf: &mut Vec<u8>, flags
     }
     write_span(buf, n.refs);
     write_span(buf, n.governs);
-    let offset = *flags_cursor;
+    let flags_offset = *flags_cursor;
     for (&flag, &span) in &n.flags {
         write_u8(flags_buf, flag_to_u8(flag));
         write_span(flags_buf, span);
     }
-    let count = n.flags.len() as u32;
-    *flags_cursor += count;
-    write_u32(buf, offset);
-    write_u32(buf, count);
+    let flags_count = n.flags.len() as u32;
+    *flags_cursor += flags_count;
+    write_u32(buf, flags_offset);
+    write_u32(buf, flags_count);
+    let notes_offset = *notes_cursor;
+    for note in &n.notes {
+        write_span(notes_buf, note.at);
+        write_span(notes_buf, note.text);
+    }
+    let notes_count = n.notes.len() as u32;
+    *notes_cursor += notes_count;
+    write_u32(buf, notes_offset);
+    write_u32(buf, notes_count);
     debug_assert_eq!(buf.len() - start, NODE_RECORD_LEN);
 }
 
@@ -830,7 +879,6 @@ fn read_node_record(c: &mut Cursor) -> Option<NodeRaw> {
     let forced_close = c.bool_()?;
     let title = c.span()?;
     let why = c.span()?;
-    let note = c.span()?;
     let outcome = c.span()?;
     let opened = c.span()?;
     let closed_present = c.bool_()?;
@@ -840,6 +888,8 @@ fn read_node_record(c: &mut Cursor) -> Option<NodeRaw> {
     let governs = c.span()?;
     let flags_offset = c.u32()?;
     let flags_count = c.u32()?;
+    let notes_offset = c.u32()?;
+    let notes_count = c.u32()?;
     Some(NodeRaw {
         id,
         num,
@@ -850,7 +900,6 @@ fn read_node_record(c: &mut Cursor) -> Option<NodeRaw> {
         forced_close,
         title,
         why,
-        note,
         outcome,
         opened,
         closed,
@@ -858,10 +907,16 @@ fn read_node_record(c: &mut Cursor) -> Option<NodeRaw> {
         governs,
         flags_offset,
         flags_count,
+        notes_offset,
+        notes_count,
     })
 }
 
-fn assemble_nodes(raw_nodes: Vec<NodeRaw>, flags_table: &[(Flag, Span)]) -> Option<Vec<Node>> {
+fn assemble_nodes(
+    raw_nodes: Vec<NodeRaw>,
+    flags_table: &[(Flag, Span)],
+    notes_table: &[Note],
+) -> Option<Vec<Node>> {
     let mut out = Vec::with_capacity(raw_nodes.len());
     for r in raw_nodes {
         let start = r.flags_offset as usize;
@@ -871,6 +926,9 @@ fn assemble_nodes(raw_nodes: Vec<NodeRaw>, flags_table: &[(Flag, Span)]) -> Opti
         for &(f, s) in slice {
             flags.insert(f, s);
         }
+        let notes_start = r.notes_offset as usize;
+        let notes_end = notes_start.checked_add(r.notes_count as usize)?;
+        let notes = notes_table.get(notes_start..notes_end)?.to_vec();
         out.push(Node {
             id: r.id,
             num: r.num,
@@ -880,7 +938,7 @@ fn assemble_nodes(raw_nodes: Vec<NodeRaw>, flags_table: &[(Flag, Span)]) -> Opti
             state: r.state,
             parent: r.parent,
             blocks: r.blocks,
-            note: r.note,
+            notes,
             outcome: r.outcome,
             refs: r.refs,
             governs: r.governs,
@@ -1002,6 +1060,17 @@ fn parse_flags(bytes: &[u8], header: &Header) -> Option<Vec<(Flag, Span)>> {
     Some(out)
 }
 
+fn parse_notes(bytes: &[u8], header: &Header) -> Option<Vec<Note>> {
+    let mut c = Cursor::new(bytes.get(header.notes_offset as usize..)?);
+    let mut out = Vec::with_capacity(header.notes_count as usize);
+    for _ in 0..header.notes_count {
+        let at = c.span()?;
+        let text = c.span()?;
+        out.push(Note { at, text });
+    }
+    Some(out)
+}
+
 fn parse_spans(bytes: &[u8], header: &Header) -> Option<Vec<Span>> {
     let mut c = Cursor::new(bytes.get(header.spans_offset as usize..)?);
     let mut out = Vec::with_capacity(header.spans_count as usize);
@@ -1029,7 +1098,8 @@ fn parse_text(bytes: &[u8], header: &Header) -> Option<String> {
 fn build_tree(bytes: &[u8], header: &Header) -> Option<Tree> {
     let raw_nodes = parse_nodes(bytes, header)?;
     let flags_table = parse_flags(bytes, header)?;
-    let nodes = assemble_nodes(raw_nodes, &flags_table)?;
+    let notes_table = parse_notes(bytes, header)?;
+    let nodes = assemble_nodes(raw_nodes, &flags_table, &notes_table)?;
     let spans = parse_spans(bytes, header)?;
     let roots = parse_u64_list(bytes, header.roots_offset, header.roots_count)?;
     let stack = parse_u64_list(bytes, header.stack_offset, header.stack_count)?;
@@ -1066,8 +1136,17 @@ fn encode(
     let mut nodes_buf = Vec::new();
     let mut flags_buf = Vec::new();
     let mut flags_cursor = 0u32;
+    let mut notes_buf = Vec::new();
+    let mut notes_cursor = 0u32;
     for n in &nodes {
-        write_node_record(&mut nodes_buf, n, &mut flags_buf, &mut flags_cursor);
+        write_node_record(
+            &mut nodes_buf,
+            n,
+            &mut flags_buf,
+            &mut flags_cursor,
+            &mut notes_buf,
+            &mut notes_cursor,
+        );
     }
     let mut spans_buf = Vec::new();
     for &s in tree.raw_spans() {
@@ -1092,7 +1171,8 @@ fn encode(
     let nodes_offset = header_bytes;
     let spans_offset = nodes_offset + nodes_buf.len() as u64;
     let flags_offset = spans_offset + spans_buf.len() as u64;
-    let roots_offset = flags_offset + flags_buf.len() as u64;
+    let notes_offset = flags_offset + flags_buf.len() as u64;
+    let roots_offset = notes_offset + notes_buf.len() as u64;
     let stack_offset = roots_offset + roots_buf.len() as u64;
     let vivacs_offset = stack_offset + stack_buf.len() as u64;
     let text_offset = vivacs_offset + vivacs_buf.len() as u64;
@@ -1128,12 +1208,14 @@ fn encode(
         node_count: nodes.len() as u64,
         spans_count: tree.raw_spans().len() as u64,
         flags_count: (flags_buf.len() / FLAG_RECORD_LEN) as u64,
+        notes_count: (notes_buf.len() / NOTE_RECORD_LEN) as u64,
         roots_count: tree.roots.len() as u64,
         stack_count: tree.stack.len() as u64,
         vivac_count: tree.vivacs.len() as u64,
         nodes_offset,
         spans_offset,
         flags_offset,
+        notes_offset,
         roots_offset,
         stack_offset,
         vivacs_offset,
@@ -1148,6 +1230,7 @@ fn encode(
     out.extend_from_slice(&nodes_buf);
     out.extend_from_slice(&spans_buf);
     out.extend_from_slice(&flags_buf);
+    out.extend_from_slice(&notes_buf);
     out.extend_from_slice(&roots_buf);
     out.extend_from_slice(&stack_buf);
     out.extend_from_slice(&vivacs_buf);
@@ -1209,10 +1292,16 @@ mod tests {
     }
 
     fn a_note(seq: u64, ulid: &str, note: &str) -> Event {
+        a_note_at(seq, ulid, "2026-09-05T10:01:00Z", note)
+    }
+
+    /// Like `a_note`, but with its own `ts`: the fixture two distinct notes
+    /// on the same node need to prove each keeps the moment it was written.
+    fn a_note_at(seq: u64, ulid: &str, ts: &str, note: &str) -> Event {
         Event {
             seq,
             id: fixed_id(seq as u32),
-            ts: "2026-09-05T10:01:00Z".to_string(),
+            ts: ts.to_string(),
             actor: "a_test".to_string(),
             lane: "main".to_string(),
             payload: Body::NodeNoted {
@@ -1414,6 +1503,43 @@ mod tests {
         assert_eq!(snapshot(&fresh), snapshot(&loaded_again));
 
         std::fs::remove_dir_all(&store.root).ok();
+    }
+
+    /// `d390`: `note` went from one `Span` to a flat table the node table
+    /// points into, the same shape change `flags` already went through.
+    ///
+    /// This calls `encode`/`build_tree` directly rather than through `load`:
+    /// `load` falls back to folding the log whenever the index fails to
+    /// parse (`LOADING.md` §4 "nunca falla"), and the log it would fall back
+    /// to is sitting right there, untouched, with the same two notes in it.
+    /// A `parse`/`write_header` field landing out of step could come back
+    /// `None` and hide behind that fallback with the surrounding suite still
+    /// green. Going straight at the encoded bytes leaves nowhere to hide.
+    #[test]
+    fn two_notes_on_one_node_round_trip_through_the_index_alone() {
+        let root_id = fixed_id(1);
+        let events = vec![
+            created(1, &root_id, 1, Kind::Task, None, "Root", vec![], vec![]),
+            a_note_at(2, &root_id, "2026-09-01T00:00:00Z", "first note"),
+            a_note_at(3, &root_id, "2026-09-02T00:00:00Z", "second note"),
+        ];
+        let tree = fold(&events, 0);
+
+        let bytes = encode(&tree, 0, 0, 0, None);
+        let header = Header::parse(&bytes).expect("the header this test just wrote parses");
+        let loaded = build_tree(&bytes, &header).expect("the body this test just wrote parses");
+
+        let n = loaded.node(&root_id).expect("the node is in the index");
+        assert_eq!(
+            n.notes(&loaded),
+            vec![
+                ("2026-09-01T00:00:00Z", "first note"),
+                ("2026-09-02T00:00:00Z", "second note"),
+            ],
+            "both notes, oldest first and each with its own date, survive \
+             reading the encoded bytes back"
+        );
+        assert_eq!(n.note(&loaded), "second note");
     }
 
     /// Rewrites just the header of an already-persisted index, keeping the
