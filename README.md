@@ -96,7 +96,7 @@ node as something its parent cannot close over, and `--off` takes it back.
 vivac brief         where you are, what governs this point, what NOT to touch
 vivac why 11        the path from the root, narrated
 vivac tree          the tree, with false closes marked
-vivac open          the open fronts, each with its lineage
+vivac open          what is waiting on you, and what has been sitting
 vivac find cache    every node whose text holds all the words, best first
 vivac stack         the focus stack
 vivac parked        DO NOT TOUCH NOW
@@ -112,11 +112,27 @@ interface in the way, and every one of those reads takes `--json` — every one
 but the `brief`, which is written to be injected into a session and read as
 prose, never parsed.
 
-Two of them carry more than the line suggests. `why --full` adds the anchor,
+Some of them carry more than the line suggests. `why --full` adds the anchor,
 the standing decisions and the open siblings at every step of the path, which
 is the difference between a route and a briefing. `check --gates` widens the
 invariants from this tree to every tree on the machine that nobody has opened,
-because a tree nobody opens is where an invariant goes to break quietly.
+because a tree nobody opens is where an invariant goes to break quietly. And
+`open --all` drops the cap, for the times you do want the whole wall.
+
+**`open` answers one sentence, and the order is that sentence.** What is
+waiting on you right now, and what has been open so long you are not working it
+any more. So a front that blocks its parent comes first, because a blocker is
+exactly something waiting on you; among the rest, whichever holds up more tree;
+at a tie, the newest. It stops at ten, because a front is two lines and a list
+you have to scroll has already broken the promise of *right now*, and the line
+underneath says how many were left out and how long the oldest of those has
+been open.
+
+It used to print all of them, oldest first. On the tree this project keeps of
+itself that was a hundred and nine fronts across two hundred and twenty-four
+lines, with the one you touched yesterday at the bottom — which is the defect
+`find` had before it was given an order, in the same product, found again
+because nobody had gone to look at the neighbour.
 
 **And the maintainer looks.** `vivac web` draws the tree in a browser, on this
 machine and nowhere else: a server somebody starts and that dies when they
