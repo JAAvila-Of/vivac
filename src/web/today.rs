@@ -436,7 +436,7 @@ pub(super) fn today_page(project: &str, name: &str, tree: &Tree, log: &[Event]) 
          <body><div class=\"page\">\n\
          <header><h1>{name_t}</h1>\n\
          <p class=\"promise\">What moved while you were not looking.</p>\n\
-         <p class=\"onward\"><a href=\"/p/{p}/tree\">The whole tree, drawn</a></p></header>\n\
+         <p class=\"onward\"><a href=\"/p/{p}/tree\">The whole tree, as a map</a></p></header>\n\
          <main>\n{moved}{focus}{governs}{parked}</main>\n\
          <footer>The same reading in a terminal: \
          <code>vivac changes --since manual</code></footer>\n\

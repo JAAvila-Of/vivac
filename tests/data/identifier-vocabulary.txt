@@ -65,6 +65,7 @@ arguments
 argv
 arm
 array
+arrives
 as
 ascii
 ask
@@ -82,6 +83,7 @@ attribute
 authority
 auto
 automatic
+away
 aws
 back
 backdate
@@ -97,8 +99,10 @@ began
 beginning
 behind
 below
+best
 between
 bigger
+biggest
 bin
 binary
 bind
@@ -124,6 +128,7 @@ boundary
 bounds
 box
 branch
+branched
 branching
 break
 breaks
@@ -176,6 +181,8 @@ child
 children
 choice
 choose
+chunk
+chunked
 civil
 claim
 claimed
@@ -202,7 +209,7 @@ cmp
 code
 collect
 collections
-comb
+colour
 come
 comes
 command
@@ -224,10 +231,12 @@ contains
 content
 contents
 continue
+continues
 control
 cookie
 copied
 copy
+corner
 corrupt
 cors
 count
@@ -248,6 +257,7 @@ cur
 current
 cursor
 cut
+cuts
 cwd
 d200
 dash
@@ -268,6 +278,7 @@ declares
 decoded
 dedup
 deep
+deepest
 default
 degradation
 degree
@@ -277,6 +288,7 @@ denial
 denied
 deny
 depth
+depths
 deref
 derive
 descend
@@ -284,7 +296,7 @@ descendants
 description
 deserialize
 detached
-details
+detail
 detect
 determinism
 deterministic
@@ -304,9 +316,11 @@ does
 domain
 done
 down
+downwards
 doy
 drags
 drain
+drawn
 draws
 drop
 drops
@@ -314,6 +328,8 @@ dump
 duration
 dyn
 each
+earn
+echoes
 edges
 edit
 eleven
@@ -372,6 +388,7 @@ extend
 extension
 extra
 eye
+f32
 f64
 facts
 fails
@@ -380,6 +397,7 @@ fallback
 falling
 falls
 false
+fan
 fence
 fenced
 fetch
@@ -408,7 +426,9 @@ fn
 focus
 focused
 fold
+folded
 folding
+folds
 footer
 for
 force
@@ -454,6 +474,7 @@ guard
 guarded
 guess
 guessed
+gutter
 half
 hand
 handle
@@ -464,11 +485,16 @@ happens
 has
 hash
 hashes
+have
 head
 header
 headers
 heading
 headings
+heads
+heaviest
+heavy
+height
 held
 hello
 help
@@ -477,6 +503,8 @@ heuristic
 hex
 hexdigit
 hidden
+hides
+hiding
 hit
 hits
 hold
@@ -494,6 +522,7 @@ hrefs
 hs
 html
 http
+hub
 hunts
 i32
 i64
@@ -525,6 +554,7 @@ insert
 inserted
 inside
 instant
+instead
 intent
 intern
 into
@@ -543,6 +573,7 @@ iterator
 its
 jar
 join
+js
 json
 just
 jwt
@@ -557,6 +588,7 @@ label
 landing
 lands
 lane
+lanes
 last
 late
 later
@@ -567,6 +599,7 @@ leap
 leave
 leaves
 left
+legend
 len
 length
 let
@@ -574,6 +607,7 @@ letter
 level
 levels
 lifts
+light
 like
 limit
 line
@@ -634,6 +668,7 @@ matter
 max
 may
 mcp
+me
 means
 measured
 measures
@@ -642,6 +677,7 @@ merely
 message
 metadata
 method
+mid
 middle
 millis
 min
@@ -667,6 +703,7 @@ named
 names
 naming
 nanos
+narrow
 nd
 ne
 nearest
@@ -704,6 +741,8 @@ of
 off
 offenders
 offered
+offering
+offers
 offset
 ok
 old
@@ -767,6 +806,7 @@ park
 parked
 parks
 parse
+parsed
 partial
 partition
 parts
@@ -789,6 +829,7 @@ phrase
 picked
 picks
 pii
+pile
 piped
 place
 placed
@@ -834,6 +875,7 @@ pt
 pub
 push
 pushed
+px
 query
 question
 questions
@@ -841,13 +883,17 @@ quiet
 quiets
 quote
 quoted
+radius
+radix
 raised
 ralias
 rand
 random
+rank
 rather
 raw
 reaches
+reaching
 read
 reader
 readme
@@ -922,6 +968,7 @@ rfc3339
 rfind
 rid
 right
+ring
 risk
 room
 root
@@ -936,6 +983,7 @@ rpc
 rposition
 rsplit
 rule
+ruler
 rules
 run
 runs
@@ -953,6 +1001,7 @@ sb
 schema
 scheme
 scope
+script
 search
 searchable
 searched
@@ -968,6 +1017,7 @@ seek
 seen
 seg
 segment
+selected
 self
 sense
 sentence
@@ -992,10 +1042,12 @@ shape
 shaped
 share
 shared
+shell
 short
 show
 shown
 shows
+shut
 sibling
 siblings
 sid
@@ -1054,6 +1106,7 @@ starting
 starts
 state
 static
+station
 stats
 status
 stay
@@ -1082,7 +1135,6 @@ success
 successor
 suffix
 sum
-summary
 super
 superseded
 supersedes
@@ -1100,9 +1152,9 @@ take
 taken
 takes
 target
-targets
 task
 tcp
+tell
 tells
 temp
 ten
@@ -1128,8 +1180,6 @@ through
 tidy
 tie
 tight
-tile
-tiles
 time
 timeout
 times
@@ -1141,6 +1191,7 @@ tmp
 to
 today
 together
+toggled
 tok
 token
 tokens
@@ -1192,6 +1243,7 @@ unambiguous
 unchanged
 unclaimed
 under
+unfold
 unique
 unix
 unknown
@@ -1242,6 +1294,7 @@ vv
 wait
 waiting
 walk
+walks
 want
 warning
 was
@@ -1260,6 +1313,7 @@ whose
 why
 wide
 width
+windows
 wins
 with
 without
@@ -1271,7 +1325,6 @@ works
 world
 would
 wrap
-wrapping
 write
 writeln
 writer

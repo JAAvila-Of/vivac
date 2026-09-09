@@ -21,8 +21,8 @@
 //! place and proven.
 
 mod gate;
+mod map;
 mod today;
-mod tree;
 mod why;
 
 use crate::failure::{Failure, R};
@@ -105,8 +105,10 @@ enum Route<'a> {
     Today(&'a str),
     /// `GET /p/<id>/why/<node>` -- one node's lineage, drawn (`d145`).
     Why(&'a str, &'a str),
-    /// `GET /p/<id>/tree` -- the whole tree, drawn (`WEB.md` §3.6, `d194`).
-    Tree(&'a str),
+    /// `GET /p/<id>/tree` -- the whole tree, drawn (`WEB.md` §3.6, `d391`).
+    /// The query rides along: it is where the map carries what the reader
+    /// has folded away, so a view of the tree is a URL and nothing else.
+    Tree(&'a str, &'a str),
     NotFound,
 }
 
@@ -119,7 +121,10 @@ enum Route<'a> {
 /// parser to the one path security is watching, which is exactly what
 /// `d138` refused to do for headers.
 fn route(path: &str) -> Route<'_> {
-    let path = path.split_once('?').map(|(p, _)| p).unwrap_or(path);
+    let (path, query) = match path.split_once('?') {
+        Some((p, q)) => (p, q),
+        None => (path, ""),
+    };
     if path == "/" {
         return Route::Index;
     }
@@ -137,7 +142,7 @@ fn route(path: &str) -> Route<'_> {
                         return Route::Why(id, node);
                     }
                 } else if tail == "tree" {
-                    return Route::Tree(id);
+                    return Route::Tree(id, query);
                 }
             }
             _ => {}
@@ -322,18 +327,21 @@ fn handle(
                 }
                 other => not_one(request, registry, other),
             },
-            // The whole tree, drawn (`WEB.md` §3.6). Same dance as `Today`
+            // The whole tree, as a map (`WEB.md` §3.6). Same dance as `Today`
             // above, and the same reason for saying nothing in the body
             // when the store cannot be read.
-            Route::Tree(id) => match registry.named(id) {
+            Route::Tree(id, query) => match registry.named(id) {
                 Named::One(i) => {
                     let project = registry.at(i);
                     let name = project.name.clone();
                     let key = id.to_string();
                     match project.current() {
-                        Ok(ctx) => {
-                            respond(request, 200, HTML, tree::tree_page(&key, &name, &ctx.tree))
-                        }
+                        Ok(ctx) => respond(
+                            request,
+                            200,
+                            HTML,
+                            map::map_page(&key, &name, &ctx.tree, query),
+                        ),
                         Err(_) => respond(
                             request,
                             500,
@@ -503,8 +511,13 @@ mod tests {
     /// slash, the same as every other path under a project.
     #[test]
     fn a_tree_routes_under_its_project() {
-        assert!(matches!(route("/p/vivac/tree"), Route::Tree("vivac")));
-        assert!(matches!(route("/p/vivac/tree/"), Route::Tree("vivac")));
+        assert!(matches!(route("/p/vivac/tree"), Route::Tree("vivac", "")));
+        assert!(matches!(route("/p/vivac/tree/"), Route::Tree("vivac", "")));
+        // The query is the map's fold state, so it has to survive the router.
+        assert!(matches!(
+            route("/p/vivac/tree?fold=g1"),
+            Route::Tree("vivac", "fold=g1")
+        ));
     }
 
     #[test]
