@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.6](https://github.com/JAAvila-Of/vivac/compare/v0.6.5...v0.6.6) - 2026-09-09
+
+### Added
+
+- *(open)* rank fronts by what is waiting, and cap the list at ten ([#87](https://github.com/JAAvila-Of/vivac/pull/87))
+
+### Documentation
+
+- *(pillars)* count the read ceiling in open fronts, not in nodes ([#86](https://github.com/JAAvila-Of/vivac/pull/86))
+- *(readme)* say what it does now, and what the numbers were hiding ([#85](https://github.com/JAAvila-Of/vivac/pull/85))
+- *(readme)* the web serves four pages, and opens from anywhere ([#82](https://github.com/JAAvila-Of/vivac/pull/82))
+
+### Internal
+
+- *(readme)* fail when the set of web pages changes ([#84](https://github.com/JAAvila-Of/vivac/pull/84))
+
 ## [0.6.5](https://github.com/JAAvila-Of/vivac/compare/v0.6.4...v0.6.5) - 2026-09-08
 
 ### Added
