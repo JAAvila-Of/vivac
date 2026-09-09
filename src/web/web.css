@@ -523,13 +523,56 @@ body.wide-page header {
 
 /* ---- the drawing ------------------------------------------------------ */
 
+/* Two rows: the lane heads, and then the drawing beside the list. The heads
+   have to be a row of the same grid rather than anything above it, or the
+   gutter starts one strip lower than the list it is drawn against and every
+   station points at the wrong row. */
 .map {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) 25rem;
+  grid-template-rows: auto 1fr;
+}
+
+.heads {
+  position: relative;
+  grid-row: 1;
+  grid-column: 1;
+  height: 1.4rem;
+}
+
+/* One control per lane, sitting over the column it folds. Absolute, at the
+   same x the server drew the lane at: the head and its rails are the same
+   number. */
+.heads .head {
+  position: absolute;
+  top: 0;
+  width: 18px;
+  color: var(--ink-faint);
+  font-family: var(--mono);
+  font-size: 0.66rem;
+  line-height: 1.2rem;
+  text-align: center;
+  text-decoration: none;
+}
+
+.heads .head:hover,
+.heads .head:focus-visible {
+  color: var(--accent);
+}
+
+/* A folded level keeps its number and gains a box: a state a colour alone
+   carried would be one the DX pillar does not allow. */
+.heads .head.on {
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  line-height: 1.1rem;
 }
 
 .gutter {
   position: relative;
+  grid-row: 2;
+  grid-column: 1;
 }
 
 /* Two gutters, one per lane width, and exactly one of them on screen. Both
@@ -588,6 +631,38 @@ body.wide-page header {
   opacity: 0.9;
 }
 
+/* The fold control, in the gutter and beside the rail it cuts. A link, so
+   folding works with no script at all, can be bookmarked, and comes undone
+   with the back button. */
+.folds a {
+  cursor: pointer;
+}
+
+.folds rect {
+  fill: transparent;
+}
+
+.folds text {
+  fill: var(--ink-faint);
+  font-family: var(--mono);
+  font-size: 11px;
+  text-anchor: middle;
+}
+
+.folds a:hover text,
+.folds a:focus-visible text {
+  fill: var(--accent);
+}
+
+.folds a.on text {
+  fill: var(--accent);
+}
+
+/* The route dims the drawing, and a control is not part of the drawing. */
+.routing .folds text {
+  opacity: 1;
+}
+
 .route path {
   fill: none;
   stroke: var(--accent);
@@ -625,6 +700,8 @@ body.wide-page header {
    stations beside them: a row's index is its y, so an indent here would be
    a lie about where its station is. */
 ol.stops {
+  grid-row: 2;
+  grid-column: 2;
   list-style: none;
   margin: 0;
   padding: 0;
@@ -713,45 +790,47 @@ li.stop.false-close .title::after {
   font-size: 0.7rem;
 }
 
-/* The fold control. A link, because folding recomputes the map on the
-   server -- so it works with no script at all, it can be bookmarked, and
-   the back button unfolds. */
-li.stop .fold {
+/* What a folded row is holding out of sight. The control that put it there
+   lives in the gutter, beside the rail it cut; the count belongs here,
+   because it is the one thing the reader cannot see for themselves once the
+   subtree is gone. */
+li.stop .held {
   grid-column: 5;
   min-width: 2.4rem;
-  color: var(--ink-faint);
+  color: var(--accent);
   font-family: var(--mono);
   font-size: 0.7rem;
   text-align: right;
-  text-decoration: none;
-  opacity: 0;
-}
-
-li.stop:hover .fold,
-li.stop .fold:focus-visible,
-li.stop .fold.on {
-  opacity: 1;
-}
-
-/* A folded row keeps its count on screen: it is the one thing the reader
-   cannot see for themselves once the subtree is gone. */
-li.stop .fold.on {
-  color: var(--accent);
 }
 
 li.stop.folded .title {
   font-style: italic;
 }
 
+/* The same links as the heads above the gutter, for the layout where a lane
+   is 8 px across and cannot carry a control of its own. */
 .depths {
+  display: none;
   color: var(--ink-faint);
   font-family: var(--mono);
   font-size: 0.72rem;
 }
 
+@media (max-width: 860px) {
+  .depths {
+    display: inline;
+  }
+}
+
 .depths .depth {
   margin-left: 0.35rem;
   text-decoration: none;
+}
+
+.depths .depth.on {
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  padding: 0 0.2rem;
 }
 
 li.stop.hit {
@@ -793,6 +872,8 @@ li.stop.faded {
 /* On a desktop it stands beside the map and stays put while the map
    scrolls, which is the whole promise: the tree never leaves the screen. */
 .detail {
+  grid-row: 1 / span 2;
+  grid-column: 3;
   position: sticky;
   top: 0;
   align-self: start;
@@ -919,6 +1000,12 @@ li.stop.faded {
 
   .rails.narrow {
     display: block;
+  }
+
+  /* A lane is 8 px across here and no control fits in 8 px, so the heads
+     give way to the same links as chips in the tools. */
+  .heads {
+    display: none;
   }
 
   li.stop {

@@ -1181,7 +1181,14 @@ fn a_fold_travels_in_the_url_and_is_served_like_any_other_page() {
         "t2's own child should be off the page:\n{}",
         folded.body
     );
-    assert!(folded.body.contains(">+1</a>"), "{}", folded.body);
+    assert!(
+        folded.body.contains("<span class=\"held\">+1</span>"),
+        "{}",
+        folded.body
+    );
+    // And the control that undoes it is a link in the gutter, one per lane
+    // width, so it works with no script at all.
+    assert_eq!(folded.body.matches("class=\"fold on\"").count(), 2);
 }
 
 /// `WEB.md` §7.4: the whole map loads with no internet, the same as every

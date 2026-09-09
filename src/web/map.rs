@@ -33,7 +33,8 @@
 //! A **lane** is one ancestor. Lanes alive at any row are exactly the
 //! ancestor chain, so the gutter is as wide as the tree is deep -- 15 --
 //! and not as wide as it is branched -- 125. That is the measurement the
-//! whole form rests on: 300 px of gutter on a desktop, 159 on a phone.
+//! whole form rests on: 318 px of gutter on a desktop, 158 on a phone,
+//! fold controls included.
 //!
 //! Nothing here is carried by colour alone, which the DX pillar forbids:
 //! state is the fill of the station *and* a strike through the title *and*
@@ -78,6 +79,14 @@
 //! the map over what is left. `Fold` says why it is a URL and not a
 //! gesture.
 //!
+//! Both controls are **in the drawing**, because what they fold is a branch
+//! and the branch is what the gutter draws. A node with children carries a
+//! triangle in a column of its own before lane zero, drawn by the same
+//! `y(i)` as its station so the two cannot drift apart; and the head of
+//! each lane folds that whole depth, sitting over the column it acts on
+//! -- a lane *is* a depth, so nobody has to translate "depth 4" into a
+//! position. Both are links, so both work with no script at all.
+//!
 //! What folding is **not** is an "only what is open" filter. That one is
 //! still not here and still not authorised: it is not navigation, it is a
 //! claim about what matters, and `d391`'s sentence does not make it. The
@@ -114,6 +123,10 @@ const ROW: u32 = 32;
 struct Lane {
     step: u32,
     origin: u32,
+    /// Where the fold control sits, before lane zero. It has a column of the
+    /// gutter to itself: a control drawn on top of the rails would have to
+    /// share space with a station of radius 9.
+    control: u32,
     /// The class that decides which of the two is on screen. Both are
     /// selected by class and never by element, because the first version of
     /// this drew both at once: `svg.g{display:block}` is (0,1,1) and beat
@@ -123,13 +136,18 @@ struct Lane {
 
 const WIDE: Lane = Lane {
     step: 18,
-    origin: 16,
+    origin: 34,
+    control: 11,
     when: "wide",
 };
 
+/// A step narrower than the desktop's half, so that the column the control
+/// took does not cost the phone any width: 15 levels at 8 px plus the
+/// control is the 159 px the gutter measured before it had one.
 const NARROW: Lane = Lane {
-    step: 9,
-    origin: 10,
+    step: 8,
+    origin: 24,
+    control: 9,
     when: "narrow",
 };
 
@@ -195,25 +213,35 @@ impl Fold {
         self.shut.contains(&n.num)
     }
 
+    /// The query for this fold with `these` added or taken out, and
+    /// `standing` as the fragment so the browser lands back where the reader
+    /// was when they clicked.
+    fn with(&self, tree: &Tree, these: &[String], on: bool, standing: &str) -> String {
+        let dropped: BTreeSet<&String> = these.iter().collect();
+        let mut aliases: Vec<String> = self
+            .shut
+            .iter()
+            .filter_map(|&num| tree.node_by_num(num).map(|x| x.alias()))
+            .filter(|a| !dropped.contains(a))
+            .collect();
+        if on {
+            aliases.extend(these.iter().cloned());
+        }
+        aliases.sort();
+        match (aliases.is_empty(), standing.is_empty()) {
+            (true, true) => "?".to_string(),
+            (true, false) => format!("?#{standing}"),
+            (false, true) => format!("?fold={}", aliases.join(",")),
+            (false, false) => format!("?fold={}#{standing}", aliases.join(",")),
+        }
+    }
+
     /// The query for this fold with one node's state flipped, and the node
     /// itself as the fragment so the browser lands back where the reader was
     /// standing when they folded it.
     fn toggled(&self, tree: &Tree, n: &Node) -> String {
-        let mut aliases: Vec<String> = self
-            .shut
-            .iter()
-            .filter(|&&num| num != n.num)
-            .filter_map(|&num| tree.node_by_num(num).map(|x| x.alias()))
-            .collect();
-        if !self.hides(n) {
-            aliases.push(n.alias());
-        }
         let alias = n.alias();
-        if aliases.is_empty() {
-            format!("?#{alias}")
-        } else {
-            format!("?fold={}#{alias}", aliases.join(","))
-        }
+        self.with(tree, std::slice::from_ref(&alias), !self.hides(n), &alias)
     }
 }
 
@@ -450,11 +478,15 @@ fn y(i: usize) -> u32 {
 /// The whole drawing is `aria-hidden`: it is a picture of the list next to
 /// it, and a reader who cannot see it is not served by hearing 389 circles
 /// announced. The list carries the text, the links and the keyboard.
-fn gutter(map: &Map, lane: &Lane) -> String {
+fn gutter(tree: &Tree, map: &Map, lane: &Lane, fold: &Fold) -> String {
+    // The drawing is `aria-hidden`: it is a picture of the list next to it,
+    // and a reader who cannot see it is not served by hearing 395 circles
+    // announced. The fold controls at the end are outside that group, and
+    // labelled, because they are the one part of this that does something.
     let mut out = format!(
         "<svg class=\"rails {when}\" width=\"{w}\" height=\"{h}\" \
-         data-step=\"{step}\" data-origin=\"{origin}\" data-row=\"{ROW}\" \
-         aria-hidden=\"true\">\n",
+         data-step=\"{step}\" data-origin=\"{origin}\" data-row=\"{ROW}\">\n\
+         <g aria-hidden=\"true\">\n",
         when = lane.when,
         w = map.width(lane),
         h = map.height(),
@@ -532,7 +564,48 @@ fn gutter(map: &Map, lane: &Lane) -> String {
     // server: nothing is selected when the page lands, which is the whole
     // fix for a first version that arrived with everything but one node
     // dimmed to a third.
-    out.push_str("<g class=\"route\"></g></svg>\n");
+    out.push_str("<g class=\"route\"></g></g>\n");
+
+    // The fold controls, in a column of their own before lane zero, and
+    // *inside* the drawing rather than at the end of the row. They belong to
+    // the rails: what a reader folds is a branch of the tree, and the branch
+    // is the thing the gutter draws. Being in the same SVG also means they
+    // are placed by the same `y(i)` as the station they sit beside, so they
+    // cannot drift out of step with it the way a third parallel list would.
+    //
+    // Real links, in SVG, so they work with no script at all -- and outside
+    // the `aria-hidden` above, with a label each, because these are the one
+    // part of the drawing that is not a picture of the list.
+    out.push_str("<g class=\"folds\">\n");
+    for (i, s) in map.stops.iter().enumerate() {
+        if s.fan == 0 {
+            continue;
+        }
+        let n = s.node;
+        let shut = fold.hides(n);
+        let mid = y(i);
+        out.push_str(&format!(
+            "<a class=\"fold{on}\" href=\"{href}\" aria-label=\"{label}\">\
+             <rect x=\"{left}\" y=\"{top}\" width=\"18\" height=\"18\"/>\
+             <text x=\"{x}\" y=\"{text}\">{glyph}</text></a>\n",
+            on = if shut { " on" } else { "" },
+            href = escape(&fold.toggled(tree, n)),
+            label = escape(&if shut {
+                format!("unfold {} nodes under {}", s.hidden, n.alias())
+            } else {
+                format!("fold everything under {}", n.alias())
+            }),
+            left = lane.control.saturating_sub(9),
+            top = mid - 9,
+            x = lane.control,
+            text = mid + 4,
+            // A triangle that points down is open and one that points right
+            // is shut: the same shape a disclosure has had since before the
+            // web, and a shape rather than a colour.
+            glyph = if shut { "&#9656;" } else { "&#9662;" },
+        ));
+    }
+    out.push_str("</g></svg>\n");
     out
 }
 
@@ -568,28 +641,13 @@ fn rows(project: &str, tree: &Tree, map: &Map, ag: &Aggregates, fold: &Fold) -> 
             0 => String::new(),
             c => format!("<span class=\"fan\">{c}</span>"),
         };
-        // A link and not a button: folding recomputes the map on the server,
-        // so this navigates. The count is what it is holding out of sight,
-        // which is the one thing a reader cannot see for themselves once it
-        // is folded.
-        let control = if s.fan == 0 {
-            String::new()
-        } else if fold.hides(n) {
-            format!(
-                "<a class=\"fold on\" href=\"{href}\" \
-                 title=\"unfold {hidden} node{s} under {id}\">+{hidden}</a>",
-                href = escape(&fold.toggled(tree, n)),
-                hidden = s.hidden,
-                s = if s.hidden == 1 { "" } else { "s" },
-                id = escape(&alias),
-            )
-        } else {
-            format!(
-                "<a class=\"fold\" href=\"{href}\" \
-                 title=\"fold everything under {id}\">-</a>",
-                href = escape(&fold.toggled(tree, n)),
-                id = escape(&alias),
-            )
+        // How many this row is holding out of sight. The control that put
+        // them there lives in the gutter, beside the rail it cut; what
+        // belongs on the row is the count, which is the one thing a reader
+        // cannot see for themselves once the subtree is gone.
+        let control = match fold.hides(n) {
+            true => format!("<span class=\"held\">+{}</span>", s.hidden),
+            false => String::new(),
         };
         // The `*` goes *inside* the alias, which is where `vivac tree` puts
         // it and where the old tile put it. Outside, it was a fifth child of
@@ -732,6 +790,9 @@ fn key(tree: &Tree) -> String {
          <dt>cap</dt><dd>the end of a line. Provenance is a tree, so no line \
          ever rejoins another</dd>\n\
          <dt>struck out</dt><dd>closed</dd>\n\
+         <dt>triangle</dt><dd>folds everything under that node, so its \
+         neighbours come within reach</dd>\n\
+         <dt>numbers above</dt><dd>fold a whole depth at once, one per lane</dd>\n\
          <dt>keys</dt><dd>up and down walk the list, / finds, Esc closes</dd>\n\
          </dl>\n</div>\n",
         n = tree.total(),
@@ -772,12 +833,14 @@ fn stats(map: &Map, tree: &Tree) -> String {
 /// always says exactly what is folded, node by node. A `depth=` of its own
 /// would have been shorter and would have left two mechanisms that answer
 /// to each other, with a row's unfold unable to undo it.
-/// It reads the **whole** tree and never the drawing: a depth link is an
-/// absolute view, so it has to name the nodes at that depth that are folded
-/// away right now as well as the ones on screen. Built off the drawing, it
-/// quietly unfolded whatever was already folded.
-fn depths(tree: &Tree) -> String {
-    fn by_depth(tree: &Tree, n: &Node, depth: usize, out: &mut Vec<Vec<String>>) {
+/// Every node that has children, gathered by how deep it sits.
+///
+/// It reads the **whole** tree and never the drawing: folding a level is an
+/// absolute view, so it has to name the nodes at that depth that are already
+/// folded away as well as the ones on screen. Built off the drawing, it
+/// quietly unfolded whatever was folded.
+fn foldable_by_depth(tree: &Tree) -> Vec<Vec<String>> {
+    fn walk(tree: &Tree, n: &Node, depth: usize, out: &mut Vec<Vec<String>>) {
         let children = tree.children(n.num);
         if !children.is_empty() {
             if out.len() <= depth {
@@ -786,27 +849,79 @@ fn depths(tree: &Tree) -> String {
             out[depth].push(n.alias());
         }
         for c in children {
-            by_depth(tree, c, depth + 1, out);
+            walk(tree, c, depth + 1, out);
         }
     }
 
     let mut levels: Vec<Vec<String>> = Vec::new();
     for root in tree.roots() {
-        by_depth(tree, root, 0, &mut levels);
+        walk(tree, root, 0, &mut levels);
     }
+    levels
+}
+
+/// Whether every node of a level is already folded, which is what decides
+/// whether its control folds or unfolds.
+fn all_shut(tree: &Tree, fold: &Fold, level: &[String]) -> bool {
+    level
+        .iter()
+        .all(|a| tree.resolve(a).is_some_and(|n| fold.hides(n)))
+}
+
+/// One control per lane, at the head of the column it folds.
+///
+/// A lane **is** a depth, so the head of a lane is where folding a whole
+/// level belongs: it sits above the column it acts on, and nobody has to
+/// translate "depth 4" into a position on the drawing. The number is the
+/// depth; a level that is folded keeps the number and gains a box, because
+/// a state a colour alone carries is one the DX pillar does not allow.
+///
+/// Wide layout only. A lane is 8 px across on a phone and no control fits in
+/// 8 px, so the narrow one keeps the same links as a row of chips in the
+/// tools. Same links and the same mechanism, in two shapes.
+fn heads(tree: &Tree, fold: &Fold, lane: &Lane) -> String {
+    let levels = foldable_by_depth(tree);
     if levels.is_empty() {
         return String::new();
     }
+    let mut out = format!("<div class=\"heads {when}\">", when = lane.when);
+    for (level, at) in levels.iter().enumerate() {
+        if at.is_empty() {
+            continue;
+        }
+        let shut = all_shut(tree, fold, at);
+        out.push_str(&format!(
+            "<a class=\"head{on}\" style=\"left:{left}px\" href=\"{href}\" \
+             title=\"{what} everything at depth {n}\">{n}</a>",
+            on = if shut { " on" } else { "" },
+            left = lane.x(level).saturating_sub(9),
+            href = escape(&fold.with(tree, at, !shut, "")),
+            what = if shut { "unfold" } else { "fold" },
+            n = level + 1,
+        ));
+    }
+    out.push_str("</div>\n");
+    out
+}
 
+/// The same levels as `heads`, as a row of chips: what the phone gets, where
+/// a lane is too narrow to carry a control of its own.
+fn depths(tree: &Tree, fold: &Fold) -> String {
+    let levels = foldable_by_depth(tree);
+    if levels.is_empty() {
+        return String::new();
+    }
     let mut out = String::from("<span class=\"depths\">fold to depth ");
     for (level, at) in levels.iter().enumerate() {
         if at.is_empty() {
             continue;
         }
+        let shut = all_shut(tree, fold, at);
         out.push_str(&format!(
-            "<a class=\"depth\" href=\"?fold={}\">{}</a>",
-            escape(&at.join(",")),
-            level + 1,
+            "<a class=\"depth{on}\" href=\"{href}\">{n}</a>",
+            on = if shut { " on" } else { "" },
+            href = escape(&fold.with(tree, at, !shut, "")),
+            n = level + 1,
         ));
     }
     out.push_str("<a class=\"depth\" href=\"?\">all</a></span>");
@@ -847,10 +962,11 @@ pub(super) fn map_page(project: &str, name: &str, tree: &Tree, query: &str) -> S
     };
 
     let body = format!(
-        "<div class=\"map\">\n<div class=\"gutter\">{wide}{narrow}</div>\n\
+        "<div class=\"map\">\n{heads}<div class=\"gutter\">{wide}{narrow}</div>\n\
          {rows}<aside id=\"detail\" class=\"detail\">{key}</aside>\n</div>\n",
-        wide = gutter(&map, &WIDE),
-        narrow = gutter(&map, &NARROW),
+        heads = heads(tree, &fold, &WIDE),
+        wide = gutter(tree, &map, &WIDE, &fold),
+        narrow = gutter(tree, &map, &NARROW, &fold),
         rows = rows(project, tree, &map, &ag, &fold),
         key = key(tree),
     );
@@ -867,7 +983,7 @@ pub(super) fn map_page(project: &str, name: &str, tree: &Tree, query: &str) -> S
              <span class=\"hits\" id=\"hits\" role=\"status\"></span>{depths}</div>\n",
             stats = escape(&stats(&map, tree)),
             legend = legend(&map),
-            depths = depths(tree),
+            depths = depths(tree, &fold),
         ),
         payload(project, tree, &map, &ag, &fold),
         MAP_JS.to_string(),
@@ -1402,7 +1518,10 @@ mod tests {
             (tree.total() - under) * 2,
             "and off both gutters, or a rail points at the wrong row"
         );
-        assert!(page.contains(&format!(">+{under}</a>")), "{page}");
+        assert!(
+            page.contains(&format!("<span class=\"held\">+{under}</span>")),
+            "{page}"
+        );
     }
 
     /// Only the node doing the folding offers to unfold. Every ancestor of
@@ -1419,8 +1538,8 @@ mod tests {
         let page = map_page("vivac", "vivac", &tree, &format!("fold={alias}"));
         assert_eq!(
             page.matches("class=\"fold on\"").count(),
-            1,
-            "one node is folded, so one control says so:\n{page}"
+            2,
+            "one node is folded, so one control per gutter says so:\n{page}"
         );
         assert_eq!(
             page.matches("class=\"stop hub folded\"").count()
@@ -1428,6 +1547,34 @@ mod tests {
             1,
             "and one row is marked folded:\n{page}"
         );
+    }
+
+    /// A lane is a depth, so the head of a lane folds that whole depth. The
+    /// controls are one per level that has anything to fold, and the level a
+    /// reader has already folded says so rather than offering to fold it
+    /// again.
+    #[test]
+    fn each_lane_has_a_head_that_folds_its_whole_depth() {
+        let tree = real_shape();
+        let levels: Vec<Vec<String>> = foldable_by_depth(&tree)
+            .into_iter()
+            .filter(|l| !l.is_empty())
+            .collect();
+        assert!(levels.len() > 1, "the fixture has more than one level");
+
+        let page = map_page("vivac", "vivac", &tree, "");
+        assert_eq!(page.matches("class=\"head\"").count(), levels.len());
+        assert_eq!(page.matches("class=\"head on\"").count(), 0);
+
+        // Fold the first level whole, and its head is the one that changes.
+        let whole = levels[0].join(",");
+        let page = map_page("vivac", "vivac", &tree, &format!("fold={whole}"));
+        assert_eq!(
+            page.matches("class=\"head on\"").count(),
+            1,
+            "the folded level, and only it:\n{page}"
+        );
+        assert_eq!(page.matches("class=\"depth on\"").count(), 1, "{page}");
     }
 
     /// A line is a property of the work and not of the view. Fold a branch

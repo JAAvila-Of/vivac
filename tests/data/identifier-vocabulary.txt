@@ -320,6 +320,7 @@ drain
 drawn
 draws
 drop
+dropped
 drops
 dump
 duration
@@ -423,6 +424,7 @@ fn
 focus
 focused
 fold
+foldable
 folded
 folding
 folds
@@ -488,6 +490,7 @@ header
 headers
 heading
 headings
+heads
 heaviest
 heavy
 height
@@ -1163,6 +1166,7 @@ their
 them
 then
 there
+these
 they
 this
 thread
