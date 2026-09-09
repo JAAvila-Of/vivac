@@ -21,17 +21,19 @@
 //!
 //! A **line** is a route, not a branch: it follows the heaviest child at
 //! every step, and every sibling that turns off starts a line of its own.
-//! On the real tree that is 261 lines of which only 8 reach five stations,
+//! On the real tree that is 262 lines of which only 8 reach five stations,
 //! so eight earn a colour and a name and the rest stay grey -- which is the
-//! whole reason the colours read at all. A line that ends carries a
+//! whole reason the colours read at all. Lines are threaded over the
+//! **whole** tree, never over what is on screen: fold a branch away and
+//! `g1` is still `g1`, in the same colour. A line that ends carries a
 //! terminus cap: provenance is a tree (`MODEL.md` §9, invariant 11: at most
 //! one incoming edge), so no line ever rejoins another, and the cap says
 //! the line finished rather than that the drawing got cut off.
 //!
 //! A **lane** is one ancestor. Lanes alive at any row are exactly the
-//! ancestor chain, so the gutter is as wide as the tree is deep -- 16 --
+//! ancestor chain, so the gutter is as wide as the tree is deep -- 15 --
 //! and not as wide as it is branched -- 125. That is the measurement the
-//! whole form rests on: 293 px of gutter on a desktop, 155 on a phone.
+//! whole form rests on: 300 px of gutter on a desktop, 159 on a phone.
 //!
 //! Nothing here is carried by colour alone, which the DX pillar forbids:
 //! state is the fill of the station *and* a strike through the title *and*
@@ -67,26 +69,30 @@
 //! find out: the page grows with the *prose* in the tree, so a ten thousand
 //! node tree would ship tens of megabytes. `f393` holds that.
 //!
-//! ## What `d391` does not authorise
+//! ## Folding, and what folding is not
 //!
-//! Two things the prototype had are deliberately not here, because the
-//! signed sentence does not cover them and "correctness over cost" does not
-//! allow a degraded version of either:
+//! A tree drawn in one column puts a node's siblings as far apart as the
+//! work between them is deep, so on the real tree "the next one along" is
+//! the hardest thing on the page to reach. Folding answers that: `?fold=`
+//! names the nodes whose subtrees are not drawn, and the server recomputes
+//! the map over what is left. `Fold` says why it is a URL and not a
+//! gesture.
 //!
-//! - **An "only what is open" filter.** The gutter is drawn by row index,
-//!   so hiding rows would leave every rail pointing at the wrong row. The
-//!   prototype dimmed instead of hid, which is a filter that does not
-//!   filter. The honest fix is to recompute the map with the filter
-//!   applied, and that is its own decision (`f394`).
-//! - **A page that is not twelve thousand pixels tall.** 389 rows at 32 px
-//!   is the whole tree, which is what the page is for; whether it should
-//!   fold is a separate question (`f395`).
+//! What folding is **not** is an "only what is open" filter. That one is
+//! still not here and still not authorised: it is not navigation, it is a
+//! claim about what matters, and `d391`'s sentence does not make it. The
+//! mechanism it would need now exists, which is the whole of what changed
+//! -- `f394` is where it gets decided, not here.
+//!
+//! Nor does folding settle the page's height (`f395`): 395 rows at 32 px is
+//! still twelve thousand pixels when nothing is folded, which is what the
+//! page is for.
 
 use super::escape;
 use crate::event::State;
 use crate::model::{Aggregates, Node, Tree};
 use serde_json::json;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 /// The script the page carries, in its own file for the reason `web.css` is
 /// in its own file: nobody maintains two hundred lines of anything inside a
@@ -145,6 +151,72 @@ const NAMED_MAX: usize = 8;
 /// the gutter always mean the same thing.
 const HUB: usize = 10;
 
+/// What the reader has folded away, read off the query string.
+///
+/// **Folding is a URL and not a gesture**, and that is the whole design.
+/// The gutter is drawn by row index, so a row that goes missing takes its
+/// rail's meaning with it (`f394`): folding has to *recompute* the map, not
+/// hide part of one. Recomputing in the browser would put a second
+/// implementation of the same drawing next to this one, which is the defect
+/// `f380` is named after -- so the server recomputes, the fold rides in the
+/// query, and every fold control on the page is a plain link.
+///
+/// What that buys, beyond one implementation: it works with script off, a
+/// folded view can be bookmarked and sent to somebody, and the back button
+/// unfolds.
+#[derive(Default)]
+struct Fold {
+    /// Nodes whose children are not drawn.
+    shut: BTreeSet<u64>,
+}
+
+impl Fold {
+    /// **No percent-decoding**, for the reason the router gives for paths: an
+    /// alias is letters and digits and never needs escaping, so a value that
+    /// still carries a `%` resolves to no node and is dropped. Anything that
+    /// does not resolve is dropped the same way, which is what keeps the
+    /// page from ever echoing back a string a reader put in the address bar.
+    fn parse(query: &str, tree: &Tree) -> Fold {
+        let mut shut = BTreeSet::new();
+        for field in query.split('&') {
+            let Some(("fold", value)) = field.split_once('=') else {
+                continue;
+            };
+            for alias in value.split(',') {
+                if let Some(n) = tree.resolve(alias) {
+                    shut.insert(n.num);
+                }
+            }
+        }
+        Fold { shut }
+    }
+
+    fn hides(&self, n: &Node) -> bool {
+        self.shut.contains(&n.num)
+    }
+
+    /// The query for this fold with one node's state flipped, and the node
+    /// itself as the fragment so the browser lands back where the reader was
+    /// standing when they folded it.
+    fn toggled(&self, tree: &Tree, n: &Node) -> String {
+        let mut aliases: Vec<String> = self
+            .shut
+            .iter()
+            .filter(|&&num| num != n.num)
+            .filter_map(|&num| tree.node_by_num(num).map(|x| x.alias()))
+            .collect();
+        if !self.hides(n) {
+            aliases.push(n.alias());
+        }
+        let alias = n.alias();
+        if aliases.is_empty() {
+            format!("?#{alias}")
+        } else {
+            format!("?fold={}#{alias}", aliases.join(","))
+        }
+    }
+}
+
 /// One node's place in the drawing. The index of a stop in `Map::stops` is
 /// its row, its `y`, and its handle in the payload -- one number doing all
 /// three jobs, so the list and the rails cannot drift apart.
@@ -152,116 +224,176 @@ struct Stop<'t> {
     node: &'t Node,
     depth: usize,
     parent: Option<usize>,
+    /// The children that are *drawn*. Empty on a folded node, which is what
+    /// makes its line end there and its rail disappear.
     children: Vec<usize>,
-    /// How many nodes hang below this one. It decides which child the line
-    /// follows, and it is also the length of the rail this stop draws.
+    /// How many direct children the node really has, folded or not. The
+    /// radius reads this and never `children.len()`: folding is a way of
+    /// looking at the tree, and it is not allowed to change what the drawing
+    /// says about how branched the work is.
+    fan: usize,
+    /// How many nodes hang below this one *on the page*. It decides which
+    /// child the line follows, and it is the length of the rail this stop
+    /// draws.
     below: usize,
+    /// How many nodes this stop is holding out of sight. Zero unless folded.
+    hidden: usize,
     line: usize,
 }
 
-/// The whole drawing, computed once: every node as a stop, in tree order,
-/// threaded into lines.
+/// The whole drawing, computed once: every node that is not folded away as
+/// a stop, in tree order, over the lines of the whole tree.
 struct Map<'t> {
     stops: Vec<Stop<'t>>,
-    lines: Vec<Vec<usize>>,
-    /// The lines that earned a colour, best first. A line's position here
-    /// is its colour: `named[0]` is `l0`.
-    named: Vec<usize>,
+    lines: Lines,
+    /// Which stop a node is, by `num` -- `None` for a node that is folded
+    /// away and therefore has no row to point at.
+    index: HashMap<u64, usize>,
     depth: usize,
 }
 
-/// `n` and everything under it, pre-order, appended to `stops`. Pre-order is
-/// what makes a parent's row sit above its children's and its rail reach
-/// exactly to the last of them.
+/// `n` and everything under it that is not folded away, pre-order, appended
+/// to `stops`. Pre-order is what makes a parent's row sit above its
+/// children's and its rail reach exactly to the last of them.
 fn walk<'t>(
     tree: &'t Tree,
+    ag: &Aggregates,
+    fold: &Fold,
     n: &'t Node,
     depth: usize,
     parent: Option<usize>,
     stops: &mut Vec<Stop<'t>>,
 ) -> usize {
     let me = stops.len();
+    let fan = tree.children(n.num).len();
     stops.push(Stop {
         node: n,
         depth,
         parent,
         children: Vec::new(),
+        fan,
         below: 0,
+        hidden: 0,
         line: 0,
     });
     let mut children = Vec::new();
-    for c in tree.children(n.num) {
-        children.push(walk(tree, c, depth + 1, Some(me), stops));
+    if !fold.hides(n) {
+        for c in tree.children(n.num) {
+            children.push(walk(tree, ag, fold, c, depth + 1, Some(me), stops));
+        }
     }
     let below = stops.len() - me - 1;
     stops[me].children = children;
     stops[me].below = below;
+    // What folding costs, counted rather than implied: the whole subtree
+    // minus what of it is on the page.
+    stops[me].hidden = ag.counts(n.num).total.saturating_sub(below);
     me
 }
 
-/// The child a line continues into: the one carrying the most work. Ties go
-/// to the first born, so the drawing is the same every time it is drawn.
-fn heaviest(stops: &[Stop], children: &[usize]) -> usize {
-    let mut best = children[0];
-    for &c in &children[1..] {
-        if stops[c].below > stops[best].below {
-            best = c;
+/// Every line of the whole tree, threaded once.
+///
+/// **Threaded over the whole tree and never over what is on screen.** A line
+/// is a property of the work, not of the view: fold a branch away and `g1`
+/// has to still be `g1`, in the same colour, or the legend means something
+/// different on every page. The first version threaded the visible stops and
+/// the eight colours changed hands whenever anything was folded.
+struct Lines {
+    /// Which line each node is on, by `num`.
+    of: HashMap<u64, usize>,
+    /// The nodes of each line, in order, by `num`.
+    chains: Vec<Vec<u64>>,
+    /// The lines that earned a colour, best first. A line's position here is
+    /// its colour: `named[0]` is `l0`.
+    named: Vec<usize>,
+    /// What a named line is called: the alias of the node it starts at,
+    /// which is the oldest one on it.
+    names: HashMap<usize, String>,
+}
+
+/// Thread the lines. A line follows the heaviest child at every step and is
+/// followed to its end before any of the branches it left behind is started;
+/// those wait in `pending`, which is a stack rather than recursion because a
+/// line can be as long as the tree has nodes and a stack frame per station
+/// is a stack frame too many.
+fn thread(tree: &Tree, ag: &Aggregates) -> Lines {
+    let mut of: HashMap<u64, usize> = HashMap::new();
+    let mut chains: Vec<Vec<u64>> = Vec::new();
+    let mut pending: Vec<u64> = tree.roots().iter().rev().map(|r| r.num).collect();
+
+    while let Some(start) = pending.pop() {
+        let id = chains.len();
+        chains.push(Vec::new());
+        let mut at = start;
+        loop {
+            of.insert(at, id);
+            chains[id].push(at);
+            let children = tree.children(at);
+            let Some(first) = children.first() else {
+                break;
+            };
+            // The one carrying the most work, ties to the first born, so the
+            // drawing is the same every time it is drawn.
+            let mut next = first.num;
+            let mut best = ag.counts(first.num).total;
+            for c in children.iter().skip(1) {
+                let weight = ag.counts(c.num).total;
+                if weight > best {
+                    next = c.num;
+                    best = weight;
+                }
+            }
+            for c in children.iter().rev() {
+                if c.num != next {
+                    pending.push(c.num);
+                }
+            }
+            at = next;
         }
     }
-    best
+
+    // Longest first, and the tie broken by where the line starts so the
+    // colours do not shuffle between two runs on the same tree.
+    let mut rank: Vec<usize> = (0..chains.len()).collect();
+    rank.sort_by_key(|&i| (std::cmp::Reverse(chains[i].len()), chains[i][0]));
+    let named: Vec<usize> = rank
+        .into_iter()
+        .filter(|&i| chains[i].len() >= NAMED_MIN)
+        .take(NAMED_MAX)
+        .collect();
+    let names: HashMap<usize, String> = named
+        .iter()
+        .filter_map(|&i| tree.node_by_num(chains[i][0]).map(|n| (i, n.alias())))
+        .collect();
+
+    Lines {
+        of,
+        chains,
+        named,
+        names,
+    }
 }
 
 impl<'t> Map<'t> {
-    fn of(tree: &'t Tree) -> Map<'t> {
+    fn of(tree: &'t Tree, ag: &Aggregates, fold: &Fold) -> Map<'t> {
+        let lines = thread(tree, ag);
         let mut stops = Vec::new();
-        let mut starts = Vec::new();
         for root in tree.roots() {
-            starts.push(walk(tree, root, 0, None, &mut stops));
+            walk(tree, ag, fold, root, 0, None, &mut stops);
         }
-
-        // Thread the lines. A line is followed to its end before any of the
-        // branches it left behind is started; those wait in `pending`, which
-        // is a stack rather than recursion because a line can be as long as
-        // the tree has nodes and a stack frame per station is a stack frame
-        // too many.
-        let mut lines: Vec<Vec<usize>> = Vec::new();
-        let mut pending: Vec<usize> = starts.into_iter().rev().collect();
-        while let Some(start) = pending.pop() {
-            let id = lines.len();
-            lines.push(Vec::new());
-            let mut at = start;
-            loop {
-                stops[at].line = id;
-                lines[id].push(at);
-                if stops[at].children.is_empty() {
-                    break;
-                }
-                let children = stops[at].children.clone();
-                let next = heaviest(&stops, &children);
-                for &c in children.iter().rev() {
-                    if c != next {
-                        pending.push(c);
-                    }
-                }
-                at = next;
-            }
+        for s in stops.iter_mut() {
+            s.line = *lines.of.get(&s.node.num).unwrap_or(&usize::MAX);
         }
-
-        // Longest first, and the tie broken by where the line starts so the
-        // colours do not shuffle between two runs on the same tree.
-        let mut rank: Vec<usize> = (0..lines.len()).collect();
-        rank.sort_by_key(|&i| (std::cmp::Reverse(lines[i].len()), lines[i][0]));
-        let named: Vec<usize> = rank
-            .into_iter()
-            .filter(|&i| lines[i].len() >= NAMED_MIN)
-            .take(NAMED_MAX)
+        let index = stops
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (s.node.num, i))
             .collect();
-
         let depth = stops.iter().map(|s| s.depth).max().unwrap_or(0);
         Map {
             stops,
             lines,
-            named,
+            index,
             depth,
         }
     }
@@ -271,20 +403,16 @@ impl<'t> Map<'t> {
     /// in the markup, so the palette can differ between the light and the
     /// dark ground and neither is baked into the drawing.
     fn colour(&self, line: usize) -> String {
-        match self.named.iter().position(|&l| l == line) {
+        match self.lines.named.iter().position(|&l| l == line) {
             Some(i) => format!("l{i}"),
             None => "lx".to_string(),
         }
     }
 
-    /// A named line is called after the station it starts at, which is the
-    /// oldest node on it. An unnamed one is not called anything.
+    /// A named line is called after the node it starts at, which is the
+    /// oldest one on it. An unnamed line is not called anything.
     fn line_name(&self, line: usize) -> String {
-        if self.named.contains(&line) {
-            self.stops[self.lines[line][0]].node.alias()
-        } else {
-            String::new()
-        }
+        self.lines.names.get(&line).cloned().unwrap_or_default()
     }
 
     fn width(&self, lane: &Lane) -> u32 {
@@ -359,10 +487,16 @@ fn gutter(map: &Map, lane: &Lane) -> String {
         }
     }
 
-    for &line in &map.named {
-        let last = *map.lines[line]
+    // A cap is drawn where a line really ends, and only if that station is
+    // on the page. Folding cuts a line short, and a cap on the last station
+    // still showing would say the line finished there when it did not.
+    for &line in &map.lines.named {
+        let end = *map.lines.chains[line]
             .last()
             .expect("a line in `named` has at least NAMED_MIN stations");
+        let Some(&last) = map.index.get(&end) else {
+            continue;
+        };
         let (x, mid) = (lane.x(map.stops[last].depth), y(last));
         out.push_str(&format!(
             "<path class=\"terminus {c}\" d=\"M{left} {below} H{right}\"/>\n",
@@ -375,7 +509,7 @@ fn gutter(map: &Map, lane: &Lane) -> String {
 
     for (i, s) in map.stops.iter().enumerate() {
         let (x, mid) = (lane.x(s.depth), y(i));
-        let r = radius(s.children.len());
+        let r = radius(s.fan);
         out.push_str(&format!(
             "<circle class=\"station {c}{state}\" data-stop=\"{i}\" \
              cx=\"{x}\" cy=\"{mid}\" r=\"{r}\"/>\n",
@@ -405,7 +539,7 @@ fn gutter(map: &Map, lane: &Lane) -> String {
 /// The list beside the drawing: one row per node, in the same order, at the
 /// same offset. Flat, and `d387`'s reason still holds -- a row's meaning is
 /// its rail, and an indent would say the same thing twice and worse.
-fn rows(project: &str, tree: &Tree, map: &Map, ag: &Aggregates) -> String {
+fn rows(project: &str, tree: &Tree, map: &Map, ag: &Aggregates, fold: &Fold) -> String {
     let mut out = String::from("<ol class=\"stops\">\n");
     for (i, s) in map.stops.iter().enumerate() {
         let n = s.node;
@@ -417,19 +551,45 @@ fn rows(project: &str, tree: &Tree, map: &Map, ag: &Aggregates) -> String {
         if n.state == State::Suspended {
             class.push_str(" parked");
         }
-        if s.children.len() >= HUB {
+        if s.fan >= HUB {
             class.push_str(" hub");
         }
         if n.state == State::Done && ag.blockers(n.num) > 0 {
             class.push_str(" false-close");
         }
+        if fold.hides(n) {
+            class.push_str(" folded");
+        }
         let notes = match n.notes.len() {
             0 | 1 => String::new(),
             many => format!("<span class=\"notes\">{many} notes</span>"),
         };
-        let fan = match s.children.len() {
+        let fan = match s.fan {
             0 => String::new(),
             c => format!("<span class=\"fan\">{c}</span>"),
+        };
+        // A link and not a button: folding recomputes the map on the server,
+        // so this navigates. The count is what it is holding out of sight,
+        // which is the one thing a reader cannot see for themselves once it
+        // is folded.
+        let control = if s.fan == 0 {
+            String::new()
+        } else if fold.hides(n) {
+            format!(
+                "<a class=\"fold on\" href=\"{href}\" \
+                 title=\"unfold {hidden} node{s} under {id}\">+{hidden}</a>",
+                href = escape(&fold.toggled(tree, n)),
+                hidden = s.hidden,
+                s = if s.hidden == 1 { "" } else { "s" },
+                id = escape(&alias),
+            )
+        } else {
+            format!(
+                "<a class=\"fold\" href=\"{href}\" \
+                 title=\"fold everything under {id}\">-</a>",
+                href = escape(&fold.toggled(tree, n)),
+                id = escape(&alias),
+            )
         };
         // The `*` goes *inside* the alias, which is where `vivac tree` puts
         // it and where the old tile put it. Outside, it was a fifth child of
@@ -440,7 +600,7 @@ fn rows(project: &str, tree: &Tree, map: &Map, ag: &Aggregates) -> String {
             "<li class=\"{class}\" id=\"{id}\" data-stop=\"{i}\">\
              <a class=\"alias {c}\" href=\"/p/{p}/why/{id}\" \
              title=\"{id} · {w}{b} · {t}\">{id}{mark}</a>\
-             <span class=\"title\">{t}</span>{notes}{fan}</li>\n",
+             <span class=\"title\">{t}</span>{notes}{fan}{control}</li>\n",
             c = map.colour(s.line),
             id = escape(&alias),
             p = escape(project),
@@ -458,17 +618,18 @@ fn rows(project: &str, tree: &Tree, map: &Map, ag: &Aggregates) -> String {
     out
 }
 
-/// The eight named lines, as the legend and as a filter. A line's name is
+/// The eight named lines, as the legend and as a highlight. A line's name is
 /// its oldest station, which is also where a reader can go to see what the
-/// line is about.
+/// line is about, and its count is its length in the whole tree -- folding
+/// changes what is drawn and never what a line is.
 fn legend(map: &Map) -> String {
     let mut out = String::from("<div class=\"legend\">\n");
-    for (i, &line) in map.named.iter().enumerate() {
+    for (i, &line) in map.lines.named.iter().enumerate() {
         out.push_str(&format!(
             "<button class=\"line l{i}\" data-line=\"{name}\" type=\"button\">\
              <b></b>{name} · {n}</button>\n",
             name = escape(&map.line_name(line)),
-            n = map.lines[line].len(),
+            n = map.lines.chains[line].len(),
         ));
     }
     out.push_str("</div>\n");
@@ -482,20 +643,14 @@ fn legend(map: &Map) -> String {
 /// legal JSON string: legal JSON can still contain the four characters that
 /// end a `<script>` element, and a tree is allowed to hold a node called
 /// `</script>`.
-fn payload(project: &str, tree: &Tree, map: &Map, ag: &Aggregates) -> String {
-    let index: HashMap<u64, usize> = map
-        .stops
-        .iter()
-        .enumerate()
-        .map(|(i, s)| (s.node.num, i))
-        .collect();
-
+fn payload(project: &str, tree: &Tree, map: &Map, ag: &Aggregates, fold: &Fold) -> String {
     let stops: Vec<serde_json::Value> = map
         .stops
         .iter()
         .map(|s| {
             let n = s.node;
             let below = ag.counts(n.num);
+            let blocking = crate::render::blocking_of(tree, n);
             json!({
                 "a": n.alias(),
                 "t": n.title(tree),
@@ -515,22 +670,35 @@ fn payload(project: &str, tree: &Tree, map: &Map, ag: &Aggregates) -> String {
                 "fc": n.state == State::Done && ag.blockers(n.num) > 0,
                 "d": s.depth,
                 "p": s.parent,
-                "c": s.children.len(),
+                "c": s.fan,
                 "ob": below.open_count,
                 "tb": below.total,
                 "ln": map.line_name(s.line),
+                "hd": s.hidden,
                 // What holds this one open, as stop indices: the same
                 // filter `tree` and `why` read, so the three surfaces
                 // cannot disagree about what a debt is (`f380`).
-                "bl": crate::render::blocking_of(tree, n)
+                //
+                // `bn` is how many there really are and `bl` only the ones
+                // with a row to link to. A blocker is always a descendant,
+                // so folding a node hides its own debts -- and a panel that
+                // silently listed the survivors would report a node as
+                // waiting on nothing while it waits on three.
+                "bn": blocking.len(),
+                "bl": blocking
                     .iter()
-                    .filter_map(|b| index.get(&b.num))
+                    .filter_map(|b| map.index.get(&b.num))
                     .collect::<Vec<_>>(),
             })
         })
         .collect();
 
-    let raw = json!({"project": project, "stops": stops}).to_string();
+    let folded: Vec<String> = fold
+        .shut
+        .iter()
+        .filter_map(|&num| tree.node_by_num(num).map(|n| n.alias()))
+        .collect();
+    let raw = json!({"project": project, "fold": folded, "stops": stops}).to_string();
     raw.replace('<', "\\u003c")
         .replace('>', "\\u003e")
         .replace('&', "\\u0026")
@@ -575,21 +743,83 @@ fn key(tree: &Tree) -> String {
 fn stats(map: &Map, tree: &Tree) -> String {
     let open = map.stops.iter().filter(|s| s.node.state.is_open()).count();
     let blocking = map.stops.iter().filter(|s| s.node.blocks).count();
+    // Every number here counts what is drawn, except the total, which counts
+    // the tree. Folding is a way of looking and the two have to be told
+    // apart, so the gap between them is spelled out rather than left for the
+    // reader to notice.
+    let folded = tree.total().saturating_sub(map.stops.len());
+    let away = match folded {
+        0 => String::new(),
+        n => format!(" · {n} folded away"),
+    };
     format!(
-        "{n} nodes · {open} open · {blocking} blocking · depth {d} · \
-         {lines} lines, {named} of them named",
+        "{drawn} of {n} nodes{away} · {open} open · {blocking} blocking · \
+         depth {d} · {lines} lines, {named} of them named",
+        drawn = map.stops.len(),
         n = tree.total(),
         d = map.depth,
-        lines = map.lines.len(),
-        named = map.named.len(),
+        lines = map.lines.chains.len(),
+        named = map.lines.named.len(),
     )
 }
 
-/// The whole tree of `project`, drawn as a map. Never `None`: an empty tree
-/// still gets a page, it just has nothing to draw.
-pub(super) fn map_page(project: &str, name: &str, tree: &Tree) -> String {
+/// Fold everything at one depth, as a link each. The deepest level worth
+/// offering is the one below the shallowest node that has children -- past
+/// that a link would fold nothing.
+///
+/// Each of these is the same mechanism as one row's control, only spelled
+/// out over every node at that depth: there is one way to fold and the URL
+/// always says exactly what is folded, node by node. A `depth=` of its own
+/// would have been shorter and would have left two mechanisms that answer
+/// to each other, with a row's unfold unable to undo it.
+/// It reads the **whole** tree and never the drawing: a depth link is an
+/// absolute view, so it has to name the nodes at that depth that are folded
+/// away right now as well as the ones on screen. Built off the drawing, it
+/// quietly unfolded whatever was already folded.
+fn depths(tree: &Tree) -> String {
+    fn by_depth(tree: &Tree, n: &Node, depth: usize, out: &mut Vec<Vec<String>>) {
+        let children = tree.children(n.num);
+        if !children.is_empty() {
+            if out.len() <= depth {
+                out.resize(depth + 1, Vec::new());
+            }
+            out[depth].push(n.alias());
+        }
+        for c in children {
+            by_depth(tree, c, depth + 1, out);
+        }
+    }
+
+    let mut levels: Vec<Vec<String>> = Vec::new();
+    for root in tree.roots() {
+        by_depth(tree, root, 0, &mut levels);
+    }
+    if levels.is_empty() {
+        return String::new();
+    }
+
+    let mut out = String::from("<span class=\"depths\">fold to depth ");
+    for (level, at) in levels.iter().enumerate() {
+        if at.is_empty() {
+            continue;
+        }
+        out.push_str(&format!(
+            "<a class=\"depth\" href=\"?fold={}\">{}</a>",
+            escape(&at.join(",")),
+            level + 1,
+        ));
+    }
+    out.push_str("<a class=\"depth\" href=\"?\">all</a></span>");
+    out
+}
+
+/// The whole tree of `project`, drawn as a map, minus whatever `query` says
+/// the reader has folded away. Never `None`: an empty tree still gets a
+/// page, it just has nothing to draw.
+pub(super) fn map_page(project: &str, name: &str, tree: &Tree, query: &str) -> String {
     let ag = tree.aggregates();
-    let map = Map::of(tree);
+    let fold = Fold::parse(query, tree);
+    let map = Map::of(tree, &ag, &fold);
 
     if tree.is_empty_tree() {
         return shell(
@@ -621,7 +851,7 @@ pub(super) fn map_page(project: &str, name: &str, tree: &Tree) -> String {
          {rows}<aside id=\"detail\" class=\"detail\">{key}</aside>\n</div>\n",
         wide = gutter(&map, &WIDE),
         narrow = gutter(&map, &NARROW),
-        rows = rows(project, tree, &map, &ag),
+        rows = rows(project, tree, &map, &ag, &fold),
         key = key(tree),
     );
 
@@ -630,15 +860,16 @@ pub(super) fn map_page(project: &str, name: &str, tree: &Tree) -> String {
         name,
         body,
         format!(
-            "<p class=\"stats\">{}</p>\n{}<div class=\"tools\">{here}\
+            "<p class=\"stats\">{stats}</p>\n{legend}<div class=\"tools\">{here}\
              <input id=\"find\" type=\"search\" \
              placeholder=\"Find in alias, title and why…\" \
              aria-label=\"Find a station\">\
-             <span class=\"hits\" id=\"hits\" role=\"status\"></span></div>\n",
-            escape(&stats(&map, tree)),
-            legend(&map),
+             <span class=\"hits\" id=\"hits\" role=\"status\"></span>{depths}</div>\n",
+            stats = escape(&stats(&map, tree)),
+            legend = legend(&map),
+            depths = depths(tree),
         ),
-        payload(project, tree, &map, &ag),
+        payload(project, tree, &map, &ag, &fold),
         MAP_JS.to_string(),
     )
 }
@@ -901,7 +1132,7 @@ mod tests {
     #[test]
     fn every_node_is_one_row_and_one_station_in_each_gutter() {
         let tree = real_shape();
-        let page = map_page("vivac", "vivac", &tree);
+        let page = map_page("vivac", "vivac", &tree, "");
         assert_eq!(page.matches("<li class=\"stop").count(), tree.total());
         assert_eq!(
             page.matches("class=\"station ").count(),
@@ -915,7 +1146,7 @@ mod tests {
     /// specific than the rule that showed it.
     #[test]
     fn the_page_carries_one_gutter_per_lane_width() {
-        let page = map_page("vivac", "vivac", &real_shape());
+        let page = map_page("vivac", "vivac", &real_shape(), "");
         assert_eq!(page.matches("<svg class=\"rails").count(), 2);
         assert_eq!(page.matches("class=\"rails wide\"").count(), 1);
         assert_eq!(page.matches("class=\"rails narrow\"").count(), 1);
@@ -930,9 +1161,15 @@ mod tests {
     #[test]
     fn every_stop_is_on_exactly_one_line_and_a_line_walks_downwards() {
         let tree = real_shape();
-        let map = Map::of(&tree);
+        let ag = tree.aggregates();
+        let map = Map::of(&tree, &ag, &Fold::default());
         let mut seen = vec![0usize; map.stops.len()];
-        for line in &map.lines {
+        for line in map.lines.chains.iter().map(|c| {
+            c.iter()
+                .filter_map(|num| map.index.get(num).copied())
+                .collect::<Vec<usize>>()
+        }) {
+            let line = &line;
             for &s in line {
                 seen[s] += 1;
             }
@@ -955,13 +1192,14 @@ mod tests {
     #[test]
     fn only_the_long_lines_earn_a_colour() {
         let tree = real_shape();
-        let map = Map::of(&tree);
-        assert!(map.named.len() <= NAMED_MAX);
-        for &line in &map.named {
-            assert!(map.lines[line].len() >= NAMED_MIN);
+        let ag = tree.aggregates();
+        let map = Map::of(&tree, &ag, &Fold::default());
+        assert!(map.lines.named.len() <= NAMED_MAX);
+        for &line in &map.lines.named {
+            assert!(map.lines.chains[line].len() >= NAMED_MIN);
         }
         assert!(
-            map.lines.len() > map.named.len(),
+            map.lines.chains.len() > map.lines.named.len(),
             "the real shape has more lines than colours, which is the point"
         );
     }
@@ -980,7 +1218,8 @@ mod tests {
         fixture_children(&mut tree, &mut seq, &mut num, &heavy, 3);
         tree.sort_nodes();
 
-        let map = Map::of(&tree);
+        let ag = tree.aggregates();
+        let map = Map::of(&tree, &ag, &Fold::default());
         let at = |id: &str| {
             map.stops
                 .iter()
@@ -1005,9 +1244,9 @@ mod tests {
     #[test]
     fn the_detail_of_every_node_travels_with_the_page() {
         let tree = real_shape();
-        let map = Map::of(&tree);
         let ag = tree.aggregates();
-        let data = payload("vivac", &tree, &map, &ag);
+        let map = Map::of(&tree, &ag, &Fold::default());
+        let data = payload("vivac", &tree, &map, &ag, &Fold::default());
         let parsed: serde_json::Value =
             serde_json::from_str(&data.replace("\\u003c", "<").replace("\\u003e", ">"))
                 .expect("the payload is JSON");
@@ -1043,7 +1282,7 @@ mod tests {
         }
         tree.sort_nodes();
 
-        let page = map_page("vivac", "vivac", &tree);
+        let page = map_page("vivac", "vivac", &tree, "");
         assert!(page.contains("the first note"), "the covered note is here");
         assert!(page.contains("the correction"));
         assert!(page.contains("2 notes"), "and the row says there are two");
@@ -1054,7 +1293,7 @@ mod tests {
     /// colour carries, and `vivac tree` prints the same glyph.
     #[test]
     fn a_node_that_blocks_its_parent_is_marked_in_glyph_and_in_word() {
-        let page = map_page("vivac", "vivac", &blocked_shape());
+        let page = map_page("vivac", "vivac", &blocked_shape(), "");
         assert_eq!(page.matches("class=\"mark\"").count(), 1);
         assert!(page.contains("· blocking ·"), "the word, not only the mark");
         // Inside the alias, not beside it. A row is a four-column grid and
@@ -1075,7 +1314,7 @@ mod tests {
     /// says so in those words, and so does the row's own class.
     #[test]
     fn a_node_closed_over_an_open_condition_is_marked_on_its_row() {
-        let page = map_page("vivac", "vivac", &blocked_shape());
+        let page = map_page("vivac", "vivac", &blocked_shape(), "");
         assert!(page.contains("false-close"), "{page}");
         assert!(page.contains("\"fc\":true"), "and it travels in the detail");
     }
@@ -1085,7 +1324,7 @@ mod tests {
     /// the owner read -- correctly -- as the page having gone dark.
     #[test]
     fn nothing_is_selected_when_the_page_lands() {
-        let page = map_page("vivac", "vivac", &real_shape());
+        let page = map_page("vivac", "vivac", &real_shape(), "");
         assert!(!page.contains("class=\"stop on"), "no row arrives selected");
         assert!(
             page.contains("<g class=\"route\"></g>"),
@@ -1120,12 +1359,180 @@ mod tests {
         );
         tree.sort_nodes();
 
-        let page = map_page("vivac", "vivac", &tree);
+        let page = map_page("vivac", "vivac", &tree, "");
         assert!(!page.contains("<script>alert(1)"), "{page}");
         assert_eq!(
             page.matches("</script>").count(),
             2,
             "the two this page opens, and no third one a title smuggled in"
+        );
+    }
+
+    /// The biggest hub on a fixture, which is the one worth folding.
+    fn biggest_hub(tree: &Tree, ag: &Aggregates) -> String {
+        let map = Map::of(tree, ag, &Fold::default());
+        map.stops
+            .iter()
+            .max_by_key(|s| s.fan)
+            .expect("the fixture has a node with children")
+            .node
+            .alias()
+    }
+
+    /// Folding takes a subtree off the page -- rows, stations and detail --
+    /// and says how many it took, because that count is the one thing a
+    /// reader cannot see for themselves once it is folded.
+    #[test]
+    fn folding_a_node_takes_its_subtree_off_the_page_and_counts_it() {
+        let tree = real_shape();
+        let ag = tree.aggregates();
+        let alias = biggest_hub(&tree, &ag);
+        let under = ag
+            .counts(tree.resolve(&alias).expect("the hub resolves").num)
+            .total;
+
+        let page = map_page("vivac", "vivac", &tree, &format!("fold={alias}"));
+        assert_eq!(
+            page.matches("<li class=\"stop").count(),
+            tree.total() - under,
+            "the subtree should be off the page"
+        );
+        assert_eq!(
+            page.matches("class=\"station ").count(),
+            (tree.total() - under) * 2,
+            "and off both gutters, or a rail points at the wrong row"
+        );
+        assert!(page.contains(&format!(">+{under}</a>")), "{page}");
+    }
+
+    /// Only the node doing the folding offers to unfold. Every ancestor of
+    /// a folded node also has descendants off the page -- 198 of `g1`'s,
+    /// when `g132` is folded -- and the first version read that number off
+    /// each of them, so `g1` carried a control that said "+198" and folded
+    /// `g1` when it was clicked.
+    #[test]
+    fn only_the_folded_node_offers_to_unfold() {
+        let tree = real_shape();
+        let ag = tree.aggregates();
+        let alias = biggest_hub(&tree, &ag);
+
+        let page = map_page("vivac", "vivac", &tree, &format!("fold={alias}"));
+        assert_eq!(
+            page.matches("class=\"fold on\"").count(),
+            1,
+            "one node is folded, so one control says so:\n{page}"
+        );
+        assert_eq!(
+            page.matches("class=\"stop hub folded\"").count()
+                + page.matches("class=\"stop folded\"").count(),
+            1,
+            "and one row is marked folded:\n{page}"
+        );
+    }
+
+    /// A line is a property of the work and not of the view. Fold a branch
+    /// away and the eight colours have to stay where they were, or the
+    /// legend means something different on every page.
+    #[test]
+    fn folding_does_not_change_which_lines_have_a_colour() {
+        let tree = real_shape();
+        let ag = tree.aggregates();
+        let alias = biggest_hub(&tree, &ag);
+
+        let whole = Map::of(&tree, &ag, &Fold::default());
+        let folded = Map::of(&tree, &ag, &Fold::parse(&format!("fold={alias}"), &tree));
+
+        let names =
+            |m: &Map| -> Vec<String> { m.lines.named.iter().map(|&l| m.line_name(l)).collect() };
+        assert_eq!(names(&whole), names(&folded), "the legend must not move");
+
+        // And a stop that is still drawn keeps the colour it had.
+        for s in &folded.stops {
+            let before = whole.index[&s.node.num];
+            assert_eq!(
+                folded.colour(s.line),
+                whole.colour(whole.stops[before].line),
+                "{} changed colour when something else was folded",
+                s.node.alias()
+            );
+        }
+    }
+
+    /// Folding is a way of looking at the tree, so it is not allowed to
+    /// change what the drawing says about how branched the work is. The
+    /// radius of a folded station is still its real fan-out, and so is the
+    /// number on its row.
+    #[test]
+    fn a_folded_node_still_says_how_branched_it_is() {
+        let tree = real_shape();
+        let ag = tree.aggregates();
+        let alias = biggest_hub(&tree, &ag);
+        let fan = tree
+            .children(tree.resolve(&alias).expect("the hub resolves").num)
+            .len();
+
+        let page = map_page("vivac", "vivac", &tree, &format!("fold={alias}"));
+        assert!(
+            page.contains(&format!("<span class=\"fan\">{fan}</span>")),
+            "{page}"
+        );
+        assert!(
+            page.contains("r=\"9\""),
+            "the folded hub keeps the largest radius:\n{page}"
+        );
+    }
+
+    /// Nothing a reader types into the address bar reaches the page. An
+    /// alias that resolves to no node is dropped, which is the same answer
+    /// the router gives a path it does not know.
+    #[test]
+    fn a_fold_that_names_nothing_folds_nothing_and_echoes_nothing() {
+        let tree = real_shape();
+        let page = map_page("vivac", "vivac", &tree, "fold=not-a-node,%2e%2e&x=1");
+        assert_eq!(page.matches("<li class=\"stop").count(), tree.total());
+        assert!(!page.contains("not-a-node"), "{page}");
+        assert!(!page.contains("%2e"), "{page}");
+    }
+
+    /// A blocker is always a descendant, so folding a node hides its own
+    /// debts. The count has to survive that: a panel that listed only the
+    /// survivors would report a node as waiting on nothing while it waits.
+    #[test]
+    fn folding_hides_a_blocker_without_hiding_that_it_is_waiting() {
+        let mut tree = Tree::default();
+        let (mut seq, mut num) = (0u64, 0u64);
+        let root = fixture_node(&mut tree, &mut seq, &mut num, None);
+        seq += 1;
+        num += 1;
+        tree.apply(
+            seq,
+            "2026-09-09T10:00:00Z",
+            &Body::NodeCreated {
+                node: "n2".to_string(),
+                num,
+                kind: Kind::Question,
+                title: "the blocker".to_string(),
+                why: "fixture".to_string(),
+                parent: Some(root.clone()),
+                blocks: true,
+                refs: vec![],
+                governs: vec![],
+            },
+        );
+        tree.sort_nodes();
+
+        let whole = map_page("vivac", "vivac", &tree, "");
+        assert!(whole.contains("\"bn\":1"), "{whole}");
+        assert!(whole.contains("\"bl\":[1]"), "{whole}");
+
+        let folded = map_page("vivac", "vivac", &tree, "fold=g1");
+        assert!(
+            folded.contains("\"bn\":1"),
+            "still waiting on one:\n{folded}"
+        );
+        assert!(
+            folded.contains("\"bl\":[]"),
+            "and none of them has a row to link to:\n{folded}"
         );
     }
 
@@ -1145,8 +1552,8 @@ mod tests {
     /// person can look. **The verdict is the owner's, per §7.7.**
     #[test]
     fn the_real_shape_does_not_render_like_an_even_tree() {
-        let real = map_page("vivac", "vivac", &real_shape());
-        let even = map_page("vivac", "vivac", &even_shape());
+        let real = map_page("vivac", "vivac", &real_shape(), "");
+        let even = map_page("vivac", "vivac", &even_shape(), "");
 
         let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/shape");
         std::fs::create_dir_all(&dir).expect("target/shape can be created");

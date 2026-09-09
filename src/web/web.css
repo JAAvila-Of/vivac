@@ -632,7 +632,7 @@ ol.stops {
 
 li.stop {
   display: grid;
-  grid-template-columns: 5.4rem minmax(0, 1fr) auto auto;
+  grid-template-columns: 5.4rem minmax(0, 1fr) auto auto auto;
   gap: 0 0.55rem;
   align-items: center;
   height: 32px;
@@ -711,6 +711,47 @@ li.stop.false-close .title::after {
   color: var(--warn);
   font-family: var(--mono);
   font-size: 0.7rem;
+}
+
+/* The fold control. A link, because folding recomputes the map on the
+   server -- so it works with no script at all, it can be bookmarked, and
+   the back button unfolds. */
+li.stop .fold {
+  grid-column: 5;
+  min-width: 2.4rem;
+  color: var(--ink-faint);
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  text-align: right;
+  text-decoration: none;
+  opacity: 0;
+}
+
+li.stop:hover .fold,
+li.stop .fold:focus-visible,
+li.stop .fold.on {
+  opacity: 1;
+}
+
+/* A folded row keeps its count on screen: it is the one thing the reader
+   cannot see for themselves once the subtree is gone. */
+li.stop .fold.on {
+  color: var(--accent);
+}
+
+li.stop.folded .title {
+  font-style: italic;
+}
+
+.depths {
+  color: var(--ink-faint);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+}
+
+.depths .depth {
+  margin-left: 0.35rem;
+  text-decoration: none;
 }
 
 li.stop.hit {
@@ -881,8 +922,13 @@ li.stop.faded {
   }
 
   li.stop {
-    grid-template-columns: 4.4rem minmax(0, 1fr) auto auto;
+    grid-template-columns: 4.4rem minmax(0, 1fr) auto auto auto;
     gap: 0 0.4rem;
+  }
+
+  /* No hover on a phone, so the fold control is always there. */
+  li.stop .fold {
+    opacity: 1;
   }
 
   .tools #find {

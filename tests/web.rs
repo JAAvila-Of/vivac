@@ -1132,6 +1132,58 @@ fn the_detail_of_every_node_arrives_with_the_page() {
     assert!(a.body.contains("2 notes"), "{}", a.body);
 }
 
+/// Folding is a link, so it has to survive the gate as well as the router:
+/// the query is the one part of a URL the gate reads for itself, looking for
+/// a boot key, and a fold arriving there must be served rather than treated
+/// as a key that is missing.
+#[test]
+fn a_fold_travels_in_the_url_and_is_served_like_any_other_page() {
+    let s = up("map-fold");
+    s._sandbox
+        .ok(&["push", "Root goal", "--why", "it is the goal"]);
+    s._sandbox.ok(&[
+        "add",
+        "A branch",
+        "--why",
+        "it needs its own children",
+        "--parent",
+        "1",
+    ]);
+    s._sandbox.ok(&[
+        "add",
+        "A leaf below the branch",
+        "--why",
+        "it hangs off the branch",
+        "--parent",
+        "2",
+    ]);
+
+    let boot = call(s.port(), &s.boot_path(), &[("Host", s.host())]);
+    let token = token_from(&boot);
+    let id = s
+        ._sandbox
+        .0
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let headers = [("Host", s.host()), ("X-Vivac-Token", token)];
+
+    let whole = call(s.port(), &format!("/p/{id}/tree"), &headers);
+    assert_eq!(whole.status, 200, "{}", whole.body);
+    assert_eq!(whole.body.matches("<li class=\"stop").count(), 3);
+
+    let folded = call(s.port(), &format!("/p/{id}/tree?fold=t2"), &headers);
+    assert_eq!(folded.status, 200, "{}", folded.body);
+    assert_eq!(
+        folded.body.matches("<li class=\"stop").count(),
+        2,
+        "t2's own child should be off the page:\n{}",
+        folded.body
+    );
+    assert!(folded.body.contains(">+1</a>"), "{}", folded.body);
+}
+
 /// `WEB.md` §7.4: the whole map loads with no internet, the same as every
 /// other page.
 ///

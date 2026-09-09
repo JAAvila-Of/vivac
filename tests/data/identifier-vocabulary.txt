@@ -82,6 +82,7 @@ attribute
 authority
 auto
 automatic
+away
 aws
 back
 backdate
@@ -100,6 +101,7 @@ below
 best
 between
 bigger
+biggest
 bin
 binary
 bind
@@ -125,6 +127,7 @@ boundary
 bounds
 box
 branch
+branched
 branching
 break
 breaks
@@ -282,6 +285,7 @@ denial
 denied
 deny
 depth
+depths
 deref
 derive
 descend
@@ -313,6 +317,7 @@ downwards
 doy
 drags
 drain
+drawn
 draws
 drop
 drops
@@ -321,6 +326,7 @@ duration
 dyn
 each
 earn
+echoes
 edges
 edit
 eleven
@@ -417,7 +423,9 @@ fn
 focus
 focused
 fold
+folded
 folding
+folds
 footer
 for
 force
@@ -474,6 +482,7 @@ happens
 has
 hash
 hashes
+have
 head
 header
 headers
@@ -490,6 +499,8 @@ heuristic
 hex
 hexdigit
 hidden
+hides
+hiding
 hit
 hits
 hold
@@ -724,6 +735,7 @@ of
 off
 offenders
 offered
+offers
 offset
 ok
 old
@@ -927,6 +939,7 @@ rescue
 rescued
 rescuing
 resident
+resize
 resolve
 resolves
 respects
@@ -1026,6 +1039,7 @@ short
 show
 shown
 shows
+shut
 sibling
 siblings
 sid
@@ -1169,6 +1183,7 @@ tmp
 to
 today
 together
+toggled
 tok
 token
 tokens
@@ -1220,6 +1235,7 @@ unambiguous
 unchanged
 unclaimed
 under
+unfold
 unique
 unix
 unknown

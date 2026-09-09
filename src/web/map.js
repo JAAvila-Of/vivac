@@ -114,6 +114,23 @@
     );
   }
 
+  /* What holds a node open. `bn` is how many there are and `bl` only the
+     ones still on the page: a blocker is always a descendant, so folding a
+     node hides its own debts, and a panel that listed the survivors alone
+     would say a node is waiting on nothing while it waits on three. */
+  function waiting(n) {
+    if (!n.bn) return "";
+    var out = links("Does not close until these close", n.bl);
+    if (!out) out = "<h3>Does not close until these close · " + n.bn + "</h3>";
+    var away = n.bn - n.bl.length;
+    if (away > 0) {
+      out +=
+        '<p class="prose">' + away + " of them " + (away === 1 ? "is" : "are") +
+        " folded away.</p>";
+    }
+    return out;
+  }
+
   /* Every note, oldest first, each with the date it was written. Until
      9-Sep-2026 the product kept only the last one a node was given and 84
      of 225 were unreadable anywhere (`f389`); a panel that showed one again
@@ -135,6 +152,23 @@
         })
         .join("")
     );
+  }
+
+  /* What is beside it and what is under it.
+     A tree drawn in one column puts a node's siblings as far apart as the
+     work between them is deep -- on the real tree, hundreds of rows -- so
+     "the next one along" is the hardest thing on this page to reach by
+     scrolling. These are the same two lists the drawing already holds; they
+     just cost nothing to name. */
+  function around(i) {
+    var n = D[i];
+    var beside = [];
+    var under = [];
+    D.forEach(function (o, k) {
+      if (k !== i && o.p === n.p && n.p !== null) beside.push(k);
+      if (o.p === i) under.push(k);
+    });
+    return links("Beside it", beside) + links("Under it", under);
   }
 
   function card(n) {
@@ -188,8 +222,9 @@
       "<h2>" + esc(n.t) + "</h2>" +
       section("Why it was born", n.w) +
       section("Outcome", n.o) +
-      links("Does not close until these close", n.bl) +
+      waiting(n) +
       notes(n) +
+      around(i) +
       "<h3>The route here · " + route.length + " stops</h3>" +
       '<ol class="plain route-list">' +
       route
@@ -210,6 +245,17 @@
        asked for a node, never when the keyboard is walking the list. */
     if (!quiet) panel.classList.add("open");
     at = i;
+
+    /* The selection goes into the address bar, so folding something -- which
+       reloads the page -- comes back to the node you were reading, and so a
+       view of the tree is a link you can send. `replaceState` rather than a
+       hash assignment: it leaves no history entry per keystroke and fires no
+       `hashchange` for the listener below to answer. */
+    try {
+      history.replaceState(null, "", "#" + encodeURIComponent(n.a));
+    } catch (e) {
+      /* A page opened from a file has no history to replace. */
+    }
   }
 
   function jump(i) {
@@ -246,10 +292,16 @@
 
   rows.forEach(function (e) {
     e.addEventListener("click", function (ev) {
+      var link = ev.target.closest("a");
+      /* The fold control is a link that has to *navigate*: folding
+         recomputes the map, and the server is the only place that drawing
+         is implemented. Swallowing this click would leave a control that
+         looks like a link and does nothing. */
+      if (link && link.classList.contains("fold")) return;
       /* The alias is a real link and stays one: with no script it is how
          you read a node. Here it opens the panel instead, which is the
          whole difference this page is for. */
-      if (ev.target.closest("a")) ev.preventDefault();
+      if (link) ev.preventDefault();
       show(+e.dataset.stop);
     });
   });
