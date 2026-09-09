@@ -1,0 +1,162 @@
+# Precompiled binaries, built in the same run that made the release.
+#
+# The obvious shape is a workflow hanging off `push: tags`, which is what
+# cargo-dist generates. It cannot work here. GitHub starts no workflow for an
+# event caused by its own token, and the tag is pushed by release-plz with
+# exactly that token, so a tag-triggered workflow sits still. The three ways
+# out are all worse than the problem: a GitHub App puts back the class of
+# credential that release-plz.yml exists to avoid, a hand-pushed tag adds a
+# step somebody has to remember on every release, and firing it by hand needs
+# a `workflow_dispatch` the generator does not write.
+#
+# So the packaging does not hang off the tag at all. release-plz says in its
+# own output whether it released anything and under which tag, and this
+# workflow is called from that same run. The rule that breaks everything above
+# forbids starting new runs with the token; it does not forbid writing to the
+# API from the run already going. Nothing to trigger, nothing to remember, no
+# credential to hold.
+#
+# The archives are named after the target and not the version, so that the
+# dispatch used to check this file builds byte for byte what a release builds.
+# A check that exercises a different path is not a check.
+#
+# Not here, on purpose: the shell installer, the PowerShell installer and the
+# Homebrew formula. `cargo install` is not retired either -- it builds from
+# published source and stays the auditable path for anyone who cares about the
+# supply chain of a tool that reads their work.
+
+name: release
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: The release tag the archives are uploaded to.
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: >-
+          Upload to this release tag. Leave it empty to build all five targets
+          and throw the archives away, which is how this file gets checked on
+          demand without spending a release.
+        required: false
+        type: string
+  # A release is the worst place to find out that a target stopped building,
+  # and it is the only place that would find out. So the build inputs bring
+  # the five targets with them: change this file, the manifest, the lockfile
+  # or the toolchain, and the matrix runs on the pull request. It is scoped to
+  # those paths because the release profile is slow on purpose -- `lto` and
+  # `codegen-units = 1` -- and every other pull request already gets the three
+  # operating systems from ci.yml.
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      # Every target reports. One broken triple should say so next to the four
+      # that worked, and `publish` needs all of them anyway.
+      fail-fast: false
+      matrix:
+        include:
+          # musl and not gnu: a binary built against the runner's glibc refuses
+          # to start on any older distribution, and this crate links no C.
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-24.04-arm
+          # Both Apple targets build on the arm64 runner: the SDK is universal,
+          # so this does not depend on Intel runners outliving the project.
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Install the musl linker
+        if: endsWith(matrix.target, '-musl')
+        run: sudo apt-get update && sudo apt-get install --yes musl-tools
+      - run: cargo build --locked --release --target ${{ matrix.target }}
+      - name: Pack the archive
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          name="vivac-$TARGET"
+          mkdir -p "dist/$name"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cp "target/$TARGET/release/vivac.exe" "dist/$name/"
+          else
+            cp "target/$TARGET/release/vivac" "dist/$name/"
+          fi
+          cp LICENSE-MIT LICENSE-APACHE README.md "dist/$name/"
+          cd dist
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            7z a "$name.zip" "$name" > /dev/null
+          else
+            tar czf "$name.tar.gz" "$name"
+          fi
+          rm -rf "$name"
+          ls -l
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vivac-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # Needs every build, so a release never ships three binaries out of five.
+  # A pull request and a dispatch with no tag build and upload nothing: the
+  # second condition is redundant under GitHub's comparison rules and is here
+  # so that reading the file is enough to know a pull request cannot publish.
+  publish:
+    needs: build
+    if: inputs.tag != '' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          pattern: vivac-*
+          merge-multiple: true
+      - name: Write the checksums
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          sha256sum vivac-* > SHA256SUMS
+          cat SHA256SUMS
+      # Signed provenance, so a downloaded binary can be traced back to this
+      # commit and this workflow. A precompiled binary is trust that
+      # `cargo install` never asks for; this is what pays for it.
+      - uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            dist/vivac-*.tar.gz
+            dist/vivac-*.zip
+      - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: gh release upload "$TAG" dist/* --clobber
