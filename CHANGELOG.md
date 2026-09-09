@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.10](https://github.com/JAAvila-Of/vivac/compare/v0.6.9...v0.6.10) - 2026-09-09
+
+### Fixed
+
+- *(release)* tell gh which repository, since publish has no checkout ([#97](https://github.com/JAAvila-Of/vivac/pull/97))
+
 ## [0.6.9](https://github.com/JAAvila-Of/vivac/compare/v0.6.8...v0.6.9) - 2026-09-09
 
 ### Fixed
