@@ -84,7 +84,7 @@ const USAGE: &str = r#"vivac - provenance of work
                                               decisions and open siblings,
                                               per step of the path
     vivac tree [id] [--all]                   the tree, with false closes marked
-    vivac open                                open fronts and their lineage
+    vivac open [--all]                        open fronts and their lineage
     vivac find "<text>" [--everywhere]        every node whose words match
                                               --everywhere: every project
                                               the registry knows
@@ -229,7 +229,10 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         "init" | "hooks" | "mcp" => &[],
         // The reads that speak JSON, spelled out. No shorthand: a shorthand
         // is what let the brief claim it for two releases.
-        "open" | "stack" | "parked" | "triage" | "stats" | "vivacs" => &["json"],
+        // `open` also takes `--all`, the same escape hatch `tree` gives the
+        // list it caps (`d383`): the cap must never cost access to the rest.
+        "open" => &["json", "all"],
+        "stack" | "parked" | "triage" | "stats" | "vivacs" => &["json"],
         // `--gates` is its own on top of `--json`: the machine-wide scan
         // `d351` adds is nothing the other reads in this arm take.
         "check" => &["json", "gates"],

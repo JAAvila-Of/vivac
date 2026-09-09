@@ -19,6 +19,8 @@ advice
 after
 ag
 again
+age
+ages
 aggregates
 agrees
 al
@@ -81,6 +83,7 @@ auto
 automatic
 aws
 back
+backdate
 backslash
 backwards
 bare
@@ -94,6 +97,7 @@ beginning
 behind
 below
 between
+bigger
 bin
 binary
 bind
@@ -102,6 +106,7 @@ blank
 blessed
 block
 blocked
+blocker
 blockers
 blocks
 bodies
@@ -119,6 +124,7 @@ box
 branch
 branching
 break
+breaks
 brief
 broken
 browser
@@ -141,7 +147,9 @@ candidate
 candidates
 cannot
 canonicalize
+cap
 capacity
+capped
 carried
 carries
 carry
@@ -463,6 +471,7 @@ here
 heuristic
 hex
 hexdigit
+hidden
 hit
 hits
 hold
@@ -558,6 +567,7 @@ let
 letter
 level
 levels
+lifts
 like
 limit
 line
@@ -661,6 +671,7 @@ nested
 net
 never
 new
+newer
 next
 no
 node
@@ -692,6 +703,7 @@ offset
 ok
 old
 older
+oldest
 on
 once
 one
@@ -725,6 +737,7 @@ outln
 output
 outside
 over
+overall
 own
 owned
 p11
@@ -1001,6 +1014,7 @@ slot
 slots
 slug
 slugs
+small
 snapshot
 snippet
 so
@@ -1084,6 +1098,7 @@ task
 tcp
 tells
 temp
+ten
 term
 terminal
 terms
@@ -1104,6 +1119,7 @@ three
 threshold
 through
 tidy
+tie
 tight
 tile
 tiles
@@ -1129,6 +1145,7 @@ top
 total
 touches
 touching
+toward
 trace
 tracked
 trailing

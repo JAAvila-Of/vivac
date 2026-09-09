@@ -258,11 +258,18 @@ pub fn why_data(a: &Tree, id: &str) -> Result<serde_json::Value, Failure> {
 /// harness: the MCP payload was 1,993,053 bytes and is now 599,012, 30% of
 /// what it cost before.
 pub fn open_data(a: &Tree) -> serde_json::Value {
+    let ag = a.aggregates();
     let mut leaves: Vec<&Node> = a
         .nodes_iter()
         .filter(|n| n.is_front() && !a.children(n.num).iter().any(|c| c.is_front()))
         .collect();
-    leaves.sort_by_key(|n| n.num);
+    leaves.sort_by_key(|n| {
+        (
+            !n.blocks,
+            std::cmp::Reverse(ag.counts(n.num).total),
+            std::cmp::Reverse(n.num),
+        )
+    });
     json!(leaves
         .iter()
         .map(|n| json!({
@@ -502,14 +509,30 @@ pub fn tree(a: &Tree, args: &Args) -> R {
     Ok(())
 }
 
-/// `open` — the open fronts, each with its lineage compressed. It is the
-/// "where was I" view for the start of the day.
+/// Fronts printed before the list gives way to the tail line. Each front
+/// costs two lines, so ten of them plus the header and the tail still fit
+/// one screen with nothing to scroll -- and a list that has to scroll
+/// already broke the promise of "right now".
+const MAX_FRONTS_SHOWN: usize = 10;
+
+/// `open` — what is waiting for you right now, and what has been open so
+/// long you are not actually working it any more (`d383`). The order below
+/// is deduced from that sentence, not chosen and explained after: a
+/// blocker sorts first, because a blocker is exactly something waiting on
+/// you; among the rest, whichever holds up more tree; at a tie, the newest.
 pub fn open(a: &Tree, args: &Args) -> R {
+    let ag = a.aggregates();
     let mut leaves: Vec<&Node> = a
         .nodes_iter()
         .filter(|n| n.is_front() && !a.children(n.num).iter().any(|c| c.is_front()))
         .collect();
-    leaves.sort_by_key(|n| n.num);
+    leaves.sort_by_key(|n| {
+        (
+            !n.blocks,
+            std::cmp::Reverse(ag.counts(n.num).total),
+            std::cmp::Reverse(n.num),
+        )
+    });
     let standing = a
         .nodes_iter()
         .filter(|n| n.kind == Kind::Decision && n.state.is_open())
@@ -528,7 +551,13 @@ pub fn open(a: &Tree, args: &Args) -> R {
         if leaves.len() == 1 { "" } else { "s" },
     );
     outln!();
-    for n in leaves {
+    let show_all = args.has("all");
+    let shown = if show_all {
+        leaves.len()
+    } else {
+        leaves.len().min(MAX_FRONTS_SHOWN)
+    };
+    for n in &leaves[..shown] {
         outln!("  {:<6} {}", n.alias(), n.title(a));
         let lineage = a.ancestors(n.num);
         if lineage.len() > 1 {
@@ -537,6 +566,21 @@ pub fn open(a: &Tree, args: &Args) -> R {
                 .map(|p| p.alias())
                 .collect();
             outln!("         via {}", v.join(" > "));
+        }
+    }
+    let hidden = leaves.len() - shown;
+    if hidden > 0 {
+        // The oldest of the ones left out, never of the whole set: a front
+        // that made the cut is being worked, and its age is not the gap
+        // `--all` closes.
+        let oldest = leaves[shown..].iter().map(|n| n.opened(a)).min();
+        let age = oldest.and_then(|d| crate::clock::days_between(d, &crate::clock::now_rfc3339()));
+        match age {
+            Some(days) => outln!(
+                "  {hidden} more, the oldest open for {days} day{} -- vivac open --all",
+                if days == 1 { "" } else { "s" },
+            ),
+            None => outln!("  {hidden} more -- vivac open --all"),
         }
     }
     // They are not fronts, but making them vanish without saying so would be
