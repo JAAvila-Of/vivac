@@ -96,7 +96,7 @@ node as something its parent cannot close over, and `--off` takes it back.
 vivac brief         where you are, what governs this point, what NOT to touch
 vivac why 11        the path from the root, narrated
 vivac tree          the tree, with false closes marked
-vivac open          the open fronts, each with its lineage
+vivac open          what is waiting on you, and what has been sitting
 vivac find cache    every node whose text holds all the words, best first
 vivac stack         the focus stack
 vivac parked        DO NOT TOUCH NOW
@@ -112,11 +112,27 @@ interface in the way, and every one of those reads takes `--json` — every one
 but the `brief`, which is written to be injected into a session and read as
 prose, never parsed.
 
-Two of them carry more than the line suggests. `why --full` adds the anchor,
+Some of them carry more than the line suggests. `why --full` adds the anchor,
 the standing decisions and the open siblings at every step of the path, which
 is the difference between a route and a briefing. `check --gates` widens the
 invariants from this tree to every tree on the machine that nobody has opened,
-because a tree nobody opens is where an invariant goes to break quietly.
+because a tree nobody opens is where an invariant goes to break quietly. And
+`open --all` drops the cap, for the times you do want the whole wall.
+
+**`open` answers one sentence, and the order is that sentence.** What is
+waiting on you right now, and what has been open so long you are not working it
+any more. So a front that blocks its parent comes first, because a blocker is
+exactly something waiting on you; among the rest, whichever holds up more tree;
+at a tie, the newest. It stops at ten, because a front is two lines and a list
+you have to scroll has already broken the promise of *right now*, and the line
+underneath says how many were left out and how long the oldest of those has
+been open.
+
+It used to print all of them, oldest first. On the tree this project keeps of
+itself that was a hundred and nine fronts across two hundred and twenty-four
+lines, with the one you touched yesterday at the bottom — which is the defect
+`find` had before it was given an order, in the same product, found again
+because nobody had gone to look at the neighbour.
 
 **And the maintainer looks.** `vivac web` draws the tree in a browser, on this
 machine and nowhere else: a server somebody starts and that dies when they
@@ -322,37 +338,49 @@ The spine — the path from the root to the focus — is **never truncated**: if
 does not fit the budget it comes out anyway, and the warning says that what is
 left over is tree, not render.
 
-Measured on this machine at ten thousand nodes, 200 calls per cell, p50 / p99
-in milliseconds, on a tree with its derived index in place — which is what a
-tree has after the first read of it. The CLI columns start a fresh process
-every time and include the ~8.5 ms that costs; the MCP columns are a resident
-server, which is how an agent calls.
+Measured at ten thousand nodes, 200 calls per cell, p50 / p99 in milliseconds,
+on a tree with its derived index in place — which is what a tree has after the
+first read of it. The CLI columns start a fresh process every time and include
+what that costs; the MCP columns are a resident server, which is how an agent
+calls.
 
 **And it is measured twice, because a number was hiding a variable.** What
-`open` and `tree` cost is governed less by how many nodes a tree holds than by
-how many of them are still open, and the shape of the tree is the one parameter
-these numbers never named. So both shapes, at one size:
+`brief`, `open` and `tree` cost is governed less by how many nodes a tree holds
+than by how many of them are still open, and the shape of the tree is the one
+parameter these numbers never named. Both shapes are the same ten thousand
+nodes; what separates them is 170 open fronts against 3,570, and it is that
+count, not a share of the tree, that these three pay for:
 
-| | CLI, 2% open | CLI, 50% open | MCP, 2% open | MCP, 50% open |
+| | CLI, 170 open | CLI, 3570 open | MCP, 170 open | MCP, 3570 open |
 |---|---|---|---|---|
-| `brief` | 15.2 / 28.2 | 24.8 / 34.0 | 0.2 / 0.4 | 3.2 / 3.7 |
-| `why` | 17.7 / 25.1 | 17.5 / 25.6 | 2.8 / 3.6 | 2.8 / 3.9 |
-| `open` | 15.4 / 19.7 | **50.9 / 58.5** | 0.8 / 1.0 | 31.4 / 38.7 |
-| `find` | 20.3 / 23.4 | 19.6 / 26.9 | 5.7 / 7.1 | 5.6 / 9.8 |
-| `tree` | 18.1 / 20.0 | **46.6 / 60.8** | not a tool | not a tool |
+| `brief` | 18.1 / 28.3 | 18.9 / 29.3 | 0.2 / 0.3 | 1.8 / 2.8 |
+| `why` | 20.7 / 30.0 | 20.0 / 30.5 | 2.9 / 4.2 | 2.9 / 4.2 |
+| `open` | 20.1 / 30.5 | 20.6 / 31.2 | 4.4 / 6.0 | 27.4 / 38.4 |
+| `find` | 23.2 / 35.1 | 22.6 / 33.7 | 6.6 / 13.8 | 6.6 / 8.3 |
+| `tree` | 21.0 / 40.1 | 25.6 / 36.3 | not a tool | not a tool |
 
-**The performance pillar gives a read 50 ms, and the right-hand shape misses
-it.** `open` misses it at the median. That is not something a release broke: it
-was equally true of the numbers printed here before, which simply never said
-which shape they were taken on, so nobody could have checked. The ceiling used
-to be written against the node count, which is not what moves these three; it
-counts open fronts now, and `docs/PILLARS.md` says why. The tree this project
-keeps of itself is 38% open, which is the wrong side of that table. Whether a
-tree stays that open on the way to ten thousand nodes is not measured, and
-saying so costs less than assuming it either way.
+Read `why` against `open` on the MCP columns and the variable stands on its
+own: `why` costs 2.9 ms in either shape, because a lineage is bounded by depth,
+while `open` goes from 4.4 to 27.4 out of the same ten thousand nodes.
+
+**Nothing here misses the 50 ms the performance pillar gives a read, and the
+table this replaces said two of them did.** Those numbers came off a fixture
+whose generator exists nowhere any more, so the miss cannot be re-run,
+compared, or checked — which is the charge that table was already published
+under, one level down: it named the shape it was taken on and could not hand
+anybody the tree. This bench is kept, and one of the things it now refuses to
+do is measure a binary that finished linking moments ago, because the run that
+claimed the miss was taken seconds after two compilations and every row of it
+came out high, including the rows whose code had not moved.
+
+The tree this project keeps of itself is 38% open. Whether a tree stays that
+open on the way to ten thousand nodes is still not measured, and saying so
+costs less than assuming it either way.
 
 A write is p99 0.6 ms at that size over MCP, and it does not grow with the
-tree: the server appends against the tree it is already holding.
+tree: the server appends against the tree it is already holding. That figure is
+from the run this table replaces, and it stands because the write path never
+touches the count above.
 
 **The CLI column used to read worse, and the tool was not.** The fixture those
 numbers came from could never keep a derived index. The index is only written
