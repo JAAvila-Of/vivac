@@ -172,6 +172,22 @@ pub(crate) fn standing_of<'a>(a: &'a Tree, n: &Node) -> Vec<&'a Node> {
         .collect()
 }
 
+/// What `n` is waiting on: its open blockers, and only while `n` is itself
+/// open. A closed node with open blockers is not a debt, it is a false
+/// close, and `tree` reports that in those words instead.
+///
+/// It lives here rather than in either caller because both `why` and the
+/// lineage page draw it, and `WEB.md` §2 is the reason: a page picks no
+/// nodes of its own. Two implementations of this filter could disagree
+/// about a node's debts, and nothing would catch it (`f380`).
+pub(crate) fn blocking_of<'a>(a: &'a Tree, n: &Node) -> Vec<&'a Node> {
+    if n.state.is_open() {
+        a.open_blockers(n.num)
+    } else {
+        Vec::new()
+    }
+}
+
 /// The siblings of `n`, born before it by `Node::num`, that were still open
 /// at the `seq` `n` was born. Not by `closed`'s date: two siblings can open
 /// and close on the day `n` was born, in an order the date cannot tell
@@ -425,8 +441,8 @@ pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
     }
 
     for p in &lineage {
-        let pending_count = a.open_blockers(p.num);
-        if !pending_count.is_empty() && p.state.is_open() {
+        let pending_count = blocking_of(a, p);
+        if !pending_count.is_empty() {
             outln!(
                 "  {} does not close until these close ({}):",
                 p.alias(),
