@@ -81,11 +81,23 @@
 //!
 //! Both controls are **in the drawing**, because what they fold is a branch
 //! and the branch is what the gutter draws. A node with children carries a
-//! triangle in a column of its own before lane zero, drawn by the same
-//! `y(i)` as its station so the two cannot drift apart; and the head of
-//! each lane folds that whole depth, sitting over the column it acts on
-//! -- a lane *is* a depth, so nobody has to translate "depth 4" into a
+//! triangle in a column of its own before lane zero, drawn against the same
+//! row as its station so the two cannot drift apart; and the head of each
+//! lane says how many levels to show, sitting over the column it stops at
+//! -- a lane *is* a depth, so nobody has to translate a number into a
 //! position. Both are links, so both work with no script at all.
+//!
+//! The two compose in one direction only, and on purpose. `fold=` is a set
+//! of nodes and `depth=` is **one number**: clicking a depth says how many
+//! levels, whatever was clicked before it, so two clicks in any order leave
+//! the same view as the second one alone. The first version spelled a depth
+//! out as the aliases of every node at it and piled those into `fold=`,
+//! which meant folding three depths took three undos in reverse order.
+//!
+//! What a fold does **not** do is take a node out of the page. The map holds
+//! every node and gives a row only to what is drawn, so the search still
+//! reads the whole tree: folding is a way of looking, not a claim that the
+//! rest stopped existing.
 //!
 //! What folding is **not** is an "only what is open" filter. That one is
 //! still not here and still not authorised: it is not navigation, it is a
@@ -186,6 +198,16 @@ const HUB: usize = 10;
 struct Fold {
     /// Nodes whose children are not drawn.
     shut: BTreeSet<u64>,
+    /// How many levels are drawn at all. `None` is the whole tree.
+    ///
+    /// **A limit and not a pile of folds**, which is the difference between
+    /// a control that composes and one that does not. The first version
+    /// expanded "fold to depth 6" into the aliases of every node at that
+    /// depth and added them to `shut`, so folding 6, then 5, then 3 left
+    /// three sets that had to be undone one at a time and in reverse. The
+    /// owner called that strange, and it was. A depth is one number:
+    /// clicking 3 says three levels, whatever was said before it.
+    depth: Option<usize>,
 }
 
 impl Fold {
@@ -196,43 +218,59 @@ impl Fold {
     /// page from ever echoing back a string a reader put in the address bar.
     fn parse(query: &str, tree: &Tree) -> Fold {
         let mut shut = BTreeSet::new();
+        let mut depth = None;
         for field in query.split('&') {
-            let Some(("fold", value)) = field.split_once('=') else {
-                continue;
-            };
-            for alias in value.split(',') {
-                if let Some(n) = tree.resolve(alias) {
-                    shut.insert(n.num);
+            match field.split_once('=') {
+                Some(("fold", value)) => {
+                    for alias in value.split(',') {
+                        if let Some(n) = tree.resolve(alias) {
+                            shut.insert(n.num);
+                        }
+                    }
                 }
+                // Zero levels is a view of nothing, so it is not a number
+                // this accepts.
+                Some(("depth", value)) => depth = value.parse().ok().filter(|&d| d > 0),
+                _ => {}
             }
         }
-        Fold { shut }
+        Fold { shut, depth }
     }
 
+    /// Whether this node's children are folded away by name.
     fn hides(&self, n: &Node) -> bool {
         self.shut.contains(&n.num)
     }
 
-    /// The query for this fold with `these` added or taken out, and
-    /// `standing` as the fragment so the browser lands back where the reader
-    /// was when they clicked.
-    fn with(&self, tree: &Tree, these: &[String], on: bool, standing: &str) -> String {
-        let dropped: BTreeSet<&String> = these.iter().collect();
-        let mut aliases: Vec<String> = self
-            .shut
+    /// Whether the depth limit is what stops a node at `depth` drawing its
+    /// children. Not something a reader can undo one node at a time, which
+    /// is why the control on such a row says so instead of offering.
+    fn cuts(&self, depth: usize) -> bool {
+        self.depth.is_some_and(|d| depth + 1 >= d)
+    }
+
+    /// A query for a fold, with both parts spelled out and `standing` as the
+    /// fragment so the browser lands back where the reader was.
+    fn url(tree: &Tree, shut: &BTreeSet<u64>, depth: Option<usize>, standing: &str) -> String {
+        let mut parts = Vec::new();
+        if let Some(d) = depth {
+            parts.push(format!("depth={d}"));
+        }
+        let mut aliases: Vec<String> = shut
             .iter()
             .filter_map(|&num| tree.node_by_num(num).map(|x| x.alias()))
-            .filter(|a| !dropped.contains(a))
             .collect();
-        if on {
-            aliases.extend(these.iter().cloned());
-        }
         aliases.sort();
-        match (aliases.is_empty(), standing.is_empty()) {
-            (true, true) => "?".to_string(),
-            (true, false) => format!("?#{standing}"),
-            (false, true) => format!("?fold={}", aliases.join(",")),
-            (false, false) => format!("?fold={}#{standing}", aliases.join(",")),
+        if !aliases.is_empty() {
+            parts.push(format!("fold={}", aliases.join(",")));
+        }
+        let query = match parts.is_empty() {
+            true => "?".to_string(),
+            false => format!("?{}", parts.join("&")),
+        };
+        match standing.is_empty() {
+            true => query,
+            false => format!("{query}#{standing}"),
         }
     }
 
@@ -240,31 +278,44 @@ impl Fold {
     /// itself as the fragment so the browser lands back where the reader was
     /// standing when they folded it.
     fn toggled(&self, tree: &Tree, n: &Node) -> String {
-        let alias = n.alias();
-        self.with(tree, std::slice::from_ref(&alias), !self.hides(n), &alias)
+        let mut shut = self.shut.clone();
+        if !shut.remove(&n.num) {
+            shut.insert(n.num);
+        }
+        Fold::url(tree, &shut, self.depth, &n.alias())
+    }
+
+    /// The query for this fold at another depth, keeping whatever is folded
+    /// by name. `None` is the whole tree.
+    fn at_depth(&self, tree: &Tree, depth: Option<usize>) -> String {
+        Fold::url(tree, &self.shut, depth, "")
     }
 }
 
-/// One node's place in the drawing. The index of a stop in `Map::stops` is
-/// its row, its `y`, and its handle in the payload -- one number doing all
-/// three jobs, so the list and the rails cannot drift apart.
+/// One node's place in the map. **Every** node has one, drawn or not: a
+/// stop's index is its handle in the payload, and the payload is what the
+/// search reads. Folding used to drop a node out of the list altogether,
+/// which took it out of the search too -- fold `g1` and two hundred nodes
+/// stopped being findable, while `vivac find` still found them.
 struct Stop<'t> {
     node: &'t Node,
     depth: usize,
     parent: Option<usize>,
-    /// The children that are *drawn*. Empty on a folded node, which is what
-    /// makes its line end there and its rail disappear.
     children: Vec<usize>,
     /// How many direct children the node really has, folded or not. The
     /// radius reads this and never `children.len()`: folding is a way of
     /// looking at the tree, and it is not allowed to change what the drawing
     /// says about how branched the work is.
     fan: usize,
-    /// How many nodes hang below this one *on the page*. It decides which
-    /// child the line follows, and it is the length of the rail this stop
-    /// draws.
-    below: usize,
-    /// How many nodes this stop is holding out of sight. Zero unless folded.
+    /// Which row this stop is drawn on, or `None` when it is folded away.
+    /// Everything vertical is computed from this and never from the index.
+    row: Option<usize>,
+    /// The last row anything in this subtree is drawn on: the far end of the
+    /// rail this stop draws.
+    last_row: Option<usize>,
+    /// How many of this stop's descendants are drawn.
+    drawn_below: usize,
+    /// How many nodes this stop is holding out of sight.
     hidden: usize,
     line: usize,
 }
@@ -277,12 +328,24 @@ struct Map<'t> {
     /// Which stop a node is, by `num` -- `None` for a node that is folded
     /// away and therefore has no row to point at.
     index: HashMap<u64, usize>,
+    /// The deepest lane *drawn*, which is what the stats report.
     depth: usize,
+    /// The deepest lane the tree has, drawn or not. The gutter is always
+    /// this wide: the ruler across its head measures the tree, so it has to
+    /// fit whatever is folded -- and a gutter that changed width on every
+    /// fold would shove the whole page sideways as well.
+    lanes: usize,
 }
 
-/// `n` and everything under it that is not folded away, pre-order, appended
-/// to `stops`. Pre-order is what makes a parent's row sit above its
-/// children's and its rail reach exactly to the last of them.
+/// `n` and everything under it, pre-order, appended to `stops`. Pre-order is
+/// what makes a parent's row sit above its children's and its rail reach
+/// exactly to the last of them.
+///
+/// `drawn` comes down from the parent: a node is drawn when its parent drew
+/// its children, and a parent draws its children unless it is folded or the
+/// depth limit stops there. So a subtree that is not drawn is still walked,
+/// counted and carried -- it just has no row.
+#[allow(clippy::too_many_arguments)]
 fn walk<'t>(
     tree: &'t Tree,
     ag: &Aggregates,
@@ -290,32 +353,57 @@ fn walk<'t>(
     n: &'t Node,
     depth: usize,
     parent: Option<usize>,
+    drawn: bool,
     stops: &mut Vec<Stop<'t>>,
+    next_row: &mut usize,
 ) -> usize {
     let me = stops.len();
-    let fan = tree.children(n.num).len();
+    let row = drawn.then(|| {
+        let r = *next_row;
+        *next_row += 1;
+        r
+    });
     stops.push(Stop {
         node: n,
         depth,
         parent,
         children: Vec::new(),
-        fan,
-        below: 0,
+        fan: tree.children(n.num).len(),
+        row,
+        last_row: row,
+        drawn_below: 0,
         hidden: 0,
         line: 0,
     });
+
+    let shows = drawn && !fold.hides(n) && !fold.cuts(depth);
     let mut children = Vec::new();
-    if !fold.hides(n) {
-        for c in tree.children(n.num) {
-            children.push(walk(tree, ag, fold, c, depth + 1, Some(me), stops));
+    let mut drawn_below = 0;
+    let mut last_row = row;
+    for c in tree.children(n.num) {
+        let at = walk(
+            tree,
+            ag,
+            fold,
+            c,
+            depth + 1,
+            Some(me),
+            shows,
+            stops,
+            next_row,
+        );
+        drawn_below += stops[at].drawn_below + usize::from(stops[at].row.is_some());
+        if stops[at].last_row.is_some() {
+            last_row = stops[at].last_row;
         }
+        children.push(at);
     }
-    let below = stops.len() - me - 1;
     stops[me].children = children;
-    stops[me].below = below;
+    stops[me].last_row = last_row;
+    stops[me].drawn_below = drawn_below;
     // What folding costs, counted rather than implied: the whole subtree
     // minus what of it is on the page.
-    stops[me].hidden = ag.counts(n.num).total.saturating_sub(below);
+    stops[me].hidden = ag.counts(n.num).total.saturating_sub(drawn_below);
     me
 }
 
@@ -406,8 +494,19 @@ impl<'t> Map<'t> {
     fn of(tree: &'t Tree, ag: &Aggregates, fold: &Fold) -> Map<'t> {
         let lines = thread(tree, ag);
         let mut stops = Vec::new();
+        let mut next_row = 0;
         for root in tree.roots() {
-            walk(tree, ag, fold, root, 0, None, &mut stops);
+            walk(
+                tree,
+                ag,
+                fold,
+                root,
+                0,
+                None,
+                true,
+                &mut stops,
+                &mut next_row,
+            );
         }
         for s in stops.iter_mut() {
             s.line = *lines.of.get(&s.node.num).unwrap_or(&usize::MAX);
@@ -417,12 +516,18 @@ impl<'t> Map<'t> {
             .enumerate()
             .map(|(i, s)| (s.node.num, i))
             .collect();
-        let depth = stops.iter().map(|s| s.depth).max().unwrap_or(0);
+        let depth = stops
+            .iter()
+            .filter(|s| s.row.is_some())
+            .map(|s| s.depth)
+            .max()
+            .unwrap_or(0);
         Map {
             stops,
             lines,
             index,
             depth,
+            lanes: levels(tree).saturating_sub(1),
         }
     }
 
@@ -444,11 +549,26 @@ impl<'t> Map<'t> {
     }
 
     fn width(&self, lane: &Lane) -> u32 {
-        lane.x(self.depth) + 14
+        lane.x(self.lanes) + 14
     }
 
     fn height(&self) -> u32 {
-        self.stops.len() as u32 * ROW
+        self.shown() as u32 * ROW
+    }
+
+    /// How many stops are drawn. Never `stops.len()`, which counts the
+    /// whole tree since the payload started carrying it.
+    fn shown(&self) -> usize {
+        self.drawn().count()
+    }
+
+    /// The stops with a row, in row order, which is the order they were
+    /// walked in.
+    fn drawn(&self) -> impl Iterator<Item = (usize, &Stop<'t>)> {
+        self.stops
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.row.is_some())
     }
 }
 
@@ -494,18 +614,18 @@ fn gutter(tree: &Tree, map: &Map, lane: &Lane, fold: &Fold) -> String {
         origin = lane.origin,
     );
 
-    for (i, s) in map.stops.iter().enumerate() {
-        let (x, mid) = (lane.x(s.depth), y(i));
+    for (_, s) in map.drawn() {
+        let (x, mid) = (lane.x(s.depth), y(s.row.unwrap_or(0)));
         let c = map.colour(s.line);
-        if !s.children.is_empty() {
-            // The rail runs from this stop down to the last row below it,
-            // which pre-order guarantees is `i + below`.
+        if s.drawn_below > 0 {
+            // The rail runs from this stop down to the last row anything
+            // below it is drawn on.
             out.push_str(&format!(
                 "<path class=\"rail {c}\" d=\"M{x} {mid} V{end}\"/>\n",
-                end = y(i + s.below),
+                end = y(s.last_row.unwrap_or(0)),
             ));
         }
-        if let Some(p) = s.parent {
+        if let Some(p) = s.parent.filter(|&p| map.stops[p].row.is_some()) {
             // Down the parent's lane, then a quarter turn into this one.
             // The turn is always exactly one lane wide, because a child is
             // always exactly one level deeper.
@@ -526,10 +646,15 @@ fn gutter(tree: &Tree, map: &Map, lane: &Lane, fold: &Fold) -> String {
         let end = *map.lines.chains[line]
             .last()
             .expect("a line in `named` has at least NAMED_MIN stations");
-        let Some(&last) = map.index.get(&end) else {
+        let Some(last) = map
+            .index
+            .get(&end)
+            .map(|&at| &map.stops[at])
+            .filter(|s| s.row.is_some())
+        else {
             continue;
         };
-        let (x, mid) = (lane.x(map.stops[last].depth), y(last));
+        let (x, mid) = (lane.x(last.depth), y(last.row.unwrap_or(0)));
         out.push_str(&format!(
             "<path class=\"terminus {c}\" d=\"M{left} {below} H{right}\"/>\n",
             c = map.colour(line),
@@ -539,8 +664,8 @@ fn gutter(tree: &Tree, map: &Map, lane: &Lane, fold: &Fold) -> String {
         ));
     }
 
-    for (i, s) in map.stops.iter().enumerate() {
-        let (x, mid) = (lane.x(s.depth), y(i));
+    for (i, s) in map.drawn() {
+        let (x, mid) = (lane.x(s.depth), y(s.row.unwrap_or(0)));
         let r = radius(s.fan);
         out.push_str(&format!(
             "<circle class=\"station {c}{state}\" data-stop=\"{i}\" \
@@ -577,13 +702,29 @@ fn gutter(tree: &Tree, map: &Map, lane: &Lane, fold: &Fold) -> String {
     // the `aria-hidden` above, with a label each, because these are the one
     // part of the drawing that is not a picture of the list.
     out.push_str("<g class=\"folds\">\n");
-    for (i, s) in map.stops.iter().enumerate() {
+    for (_, s) in map.drawn() {
         if s.fan == 0 {
             continue;
         }
         let n = s.node;
         let shut = fold.hides(n);
-        let mid = y(i);
+        let mid = y(s.row.unwrap_or(0));
+        let (left, top, text) = (lane.control.saturating_sub(9), mid - 9, mid + 5);
+        // A triangle that points down is open and one that points right is
+        // shut: the shape a disclosure has had since before the web, and a
+        // shape rather than a colour. A node the depth limit is cutting has
+        // no offer to make -- one node cannot come back from a limit that is
+        // set for the whole map -- so it says so instead of pretending.
+        if fold.cuts(s.depth) {
+            out.push_str(&format!(
+                "<g class=\"fold off\"><title>{id} is at the last level the \
+                 depth is set to</title>\
+                 <text x=\"{x}\" y=\"{text}\">&#9656;</text></g>\n",
+                id = escape(&n.alias()),
+                x = lane.control,
+            ));
+            continue;
+        }
         out.push_str(&format!(
             "<a class=\"fold{on}\" href=\"{href}\" aria-label=\"{label}\">\
              <rect x=\"{left}\" y=\"{top}\" width=\"18\" height=\"18\"/>\
@@ -595,15 +736,26 @@ fn gutter(tree: &Tree, map: &Map, lane: &Lane, fold: &Fold) -> String {
             } else {
                 format!("fold everything under {}", n.alias())
             }),
-            left = lane.control.saturating_sub(9),
-            top = mid - 9,
             x = lane.control,
-            text = mid + 4,
-            // A triangle that points down is open and one that points right
-            // is shut: the same shape a disclosure has had since before the
-            // web, and a shape rather than a colour.
             glyph = if shut { "&#9656;" } else { "&#9662;" },
         ));
+        // And the drawing says it too, where the rail would have gone: a cut
+        // rail, which is the mark a drawing uses for "this carries on and is
+        // not shown". An 11 px triangle in a column of its own turned out to
+        // be too small to read a state off, and the state is the point.
+        if shut {
+            let x = lane.x(s.depth);
+            out.push_str(&format!(
+                "<path class=\"cut {c}\" d=\"M{a} {up} L{b} {down} M{a} {below} L{b} {rest}\"/>\n",
+                c = map.colour(s.line),
+                a = x - 5,
+                b = x + 5,
+                up = mid + 11,
+                down = mid + 5,
+                below = mid + 15,
+                rest = mid + 9,
+            ));
+        }
     }
     out.push_str("</g></svg>\n");
     out
@@ -614,7 +766,7 @@ fn gutter(tree: &Tree, map: &Map, lane: &Lane, fold: &Fold) -> String {
 /// its rail, and an indent would say the same thing twice and worse.
 fn rows(project: &str, tree: &Tree, map: &Map, ag: &Aggregates, fold: &Fold) -> String {
     let mut out = String::from("<ol class=\"stops\">\n");
-    for (i, s) in map.stops.iter().enumerate() {
+    for (i, s) in map.drawn() {
         let n = s.node;
         let alias = n.alias();
         let mut class = String::from("stop");
@@ -630,7 +782,7 @@ fn rows(project: &str, tree: &Tree, map: &Map, ag: &Aggregates, fold: &Fold) -> 
         if n.state == State::Done && ag.blockers(n.num) > 0 {
             class.push_str(" false-close");
         }
-        if fold.hides(n) {
+        if fold.hides(n) || (s.fan > 0 && fold.cuts(s.depth)) {
             class.push_str(" folded");
         }
         let notes = match n.notes.len() {
@@ -645,7 +797,11 @@ fn rows(project: &str, tree: &Tree, map: &Map, ag: &Aggregates, fold: &Fold) -> 
         // them there lives in the gutter, beside the rail it cut; what
         // belongs on the row is the count, which is the one thing a reader
         // cannot see for themselves once the subtree is gone.
-        let control = match fold.hides(n) {
+        // Only the row that is doing the hiding says how much. Every
+        // ancestor of a folded node also has descendants off the page --
+        // 198 of `g1`'s, when `g132` is folded -- and a count on each of
+        // them read as an offer to unfold something they do not hold.
+        let control = match s.fan > 0 && (fold.hides(n) || fold.cuts(s.depth)) {
             true => format!("<span class=\"held\">+{}</span>", s.hidden),
             false => String::new(),
         };
@@ -694,8 +850,14 @@ fn legend(map: &Map) -> String {
     out
 }
 
-/// Everything the panel says about every node, as one JSON array in stop
-/// order, so an index is a stop, a row and an entry all at once.
+/// Everything the panel says about every node, as one JSON array in tree
+/// order -- **every** node, folded away or not.
+///
+/// A folded node has no row and no station, and it used to have no entry
+/// either, which quietly took it out of the page's own search: fold `g1` and
+/// two hundred nodes stopped being findable here while `vivac find` went on
+/// finding them. `r` is the row a stop is drawn on, or `null`, and it is the
+/// only thing that separates the two.
 ///
 /// `<` is escaped even though `serde_json` has already made the value a
 /// legal JSON string: legal JSON can still contain the four characters that
@@ -706,6 +868,7 @@ fn payload(project: &str, tree: &Tree, map: &Map, ag: &Aggregates, fold: &Fold) 
         .stops
         .iter()
         .map(|s| {
+            let hides_here = s.fan > 0 && (fold.hides(s.node) || fold.cuts(s.depth));
             let n = s.node;
             let below = ag.counts(n.num);
             let blocking = crate::render::blocking_of(tree, n);
@@ -732,16 +895,19 @@ fn payload(project: &str, tree: &Tree, map: &Map, ag: &Aggregates, fold: &Fold) 
                 "ob": below.open_count,
                 "tb": below.total,
                 "ln": map.line_name(s.line),
-                "hd": s.hidden,
+                // The row it is drawn on, and `null` when it is folded
+                // away: everything the script measures reads this and never
+                // the index.
+                "r": s.row,
+                "hd": if hides_here { s.hidden } else { 0 },
                 // What holds this one open, as stop indices: the same
                 // filter `tree` and `why` read, so the three surfaces
                 // cannot disagree about what a debt is (`f380`).
                 //
-                // `bn` is how many there really are and `bl` only the ones
-                // with a row to link to. A blocker is always a descendant,
-                // so folding a node hides its own debts -- and a panel that
-                // silently listed the survivors would report a node as
-                // waiting on nothing while it waits on three.
+                // Every node has an entry now, folded or not, so this is
+                // the whole list and `bn` is its length. Whether one of them
+                // is on the page is a question about `r`, which the panel
+                // asks for itself.
                 "bn": blocking.len(),
                 "bl": blocking
                     .iter()
@@ -756,7 +922,13 @@ fn payload(project: &str, tree: &Tree, map: &Map, ag: &Aggregates, fold: &Fold) 
         .iter()
         .filter_map(|&num| tree.node_by_num(num).map(|n| n.alias()))
         .collect();
-    let raw = json!({"project": project, "fold": folded, "stops": stops}).to_string();
+    let raw = json!({
+        "project": project,
+        "fold": folded,
+        "depth": fold.depth,
+        "stops": stops,
+    })
+    .to_string();
     raw.replace('<', "\\u003c")
         .replace('>', "\\u003e")
         .replace('&', "\\u0026")
@@ -802,13 +974,13 @@ fn key(tree: &Tree) -> String {
 /// The line under the title: what the page is, in numbers, before anybody
 /// has clicked anything.
 fn stats(map: &Map, tree: &Tree) -> String {
-    let open = map.stops.iter().filter(|s| s.node.state.is_open()).count();
-    let blocking = map.stops.iter().filter(|s| s.node.blocks).count();
+    let open = map.drawn().filter(|(_, s)| s.node.state.is_open()).count();
+    let blocking = map.drawn().filter(|(_, s)| s.node.blocks).count();
     // Every number here counts what is drawn, except the total, which counts
     // the tree. Folding is a way of looking and the two have to be told
     // apart, so the gap between them is spelled out rather than left for the
     // reader to notice.
-    let folded = tree.total().saturating_sub(map.stops.len());
+    let folded = tree.total().saturating_sub(map.shown());
     let away = match folded {
         0 => String::new(),
         n => format!(" · {n} folded away"),
@@ -816,7 +988,7 @@ fn stats(map: &Map, tree: &Tree) -> String {
     format!(
         "{drawn} of {n} nodes{away} · {open} open · {blocking} blocking · \
          depth {d} · {lines} lines, {named} of them named",
-        drawn = map.stops.len(),
+        drawn = map.shown(),
         n = tree.total(),
         d = map.depth,
         lines = map.lines.chains.len(),
@@ -833,136 +1005,87 @@ fn stats(map: &Map, tree: &Tree) -> String {
 /// always says exactly what is folded, node by node. A `depth=` of its own
 /// would have been shorter and would have left two mechanisms that answer
 /// to each other, with a row's unfold unable to undo it.
-/// Every node that has children, gathered by how deep it sits.
-///
-/// It reads the **whole** tree and never the drawing: folding a level is an
-/// absolute view, so it has to name the nodes at that depth that are already
-/// folded away as well as the ones on screen. Built off the drawing, it
-/// quietly unfolded whatever was folded.
-fn foldable_by_depth(tree: &Tree) -> Vec<Vec<String>> {
-    fn walk(tree: &Tree, n: &Node, depth: usize, out: &mut Vec<Vec<String>>) {
-        let children = tree.children(n.num);
-        if !children.is_empty() {
-            if out.len() <= depth {
-                out.resize(depth + 1, Vec::new());
-            }
-            out[depth].push(n.alias());
-        }
-        for c in children {
-            walk(tree, c, depth + 1, out);
-        }
+/// How many levels deep the whole tree goes. The ruler is drawn from this
+/// and never from what is on screen: a ruler that loses its far end when
+/// something is folded is a ruler you cannot use to get back.
+fn levels(tree: &Tree) -> usize {
+    fn deepest(tree: &Tree, n: &Node, depth: usize) -> usize {
+        tree.children(n.num)
+            .iter()
+            .map(|c| deepest(tree, c, depth + 1))
+            .max()
+            .unwrap_or(depth)
     }
-
-    let mut levels: Vec<Vec<String>> = Vec::new();
-    for root in tree.roots() {
-        walk(tree, root, 0, &mut levels);
-    }
-    levels
-}
-
-/// What the control for one depth can do, right now.
-///
-/// A level nothing is drawn at can do **nothing**: fold the roots and every
-/// level below them is off the page already, so a control offering to fold
-/// them is offering a click that changes nothing while it grows the URL.
-/// The first version offered all fifteen at once whatever was folded, and
-/// the way back was four clicks in places the page gave no reason to look.
-enum Level {
-    /// Nothing at this depth is drawn, so there is nothing to fold.
-    Inert,
-    Fold(String),
-    Unfold(String),
-}
-
-fn level_of(tree: &Tree, map: &Map, fold: &Fold, at: &[String]) -> Level {
-    let drawn: Vec<&Node> = at
+    tree.roots()
         .iter()
-        .filter_map(|a| tree.resolve(a))
-        .filter(|n| map.index.contains_key(&n.num))
-        .collect();
-    if drawn.is_empty() {
-        return Level::Inert;
-    }
-    match drawn.iter().all(|n| fold.hides(n)) {
-        true => Level::Unfold(fold.with(tree, at, false, "")),
-        false => Level::Fold(fold.with(tree, at, true, "")),
-    }
+        .map(|r| deepest(tree, r, 0))
+        .max()
+        .map(|d| d + 1)
+        .unwrap_or(0)
 }
 
-/// One control per lane, at the head of the column it folds.
+/// One control per lane, at the head of the column it measures.
 ///
-/// A lane **is** a depth, so the head of a lane is where folding a whole
-/// level belongs: it sits above the column it acts on, and nobody has to
-/// translate "depth 4" into a position on the drawing. The number is the
-/// depth; a level that is folded keeps the number and gains a box, because
-/// a state a colour alone carries is one the DX pillar does not allow.
+/// A lane **is** a depth, so the head of a lane is where "show me this many
+/// levels" belongs: over the column it stops at, with nobody having to
+/// translate a number into a position on the drawing.
+///
+/// Exactly one is marked, because a depth is one number and not a pile. Two
+/// clicks in any order leave the same view as the second one alone, and
+/// clicking the marked one gives the whole tree back.
 ///
 /// Wide layout only. A lane is 8 px across on a phone and no control fits in
 /// 8 px, so the narrow one keeps the same links as a row of chips in the
 /// tools. Same links and the same mechanism, in two shapes.
-fn heads(tree: &Tree, map: &Map, fold: &Fold, lane: &Lane) -> String {
-    let levels = foldable_by_depth(tree);
-    if levels.is_empty() {
+fn heads(tree: &Tree, fold: &Fold, lane: &Lane) -> String {
+    let deep = levels(tree);
+    if deep == 0 {
         return String::new();
     }
     let mut out = format!("<div class=\"heads {when}\">", when = lane.when);
-    for (level, at) in levels.iter().enumerate() {
-        if at.is_empty() {
-            continue;
-        }
-        let left = lane.x(level).saturating_sub(9);
-        let n = level + 1;
-        // A level that can do nothing stays on the strip and stops being a
-        // link: the row of numbers is also the depth ruler of the drawing,
-        // and a ruler that loses a mark whenever something is folded is a
-        // worse ruler than one that greys.
-        out.push_str(&match level_of(tree, map, fold, at) {
-            Level::Inert => format!(
-                "<span class=\"head off\" style=\"left:{left}px\" \
-                 title=\"nothing is drawn at depth {n}\">{n}</span>"
-            ),
-            Level::Fold(href) => format!(
-                "<a class=\"head\" style=\"left:{left}px\" href=\"{href}\" \
-                 title=\"fold everything at depth {n}\">{n}</a>",
-                href = escape(&href),
-            ),
-            Level::Unfold(href) => format!(
-                "<a class=\"head on\" style=\"left:{left}px\" href=\"{href}\" \
-                 title=\"unfold everything at depth {n}\">{n}</a>",
-                href = escape(&href),
-            ),
-        });
+    for level in 1..=deep {
+        let here = fold.depth == Some(level);
+        out.push_str(&format!(
+            "<a class=\"head{on}\" style=\"left:{left}px\" href=\"{href}\" \
+             title=\"{what}\">{level}</a>",
+            on = if here { " on" } else { "" },
+            left = lane.x(level - 1).saturating_sub(9),
+            href = escape(&fold.at_depth(tree, if here { None } else { Some(level) })),
+            what = if here {
+                "showing this many levels -- click for the whole tree".to_string()
+            } else {
+                format!(
+                    "show {level} level{s}",
+                    s = if level == 1 { "" } else { "s" }
+                )
+            },
+        ));
     }
     out.push_str("</div>\n");
     out
 }
 
-/// The same levels as `heads`, as a row of chips: what the phone gets, where
-/// a lane is too narrow to carry a control of its own.
-fn depths(tree: &Tree, map: &Map, fold: &Fold) -> String {
-    let levels = foldable_by_depth(tree);
-    if levels.is_empty() {
+/// The same ruler as a row of chips: what the phone gets, where a lane is
+/// too narrow to carry a control of its own.
+fn depths(tree: &Tree, fold: &Fold) -> String {
+    let deep = levels(tree);
+    if deep == 0 {
         return String::new();
     }
-    let mut out = String::from("<span class=\"depths\">fold to depth ");
-    for (level, at) in levels.iter().enumerate() {
-        if at.is_empty() {
-            continue;
-        }
-        let n = level + 1;
-        out.push_str(&match level_of(tree, map, fold, at) {
-            Level::Inert => format!("<span class=\"depth off\">{n}</span>"),
-            Level::Fold(href) => format!(
-                "<a class=\"depth\" href=\"{href}\">{n}</a>",
-                href = escape(&href)
-            ),
-            Level::Unfold(href) => format!(
-                "<a class=\"depth on\" href=\"{href}\">{n}</a>",
-                href = escape(&href)
-            ),
-        });
+    let mut out = String::from("<span class=\"depths\">levels ");
+    for level in 1..=deep {
+        let here = fold.depth == Some(level);
+        out.push_str(&format!(
+            "<a class=\"depth{on}\" href=\"{href}\">{level}</a>",
+            on = if here { " on" } else { "" },
+            href = escape(&fold.at_depth(tree, if here { None } else { Some(level) })),
+        ));
     }
-    out.push_str("</span>");
+    out.push_str(&format!(
+        "<a class=\"depth{on}\" href=\"{href}\">all</a></span>",
+        on = if fold.depth.is_none() { " on" } else { "" },
+        href = escape(&fold.at_depth(tree, None)),
+    ));
     out
 }
 
@@ -975,11 +1098,23 @@ fn depths(tree: &Tree, map: &Map, fold: &Fold) -> String {
 /// escape hatch is now its own control, on both layouts, and it says how
 /// much it will bring back.
 fn unfold_all(map: &Map, tree: &Tree) -> String {
-    let folded = tree.total().saturating_sub(map.stops.len());
-    if folded == 0 {
+    let folded = tree.total().saturating_sub(map.shown());
+    match folded {
+        0 => String::new(),
+        n => format!("<a class=\"tool\" href=\"?\">Unfold everything · {n}</a>\n"),
+    }
+}
+
+/// The other end of the same pair: everything but the roots, in one click.
+///
+/// It is `depth=1` and not a fold of every node with children, and those are
+/// the same view by two roads. The road matters: one number comes undone
+/// with one click, and a set of a hundred and twenty-five aliases does not.
+fn fold_all(map: &Map, tree: &Tree) -> String {
+    if map.shown() <= tree.roots().len() {
         return String::new();
     }
-    format!("<a class=\"tool\" href=\"?\">Unfold everything · {folded}</a>\n")
+    "<a class=\"tool\" href=\"?depth=1\">Fold everything</a>\n".to_string()
 }
 
 /// The whole tree of `project`, drawn as a map, minus whatever `query` says
@@ -1018,7 +1153,7 @@ pub(super) fn map_page(project: &str, name: &str, tree: &Tree, query: &str) -> S
     let body = format!(
         "<div class=\"map\">\n{heads}<div class=\"gutter\">{wide}{narrow}</div>\n\
          {rows}<aside id=\"detail\" class=\"detail\">{key}</aside>\n</div>\n",
-        heads = heads(tree, &map, &fold, &WIDE),
+        heads = heads(tree, &fold, &WIDE),
         wide = gutter(tree, &map, &WIDE, &fold),
         narrow = gutter(tree, &map, &NARROW, &fold),
         rows = rows(project, tree, &map, &ag, &fold),
@@ -1030,15 +1165,16 @@ pub(super) fn map_page(project: &str, name: &str, tree: &Tree, query: &str) -> S
         name,
         body,
         format!(
-            "<p class=\"stats\">{stats}</p>\n{legend}<div class=\"tools\">{here}{back}\
+            "<p class=\"stats\">{stats}</p>\n{legend}<div class=\"tools\">{here}{shut}{back}\
              <input id=\"find\" type=\"search\" \
              placeholder=\"Find in alias, title and why…\" \
              aria-label=\"Find a station\">\
              <span class=\"hits\" id=\"hits\" role=\"status\"></span>{depths}</div>\n",
             stats = escape(&stats(&map, tree)),
+            shut = fold_all(&map, tree),
             back = unfold_all(&map, tree),
             legend = legend(&map),
-            depths = depths(tree, &map, &fold),
+            depths = depths(tree, &fold),
         ),
         payload(project, tree, &map, &ag, &fold),
         MAP_JS.to_string(),
@@ -1604,64 +1740,68 @@ mod tests {
         );
     }
 
-    /// A lane is a depth, so the head of a lane folds that whole depth. The
-    /// controls are one per level that has anything to fold, and the level a
-    /// reader has already folded says so rather than offering to fold it
-    /// again.
+    /// The ruler is one number and not a pile. Exactly one mark is on,
+    /// whatever was clicked before, and clicking the marked one gives the
+    /// whole tree back.
+    ///
+    /// The first version added every node at a depth to the fold set, so
+    /// folding 6, then 5, then 3 left three sets that had to be undone one
+    /// at a time in reverse -- which is what the owner met.
     #[test]
-    fn each_lane_has_a_head_that_folds_its_whole_depth() {
+    fn the_depth_ruler_is_one_number_and_not_a_pile() {
         let tree = real_shape();
-        let levels: Vec<Vec<String>> = foldable_by_depth(&tree)
-            .into_iter()
-            .filter(|l| !l.is_empty())
-            .collect();
-        assert!(levels.len() > 1, "the fixture has more than one level");
+        let deep = levels(&tree);
+        assert!(deep > 3, "the fixture is deep enough to test this");
 
         let page = map_page("vivac", "vivac", &tree, "");
-        assert_eq!(page.matches("class=\"head\"").count(), levels.len());
+        assert_eq!(page.matches("class=\"head\"").count(), deep);
         assert_eq!(page.matches("class=\"head on\"").count(), 0);
 
-        // Fold the first level whole, and its head is the one that changes.
-        let whole = levels[0].join(",");
-        let page = map_page("vivac", "vivac", &tree, &format!("fold={whole}"));
+        // Three levels, then two: the second click decides on its own.
+        let page = map_page("vivac", "vivac", &tree, "depth=3");
+        assert_eq!(page.matches("class=\"head on\"").count(), 1, "{page}");
+        let three = page.matches("<li class=\"stop").count();
+
+        let page = map_page("vivac", "vivac", &tree, "depth=3&depth=2");
         assert_eq!(
-            page.matches("class=\"head on\"").count(),
-            1,
-            "the folded level, and only it:\n{page}"
+            page.matches("<li class=\"stop").count(),
+            map_page("vivac", "vivac", &tree, "depth=2")
+                .matches("<li class=\"stop")
+                .count(),
+            "the last number wins, and nothing accumulates"
         );
-        assert_eq!(page.matches("class=\"depth on\"").count(), 1, "{page}");
+        assert!(
+            page.matches("<li class=\"stop").count() < three,
+            "two levels draw fewer rows than three"
+        );
     }
 
-    /// Fold the roots and everything below them is off the page, so every
-    /// deeper level has nothing left to fold. Offering all fifteen anyway is
-    /// offering clicks that change nothing and grow the URL, which is what
-    /// the owner met: four levels folded, and a way back that had to be
-    /// undone in the order it was done.
+    /// A depth shows that many levels, and one is the roots.
     #[test]
-    fn a_depth_with_nothing_drawn_at_it_is_no_longer_a_control() {
+    fn a_depth_of_one_draws_the_roots_and_nothing_else() {
         let tree = real_shape();
-        let roots: Vec<String> = foldable_by_depth(&tree)
-            .first()
-            .expect("the fixture has a root with children")
-            .clone();
+        let page = map_page("vivac", "vivac", &tree, "depth=1");
+        assert_eq!(
+            page.matches("<li class=\"stop").count(),
+            tree.roots().len(),
+            "{page}"
+        );
+        // And the way back is right there, because it always is.
+        assert!(page.contains("class=\"tool\" href=\"?\""), "{page}");
+    }
 
-        let page = map_page(
-            "vivac",
-            "vivac",
-            &tree,
-            &format!("fold={}", roots.join(",")),
+    /// A row the depth limit is cutting has no offer to make: one node
+    /// cannot come back from a limit set for the whole map. It says so
+    /// rather than offering a click that does nothing.
+    #[test]
+    fn a_row_the_depth_cuts_says_so_instead_of_offering_to_fold() {
+        let tree = real_shape();
+        let page = map_page("vivac", "vivac", &tree, "depth=2");
+        assert!(page.contains("class=\"fold off\""), "{page}");
+        assert!(
+            page.contains("is at the last level the depth is set to"),
+            "{page}"
         );
-        assert_eq!(
-            page.matches("class=\"head on\"").count(),
-            1,
-            "the folded level, which is the way back:\n{page}"
-        );
-        assert_eq!(
-            page.matches("class=\"head\"").count(),
-            0,
-            "and no level below it is still offering to fold:\n{page}"
-        );
-        assert!(page.contains("class=\"head off\""), "{page}");
     }
 
     /// Whatever is folded, the whole tree is one click away. The way back

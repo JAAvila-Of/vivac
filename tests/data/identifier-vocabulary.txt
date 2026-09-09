@@ -257,6 +257,7 @@ cur
 current
 cursor
 cut
+cuts
 cwd
 d200
 dash
@@ -277,6 +278,7 @@ declares
 decoded
 dedup
 deep
+deepest
 default
 degradation
 degree
@@ -321,7 +323,6 @@ drain
 drawn
 draws
 drop
-dropped
 drops
 dump
 duration
@@ -425,7 +426,6 @@ fn
 focus
 focused
 fold
-foldable
 folded
 folding
 folds
@@ -543,7 +543,6 @@ indent
 index
 indexed
 indices
-inert
 info
 init
 initial
@@ -555,6 +554,7 @@ insert
 inserted
 inside
 instant
+instead
 intent
 intern
 into
@@ -588,6 +588,7 @@ label
 landing
 lands
 lane
+lanes
 last
 late
 later
@@ -740,6 +741,7 @@ of
 off
 offenders
 offered
+offering
 offers
 offset
 ok
@@ -827,6 +829,7 @@ phrase
 picked
 picks
 pii
+pile
 piped
 place
 placed
@@ -944,7 +947,6 @@ rescue
 rescued
 rescuing
 resident
-resize
 resolve
 resolves
 respects
@@ -981,6 +983,7 @@ rpc
 rposition
 rsplit
 rule
+ruler
 rules
 run
 runs
@@ -1168,7 +1171,6 @@ their
 them
 then
 there
-these
 they
 this
 thread

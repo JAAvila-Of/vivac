@@ -657,7 +657,9 @@ a.tool {
 .folds text {
   fill: var(--ink-faint);
   font-family: var(--mono);
-  font-size: 11px;
+  /* Big enough to read the state off. At 11 px an open triangle and a shut
+     one were the same smudge, which is the whole job of the control. */
+  font-size: 15px;
   text-anchor: middle;
 }
 
@@ -670,9 +672,30 @@ a.tool {
   fill: var(--accent);
 }
 
+/* A node the depth limit is cutting is not a control: there is nothing one
+   node can do about a limit set for the whole map. */
+.folds .off text {
+  fill: var(--ink-faint);
+  opacity: 0.4;
+}
+
+/* And the drawing says it where the rail would have gone: the mark a drawing
+   uses for "this carries on and is not shown". */
+.cut {
+  fill: none;
+  stroke: var(--c);
+  stroke-width: 2;
+  stroke-linecap: round;
+  opacity: 0.85;
+}
+
 /* The route dims the drawing, and a control is not part of the drawing. */
 .routing .folds text {
   opacity: 1;
+}
+
+.routing .cut {
+  opacity: 0.14;
 }
 
 .route path {

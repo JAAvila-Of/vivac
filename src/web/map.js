@@ -24,9 +24,23 @@
   var project = data.project;
 
   var map = document.querySelector(".map");
-  var rows = [].slice.call(document.querySelectorAll("li.stop"));
   var stations = [].slice.call(document.querySelectorAll("svg .station"));
   var gutters = [].slice.call(document.querySelectorAll("svg.rails"));
+
+  /* The row of each stop that has one, by stop. Not an array in document
+     order: the payload carries every node and only some of them are drawn,
+     so a position in the list is not a position in the payload. */
+  var rows = {};
+  [].slice.call(document.querySelectorAll("li.stop")).forEach(function (e) {
+    rows[+e.dataset.stop] = e;
+  });
+  var drawn = Object.keys(rows).map(Number);
+
+  function eachRow(fn) {
+    drawn.forEach(function (k) {
+      fn(rows[k], k);
+    });
+  }
   /* What the panel says when nothing is chosen. Rendered by the server so
      it is there with no script at all, and kept here so closing the panel
      puts it back rather than leaving a hole. */
@@ -67,8 +81,11 @@
       var x = function (i) {
         return origin + D[i].d * step;
       };
+      /* The row a stop is drawn on, never its place in the payload: the
+         payload holds the whole tree and the drawing holds what is left
+         after a fold. */
       var y = function (i) {
-        return i * row + row / 2;
+        return D[i].r * row + row / 2;
       };
 
       var d = "";
@@ -195,14 +212,17 @@
 
   function show(i, quiet) {
     var n = D[i];
+    /* A node with no row is folded away: there is nothing to draw a route
+       to and nothing to scroll to. The search offers a link that unfolds it
+       instead, which is the only honest answer. */
+    if (!n || n.r === null) return;
     var route = routeTo(i);
     var onRoute = {};
     route.forEach(function (k) {
       onRoute[k] = true;
     });
 
-    rows.forEach(function (e) {
-      var k = +e.dataset.stop;
+    eachRow(function (e, k) {
       e.classList.toggle("on", k === i);
       e.classList.toggle("onroute", !!onRoute[k]);
     });
@@ -258,15 +278,22 @@
     }
   }
 
-  function jump(i) {
-    rows[i].scrollIntoView({ block: "center", behavior: "smooth" });
+  function jump(i, straight) {
+    var e = rows[i];
+    if (!e) return;
+    /* Smooth when a person asked to move, instant when the page is
+       arriving. A fold reloads the page, and animating twelve thousand
+       pixels of scroll after a reload reads as landing at the top and then
+       sliding -- which is exactly how the owner described losing their
+       place. */
+    e.scrollIntoView({ block: "center", behavior: straight ? "auto" : "smooth" });
   }
 
   function rest() {
     panel.classList.remove("open");
     map.classList.remove("routing");
     panel.innerHTML = resting;
-    rows.forEach(function (e) {
+    eachRow(function (e) {
       e.classList.remove("on", "onroute");
     });
     stations.forEach(function (e) {
@@ -290,7 +317,7 @@
     if (e.target.closest(".close")) rest();
   });
 
-  rows.forEach(function (e) {
+  eachRow(function (e) {
     e.addEventListener("click", function (ev) {
       var link = ev.target.closest("a");
       /* The fold control is a link that has to *navigate*: folding
@@ -332,47 +359,95 @@
       document.querySelectorAll(".legend .line").forEach(function (o) {
         if (o !== b) o.classList.remove("on");
       });
-      rows.forEach(function (e) {
-        e.classList.toggle("faded", on && D[+e.dataset.stop].ln !== b.dataset.line);
+      eachRow(function (e, k) {
+        e.classList.toggle("faded", on && D[k].ln !== b.dataset.line);
       });
     });
+  });
+
+  /* The way to a node that is folded away: drop whatever ancestor is
+     folded over it, and raise the depth if that is what is in the way.
+     Built here rather than on the server because only the search knows
+     which nodes it wants to reach. */
+  function reach(list) {
+    var open = {};
+    var need = 0;
+    list.forEach(function (i) {
+      if (D[i].r !== null) return;
+      need = Math.max(need, D[i].d + 1);
+      var k = D[i].p;
+      while (k !== null && k !== undefined) {
+        if (folded[D[k].a]) open[D[k].a] = true;
+        k = D[k].p;
+      }
+    });
+    var keep = (data.fold || []).filter(function (a) {
+      return !open[a];
+    });
+    var depth = data.depth;
+    if (depth && need > depth) depth = need;
+    var parts = [];
+    if (depth) parts.push("depth=" + depth);
+    if (keep.length) parts.push("fold=" + keep.join(","));
+    return "?" + parts.join("&");
+  }
+
+  var folded = {};
+  (data.fold || []).forEach(function (a) {
+    folded[a] = true;
   });
 
   var find = document.getElementById("find");
   var hits = document.getElementById("hits");
   var found = [];
+  var here = [];
   var cursor = -1;
   if (find) {
     find.addEventListener("input", function () {
       var v = find.value.trim().toLowerCase();
-      rows.forEach(function (e) {
+      eachRow(function (e) {
         e.classList.remove("hit");
       });
       found = [];
       cursor = -1;
       if (v.length > 1) {
+        /* The whole tree, and not what is on screen. Folding is a way of
+           looking; it is not a claim that the rest stopped existing, and a
+           search that quietly skipped two hundred nodes said otherwise. */
         D.forEach(function (n, i) {
           if ((n.a + " " + n.t + " " + n.w).toLowerCase().indexOf(v) >= 0) {
             found.push(i);
-            rows[i].classList.add("hit");
+            if (rows[i]) rows[i].classList.add("hit");
           }
         });
       }
-      hits.textContent =
-        v.length > 1
-          ? found.length
-            ? found.length + " found · Enter walks them"
-            : "nothing found"
-          : "";
+      here = found.filter(function (i) {
+        return D[i].r !== null;
+      });
+      var away = found.length - here.length;
+      if (v.length < 2) {
+        hits.textContent = "";
+      } else if (!found.length) {
+        hits.textContent = "nothing found";
+      } else {
+        hits.textContent =
+          found.length + " found" + (here.length ? " · Enter walks them" : "");
+        if (away) {
+          hits.insertAdjacentHTML(
+            "beforeend",
+            ' · <a href="' + reach(found) + '">' + away + " folded away</a>"
+          );
+        }
+      }
     });
     find.addEventListener("keydown", function (e) {
-      if (e.key !== "Enter" || !found.length) return;
+      if (e.key !== "Enter" || !here.length) return;
       e.preventDefault();
-      cursor = (cursor + (e.shiftKey ? -1 : 1) + found.length) % found.length;
-      var i = found[cursor];
+      cursor = (cursor + (e.shiftKey ? -1 : 1) + here.length) % here.length;
+      var i = here[cursor];
       show(i, true);
       jump(i);
-      hits.textContent = cursor + 1 + " of " + found.length;
+      hits.textContent = cursor + 1 + " of " + here.length + " on the page";
     });
   }
 
@@ -384,17 +459,18 @@
       if (find) find.focus();
       return;
     }
-    if (e.key === "ArrowDown" || e.key === "j") {
+    /* Up and down walk the rows on the page, not the payload: the payload
+       is the whole tree and half of it may be folded away. */
+    if (e.key === "ArrowDown" || e.key === "j" || e.key === "ArrowUp" || e.key === "k") {
       e.preventDefault();
-      var down = at === null ? 0 : Math.min(at + 1, D.length - 1);
-      show(down, true);
-      jump(down);
-    }
-    if (e.key === "ArrowUp" || e.key === "k") {
-      e.preventDefault();
-      var up = at === null ? 0 : Math.max(at - 1, 0);
-      show(up, true);
-      jump(up);
+      var back = e.key === "ArrowUp" || e.key === "k";
+      var seat = at === null ? -1 : drawn.indexOf(at);
+      var to =
+        seat < 0
+          ? drawn[0]
+          : drawn[Math.min(Math.max(seat + (back ? -1 : 1), 0), drawn.length - 1)];
+      show(to, true);
+      jump(to);
     }
   });
 
@@ -415,7 +491,7 @@
     if (!alias) return;
     for (var i = 0; i < D.length; i++) {
       if (D[i].a === alias) {
-        jump(i);
+        jump(i, true);
         return;
       }
     }
