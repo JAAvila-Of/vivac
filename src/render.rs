@@ -575,11 +575,19 @@ pub fn open(a: &Tree, args: &Args) -> R {
         // `--all` closes.
         let oldest = leaves[shown..].iter().map(|n| n.opened(a)).min();
         let age = oldest.and_then(|d| crate::clock::days_between(d, &crate::clock::now_rfc3339()));
+        // The same three arms the project index uses for a project that has
+        // not moved. A count of days is the wrong shape at zero and at one,
+        // and "open for 0 days" is a sentence nobody says.
         match age {
-            Some(days) => outln!(
-                "  {hidden} more, the oldest open for {days} day{} -- vivac open --all",
-                if days == 1 { "" } else { "s" },
-            ),
+            Some(d) if d <= 0 => {
+                outln!("  {hidden} more, the oldest opened today -- vivac open --all")
+            }
+            Some(1) => {
+                outln!("  {hidden} more, the oldest open since yesterday -- vivac open --all")
+            }
+            Some(days) => {
+                outln!("  {hidden} more, the oldest open for {days} days -- vivac open --all")
+            }
             None => outln!("  {hidden} more -- vivac open --all"),
         }
     }
