@@ -52,17 +52,27 @@ fn mcp_rejects_an_unknown_flag_without_waiting_on_standard_input() {
 #[test]
 fn web_rejects_an_unknown_flag_without_binding_a_port() {
     let c = Sandbox::new_empty("web-bogus");
-    let port = {
-        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        listener.local_addr().unwrap().port()
-    };
+    // Held for the whole test and handed to `--port` still bound, which is
+    // what makes the exit code below say something: reaching `web::serve`
+    // would mean binding a port that is taken, and that is an I/O failure
+    // and not a usage one -- the test below this one pins that difference.
+    // This used to release the port and then assert that nothing had taken
+    // it, which raced every other test in the binary for no gain (`f385`).
+    let held = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = held.local_addr().unwrap().port();
     let (out, code) = c.run(&["web", "--port", &port.to_string(), "--no-open", "--bogus"]);
     assert_eq!(code, 2, "{out}");
     assert!(out.contains("--bogus"), "{out}");
-    // The command returned before ever calling `web::serve`, so the port it
-    // would have bound is still free.
-    assert!(
-        TcpListener::bind(("127.0.0.1", port)).is_ok(),
-        "something is still holding the port:\n{out}"
-    );
+}
+
+/// The premise the test above rests on: a port it cannot have is a different
+/// failure from a flag it does not know, and the exit code tells them apart.
+#[test]
+fn a_port_already_taken_fails_as_io_and_not_as_usage() {
+    let c = Sandbox::new_empty("web-taken-port");
+    let held = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = held.local_addr().unwrap().port();
+    let (out, code) = c.run(&["web", "--port", &port.to_string(), "--no-open"]);
+    assert_eq!(code, 5, "{out}");
+    assert!(out.contains("Input/output error"), "{out}");
 }

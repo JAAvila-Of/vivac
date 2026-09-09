@@ -12,19 +12,29 @@
 mod common;
 use common::Sandbox;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::TcpStream;
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
 const BIN: &str = env!("CARGO_BIN_EXE_vivac");
 
-/// A port nothing else is listening on right now. `vivac web --port 0` would
-/// pick one itself, but only the process that bound it would know which --
-/// so the test binds one first, reads it, lets it go, and hands the number
-/// to `--port` instead.
-fn free_port() -> u16 {
-    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-    listener.local_addr().unwrap().port()
+/// The port out of a boot url's authority.
+///
+/// The test does not pick the port: `--port 0` lets the operating system
+/// pick, and the server prints the address it bound. So the number arrives
+/// from the process that is holding the socket, and there is no instant in
+/// which it is free for something else to take -- which is the point. This
+/// used to bind a port here, read its number, release it, and hand that
+/// number to the child; on a runner with tests in parallel another test
+/// took it in the gap and the server died at startup (`f385`).
+fn port_of(url: &str) -> u16 {
+    let authority = url.trim_start_matches("http://");
+    let authority = authority.split('/').next().unwrap_or(authority);
+    authority
+        .rsplit(':')
+        .next()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or_else(|| panic!("no port in the boot url: {url}"))
 }
 
 struct Server {
@@ -49,11 +59,11 @@ impl Server {
         home: &std::path::Path,
         roots: &[&std::path::Path],
     ) -> Server {
-        let port = free_port();
         let mut args: Vec<std::ffi::OsString> = vec![
             "web".into(),
+            // Zero, and never a number of ours: see `port_of`.
             "--port".into(),
-            port.to_string().into(),
+            "0".into(),
             "--no-open".into(),
         ];
         for r in roots {
@@ -73,7 +83,9 @@ impl Server {
         let mut boot_url = None;
         // Two lines are printed before the server ever blocks in `recv()`,
         // and both contain `http://`: the first names the address it bound,
-        // the second is the boot url. Only the second carries the key.
+        // the second is the boot url. Only the second carries the key -- and
+        // it names the same address, so it is the one datum the test needs
+        // and the port comes out of it too.
         for _ in 0..10 {
             let mut line = String::new();
             let n = reader.read_line(&mut line).unwrap();
@@ -85,10 +97,11 @@ impl Server {
                 }
             }
         }
+        let boot_url = boot_url.expect("no boot url in the server's startup lines");
         Server {
             child,
-            port,
-            boot_url: boot_url.expect("no boot url in the server's startup lines"),
+            port: port_of(&boot_url),
+            boot_url,
         }
     }
 

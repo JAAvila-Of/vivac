@@ -79,6 +79,7 @@ at
 atomic
 atomically
 attribute
+authority
 auto
 automatic
 aws
@@ -416,7 +417,6 @@ formatter
 found
 four
 fragments
-free
 fresh
 from
 front
@@ -465,6 +465,7 @@ header
 headers
 heading
 headings
+held
 hello
 help
 here
@@ -1092,6 +1093,7 @@ table
 tag
 tail
 take
+taken
 takes
 target
 task
