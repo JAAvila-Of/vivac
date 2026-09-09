@@ -11,7 +11,7 @@
 
 mod common;
 use common::Sandbox;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
@@ -168,6 +168,50 @@ impl Answer {
     }
 }
 
+/// The body, however the server chose to frame it.
+///
+/// `tiny_http` answers with `Content-Length` while it can and switches to
+/// `Transfer-Encoding: chunked` once a response outgrows its buffer. Every
+/// page was small enough for the first branch until the map arrived at
+/// rather more than a megabyte, and a client that only knew lengths read
+/// every one of those pages as empty -- with a `200` in hand, which is the
+/// worst way to be wrong. The client is ours, so it learns the other
+/// framing rather than the pages staying small enough to avoid it.
+fn read_body(reader: &mut impl BufRead, content_length: usize, chunked: bool) -> Vec<u8> {
+    if !chunked {
+        let mut body = vec![0u8; content_length];
+        reader.read_exact(&mut body).unwrap();
+        return body;
+    }
+    let mut body = Vec::new();
+    loop {
+        let mut header = String::new();
+        reader.read_line(&mut header).unwrap();
+        // A chunk size is hex, and may carry extensions after a semicolon
+        // that nothing here needs.
+        let size = usize::from_str_radix(
+            header
+                .trim_end_matches(['\r', '\n'])
+                .split(';')
+                .next()
+                .unwrap_or("")
+                .trim(),
+            16,
+        )
+        .unwrap_or_else(|_| panic!("not a chunk size: {header:?}"));
+        if size == 0 {
+            break;
+        }
+        let mut chunk = vec![0u8; size];
+        reader.read_exact(&mut chunk).unwrap();
+        body.extend_from_slice(&chunk);
+        // The CRLF that closes the chunk.
+        let mut end = [0u8; 2];
+        reader.read_exact(&mut end).unwrap();
+    }
+    body
+}
+
 /// One request, written by hand: a request line, whatever headers the test
 /// passes, and a blank line. `Connection: close` is added on every call so
 /// the response can be read to its end without trusting keep-alive.
@@ -195,6 +239,7 @@ fn call(port: u16, path: &str, headers: &[(&str, String)]) -> Answer {
 
     let mut headers_out = Vec::new();
     let mut content_length = 0usize;
+    let mut chunked = false;
     loop {
         let mut line = String::new();
         reader.read_line(&mut line).unwrap();
@@ -209,11 +254,13 @@ fn call(port: u16, path: &str, headers: &[(&str, String)]) -> Answer {
         if k.eq_ignore_ascii_case("content-length") {
             content_length = v.parse().unwrap_or(0);
         }
+        if k.eq_ignore_ascii_case("transfer-encoding") && v.eq_ignore_ascii_case("chunked") {
+            chunked = true;
+        }
         headers_out.push((k, v));
     }
 
-    let mut body = vec![0u8; content_length];
-    reader.read_exact(&mut body).unwrap();
+    let body = read_body(&mut reader, content_length, chunked);
     Answer {
         status,
         headers: headers_out,
