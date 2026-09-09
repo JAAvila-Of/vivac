@@ -927,14 +927,31 @@ fn every_row_with_children_carries_an_open_details_and_leaves_carry_none() {
     );
     assert_eq!(a.status, 200, "{}", a.body);
 
-    // g1 and t2 both have children, so both are rows, and both open.
+    // g1 and t2 both have children, so both are rows, and both open. Each
+    // row carries an `id` since `d387`, so this matches the opening of the
+    // attribute list rather than the whole tag.
     assert_eq!(
-        a.body.matches("<li class=\"row\">").count(),
+        a.body.matches("<li class=\"row\" id=").count(),
         2,
         "{}",
         a.body
     );
     assert_eq!(a.body.matches("<details open>").count(), 2, "{}", a.body);
+
+    // `d387`: one list, and depth said by naming the parent. The branch is
+    // under the root; the root is under nothing and says nothing.
+    assert_eq!(
+        a.body.matches("<ol class=\"rows\">").count(),
+        1,
+        "{}",
+        a.body
+    );
+    assert!(
+        a.body.contains("under <a href=\"#g1\">g1</a>"),
+        "{}",
+        a.body
+    );
+    assert_eq!(a.body.matches("class=\"under\"").count(), 1, "{}", a.body);
     // No block is ever closed by default: every `<details` this page
     // writes carries `open`.
     assert_eq!(

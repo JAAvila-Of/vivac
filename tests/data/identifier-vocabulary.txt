@@ -211,6 +211,7 @@ comment
 commit
 common
 compaction
+condition
 config
 connect
 const
@@ -436,6 +437,7 @@ given
 gives
 glob
 global
+glyph
 goal
 goals
 goes
@@ -552,6 +554,7 @@ kind
 known
 label
 landing
+lands
 lane
 last
 late
@@ -669,7 +672,6 @@ nearest
 needle
 needs
 negative
-nested
 net
 never
 new
@@ -1097,6 +1099,7 @@ take
 taken
 takes
 target
+targets
 task
 tcp
 tells

@@ -381,13 +381,20 @@ ol.spine .detail ul.nodes > li {
 /* ---- the global graph (WEB.md 3.6) ----------------------------------- */
 
 /* A row only exists for a node with at least one child; a leaf is only
-   ever a tile, in its parent's comb. Nesting reads as indentation, the
-   same idiom the spine above uses for depth. `d194`. */
+   ever a tile, in its parent's comb. `d194`.
+
+   One list, one line, every row at the same offset -- which is what the
+   spine above actually does, and what `d194` asked for. It used to nest,
+   one `padding-left` per level, on a comment claiming that was the spine's
+   idiom for depth; the spine has no such idiom. At fifteen levels that came
+   to 283 px and left the deepest comb 44 px to draw a fan-out in, so the
+   nesting was squeezing the very thing the page exists to show. `d387`. */
 
 ol.rows {
   list-style: none;
   margin: 0;
-  padding: 0;
+  padding: 0 0 0 1.2rem;
+  border-left: 1px solid var(--rule);
 }
 
 li.row {
@@ -431,10 +438,31 @@ li.row > details[open] > summary .count {
   display: none;
 }
 
-li.row > details > ol.rows {
-  margin: 0.7rem 0 0;
-  padding-left: 1.2rem;
-  border-left: 1px solid var(--rule);
+/* Whose comb this row's tile sits in. Quiet: it is orientation, not the
+   message, and the combs are the message. */
+li.row .under {
+  color: var(--ink-soft);
+  font-size: 0.85em;
+}
+
+/* `blocks` -- the parent cannot close until this one closes. The same `*`
+   `vivac tree` prints, and the word is in the `title` besides: the DX
+   pillar does not let a meaning live only in a colour or a class. */
+.mark {
+  color: var(--warn);
+  font-weight: 700;
+}
+
+.tile.blocking {
+  border-color: var(--warn);
+}
+
+/* The tree reporting that something went wrong, so it is never folded away
+   behind a disclosure. */
+p.false-close {
+  margin: 0.4rem 0 0;
+  color: var(--warn);
+  font-size: 0.9em;
 }
 
 /* The comb: one tile per direct child, in tree order. Its width carries

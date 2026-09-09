@@ -8,9 +8,9 @@
 //! `d194` decided the form on the measurement the promise rests on: 193
 //! nodes, max depth 6, 146 leaves (76%), one node with 56 direct children,
 //! another with 30, and only seven with five or more. **Spine and comb**: a
-//! row for every node with at least one child, nested by depth the way the
-//! spine of §3.2 nests a path, and hanging off each row a dense band -- the
-//! comb -- with one tile per direct child, in tree order. The width of the
+//! row for every node with at least one child, hung off one vertical line
+//! the way §3.2 hangs the steps of a path, and off each row a dense band --
+//! the comb -- with one tile per direct child, in tree order. The width of the
 //! band *is* the fan-out, so nothing here counts it in a number, ranks the
 //! biggest hubs, or captions the tree as lopsided: the drawing carries that
 //! or it fails §7.7.
@@ -18,6 +18,19 @@
 //! A leaf is therefore only ever a tile, in its parent's comb. A node with
 //! children is both: a tile where its parent lists it, and a row of its
 //! own. That is intended, not a duplicate.
+//!
+//! Every row sits at the same offset (`d387`). Rows used to nest, one
+//! indent per level, and by 9-Sep-2026 that had reached fourteen levels and
+//! 283 px, leaving the deepest comb 44 px on a phone -- the drawing
+//! squeezing its own subject. What answers *what hangs off what* now is
+//! each row naming its parent, which is always itself a row.
+//!
+//! **The edge that is not hierarchy is drawn too** (`f380`): `blocks` -- the
+//! parent cannot close until this one closes -- as the same `*` the command
+//! prints, on the tile and on the row; and a node closed with open blockers
+//! as a false close, in the words `vivac tree` uses and never behind a
+//! disclosure. Until then the whole web named `blocks` in exactly one
+//! place, a filter on the front page.
 //!
 //! `d196`: each row is a `<details open>`/`<summary>`, the idiom `d187`
 //! already fixed for the lineage. Open by default, because the promise is
@@ -36,18 +49,41 @@
 
 use super::{alias_link, escape};
 use crate::event::State;
-use crate::model::{Node, Tree};
+use crate::model::{Aggregates, Node, Tree};
 
 /// The class a tile carries. State is never only a class -- `tile` also
 /// spells it into `title` -- but the DX pillar asks for a second, silent cue
 /// too: closed strikes through and parked dashes and italicises.
-fn tile_class(n: &Node) -> &'static str {
-    if n.state == State::Suspended {
+///
+/// `blocks` rides along as a second class instead of replacing the state
+/// one. A node that holds its parent open is still active or closed or
+/// parked, and collapsing the two would make the drawing say less than the
+/// tree does. 31 of 386 nodes carry it on the real tree (`f380`), which is
+/// sparse enough to read as a mark rather than as texture.
+fn tile_class(n: &Node) -> String {
+    let state = if n.state == State::Suspended {
         "tile parked"
     } else if n.state.is_open() {
         "tile"
     } else {
         "tile closed"
+    };
+    if n.blocks {
+        format!("{state} blocking")
+    } else {
+        state.to_string()
+    }
+}
+
+/// The `*` a node that blocks its parent carries, in the markup of whatever
+/// carries it. The same glyph `vivac tree` prints, for the same reason it
+/// prints one: the class and the colour are not allowed to be the only
+/// place a meaning lives.
+fn blocks_mark(n: &Node) -> &'static str {
+    if n.blocks {
+        "<span class=\"mark\" aria-hidden=\"true\">*</span>"
+    } else {
+        ""
     }
 }
 
@@ -61,12 +97,14 @@ fn tile_class(n: &Node) -> &'static str {
 /// this" without a click.
 fn tile(project: &str, tree: &Tree, n: &Node) -> String {
     format!(
-        "<a class=\"{cls}\" href=\"/p/{p}/why/{a}\" title=\"{a} · {w} · {t}\">{a}</a>\n",
+        "<a class=\"{cls}\" href=\"/p/{p}/why/{a}\" title=\"{a} · {w}{b} · {t}\">{a}{mark}</a>\n",
         cls = tile_class(n),
         p = escape(project),
         a = escape(&n.alias()),
         w = escape(n.state.word(n.kind)),
+        b = if n.blocks { " · blocking" } else { "" },
         t = escape(n.title(tree)),
+        mark = blocks_mark(n),
     )
 }
 
@@ -79,13 +117,19 @@ fn comb(project: &str, tree: &Tree, children: &[&Node]) -> String {
 }
 
 /// One row: the node's own alias and title inside a `<summary>`, and --
-/// once opened -- its comb and, nested one level deeper, a row for each of
-/// its children that itself has children. `d196`.
+/// once opened -- its comb. `d196`.
 ///
 /// **Open by default.** `t191`'s promise is the shape *at landing*, and a
 /// page that opens onto 48 triangles and no comb delivers nothing: closing
 /// a block is a prune the reader makes once already looking, not the state
 /// the page arrives in.
+///
+/// **What closing one means changed with `d387`.** While rows nested,
+/// closing one hid a subtree. Flat, it hides one comb and leaves that
+/// node's own children's rows where they were -- the disclosure is now the
+/// trade `d187` describes and nothing more: the band becomes the number
+/// that counts it. It is not a prune of the tree any more, and saying so
+/// costs less than letting a reader discover it.
 ///
 /// **The fan-out is a number, but only once the comb it counts is
 /// hidden.** `d194` forbids counting it while the band is visible -- the
@@ -98,49 +142,90 @@ fn comb(project: &str, tree: &Tree, children: &[&Node]) -> String {
 /// activation model, the same reason a `<button>` inside a `<label>` does
 /// not also fire the label. Clicking anywhere else in the summary -- the
 /// title, the count, the triangle -- toggles as normal.
-fn row(project: &str, tree: &Tree, n: &Node, children: &[&Node]) -> String {
-    let comb_html = comb(project, tree, children);
-    let nested_html = rows(project, tree, children);
-    let alias = alias_link(project, &n.alias());
-    let title = escape(n.title(tree));
-
-    // The same rule `why.rs` applies to its own disclosure: a triangle
-    // that opens onto nothing teaches that the shape cannot be trusted.
-    // `rows` never calls this with an empty `children`, so the comb below
-    // is never empty either -- this is what keeps that true if it changes.
-    if comb_html.is_empty() && nested_html.is_empty() {
-        return format!(
-            "<li class=\"row\"><span class=\"alias\">{alias}</span><p class=\"title\">{title}</p></li>\n"
-        );
-    }
-
+fn row(
+    project: &str,
+    tree: &Tree,
+    ag: &Aggregates,
+    n: &Node,
+    parent: Option<&Node>,
+    children: &[&Node],
+) -> String {
+    let alias = n.alias();
     let count = match children.len() {
         1 => "1 child".to_string(),
-        n => format!("{n} children"),
+        c => format!("{c} children"),
     };
+
+    // Whose comb this row's own tile sits in. `d194` rejected the icicle
+    // for "showing that the tree is flat and hiding what hangs off what",
+    // so a flat list owes that answer -- and it is cheap to give, because
+    // the parent of a row is always itself a row: it has a child, this one.
+    // Naming only the parent therefore leaves the whole chain walkable, one
+    // hop at a time, without printing a fifteen-alias lineage on each of a
+    // hundred and twenty-five rows where it would compete with the combs.
+    let under = match parent {
+        Some(p) => format!(
+            "<span class=\"under\">under <a href=\"#{a}\">{a}</a></span>",
+            a = escape(&p.alias())
+        ),
+        None => String::new(),
+    };
+
+    // The same reading `vivac tree` prints, and always visible rather than
+    // folded into the disclosure: a false close is the tree reporting that
+    // something went wrong, and a defect one gesture away is a defect
+    // nobody reads. There are none on the real tree today, so this is a
+    // mark that shows up when the tree breaks and not before.
+    let blockers = ag.blockers(n.num);
+    let false_close = if n.state == State::Done && blockers > 0 {
+        format!(
+            "<p class=\"false-close\">false close: {blockers} open condition{s}</p>\n",
+            s = if blockers == 1 { "" } else { "s" }
+        )
+    } else {
+        String::new()
+    };
+
+    // `rows` never calls this with an empty `children`, so the comb below
+    // is never empty and the disclosure never opens onto nothing -- the
+    // same rule `why.rs` applies to its own.
     format!(
-        "<li class=\"row\">\n<details open>\n<summary><span class=\"alias\">{alias}</span>\
-         <p class=\"title\">{title}</p><span class=\"count\">{count}</span></summary>\n\
-         {comb_html}{nested_html}</details>\n</li>\n"
+        "<li class=\"row\" id=\"{id}\">\n<details open>\n\
+         <summary><span class=\"alias\">{link}{mark}</span>\
+         <p class=\"title\">{title}</p>{under}<span class=\"count\">{count}</span></summary>\n\
+         {false_close}{comb}</details>\n</li>\n",
+        id = escape(&alias),
+        link = alias_link(project, &alias),
+        mark = blocks_mark(n),
+        title = escape(n.title(tree)),
+        comb = comb(project, tree, children),
     )
 }
 
-/// A row for every one of `siblings` that has at least one child, in tree
-/// order, nested inside its own list so depth reads as indentation. A
-/// sibling with no children draws no row here: it already has its tile, in
-/// the comb above.
-fn rows(project: &str, tree: &Tree, siblings: &[&Node]) -> String {
-    let body: String = siblings
-        .iter()
-        .filter_map(|n| {
-            let children = tree.children(n.num);
-            if children.is_empty() {
-                None
-            } else {
-                Some(row(project, tree, n, &children))
-            }
-        })
-        .collect();
+/// Every node with at least one child, in tree order, as **one flat list**.
+/// A node with no children draws no row: it already has its tile, in its
+/// parent's comb.
+///
+/// **Flat, and not nested** (`d387`). `d194` fixed the form as the vertical
+/// spine `d187` had already fixed for the lineage, with a dense band
+/// hanging off each node -- and that spine does not indent: it is a
+/// fixed-width alias column against one vertical line, every step at the
+/// same offset. The nesting arrived when this was built, justified in
+/// `web.css` as "the same idiom the spine above uses for depth", which the
+/// spine does not use.
+///
+/// What it cost, measured on 9-Sep-2026: the longest chain of
+/// nodes-with-children had reached fifteen, so fourteen levels of 1.2rem
+/// and a border came to 283 px and left the deepest comb 44 px on a 375 px
+/// viewport. The width of a comb **is** the fan-out -- that is `d194` word
+/// for word -- so the drift was compressing the one variable this page
+/// exists to show, and compressing it hardest exactly where the tree had
+/// grown most (`f370`).
+fn rows(project: &str, tree: &Tree, ag: &Aggregates) -> String {
+    let mut body = String::new();
+    for root in tree.roots() {
+        push_row(project, tree, ag, root, None, &mut body);
+    }
     if body.is_empty() {
         String::new()
     } else {
@@ -148,14 +233,39 @@ fn rows(project: &str, tree: &Tree, siblings: &[&Node]) -> String {
     }
 }
 
+/// `n`'s row if it has one, then the same for each of its children, so the
+/// list comes out in tree order and a parent's row is always above the rows
+/// of its own children -- which is what makes the `under` link a step
+/// backwards through the page rather than a jump into it.
+fn push_row(
+    project: &str,
+    tree: &Tree,
+    ag: &Aggregates,
+    n: &Node,
+    parent: Option<&Node>,
+    out: &mut String,
+) {
+    let children = tree.children(n.num);
+    if children.is_empty() {
+        return;
+    }
+    out.push_str(&row(project, tree, ag, n, parent, &children));
+    for c in &children {
+        push_row(project, tree, ag, c, Some(n), out);
+    }
+}
+
 /// The whole tree of `project`, drawn. Never `None`: an empty tree still
 /// gets a page, it just has nothing to draw.
 pub(super) fn tree_page(project: &str, name: &str, tree: &Tree) -> String {
     let total = tree.total();
+    // Once for the page: `aggregates` walks the whole tree in one pass, and
+    // the blocker count every row asks it for is then a map lookup.
+    let ag = tree.aggregates();
     let body = if tree.is_empty_tree() {
         "<p class=\"empty\">Empty tree.</p>\n".to_string()
     } else {
-        rows(project, tree, &tree.roots())
+        rows(project, tree, &ag)
     };
     format!(
         "<!doctype html>\n\
@@ -411,6 +521,133 @@ mod tests {
             page.matches("class=\"tile").count(),
             192,
             "192 non-root nodes should still be 192 tiles"
+        );
+    }
+
+    /// `d387`: one list, not a nest. This is the invariant the whole change
+    /// rests on, and it is the one thing about it a machine can hold --
+    /// exactly one `<ol class="rows">` on the page means no row's offset can
+    /// depend on how deep it sits, at any depth the tree ever reaches.
+    #[test]
+    fn the_rows_are_one_flat_list_however_deep_the_tree_goes() {
+        let page = tree_page("vivac", "vivac", &real_shape());
+        assert_eq!(
+            page.matches("<ol class=\"rows\">").count(),
+            1,
+            "a second rows list is a nest, and a nest indents by depth"
+        );
+    }
+
+    /// `d194` rejected the icicle for hiding what hangs off what, so the
+    /// flat list owes that answer: every `under` has to land somewhere on
+    /// this same page. A link into nothing would be worse than no link.
+    #[test]
+    fn every_under_link_lands_on_a_row_that_is_on_the_page() {
+        let tree = real_shape();
+        let page = tree_page("vivac", "vivac", &tree);
+
+        let targets: Vec<&str> = page
+            .match_indices("<a href=\"#")
+            .map(|(at, m)| {
+                let rest = &page[at + m.len()..];
+                &rest[..rest.find('"').expect("the href is quoted")]
+            })
+            .collect();
+
+        // 125 rows on the real tree, 48 on this fixture: every row but a
+        // root names its parent, so the count is rows minus roots.
+        let rows_here = tree
+            .nodes_iter()
+            .filter(|n| !tree.children(n.num).is_empty())
+            .count();
+        let roots_with_children = tree
+            .roots()
+            .iter()
+            .filter(|r| !tree.children(r.num).is_empty())
+            .count();
+        assert_eq!(
+            targets.len(),
+            rows_here - roots_with_children,
+            "every row but a root should name its parent"
+        );
+
+        for t in targets {
+            assert!(
+                page.contains(&format!("id=\"{t}\"")),
+                "under names {t}, which is on no row of this page"
+            );
+        }
+    }
+
+    /// A tree with one blocker and one node closed on top of it: the two
+    /// readings `f380` found missing from the whole web.
+    fn blocked_shape() -> Tree {
+        let mut tree = Tree::default();
+        let (mut seq, mut num) = (0u64, 0u64);
+        let root = fixture_node(&mut tree, &mut seq, &mut num, None);
+        let branch = fixture_node(&mut tree, &mut seq, &mut num, Some(&root));
+        // The blocker, and it stays open: `n3` holds `n2` open, and `n2` is
+        // closed anyway, which is exactly what a false close is.
+        seq += 1;
+        num += 1;
+        tree.apply(
+            seq,
+            "2026-09-09T10:00:00Z",
+            &Body::NodeCreated {
+                node: "n3".to_string(),
+                num,
+                kind: Kind::Question,
+                title: "the blocker".to_string(),
+                why: "fixture".to_string(),
+                parent: Some(branch.clone()),
+                blocks: true,
+                refs: vec![],
+                governs: vec![],
+            },
+        );
+        seq += 1;
+        tree.apply(
+            seq,
+            "2026-09-09T11:00:00Z",
+            &Body::StateChanged {
+                node: branch,
+                state: State::Done,
+                outcome: "closed with a condition still open".to_string(),
+                forced: true,
+            },
+        );
+        tree.sort_nodes();
+        tree
+    }
+
+    /// The `*` is on the tile and on the row, the word is in the `title`,
+    /// and neither of them is a colour: the DX pillar does not allow a
+    /// meaning that only a colour carries, and `vivac tree` prints the same
+    /// glyph for the same reason.
+    #[test]
+    fn a_node_that_blocks_its_parent_is_marked_in_glyph_and_in_word() {
+        let page = tree_page("vivac", "vivac", &blocked_shape());
+        assert!(page.contains("class=\"tile blocking\""), "{page}");
+        assert!(
+            page.contains("· blocking ·"),
+            "the word, not only the class"
+        );
+        assert_eq!(
+            page.matches("class=\"mark\"").count(),
+            1,
+            "one blocker, one glyph"
+        );
+    }
+
+    /// A node closed while something it waits on is still open. `vivac tree`
+    /// says so in those words; until `f380` the web said nothing at all, on
+    /// any page.
+    #[test]
+    fn a_node_closed_over_an_open_condition_says_so_on_its_row() {
+        let page = tree_page("vivac", "vivac", &blocked_shape());
+        assert!(
+            page.contains("false close: 1 open condition<"),
+            "singular, and not \"1 open conditions\":\n{page}"
         );
     }
 
