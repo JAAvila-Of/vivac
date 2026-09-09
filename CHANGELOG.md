@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.7](https://github.com/JAAvila-Of/vivac/compare/v0.6.6...v0.6.7) - 2026-09-09
+
+### Added
+
+- *(web)* draw the tree as a map you can read a node from ([#92](https://github.com/JAAvila-Of/vivac/pull/92))
+- *(web)* flatten the global graph, and draw what blocks ([#90](https://github.com/JAAvila-Of/vivac/pull/90))
+
+### Fixed
+
+- *(model)* keep every note, not only the last one written ([#91](https://github.com/JAAvila-Of/vivac/pull/91))
+
+### Internal
+
+- *(web)* take the port from the server, not from a guess ([#88](https://github.com/JAAvila-Of/vivac/pull/88))
+
 ## [0.6.6](https://github.com/JAAvila-Of/vivac/compare/v0.6.5...v0.6.6) - 2026-09-09
 
 ### Added
