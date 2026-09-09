@@ -513,10 +513,32 @@ without complaining, so this one is Windows only.
 
 ## Install
 
+Every [release](https://github.com/JAAvila-Of/vivac/releases) carries a
+precompiled binary: Linux and macOS on both `x86_64` and `aarch64`, Windows on
+`x86_64`. Unpack one, put `vivac` somewhere on your `PATH`, and run `vivac
+init` inside a project. The Linux builds link against musl, so they run on
+older distributions too rather than on nothing older than the machine that
+built them.
+
+Every archive is listed in `SHA256SUMS` and carries signed build provenance,
+which ties the file to the workflow, the repository and the commit that
+produced it:
+
+```sh
+gh attestation verify vivac-x86_64-unknown-linux-musl.tar.gz --repo JAAvila-Of/vivac
+```
+
+With a Rust toolchain:
+
 ```sh
 cargo install vivac
 vivac init
 ```
+
+**`cargo install` is not the fallback.** It builds from the source published to
+crates.io, so it stays the auditable path for anyone who cares about the supply
+chain of a tool that reads their work. The binaries are for everyone who has no
+toolchain and should not need one to start.
 
 From source, `cargo install --path .` inside the repo.
 
