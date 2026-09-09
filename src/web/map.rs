@@ -860,12 +860,33 @@ fn foldable_by_depth(tree: &Tree) -> Vec<Vec<String>> {
     levels
 }
 
-/// Whether every node of a level is already folded, which is what decides
-/// whether its control folds or unfolds.
-fn all_shut(tree: &Tree, fold: &Fold, level: &[String]) -> bool {
-    level
+/// What the control for one depth can do, right now.
+///
+/// A level nothing is drawn at can do **nothing**: fold the roots and every
+/// level below them is off the page already, so a control offering to fold
+/// them is offering a click that changes nothing while it grows the URL.
+/// The first version offered all fifteen at once whatever was folded, and
+/// the way back was four clicks in places the page gave no reason to look.
+enum Level {
+    /// Nothing at this depth is drawn, so there is nothing to fold.
+    Inert,
+    Fold(String),
+    Unfold(String),
+}
+
+fn level_of(tree: &Tree, map: &Map, fold: &Fold, at: &[String]) -> Level {
+    let drawn: Vec<&Node> = at
         .iter()
-        .all(|a| tree.resolve(a).is_some_and(|n| fold.hides(n)))
+        .filter_map(|a| tree.resolve(a))
+        .filter(|n| map.index.contains_key(&n.num))
+        .collect();
+    if drawn.is_empty() {
+        return Level::Inert;
+    }
+    match drawn.iter().all(|n| fold.hides(n)) {
+        true => Level::Unfold(fold.with(tree, at, false, "")),
+        false => Level::Fold(fold.with(tree, at, true, "")),
+    }
 }
 
 /// One control per lane, at the head of the column it folds.
@@ -879,7 +900,7 @@ fn all_shut(tree: &Tree, fold: &Fold, level: &[String]) -> bool {
 /// Wide layout only. A lane is 8 px across on a phone and no control fits in
 /// 8 px, so the narrow one keeps the same links as a row of chips in the
 /// tools. Same links and the same mechanism, in two shapes.
-fn heads(tree: &Tree, fold: &Fold, lane: &Lane) -> String {
+fn heads(tree: &Tree, map: &Map, fold: &Fold, lane: &Lane) -> String {
     let levels = foldable_by_depth(tree);
     if levels.is_empty() {
         return String::new();
@@ -889,16 +910,28 @@ fn heads(tree: &Tree, fold: &Fold, lane: &Lane) -> String {
         if at.is_empty() {
             continue;
         }
-        let shut = all_shut(tree, fold, at);
-        out.push_str(&format!(
-            "<a class=\"head{on}\" style=\"left:{left}px\" href=\"{href}\" \
-             title=\"{what} everything at depth {n}\">{n}</a>",
-            on = if shut { " on" } else { "" },
-            left = lane.x(level).saturating_sub(9),
-            href = escape(&fold.with(tree, at, !shut, "")),
-            what = if shut { "unfold" } else { "fold" },
-            n = level + 1,
-        ));
+        let left = lane.x(level).saturating_sub(9);
+        let n = level + 1;
+        // A level that can do nothing stays on the strip and stops being a
+        // link: the row of numbers is also the depth ruler of the drawing,
+        // and a ruler that loses a mark whenever something is folded is a
+        // worse ruler than one that greys.
+        out.push_str(&match level_of(tree, map, fold, at) {
+            Level::Inert => format!(
+                "<span class=\"head off\" style=\"left:{left}px\" \
+                 title=\"nothing is drawn at depth {n}\">{n}</span>"
+            ),
+            Level::Fold(href) => format!(
+                "<a class=\"head\" style=\"left:{left}px\" href=\"{href}\" \
+                 title=\"fold everything at depth {n}\">{n}</a>",
+                href = escape(&href),
+            ),
+            Level::Unfold(href) => format!(
+                "<a class=\"head on\" style=\"left:{left}px\" href=\"{href}\" \
+                 title=\"unfold everything at depth {n}\">{n}</a>",
+                href = escape(&href),
+            ),
+        });
     }
     out.push_str("</div>\n");
     out
@@ -906,7 +939,7 @@ fn heads(tree: &Tree, fold: &Fold, lane: &Lane) -> String {
 
 /// The same levels as `heads`, as a row of chips: what the phone gets, where
 /// a lane is too narrow to carry a control of its own.
-fn depths(tree: &Tree, fold: &Fold) -> String {
+fn depths(tree: &Tree, map: &Map, fold: &Fold) -> String {
     let levels = foldable_by_depth(tree);
     if levels.is_empty() {
         return String::new();
@@ -916,16 +949,37 @@ fn depths(tree: &Tree, fold: &Fold) -> String {
         if at.is_empty() {
             continue;
         }
-        let shut = all_shut(tree, fold, at);
-        out.push_str(&format!(
-            "<a class=\"depth{on}\" href=\"{href}\">{n}</a>",
-            on = if shut { " on" } else { "" },
-            href = escape(&fold.with(tree, at, !shut, "")),
-            n = level + 1,
-        ));
+        let n = level + 1;
+        out.push_str(&match level_of(tree, map, fold, at) {
+            Level::Inert => format!("<span class=\"depth off\">{n}</span>"),
+            Level::Fold(href) => format!(
+                "<a class=\"depth\" href=\"{href}\">{n}</a>",
+                href = escape(&href)
+            ),
+            Level::Unfold(href) => format!(
+                "<a class=\"depth on\" href=\"{href}\">{n}</a>",
+                href = escape(&href)
+            ),
+        });
     }
-    out.push_str("<a class=\"depth\" href=\"?\">all</a></span>");
+    out.push_str("</span>");
     out
+}
+
+/// The way back to the whole tree, and it is only drawn when there is
+/// something to come back from.
+///
+/// It used to live inside the depth chips, which the wide layout hides --
+/// so on a desktop the page had no visible way out of a fold at all, and
+/// the reader had to undo each level in the order they folded it. The
+/// escape hatch is now its own control, on both layouts, and it says how
+/// much it will bring back.
+fn unfold_all(map: &Map, tree: &Tree) -> String {
+    let folded = tree.total().saturating_sub(map.stops.len());
+    if folded == 0 {
+        return String::new();
+    }
+    format!("<a class=\"tool\" href=\"?\">Unfold everything · {folded}</a>\n")
 }
 
 /// The whole tree of `project`, drawn as a map, minus whatever `query` says
@@ -964,7 +1018,7 @@ pub(super) fn map_page(project: &str, name: &str, tree: &Tree, query: &str) -> S
     let body = format!(
         "<div class=\"map\">\n{heads}<div class=\"gutter\">{wide}{narrow}</div>\n\
          {rows}<aside id=\"detail\" class=\"detail\">{key}</aside>\n</div>\n",
-        heads = heads(tree, &fold, &WIDE),
+        heads = heads(tree, &map, &fold, &WIDE),
         wide = gutter(tree, &map, &WIDE, &fold),
         narrow = gutter(tree, &map, &NARROW, &fold),
         rows = rows(project, tree, &map, &ag, &fold),
@@ -976,14 +1030,15 @@ pub(super) fn map_page(project: &str, name: &str, tree: &Tree, query: &str) -> S
         name,
         body,
         format!(
-            "<p class=\"stats\">{stats}</p>\n{legend}<div class=\"tools\">{here}\
+            "<p class=\"stats\">{stats}</p>\n{legend}<div class=\"tools\">{here}{back}\
              <input id=\"find\" type=\"search\" \
              placeholder=\"Find in alias, title and why…\" \
              aria-label=\"Find a station\">\
              <span class=\"hits\" id=\"hits\" role=\"status\"></span>{depths}</div>\n",
             stats = escape(&stats(&map, tree)),
+            back = unfold_all(&map, tree),
             legend = legend(&map),
-            depths = depths(tree, &fold),
+            depths = depths(tree, &map, &fold),
         ),
         payload(project, tree, &map, &ag, &fold),
         MAP_JS.to_string(),
@@ -1575,6 +1630,64 @@ mod tests {
             "the folded level, and only it:\n{page}"
         );
         assert_eq!(page.matches("class=\"depth on\"").count(), 1, "{page}");
+    }
+
+    /// Fold the roots and everything below them is off the page, so every
+    /// deeper level has nothing left to fold. Offering all fifteen anyway is
+    /// offering clicks that change nothing and grow the URL, which is what
+    /// the owner met: four levels folded, and a way back that had to be
+    /// undone in the order it was done.
+    #[test]
+    fn a_depth_with_nothing_drawn_at_it_is_no_longer_a_control() {
+        let tree = real_shape();
+        let roots: Vec<String> = foldable_by_depth(&tree)
+            .first()
+            .expect("the fixture has a root with children")
+            .clone();
+
+        let page = map_page(
+            "vivac",
+            "vivac",
+            &tree,
+            &format!("fold={}", roots.join(",")),
+        );
+        assert_eq!(
+            page.matches("class=\"head on\"").count(),
+            1,
+            "the folded level, which is the way back:\n{page}"
+        );
+        assert_eq!(
+            page.matches("class=\"head\"").count(),
+            0,
+            "and no level below it is still offering to fold:\n{page}"
+        );
+        assert!(page.contains("class=\"head off\""), "{page}");
+    }
+
+    /// Whatever is folded, the whole tree is one click away. The way back
+    /// used to live inside the depth chips, and the wide layout hides those,
+    /// so on a desktop a folded page had no visible way out at all.
+    #[test]
+    fn a_folded_page_always_shows_the_way_back() {
+        let tree = real_shape();
+        let ag = tree.aggregates();
+        let alias = biggest_hub(&tree, &ag);
+        let under = ag
+            .counts(tree.resolve(&alias).expect("the hub resolves").num)
+            .total;
+
+        let whole = map_page("vivac", "vivac", &tree, "");
+        assert!(
+            !whole.contains("class=\"tool\" href=\"?\""),
+            "nothing is folded, so there is nothing to come back from"
+        );
+
+        let folded = map_page("vivac", "vivac", &tree, &format!("fold={alias}"));
+        assert!(folded.contains("class=\"tool\" href=\"?\""), "{folded}");
+        assert!(
+            folded.contains(&format!("Unfold everything · {under}")),
+            "and it says how much it brings back:\n{folded}"
+        );
     }
 
     /// A line is a property of the work and not of the view. Fold a branch

@@ -398,15 +398,23 @@
     }
   });
 
-  /* A node named in the address bar opens with the page: a link to
-     `#g132` from anywhere still lands on the map, on that node, with its
-     route drawn. */
+  /* A node named in the address bar puts you *at* that row, and does not
+     open it.
+
+     The two are different things and the first version ran them together:
+     the fold controls carry the node they fold as their fragment, so that
+     folding brings you back to where you were standing -- and every fold
+     click therefore also selected that node, dimmed the rest of the map and
+     threw the drawer open on a phone. A control that folds should fold.
+
+     So this scrolls, and selecting stays what it always was: a click. The
+     row you land on is marked by `:target`, which is the browser's own
+     answer to "which one did the link mean" and needs no script at all. */
   function fromHash() {
     var alias = decodeURIComponent(location.hash.replace(/^#/, ""));
     if (!alias) return;
     for (var i = 0; i < D.length; i++) {
       if (D[i].a === alias) {
-        show(i);
         jump(i);
         return;
       }

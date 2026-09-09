@@ -476,6 +476,12 @@ body.wide-page header {
   color: var(--ink);
 }
 
+/* The way back out of a fold is a link, not a button, for the same reason
+   every other fold control is one: the server recomputes the map. */
+a.tool {
+  text-decoration: none;
+}
+
 /* The swatch repeats what the name already says. A reader with no colour
    at all still has the name, and the name is the station the line starts
    at, which is a place they can go. */
@@ -558,6 +564,12 @@ body.wide-page header {
 .heads .head:hover,
 .heads .head:focus-visible {
   color: var(--accent);
+}
+
+/* A depth with nothing drawn at it keeps its place on the ruler and stops
+   being a control: there is nothing there to fold. */
+.heads .head.off {
+  opacity: 0.35;
 }
 
 /* A folded level keeps its number and gains a box: a state a colour alone
@@ -833,8 +845,20 @@ li.stop.folded .title {
   padding: 0 0.2rem;
 }
 
+.depths .depth.off {
+  margin-left: 0.35rem;
+  opacity: 0.35;
+}
+
 li.stop.hit {
   background: var(--lit);
+}
+
+/* The row a link named. It is where the reader was put, not what they
+   chose, so it is a mark and not a selection -- and the browser draws it
+   with no script at all. */
+li.stop:target {
+  box-shadow: inset 3px 0 0 var(--ink-faint);
 }
 
 li.stop.faded {
