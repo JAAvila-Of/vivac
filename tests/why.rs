@@ -332,3 +332,63 @@ fn the_requested_node_prints_whole_with_or_without_full() {
         );
     }
 }
+
+/// `f389`: a second note used to overwrite the first everywhere `why` reads
+/// from, with no sign anything had been dropped. Once there is more than
+/// one, every one of them has to print, each with the date it was written
+/// (`d390`).
+#[test]
+fn why_prints_every_note_with_its_date_once_there_is_more_than_one() {
+    let c = Sandbox::new_seeded("two-notes");
+    c.ok(&["push", "A goal", "--why", "it is needed"]);
+    c.ok(&["note", "1", "first note"]);
+    c.ok(&["note", "1", "second note"]);
+    let s = c.ok(&["why", "1"]);
+    assert!(
+        s.contains("] first note"),
+        "the first note is missing:\n{s}"
+    );
+    assert!(
+        s.contains("] second note"),
+        "the second note is missing:\n{s}"
+    );
+    assert!(s.contains("! ["), "neither note carries a date:\n{s}");
+}
+
+/// The regression the date above can introduce: a node with exactly one
+/// note has to keep reading exactly as it did before `d390`, with no date in
+/// front of it -- the same argument `f186` made for the lineage's anchor,
+/// applied here.
+#[test]
+fn why_prints_a_single_note_with_no_date() {
+    let c = Sandbox::new_seeded("one-note");
+    c.ok(&["push", "A goal", "--why", "it is needed"]);
+    c.ok(&["note", "1", "the only note"]);
+    let s = c.ok(&["why", "1"]);
+    assert!(s.contains("! the only note"), "{s}");
+    assert!(
+        !s.contains("! ["),
+        "a single note must not carry a date:\n{s}"
+    );
+}
+
+/// The JSON twin of the two tests above: `note` keeps naming the latest one,
+/// nothing that reads that field breaks, and `notes` carries every one of
+/// them in the order they were written (`d390`).
+#[test]
+fn the_json_carries_every_note_and_note_still_carries_the_last() {
+    let c = Sandbox::new_seeded("json-notes");
+    c.ok(&["push", "A goal", "--why", "it is needed"]);
+    c.ok(&["note", "1", "first note"]);
+    c.ok(&["note", "1", "second note"]);
+    let s = c.ok(&["why", "1", "--json"]);
+    let v: Value = serde_json::from_str(&s).unwrap();
+    let notes = v["node"]["notes"].as_array().expect("notes is an array");
+    assert_eq!(notes.len(), 2, "{v}");
+    assert_eq!(notes[0]["note"], "first note", "{v}");
+    assert_eq!(notes[1]["note"], "second note", "{v}");
+    assert_eq!(
+        v["node"]["note"], "second note",
+        "note should still name the latest one:\n{v}"
+    );
+}

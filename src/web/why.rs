@@ -42,20 +42,27 @@ fn link(project: &str, tree: &Tree, n: &Node) -> String {
 /// a disclosure triangle that opens onto nothing teaches that the shape
 /// cannot be trusted.
 ///
-/// `blocking` is the third of them and the one this page went without until
-/// `f380`: what the step is waiting on, in the words `vivac why` already
-/// uses. The whole web mentioned `blocks` in one place, a filter on the
-/// front page, so the one edge in this tree that is **not** hierarchy --
-/// the parent cannot close until this one closes -- was drawn nowhere at
-/// all, on the page whose whole subject is one node.
+/// `blocking` is the third of them, added in `f380`: what the step is
+/// waiting on, in the words `vivac why` already uses. The whole web
+/// mentioned `blocks` in one place, a filter on the front page, so the one
+/// edge in this tree that is **not** hierarchy -- the parent cannot close
+/// until this one closes -- was drawn nowhere at all, on the page whose
+/// whole subject is one node.
+///
+/// `notes` is the fourth, added in `d390`: every note the node was ever
+/// given, oldest first. With two or more, each one carries the date it was
+/// written -- `render::why`'s own rule in the terminal -- because with only
+/// one, a date says nothing a lone note does not already say by being
+/// there.
 fn weight(
     project: &str,
     tree: &Tree,
     standing: &[&Node],
     open_then: &[&Node],
     blocking: &[&Node],
+    notes: &[(&str, &str)],
 ) -> String {
-    if standing.is_empty() && open_then.is_empty() && blocking.is_empty() {
+    if standing.is_empty() && open_then.is_empty() && blocking.is_empty() && notes.is_empty() {
         return String::new();
     }
     // "waiting on 2" and not "2 waiting on": the other two count things
@@ -66,9 +73,14 @@ fn weight(
         format!("waiting on {}", blocking.len()),
         format!("{} governing here", standing.len()),
         format!("{} open then", open_then.len()),
+        format!(
+            "{} note{}",
+            notes.len(),
+            if notes.len() == 1 { "" } else { "s" }
+        ),
     ]
     .iter()
-    .zip([blocking.len(), standing.len(), open_then.len()])
+    .zip([blocking.len(), standing.len(), open_then.len(), notes.len()])
     .filter(|(_, n)| *n > 0)
     .map(|(text, _)| format!("<span class=\"count\">{text}</span>"))
     .collect::<Vec<_>>()
@@ -98,6 +110,20 @@ fn weight(
             body.push_str(&link(project, tree, n));
         }
         body.push_str("</ul>\n");
+    }
+    if !notes.is_empty() {
+        body.push_str("<h3>Notes</h3>\n");
+        for (at, text) in notes {
+            if notes.len() > 1 {
+                body.push_str(&format!(
+                    "<p class=\"note\"><span class=\"when\">{}</span> {}</p>\n",
+                    escape(crate::clock::date_of(at)),
+                    escape(text)
+                ));
+            } else {
+                body.push_str(&format!("<p class=\"note\">{}</p>\n", escape(text)));
+            }
+        }
     }
     format!(
         "<details><summary>{counts}</summary>\n<div class=\"detail\">\n{body}</div>\n</details>\n"
@@ -171,6 +197,7 @@ fn step(project: &str, tree: &Tree, ag: &Aggregates, full: &Full, n: &Node, here
             &standing_of(tree, n),
             &open_then_of(tree, full, n),
             &blocking_of(tree, n),
+            &n.notes(tree),
         ),
     )
 }
@@ -265,6 +292,16 @@ mod tests {
                 state: State::Done,
                 outcome: String::new(),
                 forced: false,
+            },
+        )
+    }
+
+    fn noted(seq: u64, num: u64, note: &str) -> Event {
+        ev(
+            seq,
+            Body::NodeNoted {
+                node: format!("n{num}"),
+                note: note.to_string(),
             },
         )
     }
@@ -415,5 +452,44 @@ mod tests {
         assert!(!page.contains("http://"));
         assert!(!page.contains("https://"));
         assert!(!page.contains("//cdn"));
+    }
+
+    /// `d390`: the disclosure a step already has gains the notes. With two or
+    /// more, each carries the date it was written, the same rule
+    /// `render::why` follows in the terminal.
+    #[test]
+    fn a_step_with_two_notes_lists_both_with_their_own_date() {
+        let mut events = lineage();
+        events.push(noted(6, 4, "first note"));
+        events.push(noted(7, 4, "second note"));
+        let tree = fold(&events, 0);
+        let page = why_page("vivac", "vivac", &tree, &events, "f4").unwrap();
+        assert!(
+            page.contains("<span class=\"when\">2026-09-03</span> first note"),
+            "the first note should carry its own date:\n{page}"
+        );
+        assert!(
+            page.contains("<span class=\"when\">2026-09-03</span> second note"),
+            "the second note should carry its own date:\n{page}"
+        );
+    }
+
+    /// The regression the date above can introduce: a step with exactly one
+    /// note carries no date, the same argument `f186` made for the lineage's
+    /// anchor.
+    #[test]
+    fn a_step_with_one_note_carries_no_date() {
+        let mut events = lineage();
+        events.push(noted(6, 4, "the only note"));
+        let tree = fold(&events, 0);
+        let page = why_page("vivac", "vivac", &tree, &events, "f4").unwrap();
+        assert!(
+            page.contains("<p class=\"note\">the only note</p>"),
+            "{page}"
+        );
+        assert!(
+            !page.contains("<span class=\"when\">2026-09-03</span> the only note"),
+            "a single note must not carry a date:\n{page}"
+        );
     }
 }

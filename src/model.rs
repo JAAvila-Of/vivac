@@ -23,6 +23,15 @@ pub struct Span {
     pub len: u32,
 }
 
+/// One note and when it was written. A note is the only thing a node can
+/// receive after it is born, so the log keeps every one of them; this is
+/// what the projection used to throw away (`f389`, `d390`).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Note {
+    pub at: Span,
+    pub text: Span,
+}
+
 #[derive(Debug, Clone)]
 pub struct Node {
     pub id: String,
@@ -45,7 +54,10 @@ pub struct Node {
     /// The parent's closure condition. Explicit, and by default it does **not**
     /// block: forcing it leaves parents that never close. `MODEL.md` §5.
     pub blocks: bool,
-    pub note: Span,
+    /// Every note this node was ever given, oldest first. The log is
+    /// append-only and `apply` pushes rather than assigns, so the second
+    /// note never erases the first the way this used to (`f389`, `d390`).
+    pub notes: Vec<Note>,
     pub outcome: Span,
     /// A span of spans: the range, inside `Tree`'s own arena of spans, of the
     /// individual entries. Resolved with `Tree::text_list`.
@@ -72,8 +84,18 @@ impl Node {
     pub fn why<'t>(&self, tree: &'t Tree) -> &'t str {
         tree.text(self.why)
     }
+    /// The latest note. `brief`, `tree`, `open` and the compact steps of a
+    /// lineage want exactly one line here, and the newest is the one that
+    /// corrects the others (`d390`).
     pub fn note<'t>(&self, tree: &'t Tree) -> &'t str {
-        tree.text(self.note)
+        self.notes.last().map(|n| tree.text(n.text)).unwrap_or("")
+    }
+    /// Every note, oldest first, each with the date it was written.
+    pub fn notes<'t>(&self, tree: &'t Tree) -> Vec<(&'t str, &'t str)> {
+        self.notes
+            .iter()
+            .map(|n| (tree.text(n.at), tree.text(n.text)))
+            .collect()
     }
     pub fn outcome<'t>(&self, tree: &'t Tree) -> &'t str {
         tree.text(self.outcome)
@@ -323,7 +345,7 @@ impl Tree {
                         state: State::Active,
                         parent: parent_num,
                         blocks: *blocks,
-                        note: Span::default(),
+                        notes: Vec::new(),
                         outcome: Span::default(),
                         refs: refs_span,
                         governs: governs_span,
@@ -367,10 +389,14 @@ impl Tree {
                 }
             }
             Body::NodeNoted { node, note } => {
-                let note_span = self.intern(note);
+                // Pushed, never assigned: the second note is a second entry
+                // in the log, not a correction the tree makes in place
+                // (`f389`, `d390`).
+                let at = self.intern(ts);
+                let text = self.intern(note);
                 let num = self.resolve_ulid(node);
                 if let Some(n) = self.nodes.get_mut(&num) {
-                    n.note = note_span;
+                    n.notes.push(Note { at, text });
                 }
             }
             Body::BlockChanged { node, blocks } => {
@@ -1349,5 +1375,42 @@ mod tests {
                 n.num
             );
         }
+    }
+
+    fn noted(seq: u64, ts: &str, num: u64, note: &str) -> Event {
+        Event {
+            seq,
+            id: format!("e{seq}"),
+            ts: ts.to_string(),
+            actor: "a".to_string(),
+            lane: "main".to_string(),
+            payload: Body::NodeNoted {
+                node: format!("n{num}"),
+                note: note.to_string(),
+            },
+        }
+    }
+
+    /// `f389`: a second note used to overwrite the first everywhere a node's
+    /// note was read. It has to survive instead, in the order it was
+    /// written, each one carrying the moment it was written.
+    #[test]
+    fn a_second_note_does_not_erase_the_first() {
+        let events = vec![
+            node(1, 1, Kind::Task, None),
+            noted(2, "2026-09-01T00:00:00Z", 1, "first note"),
+            noted(3, "2026-09-02T00:00:00Z", 1, "second note"),
+        ];
+        let tree = fold(&events, 0);
+        let n = tree.node_by_num(1).unwrap();
+        assert_eq!(
+            n.notes(&tree),
+            vec![
+                ("2026-09-01T00:00:00Z", "first note"),
+                ("2026-09-02T00:00:00Z", "second note"),
+            ],
+            "both notes survive, oldest first"
+        );
+        assert_eq!(n.note(&tree), "second note", "note() still reads the last");
     }
 }
