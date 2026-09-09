@@ -36,7 +36,6 @@ alphabetic
 alphanumeric
 already
 alternatives
-always
 ambiguous
 among
 an
@@ -65,6 +64,7 @@ arguments
 argv
 arm
 array
+arrives
 as
 ascii
 ask
@@ -97,6 +97,7 @@ began
 beginning
 behind
 below
+best
 between
 bigger
 bin
@@ -176,6 +177,8 @@ child
 children
 choice
 choose
+chunk
+chunked
 civil
 claim
 claimed
@@ -202,7 +205,7 @@ cmp
 code
 collect
 collections
-comb
+colour
 come
 comes
 command
@@ -224,10 +227,12 @@ contains
 content
 contents
 continue
+continues
 control
 cookie
 copied
 copy
+corner
 corrupt
 cors
 count
@@ -284,7 +289,7 @@ descendants
 description
 deserialize
 detached
-details
+detail
 detect
 determinism
 deterministic
@@ -304,6 +309,7 @@ does
 domain
 done
 down
+downwards
 doy
 drags
 drain
@@ -314,6 +320,7 @@ dump
 duration
 dyn
 each
+earn
 edges
 edit
 eleven
@@ -372,6 +379,7 @@ extend
 extension
 extra
 eye
+f32
 f64
 facts
 fails
@@ -380,6 +388,7 @@ fallback
 falling
 falls
 false
+fan
 fence
 fenced
 fetch
@@ -454,6 +463,7 @@ guard
 guarded
 guess
 guessed
+gutter
 half
 hand
 handle
@@ -469,6 +479,9 @@ header
 headers
 heading
 headings
+heaviest
+heavy
+height
 held
 hello
 help
@@ -494,6 +507,7 @@ hrefs
 hs
 html
 http
+hub
 hunts
 i32
 i64
@@ -543,6 +557,7 @@ iterator
 its
 jar
 join
+js
 json
 just
 jwt
@@ -567,6 +582,7 @@ leap
 leave
 leaves
 left
+legend
 len
 length
 let
@@ -574,6 +590,7 @@ letter
 level
 levels
 lifts
+light
 like
 limit
 line
@@ -634,6 +651,7 @@ matter
 max
 may
 mcp
+me
 means
 measured
 measures
@@ -642,6 +660,7 @@ merely
 message
 metadata
 method
+mid
 middle
 millis
 min
@@ -667,6 +686,7 @@ named
 names
 naming
 nanos
+narrow
 nd
 ne
 nearest
@@ -767,6 +787,7 @@ park
 parked
 parks
 parse
+parsed
 partial
 partition
 parts
@@ -834,6 +855,7 @@ pt
 pub
 push
 pushed
+px
 query
 question
 questions
@@ -841,13 +863,17 @@ quiet
 quiets
 quote
 quoted
+radius
+radix
 raised
 ralias
 rand
 random
+rank
 rather
 raw
 reaches
+reaching
 read
 reader
 readme
@@ -922,6 +948,7 @@ rfc3339
 rfind
 rid
 right
+ring
 risk
 room
 root
@@ -953,6 +980,7 @@ sb
 schema
 scheme
 scope
+script
 search
 searchable
 searched
@@ -968,6 +996,7 @@ seek
 seen
 seg
 segment
+selected
 self
 sense
 sentence
@@ -992,6 +1021,7 @@ shape
 shaped
 share
 shared
+shell
 short
 show
 shown
@@ -1054,6 +1084,7 @@ starting
 starts
 state
 static
+station
 stats
 status
 stay
@@ -1082,7 +1113,6 @@ success
 successor
 suffix
 sum
-summary
 super
 superseded
 supersedes
@@ -1100,9 +1130,9 @@ take
 taken
 takes
 target
-targets
 task
 tcp
+tell
 tells
 temp
 ten
@@ -1128,8 +1158,6 @@ through
 tidy
 tie
 tight
-tile
-tiles
 time
 timeout
 times
@@ -1242,6 +1270,7 @@ vv
 wait
 waiting
 walk
+walks
 want
 warning
 was
@@ -1260,6 +1289,7 @@ whose
 why
 wide
 width
+windows
 wins
 with
 without
@@ -1271,7 +1301,6 @@ works
 world
 would
 wrap
-wrapping
 write
 writeln
 writer

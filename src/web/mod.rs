@@ -21,8 +21,8 @@
 //! place and proven.
 
 mod gate;
+mod map;
 mod today;
-mod tree;
 mod why;
 
 use crate::failure::{Failure, R};
@@ -322,7 +322,7 @@ fn handle(
                 }
                 other => not_one(request, registry, other),
             },
-            // The whole tree, drawn (`WEB.md` §3.6). Same dance as `Today`
+            // The whole tree, as a map (`WEB.md` §3.6). Same dance as `Today`
             // above, and the same reason for saying nothing in the body
             // when the store cannot be read.
             Route::Tree(id) => match registry.named(id) {
@@ -332,7 +332,7 @@ fn handle(
                     let key = id.to_string();
                     match project.current() {
                         Ok(ctx) => {
-                            respond(request, 200, HTML, tree::tree_page(&key, &name, &ctx.tree))
+                            respond(request, 200, HTML, map::map_page(&key, &name, &ctx.tree))
                         }
                         Err(_) => respond(
                             request,

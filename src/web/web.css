@@ -377,129 +377,577 @@ ol.spine .detail ul.nodes > li {
   grid-template-columns: 3.6rem 1fr;
   padding: 0.35rem 0;
 }
+/* ---- the map (WEB.md 3.6, d391) -------------------------------------- */
 
-/* ---- the global graph (WEB.md 3.6) ----------------------------------- */
+/* Eight lines earn a colour, and everything else is grey. That is not a
+   style choice: the real tree threads into 261 lines and exactly eight of
+   them reach five stations, so a palette any wider would be handing colour
+   to two-stop stubs until none of it meant anything.
 
-/* A row only exists for a node with at least one child; a leaf is only
-   ever a tile, in its parent's comb. `d194`.
+   A stop's line is written in the markup as a class, never as a hex value,
+   because the same drawing is served onto a light ground and a dark one and
+   neither palette belongs in the SVG. `--c` is the indirection: an `.l3`
+   sets it once and every part that colours itself reads it. */
 
-   One list, one line, every row at the same offset -- which is what the
-   spine above actually does, and what `d194` asked for. It used to nest,
-   one `padding-left` per level, on a comment claiming that was the spine's
-   idiom for depth; the spine has no such idiom. At fifteen levels that came
-   to 283 px and left the deepest comb 44 px to draw a fan-out in, so the
-   nesting was squeezing the very thing the page exists to show. `d387`. */
-
-ol.rows {
-  list-style: none;
-  margin: 0;
-  padding: 0 0 0 1.2rem;
-  border-left: 1px solid var(--rule);
+:root {
+  --l0: #b23b30;
+  --l1: #1f5f9e;
+  --l2: #8a6a12;
+  --l3: #1c7a58;
+  --l4: #7a3f9e;
+  --l5: #1a6f78;
+  --l6: #9a5518;
+  --l7: #4f7a1c;
+  --lx: #9aa0aa;
+  --lit: #f6f1e6;
 }
 
-li.row {
-  margin: 0 0 1.1rem;
+@media (prefers-color-scheme: dark) {
+  :root {
+    --l0: #e2483d;
+    --l1: #4aa3df;
+    --l2: #e5c07b;
+    --l3: #3fb98c;
+    --l4: #c678dd;
+    --l5: #56b6c2;
+    --l6: #d19a66;
+    --l7: #98c379;
+    --lx: #5b6270;
+    --lit: #22282f;
+  }
 }
 
-li.row .alias {
-  margin-right: 0.6rem;
+.l0 { --c: var(--l0); }
+.l1 { --c: var(--l1); }
+.l2 { --c: var(--l2); }
+.l3 { --c: var(--l3); }
+.l4 { --c: var(--l4); }
+.l5 { --c: var(--l5); }
+.l6 { --c: var(--l6); }
+.l7 { --c: var(--l7); }
+.lx { --c: var(--lx); }
+
+/* The map is the one page that is not prose, so it is the one page that
+   does not sit in a 54rem column. */
+body.wide-page {
+  padding: 1.6rem 1.2rem 4rem;
 }
 
-li.row .title {
-  display: inline;
-  margin: 0;
-  color: var(--ink-soft);
+body.wide-page .page {
+  max-width: none;
 }
 
-/* `d196`: each block is a disclosure, open by default -- the idiom `d187`
-   already fixed for the lineage, same triangle and all. */
-li.row > details {
-  margin: 0;
+body.wide-page header {
+  margin-bottom: 1.2rem;
 }
 
-li.row > details > summary {
-  cursor: pointer;
+.stats {
+  margin: 0.5rem 0 0;
+  color: var(--ink-faint);
+  font-family: var(--mono);
+  font-size: 0.74rem;
+}
+
+/* ---- the legend and the tools ---------------------------------------- */
+
+.legend {
   display: flex;
   flex-wrap: wrap;
-  align-items: baseline;
-  gap: 0 0.6rem;
+  gap: 0.3rem 0.45rem;
+  margin-top: 0.7rem;
 }
 
-li.row > details > summary:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+.legend .line,
+.tools .tool {
+  background: none;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  color: var(--ink-soft);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  padding: 0.16rem 0.6rem;
+  cursor: pointer;
 }
 
-/* The fan-out is always in the markup and only ever hidden by CSS: while
-   the block is open the comb already shows it, so `d194` still applies;
-   the moment the reader closes it, this is what is left of the shape,
-   which is `d187`'s argument for its own counts. */
-li.row > details[open] > summary .count {
+.legend .line:hover,
+.legend .line.on,
+.tools .tool:hover {
+  border-color: var(--accent);
+  color: var(--ink);
+}
+
+/* The swatch repeats what the name already says. A reader with no colour
+   at all still has the name, and the name is the station the line starts
+   at, which is a place they can go. */
+.legend .line b {
+  display: inline-block;
+  width: 1.1rem;
+  height: 0.26rem;
+  border-radius: 2px;
+  vertical-align: middle;
+  margin-right: 0.35rem;
+  background: var(--c);
+}
+
+.tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.6rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--rule);
+}
+
+.tools #find {
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 0.78rem;
+  padding: 0.2rem 0.7rem;
+  width: 16rem;
+}
+
+.tools #find:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.tools .hits {
+  color: var(--ink-faint);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+}
+
+/* ---- the drawing ------------------------------------------------------ */
+
+.map {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) 25rem;
+}
+
+.gutter {
+  position: relative;
+}
+
+/* Two gutters, one per lane width, and exactly one of them on screen. Both
+   are chosen by class and never by element: the first version of this said
+   that an svg with the gutter class displays as a block, which is more
+   specific than the rule meant to hide one, so it drew the two on top of
+   each other. */
+.rails {
   display: none;
 }
 
-/* Whose comb this row's tile sits in. Quiet: it is orientation, not the
-   message, and the combs are the message. */
-li.row .under {
-  color: var(--ink-soft);
-  font-size: 0.85em;
+.rails.wide {
+  display: block;
 }
 
-/* `blocks` -- the parent cannot close until this one closes. The same `*`
-   `vivac tree` prints, and the word is in the `title` besides: the DX
-   pillar does not let a meaning live only in a colour or a class. */
+.rail,
+.elbow {
+  fill: none;
+  stroke: var(--c);
+  stroke-width: 2.2;
+  opacity: 0.55;
+}
+
+.elbow {
+  opacity: 0.45;
+}
+
+.terminus {
+  fill: none;
+  stroke: var(--c);
+  stroke-width: 3;
+  stroke-linecap: round;
+  opacity: 0.9;
+}
+
+/* Solid is open and hollow is closed, and the row says the same thing in
+   words and in a strike through the title. */
+.station {
+  stroke: var(--c);
+  stroke-width: 1.7;
+  cursor: pointer;
+}
+
+.station.open {
+  fill: var(--c);
+}
+
+.station.shut {
+  fill: var(--ground);
+}
+
+.waits {
+  fill: none;
+  stroke: var(--warn);
+  stroke-width: 1.2;
+  opacity: 0.9;
+}
+
+.route path {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 3.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.route circle {
+  fill: var(--accent);
+  stroke: var(--ground);
+  stroke-width: 2;
+}
+
+/* While a route is drawn everything off it steps back -- but only as far
+   as still being readable. The first version dimmed to a third, and the
+   owner read the page as having gone dark rather than as having answered. */
+.routing .rail,
+.routing .elbow,
+.routing .terminus {
+  opacity: 0.14;
+}
+
+.routing .station {
+  opacity: 0.3;
+}
+
+.routing .station.on {
+  opacity: 1;
+}
+
+/* ---- the list -------------------------------------------------------- */
+
+/* One row per node, in the same order and at the same offset as the
+   stations beside them: a row's index is its y, so an indent here would be
+   a lie about where its station is. */
+ol.stops {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+li.stop {
+  display: grid;
+  grid-template-columns: 5.4rem minmax(0, 1fr) auto auto;
+  gap: 0 0.55rem;
+  align-items: center;
+  height: 32px;
+  padding-right: 1rem;
+  border-bottom: 1px solid var(--rule-soft);
+  cursor: pointer;
+}
+
+li.stop:hover {
+  background: var(--rule-soft);
+}
+
+li.stop .alias {
+  color: var(--c);
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  text-decoration: none;
+  /* The lists elsewhere nudge an alias down to sit on the first line of a
+     wrapped title. A row here is one line, 32 px tall and centred, and the
+     nudge would push it off the station it names. */
+  padding-top: 0;
+}
+
+li.stop .title {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.86rem;
+}
+
+li.stop.hub .title {
+  font-weight: 600;
+}
+
+/* Closed is struck through as well as hollow in the drawing: two ways of
+   saying it, neither of them a colour. */
+li.stop.shut {
+  color: var(--ink-faint);
+}
+
+li.stop.shut .title {
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+  text-decoration-color: var(--ink-faint);
+}
+
+li.stop.parked .title {
+  font-style: italic;
+}
+
+li.stop .fan {
+  color: var(--ink-faint);
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  min-width: 1.6rem;
+  text-align: right;
+}
+
+li.stop .notes {
+  color: var(--warn);
+  font-family: var(--mono);
+  font-size: 0.64rem;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 0 0.24rem;
+}
+
+li.stop.false-close .title::after {
+  content: " false close";
+  color: var(--warn);
+  font-family: var(--mono);
+  font-size: 0.7rem;
+}
+
+li.stop.hit {
+  background: var(--lit);
+}
+
+li.stop.faded {
+  opacity: 0.25;
+}
+
+.routing li.stop {
+  opacity: 0.45;
+}
+
+/* The route is lit along the titles too, not only along the rails: a rail
+   can be sixteen lanes away from the title it belongs to, and a reader
+   should not have to measure across the page to see which rows are on the
+   route. */
+.routing li.stop.onroute {
+  opacity: 1;
+  background: var(--rule-soft);
+}
+
+.routing li.stop.on {
+  opacity: 1;
+  background: var(--lit);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+/* blocks -- the parent cannot close until this one closes. The same glyph
+   vivac tree prints, and the word is in the title attribute besides. */
 .mark {
   color: var(--warn);
   font-weight: 700;
 }
 
-.tile.blocking {
-  border-color: var(--warn);
-}
+/* ---- the detail ------------------------------------------------------ */
 
-/* The tree reporting that something went wrong, so it is never folded away
-   behind a disclosure. */
-p.false-close {
-  margin: 0.4rem 0 0;
-  color: var(--warn);
-  font-size: 0.9em;
-}
-
-/* The comb: one tile per direct child, in tree order. Its width carries
-   the fan-out -- nothing here counts it into a number. */
-.comb {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.3rem;
-  margin: 0.4rem 0 0;
-}
-
-.tile {
-  display: inline-block;
-  padding: 0.15rem 0.5rem;
-  border: 1px solid var(--rule);
-  border-radius: 0.25rem;
+/* On a desktop it stands beside the map and stays put while the map
+   scrolls, which is the whole promise: the tree never leaves the screen. */
+.detail {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  max-height: 100vh;
+  overflow: auto;
+  border-left: 1px solid var(--rule);
   background: var(--panel);
+  padding: 1rem 1.1rem 3rem;
+}
+
+.detail .code {
+  margin: 0 0 0.3rem;
   color: var(--ink-soft);
   font-family: var(--mono);
-  font-size: 0.76rem;
-  text-decoration: none;
+  font-size: 0.68rem;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
 }
 
-.tile:hover,
-.tile:focus-visible {
-  border-color: var(--accent);
-  color: var(--accent);
+.detail h2 {
+  margin: 0 0 0.2rem;
+  font-size: 1.05rem;
+  line-height: 1.35;
 }
 
-/* Meaning is never colour alone: closed strikes through and parked dashes
-   the border and italicises, and both also spell the state as a word in
-   `title` (DX pillar). */
-.tile.closed {
-  text-decoration: line-through;
+.detail h3 {
+  margin: 1.2rem 0 0.35rem;
+  color: var(--ink-faint);
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
 }
 
-.tile.parked {
-  border-style: dashed;
-  font-style: italic;
+.detail .prose {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 0.85rem;
+  white-space: pre-wrap;
+}
+
+.detail details {
+  border-top: 1px solid var(--rule);
+  padding: 0.45rem 0;
+}
+
+.detail summary {
+  cursor: pointer;
+  color: var(--ink-soft);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+}
+
+.detail .when {
+  color: var(--ink-faint);
+  font-family: var(--mono);
+}
+
+.detail ul.plain,
+.detail ol.plain {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 0.82rem;
+}
+
+.detail .plain > li {
+  padding: 0.16rem 0 0.16rem 0.9rem;
+  border-left: 2px solid var(--rule);
+}
+
+.detail .plain > li.last {
+  border-left-color: var(--accent);
+  font-weight: 600;
+}
+
+.detail .go {
+  margin-right: 0.4rem;
+  font-family: var(--mono);
+  font-size: 0.74rem;
+}
+
+.detail dl {
+  display: grid;
+  grid-template-columns: 7rem 1fr;
+  gap: 0.35rem 0;
+  margin: 0;
+  font-size: 0.82rem;
+}
+
+.detail dt {
+  padding-top: 0.15rem;
+  color: var(--ink-faint);
+  font-size: 0.66rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.detail dd {
+  margin: 0;
+}
+
+.detail .onward {
+  margin: 1.4rem 0 0;
+  font-size: 0.82rem;
+}
+
+/* Only a drawer has a handle and a close button, so on a desktop there is
+   nothing to draw. */
+.detail .sheet {
+  display: none;
+}
+
+/* ---- on a phone ------------------------------------------------------ */
+
+@media (max-width: 860px) {
+  .map {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .rails.wide {
+    display: none;
+  }
+
+  .rails.narrow {
+    display: block;
+  }
+
+  li.stop {
+    grid-template-columns: 4.4rem minmax(0, 1fr) auto auto;
+    gap: 0 0.4rem;
+  }
+
+  .tools #find {
+    width: 9rem;
+  }
+
+  /* The detail becomes a drawer over the bottom half of the screen: the
+     map keeps the other half, which is what "without letting go" means
+     when there is no room for two columns. */
+  .detail {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    top: auto;
+    z-index: 9;
+    width: 100%;
+    height: 50vh;
+    max-height: 50vh;
+    border-left: none;
+    border-top: 1px solid var(--rule);
+    border-radius: 14px 14px 0 0;
+    box-shadow: 0 -12px 32px rgba(0, 0, 0, 0.35);
+    transform: translateY(101%);
+    transition: transform 0.22s ease;
+  }
+
+  .detail.open {
+    transform: translateY(0);
+  }
+
+  .detail .sheet {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin: -1rem -1.1rem 0.7rem;
+    padding: 0.6rem 1.1rem;
+    background: var(--panel);
+    border-bottom: 1px solid var(--rule);
+  }
+
+  .detail .grab {
+    position: absolute;
+    left: 50%;
+    top: 0.3rem;
+    transform: translateX(-50%);
+    width: 2.4rem;
+    height: 0.25rem;
+    border-radius: 99px;
+    background: var(--rule);
+  }
+
+  .detail .close {
+    background: none;
+    border: 1px solid var(--rule);
+    border-radius: 99px;
+    color: var(--ink-soft);
+    font-family: inherit;
+    font-size: 0.72rem;
+    padding: 0.12rem 0.6rem;
+    cursor: pointer;
+  }
+}
+
+/* Somebody reading this with motion turned down asked for that. */
+@media (prefers-reduced-motion: reduce) {
+  .detail {
+    transition: none;
+  }
 }

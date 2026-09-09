@@ -787,12 +787,13 @@ fn the_tree_page_routes_with_or_without_a_slash_and_a_bogus_project_is_still_not
     assert_eq!(bogus.status, 404, "{}", bogus.body);
 }
 
-/// `WEB.md` §3.6: a leaf is only ever a tile and a node with a child is a
-/// tile too -- every node with a parent shows up exactly once in someone's
-/// comb, and it reaches its own lineage (§3.2) from there.
+/// `d391`: the map draws every node once, leaves included. There are no
+/// tiles any more -- a leaf used to exist only inside its parent's comb --
+/// and every alias still reaches its own lineage, which is exactly what a
+/// click costs a reader whose browser runs no script.
 #[test]
-fn every_child_in_the_tree_appears_exactly_once_as_a_tile_that_reaches_its_own_lineage() {
-    let s = up("tree-tiles");
+fn every_node_is_one_row_that_still_reaches_its_own_lineage() {
+    let s = up("map-rows");
     s._sandbox
         .ok(&["push", "Root goal", "--why", "it is the goal"]);
     s._sandbox.ok(&[
@@ -836,23 +837,34 @@ fn every_child_in_the_tree_appears_exactly_once_as_a_tile_that_reaches_its_own_l
     );
     assert_eq!(a.status, 200, "{}", a.body);
 
-    for alias in ["t2", "t3", "t4"] {
-        let needle = format!("class=\"tile\" href=\"/p/{id}/why/{alias}\"");
+    for alias in ["g1", "t2", "t3", "t4"] {
+        let needle = format!("href=\"/p/{id}/why/{alias}\"");
         assert_eq!(
             a.body.matches(&needle).count(),
             1,
-            "{alias} should reach its own lineage exactly once as a tile:\n{}",
+            "{alias} should reach its own lineage exactly once:\n{}",
+            a.body
+        );
+        assert_eq!(
+            a.body.matches(&format!("id=\"{alias}\"")).count(),
+            1,
+            "{alias} should be one row and no more:\n{}",
             a.body
         );
     }
 }
 
-/// `WEB.md` §3.6: a leaf gets a tile and no row of its own; a node with a
-/// child gets both, because it is a tile in its parent's comb and a row
-/// where its own children hang.
+/// `d391`, and `d387` before it: one flat list, one row per node, every row
+/// at the same offset. A row's index in that list *is* the row its station
+/// is drawn on, so a nest here would put the drawing and the list on
+/// different lines.
+///
+/// The old page gave a row only to a node with children and drew a leaf as
+/// a tile in its parent's comb. The map gives every node a row, which is
+/// what lets a leaf carry a station of its own.
 #[test]
-fn a_leaf_gets_a_tile_and_no_row_while_a_branch_gets_both() {
-    let s = up("tree-rows");
+fn the_map_is_one_flat_list_with_a_row_for_every_node() {
+    let s = up("map-flat");
     s._sandbox
         .ok(&["push", "Root goal", "--why", "it is the goal"]);
     s._sandbox.ok(&[
@@ -896,41 +908,40 @@ fn a_leaf_gets_a_tile_and_no_row_while_a_branch_gets_both() {
     );
     assert_eq!(a.status, 200, "{}", a.body);
 
-    // t3 is a leaf: a tile, and never a row header of its own.
-    assert!(
-        a.body
-            .contains(&format!("class=\"tile\" href=\"/p/{id}/why/t3\"")),
-        "{}",
-        a.body
-    );
-    assert!(
-        !a.body
-            .contains(&format!("<a href=\"/p/{id}/why/t3\">t3</a>")),
-        "{}",
+    assert_eq!(
+        a.body.matches("<ol class=\"stops\">").count(),
+        1,
+        "a second list is a nest, and a nest moves a row off its station:\n{}",
         a.body
     );
+    assert_eq!(a.body.matches("<li class=\"stop").count(), 4, "{}", a.body);
 
-    // t2 has a child, so it is both a tile in g1's comb and a row of its own.
-    assert!(
-        a.body
-            .contains(&format!("class=\"tile\" href=\"/p/{id}/why/t2\"")),
-        "{}",
-        a.body
-    );
-    assert!(
-        a.body
-            .contains(&format!("<a href=\"/p/{id}/why/t2\">t2</a>")),
-        "{}",
-        a.body
-    );
+    // Tree order, and the two gutters drawing the same four stations on the
+    // same four rows.
+    for (row, alias) in ["g1", "t2", "t4", "t3"].iter().enumerate() {
+        assert!(
+            a.body
+                .contains(&format!("id=\"{alias}\" data-stop=\"{row}\"")),
+            "{alias} should be row {row}:\n{}",
+            a.body
+        );
+        assert_eq!(
+            a.body.matches(&format!("data-stop=\"{row}\" cx=")).count(),
+            2,
+            "one station in each of the two gutters:\n{}",
+            a.body
+        );
+    }
 }
 
-/// `d196`: a row is a disclosure, open at landing so `t191`'s promise --
-/// the shape at a glance -- holds without a click. Leaves are tiles only
-/// and never a `<details>` of their own.
+/// The drawing carries the fan-out in the radius of a station, and a radius
+/// saturates: past thirty children they all look alike. The number on the
+/// row is what tells those apart, which is why `d194`'s ban on counting it
+/// does not carry over -- that ban existed because a comb's *width* said it
+/// exactly, and there is no comb any more.
 #[test]
-fn every_row_with_children_carries_an_open_details_and_leaves_carry_none() {
-    let s = up("tree-details-open");
+fn the_row_counts_the_fan_out_the_radius_can_no_longer_tell_apart() {
+    let s = up("map-fan");
     s._sandbox
         .ok(&["push", "Root goal", "--why", "it is the goal"]);
     s._sandbox.ok(&[
@@ -974,108 +985,28 @@ fn every_row_with_children_carries_an_open_details_and_leaves_carry_none() {
     );
     assert_eq!(a.status, 200, "{}", a.body);
 
-    // g1 and t2 both have children, so both are rows, and both open. Each
-    // row carries an `id` since `d387`, so this matches the opening of the
-    // attribute list rather than the whole tag.
-    assert_eq!(
-        a.body.matches("<li class=\"row\" id=").count(),
-        2,
+    // g1 has two children, t2 has one, and the two leaves have none and
+    // therefore no number at all.
+    assert!(
+        a.body.contains("<span class=\"fan\">2</span>"),
         "{}",
         a.body
     );
-    assert_eq!(a.body.matches("<details open>").count(), 2, "{}", a.body);
-
-    // `d387`: one list, and depth said by naming the parent. The branch is
-    // under the root; the root is under nothing and says nothing.
     assert_eq!(
-        a.body.matches("<ol class=\"rows\">").count(),
+        a.body.matches("<span class=\"fan\">1</span>").count(),
         1,
         "{}",
         a.body
     );
-    assert!(
-        a.body.contains("under <a href=\"#g1\">g1</a>"),
-        "{}",
-        a.body
-    );
-    assert_eq!(a.body.matches("class=\"under\"").count(), 1, "{}", a.body);
-    // No block is ever closed by default: every `<details` this page
-    // writes carries `open`.
-    assert_eq!(
-        a.body.matches("<details>").count(),
-        0,
-        "a details closed by default:\n{}",
-        a.body
-    );
+    assert_eq!(a.body.matches("class=\"fan\"").count(), 2, "{}", a.body);
 }
 
-/// `d196`: the fan-out is only ever hidden by CSS, on `details[open]` --
-/// the HTML always carries it, so `curl` and a reader who closes the block
-/// see the same number either way.
+/// DX pillar: state never rides on a colour alone. Each row spells its
+/// state as a word in `title`, not only through its class and the fill of
+/// its station.
 #[test]
-fn the_summary_always_carries_the_count_in_its_markup() {
-    let s = up("tree-details-count");
-    s._sandbox
-        .ok(&["push", "Root goal", "--why", "it is the goal"]);
-    s._sandbox.ok(&[
-        "add",
-        "A branch",
-        "--why",
-        "it needs its own children",
-        "--parent",
-        "1",
-    ]);
-    s._sandbox.ok(&[
-        "add",
-        "A leaf beside it",
-        "--why",
-        "it stands alone",
-        "--parent",
-        "1",
-    ]);
-    s._sandbox.ok(&[
-        "add",
-        "A leaf below the branch",
-        "--why",
-        "it hangs off the branch",
-        "--parent",
-        "2",
-    ]);
-
-    let boot = call(s.port(), &s.boot_path(), &[("Host", s.host())]);
-    let token = token_from(&boot);
-    let id = s
-        ._sandbox
-        .0
-        .file_name()
-        .unwrap()
-        .to_string_lossy()
-        .into_owned();
-    let a = call(
-        s.port(),
-        &format!("/p/{id}/tree"),
-        &[("Host", s.host()), ("X-Vivac-Token", token)],
-    );
-    assert_eq!(a.status, 200, "{}", a.body);
-
-    // g1 has two children (t2, t3): plural. t2 has one (t4): singular.
-    assert!(
-        a.body.contains("<span class=\"count\">2 children</span>"),
-        "{}",
-        a.body
-    );
-    assert!(
-        a.body.contains("<span class=\"count\">1 child</span>"),
-        "{}",
-        a.body
-    );
-}
-
-/// DX pillar: state never rides on a colour alone. Each tile spells its
-/// state as a word in `title`, not only through its class.
-#[test]
-fn state_reaches_the_tile_as_a_word_in_its_title_attribute_not_only_as_a_class() {
-    let s = up("tree-state-words");
+fn state_reaches_the_row_as_a_word_in_its_title_attribute_not_only_as_a_class() {
+    let s = up("map-state-words");
     s._sandbox
         .ok(&["push", "Root goal", "--why", "it is the goal"]);
     s._sandbox.ok(&[
@@ -1135,12 +1066,83 @@ fn state_reaches_the_tile_as_a_word_in_its_title_attribute_not_only_as_a_class()
         "{}",
         a.body
     );
+    // And the word is not the only cue either: the closed one is struck
+    // through and its station is hollow.
+    assert!(a.body.contains("<li class=\"stop shut\""), "{}", a.body);
 }
 
-/// `WEB.md` §7.4: the whole tree loads with no internet, the same as every
-/// other page.
+/// The promise `d391` signs, over HTTP rather than through a unit test: the
+/// detail of every node is already on the page when it arrives, so reading
+/// one costs no second request. That is what "without letting go" means in
+/// a browser -- and it is also why the CSP can keep saying `default-src
+/// 'none'`, with no way for the page to talk to anything at all.
 #[test]
-fn the_tree_page_reaches_for_nothing_off_this_machine() {
+fn the_detail_of_every_node_arrives_with_the_page() {
+    let s = up("map-detail");
+    s._sandbox
+        .ok(&["push", "Root goal", "--why", "it is the goal"]);
+    s._sandbox.ok(&[
+        "add",
+        "A branch",
+        "--why",
+        "it needs its own children",
+        "--parent",
+        "1",
+    ]);
+    s._sandbox.ok(&["note", "2", "the first note"]);
+    s._sandbox
+        .ok(&["note", "2", "and the one that corrects it"]);
+
+    let boot = call(s.port(), &s.boot_path(), &[("Host", s.host())]);
+    let token = token_from(&boot);
+    let id = s
+        ._sandbox
+        .0
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let a = call(
+        s.port(),
+        &format!("/p/{id}/tree"),
+        &[("Host", s.host()), ("X-Vivac-Token", token)],
+    );
+    assert_eq!(a.status, 200, "{}", a.body);
+
+    assert!(
+        a.body
+            .contains("<script type=\"application/json\" id=\"map-data\">"),
+        "{}",
+        a.body
+    );
+    for why in ["it is the goal", "it needs its own children"] {
+        assert!(
+            a.body.contains(why),
+            "{why} is not on the page:\n{}",
+            a.body
+        );
+    }
+    // `f389`: both notes travel, not only the last one written.
+    assert!(a.body.contains("the first note"), "{}", a.body);
+    assert!(
+        a.body.contains("and the one that corrects it"),
+        "{}",
+        a.body
+    );
+    assert!(a.body.contains("2 notes"), "{}", a.body);
+}
+
+/// `WEB.md` §7.4: the whole map loads with no internet, the same as every
+/// other page.
+///
+/// It is the first page with a drawing and a script in it, so this is also
+/// the first time the promise means more than "no `<img>`". The assertion
+/// used to be that the page carried no `<svg>` and no `<script>` at all,
+/// which stopped saying anything the day it carried both. What it has to
+/// say instead is that neither of them *reaches*: no `src`, no `@import`,
+/// no `<use>`, and no absolute URL anywhere on the page.
+#[test]
+fn the_map_reaches_for_nothing_off_this_machine() {
     let s = up("tree-offline");
     s._sandbox
         .ok(&["push", "Ship the thing", "--why", "it is the goal"]);
@@ -1161,8 +1163,13 @@ fn the_tree_page_reaches_for_nothing_off_this_machine() {
     assert_eq!(a.status, 200, "{}", a.body);
     assert!(!a.body.contains("http://"), "{}", a.body);
     assert!(!a.body.contains("https://"), "{}", a.body);
-    assert!(!a.body.contains("<script"), "{}", a.body);
-    assert!(!a.body.contains("<svg"), "{}", a.body);
+    for reaching in ["src=", "@import", "<use", "<image", "url("] {
+        assert!(
+            !a.body.contains(reaching),
+            "{reaching} would fetch something:\n{}",
+            a.body
+        );
+    }
 }
 
 /// `f189`'s test, extended: the tree the front page links to has to be
