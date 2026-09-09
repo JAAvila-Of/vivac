@@ -20,7 +20,7 @@
 use super::{alias_link, escape};
 use crate::event::Event;
 use crate::model::{Aggregates, Node, Tree};
-use crate::render::{anchor_of, open_then_of, standing_of, Full};
+use crate::render::{anchor_of, blocking_of, open_then_of, standing_of, Full};
 
 /// One node as a line inside a `<details>`: the alias links to its own
 /// lineage, so the drawing is also the way you walk the tree.
@@ -34,28 +34,57 @@ fn link(project: &str, tree: &Tree, n: &Node) -> String {
     )
 }
 
-/// The two lists that hang off a step, and the summary that stands in for
-/// them when it is closed.
+/// The lists that hang off a step, and the summary that stands in for them
+/// when it is closed.
 ///
 /// A step with nothing to expand gets no `<details>` at all: the absence is
 /// the answer --nothing was decided here, nothing was left open here-- and
 /// a disclosure triangle that opens onto nothing teaches that the shape
 /// cannot be trusted.
-fn weight(project: &str, tree: &Tree, standing: &[&Node], open_then: &[&Node]) -> String {
-    if standing.is_empty() && open_then.is_empty() {
+///
+/// `blocking` is the third of them and the one this page went without until
+/// `f380`: what the step is waiting on, in the words `vivac why` already
+/// uses. The whole web mentioned `blocks` in one place, a filter on the
+/// front page, so the one edge in this tree that is **not** hierarchy --
+/// the parent cannot close until this one closes -- was drawn nowhere at
+/// all, on the page whose whole subject is one node.
+fn weight(
+    project: &str,
+    tree: &Tree,
+    standing: &[&Node],
+    open_then: &[&Node],
+    blocking: &[&Node],
+) -> String {
+    if standing.is_empty() && open_then.is_empty() && blocking.is_empty() {
         return String::new();
     }
+    // "waiting on 2" and not "2 waiting on": the other two count things
+    // that sit at this step, and this one names what the step is stuck
+    // behind. Reading it the same way round as the others would say the
+    // opposite of what it means.
     let counts = [
-        (standing.len(), "governing here"),
-        (open_then.len(), "open then"),
+        format!("waiting on {}", blocking.len()),
+        format!("{} governing here", standing.len()),
+        format!("{} open then", open_then.len()),
     ]
     .iter()
-    .filter(|(n, _)| *n > 0)
-    .map(|(n, w)| format!("<span class=\"count\">{n} {w}</span>"))
+    .zip([blocking.len(), standing.len(), open_then.len()])
+    .filter(|(_, n)| *n > 0)
+    .map(|(text, _)| format!("<span class=\"count\">{text}</span>"))
     .collect::<Vec<_>>()
     .join(" ");
 
     let mut body = String::new();
+    // First of the three, because it is the only one that says the step
+    // cannot finish. The other two describe the moment; this one describes
+    // a debt.
+    if !blocking.is_empty() {
+        body.push_str("<h3>Does not close until these close</h3>\n<ul class=\"nodes\">\n");
+        for n in blocking {
+            body.push_str(&link(project, tree, n));
+        }
+        body.push_str("</ul>\n");
+    }
     if !standing.is_empty() {
         body.push_str("<h3>Decided here, still standing</h3>\n<ul class=\"nodes\">\n");
         for n in standing {
@@ -140,7 +169,8 @@ fn step(project: &str, tree: &Tree, ag: &Aggregates, full: &Full, n: &Node, here
             project,
             tree,
             &standing_of(tree, n),
-            &open_then_of(tree, full, n)
+            &open_then_of(tree, full, n),
+            &blocking_of(tree, n),
         ),
     )
 }
