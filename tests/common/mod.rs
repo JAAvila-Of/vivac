@@ -144,6 +144,71 @@ impl Sandbox {
     pub fn log(&self) -> String {
         std::fs::read_to_string(self.0.join(".vivac").join("events")).unwrap_or_default()
     }
+
+    /// Appends a line straight to `events`, bypassing every command. `t411`
+    /// §13's own tests need lines no CLI path would ever write: a line
+    /// well-formed enough to name an event type or a node kind this version
+    /// does not know, or one broken in ways a real crash leaves behind.
+    #[allow(dead_code)]
+    pub fn append_raw_line(&self, line: &str) {
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.0.join(".vivac").join("events"))
+            .unwrap();
+        writeln!(f, "{line}").unwrap();
+    }
+
+    /// A line only a newer vivac could have written: well-formed JSON with a
+    /// numeric `seq` and a `payload.type` this version's `Body` does not
+    /// carry. `t411` §13. The exact `seq` given does not matter -- the line
+    /// never folds, since deserialising it as an `Event` fails before `seq`
+    /// is read for anything but a shape check.
+    #[allow(dead_code)]
+    pub fn append_unknown_event_type(&self) {
+        self.append_raw_line(
+            r#"{"seq":999,"id":"01UNKNOWNTYPEAAAAAAAAAAAAA","ts":"2026-01-01T00:00:00Z","actor":"a_test0000000","lane":"main","payload":{"type":"node.evolved","node":"01UNKNOWNTYPEBBBBBBBBBBBBB"}}"#,
+        );
+    }
+
+    /// The same, with a well-formed `node.created` whose `kind` this version
+    /// cannot parse.
+    #[allow(dead_code)]
+    pub fn append_unknown_node_kind(&self) {
+        self.append_raw_line(
+            r#"{"seq":999,"id":"01UNKNOWNKINDAAAAAAAAAAAAA","ts":"2026-01-01T00:00:00Z","actor":"a_test0000000","lane":"main","payload":{"type":"node.created","node":"01UNKNOWNKINDBBBBBBBBBBBBB","num":999,"kind":"epic","title":"From a newer vivac"}}"#,
+        );
+    }
+
+    /// A type this version knows, carrying a value it does not: a flag that
+    /// is not `suspect`, `review` or `stale`. The shape a newer vivac writes
+    /// the day it adds a value to a field that already exists.
+    #[allow(dead_code)]
+    pub fn append_unreadable_known_event(&self) {
+        self.append_raw_line(
+            r#"{"seq":999,"id":"01UNKNOWNVALUEAAAAAAAAAAAA","ts":"2026-01-01T00:00:00Z","actor":"a_test0000000","lane":"main","payload":{"type":"flag.raised","node":"01UNKNOWNVALUEBBBBBBBBBBBB","flag":"advise","reason":"from a newer vivac"}}"#,
+        );
+    }
+
+    /// `d441` on top of `t411` §13 bis: an `arm.added` missing `dir`, the
+    /// shape a format before the folder existed would have written.
+    #[allow(dead_code)]
+    pub fn append_arm_added_without_dir(&self) {
+        self.append_raw_line(
+            r#"{"seq":999,"id":"01ARMNODIRAAAAAAAAAAAAAAAA","ts":"2026-01-01T00:00:00Z","actor":"a_test0000000","lane":"main","payload":{"type":"arm.added","node":"01ARMNODIRBBBBBBBBBBBBBBBB","command":"cargo test"}}"#,
+        );
+    }
+
+    /// The same, with a `node.created` whose `arms` are bare strings -- the
+    /// shape `t411`'s first round wrote, before `d441` made the folder part
+    /// of the pair.
+    #[allow(dead_code)]
+    pub fn append_node_created_with_string_arms(&self) {
+        self.append_raw_line(
+            r#"{"seq":999,"id":"01OLDARMSHAPEAAAAAAAAAAAAA","ts":"2026-01-01T00:00:00Z","actor":"a_test0000000","lane":"main","payload":{"type":"node.created","node":"01OLDARMSHAPEBBBBBBBBBBBBB","num":999,"kind":"rule","title":"From before d441","arms":["cargo test"]}}"#,
+        );
+    }
 }
 
 impl Drop for Sandbox {
