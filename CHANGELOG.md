@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.11](https://github.com/JAAvila-Of/vivac/compare/v0.6.10...v0.6.11) - 2026-09-10
+
+### Documentation
+
+- *(readme)* install without a Rust toolchain ([#99](https://github.com/JAAvila-Of/vivac/pull/99))
+
+### Fixed
+
+- *(web)* make the map's where-am-i button work again
+
 ## [0.6.10](https://github.com/JAAvila-Of/vivac/compare/v0.6.9...v0.6.10) - 2026-09-09
 
 ### Fixed
