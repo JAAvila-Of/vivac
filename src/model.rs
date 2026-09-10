@@ -286,6 +286,12 @@ pub struct Tree {
     /// Every `num` a hand edit handed to two different ULIDs, in the order
     /// the fold met the second claimant. Empty on a well-formed log.
     pub repeated_nums: Vec<RepeatedNum>,
+    /// Whether a pillar or a rule has ever been created, in any state.
+    /// `d444`: the config's write-lock checks this once per write rather
+    /// than scanning every node, and it only ever turns true -- a pillar or
+    /// a rule superseded or abandoned still counts, since the config it
+    /// locked stays locked.
+    pub has_governance: bool,
 }
 
 pub fn fold(events: &[Event], broken: usize) -> Tree {
@@ -365,6 +371,9 @@ impl Tree {
                         second: format!("{}{}", kind.prefix(), num),
                     });
                     return;
+                }
+                if matches!(kind, Kind::Pillar | Kind::Rule) {
+                    self.has_governance = true;
                 }
                 let title_span = self.intern(title);
                 let why_span = self.intern(why);
@@ -916,10 +925,17 @@ impl Tree {
         let mut nodes = HashMap::with_capacity(p.nodes.len());
         let mut children: HashMap<u64, Vec<u64>> = HashMap::new();
         let mut ulid_index = HashMap::with_capacity(p.nodes.len());
+        // `d444`: not carried in the index format itself -- it is cheaper to
+        // re-derive over the same pass this loop already makes than to grow
+        // the on-disk shape for one bit an index load can recompute for free.
+        let mut has_governance = false;
         for n in p.nodes {
             ulid_index.insert(n.id.clone(), n.num);
             if let Some(parent) = n.parent {
                 children.entry(parent).or_default().push(n.num);
+            }
+            if matches!(n.kind, Kind::Pillar | Kind::Rule) {
+                has_governance = true;
             }
             nodes.insert(n.num, n);
         }
@@ -944,6 +960,7 @@ impl Tree {
             next_num: p.next_num,
             broken_lines: p.broken_lines,
             repeated_nums: Vec::new(),
+            has_governance,
         }
     }
 

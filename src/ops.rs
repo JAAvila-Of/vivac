@@ -77,7 +77,12 @@ impl Ctx {
     /// Writes and **then applies in memory**, so that whatever gets printed
     /// next is the state after the operation and not the one before it.
     fn emit(&mut self, bodies: Vec<Body>) -> R {
-        self.store.append(bodies.clone(), self.tree.seq)?;
+        // `d444`: the one bit `Store::append`'s own write-lock needs and
+        // cannot see for itself -- whether this tree already has a pillar
+        // or a rule, from a write before this one.
+        let already_governed = self.tree.has_governance;
+        self.store
+            .append(bodies.clone(), self.tree.seq, already_governed)?;
         let ts = crate::clock::now_rfc3339();
         for c in &bodies {
             let seq = self.tree.seq + 1;
