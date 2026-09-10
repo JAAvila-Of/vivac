@@ -25,6 +25,12 @@ pub struct Push {
     pub refs: Vec<String>,
     pub governs: Vec<String>,
     pub blocks: bool,
+    pub arms: Vec<String>,
+    pub arm_dir: Option<String>,
+    /// Whether this call arrived over MCP rather than the CLI: the only
+    /// thing it changes is which vocabulary a missing-folder message uses
+    /// -- `arm_dir` there, `--arm-dir` here (`t411` §21).
+    pub via_mcp: bool,
 }
 
 impl Push {
@@ -45,6 +51,9 @@ impl Push {
             refs: a.list("ref"),
             governs: a.list("governs"),
             blocks: a.has("blocks"),
+            arms: a.list("arm"),
+            arm_dir: a.opt("arm-dir").map(str::to_string),
+            via_mcp: false,
         })
     }
 }
@@ -109,6 +118,10 @@ pub struct Add {
     pub refs: Vec<String>,
     pub governs: Vec<String>,
     pub blocks: bool,
+    pub arms: Vec<String>,
+    pub arm_dir: Option<String>,
+    /// See `Push::via_mcp`.
+    pub via_mcp: bool,
 }
 
 impl Add {
@@ -124,6 +137,9 @@ impl Add {
             refs: a.list("ref"),
             governs: a.list("governs"),
             blocks: a.has("blocks"),
+            arms: a.list("arm"),
+            arm_dir: a.opt("arm-dir").map(str::to_string),
+            via_mcp: false,
         })
     }
 }
@@ -301,6 +317,32 @@ impl Restore {
             .ok_or_else(|| Failure::usage("usage: vivac restore <v>"))?;
         Ok(Restore {
             vivac: s.to_string(),
+        })
+    }
+}
+
+pub struct Arm {
+    pub id: String,
+    pub command: String,
+    pub dir: Option<String>,
+    pub off: bool,
+    /// See `Push::via_mcp`.
+    pub via_mcp: bool,
+}
+
+impl Arm {
+    pub fn from_args(a: &Args) -> Result<Arm, Failure> {
+        let (Some(id), Some(command)) = (a.positional(0), a.positional(1)) else {
+            return Err(Failure::usage(
+                "usage: vivac arm <rule> \"<command>\" --dir <dir> [--off]",
+            ));
+        };
+        Ok(Arm {
+            id: id.to_string(),
+            command: command.to_string(),
+            dir: a.opt("dir").map(str::to_string),
+            off: a.has("off"),
+            via_mcp: false,
         })
     }
 }

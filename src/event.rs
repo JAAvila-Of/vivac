@@ -4,7 +4,8 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Node types. `MODEL.md` §4.2.
+/// Node types. `MODEL.md` §4.2. `Pillar` and `Rule` are `t411`: added at the
+/// end, so the order of what already existed never moves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Kind {
@@ -15,6 +16,8 @@ pub enum Kind {
     Constraint,
     Finding,
     Assumption,
+    Pillar,
+    Rule,
 }
 
 impl Kind {
@@ -28,6 +31,8 @@ impl Kind {
             Kind::Constraint => 'c',
             Kind::Finding => 'f',
             Kind::Assumption => 'a',
+            Kind::Pillar => 'p',
+            Kind::Rule => 'r',
         }
     }
 
@@ -40,6 +45,8 @@ impl Kind {
             "constraint" => Kind::Constraint,
             "finding" => Kind::Finding,
             "assumption" => Kind::Assumption,
+            "pillar" => Kind::Pillar,
+            "rule" => Kind::Rule,
             _ => return None,
         })
     }
@@ -55,10 +62,22 @@ impl Kind {
             Kind::Constraint => "constraint",
             Kind::Finding => "finding",
             Kind::Assumption => "assumption",
+            Kind::Pillar => "pillar",
+            Kind::Rule => "rule",
         }
     }
 
-    pub const ALL: &'static str = "goal, task, decision, question, constraint, finding, assumption";
+    pub const ALL: &'static str =
+        "goal, task, decision, question, constraint, finding, assumption, pillar, rule";
+
+    /// `word`, with the indefinite article it takes: `"a task"`, `"an
+    /// assumption"`. Every message that forms "a" plus a type's word reads
+    /// this instead, since `assumption` is the one of the nine that needs
+    /// "an".
+    pub fn with_article(self) -> String {
+        let article = if self == Kind::Assumption { "an" } else { "a" };
+        format!("{article} {}", self.word())
+    }
 }
 
 /// Canonical states.
@@ -169,6 +188,21 @@ impl VivacKind {
     }
 }
 
+/// A rule's arm: the command or test that verifies it, and the folder it
+/// runs in, relative to the one that holds `.vivac`. `d441`: the folder is
+/// part of the arm's identity, not an afterthought -- the same command in
+/// two folders are two different arms, since the folder decides what the
+/// command actually checks.
+///
+/// No `#[serde(default)]` on either field: a line missing `dir` was written
+/// by a format this version does not fully know, and `t411` §13 bis refuses
+/// it rather than guessing which folder was meant.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Arm {
+    pub dir: String,
+    pub command: String,
+}
+
 /// One event from the log. `MODEL.md` §3.2.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Event {
@@ -226,6 +260,12 @@ pub enum Body {
         refs: Vec<String>,
         #[serde(default)]
         governs: Vec<String>,
+        /// A rule's arms, given at birth. Empty for a rule with none -- which
+        /// means it is judged -- and for every type that is not a rule.
+        /// `d415`. Omitted when empty, so a pillar or any other kind that
+        /// never carries one writes exactly what it always has.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        arms: Vec<Arm>,
     },
     #[serde(rename = "state.changed")]
     StateChanged {
@@ -258,6 +298,25 @@ pub enum Body {
     },
     #[serde(rename = "flag.cleared")]
     FlagCleared { node: String, flag: Flag },
+    /// A rule gains a command or test that verifies it. `d415`: vivac never
+    /// runs it, only stores and hands it back. Shaped like `flag.raised`
+    /// on purpose -- an addition, never a rewrite of what was already there.
+    /// `dir` is `d441`: no `#[serde(default)]`, because a line missing it is
+    /// one an older format wrote, and `t411` §13 bis has to refuse it rather
+    /// than silently treat it as the tree's own folder.
+    #[serde(rename = "arm.added")]
+    ArmAdded {
+        node: String,
+        dir: String,
+        command: String,
+    },
+    /// The mirror of `arm.added`, shaped like `flag.cleared`.
+    #[serde(rename = "arm.removed")]
+    ArmRemoved {
+        node: String,
+        dir: String,
+        command: String,
+    },
     #[serde(rename = "vivac.created")]
     VivacCreated {
         vivac: String,

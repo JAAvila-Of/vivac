@@ -25,11 +25,13 @@
 //! and taking its place means being reachable through the same door, in the
 //! tool list, with a schema.
 //!
-//! **Four reads, seven writes, eleven tools.** The reads answer `brief`,
-//! `find`, `why` and `open`. The writes are `push`, `pop`, `add`, `decide`,
-//! `note`, `park` and `save` -- the seven `t106` already turned into
-//! functions that hand back an `Outcome` instead of printing one, so this is
-//! the second caller that reads the same answer the CLI does.
+//! **Five reads, eight writes, thirteen tools.** The reads answer `brief`,
+//! `find`, `why`, `open` and `rules` -- the last one `t411`'s own pull,
+//! since a rule nobody pulls on is a rule that might as well not be there.
+//! The writes are `push`, `pop`, `add`, `decide`, `note`, `park`, `save` and
+//! `arm` -- the first seven `t106` already turned into functions that hand
+//! back an `Outcome` instead of printing one, so this is the second caller
+//! that reads the same answer the CLI does.
 //!
 //! **What stays out, and why.** `abandon` discards a node and every
 //! descendant it has; reachable from a tool call, that would happen with
@@ -52,10 +54,24 @@ const PROTOCOL: &str = "2025-06-18";
 /// What JSON shape an argument's value takes. Every tool used to need only
 /// `string`, but `blocks` is a flag and `ref`/`governs`/`alternative` repeat,
 /// so `schema` below has two more shapes to say.
+#[derive(Clone, Copy)]
 enum ArgKind {
     Str,
     Bool,
     List,
+}
+
+impl ArgKind {
+    /// The word a mismatch message names it by. Not the JSON type `schema`
+    /// writes into `inputSchema` -- `List` is `array` there -- because this
+    /// reads as a sentence, not as a wire format.
+    fn word(self) -> &'static str {
+        match self {
+            ArgKind::Str => "string",
+            ArgKind::Bool => "boolean",
+            ArgKind::List => "list",
+        }
+    }
 }
 
 struct Arg {
@@ -77,7 +93,7 @@ struct Tool {
     args: &'static [Arg],
 }
 
-/// Eleven, and the number is a budget rather than a stage of growth: every
+/// Thirteen, and the number is a budget rather than a stage of growth: every
 /// tool here costs context in every session the agent ever opens. The other
 /// seven write ops -- `done`, `block`, `promote`, `abandon`, `focus`, `flag`,
 /// `restore` -- stay off this list on purpose; see the module doc.
@@ -145,6 +161,24 @@ const TOOLS: &[Tool] = &[
         args: &[],
     },
     Tool {
+        name: "vivac_rules",
+        description: "What governs this project: every pillar, the rules under each \
+                      pillar and those without one, and the invariants. A pillar's \
+                      title names it and says what it rejects, in the project's own \
+                      words. Each rule carries the commands that verify it, each with \
+                      the folder it runs in, relative to the folder that holds .vivac, \
+                      or none, which means it is judged. Run a command from its folder: \
+                      from anywhere else it can pass without checking anything. Read it \
+                      whenever you are asked to check work against the project's rules, \
+                      whether or not they arrived when the session opened: vivac hands \
+                      you the rules and the commands, and the judging is yours. If it \
+                      comes back with no pillar and no rule while the project keeps its \
+                      rules in files such as CLAUDE.md or AGENTS.md, propose which are \
+                      pillars and which are rules, let the person decide, and write \
+                      them with vivac_add.",
+        args: &[],
+    },
+    Tool {
         name: "vivac_push",
         description: "Open a node and step into it: it becomes the focus, and everything \
                       captured next hangs from it until a matching pop. Call it the moment \
@@ -171,8 +205,10 @@ const TOOLS: &[Tool] = &[
                 name: "type",
                 kind: ArgKind::Str,
                 required: false,
-                description: "goal, task, decision, question, constraint, finding or \
-                              assumption. Defaults to goal at the root, task otherwise.",
+                description: "goal, task, decision, question, constraint, finding, \
+                              assumption, pillar or rule. Defaults to goal at the root, \
+                              task otherwise. A pillar is titled with its name and what \
+                              it restricts, in the project's own words.",
             },
             Arg {
                 name: "blocks",
@@ -191,6 +227,23 @@ const TOOLS: &[Tool] = &[
                 kind: ArgKind::List,
                 required: false,
                 description: "Globs of files this node's work is expected to touch.",
+            },
+            Arg {
+                name: "arm",
+                kind: ArgKind::List,
+                required: false,
+                description: "Commands that verify this rule, one per entry, all run in \
+                              arm_dir. Only for a rule; a rule without one is judged. \
+                              vivac never runs them.",
+            },
+            Arg {
+                name: "arm_dir",
+                kind: ArgKind::Str,
+                required: false,
+                description: "The folder every arm given here runs in, relative to the \
+                              folder that holds .vivac: vivac, say, or . for that folder \
+                              itself. Required with arm, refused without it. It has to \
+                              exist.",
             },
         ],
     },
@@ -257,8 +310,10 @@ const TOOLS: &[Tool] = &[
                 name: "type",
                 kind: ArgKind::Str,
                 required: false,
-                description: "goal, task, decision, question, constraint, finding or \
-                              assumption. Defaults to goal at the root, task otherwise.",
+                description: "goal, task, decision, question, constraint, finding, \
+                              assumption, pillar or rule. Defaults to goal at the root, \
+                              task otherwise. A pillar is titled with its name and what \
+                              it restricts, in the project's own words.",
             },
             Arg {
                 name: "blocks",
@@ -277,6 +332,23 @@ const TOOLS: &[Tool] = &[
                 kind: ArgKind::List,
                 required: false,
                 description: "Globs of files this node's work is expected to touch.",
+            },
+            Arg {
+                name: "arm",
+                kind: ArgKind::List,
+                required: false,
+                description: "Commands that verify this rule, one per entry, all run in \
+                              arm_dir. Only for a rule; a rule without one is judged. \
+                              vivac never runs them.",
+            },
+            Arg {
+                name: "arm_dir",
+                kind: ArgKind::Str,
+                required: false,
+                description: "The folder every arm given here runs in, relative to the \
+                              folder that holds .vivac: vivac, say, or . for that folder \
+                              itself. Required with arm, refused without it. It has to \
+                              exist.",
             },
         ],
     },
@@ -404,6 +476,43 @@ const TOOLS: &[Tool] = &[
             },
         ],
     },
+    Tool {
+        name: "vivac_arm",
+        description: "Record a command that verifies a rule and the folder it runs in, or \
+                      with off, remove one. vivac never runs it: it hands it to whoever \
+                      checks the rule. Call it the moment a test for a rule exists, \
+                      because the day a rule became checkable is part of its history.",
+        args: &[
+            Arg {
+                name: "id",
+                kind: ArgKind::Str,
+                required: true,
+                description: "The rule, as the tree names it: r12.",
+            },
+            Arg {
+                name: "command",
+                kind: ArgKind::Str,
+                required: true,
+                description: "The command or test that verifies it, as someone would \
+                              type it.",
+            },
+            Arg {
+                name: "dir",
+                kind: ArgKind::Str,
+                required: true,
+                description: "The folder the command runs in, relative to the folder \
+                              that holds .vivac: vivac, say, or . for that folder \
+                              itself. It has to exist.",
+            },
+            Arg {
+                name: "off",
+                kind: ArgKind::Bool,
+                required: false,
+                description: "Remove this command, in this folder, from the rule \
+                              instead of adding it.",
+            },
+        ],
+    },
 ];
 
 fn schema(t: &Tool) -> Value {
@@ -472,24 +581,92 @@ fn pretty(v: Value) -> Result<String, Failure> {
     serde_json::to_string_pretty(&v).map_err(|e| Failure::Io(std::io::Error::other(e)))
 }
 
-fn argument<'a>(params: &'a Value, name: &str) -> Option<&'a str> {
-    params["arguments"][name].as_str()
+/// The one door every argument comes through. A schema and the call that
+/// reads it are two sources, and nothing else keeps them together (`f438`,
+/// `f452`): a `Reader` is built for one tool, and every read it does is
+/// checked against that tool's own `args`.
+struct Reader<'a> {
+    tool: &'static Tool,
+    arguments: &'a Value,
 }
 
-fn bool_argument(params: &Value, name: &str) -> bool {
-    params["arguments"][name].as_bool().unwrap_or(false)
+impl<'a> Reader<'a> {
+    fn new(tool: &'static Tool, params: &'a Value) -> Reader<'a> {
+        Reader {
+            tool,
+            arguments: &params["arguments"],
+        }
+    }
+
+    /// Debug builds only, and cheap enough there to run on every read: an
+    /// argument the tool's schema does not list, or one read as a shape
+    /// other than the one declared for it, stops the call on the spot.
+    #[cfg(debug_assertions)]
+    fn checked(&self, name: &str, kind: ArgKind) {
+        match self.tool.args.iter().find(|a| a.name == name) {
+            None => panic!(
+                "{tool} reads {name}, which its schema does not declare",
+                tool = self.tool.name
+            ),
+            Some(declared) if declared.kind.word() != kind.word() => panic!(
+                "{tool} reads {name} as a {read}, and its schema declares a {is}",
+                tool = self.tool.name,
+                read = kind.word(),
+                is = declared.kind.word()
+            ),
+            Some(_) => {}
+        }
+    }
+
+    #[cfg(not(debug_assertions))]
+    fn checked(&self, _name: &str, _kind: ArgKind) {}
+
+    fn str(&self, name: &str) -> Option<&'a str> {
+        self.checked(name, ArgKind::Str);
+        self.arguments[name].as_str()
+    }
+
+    fn bool(&self, name: &str) -> bool {
+        self.checked(name, ArgKind::Bool);
+        self.arguments[name].as_bool().unwrap_or(false)
+    }
+
+    fn list(&self, name: &str) -> Vec<String> {
+        self.checked(name, ArgKind::List);
+        self.arguments[name]
+            .as_array()
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
 }
 
-fn list_argument(params: &Value, name: &str) -> Vec<String> {
-    params["arguments"][name]
-        .as_array()
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|v| v.as_str().map(str::to_string))
-                .collect()
-        })
-        .unwrap_or_default()
+/// The two panics `checked` raises, pinned to their exact wording. Only
+/// meaningful in a debug build, the only build where `checked` does
+/// anything.
+#[cfg(all(test, debug_assertions))]
+mod reader_tests {
+    use super::*;
+
+    #[test]
+    #[should_panic(expected = "vivac_why reads arm_dir, which its schema does not declare")]
+    fn reading_an_undeclared_argument_panics() {
+        let tool = TOOLS.iter().find(|t| t.name == "vivac_why").unwrap();
+        let params = json!({ "arguments": {} });
+        Reader::new(tool, &params).str("arm_dir");
+    }
+
+    #[test]
+    #[should_panic(expected = "vivac_push reads arm as a string, and its schema declares a list")]
+    fn reading_a_declared_argument_with_the_wrong_shape_panics() {
+        let tool = TOOLS.iter().find(|t| t.name == "vivac_push").unwrap();
+        let params = json!({ "arguments": {} });
+        Reader::new(tool, &params).str("arm");
+    }
 }
 
 /// Serialised the same way the three reads that speak JSON already are:
@@ -501,6 +678,13 @@ fn outcome_text(o: outcome::Outcome) -> Result<String, Failure> {
 
 fn call(project: &mut Project, params: &Value) -> Result<String, Failure> {
     let name = params["name"].as_str().unwrap_or_default();
+    let Some(tool) = TOOLS.iter().find(|t| t.name == name) else {
+        return Err(Failure::usage(format!(
+            "no such tool: {name}. This server has: {}",
+            TOOLS.iter().map(|t| t.name).collect::<Vec<_>>().join(", ")
+        )));
+    };
+    let a = Reader::new(tool, params);
     let missing = |what: &str| Failure::usage(format!("{name} needs a {what}."));
     match name {
         "vivac_brief" => {
@@ -510,20 +694,16 @@ fn call(project: &mut Project, params: &Value) -> Result<String, Failure> {
             brief::to_text(&ctx.tree, ctx.anchor.as_ref(), &empty, &name)
         }
         "vivac_find" => {
-            let query = argument(params, "query")
-                .ok_or_else(|| missing("query"))?
-                .to_string();
-            if bool_argument(params, "everywhere") {
+            let query = a.str("query").ok_or_else(|| missing("query"))?.to_string();
+            if a.bool("everywhere") {
                 pretty(render::find_everywhere_data(&query)?)
             } else {
                 pretty(render::find_data(&project.current()?.tree, &query)?)
             }
         }
         "vivac_why" => {
-            let id = argument(params, "id")
-                .ok_or_else(|| missing("id"))?
-                .to_string();
-            match argument(params, "project") {
+            let id = a.str("id").ok_or_else(|| missing("id"))?.to_string();
+            match a.str("project") {
                 Some(spec) => {
                     let foreign_root = registry::resolve(spec)?;
                     let tree = index::load(&store::Store::open(foreign_root)?, false)?;
@@ -533,62 +713,62 @@ fn call(project: &mut Project, params: &Value) -> Result<String, Failure> {
             }
         }
         "vivac_open" => pretty(render::open_data(&project.current()?.tree)),
+        "vivac_rules" => pretty(render::rules_data(&project.current()?.tree)),
         "vivac_push" => {
-            let title = argument(params, "title")
-                .ok_or_else(|| missing("title"))?
-                .to_string();
-            let why = argument(params, "why")
-                .ok_or_else(|| missing("why"))?
-                .to_string();
+            let title = a.str("title").ok_or_else(|| missing("title"))?.to_string();
+            let why = a.str("why").ok_or_else(|| missing("why"))?.to_string();
             let p = params::Push {
                 title,
                 why,
-                kind: argument(params, "type").map(str::to_string),
-                refs: list_argument(params, "ref"),
-                governs: list_argument(params, "governs"),
-                blocks: bool_argument(params, "blocks"),
+                kind: a.str("type").map(str::to_string),
+                refs: a.list("ref"),
+                governs: a.list("governs"),
+                blocks: a.bool("blocks"),
+                arms: a.list("arm"),
+                arm_dir: a.str("arm_dir").map(str::to_string),
+                via_mcp: true,
             };
             outcome_text(project.write(|ctx| ops::push(ctx, p))?)
         }
         "vivac_pop" => {
             let p = params::Pop {
-                outcome: argument(params, "outcome").unwrap_or("").to_string(),
-                next: argument(params, "next").map(str::to_string),
-                force: bool_argument(params, "force"),
+                outcome: a.str("outcome").unwrap_or("").to_string(),
+                next: a.str("next").map(str::to_string),
+                force: a.bool("force"),
             };
             outcome_text(project.write(|ctx| ops::pop(ctx, p))?)
         }
         "vivac_add" => {
-            let title = argument(params, "title")
-                .ok_or_else(|| missing("title"))?
-                .to_string();
+            let title = a.str("title").ok_or_else(|| missing("title"))?.to_string();
             let p = params::Add {
                 title,
-                parent: argument(params, "parent").map(str::to_string),
-                kind: argument(params, "type").map(str::to_string),
-                why: argument(params, "why").unwrap_or("").to_string(),
-                refs: list_argument(params, "ref"),
-                governs: list_argument(params, "governs"),
-                blocks: bool_argument(params, "blocks"),
+                parent: a.str("parent").map(str::to_string),
+                kind: a.str("type").map(str::to_string),
+                why: a.str("why").unwrap_or("").to_string(),
+                refs: a.list("ref"),
+                governs: a.list("governs"),
+                blocks: a.bool("blocks"),
+                arms: a.list("arm"),
+                arm_dir: a.str("arm_dir").map(str::to_string),
+                via_mcp: true,
             };
             outcome_text(project.write(|ctx| ops::add(ctx, p))?)
         }
         "vivac_decide" => {
-            let title = argument(params, "title")
-                .ok_or_else(|| missing("title"))?
-                .to_string();
-            let reason = argument(params, "reason")
+            let title = a.str("title").ok_or_else(|| missing("title"))?.to_string();
+            let reason = a
+                .str("reason")
                 .ok_or_else(|| missing("reason"))?
                 .to_string();
             let p = params::Decide {
                 title,
-                parent: argument(params, "parent").map(str::to_string),
+                parent: a.str("parent").map(str::to_string),
                 reason,
-                alternatives: list_argument(params, "alternative"),
-                supersedes: argument(params, "supersedes").map(str::to_string),
-                refs: list_argument(params, "ref"),
-                governs: list_argument(params, "governs"),
-                blocks: bool_argument(params, "blocks"),
+                alternatives: a.list("alternative"),
+                supersedes: a.str("supersedes").map(str::to_string),
+                refs: a.list("ref"),
+                governs: a.list("governs"),
+                blocks: a.bool("blocks"),
             };
             outcome_text(project.write(|ctx| ops::decide(ctx, p))?)
         }
@@ -597,10 +777,8 @@ fn call(project: &mut Project, params: &Value) -> Result<String, Failure> {
         // positional would on the CLI, so `ops::note` attaches it to the
         // focus the same way `vivac note "<note>"` does.
         "vivac_note" => {
-            let text = argument(params, "note")
-                .ok_or_else(|| missing("note"))?
-                .to_string();
-            let p = match argument(params, "id") {
+            let text = a.str("note").ok_or_else(|| missing("note"))?.to_string();
+            let p = match a.str("id") {
                 Some(id) => params::Note {
                     node: Some(id.to_string()),
                     note: Some(text),
@@ -616,7 +794,7 @@ fn call(project: &mut Project, params: &Value) -> Result<String, Failure> {
         // of the single word `vivac park "<reason>"` would pass, and
         // `named_or_focus` is what resolves it against the focus.
         "vivac_park" => {
-            let p = match (argument(params, "id"), argument(params, "reason")) {
+            let p = match (a.str("id"), a.str("reason")) {
                 (Some(id), Some(reason)) => params::Park {
                     node: Some(id.to_string()),
                     reason: Some(reason.to_string()),
@@ -636,17 +814,29 @@ fn call(project: &mut Project, params: &Value) -> Result<String, Failure> {
             };
             outcome_text(project.write(|ctx| ops::park(ctx, p))?)
         }
+        "vivac_arm" => {
+            let id = a.str("id").ok_or_else(|| missing("id"))?.to_string();
+            let command = a
+                .str("command")
+                .ok_or_else(|| missing("command"))?
+                .to_string();
+            let p = params::Arm {
+                id,
+                command,
+                dir: a.str("dir").map(str::to_string),
+                off: a.bool("off"),
+                via_mcp: true,
+            };
+            outcome_text(project.write(|ctx| ops::arm(ctx, p))?)
+        }
         "vivac_save" => {
             let p = params::Save {
-                label: argument(params, "label").unwrap_or("").to_string(),
-                next: argument(params, "next").unwrap_or("").to_string(),
+                label: a.str("label").unwrap_or("").to_string(),
+                next: a.str("next").unwrap_or("").to_string(),
             };
             outcome_text(project.write(|ctx| ops::save(ctx, p))?)
         }
-        other => Err(Failure::usage(format!(
-            "no such tool: {other}. This server has: {}",
-            TOOLS.iter().map(|t| t.name).collect::<Vec<_>>().join(", ")
-        ))),
+        other => unreachable!("{other} passed the tool lookup but no arm here handles it"),
     }
 }
 

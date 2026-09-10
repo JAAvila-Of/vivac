@@ -1,4 +1,4 @@
-//! `d336` — a constraint is not an open front.
+//! `d336`/`d414` — a constraint, a pillar and a rule are not open fronts.
 //!
 //! `d336` carried a mechanical acceptance criterion: **one test that fails
 //! today for each of its two changes**, with the rest of the battery green
@@ -8,16 +8,19 @@
 //! It could only be met for one of the two, and finding out why was worth
 //! more than the tests were:
 //!
-//! - **Change one, `is_front()`.** `a_constraint_is_not_an_open_front` fails
-//!   today, as intended, and it is the test that survives here.
+//! - **Change one, `is_front()`.** `a_rule_is_not_an_open_front` fails today,
+//!   as intended, and it is the test that survives here.
 //! - **Change two, the `constraints()` predicate.** No test could fail,
 //!   because the change was unobservable: `constraints()` admits a node when
 //!   it is project-wide **or** when its ancestry meets the focus path, and
 //!   `ancestors()` runs all the way to the root, which sits on every focus
-//!   path there is. In a single-root tree the second clause already admits
-//!   every open constraint, so widening the first one changes nothing
-//!   anybody can see, and the pinning test this file would carry for that
-//!   no-op is not included here.
+//!   path there is. `d414` retires that change outright rather than fixing
+//!   it: gone by type is what §5 of `t411` reads for governance from now on,
+//!   and the pinning test this file used to carry for the no-op --
+//!   `a_task_local_constraint_reaches_every_brief` -- is retired with it.
+//!
+//! `d414` widens what change one excludes: `Pillar` and `Rule` join
+//! `Constraint`, for the same reason `Decision` was excluded to begin with.
 
 mod common;
 use common::Sandbox;
@@ -45,13 +48,13 @@ fn seeded(name: &str) -> Sandbox {
 
 /// A permanent rule is neither worked on nor ever closed, so counting it
 /// among the open fronts answers "what do I have open?" with governance.
-/// `Decision` was excluded for this exact reason; a constraint qualifies for
-/// it just as squarely.
+/// `Decision` was excluded for this exact reason; `Constraint`, `Pillar` and
+/// `Rule` qualify for it just as squarely (`d414`).
 ///
 /// Six of them go unnoticed. Forty-seven would make half the view be
 /// governance, which is `f334`.
 #[test]
-fn a_constraint_is_not_an_open_front() {
+fn a_constraint_a_pillar_and_a_rule_are_not_open_fronts() {
     let c = seeded("front");
     c.ok(&[
         "add",
@@ -63,13 +66,39 @@ fn a_constraint_is_not_an_open_front() {
         "--why",
         "company policy",
     ]);
+    c.ok(&[
+        "add",
+        "Security",
+        "--parent",
+        "1",
+        "--type",
+        "pillar",
+        "--why",
+        "the arbiter for this tree",
+    ]);
+    c.ok(&[
+        "add",
+        "Never store a secret",
+        "--parent",
+        "3",
+        "--type",
+        "rule",
+        "--why",
+        "what the pillar arbitrates",
+    ]);
 
     let out = c.ok(&["open"]);
 
-    assert!(
-        !out.contains("No dependencies under a copyleft licence"),
-        "a constraint is governance, not a front, and `open` still lists it:\n{out}"
-    );
+    for title in [
+        "No dependencies under a copyleft licence",
+        "Security",
+        "Never store a secret",
+    ] {
+        assert!(
+            !out.contains(title),
+            "a {title} is governance, not a front, and `open` still lists it:\n{out}"
+        );
+    }
     assert!(
         out.contains("Pick a token store"),
         "the real front disappeared, which is a different bug:\n{out}"

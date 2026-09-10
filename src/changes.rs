@@ -77,6 +77,8 @@ pub struct Tail {
     pub notes: usize,
     pub flags_cleared: usize,
     pub edges: usize,
+    /// A rule armed or disarmed: `arm.added` or `arm.removed`.
+    pub arms: usize,
     /// Stops inside the stretch. Not printed in the tail: it goes in the
     /// header, where it says how far back the boundary is, which is the one
     /// place the number means something.
@@ -160,6 +162,10 @@ pub fn collect<'a>(tree: &'a Tree, log: &[Event], since_seq: u64) -> Changed<'a>
                     None => result.tail.unreadable += 1,
                 }
             }
+            Body::ArmAdded { node, .. } | Body::ArmRemoved { node, .. } => match tree.node(node) {
+                Some(_) => result.tail.arms += 1,
+                None => result.tail.unreadable += 1,
+            },
             // Not naming a node: nothing to check against the tree.
             Body::VivacCreated { .. } => result.tail.stops += 1,
         }
@@ -304,6 +310,9 @@ pub(crate) fn tail_phrase(tail: &Tail) -> Option<String> {
     if tail.edges > 0 {
         parts.push(format!("{} edge change{}", tail.edges, plural(tail.edges)));
     }
+    if tail.arms > 0 {
+        parts.push(format!("{} arm change{}", tail.arms, plural(tail.arms)));
+    }
     if tail.unreadable > 0 {
         parts.push(format!(
             "{} unreadable event{}",
@@ -443,6 +452,7 @@ fn as_json(tree: &Tree, result: &Changed) -> serde_json::Value {
             "notes": result.tail.notes,
             "flags_cleared": result.tail.flags_cleared,
             "edge_changes": result.tail.edges,
+            "arm_changes": result.tail.arms,
             "unreadable": result.tail.unreadable,
         },
     })
@@ -478,6 +488,7 @@ mod tests {
                 blocks: false,
                 refs: vec![],
                 governs: vec![],
+                arms: vec![],
             },
         )
     }

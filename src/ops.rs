@@ -13,13 +13,14 @@
 //! keeping?" was called zero times, under a protocol declared mandatory.
 
 use crate::anchor::{self, Anchor};
-use crate::event::{Body, Event, Flag, Kind, State, VivacKind};
+use crate::event::{Arm, Body, Event, Flag, Kind, State, VivacKind};
 use crate::failure::{Failure, R};
 use crate::model::{fold, Node, Tree};
 use crate::outcome::{self, Outcome};
 use crate::params;
 use crate::store::Store;
 use crate::{id, redact};
+use std::path::Path;
 
 pub struct Ctx {
     pub store: Store,
@@ -161,6 +162,150 @@ fn kind_of(raw: Option<&str>, fallback: Kind) -> Result<Kind, Failure> {
     }
 }
 
+/// The same guard `note` is held to: one line, not empty. `d415`.
+fn validate_arm_text(s: &str) -> Result<(), Failure> {
+    if s.trim().is_empty() {
+        return Err(Failure::usage("An arm cannot be empty."));
+    }
+    if s.contains('\n') {
+        return Err(Failure::usage(
+            "An arm is one line: write it the way it would be typed.",
+        ));
+    }
+    Ok(())
+}
+
+/// Is this slashed-and-unnormalized folder absolute? Checked on every
+/// system regardless of which one is running, per `d441`: the log travels,
+/// and a path only Windows would call absolute still carries this machine's
+/// layout once it lands somewhere else.
+fn is_absolute_arm_dir(slashed: &str) -> bool {
+    if slashed.starts_with('/') || slashed.starts_with('~') {
+        return true;
+    }
+    let mut chars = slashed.chars();
+    matches!(
+        (chars.next(), chars.next()),
+        (Some(letter), Some(':')) if letter.is_ascii_alphabetic()
+    )
+}
+
+/// `./vivac/` -> `vivac`; `vivac\src` (already slashed to `vivac/src`) stays
+/// `vivac/src`; `.`, `./` or `.\` (slashed to `./`) -> `.`. `d441`.
+fn normalize_arm_dir(slashed: &str) -> String {
+    let parts: Vec<&str> = slashed
+        .split('/')
+        .filter(|c| !c.is_empty() && *c != ".")
+        .collect();
+    if parts.is_empty() {
+        ".".to_string()
+    } else {
+        parts.join("/")
+    }
+}
+
+/// Checks 3 through 6 of `d441`'s six, shared by `--arm-dir` (`add`, `push`)
+/// and `--dir` (`arm`): once a folder is known to have been given at all --
+/// check 1 or 2, which differ in wording by caller -- absolute, `..`,
+/// redaction and existence are the same check regardless of which flag
+/// named it.
+fn validate_arm_dir(raw: &str, tree_root: &Path) -> Result<String, Failure> {
+    let slashed = raw.replace('\\', "/");
+    if is_absolute_arm_dir(&slashed) {
+        return Err(Failure::usage(
+            "An arm's folder is relative to the one that holds .vivac: an \
+             absolute path would write this machine's layout into the log.",
+        ));
+    }
+    if slashed.split('/').any(|c| c == "..") {
+        return Err(Failure::usage(
+            "An arm's folder has to be inside the one that holds .vivac.",
+        ));
+    }
+    let normalized = normalize_arm_dir(&slashed);
+    guard_text(&[("dir", &normalized)])?;
+    if !tree_root.join(&normalized).is_dir() {
+        return Err(Failure::usage(format!(
+            "There is no folder {normalized} inside the one that holds .vivac."
+        )));
+    }
+    Ok(normalized)
+}
+
+/// The wording of the missing-folder and folder-without-arm messages, in the
+/// two vocabularies a flag can be named in: the CLI's own `--flag`, and
+/// MCP's bare argument name. §21: "the same texts, with `arm_dir` in place
+/// of `--arm-dir`, `dir` in place of `--dir` and `arm` in place of `--arm`."
+fn needs_arm_dir_message(via_mcp: bool) -> String {
+    let flag = if via_mcp { "arm_dir" } else { "--arm-dir" };
+    format!(
+        "An arm needs {flag}: the folder it runs in, relative to the one \
+         that holds .vivac. Use . for that folder itself."
+    )
+}
+
+fn arm_dir_without_arm_message(via_mcp: bool) -> String {
+    let (dir_flag, arm_flag) = if via_mcp {
+        ("arm_dir", "arm")
+    } else {
+        ("--arm-dir", "--arm")
+    };
+    format!("{dir_flag} says where an arm runs, and no {arm_flag} was given.")
+}
+
+fn needs_dir_message(via_mcp: bool) -> String {
+    let flag = if via_mcp { "dir" } else { "--dir" };
+    format!(
+        "An arm needs {flag}: the folder it runs in, relative to the one \
+         that holds .vivac. Use . for that folder itself."
+    )
+}
+
+/// `--arm`/`--arm-dir`, checked against the type it is born with. `d415`:
+/// only a rule may carry one, and it may carry none -- a rule with no arm is
+/// judged. `d441`: whenever one or more `--arm` are given, `--arm-dir` is
+/// mandatory and names the one folder every arm in this call runs in.
+/// `via_mcp` only ever changes which vocabulary the missing-folder messages
+/// use, never the check itself.
+fn arms_of(
+    ctx: &Ctx,
+    raw: Vec<String>,
+    dir: Option<String>,
+    kind: Kind,
+    via_mcp: bool,
+) -> Result<Vec<Arm>, Failure> {
+    if !raw.is_empty() && kind != Kind::Rule {
+        return Err(Failure::usage(format!(
+            "Only a rule has an arm; this would be {}.",
+            kind.with_article()
+        )));
+    }
+    if raw.is_empty() {
+        if dir.is_some() {
+            return Err(Failure::usage(arm_dir_without_arm_message(via_mcp)));
+        }
+        return Ok(vec![]);
+    }
+    let dir = match dir {
+        Some(d) if !d.trim().is_empty() => d,
+        _ => return Err(Failure::usage(needs_arm_dir_message(via_mcp))),
+    };
+    let normalized = validate_arm_dir(&dir, &ctx.store.root)?;
+    for (i, a) in raw.iter().enumerate() {
+        validate_arm_text(a)?;
+        if raw[..i].contains(a) {
+            return Err(Failure::usage(format!("The same arm is given twice: {a}")));
+        }
+    }
+    Ok(raw
+        .into_iter()
+        .map(|command| Arm {
+            dir: normalized.clone(),
+            command,
+        })
+        .collect())
+}
+
 /// What it takes to create a node, named rather than positional.
 ///
 /// `title` and `why` stay borrowed rather than owned: every caller still
@@ -176,6 +321,7 @@ struct Born<'a> {
     refs: Vec<String>,
     governs: Vec<String>,
     blocks: bool,
+    arms: Vec<Arm>,
 }
 
 /// Creates a node. Returns the event and the alias number assigned.
@@ -188,6 +334,7 @@ fn born(ctx: &Ctx, b: Born) -> Result<(Body, u64, String), Failure> {
     let mut fields: Vec<(&str, &str)> = vec![("title", b.title), ("why", b.why)];
     fields.extend(b.refs.iter().map(|r| ("ref", r.as_str())));
     fields.extend(b.governs.iter().map(|g| ("governs", g.as_str())));
+    fields.extend(b.arms.iter().map(|a| ("arm", a.command.as_str())));
     guard_text(&fields)?;
 
     let node = id::ulid();
@@ -203,6 +350,7 @@ fn born(ctx: &Ctx, b: Born) -> Result<(Body, u64, String), Failure> {
             blocks: b.blocks,
             refs: b.refs,
             governs: b.governs,
+            arms: b.arms,
         },
         num,
         node,
@@ -221,6 +369,7 @@ pub fn push(ctx: &mut Ctx, p: params::Push) -> Result<Outcome, Failure> {
             Kind::Task
         },
     )?;
+    let arms = arms_of(ctx, p.arms, p.arm_dir, kind, p.via_mcp)?;
     let (ev, num, node) = born(
         ctx,
         Born {
@@ -231,6 +380,7 @@ pub fn push(ctx: &mut Ctx, p: params::Push) -> Result<Outcome, Failure> {
             refs: p.refs,
             governs: p.governs,
             blocks: p.blocks,
+            arms,
         },
     )?;
     // The vivac goes **before** the push: it freezes the stack at the moment
@@ -461,6 +611,7 @@ pub fn add(ctx: &mut Ctx, p: params::Add) -> Result<Outcome, Failure> {
             Kind::Task
         },
     )?;
+    let arms = arms_of(ctx, p.arms, p.arm_dir, kind, p.via_mcp)?;
     let (ev, num, _) = born(
         ctx,
         Born {
@@ -471,6 +622,7 @@ pub fn add(ctx: &mut Ctx, p: params::Add) -> Result<Outcome, Failure> {
             refs: p.refs,
             governs: p.governs,
             blocks: p.blocks,
+            arms,
         },
     )?;
     ctx.emit(vec![ev])?;
@@ -795,6 +947,71 @@ pub fn flag(ctx: &mut Ctx, p: params::Flag) -> Result<Outcome, Failure> {
     })
 }
 
+/// `arm <id> "<command>" [--off]` — record or remove what verifies a rule.
+///
+/// Vivac never runs it: `d415`. Shaped like `flag`, and like `flag` it
+/// arms or disarms a closed node. Where it parts from `flag` is the
+/// repeat: a flag folds into a set, so raising it twice changes nothing,
+/// but arms fold into a list, so a repeated arm would show twice and the
+/// removal of an absent one would write a line that changes no answer.
+/// Both are refused before anything is written.
+pub fn arm(ctx: &mut Ctx, p: params::Arm) -> Result<Outcome, Failure> {
+    let n = ctx.resolve(&p.id)?.clone();
+    if n.kind != Kind::Rule {
+        return Err(Failure::usage(format!(
+            "Only a rule has an arm; {} is {}.",
+            n.alias(),
+            n.kind.with_article()
+        )));
+    }
+    let dir = match &p.dir {
+        Some(d) if !d.trim().is_empty() => d.clone(),
+        _ => return Err(Failure::usage(needs_dir_message(p.via_mcp))),
+    };
+    let dir = validate_arm_dir(&dir, &ctx.store.root)?;
+    validate_arm_text(&p.command)?;
+    let has = n
+        .arms(&ctx.tree)
+        .contains(&(dir.as_str(), p.command.as_str()));
+    if p.off && !has {
+        return Err(Failure::usage(format!(
+            "{0} has no such arm; vivac why {0} lists the ones it has.",
+            n.alias()
+        )));
+    }
+    if !p.off && has {
+        return Err(Failure::usage(format!(
+            "{} already has that arm.",
+            n.alias()
+        )));
+    }
+    guard_text(&[("arm", &p.command)])?;
+    let body = if p.off {
+        Body::ArmRemoved {
+            node: n.id.clone(),
+            dir: dir.clone(),
+            command: p.command.clone(),
+        }
+    } else {
+        Body::ArmAdded {
+            node: n.id.clone(),
+            dir: dir.clone(),
+            command: p.command.clone(),
+        }
+    };
+    ctx.emit(vec![body])?;
+    Ok(Outcome::Armed {
+        alias: n.alias(),
+        dir,
+        arm: p.command,
+        change: if p.off {
+            outcome::ArmChange::Removed
+        } else {
+            outcome::ArmChange::Added
+        },
+    })
+}
+
 /// `decide` — record a decision.
 ///
 /// The discarded alternatives are optional in the schema and mandatory in
@@ -824,6 +1041,7 @@ pub fn decide(ctx: &mut Ctx, p: params::Decide) -> Result<Outcome, Failure> {
             refs: p.refs,
             governs: p.governs,
             blocks: p.blocks,
+            arms: vec![],
         },
     )?;
 
