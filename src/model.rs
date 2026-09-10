@@ -23,6 +23,13 @@ pub struct Span {
     pub len: u32,
 }
 
+/// Resolves a span against an arena passed in directly, rather than through
+/// `Tree::text`, which takes the whole `Tree` and so cannot be called while
+/// another field of it is mutably borrowed.
+fn span_text(arena: &str, s: Span) -> &str {
+    &arena[s.start as usize..(s.start + s.len) as usize]
+}
+
 /// One note and when it was written. A note is the only thing a node can
 /// receive after it is born, so the log keeps every one of them; this is
 /// what the projection used to throw away (`f389`, `d390`).
@@ -30,6 +37,14 @@ pub struct Span {
 pub struct Note {
     pub at: Span,
     pub text: Span,
+}
+
+/// A rule's arm, resolved to spans into `Tree`'s own text arena: the folder
+/// it runs in and the command itself. `d441`.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ArmSpan {
+    pub dir: Span,
+    pub command: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -70,6 +85,11 @@ pub struct Node {
     /// Flag -> reason. Orthogonal to state: a node can be `active` and
     /// `suspect` at the same time.
     pub flags: BTreeMap<Flag, Span>,
+    /// A rule's arms, oldest first: the commands or tests that verify it,
+    /// each with the folder it runs in (`d441`). Vivac never runs one, only
+    /// stores and hands it back. Empty for a rule with none -- which means
+    /// it is judged -- and for every kind that is not a rule. `d415`.
+    pub arms: Vec<ArmSpan>,
 }
 
 impl Node {
@@ -112,6 +132,14 @@ impl Node {
     pub fn governs<'t>(&self, tree: &'t Tree) -> Vec<&'t str> {
         tree.text_list(self.governs)
     }
+    /// A rule's arms, resolved to text, oldest first: the folder and the
+    /// command of each one, in that order. `d441`.
+    pub fn arms<'t>(&self, tree: &'t Tree) -> Vec<(&'t str, &'t str)> {
+        self.arms
+            .iter()
+            .map(|a| (tree.text(a.dir), tree.text(a.command)))
+            .collect()
+    }
 }
 
 /// A safe stop. Immutable: there is no event that modifies one.
@@ -151,12 +179,16 @@ impl Node {
     /// Listing it beside pending work fills the brief with things not to do,
     /// which is exactly the opposite of what it exists for.
     ///
-    /// `Constraint` is excluded for the same reason (`d336`): a standing
-    /// rule is not worked and does not close on its own either -- the
-    /// brief's INVARIANTS is where it is read, not the list of what is left
-    /// to do.
+    /// `Constraint`, `Pillar` and `Rule` are excluded for the same reason
+    /// (`d414`, which keeps the first change of `d336` and widens it): a
+    /// standing rule is not executed and does not close on its own either --
+    /// `rules` is where it is read, not the list of what is left to do.
     pub fn is_front(&self) -> bool {
-        self.state.is_open() && !matches!(self.kind, Kind::Decision | Kind::Constraint)
+        self.state.is_open()
+            && !matches!(
+                self.kind,
+                Kind::Decision | Kind::Constraint | Kind::Pillar | Kind::Rule
+            )
     }
 }
 
@@ -311,6 +343,7 @@ impl Tree {
                 blocks,
                 refs,
                 governs,
+                arms,
             } => {
                 if self.ulid_index.contains_key(node) {
                     // Repeated creation: commutative, the first one wins.
@@ -337,6 +370,13 @@ impl Tree {
                 let why_span = self.intern(why);
                 let refs_span = self.intern_list(refs);
                 let governs_span = self.intern_list(governs);
+                let arm_spans: Vec<ArmSpan> = arms
+                    .iter()
+                    .map(|a| ArmSpan {
+                        dir: self.intern(&a.dir),
+                        command: self.intern(&a.command),
+                    })
+                    .collect();
                 let opened_span = self.intern(crate::clock::date_of(ts));
                 let parent_num = parent.as_deref().map(|p| self.resolve_pending(p));
                 self.nodes.insert(
@@ -358,6 +398,7 @@ impl Tree {
                         closed: None,
                         forced_close: false,
                         flags: BTreeMap::new(),
+                        arms: arm_spans,
                     },
                 );
                 self.ulid_index.insert(node.clone(), *num);
@@ -436,6 +477,33 @@ impl Tree {
                 let num = self.resolve_ulid(node);
                 if let Some(n) = self.nodes.get_mut(&num) {
                     n.flags.remove(flag);
+                }
+            }
+            Body::ArmAdded { node, dir, command } => {
+                let span = ArmSpan {
+                    dir: self.intern(dir),
+                    command: self.intern(command),
+                };
+                let num = self.resolve_ulid(node);
+                if let Some(n) = self.nodes.get_mut(&num) {
+                    n.arms.push(span);
+                }
+            }
+            Body::ArmRemoved { node, dir, command } => {
+                let num = self.resolve_ulid(node);
+                if let Some(n) = self.nodes.get_mut(&num) {
+                    // The first arm whose pair matches, not the spans: two
+                    // arms with the same text intern to two different spans,
+                    // and what `arm --off` names is the pair, not which copy.
+                    // `self.text` is read as a field, not through `Tree::text`
+                    // -- that method takes the whole `self`, which the
+                    // mutable borrow of `self.nodes` through `n` rules out.
+                    if let Some(pos) = n.arms.iter().position(|a| {
+                        span_text(&self.text, a.dir) == dir.as_str()
+                            && span_text(&self.text, a.command) == command.as_str()
+                    }) {
+                        n.arms.remove(pos);
+                    }
                 }
             }
             Body::VivacCreated {
@@ -1014,6 +1082,7 @@ mod tests {
                 blocks: false,
                 refs: vec![],
                 governs: vec![],
+                arms: vec![],
             },
         }
     }
@@ -1035,6 +1104,7 @@ mod tests {
                 blocks: false,
                 refs: vec![],
                 governs: vec![],
+                arms: vec![],
             },
         }
     }
@@ -1165,6 +1235,7 @@ mod tests {
                 blocks: false,
                 refs: vec![],
                 governs: vec![],
+                arms: vec![],
             },
         }
     }
@@ -1253,6 +1324,7 @@ mod tests {
                 blocks: true,
                 refs: vec![],
                 governs: vec![],
+                arms: vec![],
             },
         }
     }

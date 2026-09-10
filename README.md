@@ -90,6 +90,32 @@ vivac park 2 "waiting on the corpus run"
 the decision it replaces, so a reversal reads from either end. `block` marks a
 node as something its parent cannot close over, and `--off` takes it back.
 
+The tree also holds what governs the project. A `pillar` is an arbiter, and
+its title says so: its name and what it restricts, in the project's own
+words. vivac keeps no list of kinds of pillar: what governs a project is
+found by reasoning about that project, and a menu would decide it first. A
+`rule` hangs under the pillar it answers to, or under the root when no pillar
+owns it, which is also where a rule about how the pillars weigh against each
+other goes. A rule can carry the command that verifies it, at birth with
+`--arm` or later with `vivac arm`; a rule with none is one somebody has to
+judge. vivac never runs an arm: it hands it to whoever is doing the checking,
+through `vivac rules` or the same read over MCP.
+
+```sh
+vivac add "Security: vetoes on the spot" --type pillar --why "the tree maps where a system is weak"
+vivac add "Never store a secret" --parent 7 --type rule --arm "cargo test redact" --why "a leak cannot be taken back"
+```
+
+Rules a project already keeps in files are a different matter. vivac never
+reads `CLAUDE.md`, `AGENTS.md` or any memory file, and it does not guess which
+of their sentences are rules, because telling a rule from the prose around it
+takes judgment. Bringing them in is the agent's job, with a person deciding: the
+agent proposes which lines are pillars, which are rules and which are neither,
+the person rules on it, and the agent writes them with `vivac add`. A tree with
+no pillar and no rule says so when it is asked for its rules. And keep the file
+as it is afterwards, for now: `vivac rules` is read on demand, not handed to the
+agent when a session opens, so the file is still what delivers them unasked.
+
 **The maintainer reads.**
 
 ```sh
@@ -100,6 +126,7 @@ vivac open          what is waiting on you, and what has been sitting
 vivac find cache    every node whose text holds all the words, best first
 vivac stack         the focus stack
 vivac parked        DO NOT TOUCH NOW
+vivac rules         the pillars, rules and invariants that govern this project
 vivac triage        what can be pruned, and with which command
 vivac reconcile     files that changed with nothing in the tree claiming them
 vivac changes       what a stretch of work opened, closed and marked

@@ -11,6 +11,7 @@ active
 actor
 add
 added
+additions
 addr
 adds
 admit
@@ -19,6 +20,7 @@ advice
 after
 ag
 again
+against
 age
 ages
 aggregates
@@ -58,14 +60,18 @@ append
 appends
 apply
 are
+arena
 arg
 args
 argument
 arguments
 argv
 arm
+armed
+arms
 array
 arrives
+article
 as
 ascii
 ask
@@ -74,6 +80,7 @@ asker
 asks
 assemble
 assert
+assertions
 assign
 assumption
 at
@@ -89,6 +96,7 @@ back
 backdate
 backslash
 backwards
+bad
 bare
 baskets
 be
@@ -107,6 +115,8 @@ bin
 binary
 bind
 binding
+birth
+births
 blank
 blessed
 block
@@ -140,6 +150,7 @@ btree
 budget
 buf
 build
+built
 but
 by
 bytes
@@ -189,6 +200,7 @@ claimed
 claims
 clamp
 class
+claude
 clean
 cleanup
 clear
@@ -207,6 +219,7 @@ cls
 cmd
 cmp
 code
+code2
 collect
 collections
 colour
@@ -218,8 +231,10 @@ comment
 commit
 common
 compaction
+component
 condition
 config
+confirms
 connect
 const
 constant
@@ -237,6 +252,7 @@ cookie
 copied
 copy
 corner
+correctly
 corrupt
 cors
 count
@@ -274,6 +290,7 @@ decide
 decided
 decision
 decisions
+declared
 declares
 decoded
 dedup
@@ -311,10 +328,13 @@ disclosure
 dispatch
 display
 div
+documented
 doe
 does
 domain
 done
+dot
+dotdot
 down
 downwards
 doy
@@ -326,13 +346,13 @@ drop
 drops
 dump
 duration
+dx
 dyn
 each
 earn
 echoes
 edges
 edit
-eleven
 else
 email
 emit
@@ -377,8 +397,10 @@ exactly
 exclusive
 excuse
 exist
+existing
 exists
 exit
+exits
 expand
 expect
 expected
@@ -409,6 +431,7 @@ fill
 filter
 find
 finding
+finds
 fingerprint
 first
 fit
@@ -427,6 +450,8 @@ focus
 focused
 fold
 folded
+folder
+folders
 folding
 folds
 footer
@@ -446,6 +471,7 @@ front
 fronts
 fs
 full
+gains
 garbage
 gate
 gates
@@ -465,6 +491,8 @@ goes
 going
 good
 got
+govern
+governed
 governing
 governs
 group
@@ -505,6 +533,8 @@ hexdigit
 hidden
 hides
 hiding
+hint
+hints
 hit
 hits
 hold
@@ -539,6 +569,7 @@ in
 include
 includes
 incoming
+indefinite
 indent
 index
 indexed
@@ -559,6 +590,7 @@ intent
 intern
 into
 invalid
+invariant
 invariants
 invents
 io
@@ -575,6 +607,7 @@ jar
 join
 js
 json
+judged
 just
 jwt
 keep
@@ -668,6 +701,7 @@ matter
 max
 may
 mcp
+md
 me
 means
 measured
@@ -681,6 +715,7 @@ mid
 middle
 millis
 min
+minus
 missing
 mod
 model
@@ -721,6 +756,7 @@ nodes
 non
 none
 nonexistent
+normalize
 normalized
 not
 note
@@ -740,6 +776,7 @@ observe
 of
 off
 offenders
+offer
 offered
 offering
 offers
@@ -769,13 +806,16 @@ or
 ord
 order
 ordering
+orders
 origin
+orphan
 orphaned
 orphans
 os
 other
 others
 out
+out2
 outcome
 outln
 output
@@ -798,6 +838,7 @@ pages
 pair
 pairs
 panic
+panics
 paragraph
 params
 parent
@@ -830,6 +871,8 @@ picked
 picks
 pii
 pile
+pillar
+pillars
 piped
 place
 placed
@@ -839,6 +882,7 @@ plants
 plural
 pluralised
 plus
+points
 pop
 popped
 populated
@@ -847,6 +891,7 @@ pos
 position
 positional
 positionals
+power
 precision
 prefix
 prefixes
@@ -867,6 +912,7 @@ promote
 promoted
 promoting
 properties
+property
 prose
 protocol
 prune
@@ -896,6 +942,7 @@ reaches
 reaching
 read
 reader
+reading
 readme
 reads
 real
@@ -918,6 +965,7 @@ refusals
 refuse
 refused
 refuses
+regardless
 regenerated
 registering
 registers
@@ -929,8 +977,10 @@ relaxed
 rem
 remaining
 remembers
+removals
 remove
 removed
+removing
 rename
 render
 reopen
@@ -940,6 +990,7 @@ replace
 replaced
 reply
 reported
+reports
 request
 requested
 required
@@ -999,6 +1050,7 @@ saved
 says
 sb
 schema
+schemas
 scheme
 scope
 script
@@ -1027,6 +1079,7 @@ seq
 sequence
 serde
 serialize
+serializing
 serve
 served
 server
@@ -1044,6 +1097,7 @@ share
 shared
 shell
 short
+should
 show
 shown
 shows
@@ -1064,6 +1118,7 @@ size
 skip
 skips
 slash
+slashed
 slashes
 sleep
 slice
@@ -1172,6 +1227,7 @@ them
 then
 there
 they
+thirteen
 this
 thread
 three
@@ -1242,6 +1298,7 @@ ulids
 unambiguous
 unchanged
 unclaimed
+undeclared
 under
 unfold
 unique
@@ -1268,10 +1325,12 @@ use
 used
 user
 userprofile
+using
 usize
 utf8
 val
 valid
+validate
 value
 values
 vanished
@@ -1285,6 +1344,7 @@ verdict
 verdicts
 version
 via
+view
 visible
 vivac
 vivacs
@@ -1304,6 +1364,7 @@ weight
 what
 when
 where
+wherever
 which
 while
 whitespace

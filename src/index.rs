@@ -48,7 +48,7 @@
 
 use crate::anchor::AnchorRef;
 use crate::event::{Event, Flag, Kind, State, VivacKind};
-use crate::model::{fold, Node, Note, RawParts, Span, Tree, Vivac};
+use crate::model::{fold, ArmSpan, Node, Note, RawParts, Span, Tree, Vivac};
 use crate::store::Store;
 use std::collections::BTreeMap;
 use std::fs::{self, File};
@@ -56,17 +56,22 @@ use std::io::{BufRead, BufReader, Seek, SeekFrom, Write as IoWrite};
 use std::path::Path;
 
 const MAGIC: u64 = u64::from_le_bytes(*b"vivacIDX");
-// `d390`: a node's notes went from one `Span` to a table of them, the same
-// shape change `flags` already went through. `Header::parse` refuses any
-// version but this one and `try_load_index` falls back to folding the log,
-// which is the sede -- so bumping this needs no migration and no command.
-const FORMAT_VERSION: u32 = 2;
+// `t411`/`d441`: a rule's `arms` is a new field on `Node`, and each arm is a
+// pair of spans rather than one. `Header::parse` refuses any version but
+// this one and `try_load_index` falls back to folding the log, which is
+// what the index is derived from -- so bumping this needs no migration and
+// no command.
+const FORMAT_VERSION: u32 = 4;
 const ULID_LEN: usize = 26;
 const SPAN_LEN: usize = 8;
 const FLAG_RECORD_LEN: usize = 1 + SPAN_LEN;
 /// A note's own moment and text, mirroring `FLAG_RECORD_LEN`'s shape: no tag
 /// byte, since a note carries no enum the way a flag carries its kind.
 const NOTE_RECORD_LEN: usize = SPAN_LEN * 2;
+/// An arm is two spans into the text arena -- the folder it runs in and the
+/// command itself (`d441`) -- so the flat arms table is shaped like the
+/// notes table above it, one record per arm.
+const ARM_RECORD_LEN: usize = SPAN_LEN * 2;
 const NODE_RECORD_LEN: usize = ULID_LEN
     + 8
     + 1
@@ -79,6 +84,8 @@ const NODE_RECORD_LEN: usize = ULID_LEN
     + SPAN_LEN
     + SPAN_LEN
     + SPAN_LEN
+    + 4
+    + 4
     + 4
     + 4
     + 4
@@ -418,6 +425,7 @@ struct Header {
     spans_count: u64,
     flags_count: u64,
     notes_count: u64,
+    arms_count: u64,
     roots_count: u64,
     stack_count: u64,
     vivac_count: u64,
@@ -425,6 +433,7 @@ struct Header {
     spans_offset: u64,
     flags_offset: u64,
     notes_offset: u64,
+    arms_offset: u64,
     roots_offset: u64,
     stack_offset: u64,
     vivacs_offset: u64,
@@ -465,6 +474,7 @@ impl Header {
             spans_count: c.u64()?,
             flags_count: c.u64()?,
             notes_count: c.u64()?,
+            arms_count: c.u64()?,
             roots_count: c.u64()?,
             stack_count: c.u64()?,
             vivac_count: c.u64()?,
@@ -472,6 +482,7 @@ impl Header {
             spans_offset: c.u64()?,
             flags_offset: c.u64()?,
             notes_offset: c.u64()?,
+            arms_offset: c.u64()?,
             roots_offset: c.u64()?,
             stack_offset: c.u64()?,
             vivacs_offset: c.u64()?,
@@ -505,6 +516,9 @@ impl Header {
             return None;
         }
         if !fits(self.notes_offset, self.notes_count, NOTE_RECORD_LEN as u64)? {
+            return None;
+        }
+        if !fits(self.arms_offset, self.arms_count, ARM_RECORD_LEN as u64)? {
             return None;
         }
         if !fits(self.roots_offset, self.roots_count, 8)? {
@@ -550,6 +564,7 @@ fn write_header(buf: &mut Vec<u8>, h: &Header) {
     write_u64(buf, h.spans_count);
     write_u64(buf, h.flags_count);
     write_u64(buf, h.notes_count);
+    write_u64(buf, h.arms_count);
     write_u64(buf, h.roots_count);
     write_u64(buf, h.stack_count);
     write_u64(buf, h.vivac_count);
@@ -557,6 +572,7 @@ fn write_header(buf: &mut Vec<u8>, h: &Header) {
     write_u64(buf, h.spans_offset);
     write_u64(buf, h.flags_offset);
     write_u64(buf, h.notes_offset);
+    write_u64(buf, h.arms_offset);
     write_u64(buf, h.roots_offset);
     write_u64(buf, h.stack_offset);
     write_u64(buf, h.vivacs_offset);
@@ -589,6 +605,7 @@ fn header_len() -> usize {
         spans_count: 0,
         flags_count: 0,
         notes_count: 0,
+        arms_count: 0,
         roots_count: 0,
         stack_count: 0,
         vivac_count: 0,
@@ -596,6 +613,7 @@ fn header_len() -> usize {
         spans_offset: 0,
         flags_offset: 0,
         notes_offset: 0,
+        arms_offset: 0,
         roots_offset: 0,
         stack_offset: 0,
         vivacs_offset: 0,
@@ -714,6 +732,8 @@ fn kind_to_u8(k: Kind) -> u8 {
         Kind::Constraint => 4,
         Kind::Finding => 5,
         Kind::Assumption => 6,
+        Kind::Pillar => 7,
+        Kind::Rule => 8,
     }
 }
 
@@ -726,6 +746,8 @@ fn u8_to_kind(b: u8) -> Option<Kind> {
         4 => Kind::Constraint,
         5 => Kind::Finding,
         6 => Kind::Assumption,
+        7 => Kind::Pillar,
+        8 => Kind::Rule,
         _ => return None,
     })
 }
@@ -812,6 +834,8 @@ struct NodeRaw {
     flags_count: u32,
     notes_offset: u32,
     notes_count: u32,
+    arms_offset: u32,
+    arms_count: u32,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -822,6 +846,8 @@ fn write_node_record(
     flags_cursor: &mut u32,
     notes_buf: &mut Vec<u8>,
     notes_cursor: &mut u32,
+    arms_buf: &mut Vec<u8>,
+    arms_cursor: &mut u32,
 ) {
     let start = buf.len();
     write_ulid(buf, &n.id);
@@ -865,6 +891,15 @@ fn write_node_record(
     *notes_cursor += notes_count;
     write_u32(buf, notes_offset);
     write_u32(buf, notes_count);
+    let arms_offset = *arms_cursor;
+    for arm in &n.arms {
+        write_span(arms_buf, arm.dir);
+        write_span(arms_buf, arm.command);
+    }
+    let arms_count = n.arms.len() as u32;
+    *arms_cursor += arms_count;
+    write_u32(buf, arms_offset);
+    write_u32(buf, arms_count);
     debug_assert_eq!(buf.len() - start, NODE_RECORD_LEN);
 }
 
@@ -890,6 +925,8 @@ fn read_node_record(c: &mut Cursor) -> Option<NodeRaw> {
     let flags_count = c.u32()?;
     let notes_offset = c.u32()?;
     let notes_count = c.u32()?;
+    let arms_offset = c.u32()?;
+    let arms_count = c.u32()?;
     Some(NodeRaw {
         id,
         num,
@@ -909,6 +946,8 @@ fn read_node_record(c: &mut Cursor) -> Option<NodeRaw> {
         flags_count,
         notes_offset,
         notes_count,
+        arms_offset,
+        arms_count,
     })
 }
 
@@ -916,6 +955,7 @@ fn assemble_nodes(
     raw_nodes: Vec<NodeRaw>,
     flags_table: &[(Flag, Span)],
     notes_table: &[Note],
+    arms_table: &[ArmSpan],
 ) -> Option<Vec<Node>> {
     let mut out = Vec::with_capacity(raw_nodes.len());
     for r in raw_nodes {
@@ -929,6 +969,9 @@ fn assemble_nodes(
         let notes_start = r.notes_offset as usize;
         let notes_end = notes_start.checked_add(r.notes_count as usize)?;
         let notes = notes_table.get(notes_start..notes_end)?.to_vec();
+        let arms_start = r.arms_offset as usize;
+        let arms_end = arms_start.checked_add(r.arms_count as usize)?;
+        let arms = arms_table.get(arms_start..arms_end)?.to_vec();
         out.push(Node {
             id: r.id,
             num: r.num,
@@ -946,6 +989,7 @@ fn assemble_nodes(
             closed: r.closed,
             forced_close: r.forced_close,
             flags,
+            arms,
         });
     }
     Some(out)
@@ -1080,6 +1124,21 @@ fn parse_spans(bytes: &[u8], header: &Header) -> Option<Vec<Span>> {
     Some(out)
 }
 
+/// The flat arms table: two spans per arm -- folder, then command -- in the
+/// same per-node order `write_node_record` wrote them, so
+/// `assemble_nodes`'s `[start..end]` slice lands on the right node's own
+/// arms.
+fn parse_arms(bytes: &[u8], header: &Header) -> Option<Vec<ArmSpan>> {
+    let mut c = Cursor::new(bytes.get(header.arms_offset as usize..)?);
+    let mut out = Vec::with_capacity(header.arms_count as usize);
+    for _ in 0..header.arms_count {
+        let dir = c.span()?;
+        let command = c.span()?;
+        out.push(ArmSpan { dir, command });
+    }
+    Some(out)
+}
+
 fn parse_u64_list(bytes: &[u8], offset: u64, count: u64) -> Option<Vec<u64>> {
     let mut c = Cursor::new(bytes.get(offset as usize..)?);
     let mut out = Vec::with_capacity(count as usize);
@@ -1099,7 +1158,8 @@ fn build_tree(bytes: &[u8], header: &Header) -> Option<Tree> {
     let raw_nodes = parse_nodes(bytes, header)?;
     let flags_table = parse_flags(bytes, header)?;
     let notes_table = parse_notes(bytes, header)?;
-    let nodes = assemble_nodes(raw_nodes, &flags_table, &notes_table)?;
+    let arms_table = parse_arms(bytes, header)?;
+    let nodes = assemble_nodes(raw_nodes, &flags_table, &notes_table, &arms_table)?;
     let spans = parse_spans(bytes, header)?;
     let roots = parse_u64_list(bytes, header.roots_offset, header.roots_count)?;
     let stack = parse_u64_list(bytes, header.stack_offset, header.stack_count)?;
@@ -1138,6 +1198,8 @@ fn encode(
     let mut flags_cursor = 0u32;
     let mut notes_buf = Vec::new();
     let mut notes_cursor = 0u32;
+    let mut arms_buf = Vec::new();
+    let mut arms_cursor = 0u32;
     for n in &nodes {
         write_node_record(
             &mut nodes_buf,
@@ -1146,6 +1208,8 @@ fn encode(
             &mut flags_cursor,
             &mut notes_buf,
             &mut notes_cursor,
+            &mut arms_buf,
+            &mut arms_cursor,
         );
     }
     let mut spans_buf = Vec::new();
@@ -1172,7 +1236,8 @@ fn encode(
     let spans_offset = nodes_offset + nodes_buf.len() as u64;
     let flags_offset = spans_offset + spans_buf.len() as u64;
     let notes_offset = flags_offset + flags_buf.len() as u64;
-    let roots_offset = notes_offset + notes_buf.len() as u64;
+    let arms_offset = notes_offset + notes_buf.len() as u64;
+    let roots_offset = arms_offset + arms_buf.len() as u64;
     let stack_offset = roots_offset + roots_buf.len() as u64;
     let vivacs_offset = stack_offset + stack_buf.len() as u64;
     let text_offset = vivacs_offset + vivacs_buf.len() as u64;
@@ -1209,6 +1274,7 @@ fn encode(
         spans_count: tree.raw_spans().len() as u64,
         flags_count: (flags_buf.len() / FLAG_RECORD_LEN) as u64,
         notes_count: (notes_buf.len() / NOTE_RECORD_LEN) as u64,
+        arms_count: (arms_buf.len() / ARM_RECORD_LEN) as u64,
         roots_count: tree.roots.len() as u64,
         stack_count: tree.stack.len() as u64,
         vivac_count: tree.vivacs.len() as u64,
@@ -1216,6 +1282,7 @@ fn encode(
         spans_offset,
         flags_offset,
         notes_offset,
+        arms_offset,
         roots_offset,
         stack_offset,
         vivacs_offset,
@@ -1231,6 +1298,7 @@ fn encode(
     out.extend_from_slice(&spans_buf);
     out.extend_from_slice(&flags_buf);
     out.extend_from_slice(&notes_buf);
+    out.extend_from_slice(&arms_buf);
     out.extend_from_slice(&roots_buf);
     out.extend_from_slice(&stack_buf);
     out.extend_from_slice(&vivacs_buf);
@@ -1287,6 +1355,42 @@ mod tests {
                 blocks: false,
                 refs,
                 governs,
+                arms: vec![],
+            },
+        }
+    }
+
+    /// Like `created`, with a rule's arms: the fixture
+    /// `a_rule_round_trips_its_arms_through_the_index` needs, since
+    /// `created` above stays the minimal shape every other fixture wants.
+    /// `d441`: each arm is a folder and a command, not a bare string.
+    #[allow(clippy::too_many_arguments)]
+    fn created_with_arms(
+        seq: u64,
+        ulid: &str,
+        num: u64,
+        kind: Kind,
+        parent: Option<&str>,
+        title: &str,
+        arms: Vec<crate::event::Arm>,
+    ) -> Event {
+        Event {
+            seq,
+            id: fixed_id(seq as u32),
+            ts: "2026-09-05T10:00:00Z".to_string(),
+            actor: "a_test".to_string(),
+            lane: "main".to_string(),
+            payload: Body::NodeCreated {
+                node: ulid.to_string(),
+                num,
+                kind,
+                title: title.to_string(),
+                why: "because it is needed".to_string(),
+                parent: parent.map(str::to_string),
+                blocks: false,
+                refs: vec![],
+                governs: vec![],
+                arms,
             },
         }
     }
@@ -1393,7 +1497,7 @@ mod tests {
             out.push_str(&format!(
                 "node num={} id={} kind={:?} state={:?} parent={:?} blocks={} forced={} \
                  title={:?} why={:?} note={:?} outcome={:?} opened={:?} closed={:?} \
-                 refs={:?} governs={:?} flags={:?}\n",
+                 refs={:?} governs={:?} flags={:?} arms={:?}\n",
                 n.num,
                 n.id,
                 n.kind,
@@ -1413,6 +1517,7 @@ mod tests {
                     .iter()
                     .map(|(f, s)| (f.word(), tree.text(*s)))
                     .collect::<Vec<_>>(),
+                n.arms(tree),
             ));
         }
         for v in &tree.vivacs {
@@ -1540,6 +1645,56 @@ mod tests {
              reading the encoded bytes back"
         );
         assert_eq!(n.note(&loaded), "second note");
+    }
+
+    /// `t411`: a rule's `arms` is a new field on `Node`, stored the same way
+    /// `d390` proved for notes -- a flat table the node record points into.
+    /// Same direct `encode`/`build_tree` call as the note round trip above,
+    /// and for the same reason: `load`'s fallback to folding the log must
+    /// not be the thing that hides a misplaced field. A pillar carries no
+    /// field of its own (`d436`), so it rides along here only to prove its
+    /// presence changes nothing about the rule beside it.
+    #[test]
+    fn a_pillar_and_a_rule_round_trip_through_the_index_alone() {
+        let pillar_id = fixed_id(1);
+        let rule_id = fixed_id(2);
+        let events = vec![
+            created(
+                1,
+                &pillar_id,
+                1,
+                Kind::Pillar,
+                None,
+                "Security",
+                vec![],
+                vec![],
+            ),
+            created_with_arms(
+                2,
+                &rule_id,
+                2,
+                Kind::Rule,
+                Some(&pillar_id),
+                "Never store a secret",
+                vec![crate::event::Arm {
+                    dir: "vivac".to_string(),
+                    command: "cargo test --bin vivac redact::tests".to_string(),
+                }],
+            ),
+        ];
+        let tree = fold(&events, 0);
+
+        let bytes = encode(&tree, 0, 0, 0, None);
+        let header = Header::parse(&bytes).expect("the header this test just wrote parses");
+        let loaded = build_tree(&bytes, &header).expect("the body this test just wrote parses");
+
+        let pillar = loaded.node(&pillar_id).expect("the pillar is in the index");
+        assert_eq!(pillar.arms(&loaded), Vec::<(&str, &str)>::new());
+        let rule = loaded.node(&rule_id).expect("the rule is in the index");
+        assert_eq!(
+            rule.arms(&loaded),
+            vec![("vivac", "cargo test --bin vivac redact::tests")]
+        );
     }
 
     /// Rewrites just the header of an already-persisted index, keeping the

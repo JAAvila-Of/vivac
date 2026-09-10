@@ -59,7 +59,7 @@ fn label(a: &Tree, n: &Node) -> String {
 
 fn json_node(a: &Tree, ag: &Aggregates, n: &Node) -> serde_json::Value {
     let r = ag.counts(n.num);
-    json!({
+    let mut v = json!({
         "id": n.id,
         "alias": n.alias(),
         "num": n.num,
@@ -82,7 +82,19 @@ fn json_node(a: &Tree, ag: &Aggregates, n: &Node) -> serde_json::Value {
         "false_close": n.state == State::Done && ag.blockers(n.num) > 0,
         "open_below": r.open_count,
         "total_below": r.total,
-    })
+    });
+    // `t411`: a rule gains `arms`, and no other kind gains anything -- the
+    // JSON of every other kind stays byte for byte what it already was.
+    // `arms` is **always** present on a rule, empty or not, so a reader can
+    // tell "judged" apart from "not a rule" without a second lookup.
+    if n.kind == Kind::Rule {
+        v["arms"] = json!(n
+            .arms(a)
+            .into_iter()
+            .map(|(dir, command)| json!({"dir": dir, "command": command}))
+            .collect::<Vec<_>>());
+    }
+    v
 }
 
 pub(crate) fn print_json(v: serde_json::Value) -> R {
@@ -378,6 +390,11 @@ pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
             }
         };
         outln!("  {:<6}{}", p.alias(), label(a, p));
+        // `t411` §6: a rule shows its arms, in the same words `rules` prints
+        // them with.
+        if p.kind == Kind::Rule {
+            print_arms(a, p, "        ", true);
+        }
         for l in wrap(&body(p.why(a)), WIDTH, "        ") {
             outln!("{l}");
         }
@@ -648,6 +665,199 @@ pub fn open(a: &Tree, args: &Args) -> R {
         outln!("  + {phrase}   vivac brief");
     }
     outln!();
+    Ok(())
+}
+
+/// The nearest ancestor of kind `Pillar`, climbing one parent at a time and
+/// stopping at the first match. `None` when nothing above `n` is a pillar --
+/// the climb still ends, at the root.
+///
+/// `rules`'s own performance budget (§5): a pass over the nodes plus this
+/// climb for each rule, never a walk of the whole tree per rule.
+fn nearest_pillar<'a>(a: &'a Tree, n: &Node) -> Option<&'a Node> {
+    let mut cur = n.parent;
+    while let Some(p) = cur {
+        let node = a.node_by_num(p)?;
+        if node.kind == Kind::Pillar {
+            return Some(node);
+        }
+        cur = node.parent;
+    }
+    None
+}
+
+/// One pillar with the open rules that answer to it.
+struct PillarSection<'a> {
+    pillar: &'a Node,
+    rules: Vec<&'a Node>,
+}
+
+/// The pull's own shape (`t411` §5): every pillar that still governs --
+/// open, or closed with an open rule still hanging off it -- each with its
+/// own open rules; the open rules that answer to no pillar; and every open
+/// invariant. Built in one pass over the nodes plus the parent climb of
+/// each rule, never a second walk of the tree.
+struct RulesView<'a> {
+    pillars: Vec<PillarSection<'a>>,
+    orphan_rules: Vec<&'a Node>,
+    invariants: Vec<&'a Node>,
+}
+
+fn rules_view(a: &Tree) -> RulesView<'_> {
+    let mut under: HashMap<u64, Vec<&Node>> = HashMap::new();
+    let mut orphan_rules: Vec<&Node> = Vec::new();
+    for n in a.nodes_iter() {
+        if n.kind == Kind::Rule && n.state.is_open() {
+            match nearest_pillar(a, n) {
+                Some(p) => under.entry(p.num).or_default().push(n),
+                None => orphan_rules.push(n),
+            }
+        }
+    }
+    for v in under.values_mut() {
+        v.sort_by_key(|n| n.num);
+    }
+    orphan_rules.sort_by_key(|n| n.num);
+
+    let mut pillars: Vec<PillarSection> = a
+        .nodes_iter()
+        .filter(|n| n.kind == Kind::Pillar)
+        .filter(|n| n.state.is_open() || under.get(&n.num).is_some_and(|v| !v.is_empty()))
+        .map(|n| PillarSection {
+            pillar: n,
+            rules: under.get(&n.num).cloned().unwrap_or_default(),
+        })
+        .collect();
+    pillars.sort_by_key(|s| s.pillar.num);
+
+    let mut invariants: Vec<&Node> = a
+        .nodes_iter()
+        .filter(|n| n.kind == Kind::Constraint && n.state.is_open())
+        .collect();
+    invariants.sort_by_key(|n| n.num);
+
+    RulesView {
+        pillars,
+        orphan_rules,
+        invariants,
+    }
+}
+
+/// `rules --json` and `vivac_rules`'s own payload: the same builder, so the
+/// two can never drift apart.
+pub fn rules_data(a: &Tree) -> serde_json::Value {
+    let ag = &a.aggregates();
+    let view = rules_view(a);
+    json!({
+        "pillars": view.pillars.iter().map(|s| {
+            let mut v = json_node(a, ag, s.pillar);
+            v["rules"] = json!(s.rules.iter().map(|r| json_node(a, ag, r)).collect::<Vec<_>>());
+            v
+        }).collect::<Vec<_>>(),
+        "rules": view.orphan_rules.iter().map(|r| json_node(a, ag, r)).collect::<Vec<_>>(),
+        "invariants": view.invariants.iter().map(|n| json_node(a, ag, n)).collect::<Vec<_>>(),
+    })
+}
+
+/// A rule's own arms, one per line. `indent` is whatever column the rule's
+/// own title started at, so the line under it lines up. `show_judged`
+/// prints `judged: no command verifies it` for a rule with none; `rules`
+/// (`d421`) passes `false`, because there the line only repeats what the
+/// rule's absent `armed:` lines already say by not being there, and `why`
+/// (`t411` §6) passes `true`, because there it is the only line and it does
+/// inform.
+fn print_arms(a: &Tree, r: &Node, indent: &str, show_judged: bool) {
+    let arms = r.arms(a);
+    if arms.is_empty() {
+        if show_judged {
+            outln!("{indent}judged: no command verifies it");
+        }
+    } else {
+        for (dir, command) in arms {
+            outln!("{indent}armed in {dir}/: {command}");
+        }
+    }
+}
+
+/// `d422`: nobody hunting for what governs this project should have to
+/// guess that a second, unread map exists. Printed once, after whichever of
+/// `rules`'s two shapes just ran, and only when there was no open pillar and
+/// no open rule for it to find.
+fn print_second_map_hint() {
+    outln!("  Rules kept in CLAUDE.md, AGENTS.md or a memory file are a second map, and");
+    outln!("  vivac never reads them: bring them in with vivac add --type pillar|rule.");
+}
+
+/// `rules` — the pull: everything that governs this project, read whether
+/// or not the push ever carried it into a brief. `t411` §5.
+pub fn rules(a: &Tree, args: &Args) -> R {
+    if args.has("json") {
+        return print_json(rules_data(a));
+    }
+    let view = rules_view(a);
+    let total_rules: usize =
+        view.pillars.iter().map(|s| s.rules.len()).sum::<usize>() + view.orphan_rules.len();
+    let armed_rules = view
+        .pillars
+        .iter()
+        .flat_map(|s| &s.rules)
+        .chain(&view.orphan_rules)
+        .filter(|r| !r.arms.is_empty())
+        .count();
+    let judged_rules = total_rules - armed_rules;
+    // `d422`: true whenever there is no open pillar and no open rule for
+    // this read to find, whether or not an invariant is still around.
+    let nothing_governs = view.pillars.is_empty() && total_rules == 0;
+
+    if nothing_governs && view.invariants.is_empty() {
+        outln!("  Nothing governs this project yet: no pillars, rules or invariants.");
+        outln!();
+        print_second_map_hint();
+        return Ok(());
+    }
+
+    outln!();
+    if !view.pillars.is_empty() {
+        outln!("  PILLARS");
+        for s in &view.pillars {
+            outln!("  {:<6}{}", s.pillar.alias(), label(a, s.pillar));
+            for r in &s.rules {
+                outln!("    {:<6}{}", r.alias(), r.title(a));
+                print_arms(a, r, "          ", false);
+            }
+        }
+    }
+    if !view.orphan_rules.is_empty() {
+        outln!();
+        outln!("  RULES WITHOUT A PILLAR");
+        for r in &view.orphan_rules {
+            outln!("  {:<6}{}", r.alias(), r.title(a));
+            print_arms(a, r, "        ", false);
+        }
+    }
+    if !view.invariants.is_empty() {
+        outln!();
+        outln!("  INVARIANTS");
+        for n in &view.invariants {
+            outln!("  {:<6}{}", n.alias(), n.title(a));
+        }
+    }
+    outln!();
+    outln!(
+        "  {} pillar{} \u{b7} {} rule{}: {} armed, {} judged \u{b7} {} invariant{}",
+        view.pillars.len(),
+        if view.pillars.len() == 1 { "" } else { "s" },
+        total_rules,
+        if total_rules == 1 { "" } else { "s" },
+        armed_rules,
+        judged_rules,
+        view.invariants.len(),
+        if view.invariants.len() == 1 { "" } else { "s" },
+    );
+    outln!();
+    if nothing_governs {
+        print_second_map_hint();
+    }
     Ok(())
 }
 
