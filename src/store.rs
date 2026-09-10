@@ -13,6 +13,7 @@
 //! when it is trusted, refreshed or thrown away; this module only names
 //! where it lives.
 
+use crate::failure::Failure;
 use crate::{clock, id};
 use serde::{Deserialize, Serialize};
 use std::ffi::OsStr;
@@ -183,25 +184,14 @@ impl Store {
     /// Reads the whole log. An unreadable line **does not abort**: it is
     /// counted and skipped. A half-written log has to stay readable, or the
     /// tool that keeps the thread becomes the one that loses it.
-    pub fn read_all(&self) -> std::io::Result<(Vec<crate::event::Event>, usize)> {
-        let f = match File::open(self.log()) {
-            Ok(f) => f,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((vec![], 0)),
-            Err(e) => return Err(e),
-        };
-        let mut events = Vec::new();
-        let mut broken = 0usize;
-        for line in BufReader::new(f).lines() {
-            let line = line?;
-            if line.trim().is_empty() {
-                continue;
-            }
-            match serde_json::from_str(&line) {
-                Ok(e) => events.push(e),
-                Err(_) => broken += 1,
-            }
-        }
-        Ok((events, broken))
+    ///
+    /// One case refuses instead of skipping: `t411` §13, a line that is
+    /// well-formed JSON but names an event type or a node kind this version
+    /// does not know. That line was written by a newer vivac, and reading
+    /// past it in silence would mean acting on a tree this version cannot
+    /// actually see all of.
+    pub fn read_all(&self) -> Result<(Vec<crate::event::Event>, usize), Failure> {
+        read_all_from(&self.log())
     }
 
     /// Appends events at the end. One line per event, rewriting nothing.
@@ -230,6 +220,58 @@ impl Store {
             .open(self.log())?;
         f.write_all(buf.as_bytes())
     }
+}
+
+/// The read `Store::read_all` runs, taken as a free function of a path
+/// rather than a method: `index.rs`'s own tail read (`read_tracked`) keeps a
+/// separate implementation for its own reasons (`LOADING.md` §4), but when
+/// it hits a line `t411` §13 refuses over, it falls back to a full read from
+/// byte zero rather than reconstructing this file's own line count -- and
+/// that full read is this function, so the two paths report the very same
+/// line number for the very same line.
+pub(crate) fn read_all_from(path: &Path) -> Result<(Vec<crate::event::Event>, usize), Failure> {
+    let f = match File::open(path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((vec![], 0)),
+        Err(e) => return Err(e.into()),
+    };
+    let mut events = Vec::new();
+    let mut broken = 0usize;
+    for (i, line) in BufReader::new(f).lines().enumerate() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        match serde_json::from_str(&line) {
+            Ok(e) => events.push(e),
+            Err(_) => match crate::event::unknown_reason_for(&line) {
+                Some(reason) => return Err(newer_vivac_failure(i + 1, reason)),
+                None => broken += 1,
+            },
+        }
+    }
+    Ok((events, broken))
+}
+
+/// The exact wording of `t411` §13's refusal, for the one line that earned
+/// it. `line_no` is 1-based, matching what a text editor would show.
+pub(crate) fn newer_vivac_failure(line_no: usize, reason: crate::event::UnknownReason) -> Failure {
+    let path = format!("{DIR}/{LOG}");
+    let detail = match reason {
+        crate::event::UnknownReason::EventType(t) => {
+            format!("is an event this version does not know ({t})")
+        }
+        crate::event::UnknownReason::NodeKind(k) => {
+            format!("creates a node of a type this version does not know ({k})")
+        }
+        crate::event::UnknownReason::Shape(t) => {
+            format!("is a {t} event whose fields this version cannot read")
+        }
+    };
+    Failure::newer_vivac(format!(
+        "This tree was written by a newer vivac: line {line_no} of {path} {detail}. \
+         Update vivac to read it. Nothing was written."
+    ))
 }
 
 impl Store {

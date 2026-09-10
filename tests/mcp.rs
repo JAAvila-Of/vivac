@@ -341,6 +341,31 @@ fn why_with_project_returns_what_the_cli_returns() {
     );
 }
 
+/// `t411` §13: a read that reaches into another project's log and finds a
+/// line only a newer vivac could have written comes back as the error, not
+/// a half-built answer.
+#[test]
+fn why_with_project_over_an_unknown_event_returns_the_error_not_a_half_answer() {
+    let a = seeded("mcp-nv-a");
+    let name_a = a.0.file_name().unwrap().to_string_lossy().into_owned();
+    a.append_unknown_event_type();
+    let b = Sandbox::new_seeded_in("mcp-nv-b", a.global_home());
+
+    let mut s = hello(&b);
+    let r = s.ask(&format!(
+        r#"{{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{{"name":"vivac_why","arguments":{{"id":"t2","project":"{name_a}"}}}}}}"#
+    ));
+    assert!(
+        r["error"].is_null(),
+        "it answered at the protocol level: {r}"
+    );
+    assert_eq!(r["result"]["isError"], true, "{r}");
+    assert!(
+        text_of(&r).contains("This tree was written by a newer vivac"),
+        "{r}"
+    );
+}
+
 #[test]
 fn open_lists_the_fronts() {
     let c = seeded("open");

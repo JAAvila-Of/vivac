@@ -124,7 +124,7 @@ const USAGE: &str = r#"vivac - provenance of work
 
   Exit codes
     0 fine   1 the model refuses   2 usage   3 redaction guard   4 no .vivac
-    5 input/output error
+    5 input/output error, or a tree written by a newer vivac
 "#;
 
 /// A root that reached the registry with no identity to be keyed by, kept so
@@ -618,6 +618,7 @@ mod tests {
             Failure::Redaction(Box::new(finding)),
             Failure::NoStore,
             Failure::Io(std::io::Error::other("disk full")),
+            Failure::newer_vivac("this log holds an event this version does not know"),
         ];
         variants
             .into_iter()
@@ -627,6 +628,7 @@ mod tests {
                 Failure::Redaction(_) => f.code(),
                 Failure::NoStore => f.code(),
                 Failure::Io(_) => f.code(),
+                Failure::NewerVivac(_) => f.code(),
             })
             .collect()
     }
