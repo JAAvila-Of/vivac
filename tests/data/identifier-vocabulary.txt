@@ -24,6 +24,7 @@ against
 age
 ages
 aggregates
+agree
 agrees
 al
 alias
@@ -37,6 +38,7 @@ alphabet
 alphabetic
 alphanumeric
 already
+also
 alternatives
 always
 ambiguous
@@ -264,6 +266,7 @@ crash
 crate
 create
 created
+creates
 credential
 crockford
 cross
@@ -273,6 +276,7 @@ ctx
 cur
 current
 cursor
+custom
 cut
 cuts
 cwd
@@ -284,6 +288,7 @@ date
 dates
 day
 days
+de
 dead
 debug
 dec
@@ -313,6 +318,7 @@ descend
 descendants
 description
 deserialize
+deserializer
 detached
 detail
 detect
@@ -493,6 +499,7 @@ going
 good
 got
 govern
+governance
 governed
 governing
 governs
@@ -521,6 +528,7 @@ headers
 heading
 headings
 heads
+healthy
 heaviest
 heavy
 height
@@ -534,6 +542,7 @@ hexdigit
 hidden
 hides
 hiding
+high
 hint
 hints
 hit
@@ -587,6 +596,7 @@ inserted
 inside
 instant
 instead
+integer
 intent
 intern
 into
@@ -664,6 +674,8 @@ local
 locate
 location
 lock
+locked
+locks
 log
 log2
 lone
@@ -744,6 +756,7 @@ narrow
 nd
 ne
 nearest
+needed
 needle
 needs
 negative
@@ -950,6 +963,7 @@ readme
 reads
 real
 reason
+recognise
 reconcile
 record
 records
@@ -970,6 +984,7 @@ refused
 refuses
 regardless
 regenerated
+regenerates
 registering
 registers
 registry
@@ -977,6 +992,7 @@ rejected
 rejects
 rel
 relaxed
+release
 rem
 remaining
 remembers
@@ -1083,6 +1099,7 @@ seq
 sequence
 serde
 serialize
+serializer
 serializing
 serve
 served
@@ -1308,6 +1325,7 @@ unfold
 unique
 unix
 unknown
+unlocked
 unreachable
 unreadable
 unrecognised
@@ -1317,6 +1335,7 @@ until
 untouched
 unwrap
 unwritable
+unwritten
 up
 updates
 upper
