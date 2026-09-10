@@ -48,6 +48,7 @@
 
 use crate::anchor::AnchorRef;
 use crate::event::{Event, Flag, Kind, State, VivacKind};
+use crate::failure::Failure;
 use crate::model::{fold, ArmSpan, Node, Note, RawParts, Span, Tree, Vivac};
 use crate::store::Store;
 use std::collections::BTreeMap;
@@ -104,8 +105,10 @@ const TAIL_REFRESH_THRESHOLD: usize = 200;
 /// "Cuándo se reescribe"), even though it is free to read a warm or stale
 /// one exactly like a read does. The only error this can return is a
 /// genuine failure to read `events` itself -- everything the index's own
-/// file touches is caught internally and answered by folding the log.
-pub fn load(store: &Store, allow_persist: bool) -> std::io::Result<Tree> {
+/// file touches is caught internally and answered by folding the log --
+/// or `t411` §13's refusal, once `events` itself holds a line only a newer
+/// vivac could have written.
+pub fn load(store: &Store, allow_persist: bool) -> Result<Tree, Failure> {
     if let Some(loaded) = try_load_index(store) {
         return Ok(match loaded {
             Loaded::Fresh(tree) => tree,
@@ -166,7 +169,7 @@ struct Tracked {
     last: Option<LastEvent>,
 }
 
-fn read_tracked(path: &Path, from_offset: u64) -> std::io::Result<Tracked> {
+fn read_tracked(path: &Path, from_offset: u64) -> Result<Tracked, Failure> {
     let f = match File::open(path) {
         Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -177,7 +180,7 @@ fn read_tracked(path: &Path, from_offset: u64) -> std::io::Result<Tracked> {
                 last: None,
             })
         }
-        Err(e) => return Err(e),
+        Err(e) => return Err(e.into()),
     };
     let mut reader = BufReader::new(f);
     reader.seek(SeekFrom::Start(from_offset))?;
@@ -219,7 +222,22 @@ fn read_tracked(path: &Path, from_offset: u64) -> std::io::Result<Tracked> {
                 });
                 events.push(e);
             }
-            Err(_) => broken += 1,
+            Err(_) => match crate::event::unknown_reason_for(&line) {
+                // `from_offset` may sit mid-file, so the line number this
+                // read would report is only ever right when it starts at
+                // byte zero. Rather than reconstruct that count, a tail
+                // read that hits this case just re-reads the whole file --
+                // `crate::store::read_all_from` -- which starts at zero and
+                // so names the correct line.
+                Some(_) => match crate::store::read_all_from(path) {
+                    Err(e) => return Err(e),
+                    // The log changed under the two reads and the full one
+                    // no longer sees the problem: treat this line the way
+                    // an ordinary broken line has always been treated.
+                    Ok(_) => broken += 1,
+                },
+                None => broken += 1,
+            },
         }
     }
     Ok(Tracked {

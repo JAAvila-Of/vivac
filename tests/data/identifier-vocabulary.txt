@@ -259,6 +259,7 @@ cors
 count
 counted
 counts
+cover
 covers
 crash
 crate
@@ -617,6 +618,7 @@ keys
 kids
 kill
 kind
+know
 known
 label
 landing
@@ -808,6 +810,7 @@ ord
 order
 ordering
 orders
+ordinary
 origin
 orphan
 orphaned
@@ -1042,6 +1045,7 @@ runs
 said
 same
 sample
+samples
 sandbox
 sandboxes
 sanitize
@@ -1336,6 +1340,7 @@ value
 values
 vanished
 var
+variant
 variants
 varied
 vec
@@ -1391,6 +1396,7 @@ write
 writeln
 writer
 writes
+writing
 written
 wrong
 wrote
