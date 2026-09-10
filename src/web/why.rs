@@ -280,6 +280,7 @@ mod tests {
                 blocks: false,
                 refs: vec![],
                 governs: vec![],
+                arms: vec![],
             },
         )
     }

@@ -47,9 +47,12 @@ const USAGE: &str = r#"vivac - provenance of work
 
     vivac focus <id> [--reopen]               step back into a node
     vivac push "<title>" --why "<reason>"     open a node and stack it
-          [--type goal|task|decision|question|constraint|finding|assumption]
+          [--type goal|task|decision|question|constraint|finding|assumption
+                  |pillar|rule]
           [--blocks]         its parent cannot close until this one closes
           [--ref R] [--governs G]
+          [--arm "<command>"]  what verifies a rule; vivac never runs it
+          [--arm-dir <dir>]    where it runs, relative to where .vivac lives
     vivac pop ["<outcome>"] [--next "<...>"]  close the focus, back to the parent
     vivac park [<id>] ["<reason>"]            park it: feeds DO NOT TOUCH NOW
     vivac promote [<id>]                      the focus becomes a goal of its own
@@ -60,11 +63,15 @@ const USAGE: &str = r#"vivac - provenance of work
   Without touching the stack
 
     vivac add "<title>" [--parent N] [--why "<reason>"] [--blocks]
-          [--type goal|task|decision|question|constraint|finding|assumption]
+          [--type goal|task|decision|question|constraint|finding|assumption
+                  |pillar|rule]
           [--ref R] [--governs G]
+          [--arm "<command>"]  what verifies a rule; vivac never runs it
+          [--arm-dir <dir>]    where it runs, relative to where .vivac lives
     vivac done <id> ["<outcome>"] [--force]
     vivac note [<id>] "<note>"
     vivac block <id> [--off]
+    vivac arm <rule> "<command>" --dir <dir> [--off]
     vivac decide "<title>" --reason "<r>" [--parent N] [--alternative X]
           [--supersedes d9] [--blocks] [--ref R] [--governs G]
     vivac flag <id> suspect|review|stale --why "<reason>"  [--off]
@@ -90,6 +97,8 @@ const USAGE: &str = r#"vivac - provenance of work
                                               the registry knows
     vivac stack                               where you are right now
     vivac parked                              DO NOT TOUCH NOW
+    vivac rules                               the pillars, rules and invariants
+                                              that govern this project
     vivac triage                              what can be pruned, and with what
     vivac reconcile [--since <v>] [--all]     files that changed with nothing
                                               in the tree claiming them
@@ -200,7 +209,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
     // the way ignores what it did not understand is exactly what `f51`
     // describes.
     let allowed: &[&str] = match cmd {
-        "push" => &["why", "type", "blocks", "ref", "governs"],
+        "push" => &["why", "type", "blocks", "ref", "governs", "arm", "arm-dir"],
         "pop" => &["force", "next"],
         "decide" => &[
             "parent",
@@ -218,11 +227,14 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         // today, and the agent reads the brief as prose. `d53`.
         "brief" => &["budget", "now"],
         "session" => &["hook", "next", "budget", "now"],
-        "add" => &["parent", "why", "type", "blocks", "ref", "governs"],
+        "add" => &[
+            "parent", "why", "type", "blocks", "ref", "governs", "arm", "arm-dir",
+        ],
         "done" => &["force"],
         "abandon" => &["cascade", "rescue"],
         "focus" => &["reopen"],
         "block" => &["off"],
+        "arm" => &["dir", "off"],
         "tree" => &["all", "json"],
         "reconcile" => &["since", "all", "json"],
         "changes" => &["since", "json"],
@@ -233,7 +245,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         // `open` also takes `--all`, the same escape hatch `tree` gives the
         // list it caps (`d383`): the cap must never cost access to the rest.
         "open" => &["json", "all"],
-        "stack" | "parked" | "triage" | "stats" | "vivacs" => &["json"],
+        "stack" | "parked" | "triage" | "stats" | "vivacs" | "rules" => &["json"],
         // `--gates` is its own on top of `--json`: the machine-wide scan
         // `d351` adds is nothing the other reads in this arm take.
         "check" => &["json", "gates"],
@@ -455,7 +467,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
     // half the command line, and the other half went through in silence
     // (`f52`).
     let takes: usize = match cmd {
-        "park" | "abandon" | "done" | "note" | "flag" => 2,
+        "park" | "abandon" | "done" | "note" | "flag" | "arm" => 2,
         "focus" | "push" | "pop" | "promote" | "add" | "block" | "decide" | "save" | "restore"
         | "import" | "tree" | "session" | "find" => 1,
         _ => 0,
@@ -500,6 +512,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         }
         "tree" => render::tree(&ctx.tree, a),
         "open" => render::open(&ctx.tree, a),
+        "rules" => render::rules(&ctx.tree, a),
         "find" => render::find(&ctx.tree, a),
         "stack" => render::stack(&ctx.tree, a),
         "parked" => render::parked(&ctx.tree, a),
@@ -528,6 +541,7 @@ fn may_append(cmd: &str) -> bool {
             | "add"
             | "note"
             | "block"
+            | "arm"
             | "promote"
             | "abandon"
             | "focus"
@@ -553,6 +567,7 @@ fn write_op(cmd: &str, ctx: &mut ops::Ctx, a: &Args) -> Result<Option<outcome::O
         "add" => ops::add(ctx, params::Add::from_args(a)?)?,
         "note" => ops::note(ctx, params::Note::from_args(a)?)?,
         "block" => ops::block(ctx, params::Block::from_args(a)?)?,
+        "arm" => ops::arm(ctx, params::Arm::from_args(a)?)?,
         "promote" => ops::promote(ctx, params::Promote::from_args(a)?)?,
         "abandon" => ops::abandon(ctx, params::Abandon::from_args(a)?)?,
         "focus" => ops::focus(ctx, params::Focus::from_args(a)?)?,
