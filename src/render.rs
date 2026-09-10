@@ -1621,9 +1621,8 @@ pub fn find_everywhere_data(query: &str) -> Result<serde_json::Value, Failure> {
     let mut projects: Vec<(String, Tree)> = Vec::new();
     for root in known_roots {
         let name = project_name(&root);
-        if let Ok(tree) = crate::store::Store::open(root)
-            .map_err(Failure::from)
-            .and_then(|s| crate::index::load(&s, false))
+        if let Ok(tree) =
+            crate::store::Store::open(root).and_then(|s| crate::index::load(&s, false))
         {
             projects.push((name, tree));
         }
@@ -1658,10 +1657,7 @@ pub fn find_everywhere(a: &Args) -> R {
     let mut unreachable: Vec<String> = Vec::new();
     for root in known_roots {
         let name = project_name(&root);
-        match crate::store::Store::open(root)
-            .map_err(Failure::from)
-            .and_then(|s| crate::index::load(&s, false))
-        {
+        match crate::store::Store::open(root).and_then(|s| crate::index::load(&s, false)) {
             Ok(tree) => projects.push((name, tree)),
             Err(_) => unreachable.push(name),
         }

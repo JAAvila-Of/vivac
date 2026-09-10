@@ -73,9 +73,63 @@ fn non_blank(v: Option<&OsStr>) -> Option<&OsStr> {
     }
 }
 
+/// `config`'s `version`, once it is known to be one of the two shapes this
+/// release can act on. `d444`: a tree that gains its first pillar or rule
+/// turns this from `One` to `Locked`, in place, before the event that
+/// creates it is appended -- and a release earlier than that fails to parse
+/// `Locked`'s own sentence, which is the whole point.
+///
+/// No `#[derive(Serialize, Deserialize)]`: neither shape is an enum tag in
+/// the usual sense, one is the bare integer `1` and the other is a string,
+/// and `check_config_version` -- not this type -- is what tells a genuinely
+/// unknown version apart from one of these two.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigVersion {
+    One,
+    Locked,
+}
+
+/// The sentence a config's `version` becomes the moment its tree gains a
+/// pillar or a rule. Literal and without a number: release-plz decides the
+/// number when it publishes, and every release from here on reads the
+/// sentence exactly as it reads `1`. `d444`.
+pub const LOCK_SENTENCE: &str =
+    "this tree holds pillars and rules, and this vivac is too old to read them: update vivac";
+
+impl Serialize for ConfigVersion {
+    fn serialize<S>(&self, s: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            ConfigVersion::One => s.serialize_u32(1),
+            ConfigVersion::Locked => s.serialize_str(LOCK_SENTENCE),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ConfigVersion {
+    /// Only ever reached once `check_config_version` has already let the raw
+    /// value through: a `1`, or the lock sentence. Anything else refuses
+    /// generically here, which is `d444`'s "como hoy" for a version this
+    /// deserializer was never meant to explain -- negative, a float, an
+    /// object, `null`.
+    fn deserialize<D>(d: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let v = serde_json::Value::deserialize(d)?;
+        match &v {
+            serde_json::Value::Number(n) if n.as_u64() == Some(1) => Ok(ConfigVersion::One),
+            serde_json::Value::String(s) if s == LOCK_SENTENCE => Ok(ConfigVersion::Locked),
+            _ => Err(serde::de::Error::custom("unsupported config version")),
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
-    pub version: u32,
+    pub version: ConfigVersion,
     pub project_id: String,
     /// Opaque identifier for this install. **It carries no email and no name**:
     /// the security pillar forbids it, and vetoes `MODEL.md` §3.4.
@@ -85,7 +139,7 @@ pub struct Config {
 impl Config {
     fn new_seeded() -> Config {
         Config {
-            version: 1,
+            version: ConfigVersion::One,
             project_id: id::ulid(),
             actor: format!("a_{}", &id::ulid()[..12]),
         }
@@ -135,15 +189,25 @@ pub fn first_event_id(root: &Path) -> Option<String> {
 }
 
 impl Store {
-    pub fn open(root: PathBuf) -> std::io::Result<Store> {
+    pub fn open(root: PathBuf) -> Result<Store, Failure> {
         let p = root.join(DIR).join(CONFIG);
         let config = match fs::read_to_string(&p) {
-            Ok(s) => serde_json::from_str(&s).map_err(std::io::Error::other)?,
+            Ok(s) => read_config(&s)?,
             Err(_) => {
                 // A `.vivac/` with no config comes from an earlier version or a
                 // half-finished delete. Fill it in rather than fail: the tree,
-                // which is what matters, lives in `events`.
-                let c = Config::new_seeded();
+                // which is what matters, lives in `events`. `d444`: if the log
+                // already carries a pillar or a rule, the regenerated config is
+                // born locked -- deleting one file must never hand an older
+                // release a config that looks readable over a tree it is not.
+                let c = if log_already_governed(&root) {
+                    Config {
+                        version: ConfigVersion::Locked,
+                        ..Config::new_seeded()
+                    }
+                } else {
+                    Config::new_seeded()
+                };
                 write_config(&root, &c)?;
                 c
             }
@@ -180,6 +244,83 @@ fn write_config(root: &Path, c: &Config) -> std::io::Result<()> {
     f.write_all(b"\n")
 }
 
+/// `d444`'s own protection: the config is written to a sibling temporary
+/// file and renamed over the real one, never edited in place. A process
+/// that dies between the two steps leaves the old config exactly as it
+/// was -- there is no window where `config` itself is half-written.
+fn write_config_atomic(root: &Path, c: &Config) -> std::io::Result<()> {
+    let dir = root.join(DIR);
+    let tmp = dir.join("config.tmp");
+    {
+        let mut f = File::create(&tmp)?;
+        f.write_all(serde_json::to_string_pretty(c)?.as_bytes())?;
+        f.write_all(b"\n")?;
+    }
+    fs::rename(&tmp, dir.join(CONFIG))
+}
+
+/// Parses `config`'s text into a `Config`, refusing the two shapes of
+/// `version` `t411` §27 gives a name to before letting `serde_json` see the
+/// rest: a non-negative integer that is not `1`, or a string that is not
+/// `d444`'s own sentence. Every other shape -- absent, negative, a float, an
+/// object, `null` -- is left to `Config`'s own `Deserialize`, which fails
+/// exactly as it did before `d444`.
+fn read_config(raw: &str) -> Result<Config, Failure> {
+    let v: serde_json::Value =
+        serde_json::from_str(raw).map_err(|e| Failure::Io(std::io::Error::other(e)))?;
+    check_config_version(v.get("version"))?;
+    serde_json::from_value(v).map_err(|e| Failure::Io(std::io::Error::other(e)))
+}
+
+fn check_config_version(version: Option<&serde_json::Value>) -> Result<(), Failure> {
+    match version {
+        Some(serde_json::Value::Number(n)) => match n.as_u64() {
+            Some(1) => Ok(()),
+            Some(other) => Err(Failure::newer_vivac(format!(
+                "This tree was written by a newer vivac: its config has version {other}, \
+                 which this version does not know. Update vivac to read it. Nothing was \
+                 written."
+            ))),
+            // Negative or non-integer: not one of the two known shapes, and
+            // not a value worth a friendly message either. Falls through to
+            // the generic config-read failure, same as before `d444`.
+            None => Ok(()),
+        },
+        Some(serde_json::Value::String(s)) if s == LOCK_SENTENCE => Ok(()),
+        Some(serde_json::Value::String(s)) => Err(Failure::newer_vivac(format!(
+            "This tree was written by a newer vivac: its config says {s:?}. Update vivac \
+             to read it. Nothing was written."
+        ))),
+        _ => Ok(()),
+    }
+}
+
+/// The rare path `Store::open` takes when `config` itself is missing:
+/// whether the log already holds a pillar or a rule, in any state. Reads
+/// the whole log -- something no ordinary read ever pays for -- because a
+/// vanished config is itself the unusual case, and regenerating one that
+/// looks readable by any release over a tree that already governs
+/// something would undo the very lock `d444` exists to keep.
+fn log_already_governed(root: &Path) -> bool {
+    let Ok(f) = File::open(root.join(DIR).join(LOG)) else {
+        return false;
+    };
+    for line in BufReader::new(f).lines().map_while(Result::ok) {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        if v["payload"]["type"] == "node.created"
+            && matches!(v["payload"]["kind"].as_str(), Some("pillar") | Some("rule"))
+        {
+            return true;
+        }
+    }
+    false
+}
+
 impl Store {
     /// Reads the whole log. An unreadable line **does not abort**: it is
     /// counted and skipped. A half-written log has to stay readable, or the
@@ -200,7 +341,18 @@ impl Store {
     /// That is why there is no `fsync` --on Windows it costs more than the
     /// whole budget-- and why it opens in `append` mode, which makes each
     /// single-line write atomic and removes the need for a lock.
-    pub fn append(&self, body: Vec<crate::event::Body>, from_seq: u64) -> std::io::Result<()> {
+    ///
+    /// `tree_already_governed` is `d444`'s own check, paid before any of
+    /// `body` reaches disk: the config locks in place, first, so a process
+    /// that dies between the two leaves an unlocked config over a tree with
+    /// no pillar and no rule, which is harmless.
+    pub fn append(
+        &mut self,
+        body: Vec<crate::event::Body>,
+        from_seq: u64,
+        tree_already_governed: bool,
+    ) -> std::io::Result<()> {
+        self.lock_if_needed(&body, tree_already_governed)?;
         let mut buf = String::with_capacity(256 * body.len());
         for (i, c) in body.into_iter().enumerate() {
             let e = crate::event::Event {
@@ -219,6 +371,41 @@ impl Store {
             .append(true)
             .open(self.log())?;
         f.write_all(buf.as_bytes())
+    }
+
+    /// `d444`: locks the config in place the moment this tree gains its
+    /// first pillar or rule -- before the event that creates one is
+    /// appended. A no-op once the config is already locked, and a no-op for
+    /// every write that neither creates a pillar or a rule nor lands on a
+    /// tree that already has one.
+    fn lock_if_needed(
+        &mut self,
+        body: &[crate::event::Body],
+        tree_already_governed: bool,
+    ) -> std::io::Result<()> {
+        if self.config.version != ConfigVersion::One {
+            return Ok(());
+        }
+        let creates_governance = body.iter().any(|b| {
+            matches!(
+                b,
+                crate::event::Body::NodeCreated {
+                    kind: crate::event::Kind::Pillar | crate::event::Kind::Rule,
+                    ..
+                }
+            )
+        });
+        if !tree_already_governed && !creates_governance {
+            return Ok(());
+        }
+        let locked = Config {
+            version: ConfigVersion::Locked,
+            project_id: self.config.project_id.clone(),
+            actor: self.config.actor.clone(),
+        };
+        write_config_atomic(&self.root, &locked)?;
+        self.config = locked;
+        Ok(())
     }
 }
 
@@ -408,7 +595,7 @@ mod tests {
     #[test]
     fn first_event_id_reads_line_one_without_folding() {
         let tmp = std::env::temp_dir().join(format!("vivac-fe-{}", id::ulid()));
-        let s = Store::create(&tmp).unwrap();
+        let mut s = Store::create(&tmp).unwrap();
         // A log large enough that folding the whole thing would be visible
         // in the timing, if this ever regressed into calling `read_all`.
         for _ in 0..500 {
@@ -418,6 +605,7 @@ mod tests {
                     note: "filler".into(),
                 }],
                 0,
+                false,
             )
             .unwrap();
         }
