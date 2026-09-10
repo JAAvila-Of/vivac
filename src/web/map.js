@@ -341,10 +341,10 @@
     });
   });
 
-  var here = document.getElementById("here");
-  if (here) {
-    here.addEventListener("click", function () {
-      var i = +here.dataset.stop;
+  var whereAmI = document.getElementById("here");
+  if (whereAmI) {
+    whereAmI.addEventListener("click", function () {
+      var i = +whereAmI.dataset.stop;
       show(i);
       jump(i);
     });
