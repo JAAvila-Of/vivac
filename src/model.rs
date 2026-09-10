@@ -150,8 +150,13 @@ impl Node {
     /// it, it governs, and it closes itself when another supersedes it.
     /// Listing it beside pending work fills the brief with things not to do,
     /// which is exactly the opposite of what it exists for.
+    ///
+    /// `Constraint` is excluded for the same reason (`d336`): a standing
+    /// rule is not worked and does not close on its own either -- the
+    /// brief's INVARIANTS is where it is read, not the list of what is left
+    /// to do.
     pub fn is_front(&self) -> bool {
-        self.state.is_open() && self.kind != Kind::Decision
+        self.state.is_open() && !matches!(self.kind, Kind::Decision | Kind::Constraint)
     }
 }
 
