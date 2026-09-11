@@ -267,6 +267,7 @@ crate
 create
 created
 creates
+creation
 credential
 crockford
 cross
@@ -296,6 +297,9 @@ decide
 decided
 decision
 decisions
+declaration
+declarations
+declare
 declared
 declares
 decoded
@@ -356,6 +360,7 @@ duration
 dx
 dyn
 each
+earlier
 earn
 echoes
 edges
@@ -471,6 +476,7 @@ format
 formatter
 found
 four
+fourteen
 fragments
 fresh
 from
@@ -573,6 +579,7 @@ ids
 if
 ignore
 ignored
+ignores
 impl
 import
 in
@@ -696,6 +703,7 @@ made
 magic
 main
 makes
+malformed
 mandatory
 manual
 many
@@ -760,6 +768,7 @@ needed
 needle
 needs
 negative
+neither
 net
 never
 new
@@ -966,6 +975,7 @@ reason
 recognise
 reconcile
 record
+recorded
 records
 recv
 redact
@@ -1005,9 +1015,11 @@ render
 reopen
 repeat
 repeated
+repeating
 replace
 replaced
 reply
+report
 reported
 reports
 request
@@ -1248,7 +1260,6 @@ them
 then
 there
 they
-thirteen
 this
 thread
 three
@@ -1322,6 +1333,7 @@ unclaimed
 undeclared
 under
 unfold
+ungoverned
 unique
 unix
 unknown
@@ -1381,6 +1393,7 @@ walk
 walks
 want
 warning
+warns
 was
 way
 web
@@ -1396,6 +1409,8 @@ whoami
 whole
 whose
 why
+why3
+why4
 wide
 width
 windows

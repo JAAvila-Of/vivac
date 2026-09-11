@@ -94,6 +94,17 @@ fn json_node(a: &Tree, ag: &Aggregates, n: &Node) -> serde_json::Value {
             .map(|(dir, command)| json!({"dir": dir, "command": command}))
             .collect::<Vec<_>>());
     }
+    // `t426` §3.2: a decision gains `against` only when its `node.created`
+    // carried the key, or a late declaration was folded into a birth that
+    // never did. Everything else -- every other kind, and a decision with
+    // neither -- stays byte for byte what it already was.
+    if n.kind == Kind::Decision && (n.against_recorded || !n.against.is_empty()) {
+        v["against"] = json!(n
+            .against(a)
+            .into_iter()
+            .map(|(node, why, declared)| json!({"node": node, "why": why, "declared": declared}))
+            .collect::<Vec<_>>());
+    }
     v
 }
 
@@ -394,6 +405,13 @@ pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
         // them with.
         if p.kind == Kind::Rule {
             print_arms(a, p, "        ", true);
+        }
+        // `t426` §3.1: a decision shows its declarations right where a rule
+        // shows its arms -- behind the alias line, ahead of the body.
+        // `d330`'s own rule: they show for the node actually asked about,
+        // and for an ancestor only under `--full`.
+        if p.kind == Kind::Decision && (is_last || full.is_some()) {
+            print_against(a, p, "        ");
         }
         for l in wrap(&body(p.why(a)), WIDTH, "        ") {
             outln!("{l}");
@@ -775,6 +793,22 @@ fn print_arms(a: &Tree, r: &Node, indent: &str, show_judged: bool) {
     } else {
         for (dir, command) in arms {
             outln!("{indent}armed in {dir}/: {command}");
+        }
+    }
+}
+
+/// A decision's own declarations, one per line, wrapped the same way its
+/// body is: `judged against <alias>: <why>`, with `(declared <date>)`
+/// appended for a late one. `t426` §3.1.
+fn print_against(a: &Tree, n: &Node, indent: &str) {
+    for (node, why, declared) in n.against(a) {
+        let suffix = match declared {
+            Some(date) => format!("  (declared {date})"),
+            None => String::new(),
+        };
+        let line = format!("judged against {node}: {why}{suffix}");
+        for l in wrap(&line, WIDTH, indent) {
+            outln!("{l}");
         }
     }
 }

@@ -203,6 +203,16 @@ pub struct Arm {
     pub command: String,
 }
 
+/// A decision, judged against a pillar or a rule: the node it was judged
+/// against and the sentence saying how it holds. `t426` §1.1. `node` is a
+/// ULID, resolved at write time the same way `parent` is; `why` is the
+/// sentence, and vivac never judges it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Against {
+    pub node: String,
+    pub why: String,
+}
+
 /// One event from the log. `MODEL.md` §3.2.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Event {
@@ -266,6 +276,13 @@ pub enum Body {
         /// never carries one writes exactly what it always has.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         arms: Vec<Arm>,
+        /// A decision's declarations at birth: absent and empty mean
+        /// different things (`d445`). Absent is a vivac that could not
+        /// declare, or a tree with no pillar or rule open; `Some(vec![])` is
+        /// one that could and declared nothing. `t426` §1.1: added last, so
+        /// the order of what already exists never moves.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        against: Option<Vec<Against>>,
     },
     #[serde(rename = "state.changed")]
     StateChanged {
@@ -317,6 +334,11 @@ pub enum Body {
         dir: String,
         command: String,
     },
+    /// A decision declares, after the fact, what it was judged against.
+    /// `t426` §1.2: one per call to `declare`, with every declaration it
+    /// carries, written whole or not at all.
+    #[serde(rename = "against.added")]
+    AgainstAdded { node: String, against: Vec<Against> },
     #[serde(rename = "vivac.created")]
     VivacCreated {
         vivac: String,
@@ -385,6 +407,7 @@ impl Body {
         "flag.cleared",
         "arm.added",
         "arm.removed",
+        "against.added",
         "vivac.created",
         "session.started",
     ];
@@ -456,6 +479,7 @@ mod tests {
             Body::FlagCleared { .. } => "flag.cleared",
             Body::ArmAdded { .. } => "arm.added",
             Body::ArmRemoved { .. } => "arm.removed",
+            Body::AgainstAdded { .. } => "against.added",
             Body::VivacCreated { .. } => "vivac.created",
             Body::SessionStarted { .. } => "session.started",
         }
@@ -474,6 +498,7 @@ mod tests {
                 refs: vec![],
                 governs: vec![],
                 arms: vec![],
+                against: None,
             },
             Body::StateChanged {
                 node: "n".into(),
@@ -510,6 +535,13 @@ mod tests {
                 node: "n".into(),
                 dir: "vivac".into(),
                 command: "x".into(),
+            },
+            Body::AgainstAdded {
+                node: "n".into(),
+                against: vec![Against {
+                    node: "r".into(),
+                    why: "x".into(),
+                }],
             },
             Body::VivacCreated {
                 vivac: "v".into(),

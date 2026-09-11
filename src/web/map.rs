@@ -1263,6 +1263,7 @@ mod tests {
                 refs: vec![],
                 governs: vec![],
                 arms: vec![],
+                against: None,
             },
         );
         id
@@ -1385,6 +1386,7 @@ mod tests {
                 refs: vec![],
                 governs: vec![],
                 arms: vec![],
+                against: None,
             },
         );
         seq += 1;
@@ -1665,6 +1667,7 @@ mod tests {
                 refs: vec![],
                 governs: vec![],
                 arms: vec![],
+                against: None,
             },
         );
         tree.sort_nodes();
@@ -1921,6 +1924,7 @@ mod tests {
                 refs: vec![],
                 governs: vec![],
                 arms: vec![],
+                against: None,
             },
         );
         tree.sort_nodes();

@@ -53,6 +53,7 @@ const USAGE: &str = r#"vivac - provenance of work
           [--ref R] [--governs G]
           [--arm "<command>"]  what verifies a rule; vivac never runs it
           [--arm-dir <dir>]    where it runs, relative to where .vivac lives
+          [--against "r12: <why>"]  on a decision: what it was judged against
     vivac pop ["<outcome>"] [--next "<...>"]  close the focus, back to the parent
     vivac park [<id>] ["<reason>"]            park it: feeds DO NOT TOUCH NOW
     vivac promote [<id>]                      the focus becomes a goal of its own
@@ -68,12 +69,15 @@ const USAGE: &str = r#"vivac - provenance of work
           [--ref R] [--governs G]
           [--arm "<command>"]  what verifies a rule; vivac never runs it
           [--arm-dir <dir>]    where it runs, relative to where .vivac lives
+          [--against "r12: <why>"]  on a decision: what it was judged against
     vivac done <id> ["<outcome>"] [--force]
     vivac note [<id>] "<note>"
     vivac block <id> [--off]
     vivac arm <rule> "<command>" --dir <dir> [--off]
+    vivac declare <decision> --against "r12: <why>"
     vivac decide "<title>" --reason "<r>" [--parent N] [--alternative X]
           [--supersedes d9] [--blocks] [--ref R] [--governs G]
+          [--against "r12: <why>"]  what it was judged against; repeat it
     vivac flag <id> suspect|review|stale --why "<reason>"  [--off]
 
   Safe stops
@@ -208,7 +212,9 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
     // the way ignores what it did not understand is exactly what `f51`
     // describes.
     let allowed: &[&str] = match cmd {
-        "push" => &["why", "type", "blocks", "ref", "governs", "arm", "arm-dir"],
+        "push" => &[
+            "why", "type", "blocks", "ref", "governs", "arm", "arm-dir", "against",
+        ],
         "pop" => &["force", "next"],
         "decide" => &[
             "parent",
@@ -218,6 +224,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
             "ref",
             "governs",
             "blocks",
+            "against",
         ],
         "flag" => &["why", "off"],
         "save" => &["next"],
@@ -227,13 +234,14 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         "brief" => &["budget", "now"],
         "session" => &["hook", "next", "budget", "now"],
         "add" => &[
-            "parent", "why", "type", "blocks", "ref", "governs", "arm", "arm-dir",
+            "parent", "why", "type", "blocks", "ref", "governs", "arm", "arm-dir", "against",
         ],
         "done" => &["force"],
         "abandon" => &["cascade", "rescue"],
         "focus" => &["reopen"],
         "block" => &["off"],
         "arm" => &["dir", "off"],
+        "declare" => &["against"],
         "tree" => &["all", "json"],
         "reconcile" => &["since", "all", "json"],
         "changes" => &["since", "json"],
@@ -468,7 +476,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
     let takes: usize = match cmd {
         "park" | "abandon" | "done" | "note" | "flag" | "arm" => 2,
         "focus" | "push" | "pop" | "promote" | "add" | "block" | "decide" | "save" | "restore"
-        | "import" | "tree" | "session" | "find" => 1,
+        | "import" | "tree" | "session" | "find" | "declare" => 1,
         _ => 0,
     };
     if let [first, ..] = a.extra(takes) {
@@ -526,7 +534,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
     r.map(|_| 0)
 }
 
-/// Whether `cmd` might append to the log this run: the fourteen names
+/// Whether `cmd` might append to the log this run: the fifteen names
 /// `write_op` below matches, plus `session` (a hook can write an opening or
 /// an automatic stop) and `import` (writes the events it brings in). Every
 /// other command only ever reads.
@@ -546,6 +554,7 @@ fn may_append(cmd: &str) -> bool {
             | "focus"
             | "flag"
             | "decide"
+            | "declare"
             | "save"
             | "restore"
             | "session"
@@ -553,7 +562,7 @@ fn may_append(cmd: &str) -> bool {
     )
 }
 
-/// The fourteen write operations, matched once so that printing an `Outcome`
+/// The fifteen write operations, matched once so that printing an `Outcome`
 /// lives in exactly one place in `dispatch` below. `None` means `cmd` names
 /// one of the reads instead, which go on printing for themselves --
 /// `render.rs` and `brief.rs` are not part of this: they are not writes.
@@ -572,6 +581,7 @@ fn write_op(cmd: &str, ctx: &mut ops::Ctx, a: &Args) -> Result<Option<outcome::O
         "focus" => ops::focus(ctx, params::Focus::from_args(a)?)?,
         "flag" => ops::flag(ctx, params::Flag::from_args(a)?)?,
         "decide" => ops::decide(ctx, params::Decide::from_args(a)?)?,
+        "declare" => ops::declare(ctx, params::Declare::from_args(a)?)?,
         "save" => ops::save(ctx, params::Save::from_args(a)?)?,
         "restore" => ops::restore(ctx, params::Restore::from_args(a)?)?,
         _ => return Ok(None),

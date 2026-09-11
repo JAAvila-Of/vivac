@@ -13,7 +13,7 @@
 //! keeping?" was called zero times, under a protocol declared mandatory.
 
 use crate::anchor::{self, Anchor};
-use crate::event::{Arm, Body, Event, Flag, Kind, State, VivacKind};
+use crate::event::{Against, Arm, Body, Event, Flag, Kind, State, VivacKind};
 use crate::failure::{Failure, R};
 use crate::model::{fold, Node, Tree};
 use crate::outcome::{self, Outcome};
@@ -311,6 +311,73 @@ fn arms_of(
         .collect())
 }
 
+/// Splits one `--against` entry on the **first** `:`: the id to its left,
+/// the sentence to its right, both trimmed. `t426` §2.1: the sentence may
+/// carry more colons of its own.
+fn split_against_entry(raw: &str) -> Result<(&str, &str), Failure> {
+    let form_error =
+        || Failure::usage("--against needs an id and a sentence: --against \"r12: why it holds\"");
+    let (id, why) = raw.split_once(':').ok_or_else(form_error)?;
+    let (id, why) = (id.trim(), why.trim());
+    if id.is_empty() || why.is_empty() {
+        return Err(form_error());
+    }
+    Ok((id, why))
+}
+
+/// `--against`, checked against what it points at. `t426` §2.1 and §2.2:
+/// shared by `decide`, `push`, `add` and `declare`, since every one of them
+/// judges an entry by the same questions -- only `push` and `add` ever
+/// call it with a `kind` that is not already `Kind::Decision`, since a
+/// decision is the only kind that may carry one.
+///
+/// Every check runs **before** anything is written, in order: the form of
+/// each entry, that the id exists, that it names a pillar or a rule, that
+/// it still governs, and that no id repeats within this one call.
+fn against_of(ctx: &Ctx, raw: Vec<String>, kind: Kind) -> Result<Vec<Against>, Failure> {
+    if !raw.is_empty() && kind != Kind::Decision {
+        return Err(Failure::usage(format!(
+            "--against goes on a decision, and this is {}",
+            kind.with_article()
+        )));
+    }
+    let mut out = Vec::with_capacity(raw.len());
+    let mut seen: Vec<u64> = Vec::with_capacity(raw.len());
+    for entry in &raw {
+        let (id, why) = split_against_entry(entry)?;
+        let n = ctx
+            .tree
+            .resolve(id)
+            .ok_or_else(|| Failure::usage(format!("No such node: {id}.")))?;
+        if !matches!(n.kind, Kind::Pillar | Kind::Rule) {
+            return Err(Failure::usage(format!(
+                "--against points at a pillar or a rule, and {} is {}",
+                n.alias(),
+                n.kind.with_article()
+            )));
+        }
+        if !n.state.is_open() {
+            return Err(Failure::usage(format!(
+                "--against points at what still governs, and {} is {}: vivac rules lists what does",
+                n.alias(),
+                n.state.word(n.kind)
+            )));
+        }
+        if seen.contains(&n.num) {
+            return Err(Failure::usage(format!(
+                "--against names {} twice",
+                n.alias()
+            )));
+        }
+        seen.push(n.num);
+        out.push(Against {
+            node: n.id.clone(),
+            why: why.to_string(),
+        });
+    }
+    Ok(out)
+}
+
 /// What it takes to create a node, named rather than positional.
 ///
 /// `title` and `why` stay borrowed rather than owned: every caller still
@@ -327,23 +394,35 @@ struct Born<'a> {
     governs: Vec<String>,
     blocks: bool,
     arms: Vec<Arm>,
+    /// Already validated by `against_of`. Empty for every kind that is not
+    /// a decision, since only a decision may carry one.
+    against: Vec<Against>,
 }
 
-/// Creates a node. Returns the event and the alias number assigned.
+/// Creates a node. Returns the event, the alias number assigned, and
+/// whether the `against` key was written empty -- `d445`'s `no_against`,
+/// which `push`, `add` and `decide` each fold into their own `Outcome`.
 ///
 /// Takes a `Born` already extracted rather than `&Args`: the three ops that
 /// call this (`push`, `add`, `decide`) do not all read the fields the same
 /// way (`add` defaults `why` with `.opt_or`, `push` demands it), so the
 /// reading stays with each caller and only the shared write comes here.
-fn born(ctx: &Ctx, b: Born) -> Result<(Body, u64, String), Failure> {
+fn born(ctx: &Ctx, b: Born) -> Result<(Body, u64, String, bool), Failure> {
     let mut fields: Vec<(&str, &str)> = vec![("title", b.title), ("why", b.why)];
     fields.extend(b.refs.iter().map(|r| ("ref", r.as_str())));
     fields.extend(b.governs.iter().map(|g| ("governs", g.as_str())));
     fields.extend(b.arms.iter().map(|a| ("arm", a.command.as_str())));
+    fields.extend(b.against.iter().map(|a| ("against", a.why.as_str())));
     guard_text(&fields)?;
 
     let node = id::ulid();
     let num = ctx.tree.next_num.max(1);
+    // `t426` §1.1: `Some` only for a decision born while at least one
+    // pillar or rule is open -- the same predicate `vivac rules` lists
+    // under -- and `Some(vec![])` when nothing was declared. Every other
+    // node keeps writing exactly the bytes it always has.
+    let against = (b.kind == Kind::Decision && ctx.tree.has_open_governance()).then_some(b.against);
+    let no_against = against.as_ref().is_some_and(Vec::is_empty);
     Ok((
         Body::NodeCreated {
             node: node.clone(),
@@ -356,9 +435,11 @@ fn born(ctx: &Ctx, b: Born) -> Result<(Body, u64, String), Failure> {
             refs: b.refs,
             governs: b.governs,
             arms: b.arms,
+            against,
         },
         num,
         node,
+        no_against,
     ))
 }
 
@@ -375,7 +456,8 @@ pub fn push(ctx: &mut Ctx, p: params::Push) -> Result<Outcome, Failure> {
         },
     )?;
     let arms = arms_of(ctx, p.arms, p.arm_dir, kind, p.via_mcp)?;
-    let (ev, num, node) = born(
+    let against = against_of(ctx, p.against, kind)?;
+    let (ev, num, node, no_against) = born(
         ctx,
         Born {
             title: &p.title,
@@ -386,6 +468,7 @@ pub fn push(ctx: &mut Ctx, p: params::Push) -> Result<Outcome, Failure> {
             governs: p.governs,
             blocks: p.blocks,
             arms,
+            against,
         },
     )?;
     // The vivac goes **before** the push: it freezes the stack at the moment
@@ -420,6 +503,7 @@ pub fn push(ctx: &mut Ctx, p: params::Push) -> Result<Outcome, Failure> {
         title: p.title,
         blocks: p.blocks,
         advice,
+        no_against,
     })
 }
 
@@ -617,7 +701,8 @@ pub fn add(ctx: &mut Ctx, p: params::Add) -> Result<Outcome, Failure> {
         },
     )?;
     let arms = arms_of(ctx, p.arms, p.arm_dir, kind, p.via_mcp)?;
-    let (ev, num, _) = born(
+    let against = against_of(ctx, p.against, kind)?;
+    let (ev, num, _, no_against) = born(
         ctx,
         Born {
             title: &p.title,
@@ -628,6 +713,7 @@ pub fn add(ctx: &mut Ctx, p: params::Add) -> Result<Outcome, Failure> {
             governs: p.governs,
             blocks: p.blocks,
             arms,
+            against,
         },
     )?;
     ctx.emit(vec![ev])?;
@@ -642,6 +728,7 @@ pub fn add(ctx: &mut Ctx, p: params::Add) -> Result<Outcome, Failure> {
         title: p.title,
         parent: parent_info,
         blocks: p.blocks,
+        no_against,
     })
 }
 
@@ -1036,7 +1123,8 @@ pub fn decide(ctx: &mut Ctx, p: params::Decide) -> Result<Outcome, Failure> {
         Some(s) => Some(ctx.resolve(s)?.id.clone()),
         None => ctx.tree.focus().map(|n| n.id.clone()),
     };
-    let (ev, num, _) = born(
+    let against = against_of(ctx, p.against, Kind::Decision)?;
+    let (ev, num, _, no_against) = born(
         ctx,
         Born {
             title: &p.title,
@@ -1047,6 +1135,7 @@ pub fn decide(ctx: &mut Ctx, p: params::Decide) -> Result<Outcome, Failure> {
             governs: p.governs,
             blocks: p.blocks,
             arms: vec![],
+            against,
         },
     )?;
 
@@ -1066,6 +1155,65 @@ pub fn decide(ctx: &mut Ctx, p: params::Decide) -> Result<Outcome, Failure> {
         title: p.title,
         superseded: superseded.map(|v| outcome::SupersededNode { alias: v.alias() }),
         no_alternatives: p.alternatives.is_empty(),
+        no_against,
+    })
+}
+
+/// `declare <decision> --against "<id>: <why>"` — record, after the fact,
+/// what a decision was judged against. `t426` §2.2: unlike `--against` at
+/// birth, the decision may be in any state -- it declares a fact about the
+/// past, not a claim about what it still governs.
+pub fn declare(ctx: &mut Ctx, p: params::Declare) -> Result<Outcome, Failure> {
+    let (Some(id), false) = (p.id.as_deref(), p.against.is_empty()) else {
+        return Err(Failure::usage(
+            "usage: vivac declare <decision> --against \"r12: <why>\"",
+        ));
+    };
+    let n = ctx.resolve(id)?.clone();
+    if n.kind != Kind::Decision {
+        return Err(Failure::usage(format!(
+            "vivac declare takes a decision, and {} is {}",
+            n.alias(),
+            n.kind.with_article()
+        )));
+    }
+    let entries = against_of(ctx, p.against, Kind::Decision)?;
+    // What the decision already declares, at birth or later, cannot be
+    // declared again.
+    let mut already: Vec<u64> = n.against.iter().map(|a| a.node).collect();
+    for e in &entries {
+        let (num, alias) = ctx
+            .tree
+            .node(&e.node)
+            .map(|x| (x.num, x.alias()))
+            .unwrap_or((u64::MAX, e.node.clone()));
+        if already.contains(&num) {
+            return Err(Failure::usage(format!(
+                "{} already declares {alias}",
+                n.alias()
+            )));
+        }
+        already.push(num);
+    }
+    guard_text(
+        &entries
+            .iter()
+            .map(|a| ("against", a.why.as_str()))
+            .collect::<Vec<_>>(),
+    )?;
+    ctx.emit(vec![Body::AgainstAdded {
+        node: n.id.clone(),
+        against: entries.clone(),
+    }])?;
+    Ok(Outcome::Declared {
+        alias: n.alias(),
+        against: entries
+            .into_iter()
+            .map(|a| outcome::DeclaredPair {
+                node: ctx.tree.node(&a.node).map(|x| x.alias()).unwrap_or(a.node),
+                why: a.why,
+            })
+            .collect(),
     })
 }
 
