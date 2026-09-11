@@ -25,13 +25,13 @@
 //! and taking its place means being reachable through the same door, in the
 //! tool list, with a schema.
 //!
-//! **Five reads, eight writes, thirteen tools.** The reads answer `brief`,
+//! **Five reads, nine writes, fourteen tools.** The reads answer `brief`,
 //! `find`, `why`, `open` and `rules` -- the last one `t411`'s own pull,
 //! since a rule nobody pulls on is a rule that might as well not be there.
-//! The writes are `push`, `pop`, `add`, `decide`, `note`, `park`, `save` and
-//! `arm` -- the first seven `t106` already turned into functions that hand
-//! back an `Outcome` instead of printing one, so this is the second caller
-//! that reads the same answer the CLI does.
+//! The writes are `push`, `pop`, `add`, `decide`, `note`, `park`, `save`,
+//! `arm` and `declare` -- the first seven `t106` already turned into
+//! functions that hand back an `Outcome` instead of printing one, so this
+//! is the second caller that reads the same answer the CLI does.
 //!
 //! **What stays out, and why.** `abandon` discards a node and every
 //! descendant it has; reachable from a tool call, that would happen with
@@ -93,7 +93,7 @@ struct Tool {
     args: &'static [Arg],
 }
 
-/// Thirteen, and the number is a budget rather than a stage of growth: every
+/// Fourteen, and the number is a budget rather than a stage of growth: every
 /// tool here costs context in every session the agent ever opens. The other
 /// seven write ops -- `done`, `block`, `promote`, `abandon`, `focus`, `flag`,
 /// `restore` -- stay off this list on purpose; see the module doc.
@@ -245,6 +245,14 @@ const TOOLS: &[Tool] = &[
                               itself. Required with arm, refused without it. It has to \
                               exist.",
             },
+            Arg {
+                name: "against",
+                kind: ArgKind::List,
+                required: false,
+                description: "Only for a decision: a pillar or rule it was judged \
+                              against and a sentence on how it holds, as one entry: \
+                              \"r12: the write path stays local\". Repeat for each one.",
+            },
         ],
     },
     Tool {
@@ -350,6 +358,14 @@ const TOOLS: &[Tool] = &[
                               itself. Required with arm, refused without it. It has to \
                               exist.",
             },
+            Arg {
+                name: "against",
+                kind: ArgKind::List,
+                required: false,
+                description: "Only for a decision: a pillar or rule it was judged \
+                              against and a sentence on how it holds, as one entry: \
+                              \"r12: the write path stays local\". Repeat for each one.",
+            },
         ],
     },
     Tool {
@@ -358,7 +374,10 @@ const TOOLS: &[Tool] = &[
                       that lost. Call it the moment a choice is actually settled, not \
                       before and not long after: the alternatives are optional in the \
                       schema and not in practice, because without them the same option \
-                      gets proposed again in a month by whoever was not in the room.",
+                      gets proposed again in a month by whoever was not in the room. \
+                      When the project has pillars or rules, name in `against` the ones \
+                      this was judged against, each with a sentence: a pillar judged \
+                      in silence reads the same as one skipped.",
         args: &[
             Arg {
                 name: "title",
@@ -409,6 +428,15 @@ const TOOLS: &[Tool] = &[
                 kind: ArgKind::List,
                 required: false,
                 description: "Globs of files this decision's work is expected to touch.",
+            },
+            Arg {
+                name: "against",
+                kind: ArgKind::List,
+                required: false,
+                description: "A pillar or rule this was judged against and a sentence on \
+                              how it holds, as one entry: \"r12: the write path stays \
+                              local\". Repeat for each one. vivac checks that the pillar \
+                              or rule exists and still governs; the sentence is not judged.",
             },
         ],
     },
@@ -510,6 +538,30 @@ const TOOLS: &[Tool] = &[
                 required: false,
                 description: "Remove this command, in this folder, from the rule \
                               instead of adding it.",
+            },
+        ],
+    },
+    Tool {
+        name: "vivac_declare",
+        description: "Record, after the fact, the pillars or rules a decision was judged \
+                      against, each with a sentence. Call it the moment the judging \
+                      happens -- someone asks whether a decision holds against a rule, \
+                      and it gets checked -- because when a decision was judged is part \
+                      of its history, and this one shows as late.",
+        args: &[
+            Arg {
+                name: "id",
+                kind: ArgKind::Str,
+                required: true,
+                description: "The decision, as the tree names it: d12.",
+            },
+            Arg {
+                name: "against",
+                kind: ArgKind::List,
+                required: true,
+                description: "A pillar or rule it was judged against and a sentence on \
+                              how it holds, as one entry: \"r12: the write path stays \
+                              local\". Repeat for each one.",
             },
         ],
     },
@@ -726,6 +778,7 @@ fn call(project: &mut Project, params: &Value) -> Result<String, Failure> {
                 blocks: a.bool("blocks"),
                 arms: a.list("arm"),
                 arm_dir: a.str("arm_dir").map(str::to_string),
+                against: a.list("against"),
                 via_mcp: true,
             };
             outcome_text(project.write(|ctx| ops::push(ctx, p))?)
@@ -750,6 +803,7 @@ fn call(project: &mut Project, params: &Value) -> Result<String, Failure> {
                 blocks: a.bool("blocks"),
                 arms: a.list("arm"),
                 arm_dir: a.str("arm_dir").map(str::to_string),
+                against: a.list("against"),
                 via_mcp: true,
             };
             outcome_text(project.write(|ctx| ops::add(ctx, p))?)
@@ -769,6 +823,7 @@ fn call(project: &mut Project, params: &Value) -> Result<String, Failure> {
                 refs: a.list("ref"),
                 governs: a.list("governs"),
                 blocks: a.bool("blocks"),
+                against: a.list("against"),
             };
             outcome_text(project.write(|ctx| ops::decide(ctx, p))?)
         }
@@ -828,6 +883,14 @@ fn call(project: &mut Project, params: &Value) -> Result<String, Failure> {
                 via_mcp: true,
             };
             outcome_text(project.write(|ctx| ops::arm(ctx, p))?)
+        }
+        "vivac_declare" => {
+            let id = a.str("id").ok_or_else(|| missing("id"))?.to_string();
+            let p = params::Declare {
+                id: Some(id),
+                against: a.list("against"),
+            };
+            outcome_text(project.write(|ctx| ops::declare(ctx, p))?)
         }
         "vivac_save" => {
             let p = params::Save {
@@ -1116,6 +1179,41 @@ mod resident_write_tests {
             &mut project,
             "vivac_save",
             json!({"label": "before the migration", "next": "run the reconcile"}),
+        );
+        assert_resident_matches_fresh_fold(&root, &mut project);
+        cleanup(&root);
+    }
+
+    #[test]
+    fn declare_leaves_the_resident_tree_equal_to_a_fresh_fold() {
+        let (root, mut project) = temp_project("declare");
+        call_tool(
+            &mut project,
+            "vivac_add",
+            json!({"title": "Security", "type": "pillar", "why": "vetoes on the spot"}),
+        );
+        call_tool(
+            &mut project,
+            "vivac_add",
+            json!({
+                "title": "Keep the write path local",
+                "parent": "1",
+                "type": "rule",
+                "why": "guard",
+            }),
+        );
+        call_tool(
+            &mut project,
+            "vivac_decide",
+            json!({"title": "Keep it local", "reason": "because"}),
+        );
+        call_tool(
+            &mut project,
+            "vivac_declare",
+            json!({
+                "id": "d3",
+                "against": ["r2: nothing on the write path calls the network"],
+            }),
         );
         assert_resident_matches_fresh_fold(&root, &mut project);
         cleanup(&root);

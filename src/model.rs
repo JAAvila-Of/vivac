@@ -47,6 +47,37 @@ pub struct ArmSpan {
     pub command: Span,
 }
 
+/// A decision's declaration against a pillar or a rule, resolved to spans
+/// and a `num`. `t426` §1.3: `declared` is `Some` only for a declaration
+/// `declare` added after birth -- the date of the event that brought it --
+/// and `None` for one the decision was born with.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct AgainstSpan {
+    /// The pillar or rule's own `num`. `u64::MAX` when the ULID names
+    /// nothing this tree has folded, which a hand-edited log can produce and
+    /// no write this version makes ever does.
+    pub node: u64,
+    pub why: Span,
+    pub declared: Option<Span>,
+}
+
+/// A declaration resolved against the tree it lives in, the way
+/// [`Node::against`] hands it back.
+#[derive(Debug)]
+pub struct AgainstEntry<'t> {
+    /// The pillar or rule's own alias, or `"?"` for a reference a
+    /// hand-edited log left dangling.
+    pub alias: String,
+    pub why: &'t str,
+    /// The date of a late declaration, and `None` for one the decision was
+    /// born with. `t426` §1.3.
+    pub declared: Option<&'t str>,
+    /// The pillar or rule's own kind and state, read in the same place as
+    /// the alias so the prose and the JSON of `why` mark a target the same
+    /// way (`d551`). `None` for a dangling reference, which has neither.
+    pub target: Option<(Kind, State)>,
+}
+
 #[derive(Debug, Clone)]
 pub struct Node {
     pub id: String,
@@ -90,6 +121,15 @@ pub struct Node {
     /// stores and hands it back. Empty for a rule with none -- which means
     /// it is judged -- and for every kind that is not a rule. `d415`.
     pub arms: Vec<ArmSpan>,
+    /// A decision's declarations, oldest first: at birth, then every one
+    /// `declare` added later. `t426` §1.3.
+    pub against: Vec<AgainstSpan>,
+    /// Whether this decision's `node.created` carried the `against` key at
+    /// all -- `Some(vec![])` counts as `true`. `t426` §1.1: absent and empty
+    /// mean different things, and only this bit tells them apart once a
+    /// late declaration has been folded in beside a birth that never had
+    /// the key.
+    pub against_recorded: bool,
 }
 
 impl Node {
@@ -138,6 +178,23 @@ impl Node {
         self.arms
             .iter()
             .map(|a| (tree.text(a.dir), tree.text(a.command)))
+            .collect()
+    }
+    /// A decision's declarations, oldest first, resolved against `tree`. A
+    /// reference a hand-edited log left dangling resolves rather than
+    /// panicking. `t426` §1.3.
+    pub fn against<'t>(&self, tree: &'t Tree) -> Vec<AgainstEntry<'t>> {
+        self.against
+            .iter()
+            .map(|a| {
+                let target = tree.node_by_num(a.node);
+                AgainstEntry {
+                    alias: target.map(|n| n.alias()).unwrap_or_else(|| "?".to_string()),
+                    why: tree.text(a.why),
+                    declared: a.declared.map(|s| tree.text(s)),
+                    target: target.map(|n| (n.kind, n.state)),
+                }
+            })
             .collect()
     }
 }
@@ -350,6 +407,7 @@ impl Tree {
                 refs,
                 governs,
                 arms,
+                against,
             } => {
                 if self.ulid_index.contains_key(node) {
                     // Repeated creation: commutative, the first one wins.
@@ -386,6 +444,16 @@ impl Tree {
                         command: self.intern(&a.command),
                     })
                     .collect();
+                let against_recorded = against.is_some();
+                let against_spans: Vec<AgainstSpan> = against
+                    .iter()
+                    .flatten()
+                    .map(|a| AgainstSpan {
+                        node: self.resolve_ulid(&a.node),
+                        why: self.intern(&a.why),
+                        declared: None,
+                    })
+                    .collect();
                 let opened_span = self.intern(crate::clock::date_of(ts));
                 let parent_num = parent.as_deref().map(|p| self.resolve_pending(p));
                 self.nodes.insert(
@@ -408,6 +476,8 @@ impl Tree {
                         forced_close: false,
                         flags: BTreeMap::new(),
                         arms: arm_spans,
+                        against: against_spans,
+                        against_recorded,
                     },
                 );
                 self.ulid_index.insert(node.clone(), *num);
@@ -513,6 +583,24 @@ impl Tree {
                     }) {
                         n.arms.remove(pos);
                     }
+                }
+            }
+            Body::AgainstAdded { node, against } => {
+                // Interned before the mutable borrow of `self.nodes` below,
+                // the same trap `StateChanged` avoids above: `intern` needs
+                // the whole `self`.
+                let declared_span = self.intern(crate::clock::date_of(ts));
+                let spans: Vec<AgainstSpan> = against
+                    .iter()
+                    .map(|a| AgainstSpan {
+                        node: self.resolve_ulid(&a.node),
+                        why: self.intern(&a.why),
+                        declared: Some(declared_span),
+                    })
+                    .collect();
+                let num = self.resolve_ulid(node);
+                if let Some(n) = self.nodes.get_mut(&num) {
+                    n.against.extend(spans);
                 }
             }
             Body::VivacCreated {
@@ -701,6 +789,17 @@ impl Tree {
 
     pub fn nodes_iter(&self) -> impl Iterator<Item = &Node> {
         self.nodes.values()
+    }
+
+    /// Whether at least one pillar or rule is open right now -- the same
+    /// predicate `vivac rules` lists under. `t426` §1.1: a decision's
+    /// `node.created` only ever carries the `against` key when this holds,
+    /// so a tree that governs nothing keeps writing the exact bytes it
+    /// always has.
+    pub fn has_open_governance(&self) -> bool {
+        self.nodes
+            .values()
+            .any(|n| matches!(n.kind, Kind::Pillar | Kind::Rule) && n.state.is_open())
     }
 
     /// Resolves whatever the user types: `7`, `t7` or the whole ULID.
@@ -1100,6 +1199,7 @@ mod tests {
                 refs: vec![],
                 governs: vec![],
                 arms: vec![],
+                against: None,
             },
         }
     }
@@ -1122,6 +1222,7 @@ mod tests {
                 refs: vec![],
                 governs: vec![],
                 arms: vec![],
+                against: None,
             },
         }
     }
@@ -1253,6 +1354,7 @@ mod tests {
                 refs: vec![],
                 governs: vec![],
                 arms: vec![],
+                against: None,
             },
         }
     }
@@ -1342,6 +1444,7 @@ mod tests {
                 refs: vec![],
                 governs: vec![],
                 arms: vec![],
+                against: None,
             },
         }
     }
