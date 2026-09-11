@@ -27,6 +27,8 @@ pub struct Push {
     pub blocks: bool,
     pub arms: Vec<String>,
     pub arm_dir: Option<String>,
+    /// Only on a decision: what it was judged against. `t426` §2.1.
+    pub against: Vec<String>,
     /// Whether this call arrived over MCP rather than the CLI: the only
     /// thing it changes is which vocabulary a missing-folder message uses
     /// -- `arm_dir` there, `--arm-dir` here (`t411` §21).
@@ -53,6 +55,7 @@ impl Push {
             blocks: a.has("blocks"),
             arms: a.list("arm"),
             arm_dir: a.opt("arm-dir").map(str::to_string),
+            against: a.list("against"),
             via_mcp: false,
         })
     }
@@ -120,6 +123,8 @@ pub struct Add {
     pub blocks: bool,
     pub arms: Vec<String>,
     pub arm_dir: Option<String>,
+    /// Only on a decision: what it was judged against. `t426` §2.1.
+    pub against: Vec<String>,
     /// See `Push::via_mcp`.
     pub via_mcp: bool,
 }
@@ -139,6 +144,7 @@ impl Add {
             blocks: a.has("blocks"),
             arms: a.list("arm"),
             arm_dir: a.opt("arm-dir").map(str::to_string),
+            against: a.list("against"),
             via_mcp: false,
         })
     }
@@ -265,6 +271,8 @@ pub struct Decide {
     pub refs: Vec<String>,
     pub governs: Vec<String>,
     pub blocks: bool,
+    /// What it was judged against. `t426` §2.1.
+    pub against: Vec<String>,
 }
 
 impl Decide {
@@ -288,6 +296,22 @@ impl Decide {
             refs: a.list("ref"),
             governs: a.list("governs"),
             blocks: a.has("blocks"),
+            against: a.list("against"),
+        })
+    }
+}
+
+/// `declare <decision> --against "<id>: <why>"`. `t426` §2.2.
+pub struct Declare {
+    pub id: Option<String>,
+    pub against: Vec<String>,
+}
+
+impl Declare {
+    pub fn from_args(a: &Args) -> Result<Declare, Failure> {
+        Ok(Declare {
+            id: a.positional(0).map(str::to_string),
+            against: a.list("against"),
         })
     }
 }

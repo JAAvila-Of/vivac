@@ -117,12 +117,12 @@ fn initialize_answers_with_the_server_and_its_version() {
     assert!(r["result"]["capabilities"]["tools"].is_object(), "{r}");
 }
 
-/// Thirteen, and no more. Every tool costs context in every session the
-/// agent ever opens, so the list is a budget and not a catalogue: five reads
-/// plus the eight writes `t118` and `t411` add between them, and nothing
-/// past that.
+/// Fourteen, and no more. Every tool costs context in every session the
+/// agent ever opens, so the list is a budget and not a catalogue: five
+/// reads plus the nine writes `t118`, `t411` and `t426` add between them,
+/// and nothing past that.
 #[test]
-fn the_tool_list_is_the_thirteen_and_only_the_thirteen() {
+fn the_tool_list_is_the_fourteen_and_only_the_fourteen() {
     let c = seeded("list");
     let mut s = hello(&c);
     let r = s.ask(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#);
@@ -136,6 +136,7 @@ fn the_tool_list_is_the_thirteen_and_only_the_thirteen() {
             "vivac_arm",
             "vivac_brief",
             "vivac_decide",
+            "vivac_declare",
             "vivac_find",
             "vivac_note",
             "vivac_open",
@@ -1046,6 +1047,87 @@ fn save_by_mcp_writes_the_same_events_as_save_by_the_cli() {
     let mut s = hello(&via_mcp);
     let r = s.ask(
         r#"{"jsonrpc":"2.0","id":26,"method":"tools/call","params":{"name":"vivac_save","arguments":{"label":"before the migration","next":"run the reconcile"}}}"#,
+    );
+    assert_eq!(r["result"]["isError"], false, "{r}");
+    assert_eq!(tree_events(&cli), tree_events(&via_mcp));
+}
+
+/// `t426`: the same criterion as the seven tests above, for `--against` on
+/// `decide` and for the new `declare` tool.
+#[test]
+fn decide_against_by_mcp_writes_the_same_events_as_by_the_cli() {
+    let cli = Sandbox::new_seeded("decide-against-cli");
+    cli.ok(&[
+        "add",
+        "Security",
+        "--type",
+        "pillar",
+        "--why",
+        "vetoes on the spot",
+    ]);
+    cli.ok(&[
+        "add",
+        "Keep the write path local",
+        "--parent",
+        "1",
+        "--type",
+        "rule",
+        "--why",
+        "guard",
+    ]);
+    let via_mcp = twin_of(&cli, "decide-against-mcp");
+
+    cli.ok(&[
+        "decide",
+        "Keep it local",
+        "--reason",
+        "the pillar settles it",
+        "--against",
+        "r2: nothing on the write path calls the network",
+    ]);
+
+    let mut s = hello(&via_mcp);
+    let r = s.ask(
+        r#"{"jsonrpc":"2.0","id":27,"method":"tools/call","params":{"name":"vivac_decide","arguments":{"title":"Keep it local","reason":"the pillar settles it","against":["r2: nothing on the write path calls the network"]}}}"#,
+    );
+    assert_eq!(r["result"]["isError"], false, "{r}");
+    assert_eq!(tree_events(&cli), tree_events(&via_mcp));
+}
+
+#[test]
+fn declare_by_mcp_writes_the_same_events_as_declare_by_the_cli() {
+    let cli = Sandbox::new_seeded("declare-cli");
+    cli.ok(&[
+        "add",
+        "Security",
+        "--type",
+        "pillar",
+        "--why",
+        "vetoes on the spot",
+    ]);
+    cli.ok(&[
+        "add",
+        "Keep the write path local",
+        "--parent",
+        "1",
+        "--type",
+        "rule",
+        "--why",
+        "guard",
+    ]);
+    cli.ok(&["decide", "Keep it local", "--reason", "because"]);
+    let via_mcp = twin_of(&cli, "declare-mcp");
+
+    cli.ok(&[
+        "declare",
+        "3",
+        "--against",
+        "r2: nothing on the write path calls the network",
+    ]);
+
+    let mut s = hello(&via_mcp);
+    let r = s.ask(
+        r#"{"jsonrpc":"2.0","id":28,"method":"tools/call","params":{"name":"vivac_declare","arguments":{"id":"d3","against":["r2: nothing on the write path calls the network"]}}}"#,
     );
     assert_eq!(r["result"]["isError"], false, "{r}");
     assert_eq!(tree_events(&cli), tree_events(&via_mcp));

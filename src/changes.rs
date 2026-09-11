@@ -79,6 +79,9 @@ pub struct Tail {
     pub edges: usize,
     /// A rule armed or disarmed: `arm.added` or `arm.removed`.
     pub arms: usize,
+    /// A `declare` call: one `against.added`, however many declarations it
+    /// carried. `t426` §3.3.
+    pub declarations: usize,
     /// Stops inside the stretch. Not printed in the tail: it goes in the
     /// header, where it says how far back the boundary is, which is the one
     /// place the number means something.
@@ -164,6 +167,10 @@ pub fn collect<'a>(tree: &'a Tree, log: &[Event], since_seq: u64) -> Changed<'a>
             }
             Body::ArmAdded { node, .. } | Body::ArmRemoved { node, .. } => match tree.node(node) {
                 Some(_) => result.tail.arms += 1,
+                None => result.tail.unreadable += 1,
+            },
+            Body::AgainstAdded { node, .. } => match tree.node(node) {
+                Some(_) => result.tail.declarations += 1,
                 None => result.tail.unreadable += 1,
             },
             // Not naming a node: nothing to check against the tree.
@@ -313,6 +320,13 @@ pub(crate) fn tail_phrase(tail: &Tail) -> Option<String> {
     if tail.arms > 0 {
         parts.push(format!("{} arm change{}", tail.arms, plural(tail.arms)));
     }
+    if tail.declarations > 0 {
+        parts.push(format!(
+            "{} late declaration{}",
+            tail.declarations,
+            plural(tail.declarations)
+        ));
+    }
     if tail.unreadable > 0 {
         parts.push(format!(
             "{} unreadable event{}",
@@ -453,6 +467,7 @@ fn as_json(tree: &Tree, result: &Changed) -> serde_json::Value {
             "flags_cleared": result.tail.flags_cleared,
             "edge_changes": result.tail.edges,
             "arm_changes": result.tail.arms,
+            "late_declarations": result.tail.declarations,
             "unreadable": result.tail.unreadable,
         },
     })
@@ -489,6 +504,7 @@ mod tests {
                 refs: vec![],
                 governs: vec![],
                 arms: vec![],
+                against: None,
             },
         )
     }

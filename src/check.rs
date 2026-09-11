@@ -1,10 +1,11 @@
 //! `check` — the `MODEL.md` §9 invariants that apply to Tier 0.
 //!
 //! It separates two things that look alike and are not. A cycle or an orphan
-//! is **store corruption**: the tool is lying. A false close is a **finding
-//! about the project**: the store is fine and what is wrong is the work,
-//! which was called finished without being finished. Both exit non-zero
-//! --this belongs in CI-- but they are not counted together.
+//! is **store corruption**: the tool is lying. A false close, or a decision
+//! that could have declared what it was judged against and named nothing, is
+//! a **finding about the project**: the store is fine and what is wrong is
+//! the work. Both exit non-zero --this belongs in CI-- but they are not
+//! counted together.
 //!
 //! `--gates` adds a third category, and it follows the same split: the store
 //! is fine and **nothing is delivering it**. `d350`/`d351` settled what that
@@ -21,13 +22,19 @@
 //! in fact been written with no brief in front of anybody.
 
 use crate::args::Args;
-use crate::event::{Body, State};
+use crate::event::{Body, Kind, State};
 use crate::model::Tree;
 use crate::output::outln;
 
 pub fn check(a: &Tree, args: &Args) -> Result<i32, crate::failure::Failure> {
     let mut store: Vec<String> = Vec::new();
     let mut project: Vec<String> = Vec::new();
+    // Tracked apart from `project`'s own count so each footer prints only
+    // for the finding that actually produced it (`t426` §4): a tree can
+    // hold a false close with no undeclared decision, or the other way
+    // round.
+    let mut false_close_count = 0usize;
+    let mut undeclared_count = 0usize;
 
     if a.broken_lines > 0 {
         store.push(format!(
@@ -81,6 +88,22 @@ pub fn check(a: &Tree, args: &Args) -> Result<i32, crate::failure::Failure> {
                 pending_count.len(),
                 aliases.join(", ")
             ));
+            false_close_count += 1;
+        }
+        // `t426` §4: a decision that could have declared what it was judged
+        // against -- its `node.created` carried the key -- and never did,
+        // at birth or later. One born with no key never had the chance, and
+        // does not count.
+        if n.kind == Kind::Decision
+            && n.state.is_open()
+            && n.against_recorded
+            && n.against.is_empty()
+        {
+            project.push(format!(
+                "{0} declares nothing it was judged against: vivac declare {0} --against \"<id>: <why>\"",
+                n.alias()
+            ));
+            undeclared_count += 1;
         }
     }
     store.sort();
@@ -169,9 +192,16 @@ pub fn check(a: &Tree, args: &Args) -> Result<i32, crate::failure::Failure> {
                 outln!("      {m}");
             }
             outln!();
-            outln!("  A false close is not repaired by editing the tree: reopen what");
-            outln!("  stayed open, or close it deliberately with --force.");
-            outln!();
+            if false_close_count > 0 {
+                outln!("  A false close is not repaired by editing the tree: reopen what");
+                outln!("  stayed open, or close it deliberately with --force.");
+                outln!();
+            }
+            if undeclared_count > 0 {
+                outln!("  A decision that declared nothing stays as it was written: vivac declare");
+                outln!("  adds what it was judged against, and why shows it as late.");
+                outln!();
+            }
         }
         if !gates.is_empty() {
             outln!(
