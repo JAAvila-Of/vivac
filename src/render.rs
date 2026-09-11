@@ -94,6 +94,13 @@ fn json_node(a: &Tree, ag: &Aggregates, n: &Node) -> serde_json::Value {
             .map(|(dir, command)| json!({"dir": dir, "command": command}))
             .collect::<Vec<_>>());
     }
+    // `t426` §3.2: a decision gains `against` only when its `node.created`
+    // carried the key, or a late declaration was folded into a birth that
+    // never did. Everything else -- every other kind, and a decision with
+    // neither -- stays byte for byte what it already was.
+    if n.kind == Kind::Decision && (n.against_recorded || !n.against.is_empty()) {
+        v["against"] = against_json(a, n);
+    }
     v
 }
 
@@ -269,6 +276,11 @@ fn json_node_full(a: &Tree, ag: &Aggregates, full: &Full, n: &Node) -> serde_jso
 /// `governs`, `opened`, `closed`, `false_close`, `total_below`. The prose
 /// never prints any of them for an ancestor, and whoever wants them can ask
 /// `why` about that alias directly.
+///
+/// A decision carries `against` only under `--full`, because that is the
+/// only time the prose prints an ancestor's declarations (`d330`), and
+/// through the same [`against_json`] [`json_node`] uses, so a step and a
+/// node cannot read one differently (`d469`).
 fn path_step_json(a: &Tree, ag: &Aggregates, full: Option<&Full>, p: &Node) -> serde_json::Value {
     let body = |text: &str| match full {
         Some(_) => text.to_string(),
@@ -292,6 +304,9 @@ fn path_step_json(a: &Tree, ag: &Aggregates, full: Option<&Full>, p: &Node) -> s
             "parked": below.parked_nodes,
         },
     });
+    if full.is_some() && p.kind == Kind::Decision && (p.against_recorded || !p.against.is_empty()) {
+        v["against"] = against_json(a, p);
+    }
     if let Some(f) = full {
         v["anchor"] = json!(anchor_of(a, f, p));
         v["standing"] = json!(standing_of(a, p)
@@ -505,6 +520,13 @@ pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
         // them with.
         if p.kind == Kind::Rule {
             print_arms(a, p, "        ", true);
+        }
+        // `t426` §3.1: a decision shows its declarations right where a rule
+        // shows its arms -- behind the alias line, ahead of the body.
+        // `d330`'s own rule: they show for the node actually asked about,
+        // and for an ancestor only under `--full`.
+        if p.kind == Kind::Decision && (is_last || full.is_some()) {
+            print_against(a, p, "        ");
         }
         for l in wrap(&body(p.why(a)), WIDTH, "        ") {
             outln!("{l}");
@@ -888,6 +910,50 @@ fn print_arms(a: &Tree, r: &Node, indent: &str, show_judged: bool) {
             outln!("{indent}armed in {dir}/: {command}");
         }
     }
+}
+
+/// A decision's own declarations, one per line, wrapped the same way its
+/// body is: `judged against <alias>: <why>`, with `(declared <date>)`
+/// appended for a late one. `t426` §3.1.
+///
+/// A pillar or rule that is no longer open is marked right after its alias
+/// with the word `label()` puts behind a title, `[abandoned]` or `[closed]`,
+/// so a reader does not have to go and look whether what was named still
+/// governs (`d551`). An open one, and a dangling reference, carry no mark.
+fn print_against(a: &Tree, n: &Node, indent: &str) {
+    for e in n.against(a) {
+        let mark = match e.target {
+            Some((kind, state)) if !state.is_open() => format!(" [{}]", state.word(kind)),
+            _ => String::new(),
+        };
+        let suffix = match e.declared {
+            Some(date) => format!("  (declared {date})"),
+            None => String::new(),
+        };
+        let line = format!("judged against {}{mark}: {}{suffix}", e.alias, e.why);
+        for l in wrap(&line, WIDTH, indent) {
+            outln!("{l}");
+        }
+    }
+}
+
+/// A decision's declarations as JSON, one entry for each one
+/// [`print_against`] prints and in the same order. `state` is there on every
+/// entry, open or not, serialized the way a node's own `state` is and `null`
+/// for a dangling reference: what the data carries cannot depend on what the
+/// prose leaves unsaid (`d551`). Shared by [`json_node`] and
+/// [`path_step_json`], so the two cannot read a declaration differently.
+fn against_json(a: &Tree, n: &Node) -> serde_json::Value {
+    json!(n
+        .against(a)
+        .into_iter()
+        .map(|e| json!({
+            "node": e.alias,
+            "state": e.target.map(|(_, state)| state),
+            "why": e.why,
+            "declared": e.declared,
+        }))
+        .collect::<Vec<_>>())
 }
 
 /// `d422`: nobody hunting for what governs this project should have to

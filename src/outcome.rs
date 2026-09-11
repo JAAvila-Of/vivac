@@ -97,6 +97,21 @@ pub enum ArmChange {
     Removed,
 }
 
+/// One declaration `declare` recorded: the pillar or rule's own alias and
+/// the sentence on how the decision holds against it. `t426` §2.2.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DeclaredPair {
+    pub node: String,
+    pub why: String,
+}
+
+/// `false` is never serialized: otherwise `d445`'s `no_against` would
+/// change the JSON of every write that is not a decision, which `t426` §2.3
+/// keeps byte for byte what it already was.
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
 /// A node `restore` cannot put back on the stack, and why: it closed, it was
 /// abandoned, or it no longer exists at all.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -146,6 +161,8 @@ pub enum Outcome {
         title: String,
         blocks: bool,
         advice: Option<DepthAdvice>,
+        #[serde(skip_serializing_if = "is_false")]
+        no_against: bool,
     },
     Popped {
         closed: Closed,
@@ -159,6 +176,8 @@ pub enum Outcome {
         title: String,
         parent: Option<AddedUnder>,
         blocks: bool,
+        #[serde(skip_serializing_if = "is_false")]
+        no_against: bool,
     },
     Noted {
         alias: String,
@@ -207,6 +226,14 @@ pub enum Outcome {
         title: String,
         superseded: Option<SupersededNode>,
         no_alternatives: bool,
+        #[serde(skip_serializing_if = "is_false")]
+        no_against: bool,
+    },
+    /// `declare`'s own write: what a decision was judged against, recorded
+    /// after the fact. `t426` §2.2.
+    Declared {
+        alias: String,
+        against: Vec<DeclaredPair>,
     },
     Saved {
         num: u64,
@@ -230,6 +257,17 @@ pub enum Outcome {
     /// A session opened, for the start hook. Silent for the same reason: the
     /// brief is what the hook actually shows, and this is not it.
     SessionOpened,
+}
+
+/// `d445`'s warning: a pillar or a rule judged in silence reads the same
+/// as one nobody checked at all, so a decision born while something governs
+/// and declaring nothing says so, and says how to fix it. `t426` §2.3.
+fn no_against_lines(out: &mut Vec<String>, alias: &str) {
+    out.push(
+        "        no --against: a pillar judged in silence reads the same as one skipped"
+            .to_string(),
+    );
+    out.push(format!("        vivac declare {alias} adds one"));
 }
 
 fn closed_lines(out: &mut Vec<String>, c: &Closed) {
@@ -256,6 +294,7 @@ pub fn to_text(o: &Outcome) -> String {
             title,
             blocks,
             advice,
+            no_against,
         } => {
             lines.push(format!("  {alias}  {title}"));
             if *blocks {
@@ -269,6 +308,9 @@ pub fn to_text(o: &Outcome) -> String {
                 ));
                 lines.push("  Is this still a detour, or did the real goal move?".to_string());
                 lines.push("  If it moved:  vivac promote".to_string());
+            }
+            if *no_against {
+                no_against_lines(&mut lines, alias);
             }
         }
         Outcome::Popped { closed, parent } => {
@@ -290,6 +332,7 @@ pub fn to_text(o: &Outcome) -> String {
             title,
             parent,
             blocks,
+            no_against,
         } => {
             let where_at = match parent {
                 Some(p) => format!(" under {}", p.alias),
@@ -298,6 +341,9 @@ pub fn to_text(o: &Outcome) -> String {
             lines.push(format!("  {alias}  {title}{where_at}"));
             if *blocks {
                 lines.push("        blocks its parent from closing".to_string());
+            }
+            if *no_against {
+                no_against_lines(&mut lines, alias);
             }
         }
         Outcome::Noted { alias } => lines.push(format!("  {alias} noted")),
@@ -385,6 +431,7 @@ pub fn to_text(o: &Outcome) -> String {
             title,
             superseded,
             no_alternatives,
+            no_against,
         } => {
             lines.push(format!("  {alias}  {title}"));
             if let Some(s) = superseded {
@@ -395,6 +442,14 @@ pub fn to_text(o: &Outcome) -> String {
                     "        no alternatives recorded: in a month they get proposed again"
                         .to_string(),
                 );
+            }
+            if *no_against {
+                no_against_lines(&mut lines, alias);
+            }
+        }
+        Outcome::Declared { alias, against } => {
+            for a in against {
+                lines.push(format!("  {alias}  judged against {}: {}", a.node, a.why));
             }
         }
         Outcome::Saved {

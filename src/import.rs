@@ -141,6 +141,7 @@ pub fn import(ctx: &mut Ctx, args: &Args) -> R {
                 refs: n.refs.clone(),
                 governs: vec![],
                 arms: vec![],
+                against: None,
             },
             instant(&n.opened),
         );
