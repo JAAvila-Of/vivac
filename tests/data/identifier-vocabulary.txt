@@ -207,6 +207,7 @@ cls
 cmd
 cmp
 code
+codes
 collect
 collections
 colour
