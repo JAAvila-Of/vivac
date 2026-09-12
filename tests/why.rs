@@ -15,6 +15,7 @@
 mod common;
 use common::Sandbox;
 use serde_json::Value;
+use std::collections::BTreeSet;
 
 /// `g1` (root), two siblings under it -- one closed before `t4` is born, one
 /// closed after -- and `t4` itself, the node every test below asks about.
@@ -214,6 +215,12 @@ fn without_full_fields(v: &Value) -> Value {
 /// responsible for. This checks that directly, rather than by field
 /// presence alone: the plain read has to equal `--full`'s own output with
 /// exactly the three fields it adds removed, nothing more and nothing less.
+///
+/// `t465` clips an ancestor step's `why`, `notes` and `outcome` when `--full`
+/// is absent, so this equality only holds because `seeded`'s bodies are all
+/// shorter than `ANCESTOR_CLIP` -- clipping a string that already fits is a
+/// no-op. A fixture with long bodies would make the plain read and `--full`
+/// disagree on purpose, and that disagreement is what the next test proves.
 #[test]
 fn the_plain_read_is_full_with_its_three_fields_removed() {
     let c = seeded("plain-equals-full-stripped");
@@ -390,5 +397,454 @@ fn the_json_carries_every_note_and_note_still_carries_the_last() {
     assert_eq!(
         v["node"]["note"], "second note",
         "note should still name the latest one:\n{v}"
+    );
+}
+
+/// The JSON mirror of `without_full_the_ancestor_body_is_truncated` and
+/// `full_prints_the_ancestor_body_whole`: `path`'s ancestor clips its `why`,
+/// each `notes[].note` and its `outcome` the same way the prose does, under
+/// the same `ANCESTOR_CLIP`, and `--full` leaves them whole. `node` never
+/// clips, in either mode, because it is the one thing `why` was actually
+/// asked about.
+#[test]
+fn path_clip_matches_the_prose_and_full_leaves_it_whole() {
+    let c = seeded_with_long_bodies("json-ancestor-clip");
+    let plain: Value = serde_json::from_str(&c.ok(&["why", "2", "--json"])).unwrap();
+    let full = full_json(&c, "2");
+
+    let why_plain = plain["path"][0]["why"].as_str().unwrap();
+    assert!(
+        why_plain.contains("anc-why-open"),
+        "the start of the ancestor's why should survive the clip:\n{plain}"
+    );
+    assert!(
+        !why_plain.contains("anc-why-close"),
+        "the ancestor's why should have been clipped:\n{plain}"
+    );
+    assert!(
+        why_plain.contains("..."),
+        "a clipped why needs its own truncation mark:\n{plain}"
+    );
+    assert!(
+        !plain["path"][0]["notes"][0]["note"]
+            .as_str()
+            .unwrap()
+            .contains("anc-note-close"),
+        "the ancestor's note should have been clipped:\n{plain}"
+    );
+    assert!(
+        !plain["path"][0]["outcome"]
+            .as_str()
+            .unwrap()
+            .contains("anc-outcome-close"),
+        "the ancestor's outcome should have been clipped:\n{plain}"
+    );
+
+    assert!(
+        full["path"][0]["why"]
+            .as_str()
+            .unwrap()
+            .contains("anc-why-close"),
+        "--full should carry the ancestor's why whole:\n{full}"
+    );
+    assert!(
+        full["path"][0]["notes"][0]["note"]
+            .as_str()
+            .unwrap()
+            .contains("anc-note-close"),
+        "--full should carry the ancestor's note whole:\n{full}"
+    );
+    assert!(
+        full["path"][0]["outcome"]
+            .as_str()
+            .unwrap()
+            .contains("anc-outcome-close"),
+        "--full should carry the ancestor's outcome whole:\n{full}"
+    );
+
+    assert!(
+        plain["node"]["why"]
+            .as_str()
+            .unwrap()
+            .contains("tgt-why-close"),
+        "the requested node's own why must never clip:\n{plain}"
+    );
+}
+
+/// Every handle -- `in_parallel`, and `node`'s `standing` and `open_then`
+/// under `--full` -- carries exactly `alias`, `kind`, `state` and `title`,
+/// nothing more and nothing less; a `born_here` handle carries those four
+/// plus `blocks`, because the prose stars the ones that keep their parent
+/// from closing.
+#[test]
+fn every_handle_carries_exactly_its_own_fields() {
+    let c = Sandbox::new_seeded("handle-keys");
+    c.ok(&["push", "Root", "--why", "root reason"]);
+    c.ok(&[
+        "add",
+        "Sibling of the target, still open",
+        "--parent",
+        "1",
+        "--why",
+        "sibling reason",
+    ]);
+    c.ok(&[
+        "add",
+        "The target node",
+        "--parent",
+        "1",
+        "--why",
+        "target reason",
+    ]);
+    c.ok(&[
+        "add",
+        "Child of the target, still open",
+        "--parent",
+        "3",
+        "--why",
+        "child reason",
+        "--blocks",
+    ]);
+    c.ok(&[
+        "decide",
+        "Decision under the target",
+        "--parent",
+        "3",
+        "--reason",
+        "decision reason",
+    ]);
+
+    let v = full_json(&c, "3");
+
+    let keys_of = |h: &Value| -> BTreeSet<String> {
+        h.as_object()
+            .unwrap_or_else(|| panic!("not an object: {h}"))
+            .keys()
+            .cloned()
+            .collect()
+    };
+    let handle_keys: BTreeSet<String> = ["alias", "kind", "state", "title"]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    let born_here_keys: BTreeSet<String> = ["alias", "kind", "state", "title", "blocks"]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+
+    let siblings = v["in_parallel"].as_array().unwrap();
+    assert!(
+        !siblings.is_empty(),
+        "the fixture should carry an open sibling:\n{v}"
+    );
+    for h in siblings {
+        assert_eq!(
+            keys_of(h),
+            handle_keys,
+            "in_parallel carries the wrong keys:\n{v}"
+        );
+    }
+
+    let standing = v["node"]["standing"].as_array().unwrap();
+    assert!(
+        !standing.is_empty(),
+        "the fixture should carry a standing decision:\n{v}"
+    );
+    for h in standing {
+        assert_eq!(
+            keys_of(h),
+            handle_keys,
+            "standing carries the wrong keys:\n{v}"
+        );
+    }
+
+    let open_then = v["node"]["open_then"].as_array().unwrap();
+    assert!(
+        !open_then.is_empty(),
+        "the fixture should carry an open_then sibling:\n{v}"
+    );
+    for h in open_then {
+        assert_eq!(
+            keys_of(h),
+            handle_keys,
+            "open_then carries the wrong keys:\n{v}"
+        );
+    }
+
+    let born_here = v["born_here"].as_array().unwrap();
+    assert_eq!(
+        born_here.len(),
+        2,
+        "the fixture should carry two open children:\n{v}"
+    );
+    for h in born_here {
+        assert_eq!(
+            keys_of(h),
+            born_here_keys,
+            "born_here carries the wrong keys:\n{v}"
+        );
+    }
+}
+
+/// `t465`: `blockers` walks every step of the path **with the node itself
+/// included**, using `blocking_of` rather than a flat `open_blockers` read
+/// off the node alone. An ancestor further up that is still open and has its
+/// own open blocker shows up here, blocker included; a step that already
+/// closed answers empty, even with an open blocker left behind -- that is a
+/// false close, not a debt, and `triage` is where that gets reported instead.
+#[test]
+fn blockers_reaches_an_open_ancestor_and_skips_a_closed_one() {
+    let c = Sandbox::new_seeded("ancestor-blockers");
+    c.ok(&["push", "Root", "--why", "root reason"]);
+    c.ok(&[
+        "add",
+        "Ancestor still open",
+        "--parent",
+        "1",
+        "--why",
+        "ancestor reason",
+    ]);
+    c.ok(&[
+        "add",
+        "Blocks the open ancestor",
+        "--parent",
+        "2",
+        "--why",
+        "blocker reason",
+        "--blocks",
+    ]);
+    c.ok(&[
+        "add",
+        "Closed ancestor step",
+        "--parent",
+        "2",
+        "--why",
+        "closed reason",
+    ]);
+    c.ok(&[
+        "add",
+        "Blocks the closed ancestor",
+        "--parent",
+        "4",
+        "--why",
+        "blocker reason",
+        "--blocks",
+    ]);
+    c.ok(&["done", "4", "closed anyway", "--force"]);
+    c.ok(&[
+        "add",
+        "The queried node",
+        "--parent",
+        "4",
+        "--why",
+        "target reason",
+    ]);
+
+    let v: Value = serde_json::from_str(&c.ok(&["why", "6", "--json"])).unwrap();
+    let blockers = v["blockers"].as_array().unwrap();
+    assert_eq!(blockers.len(), 1, "{v}");
+    assert_eq!(blockers[0]["blocked"], "t2", "{v}");
+    let until: Vec<String> = blockers[0]["until"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| h["alias"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(until, vec!["t3"], "{v}");
+    assert!(
+        blockers.iter().all(|b| b["blocked"] != "t4"),
+        "a closed step must not appear in blockers, even with an open blocker of its own:\n{v}"
+    );
+}
+
+/// Parses the aliases a prose block lists after its header line, up to the
+/// next blank line: one alias per line, the first token once a leading `*`
+/// (born here's blocking-marker) is skipped.
+fn prose_aliases_after(s: &str, header: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut inside = false;
+    for line in s.lines() {
+        if line.trim_start().starts_with(header) {
+            inside = true;
+            continue;
+        }
+        if inside {
+            if line.trim().is_empty() {
+                break;
+            }
+            let mut words = line.split_whitespace();
+            let mut tok = words.next().expect("a listed line names an alias");
+            if tok == "*" {
+                tok = words.next().expect("a starred line still names an alias");
+            }
+            out.push(tok.to_string());
+        }
+    }
+    out
+}
+
+/// Parses every "`<alias>` does not close until these close (`n`):" block:
+/// the blocked step's own alias, paired with the aliases listed under it.
+fn prose_blockers(s: &str) -> Vec<(String, Vec<String>)> {
+    let mut out = Vec::new();
+    let lines: Vec<&str> = s.lines().collect();
+    let mut i = 0;
+    while i < lines.len() {
+        let trimmed = lines[i].trim();
+        if let Some(at) = trimmed.find(" does not close until these close (") {
+            let blocked = trimmed[..at].to_string();
+            let mut until = Vec::new();
+            i += 1;
+            while i < lines.len() && !lines[i].trim().is_empty() {
+                let alias = lines[i]
+                    .split_whitespace()
+                    .next()
+                    .expect("a listed line names an alias")
+                    .to_string();
+                until.push(alias);
+                i += 1;
+            }
+            out.push((blocked, until));
+        }
+        i += 1;
+    }
+    out
+}
+
+/// One tree that carries every corner `prose_and_json_name_exactly_the_same_aliases`
+/// checks at once: an open sibling of the target and a closed one, an open
+/// child that blocks and one that does not and one that is closed, and a
+/// blocker at two different steps of the path -- the ancestor and the target
+/// itself.
+fn seeded_for_the_prose_and_json_check(name: &str) -> Sandbox {
+    let c = Sandbox::new_seeded(name);
+    c.ok(&["push", "Root", "--why", "root reason"]);
+    c.ok(&[
+        "add",
+        "Ancestor",
+        "--parent",
+        "1",
+        "--why",
+        "ancestor reason",
+    ]);
+    c.ok(&[
+        "add",
+        "Blocks the ancestor",
+        "--parent",
+        "2",
+        "--why",
+        "blocker reason",
+        "--blocks",
+    ]);
+    c.ok(&[
+        "add",
+        "The target node",
+        "--parent",
+        "2",
+        "--why",
+        "target reason",
+    ]);
+    c.ok(&[
+        "add",
+        "Open sibling of the target",
+        "--parent",
+        "2",
+        "--why",
+        "sibling reason",
+    ]);
+    c.ok(&[
+        "add",
+        "Closed sibling of the target",
+        "--parent",
+        "2",
+        "--why",
+        "sibling reason",
+    ]);
+    c.ok(&["done", "6", "settled"]);
+    c.ok(&[
+        "add",
+        "Open child of the target, blocks",
+        "--parent",
+        "4",
+        "--why",
+        "child reason",
+        "--blocks",
+    ]);
+    c.ok(&[
+        "add",
+        "Open child of the target, no blocks",
+        "--parent",
+        "4",
+        "--why",
+        "child reason",
+    ]);
+    c.ok(&[
+        "add",
+        "Closed child of the target",
+        "--parent",
+        "4",
+        "--why",
+        "child reason",
+    ]);
+    c.ok(&["done", "9", "settled"]);
+    c
+}
+
+/// The test that would have caught `blockers` answering a different question
+/// than "does not close until these close" does (`t465`, `f440`): every alias
+/// the prose lists under "In parallel", "Born here and still open" and each
+/// "does not close until these close" has to be exactly the set of aliases
+/// the JSON's `in_parallel`, `born_here` and `blockers[].until` carry.
+#[test]
+fn prose_and_json_name_exactly_the_same_aliases() {
+    let c = seeded_for_the_prose_and_json_check("prose-json-check");
+    let prose = c.ok(&["why", "4"]);
+    let v: Value = serde_json::from_str(&c.ok(&["why", "4", "--json"])).unwrap();
+
+    let siblings_prose = prose_aliases_after(&prose, "In parallel, still open (");
+    let siblings_json: Vec<String> = v["in_parallel"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| h["alias"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(siblings_prose, siblings_json, "{prose}\n{v}");
+    assert_eq!(siblings_prose, vec!["t3", "t5"], "{prose}");
+
+    let born_here_prose = prose_aliases_after(&prose, "Born here and still open (");
+    let born_here_json: Vec<String> = v["born_here"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| h["alias"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(born_here_prose, born_here_json, "{prose}\n{v}");
+    assert_eq!(born_here_prose, vec!["t7", "t8"], "{prose}");
+
+    let blockers_prose = prose_blockers(&prose);
+    let blockers_json: Vec<(String, Vec<String>)> = v["blockers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| {
+            (
+                b["blocked"].as_str().unwrap().to_string(),
+                b["until"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|h| h["alias"].as_str().unwrap().to_string())
+                    .collect(),
+            )
+        })
+        .collect();
+    assert_eq!(blockers_prose, blockers_json, "{prose}\n{v}");
+    assert_eq!(
+        blockers_prose,
+        vec![
+            ("t2".to_string(), vec!["t3".to_string()]),
+            ("t4".to_string(), vec!["t7".to_string()]),
+        ],
+        "{prose}"
     );
 }

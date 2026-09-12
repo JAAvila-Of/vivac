@@ -212,6 +212,9 @@ fn find_with_everywhere_returns_what_the_cli_returns() {
     );
 }
 
+/// `t465`: `path` stopped carrying the node itself -- it already travels
+/// whole in `node`, so `g1` is both the first step and the last one here,
+/// never `t2`.
 #[test]
 fn why_carries_the_path_down_from_the_goal() {
     let c = seeded("why");
@@ -221,7 +224,32 @@ fn why_carries_the_path_down_from_the_goal() {
     );
     let v: Value = serde_json::from_str(&text_of(&r)).unwrap();
     assert_eq!(v["node"]["title"], "Guard the commit messages");
-    assert!(v["path"].as_array().unwrap().len() >= 2, "{v}");
+    let path = v["path"].as_array().unwrap();
+    assert_eq!(
+        path.last().unwrap()["alias"],
+        "g1",
+        "the last path step should be the node's own parent:\n{v}"
+    );
+    assert_eq!(
+        path[0]["alias"], "g1",
+        "the first path step should be the root:\n{v}"
+    );
+}
+
+/// The MCP tool's own payload has to equal `why --json`'s, value for value,
+/// not just at the fields the tests above happen to reach into.
+#[test]
+fn why_comes_back_as_the_json_the_cli_would_print() {
+    let c = seeded("why-json");
+    let cli_text = c.ok(&["why", "t2", "--json"]);
+    let cli: Value = serde_json::from_str(&cli_text).expect("the CLI payload is not JSON");
+    let mut s = hello(&c);
+    let r = s.ask(
+        r#"{"jsonrpc":"2.0","id":25,"method":"tools/call","params":{"name":"vivac_why","arguments":{"id":"t2"}}}"#,
+    );
+    let t = text_of(&r);
+    let v: Value = serde_json::from_str(&t).expect("the payload is not JSON");
+    assert_eq!(v, cli, "the MCP tool and `why --json` disagree:\n{t}");
 }
 
 /// `d273`'s second half, on `vivac_why`: `project` opens a node that lives
