@@ -207,18 +207,90 @@ pub(crate) fn open_then_of<'a>(a: &'a Tree, full: &Full, n: &Node) -> Vec<&'a No
         .collect()
 }
 
-/// `json_node`, with the three `--full` fields added.
+/// A handle: the four fields a reader needs to recognise a node and go ask
+/// `why` about it, nothing more. `open_data` prints the same four (plus
+/// `lineage`, which why has no use for: a path's siblings already share a
+/// parent, and whatever is born here already hangs off the node itself).
+/// `t465` put this everywhere `why`'s JSON used to hand back a whole
+/// [`json_node`] for something the prose only ever names -- a sibling, a
+/// child, a blocker, a standing decision.
+fn handle_json(a: &Tree, n: &Node) -> serde_json::Value {
+    json!({
+        "alias": n.alias(),
+        "kind": n.kind,
+        "state": n.state,
+        "title": n.title(a),
+    })
+}
+
+/// `json_node`, with the three `--full` fields added -- `standing` and
+/// `open_then` as handles now rather than whole nodes (`t465`): the prose
+/// `print_full_of` prints only their aliases, and the JSON used to carry the
+/// rest of each one for nothing.
 fn json_node_full(a: &Tree, ag: &Aggregates, full: &Full, n: &Node) -> serde_json::Value {
     let mut v = json_node(a, ag, n);
     v["anchor"] = json!(anchor_of(a, full, n));
     v["standing"] = json!(standing_of(a, n)
         .iter()
-        .map(|c| json_node(a, ag, c))
+        .map(|c| handle_json(a, c))
         .collect::<Vec<_>>());
     v["open_then"] = json!(open_then_of(a, full, n)
         .iter()
-        .map(|c| json_node(a, ag, c))
+        .map(|c| handle_json(a, c))
         .collect::<Vec<_>>());
+    v
+}
+
+/// One step of `path`: an ancestor's handle plus the body the prose actually
+/// reads out loud, clipped the same way and by the same `ANCESTOR_CLIP` the
+/// text render of `why` uses, and whole under `--full`. Unlike a handle,
+/// `notes` carries every one of them rather than only the latest, because
+/// the prose does too -- but there is no `note` field here: it would only be
+/// the last of `notes` again, and `f440` found most of a path's weight was
+/// one note carried twice exactly that way.
+///
+/// `below` is `ag.counts`, the same three fields the prose folds into one
+/// phrase after every step but the last: open, closed and parked, always all
+/// three, because a zero here is an answer and not an absence.
+///
+/// What it deliberately drops: `id`, `num`, `blocks`, `parent`, `refs`,
+/// `governs`, `opened`, `closed`, `false_close`, `total_below`. The prose
+/// never prints any of them for an ancestor, and whoever wants them can ask
+/// `why` about that alias directly.
+fn path_step_json(a: &Tree, ag: &Aggregates, full: Option<&Full>, p: &Node) -> serde_json::Value {
+    let body = |text: &str| match full {
+        Some(_) => text.to_string(),
+        None => clip(text, ANCESTOR_CLIP),
+    };
+    let below = ag.counts(p.num);
+    let mut v = json!({
+        "alias": p.alias(),
+        "kind": p.kind,
+        "state": p.state,
+        "title": p.title(a),
+        "why": body(p.why(a)),
+        "notes": p.notes(a)
+            .iter()
+            .map(|(at, text)| json!({"at": at, "note": body(text)}))
+            .collect::<Vec<_>>(),
+        "outcome": body(p.outcome(a)),
+        "below": {
+            "open": below.open_count,
+            "closed": below.closed_count,
+            "parked": below.parked_nodes,
+        },
+    });
+    if let Some(f) = full {
+        v["anchor"] = json!(anchor_of(a, f, p));
+        v["standing"] = json!(standing_of(a, p)
+            .iter()
+            .map(|c| handle_json(a, c))
+            .collect::<Vec<_>>());
+        v["open_then"] = json!(open_then_of(a, f, p)
+            .iter()
+            .map(|c| handle_json(a, c))
+            .collect::<Vec<_>>());
+    }
     v
 }
 
@@ -232,16 +304,27 @@ fn json_node_full(a: &Tree, ag: &Aggregates, full: &Full, n: &Node) -> serde_jso
 ///
 /// `full` is `None` for every caller but `why --full`, `why_data`'s own
 /// signature included: the MCP tool calls that one and has never asked for
-/// the log, so its shape stays exactly what it has always been.
+/// the log, so it always gets the plain shape below and never `--full`'s
+/// three extra fields.
+///
+/// `node` is the one whole [`json_node`], the reason anybody asked. Every
+/// other field the prose only ever names, so `t465` cut each down to match:
+/// `path` to a clipped [`path_step_json`] per ancestor, `in_parallel` and
+/// `born_here` to a [`handle_json`] each, and `blockers` to one entry per
+/// path step -- node included -- naming what `blocking_of` says still keeps
+/// it from closing. `f440` measured what the old shape cost on a real tree:
+/// 86,894 bytes for one `why --json`, 89% of it `in_parallel` alone, against
+/// 3,685 for the prose answering the same question. Over a copy of the same
+/// tree, both numbers from the same harness, it is 7,139 now.
 fn why_data_impl(a: &Tree, full: Option<&Full>, id: &str) -> Result<serde_json::Value, Failure> {
     let ag = &a.aggregates();
     let n = a
         .resolve(id)
         .ok_or_else(|| Failure::usage(format!("No such node: {id}.")))?;
     let lineage = a.ancestors(n.num);
-    let node_json = |x: &Node| match full {
-        Some(f) => json_node_full(a, ag, f, x),
-        None => json_node(a, ag, x),
+    let node_json = match full {
+        Some(f) => json_node_full(a, ag, f, n),
+        None => json_node(a, ag, n),
     };
     let siblings: Vec<_> = n
         .parent
@@ -249,16 +332,43 @@ fn why_data_impl(a: &Tree, full: Option<&Full>, id: &str) -> Result<serde_json::
         .unwrap_or_default()
         .into_iter()
         .filter(|c| c.id != n.id && c.state.is_open())
-        .map(|c| json_node(a, ag, c))
+        .map(|c| handle_json(a, c))
+        .collect();
+    let born_here: Vec<_> = a
+        .children(n.num)
+        .iter()
+        .filter(|c| c.state.is_open())
+        .map(|c| {
+            let mut v = handle_json(a, c);
+            v["blocks"] = json!(c.blocks);
+            v
+        })
+        .collect();
+    // Every step of the path, node included -- the same walk the prose's own
+    // "does not close until" loop makes -- kept to the ones `blocking_of`
+    // answers non-empty. A closed step drops out on its own: it is a false
+    // close, not a debt, and `tree` and `triage` report it as one instead.
+    let blockers: Vec<_> = lineage
+        .iter()
+        .filter_map(|p| {
+            let until = blocking_of(a, p);
+            (!until.is_empty()).then(|| {
+                json!({
+                    "blocked": p.alias(),
+                    "until": until.iter().map(|c| handle_json(a, c)).collect::<Vec<_>>(),
+                })
+            })
+        })
         .collect();
     Ok(json!({
-        "node": node_json(n),
-        "path": lineage.iter().map(|x| node_json(x)).collect::<Vec<_>>(),
+        "node": node_json,
+        "path": lineage[..lineage.len().saturating_sub(1)]
+            .iter()
+            .map(|p| path_step_json(a, ag, full, p))
+            .collect::<Vec<_>>(),
         "in_parallel": siblings,
-        "born_here": a.children(n.num).iter().filter(|c| c.state.is_open())
-            .map(|c| json_node(a, ag, c)).collect::<Vec<_>>(),
-        "blockers": a.open_blockers(n.num).iter()
-            .map(|c| json_node(a, ag, c)).collect::<Vec<_>>(),
+        "born_here": born_here,
+        "blockers": blockers,
     }))
 }
 
@@ -269,11 +379,12 @@ pub fn why_data(a: &Tree, id: &str) -> Result<serde_json::Value, Failure> {
 /// A front, identified by its alias and where it hangs, not the node itself:
 /// `why` on the alias brings the rest.
 ///
-/// This used to be `json_node`'s eighteen keys plus `lineage`, the same
-/// shape `why` needs because `why` is asked for exactly that prose. The
-/// prose `open` prints was already the right shape -- alias, title, path --
-/// and the data was not; `d172` made the same fix for `find` first, down to
-/// dropping `matched`, which has no analogue here because there is no query.
+/// This used to be `json_node`'s eighteen keys plus `lineage`: the shape
+/// `why` gives the one node it is asked about, and until `t465` gave every
+/// other node it named as well. The prose `open` prints was already the
+/// right shape -- alias, title, path -- and the data was not; `d172` made the
+/// same fix for `find` first, down to dropping `matched`, which has no
+/// analogue here because there is no query.
 /// Measured over the same 10,000-node tree, both numbers from the same
 /// harness: the MCP payload was 1,993,053 bytes and is now 599,012, 30% of
 /// what it cost before.

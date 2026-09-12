@@ -464,6 +464,16 @@ return the node, which over ten thousand nodes meant 1,993,053 bytes where
 599,012 will do. A payload nobody asked for costs the same context as a tool
 nobody calls.
 
+`vivac_why` follows the same rule for everything but the node you asked
+about, which still comes back whole. The ancestors on its path carry their
+bodies clipped the way the prose clips them, and its siblings, children and
+blockers come back as handles — alias, kind, state and title, plus whether a
+child blocks. It used to return every one of them whole: `why --json` on a
+node deep in this project's own tree weighed 86,894 bytes against 3,685 for
+the prose, and weighs 7,139 now. Across every node of three real trees, this
+one among them, the JSON went from 8.8, 6.7 and 5.7 times the prose to 1.5,
+1.8 and 2.1.
+
 `vivac_find` takes `everywhere` and `vivac_why` takes `project`, the same two
 questions the command line answers. They arrived together on purpose: a hit
 from another tree carries an alias, an alias means nothing outside the tree
