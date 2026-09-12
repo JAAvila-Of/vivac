@@ -115,6 +115,7 @@ const USAGE: &str = r#"vivac - provenance of work
 
   Exit codes
     0 fine   1 the model refuses   2 usage   3 redaction guard   4 no .vivac
+    5 input/output error
 "#;
 
 /// A root that reached the registry with no identity to be keyed by, kept so
@@ -561,4 +562,75 @@ fn write_op(cmd: &str, ctx: &mut ops::Ctx, a: &Args) -> Result<Option<outcome::O
         "restore" => ops::restore(ctx, params::Restore::from_args(a)?)?,
         _ => return Ok(None),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::USAGE;
+    use crate::failure::Failure;
+    use crate::redact;
+    use std::collections::BTreeSet;
+
+    /// Every number in the `Exit codes` block of the help text: the codes
+    /// this binary claims to be able to return. Parsed rather than
+    /// hand-copied, so the check below breaks the moment the block and the
+    /// code drift apart, not the moment somebody happens to read both and
+    /// disagree.
+    fn exit_codes_in_usage(help: &str) -> BTreeSet<i32> {
+        let block = help
+            .split_once("Exit codes")
+            .expect("USAGE lost its `Exit codes` section")
+            .1;
+        block
+            .split_whitespace()
+            .filter_map(|word| word.parse().ok())
+            .collect()
+    }
+
+    /// One instance of every `Failure` variant, and the code each one
+    /// actually returns. The instances are matched with no catch-all arm on
+    /// purpose: a variant added to `Failure` and left out of this array
+    /// still compiles the array itself, but the match right below refuses to
+    /// build until the new variant is given a line here too. `Redaction`'s
+    /// sample comes from `redact::check_field` rather than being built by
+    /// hand, so it is a real `Finding` and not a guess at the shape of one.
+    fn exit_codes_failure_can_return() -> BTreeSet<i32> {
+        let finding = redact::check_field("token", "ghp_16C7e42F292c6912E7710c838347Ae178B4a")
+            .expect("a known credential prefix, refused by redact.rs's own tests too");
+        let variants = [
+            Failure::Model("the parent still has an open blocker".into()),
+            Failure::usage("unknown command: bogus"),
+            Failure::Redaction(Box::new(finding)),
+            Failure::NoStore,
+            Failure::Io(std::io::Error::other("disk full")),
+        ];
+        variants
+            .into_iter()
+            .map(|f| match &f {
+                Failure::Model(_) => f.code(),
+                Failure::Usage(_) => f.code(),
+                Failure::Redaction(_) => f.code(),
+                Failure::NoStore => f.code(),
+                Failure::Io(_) => f.code(),
+            })
+            .collect()
+    }
+
+    /// The two have to agree in both directions: no code `Failure::code` can
+    /// return left off the help, and no code on the help that nothing
+    /// returns. `0` is added by hand rather than through the match above: it
+    /// is the exit code of success, and success is not a `Failure` variant.
+    /// `f462`: `Io` has returned 5 since it existed, and the help never said
+    /// so.
+    #[test]
+    fn usage_lists_every_exit_code_failure_can_return() {
+        let listed = exit_codes_in_usage(USAGE);
+        let mut real = exit_codes_failure_can_return();
+        real.insert(0);
+        assert_eq!(
+            listed, real,
+            "USAGE's `Exit codes` block and what `Failure::code` can return \
+             (plus 0, for success) have drifted."
+        );
+    }
 }
