@@ -144,13 +144,14 @@ mod tests {
     /// to be keyed by.
     fn seeded_project(prefix: &str) -> (std::path::PathBuf, String) {
         let root = temp_dir(prefix);
-        let s = store::Store::create(&root).unwrap();
+        let mut s = store::Store::create(&root).unwrap();
         s.append(
             vec![crate::event::Body::NodeNoted {
                 node: "t1".into(),
                 note: "seed".into(),
             }],
             0,
+            false,
         )
         .unwrap();
         let id = store::first_event_id(&root).unwrap();

@@ -89,6 +89,14 @@ pub enum FlagChange {
     Raised { title: String, reason: String },
 }
 
+/// The two shapes `arm` can leave, mirroring `FlagChange`: `d415`.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(tag = "change")]
+pub enum ArmChange {
+    Added,
+    Removed,
+}
+
 /// A node `restore` cannot put back on the stack, and why: it closed, it was
 /// abandoned, or it no longer exists at all.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -184,6 +192,15 @@ pub enum Outcome {
         alias: String,
         flag: String,
         change: FlagChange,
+    },
+    Armed {
+        alias: String,
+        /// The folder the arm runs in, already normalized -- `.` for the
+        /// tree's own folder. `d441`: a pair with no folder is exactly what
+        /// it retired, so the confirmation shows both halves.
+        dir: String,
+        arm: String,
+        change: ArmChange,
     },
     Decided {
         alias: String,
@@ -350,6 +367,17 @@ pub fn to_text(o: &Outcome) -> String {
             FlagChange::Raised { title, reason } => {
                 lines.push(format!("  {alias}  {title}  -> {flag}"));
                 lines.push(format!("        {reason}"));
+            }
+        },
+        Outcome::Armed {
+            alias,
+            dir,
+            arm,
+            change,
+        } => match change {
+            ArmChange::Added => lines.push(format!("  {alias}  armed in {dir}/: {arm}")),
+            ArmChange::Removed => {
+                lines.push(format!("  {alias}  no longer armed in {dir}/: {arm}"))
             }
         },
         Outcome::Decided {

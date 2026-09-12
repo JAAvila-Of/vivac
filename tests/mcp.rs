@@ -12,7 +12,7 @@
 
 mod common;
 use common::Sandbox;
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
@@ -117,11 +117,12 @@ fn initialize_answers_with_the_server_and_its_version() {
     assert!(r["result"]["capabilities"]["tools"].is_object(), "{r}");
 }
 
-/// Eleven, and no more. Every tool costs context in every session the agent
-/// ever opens, so the list is a budget and not a catalogue: four reads plus
-/// the seven writes `t118` adds, and nothing past that.
+/// Thirteen, and no more. Every tool costs context in every session the
+/// agent ever opens, so the list is a budget and not a catalogue: five reads
+/// plus the eight writes `t118` and `t411` add between them, and nothing
+/// past that.
 #[test]
-fn the_tool_list_is_the_eleven_and_only_the_eleven() {
+fn the_tool_list_is_the_thirteen_and_only_the_thirteen() {
     let c = seeded("list");
     let mut s = hello(&c);
     let r = s.ask(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#);
@@ -132,6 +133,7 @@ fn the_tool_list_is_the_eleven_and_only_the_eleven() {
         names,
         [
             "vivac_add",
+            "vivac_arm",
             "vivac_brief",
             "vivac_decide",
             "vivac_find",
@@ -140,6 +142,7 @@ fn the_tool_list_is_the_eleven_and_only_the_eleven() {
             "vivac_park",
             "vivac_pop",
             "vivac_push",
+            "vivac_rules",
             "vivac_save",
             "vivac_why",
         ]
@@ -154,6 +157,29 @@ fn the_tool_list_is_the_eleven_and_only_the_eleven() {
         );
         assert_eq!(t["inputSchema"]["type"], "object", "{t}");
     }
+}
+
+/// `d422`: an agent that finds no pillar and no rule needs telling what to
+/// do about it, not just told the tree is empty.
+#[test]
+fn vivac_rules_description_points_at_claude_md_when_nothing_governs() {
+    let c = seeded("rules-desc");
+    let mut s = hello(&c);
+    let r = s.ask(r#"{"jsonrpc":"2.0","id":19,"method":"tools/list"}"#);
+    let tools = r["result"]["tools"].as_array().unwrap().clone();
+    let rules_tool = tools
+        .iter()
+        .find(|t| t["name"] == "vivac_rules")
+        .expect("vivac_rules is in the tool list");
+    let description = rules_tool["description"].as_str().unwrap();
+    assert!(
+        description.contains(
+            "If it comes back with no pillar and no rule while the project keeps its \
+             rules in files such as CLAUDE.md or AGENTS.md, propose which are pillars \
+             and which are rules, let the person decide, and write them with vivac_add."
+        ),
+        "{description}"
+    );
 }
 
 #[test]
@@ -179,6 +205,45 @@ fn find_comes_back_as_the_json_the_cli_would_print() {
     let t = text_of(&r);
     let v: Value = serde_json::from_str(&t).expect("the payload is not JSON");
     assert_eq!(v, cli, "the MCP tool and `find --json` disagree:\n{t}");
+}
+
+/// `t411`: `vivac_rules` is the same pull `rules --json` already answers,
+/// through the second door.
+#[test]
+fn rules_comes_back_as_the_json_the_cli_would_print() {
+    let c = seeded("rules");
+    std::fs::create_dir(c.0.join("vivac")).unwrap();
+    c.ok(&[
+        "add",
+        "Security",
+        "--type",
+        "pillar",
+        "--why",
+        "vetoes on the spot",
+    ]);
+    c.ok(&[
+        "add",
+        "Never store a secret",
+        "--parent",
+        "3",
+        "--type",
+        "rule",
+        "--arm",
+        "cargo test --bin vivac redact::tests",
+        "--arm-dir",
+        "vivac",
+        "--why",
+        "the mechanical half",
+    ]);
+    let cli_text = c.ok(&["rules", "--json"]);
+    let cli: Value = serde_json::from_str(&cli_text).expect("the CLI payload is not JSON");
+    let mut s = hello(&c);
+    let r = s.ask(
+        r#"{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"vivac_rules","arguments":{}}}"#,
+    );
+    let t = text_of(&r);
+    let v: Value = serde_json::from_str(&t).expect("the payload is not JSON");
+    assert_eq!(v, cli, "the MCP tool and `rules --json` disagree:\n{t}");
 }
 
 /// `d273`'s second half, on `vivac_find`: `everywhere` fans the search out
@@ -273,6 +338,31 @@ fn why_with_project_returns_what_the_cli_returns() {
     assert_eq!(
         v, cli,
         "the MCP tool and `why --project --json` disagree:\n{t}"
+    );
+}
+
+/// `t411` §13: a read that reaches into another project's log and finds a
+/// line only a newer vivac could have written comes back as the error, not
+/// a half-built answer.
+#[test]
+fn why_with_project_over_an_unknown_event_returns_the_error_not_a_half_answer() {
+    let a = seeded("mcp-nv-a");
+    let name_a = a.0.file_name().unwrap().to_string_lossy().into_owned();
+    a.append_unknown_event_type();
+    let b = Sandbox::new_seeded_in("mcp-nv-b", a.global_home());
+
+    let mut s = hello(&b);
+    let r = s.ask(&format!(
+        r#"{{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{{"name":"vivac_why","arguments":{{"id":"t2","project":"{name_a}"}}}}}}"#
+    ));
+    assert!(
+        r["error"].is_null(),
+        "it answered at the protocol level: {r}"
+    );
+    assert_eq!(r["result"]["isError"], true, "{r}");
+    assert!(
+        text_of(&r).contains("This tree was written by a newer vivac"),
+        "{r}"
     );
 }
 
@@ -579,6 +669,105 @@ fn abandon_and_restore_are_never_in_the_tool_list() {
     for word in ["vivac_abandon", "vivac_restore"] {
         assert!(!names.contains(&word), "{word} reached the tool list");
     }
+}
+
+/// `d436`: a pillar's title carries what it restricts, and vivac keeps no
+/// menu of powers, so neither tool that writes a pillar offers one.
+#[test]
+fn the_add_and_push_schemas_offer_no_power() {
+    let c = seeded("no-power-schema");
+    let mut s = hello(&c);
+    let r = s.ask(r#"{"jsonrpc":"2.0","id":23,"method":"tools/list"}"#);
+    let tools = r["result"]["tools"].as_array().unwrap().clone();
+    for name in ["vivac_add", "vivac_push"] {
+        let tool = tools
+            .iter()
+            .find(|t| t["name"] == name)
+            .unwrap_or_else(|| panic!("{name} is in the tool list"));
+        assert!(
+            tool["inputSchema"]["properties"].get("power").is_none(),
+            "{name} offers power: {tool}"
+        );
+    }
+}
+
+/// Every tool, called with every argument its own schema declares, one
+/// value per declared type. An agent sends only what a schema lists, so a
+/// call that reads anything else depends on an argument nobody can see
+/// (`f452`); a debug build stops on that read, and the server dies here
+/// instead of answering.
+#[test]
+fn every_tool_answers_a_call_built_from_only_its_own_schema() {
+    let c = seeded("schema-reads");
+    let mut s = hello(&c);
+    let r = s.ask(r#"{"jsonrpc":"2.0","id":30,"method":"tools/list"}"#);
+    let tools = r["result"]["tools"].as_array().unwrap().clone();
+    for (i, t) in tools.iter().enumerate() {
+        let name = t["name"].as_str().unwrap();
+        let mut arguments = serde_json::Map::new();
+        for (arg_name, property) in t["inputSchema"]["properties"].as_object().unwrap() {
+            let value = match property["type"].as_str().unwrap() {
+                "boolean" => json!(true),
+                "array" => json!(["a value"]),
+                _ => json!("a value"),
+            };
+            arguments.insert(arg_name.clone(), value);
+        }
+        let id = 200 + i as i64;
+        let call = json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "tools/call",
+            "params": { "name": name, "arguments": arguments },
+        })
+        .to_string();
+        s.notify(&call);
+        let mut buf = String::new();
+        s.output.read_line(&mut buf).unwrap();
+        assert!(
+            !buf.is_empty(),
+            "{name} crashed the server instead of answering a call built from its own schema"
+        );
+        let reply: Value = serde_json::from_str(&buf)
+            .unwrap_or_else(|e| panic!("{name} did not reply JSON-RPC: {e}\n{buf}"));
+        assert_eq!(reply["id"], id, "{name} answered a different call: {reply}");
+    }
+}
+
+/// `arm` and `arm_dir` are the pair an agent following `vivac_add`'s own
+/// schema has to be able to send (`f452`).
+#[test]
+fn vivac_add_arms_a_rule_using_only_its_own_declared_schema() {
+    let c = Sandbox::new_seeded("add-arm-schema");
+    std::fs::create_dir(c.0.join("vivac")).unwrap();
+    let mut s = hello(&c);
+    let call = json!({
+        "jsonrpc": "2.0",
+        "id": 31,
+        "method": "tools/call",
+        "params": {
+            "name": "vivac_add",
+            "arguments": {
+                "title": "Never store a secret",
+                "why": "guard",
+                "type": "rule",
+                "arm": ["cargo test"],
+                "arm_dir": "."
+            }
+        }
+    })
+    .to_string();
+    let r = s.ask(&call);
+    assert_eq!(r["result"]["isError"], false, "{r}");
+    let rules = s.ask(
+        r#"{"jsonrpc":"2.0","id":32,"method":"tools/call","params":{"name":"vivac_rules","arguments":{}}}"#,
+    );
+    let data: Value = serde_json::from_str(&text_of(&rules)).unwrap();
+    assert_eq!(data["rules"][0]["arms"][0]["dir"], ".", "{data}");
+    assert_eq!(
+        data["rules"][0]["arms"][0]["command"], "cargo test",
+        "{data}"
+    );
 }
 
 /// The redaction guard lives in the ops, not in either caller, so a write

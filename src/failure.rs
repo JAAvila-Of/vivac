@@ -7,6 +7,7 @@
 
 use crate::redact::Finding;
 
+#[derive(Debug)]
 pub enum Failure {
     /// The model refuses the operation. There is only one such rule today:
     /// closing with open blockers. `MODEL.md` §7.
@@ -18,6 +19,11 @@ pub enum Failure {
     /// There is no `.vivac/` here or further up.
     NoStore,
     Io(std::io::Error),
+    /// A line in the log is well-formed JSON but names an event type or a
+    /// node kind this version does not know: `t411` §13. Shares `Io`'s exit
+    /// code -- the store is the thing this process cannot make sense of,
+    /// same as any other log it fails to read.
+    NewerVivac(String),
 }
 
 pub type R = Result<(), Failure>;
@@ -29,14 +35,14 @@ impl Failure {
             Failure::Usage(_) => 2,
             Failure::Redaction(_) => 3,
             Failure::NoStore => 4,
-            Failure::Io(_) => 5,
+            Failure::Io(_) | Failure::NewerVivac(_) => 5,
         }
     }
 
     pub fn print_to_stderr(&self) {
         eprintln!();
         match self {
-            Failure::Model(m) | Failure::Usage(m) => eprintln!("{m}"),
+            Failure::Model(m) | Failure::Usage(m) | Failure::NewerVivac(m) => eprintln!("{m}"),
             Failure::Redaction(h) => eprintln!("{h}"),
             Failure::NoStore => {
                 eprintln!("  No .vivac/ here or further up.");
@@ -56,7 +62,7 @@ impl Failure {
     /// refusal it cannot act on. Two renderings of the same data, on purpose.
     pub fn message(&self) -> String {
         match self {
-            Failure::Model(m) | Failure::Usage(m) => m.trim().to_string(),
+            Failure::Model(m) | Failure::Usage(m) | Failure::NewerVivac(m) => m.trim().to_string(),
             Failure::Redaction(h) => h.to_string(),
             Failure::NoStore => "No .vivac/ here or further up. Plant one: vivac init".into(),
             Failure::Io(e) => format!("Input/output error: {e}"),
@@ -65,6 +71,10 @@ impl Failure {
 
     pub fn usage(m: impl Into<String>) -> Failure {
         Failure::Usage(format!("  {}", m.into()))
+    }
+
+    pub fn newer_vivac(m: impl Into<String>) -> Failure {
+        Failure::NewerVivac(format!("  {}", m.into()))
     }
 }
 
