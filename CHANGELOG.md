@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0](https://github.com/JAAvila-Of/vivac/compare/v0.7.0...v0.8.0) - 2026-09-13
+
+### Added
+
+- *(mcp)* return what the CLI prints alongside every write
+- [**breaking**] declare which pillars and rules a decision was judged against
+
+### Fixed
+
+- *(why)* carry a rule's arms on each step of the path
+
 ## [0.7.0](https://github.com/JAAvila-Of/vivac/compare/v0.6.11...v0.7.0) - 2026-09-13
 
 ### Upgrading
