@@ -848,3 +848,342 @@ fn prose_and_json_name_exactly_the_same_aliases() {
         "{prose}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// `f549`: a rule's arms reach the JSON of every step of the path, not only
+// the node actually asked about.
+// ---------------------------------------------------------------------------
+
+/// `f549`'s own direct case: an armed rule ancestor carries its arm in
+/// `why --json`'s path, and a judged one carries `"arms": []` rather than
+/// leaving the key out.
+#[test]
+fn a_rule_ancestors_arms_reach_the_json_path_step() {
+    let c = Sandbox::new_seeded("path-step-arms");
+    c.ok(&["add", "Armed rule", "--type", "rule", "--why", "reason"]); // r1
+    c.ok(&["arm", "1", "cargo test", "--dir", "."]);
+    c.ok(&["add", "Judged rule", "--type", "rule", "--why", "reason"]); // r2
+    c.ok(&[
+        "add",
+        "Child of the armed rule",
+        "--parent",
+        "1",
+        "--why",
+        "reason",
+    ]); // t3
+    c.ok(&[
+        "add",
+        "Child of the judged rule",
+        "--parent",
+        "2",
+        "--why",
+        "reason",
+    ]); // t4
+
+    let armed: Value = serde_json::from_str(&c.ok(&["why", "3", "--json"])).unwrap();
+    let arms = armed["path"][0]["arms"].as_array().expect("arms is a list");
+    assert_eq!(arms.len(), 1, "{armed}");
+    assert_eq!(arms[0]["dir"], ".", "{armed}");
+    assert_eq!(arms[0]["command"], "cargo test", "{armed}");
+
+    let judged: Value = serde_json::from_str(&c.ok(&["why", "4", "--json"])).unwrap();
+    assert_eq!(judged["path"][0]["arms"], serde_json::json!([]), "{judged}");
+}
+
+/// The blocks of `why`'s prose, keyed by alias: everything from that step's
+/// own alias line up to the next step's, or to the end of the output for the
+/// last one. `render.rs` prints each alias line as `"  {:<6}{}"`, so the
+/// marker is the same padding, and this is what lets the parity checks below
+/// read each step's lines without re-parsing the whole render loop.
+fn step_blocks<'a>(prose: &'a str, aliases: &[&str]) -> Vec<(String, Vec<&'a str>)> {
+    let lines: Vec<&str> = prose.lines().collect();
+    let starts: Vec<usize> = aliases
+        .iter()
+        .map(|alias| {
+            let marker = format!("  {alias:<6}");
+            lines
+                .iter()
+                .position(|l| l.starts_with(&marker))
+                .unwrap_or_else(|| panic!("missing step for {alias} in:\n{prose}"))
+        })
+        .collect();
+    starts
+        .iter()
+        .enumerate()
+        .map(|(i, &begin)| {
+            let end = starts.get(i + 1).copied().unwrap_or(lines.len());
+            (aliases[i].to_string(), lines[begin..end].to_vec())
+        })
+        .collect()
+}
+
+/// The rule lines of one step's block: `Some(arms)` -- empty for a judged
+/// rule -- when the block carries either an `armed in` line or the `judged:`
+/// one, `None` for a step that is not a rule at all.
+fn parse_arms_lines(block: &[&str]) -> Option<Vec<(String, String)>> {
+    let mut arms = Vec::new();
+    let mut is_rule = false;
+    for l in block {
+        let t = l.trim();
+        if t == "judged: no command verifies it" {
+            is_rule = true;
+        }
+        if let Some(rest) = t.strip_prefix("armed in ") {
+            is_rule = true;
+            let cut = rest.find("/: ").expect("armed in <dir>/: <command>");
+            arms.push((rest[..cut].to_string(), rest[cut + 3..].to_string()));
+        }
+    }
+    is_rule.then_some(arms)
+}
+
+/// The `judged against` lines of one step's block: the alias named right
+/// after the prefix, and whether it carries a `[state]` mark. The sentence
+/// and its date are not parsed here: what the mark says is the business of
+/// `against_marks_a_target_that_closed_or_was_abandoned_and_leaves_an_open_one_bare`
+/// in `against.rs`.
+fn parse_against_lines(block: &[&str]) -> Vec<(String, bool)> {
+    block
+        .iter()
+        .filter_map(|l| {
+            let rest = l.trim().strip_prefix("judged against ")?;
+            let colon = rest.find(':')?;
+            let head = &rest[..colon];
+            Some(match head.split_once(' ') {
+                Some((alias, _mark)) => (alias.to_string(), true),
+                None => (head.to_string(), false),
+            })
+        })
+        .collect()
+}
+
+/// The aliases after a `standing (n): ` or `open then (n): ` line in one
+/// step's block, `None` when the block carries neither -- which is what an
+/// empty list looks like in prose, since `print_full_of` only prints the
+/// line at all once it has something to say.
+fn parse_full_list(block: &[&str], prefix: &str) -> Option<Vec<String>> {
+    block.iter().find_map(|l| {
+        let rest = l.trim().strip_prefix(prefix)?;
+        let after_count = rest.split_once("): ")?.1;
+        Some(after_count.split(", ").map(str::to_string).collect())
+    })
+}
+
+/// One tree whose path to the node asked about crosses, as ancestors: an
+/// armed rule (`r1`), a rule with no arm that also carries a standing
+/// decision and a sibling open at its own birth (`r3`), and a decision
+/// (`d6`) with a birth declaration against a rule abandoned afterward and a
+/// late one against a rule that stays open.
+fn seeded_for_arms_and_against_parity(name: &str) -> Sandbox {
+    let c = Sandbox::new_seeded(name);
+    c.ok(&[
+        "add",
+        "Root rule, armed",
+        "--type",
+        "rule",
+        "--why",
+        "root reason",
+    ]); // r1
+    c.ok(&["arm", "1", "cargo test", "--dir", "."]);
+    c.ok(&[
+        "add",
+        "Sibling born before r3, stays open",
+        "--parent",
+        "1",
+        "--why",
+        "sibling reason",
+    ]); // t2
+    c.ok(&[
+        "add",
+        "Child rule, judged",
+        "--parent",
+        "1",
+        "--type",
+        "rule",
+        "--why",
+        "child rule reason",
+    ]); // r3
+    c.ok(&[
+        "add",
+        "Rule target, abandoned later",
+        "--parent",
+        "1",
+        "--type",
+        "rule",
+        "--why",
+        "rule target reason",
+    ]); // r4
+    c.ok(&[
+        "add",
+        "Rule target, stays open",
+        "--parent",
+        "1",
+        "--type",
+        "rule",
+        "--why",
+        "rule target reason 2",
+    ]); // r5
+    c.ok(&[
+        "decide",
+        "Decision under r3",
+        "--parent",
+        "3",
+        "--reason",
+        "because",
+        "--against",
+        "r4: the write path stays local",
+    ]); // d6
+    c.ok(&[
+        "declare",
+        "6",
+        "--against",
+        "r5: nothing on the write path calls the network",
+    ]);
+    c.ok(&["abandon", "4", "no longer applies"]);
+    c.ok(&[
+        "add",
+        "The target node",
+        "--parent",
+        "6",
+        "--why",
+        "target reason",
+    ]); // t7
+    c
+}
+
+/// `prose_and_json_name_exactly_the_same_aliases` compares what `why` names
+/// after the path. This is the same check over what it prints on each step
+/// of the path and on the node itself: a rule's `arms`, a decision's
+/// `against`, alias and mark alike, and under `--full` the `standing` and
+/// `open_then` of every step. `f549` was a gap exactly here that nothing
+/// caught.
+#[test]
+fn prose_and_json_agree_on_arms_against_standing_and_open_then() {
+    let c = seeded_for_arms_and_against_parity("arms-against-parity");
+    let aliases = ["r1", "r3", "d6", "t7"];
+
+    let full_prose = c.ok(&["why", "7", "--full"]);
+    let full_json: Value = serde_json::from_str(&c.ok(&["why", "7", "--full", "--json"])).unwrap();
+    let full_steps: Vec<Value> = full_json["path"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .cloned()
+        .chain(std::iter::once(full_json["node"].clone()))
+        .collect();
+    let full_blocks = step_blocks(&full_prose, &aliases);
+
+    for (i, (alias, block)) in full_blocks.iter().enumerate() {
+        let step = &full_steps[i];
+        assert_eq!(step["alias"], alias.as_str(), "{full_json}");
+
+        match parse_arms_lines(block) {
+            Some(prose_arms) => {
+                let json_arms: Vec<(String, String)> = step["arms"]
+                    .as_array()
+                    .unwrap_or_else(|| panic!("{alias} should carry arms in JSON:\n{full_json}"))
+                    .iter()
+                    .map(|e| {
+                        (
+                            e["dir"].as_str().unwrap().to_string(),
+                            e["command"].as_str().unwrap().to_string(),
+                        )
+                    })
+                    .collect();
+                assert_eq!(prose_arms, json_arms, "{alias}:\n{full_prose}\n{full_json}");
+            }
+            None => assert!(
+                step.get("arms").is_none(),
+                "{alias} should carry no arms key:\n{full_json}"
+            ),
+        }
+
+        let prose_against = parse_against_lines(block);
+        if prose_against.is_empty() {
+            assert!(
+                step.get("against").is_none() || step["against"].as_array().unwrap().is_empty(),
+                "{alias} should carry no declaration:\n{full_json}"
+            );
+        } else {
+            let json_against: Vec<(String, bool)> = step["against"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{alias} should carry against in JSON:\n{full_json}"))
+                .iter()
+                .map(|e| {
+                    (
+                        e["node"].as_str().unwrap().to_string(),
+                        e["state"].as_str() != Some("active"),
+                    )
+                })
+                .collect();
+            assert_eq!(
+                prose_against, json_against,
+                "{alias}:\n{full_prose}\n{full_json}"
+            );
+        }
+
+        for (prefix, field) in [("standing (", "standing"), ("open then (", "open_then")] {
+            let json_list: Vec<String> = step[field]
+                .as_array()
+                .unwrap_or_else(|| {
+                    panic!("{alias} should carry {field} under --full:\n{full_json}")
+                })
+                .iter()
+                .map(|h| h["alias"].as_str().unwrap().to_string())
+                .collect();
+            let prose_list = parse_full_list(block, prefix).unwrap_or_default();
+            assert_eq!(
+                prose_list, json_list,
+                "{alias} {field}:\n{full_prose}\n{full_json}"
+            );
+        }
+    }
+
+    // Without `--full`: the rule steps still carry `arms` on both sides, and
+    // no step -- the decision included -- carries `against` in either one.
+    let plain_prose = c.ok(&["why", "7"]);
+    let plain_json: Value = serde_json::from_str(&c.ok(&["why", "7", "--json"])).unwrap();
+    let plain_steps: Vec<Value> = plain_json["path"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .cloned()
+        .chain(std::iter::once(plain_json["node"].clone()))
+        .collect();
+    let plain_blocks = step_blocks(&plain_prose, &aliases);
+
+    for (i, (alias, block)) in plain_blocks.iter().enumerate() {
+        let step = &plain_steps[i];
+        match parse_arms_lines(block) {
+            Some(prose_arms) => {
+                let json_arms: Vec<(String, String)> = step["arms"]
+                    .as_array()
+                    .unwrap_or_else(|| {
+                        panic!("{alias} should carry arms without --full too:\n{plain_json}")
+                    })
+                    .iter()
+                    .map(|e| {
+                        (
+                            e["dir"].as_str().unwrap().to_string(),
+                            e["command"].as_str().unwrap().to_string(),
+                        )
+                    })
+                    .collect();
+                assert_eq!(
+                    prose_arms, json_arms,
+                    "{alias}:\n{plain_prose}\n{plain_json}"
+                );
+            }
+            None => assert!(step.get("arms").is_none(), "{alias}:\n{plain_json}"),
+        }
+
+        assert!(
+            parse_against_lines(block).is_empty(),
+            "{alias} leaked a declaration without --full:\n{plain_prose}"
+        );
+        assert!(
+            step.get("against").is_none(),
+            "{alias} leaked against without --full:\n{plain_json}"
+        );
+    }
+}

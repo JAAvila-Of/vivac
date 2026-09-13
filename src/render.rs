@@ -88,11 +88,7 @@ fn json_node(a: &Tree, ag: &Aggregates, n: &Node) -> serde_json::Value {
     // `arms` is **always** present on a rule, empty or not, so a reader can
     // tell "judged" apart from "not a rule" without a second lookup.
     if n.kind == Kind::Rule {
-        v["arms"] = json!(n
-            .arms(a)
-            .into_iter()
-            .map(|(dir, command)| json!({"dir": dir, "command": command}))
-            .collect::<Vec<_>>());
+        v["arms"] = arms_json(a, n);
     }
     // `t426` §3.2: a decision gains `against` only when its `node.created`
     // carried the key, or a late declaration was folded into a birth that
@@ -277,10 +273,13 @@ fn json_node_full(a: &Tree, ag: &Aggregates, full: &Full, n: &Node) -> serde_jso
 /// never prints any of them for an ancestor, and whoever wants them can ask
 /// `why` about that alias directly.
 ///
-/// A decision carries `against` only under `--full`, because that is the
-/// only time the prose prints an ancestor's declarations (`d330`), and
-/// through the same [`against_json`] [`json_node`] uses, so a step and a
-/// node cannot read one differently (`d469`).
+/// Two fields depend on the kind of the step, and each follows the prose. A
+/// rule carries `arms` with or without `--full`, because `why` prints a
+/// rule's arms on every step of the path (`f549`). A decision carries
+/// `against` only under `--full`, because that is the only time the prose
+/// prints an ancestor's declarations (`d330`, `d469`). Both are built by
+/// the same functions [`json_node`] uses, so a step and a node cannot read
+/// either one differently.
 fn path_step_json(a: &Tree, ag: &Aggregates, full: Option<&Full>, p: &Node) -> serde_json::Value {
     let body = |text: &str| match full {
         Some(_) => text.to_string(),
@@ -304,6 +303,9 @@ fn path_step_json(a: &Tree, ag: &Aggregates, full: Option<&Full>, p: &Node) -> s
             "parked": below.parked_nodes,
         },
     });
+    if p.kind == Kind::Rule {
+        v["arms"] = arms_json(a, p);
+    }
     if full.is_some() && p.kind == Kind::Decision && (p.against_recorded || !p.against.is_empty()) {
         v["against"] = against_json(a, p);
     }
@@ -910,6 +912,19 @@ fn print_arms(a: &Tree, r: &Node, indent: &str, show_judged: bool) {
             outln!("{indent}armed in {dir}/: {command}");
         }
     }
+}
+
+/// The JSON for a rule's arms: the folder and the command of each one, in
+/// the same order [`print_arms`] prints them, present even when empty so a
+/// reader can tell a judged rule apart from a step that is not a rule at
+/// all. Shared by [`json_node`] and [`path_step_json`] so a rule's arms read
+/// the same value wherever `why` carries them (`f549`).
+fn arms_json(a: &Tree, r: &Node) -> serde_json::Value {
+    json!(r
+        .arms(a)
+        .into_iter()
+        .map(|(dir, command)| json!({"dir": dir, "command": command}))
+        .collect::<Vec<_>>())
 }
 
 /// A decision's own declarations, one per line, wrapped the same way its
