@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0](https://github.com/JAAvila-Of/vivac/compare/v0.6.11...v0.7.0) - 2026-09-13
+
+### Added
+
+- add pillars and rules, and read them back with vivac rules
+- *(why)* [**breaking**] return handles for everything but the node asked about ([#105](https://github.com/JAAvila-Of/vivac/pull/105))
+
+### Fixed
+
+- *(store)* make older releases refuse a tree that holds pillars
+- *(store)* refuse a log that holds events from a newer vivac
+- *(open)* stop listing constraints as open fronts
+- *(help)* document exit code 5, returned by every i/o error ([#104](https://github.com/JAAvila-Of/vivac/pull/104))
+
 ## [0.6.11](https://github.com/JAAvila-Of/vivac/compare/v0.6.10...v0.6.11) - 2026-09-10
 
 ### Documentation
