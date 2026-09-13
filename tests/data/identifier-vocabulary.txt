@@ -106,6 +106,7 @@ beats
 becomes
 before
 began
+begin
 beginning
 behind
 below
@@ -225,6 +226,7 @@ code2
 codes
 collect
 collections
+colon
 colour
 come
 comes
@@ -869,6 +871,7 @@ paragraph
 params
 parent
 parents
+parity
 park
 parked
 parks
@@ -964,6 +967,7 @@ random
 rank
 rather
 raw
+reach
 reaches
 reaching
 read
@@ -1206,6 +1210,7 @@ stdin
 stdio
 stdout
 step
+steps
 still
 stop
 stopped
