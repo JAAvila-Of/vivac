@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.7.0](https://github.com/JAAvila-Of/vivac/compare/v0.6.11...v0.7.0) - 2026-09-13
 
+### Upgrading
+
+- **A tree's first pillar or rule locks it against older releases.** That
+  write turns `version` in `.vivac/config` from `1` into the sentence *this
+  tree holds pillars and rules, and this vivac is too old to read them:
+  update vivac*. Every release up to 0.6.11 then stops on that tree instead
+  of misreading it: it prints the sentence inside an input/output error,
+  exits with code 5, and leaves the log byte for byte as it was. A tree with
+  no pillar and no rule keeps its config, and older releases go on reading
+  it.
+- **Restart every session once you have upgraded.** An MCP server from an
+  older release that is still running reads the config again as soon as the
+  log moves, so once the tree is locked it answers with that error. On
+  Windows it also holds the executable open, and `cargo install` fails with
+  `os error 5` until the session that started it is closed.
+- **A tree written by a newer release is refused, never skimmed.** A config
+  `version` this release does not know, or a log line naming an event type or
+  a node kind it does not know, stops the command with exit code 5, names the
+  line, and writes nothing. Until now such a line was skipped in silence, and
+  the next write could reuse its number.
+- **`why --json` and `vivac_why` changed shape**
+  ([#105](https://github.com/JAAvila-Of/vivac/pull/105)). `node` stays whole.
+  `path` holds the ancestors only and no longer ends with the node.
+  `in_parallel`, `born_here`, `standing` and `open_then` are handles, and
+  `blockers` lists what keeps every open step of the path from closing, as
+  the prose does. Anything that reads those fields needs updating.
+
 ### Added
 
 - add pillars and rules, and read them back with vivac rules
