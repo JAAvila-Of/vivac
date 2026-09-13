@@ -1160,3 +1160,319 @@ fn declare_by_mcp_writes_the_same_events_as_declare_by_the_cli() {
     assert_eq!(r["result"]["isError"], false, "{r}");
     assert_eq!(tree_events(&cli), tree_events(&via_mcp));
 }
+
+// ---------------------------------------------------------------------------
+// `d550`: every write tool's reply carries `text`, byte for byte what the
+// CLI prints for the same write, warnings and all.
+// ---------------------------------------------------------------------------
+
+/// The `text` field of a write tool's reply: `text_of` already unwraps the
+/// JSON-RPC envelope down to the pretty-printed `Outcome`, so this only has
+/// to parse that and read the one field this section is about.
+fn mcp_write_text(reply: &Value) -> String {
+    let payload: Value = serde_json::from_str(&text_of(reply))
+        .unwrap_or_else(|e| panic!("mcp reply is not JSON: {e}\n{reply}"));
+    payload["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no text field in {payload}"))
+        .to_string()
+}
+
+#[test]
+fn push_text_is_byte_for_byte_the_cli_output() {
+    let cli = Sandbox::new_seeded("push-text-cli");
+    let via_mcp = twin_of(&cli, "push-text-mcp");
+    let expected = cli.ok(&[
+        "push",
+        "Ship the release apparatus",
+        "--why",
+        "the version was a hand edit",
+        "--type",
+        "task",
+        "--ref",
+        "R1",
+        "--governs",
+        "G1",
+        "--blocks",
+    ]);
+
+    let mut s = hello(&via_mcp);
+    let r = s.ask(
+        r#"{"jsonrpc":"2.0","id":30,"method":"tools/call","params":{"name":"vivac_push","arguments":{"title":"Ship the release apparatus","why":"the version was a hand edit","type":"task","ref":["R1"],"governs":["G1"],"blocks":true}}}"#,
+    );
+    assert_eq!(r["result"]["isError"], false, "{r}");
+    assert_eq!(mcp_write_text(&r), expected);
+}
+
+#[test]
+fn pop_text_is_byte_for_byte_the_cli_output() {
+    let cli = Sandbox::new_seeded("pop-text-cli");
+    cli.ok(&[
+        "push",
+        "Ship the release apparatus",
+        "--why",
+        "the version was a hand edit",
+    ]);
+    let via_mcp = twin_of(&cli, "pop-text-mcp");
+
+    let expected = cli.ok(&["pop", "the release went out", "--next", "watch the metrics"]);
+    let mut s = hello(&via_mcp);
+    let r = s.ask(
+        r#"{"jsonrpc":"2.0","id":31,"method":"tools/call","params":{"name":"vivac_pop","arguments":{"outcome":"the release went out","next":"watch the metrics"}}}"#,
+    );
+    assert_eq!(r["result"]["isError"], false, "{r}");
+    assert_eq!(mcp_write_text(&r), expected);
+}
+
+#[test]
+fn add_text_is_byte_for_byte_the_cli_output() {
+    let cli = Sandbox::new_seeded("add-text-cli");
+    let via_mcp = twin_of(&cli, "add-text-mcp");
+    let expected = cli.ok(&[
+        "add",
+        "Guard the commit messages",
+        "--why",
+        "a malformed one does not count",
+        "--type",
+        "finding",
+        "--ref",
+        "R1",
+        "--governs",
+        "G1",
+        "--blocks",
+    ]);
+
+    let mut s = hello(&via_mcp);
+    let r = s.ask(
+        r#"{"jsonrpc":"2.0","id":32,"method":"tools/call","params":{"name":"vivac_add","arguments":{"title":"Guard the commit messages","why":"a malformed one does not count","type":"finding","ref":["R1"],"governs":["G1"],"blocks":true}}}"#,
+    );
+    assert_eq!(r["result"]["isError"], false, "{r}");
+    assert_eq!(mcp_write_text(&r), expected);
+}
+
+#[test]
+fn decide_text_is_byte_for_byte_the_cli_output() {
+    let cli = Sandbox::new_seeded("decide-text-cli");
+    let via_mcp = twin_of(&cli, "decide-text-mcp");
+    let expected = cli.ok(&[
+        "decide",
+        "Rotate release keys",
+        "--reason",
+        "the old one is in three places",
+        "--alternative",
+        "keep the old one",
+        "--ref",
+        "R1",
+        "--governs",
+        "G1",
+        "--blocks",
+    ]);
+
+    let mut s = hello(&via_mcp);
+    let r = s.ask(
+        r#"{"jsonrpc":"2.0","id":33,"method":"tools/call","params":{"name":"vivac_decide","arguments":{"title":"Rotate release keys","reason":"the old one is in three places","alternative":["keep the old one"],"ref":["R1"],"governs":["G1"],"blocks":true}}}"#,
+    );
+    assert_eq!(r["result"]["isError"], false, "{r}");
+    assert_eq!(mcp_write_text(&r), expected);
+}
+
+#[test]
+fn note_text_is_byte_for_byte_the_cli_output() {
+    let cli = Sandbox::new_seeded("note-text-cli");
+    cli.ok(&[
+        "push",
+        "Ship the release apparatus",
+        "--why",
+        "the version was a hand edit",
+    ]);
+    let via_mcp = twin_of(&cli, "note-text-mcp");
+
+    let expected = cli.ok(&["note", "the rollback plan is untested"]);
+    let mut s = hello(&via_mcp);
+    let r = s.ask(
+        r#"{"jsonrpc":"2.0","id":34,"method":"tools/call","params":{"name":"vivac_note","arguments":{"note":"the rollback plan is untested"}}}"#,
+    );
+    assert_eq!(r["result"]["isError"], false, "{r}");
+    assert_eq!(mcp_write_text(&r), expected);
+}
+
+#[test]
+fn park_text_is_byte_for_byte_the_cli_output() {
+    let cli = Sandbox::new_seeded("park-text-cli");
+    cli.ok(&[
+        "push",
+        "Ship the release apparatus",
+        "--why",
+        "the version was a hand edit",
+    ]);
+    let via_mcp = twin_of(&cli, "park-text-mcp");
+
+    let expected = cli.ok(&["park", "waiting on the security review"]);
+    let mut s = hello(&via_mcp);
+    let r = s.ask(
+        r#"{"jsonrpc":"2.0","id":35,"method":"tools/call","params":{"name":"vivac_park","arguments":{"reason":"waiting on the security review"}}}"#,
+    );
+    assert_eq!(r["result"]["isError"], false, "{r}");
+    assert_eq!(mcp_write_text(&r), expected);
+}
+
+#[test]
+fn arm_text_is_byte_for_byte_the_cli_output() {
+    let cli = Sandbox::new_seeded("arm-text-cli");
+    cli.ok(&[
+        "add",
+        "Keep the write path local",
+        "--type",
+        "rule",
+        "--why",
+        "guard",
+    ]);
+    let via_mcp = twin_of(&cli, "arm-text-mcp");
+
+    let expected = cli.ok(&["arm", "1", "cargo test", "--dir", "."]);
+    let mut s = hello(&via_mcp);
+    let r = s.ask(
+        r#"{"jsonrpc":"2.0","id":36,"method":"tools/call","params":{"name":"vivac_arm","arguments":{"id":"r1","command":"cargo test","dir":"."}}}"#,
+    );
+    assert_eq!(r["result"]["isError"], false, "{r}");
+    assert_eq!(mcp_write_text(&r), expected);
+}
+
+#[test]
+fn declare_text_is_byte_for_byte_the_cli_output() {
+    let cli = Sandbox::new_seeded("declare-text-cli");
+    cli.ok(&[
+        "add",
+        "Security",
+        "--type",
+        "pillar",
+        "--why",
+        "vetoes on the spot",
+    ]);
+    cli.ok(&[
+        "add",
+        "Keep the write path local",
+        "--parent",
+        "1",
+        "--type",
+        "rule",
+        "--why",
+        "guard",
+    ]);
+    cli.ok(&["decide", "Keep it local", "--reason", "because"]);
+    let via_mcp = twin_of(&cli, "declare-text-mcp");
+
+    let expected = cli.ok(&[
+        "declare",
+        "3",
+        "--against",
+        "r2: nothing on the write path calls the network",
+    ]);
+    let mut s = hello(&via_mcp);
+    let r = s.ask(
+        r#"{"jsonrpc":"2.0","id":37,"method":"tools/call","params":{"name":"vivac_declare","arguments":{"id":"d3","against":["r2: nothing on the write path calls the network"]}}}"#,
+    );
+    assert_eq!(r["result"]["isError"], false, "{r}");
+    assert_eq!(mcp_write_text(&r), expected);
+}
+
+#[test]
+fn save_text_is_byte_for_byte_the_cli_output() {
+    let cli = Sandbox::new_seeded("save-text-cli");
+    let via_mcp = twin_of(&cli, "save-text-mcp");
+    let expected = cli.ok(&[
+        "save",
+        "before the migration",
+        "--next",
+        "run the reconcile",
+    ]);
+
+    let mut s = hello(&via_mcp);
+    let r = s.ask(
+        r#"{"jsonrpc":"2.0","id":38,"method":"tools/call","params":{"name":"vivac_save","arguments":{"label":"before the migration","next":"run the reconcile"}}}"#,
+    );
+    assert_eq!(r["result"]["isError"], false, "{r}");
+    assert_eq!(mcp_write_text(&r), expected);
+}
+
+// ---------------------------------------------------------------------------
+// `f457`: three warnings an agent writing over MCP never saw, since only a
+// terminal printed them.
+// ---------------------------------------------------------------------------
+
+/// `vivac_decide` with no `against`, on a tree where a rule already governs:
+/// `text` carries both lines of the `d445` warning, with the alias of the
+/// decision it just wrote.
+#[test]
+fn decide_with_no_against_on_a_governed_tree_warns_in_its_text() {
+    let c = Sandbox::new_seeded("decide-no-against-text");
+    c.ok(&[
+        "add",
+        "Security",
+        "--type",
+        "pillar",
+        "--why",
+        "vetoes on the spot",
+    ]);
+    c.ok(&[
+        "add",
+        "Keep the write path local",
+        "--parent",
+        "1",
+        "--type",
+        "rule",
+        "--why",
+        "guard",
+    ]);
+
+    let mut s = hello(&c);
+    let r = s.ask(
+        r#"{"jsonrpc":"2.0","id":39,"method":"tools/call","params":{"name":"vivac_decide","arguments":{"title":"Keep it local","reason":"because"}}}"#,
+    );
+    assert_eq!(r["result"]["isError"], false, "{r}");
+    let text = mcp_write_text(&r);
+    assert!(
+        text.contains("no --against: a pillar judged in silence reads the same as one skipped"),
+        "{text}"
+    );
+    assert!(text.contains("vivac declare d3 adds one"), "{text}");
+}
+
+/// `vivac_push` past four levels deep: `text` carries the depth advice, the
+/// same one the CLI prints for a stack at the same depth.
+#[test]
+fn push_past_four_levels_carries_the_depth_advice_in_its_text() {
+    let c = Sandbox::new_seeded("push-depth-text");
+    c.ok(&["push", "Level 1", "--why", "root"]);
+    c.ok(&["push", "Level 2", "--why", "deeper"]);
+    c.ok(&["push", "Level 3", "--why", "deeper still"]);
+    let via_mcp = twin_of(&c, "push-depth-text-cli-side");
+
+    let expected = c.ok(&["push", "Level 4", "--why", "deeper yet"]);
+    let mut s = hello(&via_mcp);
+    let r = s.ask(
+        r#"{"jsonrpc":"2.0","id":40,"method":"tools/call","params":{"name":"vivac_push","arguments":{"title":"Level 4","why":"deeper yet"}}}"#,
+    );
+    assert_eq!(r["result"]["isError"], false, "{r}");
+    let text = mcp_write_text(&r);
+    assert!(text.contains("levels away from"), "{text}");
+    assert_eq!(text, expected);
+}
+
+/// `vivac_save` with no `next`: `text` carries the `no --next` line the CLI
+/// prints for the same call.
+#[test]
+fn save_with_no_next_carries_the_warning_in_its_text() {
+    let c = Sandbox::new_seeded("save-no-next-text");
+    let via_mcp = twin_of(&c, "save-no-next-text-mcp");
+
+    let expected = c.ok(&["save", "before the migration"]);
+    let mut s = hello(&via_mcp);
+    let r = s.ask(
+        r#"{"jsonrpc":"2.0","id":41,"method":"tools/call","params":{"name":"vivac_save","arguments":{"label":"before the migration"}}}"#,
+    );
+    assert_eq!(r["result"]["isError"], false, "{r}");
+    let text = mcp_write_text(&r);
+    assert!(text.contains("no --next"), "{text}");
+    assert_eq!(text, expected);
+}

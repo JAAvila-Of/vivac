@@ -722,10 +722,16 @@ mod reader_tests {
 }
 
 /// Serialised the same way the three reads that speak JSON already are:
-/// `pretty` over a `Value`, so the model gets back data it can parse rather
-/// than the sentence `outcome::to_text` writes for a terminal.
+/// `pretty` over a `Value`, plus one field the data alone cannot carry.
+/// `text` is exactly what `outcome::to_text` renders for the same write, the
+/// way the CLI prints it (`d550`). The warnings only exist as that sentence
+/// -- a decision judged against nothing, a stack four deep, a stop with no
+/// next step -- and they are meant for the moment of writing, which for an
+/// agent is almost always a call to this server.
 fn outcome_text(o: outcome::Outcome) -> Result<String, Failure> {
-    pretty(serde_json::to_value(&o).map_err(|e| Failure::Io(std::io::Error::other(e)))?)
+    let mut v = serde_json::to_value(&o).map_err(|e| Failure::Io(std::io::Error::other(e)))?;
+    v["text"] = json!(outcome::to_text(&o));
+    pretty(v)
 }
 
 fn call(project: &mut Project, params: &Value) -> Result<String, Failure> {

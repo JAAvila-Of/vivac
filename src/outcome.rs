@@ -3,10 +3,11 @@
 //! `t106`: the CLI is not the only caller any more, and a caller over MCP
 //! cannot read stdout. Every write op is moving from printing straight to a
 //! terminal to returning an `Outcome`, so a second surface can read the same
-//! answer the CLI does. `main.rs` is the only place left that turns one into
-//! text, in `to_text` below -- a mirror of `brief::to_text`, which already
-//! proved the split works: the data is built once, and the terminal
-//! rendering is a formatting step over it, not a second source of truth.
+//! answer the CLI does. `main.rs` and the MCP server both turn one into
+//! text through `to_text` below -- a mirror of `brief::to_text`, which
+//! already proved the split works: the data is built once, and the
+//! rendering into a sentence is a formatting step over it, not a second
+//! source of truth.
 //!
 //! **A variant carries the value an operation computed, never the sentence it
 //! would have printed.** Where today's code interpolates a value into a
