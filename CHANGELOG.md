@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.8.0](https://github.com/JAAvila-Of/vivac/compare/v0.7.0...v0.8.0) - 2026-09-13
 
+### Upgrading
+
+- **Once `vivac declare` has run on a tree, 0.7.0 no longer reads it.** A
+  late declaration is an event 0.7.0 does not know, so it stops on that tree
+  with exit code 5, names the line, and writes nothing. A declaration made
+  when the decision was written is not an event of its own: 0.7.0 reads that
+  decision without showing what it declared, and a decision 0.7.0 writes
+  carries no list at all.
+- **Restart every session once you have upgraded.** An MCP server from 0.7.0
+  that is still running stops the same way as soon as a late declaration
+  lands in the log. On Windows it also holds the executable open, and
+  `cargo install` fails with `os error 5` until the session that started it
+  is closed.
+- **`check` can exit with 1 on a tree that passed before.** It now reports
+  every open decision written while a pillar or rule was open that declares
+  nothing it was judged against. A decision written by an older release, or
+  in a tree with nothing to judge against, carries no list and is never
+  reported, so upgrading alone turns nothing red: only decisions written
+  from now on count, and `vivac declare` clears one.
+- **Every JSON change is an addition.** In `why --json` and `vivac_why`, a
+  decision written while a pillar or rule was open, or declared later,
+  carries `against`, and every entry in it carries `state`. On `path`, a
+  rule step carries `arms`, and under `--full` a decision step carries
+  `against` too. Every write over MCP carries `text`. Nothing was renamed or
+  removed.
+
 ### Added
 
 - *(mcp)* return what the CLI prints alongside every write
