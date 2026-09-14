@@ -49,7 +49,15 @@ const SPANISH: &str = "tests/data/spanish-vocabulary.txt";
 /// would make it unrecognisable against its reference, and that costs more
 /// than the collision does. `era` is the only one of the five that the
 /// Spanish vocabulary happens to contain.
-const KNOWN_ENGLISH: &[&str] = &["era"];
+///
+/// `ser` is `serde` and `serde_json`'s own module name (`serde::ser`,
+/// `serde_json::ser::PrettyFormatter`), reached from `src/setup/json.rs`:
+/// not a word this crate chose, and not one it can rename.
+///
+/// `base` is the base name of a path or a command line's first word, in
+/// `src/setup/claude_code.rs` -- ordinary English that happens to also spell
+/// the Spanish word for the same idea.
+const KNOWN_ENGLISH: &[&str] = &["era", "ser", "base"];
 
 fn root() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))

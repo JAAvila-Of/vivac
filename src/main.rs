@@ -34,6 +34,7 @@ mod redact;
 mod registry;
 mod render;
 mod session;
+mod setup;
 mod store;
 mod web;
 
@@ -121,10 +122,12 @@ const USAGE: &str = r#"vivac - provenance of work
     vivac mcp                                 serve the tree over MCP
     vivac web [--port N] [--no-open]          the tree in a browser, and
           [--project P]                       nowhere but this machine
-    vivac hooks                               what to paste into settings.json
 
   Getting started
 
+    vivac setup claude-code [--dry-run] [--yes] [--undo]
+                                              write what Claude Code needs here:
+                                              hooks, the MCP server, a skill
     vivac init                                plant .vivac/ here
     vivac import <tree.json>                  bring in a tree from the spike
 
@@ -265,6 +268,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         "changes" => &["since", "json"],
         "web" => &["port", "no-open", "project"],
         "init" | "hooks" | "mcp" => &[],
+        "setup" => &["dry-run", "yes", "undo"],
         // The reads that speak JSON, spelled out. No shorthand: a shorthand
         // is what let the brief claim it for two releases.
         // `open` also takes `--all`, the same escape hatch `tree` gives the
@@ -317,8 +321,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         // regenerated locked if the log already governs (`d444`) -- so
         // opening never duplicates what that path already decides. An
         // empty `.vivac/` holds no tree yet, so it is planted like a new one.
-        let dir = cwd.join(store::DIR);
-        if dir.join(store::CONFIG).is_file() || dir.join(store::LOG).is_file() {
+        if store::already_planted(&cwd) {
             let s = store::Store::open(cwd.clone())?;
             outln!("  vivac is already planted in {}", cwd.display());
             outln!("        project {}", s.config.project_id);
@@ -332,13 +335,26 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         return Ok(0);
     }
 
+    // A tombstone, not a plain unknown command: `vivac hooks` is gone
+    // (`d557`), and whoever has it written down in a note somewhere still
+    // gets sent to where it went, instead of just "unknown command".
     if cmd == "hooks" {
-        return session::hooks().map(|_| 0);
+        return Err(Failure::usage(
+            "vivac hooks is gone: vivac setup claude-code writes the hooks itself,\n  \
+             after showing them.",
+        ));
+    }
+
+    // `setup` may need to plant the tree, the same reason `init` returns up
+    // here: there may be no root at all yet, and its own root search knows
+    // to fall back to the current directory (`t565` §7.2).
+    if cmd == "setup" {
+        return setup::dispatch(&cwd, a);
     }
 
     // `--everywhere` reads the registry instead of the tree underfoot, so
     // it has to work with no root at all -- the same reason `init` and
-    // `hooks` return up here rather than past the check below. `d273`,
+    // `setup` return up here rather than past the check below. `d273`,
     // first half.
     if cmd == "find" && a.has("everywhere") {
         return render::find_everywhere(a).map(|_| 0);

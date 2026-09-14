@@ -174,6 +174,16 @@ pub fn find_root(from_dir: &Path) -> Option<PathBuf> {
     }
 }
 
+/// Whether `root/.vivac/` already holds a tree worth opening rather than
+/// creating: a config or a log. `f566`: an empty `.vivac/` -- one that exists
+/// as a directory but holds neither -- is planted like a new one, and `init`
+/// and `setup` share this one check rather than each guessing it their own
+/// way.
+pub fn already_planted(root: &Path) -> bool {
+    let dir = root.join(DIR);
+    dir.join(CONFIG).is_file() || dir.join(LOG).is_file()
+}
+
 /// The `id` of line 1 of `<root>/.vivac/events`, without folding the rest of
 /// the log. An empty log, an unreadable file or a first line that will not
 /// parse all come back `None`; the caller decides what that means.

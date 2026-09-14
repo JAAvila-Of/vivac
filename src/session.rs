@@ -139,34 +139,3 @@ pub fn dispatch(ctx: &mut crate::ops::Ctx, a: &Args, project: &str) -> R {
         _ => Err(Failure::usage("usage: vivac session start|end [--hook]")),
     }
 }
-
-/// `vivac hooks` — prints what to paste, and touches nobody's configuration.
-/// Writing to the user's settings is an action you ask for, not one that
-/// happens by surprise.
-pub fn hooks() -> R {
-    outln!(
-        r#"
-  Paste this into the project's .claude/settings.json:
-
-  {{
-    "hooks": {{
-      "SessionStart": [
-        {{ "matcher": "*", "hooks": [{{ "type": "command", "command": "vivac session start --hook" }}] }}
-      ],
-      "Stop": [
-        {{ "hooks": [{{ "type": "command", "command": "vivac session end --hook" }}] }}
-      ]
-    }}
-  }}
-
-  SessionStart injects the brief into the agent's context, and fires again
-  after a compaction -- exactly when the brief has the most work to do
-  picking the thread back up.
-  Stop leaves an automatic stop with the stack as it stood.
-
-  Both stay quiet and exit 0 where there is no .vivac/, so they can be left
-  in the global configuration without getting in the way of other projects.
-"#
-    );
-    Ok(())
-}

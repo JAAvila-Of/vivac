@@ -144,7 +144,6 @@ fn nothing_the_tool_prints_is_in_spanish() {
         &["check"],
         &["vivacs"],
         &["restore", "v1"],
-        &["hooks"],
         &["session", "start"],
     ];
     for cmd in commands {
