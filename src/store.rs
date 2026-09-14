@@ -215,6 +215,10 @@ impl Store {
         Ok(Store { root, config })
     }
 
+    /// For a `.vivac/` that does not exist yet. `f566`: `init` on one that
+    /// already does calls `open` instead, so this always writes a fresh
+    /// config -- calling it over an existing tree would hand it a new
+    /// `project_id` and drop `d444`'s lock back to `1`.
     pub fn create(root: &Path) -> std::io::Result<Store> {
         let d = root.join(DIR);
         fs::create_dir_all(&d)?;

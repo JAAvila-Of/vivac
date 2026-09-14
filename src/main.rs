@@ -311,6 +311,19 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
     }
 
     if cmd == "init" {
+        // `f566`: a tree already there is something to open, not something
+        // to create over. `Store::open` reads its config as is when one
+        // exists, and only writes when there is none to read --
+        // regenerated locked if the log already governs (`d444`) -- so
+        // opening never duplicates what that path already decides. An
+        // empty `.vivac/` holds no tree yet, so it is planted like a new one.
+        let dir = cwd.join(store::DIR);
+        if dir.join(store::CONFIG).is_file() || dir.join(store::LOG).is_file() {
+            let s = store::Store::open(cwd.clone())?;
+            outln!("  vivac is already planted in {}", cwd.display());
+            outln!("        project {}", s.config.project_id);
+            return Ok(0);
+        }
         let s = store::Store::create(&cwd)?;
         outln!("  vivac planted in {}", cwd.display());
         outln!("        project {}", s.config.project_id);
