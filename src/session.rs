@@ -12,19 +12,6 @@ use crate::event::VivacKind;
 use crate::failure::{Failure, R};
 use crate::output::outln;
 
-/// Wraps text in the envelope Claude Code injects into the context. It is a
-/// single JSON line, with no external dependency and no `jq` in between: a
-/// hook with a pipe is a hook that breaks on the first different machine.
-fn envelope(event_name: &str, text: &str) -> String {
-    serde_json::json!({
-        "hookSpecificOutput": {
-            "hookEventName": event_name,
-            "additionalContext": text,
-        }
-    })
-    .to_string()
-}
-
 /// What the hook is handed on stdin.
 ///
 /// Two fields are read and the rest is left where it is. `transcript_path`
@@ -68,10 +55,12 @@ pub fn start(ctx: &mut crate::ops::Ctx, a: &Args, project: &str) -> R {
     if !a.has("hook") {
         return crate::brief::brief(&ctx.tree, ctx.anchor.as_ref(), a, project);
     }
-    // In hook mode the brief is captured and emitted inside the envelope. No
-    // loose noise on stdout: what is not in the envelope, the agent never sees.
+    // In hook mode the brief goes straight to stdout, in plain text: Claude
+    // Code's own hook reference says plain-text stdout on `SessionStart`
+    // becomes context the agent can see and act on (`f403`, `f404`), so there
+    // is no envelope to build and no format only this one hook understands.
     let text = crate::brief::to_text(&ctx.tree, ctx.anchor.as_ref(), a, project)?;
-    outln!("{}", envelope("SessionStart", &text));
+    print!("{text}");
     // The brief goes out **first**, and the write cannot take it down. A
     // failure that left the agent with no brief would turn a hole in the
     // instrument into blindness in the product, which is a far worse trade: a
@@ -91,10 +80,11 @@ pub fn end(ctx: &mut crate::ops::Ctx, a: &Args) -> R {
         }
         return Ok(());
     }
-    // Nor with nothing new. Claude Code's `Stop` hook runs **on every turn**,
-    // not when the session closes: there is no end-of-session event (`f35`).
-    // Without this guard it would be forty identical stops a day, and a stop
-    // that repeats is not a stop, it is a log.
+    // Nor with nothing new. Claude Code does have a `SessionEnd` event, but
+    // the automatic stop hangs off `Stop` instead: `Stop` fires on every
+    // turn, so the last stop never depends on the session closing cleanly
+    // (`f568`). Without this guard it would be forty identical stops a day,
+    // and a stop that repeats is not a stop, it is a log.
     if ctx.tree.seq_change <= ctx.tree.seq_vivac {
         if !a.has("hook") {
             outln!("  Nothing changed since the last stop.");

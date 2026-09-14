@@ -387,7 +387,6 @@ entry
 enum
 enumerate
 env
-envelope
 epoch
 eprintln
 eq

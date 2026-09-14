@@ -1,8 +1,8 @@
 //! The two session hooks, against the binary.
 //!
-//! `f35`: Claude Code has no end-of-session event. `Stop` is the closest thing
-//! and it runs **on every turn**, so the automatic stop has to know when there
-//! is nothing to stop for.
+//! `f568`: Claude Code does have a `SessionEnd` event, but the automatic stop
+//! hangs off `Stop` instead. `Stop` runs **on every turn**, so the automatic
+//! stop has to know when there is nothing to stop for.
 
 mod common;
 use common::Sandbox;
@@ -45,18 +45,27 @@ fn no_stack_no_stop() {
     assert_eq!(how_many(&v, "auto"), 0, "it invented an empty stop:\n{v}");
 }
 
-/// The brief goes inside the envelope the agent reads, and nothing loose
-/// outside it: what is not in the envelope, the agent never sees.
+/// `f403`, `f404`: the brief goes straight to stdout in plain text, the shape
+/// Claude Code's own hook reference says becomes context on `SessionStart`.
+/// No JSON envelope, and the opening still lands in the log.
 #[test]
-fn the_start_hook_travels_in_its_envelope() {
-    let c = Sandbox::new_seeded("envelope");
+fn the_start_hook_prints_the_brief_as_plain_text() {
+    let c = Sandbox::new_seeded("plaintext");
     c.ok(&["push", "A goal", "--why", "it is needed"]);
-    let s = c.ok(&["session", "start", "--hook"]);
-    assert_eq!(s.lines().filter(|l| !l.trim().is_empty()).count(), 1);
-    assert!(s.contains("hookSpecificOutput"), "{s}");
-    assert!(s.contains("SessionStart"), "{s}");
-    assert!(s.contains("additionalContext"), "{s}");
-    assert!(s.contains("A goal"), "the envelope went out empty:\n{s}");
+    let (s, code) = c.run_stdin(
+        &["session", "start", "--hook"],
+        r#"{"session_id":"abc-123","source":"startup"}"#,
+    );
+    assert_eq!(code, 0, "{s}");
+    assert!(!s.contains("hookSpecificOutput"), "{s}");
+    assert!(s.starts_with("vivac · project:"), "{s}");
+    assert!(s.contains("A goal"), "the brief went out empty:\n{s}");
+    let log = c.log();
+    assert!(log.contains("session.started"), "no opening:\n{log}");
+    assert!(
+        log.contains(r#""source":"startup""#),
+        "the source did not survive:\n{log}"
+    );
 }
 
 /// **A hook that fails in every directory without a tree gets switched off
