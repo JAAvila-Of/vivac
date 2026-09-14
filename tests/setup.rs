@@ -320,7 +320,7 @@ fn a_skill_an_earlier_vivac_wrote_is_replaced() {
     );
     let after = read(&skill_path(&c));
     assert!(
-        after.contains("# Bringing another memory into vivac"),
+        after.contains("# Bringing what a project knows into vivac"),
         "{after}"
     );
     assert!(!after.contains("An older vivac-migrate"), "{after}");
@@ -948,6 +948,173 @@ fn setup_refuses_when_the_trees_own_vivac_is_the_global_store() {
     assert!(out.contains("Run setup inside a project."), "{out}");
     assert!(!c.0.join(".claude").exists());
     assert!(!c.0.join(".mcp.json").exists());
+}
+
+// ---------------------------------------------------------------------------
+// t579 §5.4: upgrading from the exact SKILL.md v0.10.0 wrote.
+// ---------------------------------------------------------------------------
+
+/// The literal SKILL.md v0.10.0 wrote: its frontmatter and body
+/// (`git show v0.10.0:src/setup/skill-frontmatter.md` and
+/// `skill-body.md`), joined by the marker line with the fingerprint that
+/// version's own `fnv1a64` computed over that text. Setup already knows how
+/// to replace a copy an earlier vivac wrote; this fixture is what that copy
+/// actually looked like.
+const OLD_RELEASE_SKILL: &str = include_str!("data/skill-v0.10.0.md");
+
+#[test]
+fn an_old_release_skill_is_replaced_by_the_new_one() {
+    let fresh = Sandbox::new_empty("setup-skill-old-release-fresh");
+    fresh.ok(&["setup", "claude-code", "--yes"]);
+    let expected = read(&skill_path(&fresh));
+
+    let c = Sandbox::new_empty("setup-skill-old-release-upgrade");
+    std::fs::create_dir_all(skill_path(&c).parent().unwrap()).unwrap();
+    std::fs::write(skill_path(&c), OLD_RELEASE_SKILL).unwrap();
+
+    let (out, code) = c.run(&["setup", "claude-code", "--yes"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.contains("replace the copy an earlier vivac wrote"),
+        "{out}"
+    );
+    assert_eq!(read(&skill_path(&c)), expected);
+}
+
+// ---------------------------------------------------------------------------
+// t579 §5.2/§9: the skill only teaches commands that exist. Every bare
+// "vivac <word>" and every "vivac_<word>" in its text is either a verb
+// `vivac --help` lists or a tool `vivac mcp` serves.
+// ---------------------------------------------------------------------------
+
+/// Words that follow a bare "vivac" in the skill's text without naming a
+/// command. Each entry is a real sentence read out of the text, not a
+/// guess: "vivac never imports anything by itself" and "... is another
+/// map." Widening this list to let a typo pass is the wrong fix; renaming
+/// or rewriting the sentence is the right one.
+const NOT_A_COMMAND: &[&str] = &["never", "is"];
+
+/// Every verb `--help` lists on its own line, four spaces in.
+fn help_commands(help: &str) -> std::collections::BTreeSet<String> {
+    help.lines()
+        .filter_map(|l| l.strip_prefix("    vivac "))
+        .filter_map(|rest| rest.split_whitespace().next())
+        .map(str::to_string)
+        .collect()
+}
+
+const MCP_HELLO: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}"#;
+const MCP_INITIALIZE_DONE: &str = r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#;
+const MCP_TOOLS_LIST: &str = r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#;
+
+/// The tool names `vivac mcp` actually serves, asked over the wire the same
+/// way `tests/mcp.rs` does, so a tool the skill names and the server does
+/// not have cannot pass by assumption.
+fn mcp_tool_names(c: &Sandbox) -> std::collections::BTreeSet<String> {
+    use std::io::{BufRead, BufReader, Write};
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_vivac"))
+        .current_dir(&c.0)
+        .env("VIVAC_HOME", c.global_home())
+        .arg("mcp")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+
+    writeln!(stdin, "{MCP_HELLO}").unwrap();
+    stdin.flush().unwrap();
+    let mut line = String::new();
+    stdout.read_line(&mut line).unwrap();
+
+    writeln!(stdin, "{MCP_INITIALIZE_DONE}").unwrap();
+    stdin.flush().unwrap();
+
+    writeln!(stdin, "{MCP_TOOLS_LIST}").unwrap();
+    stdin.flush().unwrap();
+    let mut answer = String::new();
+    stdout.read_line(&mut answer).unwrap();
+
+    let response: serde_json::Value = serde_json::from_str(&answer).unwrap();
+    let names = response["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap().to_string())
+        .collect();
+
+    let _ = child.kill();
+    let _ = child.wait();
+    names
+}
+
+/// Every "vivac <word>" and "vivac_<word>" the text names.
+///
+/// Split into paragraphs first, so a heading's trailing "vivac" is never
+/// paired with the next paragraph's opening word, and only a bare "vivac"
+/// -- nothing glued to it, like "vivac's" or the "vivac," of a mid-sentence
+/// pause -- is read as naming a command.
+fn command_words_in(text: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    for paragraph in text.split("\n\n") {
+        let words: Vec<&str> = paragraph.split_whitespace().collect();
+        for (i, word) in words.iter().enumerate() {
+            if let Some(name) = word.strip_prefix("vivac_") {
+                let clean: String = name
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                    .collect();
+                found.push(format!("vivac_{clean}"));
+            } else if *word == "vivac" {
+                if let Some(next) = words.get(i + 1) {
+                    let clean: String = next
+                        .chars()
+                        .take_while(|c| c.is_ascii_alphanumeric())
+                        .collect();
+                    if !clean.is_empty() {
+                        found.push(clean);
+                    }
+                }
+            }
+        }
+    }
+    found
+}
+
+#[test]
+fn the_skill_only_names_commands_that_exist() {
+    let help_sandbox = Sandbox::new_empty("setup-skill-commands-help");
+    let commands = help_commands(&help_sandbox.ok(&["--help"]));
+
+    let mcp_sandbox = Sandbox::new_seeded("setup-skill-commands-mcp");
+    let tools = mcp_tool_names(&mcp_sandbox);
+
+    let mut total = 0;
+    for text in [FRONTMATTER, BODY] {
+        for word in command_words_in(text) {
+            total += 1;
+            if let Some(rest) = word.strip_prefix("vivac_") {
+                assert!(
+                    tools.contains(&word),
+                    "the skill names the tool \"vivac_{rest}\", and vivac mcp serves no such tool"
+                );
+                continue;
+            }
+            if NOT_A_COMMAND.contains(&word.as_str()) {
+                continue;
+            }
+            assert!(
+                commands.contains(&word),
+                "the skill says \"vivac {word}\", and the help lists no such command"
+            );
+        }
+    }
+    assert!(
+        total >= 10,
+        "only {total} command word(s) found: what broke is the parsing, not the skill"
+    );
 }
 
 /// (j): `--undo` in the home folder is never refused, and removes only the
