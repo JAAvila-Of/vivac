@@ -128,7 +128,9 @@ reads `CLAUDE.md`, `AGENTS.md` or any memory file, and it does not guess which
 of their sentences are rules, because telling a rule from the prose around it
 takes judgment. Bringing them in is the agent's job, with a person deciding: the
 agent proposes which lines are pillars, which are rules and which are neither,
-the person rules on it, and the agent writes them with `vivac add`. A tree with
+the person rules on it, and the agent writes them with `vivac add`. The
+`vivac-migrate` skill that setup installs takes the agent through it: see
+[Migrating to vivac](#migrating-to-vivac). A tree with
 no pillar and no rule says so when it is asked for its rules. And keep the file
 as it is afterwards, for now: `vivac rules` is read on demand, not handed to the
 agent when a session opens, so the file is still what delivers them unasked.
@@ -471,42 +473,151 @@ whose reason reads like an id, or a node you do not remember parking.
 `vivac focus <id>` takes it back out and asks no permission to do it, because
 parking only ever said "maybe I will be back".
 
-## Hooks
+## Setup
 
 ```sh
-vivac hooks     prints what to paste into .claude/settings.json
+vivac setup claude-code
 ```
 
-`SessionStart` injects the brief into the agent's context; `Stop` leaves an
-automatic stop. `Stop` runs **on every turn**, not at session close — there is
-no end-of-session event — so the stop is only saved if the tree changed since
-the previous one: a stop that repeats identically is not a stop, it is a log.
-Both stay quiet and exit 0 where there is no `.vivac/`, so they can be left in
-the global configuration without getting in the way of other projects.
+Everything Claude Code needs to work with the tree, written into the project
+and nowhere else:
+
+- `.claude/settings.json` gets two hooks. `SessionStart` runs
+  `vivac session start --hook`, which hands the agent the brief when a session
+  opens and again after a compaction. `Stop` runs `vivac session end --hook`,
+  which leaves an automatic stop.
+- `.mcp.json` gets the server, which runs `vivac mcp` (see [MCP](#mcp)).
+- `.claude/skills/vivac-migrate/` gets the skill an agent follows to bring
+  another memory into the tree (see [Migrating to vivac](#migrating-to-vivac)).
+- `.vivac/` is planted if the project has no tree yet.
+
+Before writing, setup shows every file it will create or add to, and the exact
+command each hook and the server will run, and then it asks. `--dry-run` shows
+the same and writes nothing. `--yes` writes without asking, for a script, or
+for an agent that has already shown you the dry run. setup adds to a file
+rather than replacing it, and keeps every key it does not own in its place.
+It refuses a file it cannot parse, and an entry under its name that it did not
+write. A second run finds nothing to do.
+
+**It keeps no copy of the files it changes, and that is deliberate.** A
+settings file can hold credentials in its `env` block, and a copy under another
+name is no longer covered by the ignore rule that keeps the original out of the
+repository. Instead, it keeps the original in memory. After writing, it reads
+every file back and checks that it holds what setup meant and that nothing
+else in it moved. If one does not, it puts all of them back the way they were.
+`vivac setup claude-code --undo` removes exactly what setup writes and leaves
+anything that is not exactly its own. The tree is never part of it.
+
+The commands are a bare `vivac`, never a path to the executable, because these
+files can end up in a repository and such a path carries the name of the
+account that installed it. So `vivac` has to be on the `PATH` the harness sees.
+These are plain files in your project. Commit them if everyone who works on it
+uses vivac, and keep them out of version control if only you do.
+
+`Stop` runs on every turn rather than once at the end, so the last stop does
+not depend on the session closing cleanly. The stop is only saved if the tree
+changed since the previous one: a stop that repeats identically is not a stop,
+it is a log. Both hooks stay quiet and exit 0 where there is no `.vivac/`.
 
 What they call is `vivac session start` and `vivac session end`, which are
-commands like any other. `--hook` is what makes them speak the hook protocol
-rather than to a person, so the same behaviour is available to anything that is
-not Claude Code, and the pair can be run by hand to see what a hook would do.
+commands like any other. `--hook` makes them speak to a harness instead of a
+person: the brief goes out as plain text, and what kind of start it was is
+read from what the harness passes in. So the pair can be run by hand to see
+what a hook would do. setup writes Claude Code's configuration today. Any
+harness that can run a command when a session opens and put its output in the
+agent's context can call the same one, and any MCP client can run `vivac mcp`.
+
+## Migrating to vivac
+
+**Nothing moves into vivac on its own.** If a project already lives in
+another memory system, engram or anything like it, or keeps what it has
+learned in `CLAUDE.md`, `AGENTS.md`, `MEMORY.md` or internal documents, none
+of that is in the tree after `vivac setup`. vivac never reads another system
+and never reads those files. Bringing them in is a job for the agent, with you
+deciding what goes in, and the `vivac-migrate` skill that setup installs tells
+the agent how to do it and how to check it.
+
+**We strongly recommend not running another memory or learning system
+alongside vivac in the same project.** Two maps collide: each one points the
+agent at the context it holds, and sooner or later one of them settles
+something the other mapped differently, without anyone noticing which of the
+two oriented the decision. This has been observed, not assumed:
+
+- Asked to pick up where it left off, a project with three places keeping its
+  state got three answers. A hand-written plan answered in 9,252 tokens. A
+  memory system answered "maybe" in about 12,720, depending on which of two
+  names for the project it resolved. The tree answered in 100. None of the
+  three knew what it did not know.
+- In that same project a written rule told the agent to mirror every update
+  into the memory system. That made three seats, and the one that actually
+  governed was the only one no tool could read.
+- In the project that builds vivac, with the memory system turned off
+  precisely to test whether the tree alone could carry the thread, the
+  harness's own automatic memory kept injecting a copy of the project's
+  doctrine for five days before anybody noticed.
+
+vivac does not turn anything off, and neither does setup: another system is
+not vivac's to touch. Turning it off is your call, in that system's own
+settings, and when you do, check its instructions as well. Turning its tools
+off in one project does not stop instructions that tell the agent to save
+memories there in every project.
+
+### Steps
+
+1. Install vivac and set the project up:
+
+   ```sh
+   cargo install vivac
+   vivac setup claude-code
+   ```
+
+2. Open a new Claude Code session in the project, and let it use the `vivac`
+   server when it asks.
+
+3. Bring in what another memory system knows. Ask the agent:
+
+   > Use the vivac-migrate skill to bring what engram knows about this project
+   > into vivac. Show me the plan before you write anything.
+
+   Name whichever system you use. Its tools can be off in this project: the
+   skill reads it through its command line or its export instead.
+
+4. Bring in the instruction files and your own documents:
+
+   > Use the vivac-migrate skill to bring the rules, decisions and constraints
+   > in CLAUDE.md, AGENTS.md, MEMORY.md and docs/ into vivac. Keep the files
+   > as they are.
+
+5. Check it:
+
+   > Check the migration with the vivac-migrate skill and tell me what was left
+   > out, and why.
+
+6. Decide about the other system, and open a fresh session: the brief it
+   starts with is what the tree now knows.
+
+Keep the instruction files as they are for now. `vivac rules` is read on
+demand, not handed to the agent when a session opens, so the file is still
+what delivers them unasked.
 
 ## MCP
 
-The tree as tools an agent can call:
+The tree as tools an agent can call. `vivac setup claude-code` writes the
+server into the project's `.mcp.json`, and Claude Code asks once whether to
+use it. Any other MCP client runs `vivac mcp`.
 
-```sh
-claude mcp add vivac -- vivac mcp
-```
+Fourteen of them. Five are reads: `vivac_brief`, `vivac_find`, `vivac_why`,
+`vivac_open` and `vivac_rules`. Nine are writes: `vivac_push`, `vivac_pop`,
+`vivac_add`, `vivac_decide`, `vivac_note`, `vivac_park`, `vivac_save`,
+`vivac_arm` and `vivac_declare`. The server speaks JSON-RPC over standard
+input and adds no dependency: it is the binary you already installed.
 
-Eleven of them: four reads — `vivac_brief`, `vivac_find`, `vivac_why`,
-`vivac_open` — and seven writes — `vivac_push`, `vivac_pop`, `vivac_add`,
-`vivac_decide`, `vivac_note`, `vivac_park`, `vivac_save`. It speaks JSON-RPC
-over standard input and adds no dependency: the server is the binary you
-already installed.
-
-Eleven and not more, because every tool costs context in every session the
-agent ever opens, so the list is a budget and not a catalogue. The seven
-writes are the seams of the work — opening something, closing it, parking
-it, noting it, deciding, and the safe stop — and nothing else got in.
+Fourteen and not more, because every tool costs context in every session the
+agent ever opens, so the list is a budget and not a catalogue. Seven of the
+writes are the seams of the work: opening something, closing it, parking it,
+noting it, deciding, and the safe stop. The other two are the seams of
+governance: arming a rule with the command that checks it, and declaring what
+a decision was judged against. Nothing else got in.
 
 The same budget governs what a tool hands back. `vivac_open` returns each
 front as five fields — alias, kind, state, title and lineage — rather than
@@ -577,8 +688,9 @@ without complaining, so this one is Windows only.
 
 Every [release](https://github.com/JAAvila-Of/vivac/releases) carries a
 precompiled binary: Linux and macOS on both `x86_64` and `aarch64`, Windows on
-`x86_64`. Unpack one, put `vivac` somewhere on your `PATH`, and run `vivac
-init` inside a project. The Linux builds link against musl, so they run on
+`x86_64`. Unpack one, put `vivac` somewhere on your `PATH`, and run
+`vivac setup claude-code` inside a project, or `vivac init` for a tree with no
+harness around it. The Linux builds link against musl, so they run on
 older distributions too rather than on nothing older than the machine that
 built them.
 
@@ -594,7 +706,7 @@ With a Rust toolchain:
 
 ```sh
 cargo install vivac
-vivac init
+vivac setup claude-code
 ```
 
 **`cargo install` is not the fallback.** It builds from the source published to
@@ -652,14 +764,16 @@ able to move.
 
 The project is in `0.x`, and while it is, **the minor is the position that
 breaks**: `0.3.x` to `0.4.0` may change a public surface, and a patch never
-does. The rule has been spent seven times — `0.3.0` stopped reading the logs
+does. The rule has been spent eight times — `0.3.0` stopped reading the logs
 `0.1.x` and `0.2.x` wrote, `0.4.0` made `find` hand back handles rather than
 whole nodes, `0.5.0` began refusing a write that opens a fenced code block,
 `0.6.0` made `open` hand back fronts rather than whole nodes, `0.7.0` did the
 same to `why` for everything but the node asked about, `0.8.0` wrote an event
-`0.7.0` stops at, and `0.9.0` stopped taking a closed node off the stack when
-it is not the top. Each went out as a minor for that reason, and counting them here is cheaper than counting them
-once and letting the sentence go stale.
+`0.7.0` stops at, `0.9.0` stopped taking a closed node off the stack when it
+is not the top, and `0.10.0` retired `vivac hooks` for `vivac setup` and gave
+the hook its brief as plain text. Each went out as a minor for that reason,
+and counting them here is cheaper than counting them once and letting the
+sentence go stale.
 
 **The format on disk is not settled either**, and that is what keeps `1.0`
 away. It was going to settle by moving into SQLite; the measurement rejected
