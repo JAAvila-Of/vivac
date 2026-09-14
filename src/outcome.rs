@@ -186,6 +186,13 @@ pub enum Outcome {
         advice: Option<DepthAdvice>,
         #[serde(skip_serializing_if = "is_false")]
         no_against: bool,
+        /// `--root` (`t533` §1.4): the aliases that left the stack, bottom to
+        /// top. Always present; `[]` when nothing left, `--root` or not.
+        left_stack: Vec<String>,
+        /// The deepest of `left_stack` that is still open or parked, the one
+        /// worth naming to get back to. Always present; `null` when nothing
+        /// left, or everything that did is closed or abandoned.
+        back_to: Option<String>,
     },
     Popped {
         closed: Closed,
@@ -330,10 +337,27 @@ pub fn to_text(o: &Outcome) -> String {
             blocks,
             advice,
             no_against,
+            left_stack,
+            back_to,
         } => {
             lines.push(format!("  {alias}  {title}"));
             if *blocks {
                 lines.push("        blocks its parent from closing".to_string());
+            }
+            // `--root` (`t533` §1.4): what the stack held before is reported
+            // here, right after the node born and what it blocks.
+            if let [bottom, .., top] = left_stack.as_slice() {
+                lines.push(format!(
+                    "        at the root: {} left the stack, {bottom} to {top}, none closed by this",
+                    left_stack.len()
+                ));
+            } else if let [only] = left_stack.as_slice() {
+                lines.push(format!(
+                    "        at the root: {only} left the stack, not closed by this"
+                ));
+            }
+            if let Some(b) = back_to {
+                lines.push(format!("        back there with:  vivac focus {b}"));
             }
             if let Some(a) = advice {
                 lines.push(String::new());

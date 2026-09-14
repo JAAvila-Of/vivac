@@ -159,6 +159,15 @@ fn guarded_or_refused(field: &str, text: &str) -> String {
     }
 }
 
+/// `--root` given together with `--parent` on `add` or `decide`: both name
+/// where a node is born, and a node is born in one place. `t533` §1.1.
+fn root_and_parent_error() -> Failure {
+    Failure::usage(
+        "--root and --parent both say where it is born, and a node is born in one place.\n  \
+         Keep the one you mean.",
+    )
+}
+
 fn kind_of(raw: Option<&str>, fallback: Kind) -> Result<Kind, Failure> {
     match raw {
         None => Ok(fallback),
@@ -445,8 +454,20 @@ fn born(ctx: &Ctx, b: Born) -> Result<(Body, u64, String, bool), Failure> {
 
 /// `push` — open a detour. It is **the** operation: the provenance edge is
 /// created here on its own, with nobody having to remember to declare it.
+///
+/// `--root` (`t533` §1) means born with no parent, nothing more: the kind
+/// still defaults the way it always has for a parentless node (`Kind::Goal`),
+/// and `add`/`decide`'s own stacks never move either way. On `push`, it also
+/// leaves the stack holding only the new node -- what was on it stays open in
+/// the tree, and the events that record it are the same ones `focus` already
+/// writes crossing branches: a `stack.popped` per node that leaves, top to
+/// bottom, then the `stack.pushed` of the new one.
 pub fn push(ctx: &mut Ctx, p: params::Push) -> Result<Outcome, Failure> {
-    let parent = ctx.tree.focus().map(|n| n.id.clone());
+    let parent = if p.root {
+        None
+    } else {
+        ctx.tree.focus().map(|n| n.id.clone())
+    };
     let kind = kind_of(
         p.kind.as_deref(),
         if parent.is_none() {
@@ -471,17 +492,49 @@ pub fn push(ctx: &mut Ctx, p: params::Push) -> Result<Outcome, Failure> {
             against,
         },
     )?;
+    // The old stack, bottom to top, kept only for `--root`: it is what
+    // `left_stack` reports and what the vivac below freezes.
+    let old_stack: Vec<u64> = if p.root {
+        ctx.tree.stack.clone()
+    } else {
+        Vec::new()
+    };
     // The vivac goes **before** the push: it freezes the stack at the moment
     // of the fork, which is the belay where you make yourself safe before
     // setting off. The `next_intent` is the child being opened, because that
     let v = vivac(ctx, VivacKind::Push, &p.title, parent, "");
-    ctx.emit(vec![v, ev, Body::Pushed { node }])?;
+    let mut evs = vec![v, ev];
+    for &n in old_stack.iter().rev() {
+        if let Some(left) = ctx.tree.node_by_num(n) {
+            evs.push(Body::Popped {
+                node: left.id.clone(),
+            });
+        }
+    }
+    evs.push(Body::Pushed { node });
+    ctx.emit(evs)?;
+
+    let left_stack: Vec<String> = old_stack
+        .iter()
+        .filter_map(|&n| ctx.tree.node_by_num(n))
+        .map(|n| n.alias())
+        .collect();
+    // The deepest of what left that is still open or parked: the one worth
+    // naming to get back to. Depth here means position in the old stack, top
+    // first, not how far it is from any root.
+    let back_to: Option<String> = old_stack
+        .iter()
+        .rev()
+        .filter_map(|&n| ctx.tree.node_by_num(n))
+        .find(|n| matches!(n.state, State::Active | State::Suspended))
+        .map(|n| n.alias());
 
     // `emit` already applied the push in memory, so the stack includes the
     // new node and there is no need to add one.
     let depth_of = ctx.tree.stack_depth();
     // §6.1: intervene, never block. A deep stack is almost never lack of
-    // discipline: the root goal moved and nobody re-rooted.
+    // discipline: the root goal moved and nobody re-rooted. `--root` always
+    // leaves the stack one level deep, so this never fires for it.
     let advice = if depth_of >= 4 {
         // The node named is the **bottom of this stack**, never the tree's
         // first root: the number measures the stack (`f156`), so taking the
@@ -507,6 +560,8 @@ pub fn push(ctx: &mut Ctx, p: params::Push) -> Result<Outcome, Failure> {
         blocks: p.blocks,
         advice,
         no_against,
+        left_stack,
+        back_to,
     })
 }
 
@@ -716,9 +771,16 @@ pub fn done(ctx: &mut Ctx, p: params::Done) -> Result<Outcome, Failure> {
 /// `add` — a node without touching the stack. It is how a tree that already
 /// existed elsewhere gets in, and how a finding hangs off something that is
 pub fn add(ctx: &mut Ctx, p: params::Add) -> Result<Outcome, Failure> {
-    let parent = match &p.parent {
-        Some(s) => Some(ctx.resolve(s)?.id.clone()),
-        None => ctx.tree.focus().map(|n| n.id.clone()),
+    if p.root && p.parent.is_some() {
+        return Err(root_and_parent_error());
+    }
+    let parent = if p.root {
+        None
+    } else {
+        match &p.parent {
+            Some(s) => Some(ctx.resolve(s)?.id.clone()),
+            None => ctx.tree.focus().map(|n| n.id.clone()),
+        }
     };
     let kind = kind_of(
         p.kind.as_deref(),
@@ -1138,6 +1200,9 @@ pub fn arm(ctx: &mut Ctx, p: params::Arm) -> Result<Outcome, Failure> {
 /// practice: without them, in a month the agent proposes again what you
 /// already rejected.
 pub fn decide(ctx: &mut Ctx, p: params::Decide) -> Result<Outcome, Failure> {
+    if p.root && p.parent.is_some() {
+        return Err(root_and_parent_error());
+    }
     let superseded = match &p.supersedes {
         Some(s) => Some(ctx.resolve(s)?.clone()),
         None => None,
@@ -1147,9 +1212,13 @@ pub fn decide(ctx: &mut Ctx, p: params::Decide) -> Result<Outcome, Failure> {
     if !p.alternatives.is_empty() {
         body.push_str(&format!("  |  discarded: {}", p.alternatives.join("; ")));
     }
-    let parent = match &p.parent {
-        Some(s) => Some(ctx.resolve(s)?.id.clone()),
-        None => ctx.tree.focus().map(|n| n.id.clone()),
+    let parent = if p.root {
+        None
+    } else {
+        match &p.parent {
+            Some(s) => Some(ctx.resolve(s)?.id.clone()),
+            None => ctx.tree.focus().map(|n| n.id.clone()),
+        }
     };
     let against = against_of(ctx, p.against, Kind::Decision)?;
     let (ev, num, _, no_against) = born(

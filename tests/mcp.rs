@@ -1178,6 +1178,15 @@ fn mcp_write_text(reply: &Value) -> String {
         .to_string()
 }
 
+/// The whole payload a write tool's reply carries, `text` included: what
+/// `--root` needs, since `left_stack` and `back_to` (`t533` §1.4) never reach
+/// the CLI's own output -- `push` takes no `--json` -- and this door is the
+/// only one they are ever seen through.
+fn mcp_write_payload(reply: &Value) -> Value {
+    serde_json::from_str(&text_of(reply))
+        .unwrap_or_else(|e| panic!("mcp reply is not JSON: {e}\n{reply}"))
+}
+
 #[test]
 fn push_text_is_byte_for_byte_the_cli_output() {
     let cli = Sandbox::new_seeded("push-text-cli");
@@ -1274,6 +1283,92 @@ fn decide_text_is_byte_for_byte_the_cli_output() {
     );
     assert_eq!(r["result"]["isError"], false, "{r}");
     assert_eq!(mcp_write_text(&r), expected);
+}
+
+// ---------------------------------------------------------------------------
+// `t533` §1.6: `root` on `vivac_push`, `vivac_add` and `vivac_decide`.
+// ---------------------------------------------------------------------------
+
+/// `vivac_push` with `root: true` writes the same events the CLI's
+/// `--root` does, and its payload carries `left_stack`/`back_to` -- the two
+/// keys never reach `push`'s own output, since it takes no `--json`.
+#[test]
+fn push_root_by_mcp_writes_the_same_events_as_the_cli_and_carries_the_new_keys() {
+    let cli = Sandbox::new_seeded("push-root-cli");
+    cli.ok(&["push", "First goal", "--why", "it came first"]);
+    let via_mcp = twin_of(&cli, "push-root-mcp");
+
+    cli.ok(&["push", "The successor", "--why", "moving on", "--root"]);
+
+    let mut s = hello(&via_mcp);
+    let r = s.ask(
+        r#"{"jsonrpc":"2.0","id":40,"method":"tools/call","params":{"name":"vivac_push","arguments":{"title":"The successor","why":"moving on","root":true}}}"#,
+    );
+    assert_eq!(r["result"]["isError"], false, "{r}");
+    assert_eq!(tree_events(&cli), tree_events(&via_mcp));
+
+    let payload = mcp_write_payload(&r);
+    assert_eq!(payload["left_stack"], serde_json::json!(["g1"]));
+    assert_eq!(payload["back_to"], "g1");
+}
+
+/// `vivac_add` and `vivac_decide` with `root: true` write the same events as
+/// `--root` on the CLI.
+#[test]
+fn add_root_and_decide_root_by_mcp_write_the_same_events_as_the_cli() {
+    let cli = Sandbox::new_seeded("add-decide-root-cli");
+    cli.ok(&["push", "First goal", "--why", "it came first"]);
+    let via_mcp = twin_of(&cli, "add-decide-root-mcp");
+
+    cli.ok(&[
+        "add",
+        "A stray finding",
+        "--why",
+        "noticed in passing",
+        "--root",
+    ]);
+    cli.ok(&[
+        "decide",
+        "Adopt the new approach",
+        "--reason",
+        "it settles the question",
+        "--root",
+    ]);
+
+    let mut s = hello(&via_mcp);
+    let r = s.ask(
+        r#"{"jsonrpc":"2.0","id":41,"method":"tools/call","params":{"name":"vivac_add","arguments":{"title":"A stray finding","why":"noticed in passing","root":true}}}"#,
+    );
+    assert_eq!(r["result"]["isError"], false, "{r}");
+    let r = s.ask(
+        r#"{"jsonrpc":"2.0","id":42,"method":"tools/call","params":{"name":"vivac_decide","arguments":{"title":"Adopt the new approach","reason":"it settles the question","root":true}}}"#,
+    );
+    assert_eq!(r["result"]["isError"], false, "{r}");
+    assert_eq!(tree_events(&cli), tree_events(&via_mcp));
+}
+
+/// `root` and `parent` together are refused over MCP with the same text as
+/// on the CLI, on both tools.
+#[test]
+fn root_with_parent_is_refused_by_mcp() {
+    let c = seeded("root-parent-conflict-mcp");
+    let mut s = hello(&c);
+    let r = s.ask(
+        r#"{"jsonrpc":"2.0","id":43,"method":"tools/call","params":{"name":"vivac_add","arguments":{"title":"A stray finding","parent":"1","root":true}}}"#,
+    );
+    assert_eq!(r["result"]["isError"], true, "{r}");
+    assert!(
+        text_of(&r).contains("--root and --parent both say where it is born"),
+        "{r}"
+    );
+    let r = s.ask(
+        r#"{"jsonrpc":"2.0","id":44,"method":"tools/call","params":{"name":"vivac_decide","arguments":{"title":"Adopt it","reason":"because","parent":"1","root":true}}}"#,
+    );
+    assert_eq!(r["result"]["isError"], true, "{r}");
+    assert!(
+        text_of(&r).contains("--root and --parent both say where it is born"),
+        "{r}"
+    );
 }
 
 #[test]

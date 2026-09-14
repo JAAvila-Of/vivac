@@ -253,6 +253,15 @@ const TOOLS: &[Tool] = &[
                               against and a sentence on how it holds, as one entry: \
                               \"r12: the write path stays local\". Repeat for each one.",
             },
+            Arg {
+                name: "root",
+                kind: ArgKind::Bool,
+                required: false,
+                description: "Born at the root, with no parent, instead of under the \
+                              focus. The stack is left holding only the new node; \
+                              nothing on it is closed, and the answer says how to get \
+                              back.",
+            },
         ],
     },
     Tool {
@@ -366,6 +375,13 @@ const TOOLS: &[Tool] = &[
                               against and a sentence on how it holds, as one entry: \
                               \"r12: the write path stays local\". Repeat for each one.",
             },
+            Arg {
+                name: "root",
+                kind: ArgKind::Bool,
+                required: false,
+                description: "Born at the root, with no parent, instead of under the \
+                              focus. Refused together with parent.",
+            },
         ],
     },
     Tool {
@@ -437,6 +453,13 @@ const TOOLS: &[Tool] = &[
                               how it holds, as one entry: \"r12: the write path stays \
                               local\". Repeat for each one. vivac checks that the pillar \
                               or rule exists and still governs; the sentence is not judged.",
+            },
+            Arg {
+                name: "root",
+                kind: ArgKind::Bool,
+                required: false,
+                description: "Born at the root, with no parent, instead of under the \
+                              focus. Refused together with parent.",
             },
         ],
     },
@@ -786,6 +809,7 @@ fn call(project: &mut Project, params: &Value) -> Result<String, Failure> {
                 arm_dir: a.str("arm_dir").map(str::to_string),
                 against: a.list("against"),
                 via_mcp: true,
+                root: a.bool("root"),
             };
             outcome_text(project.write(|ctx| ops::push(ctx, p))?)
         }
@@ -811,6 +835,7 @@ fn call(project: &mut Project, params: &Value) -> Result<String, Failure> {
                 arm_dir: a.str("arm_dir").map(str::to_string),
                 against: a.list("against"),
                 via_mcp: true,
+                root: a.bool("root"),
             };
             outcome_text(project.write(|ctx| ops::add(ctx, p))?)
         }
@@ -830,6 +855,7 @@ fn call(project: &mut Project, params: &Value) -> Result<String, Failure> {
                 governs: a.list("governs"),
                 blocks: a.bool("blocks"),
                 against: a.list("against"),
+                root: a.bool("root"),
             };
             outcome_text(project.write(|ctx| ops::decide(ctx, p))?)
         }
