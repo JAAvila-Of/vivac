@@ -9,6 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.9.0](https://github.com/JAAvila-Of/vivac/compare/v0.8.0...v0.9.0) - 2026-09-14
 
+### Upgrading
+
+- **`done` and `park` step off the stack only from its top.** Closing or
+  parking a node below the focus now leaves the stack as it was, and the
+  brief marks that node on the spine with its state. Under 0.8.0 the node
+  left the stack and the rest stayed, which is how the depth advice came to
+  name the wrong goal. `pop` steps off the top as before.
+- **`pop` on a focus that is no longer open leaves it as it was.** It steps
+  off the stack without writing a new state. 0.8.0 closed it again, which
+  turned a superseded decision into a done one and replaced its outcome.
+- **`restore` keeps the closed nodes below the deepest open one**, and lists
+  them as `still on the path` apart from what left the stack.
+- **The brief reads differently, and it was never meant to be parsed.** A
+  node on the spine that is no longer open carries its state in brackets.
+  DO NOT TOUCH NOW lists every parked node in the project, wherever the
+  focus is. A decision hanging off any root counts as project-wide, as an
+  invariant already did, and the governing section of `vivac web` follows
+  because it reads through the same function. With nothing on the stack the
+  brief keeps the invariants, standing decisions, parked nodes and last
+  stop, and names a real node to pick up.
+- **Every JSON change is an addition.** Over MCP, a push carries
+  `left_stack` and `back_to`, and the `closed` object of a pop or a done
+  carries `already`. Nothing was renamed or removed.
+- **No event changed.** 0.8.0 reads a log 0.9.0 wrote, and both fold it
+  into the same stack.
+- **Restart every session once you have upgraded.** An MCP server still
+  running 0.8.0 keeps unstacking the old way on the same log. On Windows it
+  also holds the executable open, and `cargo install` fails with
+  `os error 5` until the session that started it is closed.
+
 ### Added
 
 - open a node at the root while the stack is on
