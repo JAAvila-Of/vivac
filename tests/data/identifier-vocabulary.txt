@@ -58,6 +58,7 @@ answered
 answering
 answers
 any
+anywhere
 apart
 appear
 appears
@@ -988,6 +989,7 @@ prev
 preview
 prime
 print
+printed
 println
 prints
 problem
@@ -1079,6 +1081,7 @@ removal
 removals
 remove
 removed
+removes
 removing
 rename
 render
@@ -1095,6 +1098,7 @@ reply
 report
 reported
 reports
+repository
 request
 requested
 required
@@ -1198,6 +1202,7 @@ serves
 serving
 session
 set
+sets
 settings
 setup
 several
@@ -1303,6 +1308,7 @@ stripped
 strips
 struct
 sub
+subfolder
 subsec
 subsequence
 subtree
@@ -1529,6 +1535,8 @@ words
 work
 working
 works
+workspace
+worktree
 world
 would
 wrap

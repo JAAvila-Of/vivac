@@ -23,11 +23,11 @@ const SESSION_END_COMMAND: &str = "vivac session end --hook";
 const FRONTMATTER: &str = include_str!("skill-frontmatter.md");
 const BODY: &str = include_str!("skill-body.md");
 
-pub fn run(root: &Path, a: &Args) -> Result<i32, Failure> {
+pub fn run(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     if a.has("undo") {
-        return undo(root, a);
+        return undo(&roots.here, a);
     }
-    apply(root, a)
+    apply(roots, a)
 }
 
 // ---------------------------------------------------------------------------
@@ -464,8 +464,14 @@ fn wrapped_piece_line(label: &str, first: &str, second: &str) -> String {
 // Applying: plan, ask, write.
 // ---------------------------------------------------------------------------
 
-fn apply(root: &Path, a: &Args) -> Result<i32, Failure> {
-    let paths = paths(root);
+fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
+    if let Some(refusal) = super::refuse_home_or_global_store(roots) {
+        return Err(refusal);
+    }
+
+    let here = &roots.here;
+    let tree = &roots.tree;
+    let paths = paths(here);
     let settings = read_json(&paths.settings);
     let mcp = read_json(&paths.mcp);
     let skill_raw = std::fs::read_to_string(&paths.skill).ok();
@@ -515,7 +521,7 @@ fn apply(root: &Path, a: &Args) -> Result<i32, Failure> {
     );
     let stop_hook_state = hook_state(&settings_root, "Stop", "end", SESSION_END_COMMAND);
 
-    let vivac_missing = !crate::store::already_planted(root);
+    let vivac_missing = !crate::store::already_planted(tree);
     let start_missing = matches!(start_hook_state, HookState::Missing);
     let stop_missing = matches!(stop_hook_state, HookState::Missing);
     let mcp_missing = matches!(mcp_server_state, McpState::Missing);
@@ -531,7 +537,8 @@ fn apply(root: &Path, a: &Args) -> Result<i32, Failure> {
         && !skill_missing_or_replaceable;
 
     let piece_block = render_piece_block(
-        root,
+        here,
+        tree,
         vivac_missing,
         settings.exists,
         mcp.exists,
@@ -625,7 +632,7 @@ fn apply(root: &Path, a: &Args) -> Result<i32, Failure> {
     // landed, and a failure here undoes that commit by hand: `.vivac/`
     // itself is never touched, planted or rolled back (`t565` §7.7).
     if vivac_missing {
-        if let Err(e) = crate::store::Store::create(root) {
+        if let Err(e) = crate::store::Store::create(tree) {
             let unrestored = super::rollback(&writes);
             return Err(super::failure_with_rollback(
                 format!("the tree could not be planted ({e})"),
@@ -640,7 +647,8 @@ fn apply(root: &Path, a: &Args) -> Result<i32, Failure> {
 
 #[allow(clippy::too_many_arguments)]
 fn render_piece_block(
-    root: &Path,
+    here: &Path,
+    tree: &Path,
     vivac_missing: bool,
     settings_exists: bool,
     mcp_exists: bool,
@@ -651,16 +659,31 @@ fn render_piece_block(
     mcp_server_state: &McpState,
     skill_file_state: &SkillState,
 ) -> String {
-    let mut s = format!("  vivac setup claude-code, in {}\n\n", root.display());
+    let mut s = format!("  vivac setup claude-code, in {}\n\n", here.display());
 
-    s.push_str(&piece_line(
-        VIVAC_LABEL,
-        if vivac_missing {
-            "plant the tree"
-        } else {
-            "already there"
-        },
-    ));
+    // `t579` §4's warning: only when `here` sits inside a repository but is
+    // not its root, so nobody has to guess which folder Claude Code was
+    // actually opened in.
+    if !here.join(".git").exists() {
+        if let Some(git_root) = super::git_root_above(here) {
+            s.push_str(&format!(
+                "  This folder is inside the repository at {}, not at its root.\n  \
+                 Claude Code reads these files only from the folder it is opened in: if\n  \
+                 you open it at {}, run setup there instead.\n\n",
+                git_root.display(),
+                git_root.display()
+            ));
+        }
+    }
+
+    let vivac_status = if vivac_missing {
+        "plant the tree".to_string()
+    } else if tree == here {
+        "already there".to_string()
+    } else {
+        format!("already there, in {}", tree.display())
+    };
+    s.push_str(&piece_line(VIVAC_LABEL, &vivac_status));
 
     let settings_status = match (settings_exists, start_missing, stop_missing) {
         (_, false, false) => "already has both hooks",
