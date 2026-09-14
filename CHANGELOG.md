@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0](https://github.com/JAAvila-Of/vivac/compare/v0.9.0...v0.10.0) - 2026-09-14
+
+### Upgrading
+
+- **`vivac hooks` is gone.** `vivac setup claude-code` writes the two hooks,
+  the MCP server and the migration skill into the project, after showing
+  them and asking. `vivac hooks` now says where to go instead and exits 2.
+- **`vivac session start --hook` prints the brief as plain text.** Claude
+  Code puts a `SessionStart` hook's plain output into the context just as it
+  put the JSON envelope, so hooks set up under 0.9.0 keep working as they
+  are. Anything else that parsed the envelope has to read plain text.
+- **A project whose hooks were pasted by hand needs nothing.** Running setup
+  there finds them in place, even when they spell the path to `vivac`
+  differently, and adds only what is missing from the project's files.
+- **`vivac init` on an existing tree no longer rewrites its config.** Under
+  0.9.0 a second `init` gave the tree a new project id, a new actor for
+  every event after it, and dropped the lock 0.8.0 puts on a tree that holds
+  pillars or rules. If that happened to a governed tree, delete
+  `.vivac/config`: the next command writes it back, locked.
+- **A flag that takes no value no longer takes the word after it.**
+  `push --blocks "title"` keeps its title, and `--blocks=x` is refused
+  instead of stored in silence.
+- **No event changed.** 0.9.0 reads a log 0.10.0 wrote.
+- **On Windows, close every session and any `vivac web` before installing.**
+  A running `vivac mcp` or `vivac web` holds the executable open, and
+  `cargo install` fails with `os error 5` until it is closed.
+
+### Added
+
+- *(setup)* [**breaking**] write Claude Code's configuration instead of printing it
+- *(session)* [**breaking**] hand the brief to the hook as plain text
+
+### Documentation
+
+- *(readme)* document setup and how to migrate into vivac
+
+### Fixed
+
+- *(init)* leave an existing tree's config alone
+- *(args)* stop a flag without a value from eating the next word
+
 ## [0.9.0](https://github.com/JAAvila-Of/vivac/compare/v0.8.0...v0.9.0) - 2026-09-14
 
 ### Upgrading
