@@ -33,6 +33,9 @@ pub struct Push {
     /// thing it changes is which vocabulary a missing-folder message uses
     /// -- `arm_dir` there, `--arm-dir` here (`t411` §21).
     pub via_mcp: bool,
+    /// Born at the root, with no parent, instead of under the focus. `t533`
+    /// §1: the stack is left holding only the new node.
+    pub root: bool,
 }
 
 impl Push {
@@ -57,6 +60,7 @@ impl Push {
             arm_dir: a.opt("arm-dir").map(str::to_string),
             against: a.list("against"),
             via_mcp: false,
+            root: a.has("root"),
         })
     }
 }
@@ -127,12 +131,16 @@ pub struct Add {
     pub against: Vec<String>,
     /// See `Push::via_mcp`.
     pub via_mcp: bool,
+    /// See `Push::root`. Refused together with `parent`.
+    pub root: bool,
 }
 
 impl Add {
     pub fn from_args(a: &Args) -> Result<Add, Failure> {
         let title = a.positional(0).ok_or_else(|| {
-            Failure::usage("usage: vivac add \"<title>\" [--parent N] [--why \"<reason>\"]")
+            Failure::usage(
+                "usage: vivac add \"<title>\" [--parent N | --root] [--why \"<reason>\"]",
+            )
         })?;
         Ok(Add {
             title: title.to_string(),
@@ -146,6 +154,7 @@ impl Add {
             arm_dir: a.opt("arm-dir").map(str::to_string),
             against: a.list("against"),
             via_mcp: false,
+            root: a.has("root"),
         })
     }
 }
@@ -273,6 +282,8 @@ pub struct Decide {
     pub blocks: bool,
     /// What it was judged against. `t426` §2.1.
     pub against: Vec<String>,
+    /// See `Push::root`. Refused together with `parent`.
+    pub root: bool,
 }
 
 impl Decide {
@@ -297,6 +308,7 @@ impl Decide {
             governs: a.list("governs"),
             blocks: a.has("blocks"),
             against: a.list("against"),
+            root: a.has("root"),
         })
     }
 }

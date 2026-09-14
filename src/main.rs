@@ -50,6 +50,7 @@ const USAGE: &str = r#"vivac - provenance of work
           [--type goal|task|decision|question|constraint|finding|assumption
                   |pillar|rule]
           [--blocks]         its parent cannot close until this one closes
+          [--root]           born at the root; the stack keeps only it
           [--ref R] [--governs G]
           [--arm "<command>"]  what verifies a rule; vivac never runs it
           [--arm-dir <dir>]    where it runs, relative to where .vivac lives
@@ -63,7 +64,7 @@ const USAGE: &str = r#"vivac - provenance of work
 
   Without touching the stack
 
-    vivac add "<title>" [--parent N] [--why "<reason>"] [--blocks]
+    vivac add "<title>" [--parent N | --root] [--why "<reason>"] [--blocks]
           [--type goal|task|decision|question|constraint|finding|assumption
                   |pillar|rule]
           [--ref R] [--governs G]
@@ -75,8 +76,9 @@ const USAGE: &str = r#"vivac - provenance of work
     vivac block <id> [--off]
     vivac arm <rule> "<command>" --dir <dir> [--off]
     vivac declare <decision> --against "r12: <why>"
-    vivac decide "<title>" --reason "<r>" [--parent N] [--alternative X]
-          [--supersedes d9] [--blocks] [--ref R] [--governs G]
+    vivac decide "<title>" --reason "<r>" [--parent N | --root]
+          [--alternative X] [--supersedes d9] [--blocks]
+          [--ref R] [--governs G]
           [--against "r12: <why>"]  what it was judged against; repeat it
     vivac flag <id> suspect|review|stale --why "<reason>"  [--off]
 
@@ -214,7 +216,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
     // describes.
     let allowed: &[&str] = match cmd {
         "push" => &[
-            "why", "type", "blocks", "ref", "governs", "arm", "arm-dir", "against",
+            "why", "type", "blocks", "root", "ref", "governs", "arm", "arm-dir", "against",
         ],
         "pop" => &["force", "next"],
         "decide" => &[
@@ -226,6 +228,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
             "governs",
             "blocks",
             "against",
+            "root",
         ],
         "flag" => &["why", "off"],
         "save" => &["next"],
@@ -236,6 +239,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         "session" => &["hook", "next", "budget", "now"],
         "add" => &[
             "parent", "why", "type", "blocks", "ref", "governs", "arm", "arm-dir", "against",
+            "root",
         ],
         "done" => &["force"],
         "abandon" => &["cascade", "rescue"],
