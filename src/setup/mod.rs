@@ -1,12 +1,12 @@
 //! `vivac setup` — writes what a harness needs, after showing it.
 //!
-//! `t565` §7. This module holds what every harness shares: finding the
-//! root, the all-or-nothing commit with its verification and rollback, the
-//! confirmation prompt, and the fingerprint that tells an untouched
-//! generated file apart from an edited one. `claude_code` is the one harness
-//! that exists today, with its own files, its own hook shape and its own
-//! rules for "already there" versus "conflict" (`t565` §9 on
-//! `INTEGRATION.md`).
+//! `t565` §7, amended by `t579` §4. This module holds what every harness
+//! shares: the two roots a harness is set up against, the all-or-nothing
+//! commit with its verification and rollback, the confirmation prompt, and
+//! the fingerprint that tells an untouched generated file apart from an
+//! edited one. `claude_code` is the one harness that exists today, with its
+//! own files, its own hook shape and its own rules for "already there"
+//! versus "conflict" (`t565` §9 on `INTEGRATION.md`).
 //!
 //! Not exposed over MCP: setup reforms the environment rather than
 //! recording work, which is for whoever has a terminal, the same reason
@@ -41,7 +41,7 @@ pub fn dispatch(cwd: &Path, a: &Args) -> Result<i32, Failure> {
         ));
     };
     match harness {
-        "claude-code" => claude_code::run(&resolve_root(cwd)?, a),
+        "claude-code" => claude_code::run(&resolve_roots(cwd)?, a),
         other => Err(Failure::usage(format!(
             "vivac setup does not know \"{other}\" yet. It knows: {}",
             HARNESSES.join(", ")
@@ -49,23 +49,91 @@ pub fn dispatch(cwd: &Path, a: &Args) -> Result<i32, Failure> {
     }
 }
 
-/// The root a harness gets set up in: the same upward search every other
-/// command uses, falling back to the current directory when nothing is
-/// found, so a fresh project gets its tree planted right there. Refuses if
-/// that root turns out to be the very folder that holds the registry of
-/// every tree on the machine (`t565` §7.2).
-pub fn resolve_root(cwd: &Path) -> Result<PathBuf, Failure> {
-    let root = crate::store::find_root(cwd).unwrap_or_else(|| cwd.to_path_buf());
+/// The two roots setup writes into (`t579` §4). Claude Code never reads
+/// `.claude/settings.json` or `.mcp.json` from a folder above the one it was
+/// opened in, so its own files always go in `here`. The tree is shared
+/// instead, the same one every other command finds: `tree` is the `.vivac/`
+/// found walking up from `here`, or `here` itself when none exists yet, so a
+/// fresh project gets one planted right where it is opened.
+pub struct Roots {
+    pub here: PathBuf,
+    pub tree: PathBuf,
+}
+
+/// Resolves both roots, and refuses if the tree root turns out to be the
+/// very folder that holds the registry of every tree on the machine (`t565`
+/// §7.2): a project's tree living inside that one would mix a project with
+/// the registry that lists every project.
+pub fn resolve_roots(cwd: &Path) -> Result<Roots, Failure> {
+    let tree = crate::store::find_root(cwd).unwrap_or_else(|| cwd.to_path_buf());
     let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
-    let is_registry = crate::store::store_dir().is_some_and(|d| canon(&d) == canon(&root));
+    let is_registry = crate::store::store_dir().is_some_and(|d| canon(&d) == canon(&tree));
     if is_registry {
-        return Err(Failure::Model(format!(
-            "  {} holds the registry of the trees on this machine, so it cannot\n  \
-             hold a tree too. Run setup inside a project.",
-            root.display()
+        return Err(registry_refusal(&tree));
+    }
+    Ok(Roots {
+        here: cwd.to_path_buf(),
+        tree,
+    })
+}
+
+/// The text `t565` §7.2 refuses with, naming `path`: shared between
+/// `resolve_roots`, where `path` is the tree root itself, and
+/// [`refuse_home_or_global_store`], where `path` is a `.vivac/` found
+/// underneath it (`t579` §4.1).
+fn registry_refusal(path: &Path) -> Failure {
+    Failure::Model(format!(
+        "  {} holds the registry of the trees on this machine, so it cannot\n  \
+         hold a tree too. Run setup inside a project.",
+        path.display()
+    ))
+}
+
+/// Two more ways for the roots `resolve_roots` already accepted to still be
+/// dangerous to write into, caught by `apply` before it builds a plan
+/// (`t579` §4.1, `f583`, `d584`). Both were reachable under 0.10.0, and
+/// `--undo` never calls this: undoing whatever an earlier setup wrote there
+/// is always safe, and is the only way out for whoever already fell into
+/// either shape.
+///
+/// - `here` itself is the user's home folder: Claude Code's settings and
+///   skills there belong to every project that opens in it, not to this
+///   one, and the security pillar forbids setup from writing them there.
+/// - `tree`'s own `.vivac/` is the global store: `resolve_roots` only
+///   catches the tree root equalling `store_dir()` directly, but `find_root`
+///   skips a global store it finds walking up and falls back to `here`, so
+///   a global store can also turn up as the `.vivac/` `apply` would plant or
+///   reuse right under the current directory.
+pub fn refuse_home_or_global_store(roots: &Roots) -> Option<Failure> {
+    let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    if crate::store::home_dir().is_some_and(|h| canon(&h) == canon(&roots.here)) {
+        return Some(Failure::Model(format!(
+            "  {} is your home folder. Claude Code's settings and skills here are\n  \
+             yours for every project, not this one's, and setup never writes there.\n  \
+             Run setup in the folder you open Claude Code in, inside a project.",
+            roots.here.display()
         )));
     }
-    Ok(root)
+    let vivac_dir = roots.tree.join(crate::store::DIR);
+    let is_global_store = crate::registry::marks_global_store(&vivac_dir)
+        || crate::store::store_dir().is_some_and(|d| canon(&d) == canon(&vivac_dir));
+    if is_global_store {
+        return Some(registry_refusal(&vivac_dir));
+    }
+    None
+}
+
+/// The closest strict ancestor of `dir` holding a `.git` entry, folder or
+/// worktree file alike -- `dir` itself never counts. Filesystem only: `t579`
+/// §4 forbids running git or any other program to answer this.
+pub fn git_root_above(dir: &Path) -> Option<PathBuf> {
+    let mut d = dir.to_path_buf();
+    while d.pop() {
+        if d.join(".git").exists() {
+            return Some(d);
+        }
+    }
+    None
 }
 
 /// What a `PlannedWrite` does to its file.

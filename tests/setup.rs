@@ -31,6 +31,25 @@ fn read_bytes(p: &Path) -> Vec<u8> {
     std::fs::read(p).unwrap_or_else(|e| panic!("reading {p:?}: {e}"))
 }
 
+/// `p` the way the binary's own `current_dir()` would print it, for building
+/// an expected text around a path.
+///
+/// On Unix, `current_dir()` returns the *physical* path: on macOS, a
+/// temporary directory under `/var` comes back under `/private/var`, which
+/// `canonicalize` also resolves to. On Windows it is the opposite:
+/// `current_dir()` returns the path as given, short 8.3 names included (a
+/// GitHub runner's `TEMP` is `C:\Users\RUNNER~1\...`), and `canonicalize`
+/// would both expand those and prepend `\\?\`, breaking the very paths this
+/// is meant to match.
+#[cfg(unix)]
+fn printed(p: &std::path::Path) -> std::path::PathBuf {
+    std::fs::canonicalize(p).unwrap_or_else(|e| panic!("canonicalize {p:?}: {e}"))
+}
+#[cfg(not(unix))]
+fn printed(p: &std::path::Path) -> std::path::PathBuf {
+    p.to_path_buf()
+}
+
 // ---------------------------------------------------------------------------
 // 1. A fresh project.
 // ---------------------------------------------------------------------------
@@ -637,4 +656,331 @@ fn list(dir: &Path) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+// ---------------------------------------------------------------------------
+// t579 §4/§9: two roots -- Claude Code's own files always in the current
+// directory, the tree wherever it is found walking up.
+// ---------------------------------------------------------------------------
+
+fn run_in(dir: &Path, home: &Path, args: &[&str]) -> (String, i32) {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_vivac"))
+        .current_dir(dir)
+        .env("VIVAC_HOME", home)
+        .args(args)
+        .output()
+        .unwrap();
+    (
+        String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr),
+        out.status.code().unwrap_or(-1),
+    )
+}
+
+fn create_git_dir(at: &Path) {
+    std::fs::create_dir_all(at.join(".git")).unwrap();
+}
+
+fn create_git_worktree_file(at: &Path) {
+    std::fs::write(at.join(".git"), "gitdir: ../elsewhere/.git/worktrees/x\n").unwrap();
+}
+
+/// (a): a subfolder of a repository with no tree of its own gets Claude
+/// Code's files and a new tree right there, and the plan warns with the
+/// repository's root.
+#[test]
+fn a_subfolder_of_a_repository_gets_its_own_files_and_tree_with_a_warning() {
+    let c = Sandbox::new_empty("setup-two-roots-subfolder");
+    create_git_dir(&c.0);
+    let sub = c.0.join("packages").join("app");
+    std::fs::create_dir_all(&sub).unwrap();
+
+    let (out, code) = run_in(&sub, c.global_home(), &["setup", "claude-code", "--yes"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.contains(&format!(
+            "This folder is inside the repository at {}, not at its root.",
+            printed(&c.0).display()
+        )),
+        "{out}"
+    );
+    assert!(
+        out.contains("Claude Code reads these files only from the folder it is opened in: if"),
+        "{out}"
+    );
+    assert!(
+        out.contains(&format!(
+            "you open it at {}, run setup there instead.",
+            printed(&c.0).display()
+        )),
+        "{out}"
+    );
+
+    assert!(sub.join(".claude").join("settings.json").exists());
+    assert!(sub.join(".mcp.json").exists());
+    assert!(
+        sub.join(".vivac").exists(),
+        "the tree was not planted in the subfolder"
+    );
+    assert!(
+        !c.0.join(".claude").exists(),
+        "Claude Code files leaked into the repository root"
+    );
+    assert!(
+        !c.0.join(".vivac").exists(),
+        "a tree was planted above the current directory"
+    );
+}
+
+/// (b), first half: `.git` as a folder, right at the current directory,
+/// gets no warning.
+#[test]
+fn the_root_of_a_repository_gets_no_warning_with_git_as_a_folder() {
+    let c = Sandbox::new_empty("setup-two-roots-git-folder");
+    create_git_dir(&c.0);
+    let (out, code) = c.run(&["setup", "claude-code", "--yes"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(!out.contains("is inside the repository at"), "{out}");
+}
+
+/// (b), second half: `.git` as a worktree's file gets no warning either.
+#[test]
+fn the_root_of_a_repository_gets_no_warning_with_git_as_a_worktree_file() {
+    let c = Sandbox::new_empty("setup-two-roots-git-file");
+    create_git_worktree_file(&c.0);
+    let (out, code) = c.run(&["setup", "claude-code", "--yes"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(!out.contains("is inside the repository at"), "{out}");
+}
+
+/// (c): no `.git` anywhere in the ancestry gets no warning.
+#[test]
+fn no_git_anywhere_gets_no_warning() {
+    let c = Sandbox::new_empty("setup-two-roots-no-git");
+    let (out, code) = c.run(&["setup", "claude-code", "--yes"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(!out.contains("is inside the repository at"), "{out}");
+}
+
+/// (d): with a tree already planted above, Claude Code's files still land
+/// in the current directory, the tree row names where the tree actually is,
+/// and nothing is written into the folder above.
+#[test]
+fn a_tree_above_keeps_claude_codes_files_below_and_names_the_tree_root() {
+    let c = Sandbox::new_seeded("setup-two-roots-tree-above");
+    let sub = c.0.join("workdir");
+    std::fs::create_dir_all(&sub).unwrap();
+
+    let (out, code) = run_in(&sub, c.global_home(), &["setup", "claude-code", "--yes"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.contains(&format!("already there, in {}", printed(&c.0).display())),
+        "{out}"
+    );
+    assert!(sub.join(".claude").join("settings.json").exists());
+    assert!(sub.join(".mcp.json").exists());
+    assert!(
+        !sub.join(".vivac").exists(),
+        "a second tree was planted below the existing one"
+    );
+    assert!(
+        !c.0.join(".claude").exists(),
+        "Claude Code files were written above the current directory"
+    );
+    assert!(!c.0.join(".mcp.json").exists());
+}
+
+/// (f): `--undo` in a subfolder of a tree removes only what was written
+/// there, and leaves the tree above untouched.
+#[test]
+fn undo_in_a_subfolder_removes_only_that_folders_files() {
+    let c = Sandbox::new_seeded("setup-two-roots-undo-subfolder");
+    let vivac_before = std::fs::read(c.0.join(".vivac").join("config")).unwrap();
+    let sub = c.0.join("workdir");
+    std::fs::create_dir_all(&sub).unwrap();
+    let (setup_out, setup_code) = run_in(&sub, c.global_home(), &["setup", "claude-code", "--yes"]);
+    assert_eq!(setup_code, 0, "{setup_out}");
+    assert!(
+        sub.join(".claude").join("settings.json").exists(),
+        "setup did not write into the subfolder it ran in"
+    );
+
+    let (out, code) = run_in(
+        &sub,
+        c.global_home(),
+        &["setup", "claude-code", "--undo", "--yes"],
+    );
+    assert_eq!(code, 0, "{out}");
+    assert!(!sub.join(".claude").exists());
+    assert!(!sub.join(".mcp.json").exists());
+    assert!(
+        c.0.join(".vivac").exists(),
+        "the tree above was touched by undo"
+    );
+    assert_eq!(
+        vivac_before,
+        std::fs::read(c.0.join(".vivac").join("config")).unwrap()
+    );
+}
+
+/// (g): a workspace with a repository inside it -- setup at the workspace
+/// root and again inside the repository leaves two sets of Claude Code
+/// files and a single shared tree.
+#[test]
+fn a_workspace_and_a_repository_inside_it_share_one_tree_and_get_two_sets_of_files() {
+    let c = Sandbox::new_empty("setup-two-roots-workspace");
+    c.ok(&["setup", "claude-code", "--yes"]);
+    assert!(c.0.join(".vivac").exists());
+
+    let repository = c.0.join("service");
+    std::fs::create_dir_all(&repository).unwrap();
+    create_git_dir(&repository);
+
+    let (out, code) = run_in(
+        &repository,
+        c.global_home(),
+        &["setup", "claude-code", "--yes"],
+    );
+    assert_eq!(code, 0, "{out}");
+    assert!(!out.contains("is inside the repository at"), "{out}");
+    assert!(
+        out.contains(&format!("already there, in {}", printed(&c.0).display())),
+        "{out}"
+    );
+
+    assert!(c.0.join(".claude").join("settings.json").exists());
+    assert!(repository.join(".claude").join("settings.json").exists());
+    assert!(
+        !repository.join(".vivac").exists(),
+        "a second tree was planted inside the repository"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// t579 §4.1/§9: the user's home folder, and a `.vivac/` that is the global
+// store. Both are refused before the plan, and only for `apply`.
+// ---------------------------------------------------------------------------
+
+fn run_with_home(dir: &Path, home: &Path, vivac_home: &Path, args: &[&str]) -> (String, i32) {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_vivac"))
+        .current_dir(dir)
+        .env("HOME", home)
+        .env("USERPROFILE", home)
+        .env("VIVAC_HOME", vivac_home)
+        .args(args)
+        .output()
+        .unwrap();
+    (
+        String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr),
+        out.status.code().unwrap_or(-1),
+    )
+}
+
+fn home_folder_text(here: &Path) -> String {
+    format!(
+        "  {} is your home folder. Claude Code's settings and skills here are\n  \
+         yours for every project, not this one's, and setup never writes there.\n  \
+         Run setup in the folder you open Claude Code in, inside a project.",
+        here.display()
+    )
+}
+
+/// (h), first half: setup in the user's home folder refuses before showing a
+/// plan, and writes nothing.
+#[test]
+fn setup_refuses_in_the_home_folder() {
+    let c = Sandbox::new_empty("setup-two-roots-home");
+    let (out, code) = run_with_home(
+        &c.0,
+        &c.0,
+        c.global_home(),
+        &["setup", "claude-code", "--yes"],
+    );
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains(&home_folder_text(&printed(&c.0))), "{out}");
+    assert!(
+        !out.contains("vivac setup claude-code, in"),
+        "a plan was shown:\n{out}"
+    );
+    assert!(!c.0.join(".vivac").exists());
+    assert!(!c.0.join(".claude").exists());
+    assert!(!c.0.join(".mcp.json").exists());
+}
+
+/// (h), second half: the same refusal holds with `--dry-run`.
+#[test]
+fn setup_refuses_in_the_home_folder_with_dry_run_too() {
+    let c = Sandbox::new_empty("setup-two-roots-home-dry-run");
+    let (out, code) = run_with_home(
+        &c.0,
+        &c.0,
+        c.global_home(),
+        &["setup", "claude-code", "--dry-run"],
+    );
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains(&home_folder_text(&printed(&c.0))), "{out}");
+    assert!(!c.0.join(".vivac").exists());
+    assert!(!c.0.join(".claude").exists());
+}
+
+/// (i): a `.vivac/` that is the global store, found as the tree's own root,
+/// refuses with the registry's text and that `.vivac/`'s own path.
+#[test]
+fn setup_refuses_when_the_trees_own_vivac_is_the_global_store() {
+    let c = Sandbox::new_empty("setup-two-roots-store-is-tree");
+    let store = c.0.join(".vivac");
+    std::fs::create_dir_all(&store).unwrap();
+    std::fs::write(store.join("projects"), "{}").unwrap();
+
+    let (out, code) = run_with_home(
+        &c.0,
+        c.global_home(),
+        &store,
+        &["setup", "claude-code", "--yes"],
+    );
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        out.contains(&format!(
+            "{} holds the registry of the trees on this machine, so it cannot",
+            printed(&store).display()
+        )),
+        "{out}"
+    );
+    assert!(out.contains("Run setup inside a project."), "{out}");
+    assert!(!c.0.join(".claude").exists());
+    assert!(!c.0.join(".mcp.json").exists());
+}
+
+/// (j): `--undo` in the home folder is never refused, and removes only the
+/// two hooks setup would have written, leaving every other key as it was.
+#[test]
+fn undo_in_the_home_folder_removes_only_the_hooks_setup_wrote() {
+    let c = Sandbox::new_empty("setup-two-roots-undo-home");
+    std::fs::create_dir_all(c.0.join(".claude")).unwrap();
+    let settings = serde_json::json!({
+        "otherKey": "z",
+        "hooks": {
+            "SessionStart": [
+                { "hooks": [ { "type": "command", "command": SESSION_START } ] }
+            ],
+            "Stop": [
+                { "hooks": [ { "type": "command", "command": SESSION_END } ] }
+            ]
+        }
+    });
+    std::fs::write(
+        settings_path(&c),
+        serde_json::to_string_pretty(&settings).unwrap(),
+    )
+    .unwrap();
+
+    let (out, code) = run_with_home(
+        &c.0,
+        &c.0,
+        c.global_home(),
+        &["setup", "claude-code", "--undo", "--yes"],
+    );
+    assert_eq!(code, 0, "{out}");
+    let after: serde_json::Value = serde_json::from_str(&read(&settings_path(&c))).unwrap();
+    assert!(after.get("hooks").is_none(), "{after}");
+    assert_eq!(after["otherKey"], "z");
 }

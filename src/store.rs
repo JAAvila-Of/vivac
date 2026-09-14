@@ -53,11 +53,28 @@ fn resolve_store_dir(
     if let Some(v) = non_blank(vivac_home) {
         return Some(PathBuf::from(v));
     }
+    resolve_home_dir(home, userprofile).map(|h| h.join(DIR))
+}
+
+/// Where the user's home directory is, from the environment: `HOME` and
+/// then `USERPROFILE`, the same two variables `store_dir` falls back to once
+/// `VIVAC_HOME` is not set. Split out so `setup` can refuse to run there
+/// without a second search of its own (`t579` §4.1).
+pub fn home_dir() -> Option<PathBuf> {
+    resolve_home_dir(
+        std::env::var_os("HOME").as_deref(),
+        std::env::var_os("USERPROFILE").as_deref(),
+    )
+}
+
+/// Pure half of `home_dir`, for the same reason `resolve_store_dir` is split
+/// from `store_dir`.
+fn resolve_home_dir(home: Option<&OsStr>, userprofile: Option<&OsStr>) -> Option<PathBuf> {
     if let Some(h) = non_blank(home) {
-        return Some(PathBuf::from(h).join(DIR));
+        return Some(PathBuf::from(h));
     }
     if let Some(u) = non_blank(userprofile) {
-        return Some(PathBuf::from(u).join(DIR));
+        return Some(PathBuf::from(u));
     }
     None
 }
