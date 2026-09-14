@@ -12,7 +12,37 @@
 //! thing about the two halves of a command line -- what the CLI did not
 //! understand, it does not keep quiet about.
 
+use crate::failure::Failure;
 use std::collections::HashMap;
+
+/// Flags that never carry a value, checked here rather than per command:
+/// the parser runs before anything knows which command is even valid, so
+/// there is no table to look a word up in yet (`f556`).
+///
+/// A word on this list eating the word after it turned `push --blocks
+/// "title"` into a push with no title at all -- the flag took `"title"` as
+/// its own value and left nothing behind for the positional. The list is
+/// global on purpose: one word cannot be a switch for one command and a
+/// value-carrying option for another, so nothing here is allowed to grow a
+/// value anywhere in the binary.
+pub(crate) const SWITCHES: &[&str] = &[
+    "blocks",
+    "root",
+    "hook",
+    "json",
+    "all",
+    "full",
+    "force",
+    "cascade",
+    "off",
+    "reopen",
+    "gates",
+    "everywhere",
+    "no-open",
+    "yes",
+    "dry-run",
+    "undo",
+];
 
 #[derive(Debug, Default)]
 pub struct Args {
@@ -21,7 +51,7 @@ pub struct Args {
 }
 
 impl Args {
-    pub fn parse<I: IntoIterator<Item = String>>(it: I) -> Args {
+    pub fn parse<I: IntoIterator<Item = String>>(it: I) -> Result<Args, Failure> {
         let v: Vec<String> = it.into_iter().collect();
         let mut a = Args::default();
         let mut i = 0;
@@ -31,19 +61,28 @@ impl Args {
                     Some((k, val)) => (k, Some(val.to_string())),
                     None => (k, None),
                 };
-                let val = inline.or_else(|| {
-                    v.get(i + 1).filter(|n| !n.starts_with("--")).map(|n| {
-                        i += 1;
-                        n.clone()
-                    })
-                });
-                a.opts.entry(k.to_string()).or_default().extend(val);
+                if SWITCHES.contains(&k) {
+                    if let Some(val) = inline {
+                        return Err(Failure::usage(format!(
+                            "--{k} does not take a value: leave out \"={val}\"."
+                        )));
+                    }
+                    a.opts.entry(k.to_string()).or_default();
+                } else {
+                    let val = inline.or_else(|| {
+                        v.get(i + 1).filter(|n| !n.starts_with("--")).map(|n| {
+                            i += 1;
+                            n.clone()
+                        })
+                    });
+                    a.opts.entry(k.to_string()).or_default().extend(val);
+                }
             } else {
                 a.positionals.push(v[i].clone());
             }
             i += 1;
         }
-        a
+        Ok(a)
     }
 
     pub fn has(&self, k: &str) -> bool {
@@ -102,7 +141,7 @@ mod tests {
     use super::*;
 
     fn p(s: &str) -> Args {
-        Args::parse(s.split_whitespace().map(String::from))
+        Args::parse(s.split_whitespace().map(String::from)).unwrap()
     }
 
     #[test]
@@ -167,5 +206,77 @@ mod tests {
         assert_eq!(p("title --governs a b").extra(1), ["b"]);
         // A command that takes two words is not tripped by its second one.
         assert!(p("3 suspect --why reason").extra(2).is_empty());
+    }
+
+    /// `f556`: `--blocks` never takes a value, so `push --blocks "title"`
+    /// must leave `"title"` as a positional rather than swallow it.
+    #[test]
+    fn a_switch_never_eats_the_word_after_it() {
+        let a = p("--blocks t --why w");
+        assert!(a.has("blocks"));
+        assert_eq!(a.opt("blocks"), None);
+        assert_eq!(a.positional(0), Some("t"));
+        assert_eq!(a.opt("why"), Some("w"));
+    }
+
+    /// `--blocks=x` used to store `"x"` in silence. A switch has nothing to
+    /// store, so this is refused as a usage error instead.
+    #[test]
+    fn equals_on_a_switch_is_a_usage_error() {
+        let e = Args::parse(vec!["--blocks=x".to_string()]).unwrap_err();
+        assert_eq!(e.code(), 2);
+        let msg = e.message();
+        assert!(msg.contains("--blocks"), "{msg}");
+        assert!(msg.contains("does not take a value"), "{msg}");
+    }
+
+    /// `f556`: `setup --yes claude-code` is the command line that surfaced
+    /// the bug -- `--yes` used to take `"claude-code"` as its own value and
+    /// leave nothing behind for the harness name.
+    #[test]
+    fn a_switch_before_a_positional_leaves_the_positional_alone() {
+        let a = p("--yes claude-code");
+        assert!(a.has("yes"));
+        assert_eq!(a.opt("yes"), None);
+        assert_eq!(a.positional(0), Some("claude-code"));
+    }
+
+    /// The same word cannot be a switch for one command and a value-carrying
+    /// option for another, because the list in `SWITCHES` is global and
+    /// applies before any command is even known. This scans the crate for
+    /// `.opt`, `.opt_or` or `.list` called with one of those names, which
+    /// would always come back empty now that the word never keeps a value --
+    /// a silent break rather than a loud one.
+    #[test]
+    fn no_switch_is_ever_read_as_if_it_carried_a_value() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut offenders = Vec::new();
+        let mut pending = vec![root];
+        while let Some(dir) = pending.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    pending.push(path);
+                    continue;
+                }
+                if !path.extension().is_some_and(|x| x == "rs") {
+                    continue;
+                }
+                let src = std::fs::read_to_string(&path).unwrap();
+                // Every module in this crate keeps its `#[cfg(test)] mod
+                // tests` at the bottom, so this is where the tests that
+                // exercise `.opt("blocks")` and the like live, and it is not
+                // where a real command would ever read one for a value.
+                let code = src.split("#[cfg(test)]").next().unwrap_or(&src);
+                for switch in SWITCHES {
+                    for accessor in [".opt(\"", ".opt_or(\"", ".list(\""] {
+                        if code.contains(&format!("{accessor}{switch}\")")) {
+                            offenders.push(format!("{switch} via {accessor}...) in {path:?}"));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(offenders.is_empty(), "{offenders:#?}");
     }
 }
