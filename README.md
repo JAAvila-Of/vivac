@@ -73,6 +73,12 @@ vivac pop "reproduced: expires at 300s, not 3600"
 vivac pop "adapter fixed"
 ```
 
+The stack is the path from where this line of work starts to where you are,
+and it can run through nodes that are already closed. Closing or parking one
+below the focus does not move you, and the brief marks it. Only closing the
+focus itself steps back to its parent, and stepping back onto something that
+is already closed leaves it as it was.
+
 Not all of it happens on the stack. A node can be recorded without stepping
 into it, a decision can carry what it rejected, and a node can be marked
 without its state changing:
@@ -89,6 +95,17 @@ vivac park 2 "waiting on the corpus run"
 `decide` takes `--alternative` for what was turned down and `--supersedes` for
 the decision it replaces, so a reversal reads from either end. `block` marks a
 node as something its parent cannot close over, and `--off` takes it back.
+
+A node is born under the focus, which is what makes the edge free. Work that
+belongs to nothing open is the exception: `--root` on `push`, `add` or
+`decide` gives it no parent, and on `push` it also leaves the stack holding
+only the new node. Nothing on the old stack is closed, and the command says
+how to get back to it. `promote` answers a different case: something already
+in the tree turns out to be a goal of its own, and it keeps where it was born.
+
+```sh
+vivac push "Ship to a second team" --root --why "the first milestone is done"
+```
 
 The tree also holds what governs the project. A `pillar` is an arbiter, and
 its title says so: its name and what it restricts, in the project's own
@@ -365,6 +382,14 @@ The spine — the path from the root to the focus — is **never truncated**: if
 does not fit the budget it comes out anyway, and the warning says that what is
 left over is tree, not render.
 
+A node on the spine that is no longer open carries its state in brackets, so a
+path that still runs through a goal already met says so. What is parked reaches
+every brief wherever the focus is, because something parked on another branch
+is still something not to touch. And with nothing on the stack the brief still
+carries what does not depend on one: the invariants, the standing decisions,
+what is parked and the last stop, with a real node to pick up rather than a
+placeholder.
+
 Measured at ten thousand nodes, 200 calls per cell, p50 / p99 in milliseconds,
 on a tree with its derived index in place — which is what a tree has after the
 first read of it. The CLI columns start a fresh process every time and include
@@ -627,11 +652,13 @@ able to move.
 
 The project is in `0.x`, and while it is, **the minor is the position that
 breaks**: `0.3.x` to `0.4.0` may change a public surface, and a patch never
-does. The rule has been spent four times — `0.3.0` stopped reading the logs `0.1.x`
-and `0.2.x` wrote, `0.4.0` made `find` hand back handles rather than whole
-nodes, `0.5.0` began refusing a write that opens a fenced code block, and
-`0.6.0` made `open` hand back fronts rather than whole nodes. Each went out as
-a minor for that reason, and counting them here is cheaper than counting them
+does. The rule has been spent seven times — `0.3.0` stopped reading the logs
+`0.1.x` and `0.2.x` wrote, `0.4.0` made `find` hand back handles rather than
+whole nodes, `0.5.0` began refusing a write that opens a fenced code block,
+`0.6.0` made `open` hand back fronts rather than whole nodes, `0.7.0` did the
+same to `why` for everything but the node asked about, `0.8.0` wrote an event
+`0.7.0` stops at, and `0.9.0` stopped taking a closed node off the stack when
+it is not the top. Each went out as a minor for that reason, and counting them here is cheaper than counting them
 once and letting the sentence go stale.
 
 **The format on disk is not settled either**, and that is what keeps `1.0`
