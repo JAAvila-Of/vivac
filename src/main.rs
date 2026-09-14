@@ -174,7 +174,20 @@ fn run() -> i32 {
         outln!("vivac {}", env!("CARGO_PKG_VERSION"));
         return 0;
     }
-    let a = Args::parse(argv.into_iter().skip(1));
+    let a = match Args::parse(argv.into_iter().skip(1)) {
+        Ok(a) => a,
+        Err(e) => {
+            let c = e.code();
+            // Whatever ran before the refusal has to reach stdout before it
+            // reaches stderr, or the two streams interleave out of order
+            // once a terminal merges them. Nothing has printed yet here, but
+            // `dispatch`'s own error arm below needs the same flush, and the
+            // two are kept identical rather than one of them drifting.
+            output::flush();
+            e.print_to_stderr();
+            return c;
+        }
+    };
 
     match dispatch(&cmd, &a) {
         Ok(code) => code,

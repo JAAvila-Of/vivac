@@ -6,6 +6,7 @@ abs
 absent
 absolute
 accepts
+accessor
 action
 active
 actor
@@ -366,6 +367,7 @@ dyn
 each
 earlier
 earn
+eats
 echoes
 edges
 edit
@@ -1238,7 +1240,10 @@ surplus
 suspect
 suspended
 suspicious
+swallow
 swallowed
+switch
+switches
 sync
 system
 table
