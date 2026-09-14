@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0](https://github.com/JAAvila-Of/vivac/compare/v0.8.0...v0.9.0) - 2026-09-14
+
+### Added
+
+- open a node at the root while the stack is on
+
+### Documentation
+
+- *(readme)* describe the stack as a path, --root and the empty brief
+
+### Fixed
+
+- *(brief)* carry project governance from any root and with no focus
+- *(stack)* [**breaking**] keep a closed node on the path, and say so on the spine
+
 ## [0.8.0](https://github.com/JAAvila-Of/vivac/compare/v0.7.0...v0.8.0) - 2026-09-13
 
 ### Upgrading
