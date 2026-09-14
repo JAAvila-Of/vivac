@@ -61,6 +61,9 @@ impl Sandbox {
         Sandbox(d, home.to_path_buf())
     }
 
+    // `mod common` is compiled once per test binary; `setup.rs` seeds
+    // nothing, since setup itself plants the tree.
+    #[allow(dead_code)]
     pub fn new_seeded(name: &str) -> Sandbox {
         let d = unique("t", name);
         std::fs::create_dir_all(&d).unwrap();
