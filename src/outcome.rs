@@ -31,6 +31,12 @@ pub struct Closed {
     pub alias: String,
     pub title: String,
     pub force: bool,
+    /// `f552` (`t533` §2.2): the word it already was, when `pop` reaches a
+    /// focus that was not open to begin with -- `done`/`park` closed it while
+    /// it sat below the top of the stack, and nothing here closes it again.
+    /// Always present; `None` for an ordinary close, on both `pop` and
+    /// `done`.
+    pub already: Option<String>,
 }
 
 /// `push`'s advice to reconsider the root, past a stack four deep. `MODEL.md`
@@ -40,6 +46,11 @@ pub struct DepthAdvice {
     pub depth: usize,
     pub root_alias: String,
     pub root_title: String,
+    /// `t533` §2.5: the bottom of the stack can now be closed or parked --
+    /// `done`/`park` no longer unstack a node that is not the top -- and the
+    /// advice carries its word rather than calling it open when it is not.
+    /// `None` while it is still open.
+    pub root_mark: Option<String>,
 }
 
 /// Where `pop` lands: the parent that becomes the new focus, with what is
@@ -122,6 +133,17 @@ pub struct LostNode {
     /// Already resolved to a word (`n.state.word(n.kind)`, or the literal
     /// `"gone"`): there is no live node left to ask, past this point, for a
     /// node that no longer resolves at all.
+    pub state: String,
+}
+
+/// A node `restore` keeps on the rebuilt path even though it is not open:
+/// `t533` §2.3. Same shape as [`LostNode`], because both name a node and the
+/// word for the state it is in -- the difference is which one still counts
+/// as part of the stack.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct KeptNode {
+    pub alias: String,
+    pub title: String,
     pub state: String,
 }
 
@@ -248,6 +270,9 @@ pub enum Outcome {
         ts: String,
         label: String,
         next_intent: String,
+        /// Closed or parked nodes the rebuilt path still runs through:
+        /// `t533` §2.3. Always present; `[]` when the whole path is open.
+        kept: Vec<KeptNode>,
         lost: Vec<LostNode>,
         anchor: RestoreAnchor,
     },
@@ -272,6 +297,15 @@ fn no_against_lines(out: &mut Vec<String>, alias: &str) {
 }
 
 fn closed_lines(out: &mut Vec<String>, c: &Closed) {
+    if let Some(word) = &c.already {
+        // `f552` (`t533` §2.2): nothing closed here, so there is nothing to
+        // say about `--force` either.
+        out.push(format!(
+            "  {}  {}  -> already {word}, left as it was",
+            c.alias, c.title
+        ));
+        return;
+    }
     out.push(format!(
         "  {}  {}  -> {}",
         c.alias,
@@ -303,8 +337,13 @@ pub fn to_text(o: &Outcome) -> String {
             }
             if let Some(a) = advice {
                 lines.push(String::new());
+                let mark = a
+                    .root_mark
+                    .as_deref()
+                    .map(|w| format!(" [{w}]"))
+                    .unwrap_or_default();
                 lines.push(format!(
-                    "  You are {} levels away from {} \"{}\".",
+                    "  You are {} levels away from {} \"{}\"{mark}.",
                     a.depth, a.root_alias, a.root_title
                 ));
                 lines.push("  Is this still a detour, or did the real goal move?".to_string());
@@ -478,6 +517,7 @@ pub fn to_text(o: &Outcome) -> String {
             ts,
             label,
             next_intent,
+            kept,
             lost,
             anchor,
         } => {
@@ -492,6 +532,17 @@ pub fn to_text(o: &Outcome) -> String {
             lines.push(String::new());
             if !next_intent.is_empty() {
                 lines.push(format!("  you were about to:  {next_intent}"));
+                lines.push(String::new());
+            }
+            // `t533` §2.3: closed or parked, but still part of the rebuilt
+            // path -- reported apart from what actually left the stack.
+            for k in kept {
+                lines.push(format!(
+                    "  still on the path:  {} {} [{}]",
+                    k.alias, k.title, k.state
+                ));
+            }
+            if !kept.is_empty() {
                 lines.push(String::new());
             }
             for p in lost {
