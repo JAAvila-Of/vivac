@@ -339,8 +339,10 @@ pub fn brief(a: &Tree, anchor_of: &dyn Anchor, args: &Args, project: &str) -> R 
     Ok(())
 }
 
-/// The brief as text. `session start --hook` needs it whole to put in the
-/// envelope: whatever falls outside the envelope, the agent never sees.
+/// The brief as text. `session start --hook` prints it straight to stdout
+/// (`f403`, `f404`): Claude Code turns plain-text stdout on `SessionStart`
+/// into context the agent can see and act on, so there is nothing further to
+/// wrap it in.
 pub fn to_text(
     a: &Tree,
     anchor_of: &dyn Anchor,
