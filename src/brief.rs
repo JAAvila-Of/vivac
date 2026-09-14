@@ -192,20 +192,30 @@ pub(crate) fn clip(s: &str, n: usize) -> String {
     }
 }
 
+/// Project level: hanging off nothing, or off a node that itself hangs off
+/// nothing. `MODEL.md` §9.5 blesses `parent: PROJECT`, and a node with no
+/// parent at all is the strongest form of that, not a weaker one.
+/// `constraints()` above has drawn the line this way from the start; `t533`
+/// piece (b) widens `standing()`'s own clause to the same shape, and the
+/// no-focus path in `to_text` stands on nothing else.
+fn project_wide(a: &Tree, n: &Node) -> bool {
+    n.parent.is_none()
+        || n.parent
+            .and_then(|p| a.node_by_num(p))
+            .is_some_and(|p| p.parent.is_none())
+}
+
 /// Standing decisions that reach the focus: project-level, on the path, or
 /// with a `governs` overlapping the focus's own. Superseded ones never
-/// appear.
-///
-/// With no focus, `lineage` is empty and so is `on_lineage`: the filter
-/// below then keeps only the project-level ones, which is the right answer
-/// rather than a degraded one -- a decision that governs the whole product
-/// hangs off nothing, so it stays reachable from an empty path.
+/// appear. Always called with a real focus; with none, `to_text` reads
+/// `project_wide` on its own instead, since there is neither a path nor a
+/// `governs` to overlap.
 pub(crate) fn standing<'a>(a: &'a Tree, focus: &Node, on_lineage: &HashSet<u64>) -> Vec<&'a Node> {
     let mut dec: Vec<&Node> = a
         .nodes_iter()
         .filter(|n| n.kind == Kind::Decision && n.state.is_open())
         .filter(|n| {
-            n.parent.is_none()
+            project_wide(a, n)
                 || on_lineage.contains(&n.num)
                 || n.parent.is_some_and(|p| on_lineage.contains(&p))
                 || n.governs(a)
@@ -215,6 +225,113 @@ pub(crate) fn standing<'a>(a: &'a Tree, focus: &Node, on_lineage: &HashSet<u64>)
         .collect();
     dec.sort_by_key(|n| n.num);
     dec
+}
+
+/// Whether a node could ever show up in `OPEN GOALS`, kind-wise: a goal, or a
+/// node with no parent at all, and never a pillar, a rule, a decision or a
+/// constraint -- the same governance kinds `Node::is_front` already keeps out
+/// of pending work. `t533` §3.6 (`f73`, `f456`).
+fn is_goal_shaped(n: &Node) -> bool {
+    !matches!(
+        n.kind,
+        Kind::Decision | Kind::Constraint | Kind::Pillar | Kind::Rule
+    ) && (n.kind == Kind::Goal || n.parent.is_none())
+}
+
+/// What `BORN FROM HERE` lists: `focus`'s own open, front children, plus how
+/// many more open fronts hang further down without being listed one by one.
+///
+/// `f49`: a blocking question is left out here, because `BLOCKS` already
+/// lists it -- showing it twice says the same thing in two places for no
+/// reason. A blocking task still shows, asterisk and all: only a question is
+/// also a row of its own in `BLOCKS`.
+fn born_from_here(a: &Tree, focus: &Node) -> Vec<String> {
+    let mut children: Vec<String> = a
+        .children(focus.num)
+        .into_iter()
+        .filter(|c| c.is_front())
+        .filter(|c| !(c.kind == Kind::Question && c.blocks))
+        .map(|c| {
+            format!(
+                "  {} {:<6} {}",
+                if c.blocks { '*' } else { ' ' },
+                c.alias(),
+                c.title(a)
+            )
+        })
+        .collect();
+    // Closing a parent cannot make its open children invisible. They are
+    // counted and the place to look is named; listing them here would drag in
+    // the whole tree, which is exactly the noise the focus exists to keep
+    // out.
+    let direct: std::collections::HashSet<&str> = a
+        .children(focus.num)
+        .iter()
+        .map(|c| c.id.as_str())
+        .collect();
+    let deep = a
+        .descendants(focus.num)
+        .into_iter()
+        .filter(|n| n.is_front() && !direct.contains(n.id.as_str()))
+        .filter(|n| !a.children(n.num).iter().any(|c| c.is_front()))
+        .count();
+    if deep > 0 {
+        children.push(format!(
+            "    + {deep} further down, outside this level   vivac open"
+        ));
+    }
+    children
+}
+
+/// The fixed block that takes the spine's place with no focus (`t533`
+/// §3.6). Never truncated, the same as the spine.
+fn no_focus_block(a: &Tree) -> Vec<String> {
+    let mut v = vec![" No active focus.".to_string()];
+
+    let mut goals: Vec<&Node> = a
+        .nodes_iter()
+        .filter(|n| n.state.is_open() && is_goal_shaped(n))
+        .collect();
+    goals.sort_by_key(|n| n.num);
+
+    if !goals.is_empty() {
+        v.push(String::new());
+        v.push(" OPEN GOALS".to_string());
+        for m in &goals {
+            v.push(format!(
+                "  {:<6} {:<40} {} open below",
+                m.alias(),
+                clip(m.title(a), 40),
+                a.counts(m.num).open_count
+            ));
+        }
+    }
+
+    v.push(String::new());
+    if a.is_empty_tree() {
+        v.push(" Start with:  vivac push \"<title>\" --why \"<reason>\"".to_string());
+    } else if let Some(first) = goals.first() {
+        v.push(format!(" Pick up with:  vivac focus {}", first.alias()));
+        v.push(" Or open another:  vivac push \"<title>\" --why \"<reason>\"".to_string());
+    } else {
+        // Nothing open of that shape, but something parked would qualify if
+        // it were open. `f50`: the action names a real id, never `<id>`.
+        let mut parked: Vec<&Node> = a
+            .nodes_iter()
+            .filter(|n| n.state == State::Suspended && is_goal_shaped(n))
+            .collect();
+        parked.sort_by_key(|n| n.num);
+        match parked.first() {
+            Some(p) => {
+                v.push(format!(" Pick up with:  vivac focus {}", p.alias()));
+                v.push(" Or open another:  vivac push \"<title>\" --why \"<reason>\"".to_string());
+            }
+            None => {
+                v.push(" Open the next one:  vivac push \"<title>\" --why \"<reason>\"".to_string())
+            }
+        }
+    }
+    v
 }
 
 pub fn brief(a: &Tree, anchor_of: &dyn Anchor, args: &Args, project: &str) -> R {
@@ -246,59 +363,29 @@ pub fn to_text(
         Some(&num) => a.ancestors(num),
         None => vec![],
     };
-
-    if lineage.is_empty() {
-        return no_focus(a, project, &date);
-    }
-    let focus = lineage[lineage.len() - 1];
+    let focus: Option<&Node> = lineage.last().copied();
 
     let mut s: Vec<Section> = Vec::new();
 
-    // 1. Header. 2. Spine, which is never truncated.
+    // 1. Header. 2. Spine, or -- with no focus -- the fixed block that takes
+    // its place (`t533` §3.6). Neither is ever truncated, and the header is
+    // the same either way: `lane` has never named more than one lane.
     s.push(Section::fixed(vec![
         format!("vivac · project: {project} · lane: main · {date}"),
         RULE.to_string(),
         String::new(),
     ]));
-    s.push(Section::fixed(spine(a, &lineage)));
+    s.push(Section::fixed(match focus {
+        Some(_) => spine(a, &lineage),
+        None => no_focus_block(a),
+    }));
 
     // 3. Focus: what hangs off it unclosed. Standing decisions do not go in
     //    --they are not pending work and they have their own section (8)--,
     //    and whatever hangs further down is counted without being listed.
-    let mut children: Vec<String> = a
-        .children(focus.num)
-        .into_iter()
-        .filter(|c| c.is_front())
-        .map(|c| {
-            format!(
-                "  {} {:<6} {}",
-                if c.blocks { '*' } else { ' ' },
-                c.alias(),
-                c.title(a)
-            )
-        })
-        .collect();
-    // Closing a parent cannot make its open children invisible. They are
-    // counted and the place to look is named; listing them here would drag in
-    // the whole tree, which is exactly the noise the focus exists to keep
-    // out.
-    let direct: std::collections::HashSet<&str> = a
-        .children(focus.num)
-        .iter()
-        .map(|c| c.id.as_str())
-        .collect();
-    let deep = a
-        .descendants(focus.num)
-        .into_iter()
-        .filter(|n| n.is_front() && !direct.contains(n.id.as_str()))
-        .filter(|n| !a.children(n.num).iter().any(|c| c.is_front()))
-        .count();
-    if deep > 0 {
-        children.push(format!(
-            "    + {deep} further down, outside this level   vivac open"
-        ));
-    }
-    s.push(Section::fixed(heading("BORN FROM HERE", children)));
+    //    Empty, and so omitted, with no focus to hang anything off.
+    let born = focus.map(|f| born_from_here(a, f)).unwrap_or_default();
+    s.push(Section::fixed(heading("BORN FROM HERE", born)));
 
     // 4. Invariants.
     let invariants: Vec<String> = constraints(a, &lineage)
@@ -353,18 +440,13 @@ pub fn to_text(
         trim_list(flag_lines, 3, "stats"),
     )));
 
-    // 7. Out of scope. **This is the product's differentiator**, and it only
-    // has content if `park` costs the same as `pop`.
+    // 7. Out of scope: every parked node of the project, regardless of the
+    // focus (`d536`) -- so this section and `parked`'s own count agree
+    // (`f60`). **This is the product's differentiator**, and it only has
+    // content if `park` costs the same as `pop`.
     let mut parked_nodes: Vec<&Node> = a
         .nodes_iter()
         .filter(|n| n.state == State::Suspended)
-        .filter(|n| {
-            a.ancestors(n.num)
-                .iter()
-                .rev()
-                .skip(1)
-                .any(|p| on_lineage.contains(&p.num))
-        })
         .collect();
     parked_nodes.sort_by_key(|n| n.num);
     let out_of_scope: Vec<String> = parked_nodes
@@ -393,14 +475,26 @@ pub fn to_text(
     )));
 
     // 8. Standing decisions: project-level, on the path, or with a `governs`
-    // overlapping the focus's own. Superseded ones never appear.
+    // overlapping the focus's own. Superseded ones never appear. With no
+    // focus, only the project-level ones reach it: there is neither a path
+    // nor a `governs` of the focus's own to overlap.
     //
     // **Project-level had been missing**, and it is the case that matters
     // most: a decision that governs the whole product hangs off nothing, so
     // it was on no path and reached no brief. The invariants above had the
     // clause and the decisions did not, which was an asymmetry and not a
     // choice.
-    let dec = standing(a, focus, &on_lineage);
+    let dec: Vec<&Node> = match focus {
+        Some(f) => standing(a, f, &on_lineage),
+        None => {
+            let mut d: Vec<&Node> = a
+                .nodes_iter()
+                .filter(|n| n.kind == Kind::Decision && n.state.is_open() && project_wide(a, n))
+                .collect();
+            d.sort_by_key(|n| n.num);
+            d
+        }
+    };
     let decisions: Vec<String> = dec
         .iter()
         .map(|n| format!("  {:<6} {}", n.alias(), clip(n.title(a), 52)))
@@ -512,56 +606,6 @@ fn emit(mut s: Vec<Section>, budget: usize, a: &Tree) -> Result<String, crate::f
 ",
             requested - spent
         ));
-    }
-    Ok(o)
-}
-
-/// Empty stack. **It never comes out empty**: it shows the open goals and one
-/// concrete action.
-fn no_focus(a: &Tree, project: &str, date: &str) -> Result<String, crate::failure::Failure> {
-    let mut o = format!(
-        "vivac · project: {project} · lane: main · {date}
-{RULE}
-
- No active focus.
-"
-    );
-    let mut goals: Vec<&Node> = a
-        .nodes_iter()
-        .filter(|n| n.state.is_open() && (n.kind == Kind::Goal || n.parent.is_none()))
-        .collect();
-    goals.sort_by_key(|n| n.num);
-    if !goals.is_empty() {
-        o.push_str(
-            "
- OPEN GOALS
-",
-        );
-        for m in goals {
-            o.push_str(&format!(
-                "  {:<6} {:<40} {} open below
-",
-                m.alias(),
-                clip(m.title(a), 40),
-                a.counts(m.num).open_count
-            ));
-        }
-    }
-    o.push('\n');
-    if a.is_empty_tree() {
-        o.push_str(
-            " Start with:  vivac push \"<title>\" --why \"<reason>\"
-",
-        );
-    } else {
-        o.push_str(
-            " Pick up with:  vivac focus <id>
-",
-        );
-        o.push_str(
-            " Or open another:  vivac push \"<title>\" --why \"<reason>\"
-",
-        );
     }
     Ok(o)
 }
