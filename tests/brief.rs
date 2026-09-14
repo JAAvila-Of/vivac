@@ -344,3 +344,44 @@ fn a_project_level_decision_reaches_the_brief() {
 {s}"
     );
 }
+
+/// `t533` piece (c): an ancestor that has become superseded carries its mark
+/// on the spine, unclipped even past a long title, and a closed node that is
+/// still the focus carries its own mark before `<== HERE`.
+#[test]
+fn the_spine_marks_closed_and_superseded_nodes() {
+    let c = Sandbox::new_seeded("spine-marks");
+    let long_title =
+        "A decision whose title is deliberately long enough to need clipping on the spine";
+    c.ok(&[
+        "push",
+        long_title,
+        "--why",
+        "the call being made",
+        "--type",
+        "decision",
+    ]);
+    c.ok(&["push", "Middle step", "--why", "work under the decision"]);
+    c.ok(&["push", "Leaf step", "--why", "one more level"]);
+    c.ok(&[
+        "decide",
+        "Replacement decision",
+        "--reason",
+        "the old one did not hold",
+        "--supersedes",
+        "1",
+    ]);
+    c.ok(&["done", "2", "settled early"]);
+    c.ok(&["pop", "leaf done"]);
+
+    let b = c.ok(&["brief"]);
+    assert!(
+        !b.contains(long_title),
+        "the long title was not clipped:\n{b}"
+    );
+    assert!(b.contains("[superseded]"), "{b}");
+    assert!(
+        b.contains("[closed]   <== HERE"),
+        "the closed focus lost its mark before <== HERE:\n{b}"
+    );
+}

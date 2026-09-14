@@ -494,6 +494,9 @@ pub fn push(ctx: &mut Ctx, p: params::Push) -> Result<Outcome, Failure> {
             depth: depth_of,
             root_alias: root.alias(),
             root_title: root.title(&ctx.tree).to_string(),
+            // `t533` §2.5: the bottom can now be closed or parked, since
+            // `done`/`park` no longer unstack a node that is not the top.
+            root_mark: (!root.state.is_open()).then(|| root.state.word(root.kind).to_string()),
         })
     } else {
         None
@@ -508,6 +511,13 @@ pub fn push(ctx: &mut Ctx, p: params::Push) -> Result<Outcome, Failure> {
 }
 
 /// `pop` — close the focus and come back to the parent with context.
+///
+/// `f552` (`t533` §2.2): the focus can now be something `done` or `park`
+/// closed while it sat below the top of the stack, and the path only reached
+/// it once everything above it was popped in turn. Popping it does not undo
+/// that: nothing is open to close, so no `state.changed` is written, the
+/// closure rule is never consulted, and `--force` changes nothing. The
+/// `stack.popped` and the vivac are written exactly as they always are.
 pub fn pop(ctx: &mut Ctx, p: params::Pop) -> Result<Outcome, Failure> {
     let focus = ctx
         .tree
@@ -523,9 +533,22 @@ pub fn pop(ctx: &mut Ctx, p: params::Pop) -> Result<Outcome, Failure> {
     guard_text(&[("outcome", outcome_text), ("next", next)])?;
     let v = vivac(ctx, VivacKind::Pop, next, Some(focus.id.clone()), "");
     // Trap: two separate `emit`s in a row, not one lot like `push` -- one
-    // inside `close_node`, one here for the vivac -- and the parent's counts
-    // below have to be read only after both, or the number comes out wrong.
-    let closed = close_node(ctx, &focus, outcome_text, p.force, true)?;
+    // inside `close_node` (or the bare pop below), one here for the vivac --
+    // and the parent's counts below have to be read only after both, or the
+    // number comes out wrong.
+    let closed = if focus.state.is_open() {
+        close_node(ctx, &focus, outcome_text, p.force, true)?
+    } else {
+        ctx.emit(vec![Body::Popped {
+            node: focus.id.clone(),
+        }])?;
+        outcome::Closed {
+            alias: focus.alias(),
+            title: focus.title(&ctx.tree).to_string(),
+            force: p.force,
+            already: Some(focus.state.word(focus.kind).to_string()),
+        }
+    };
     ctx.emit(vec![v])?;
     let parent = match focus.parent.and_then(|p| ctx.tree.node_by_num(p)) {
         Some(parent) => Some(outcome::PoppedTo {
@@ -617,7 +640,9 @@ pub fn park(ctx: &mut Ctx, p: params::Park) -> Result<Outcome, Failure> {
         outcome: reason.to_string(),
         forced: false,
     });
-    if ctx.tree.stack.contains(&node.num) {
+    // `t533` §2.1: only when it is the stack's own top. Anywhere else, the
+    // path still runs through it and the spine marks it parked instead.
+    if ctx.tree.stack.last() == Some(&node.num) {
         evs.push(Body::Popped {
             node: node.id.clone(),
         });
@@ -667,7 +692,9 @@ fn close_node(
         outcome: outcome.to_string(),
         forced: force,
     }];
-    if unstack && ctx.tree.stack.contains(&n.num) {
+    // `t533` §2.1: only when it is the stack's own top. Anywhere else, the
+    // path still runs through it and the spine marks it closed instead.
+    if unstack && ctx.tree.stack.last() == Some(&n.num) {
         evs.push(Body::Popped { node: n.id.clone() });
     }
     ctx.emit(evs)?;
@@ -675,6 +702,7 @@ fn close_node(
         alias: n.alias(),
         title: n.title(&ctx.tree).to_string(),
         force,
+        already: None,
     })
 }
 
@@ -1234,11 +1262,133 @@ pub fn save(ctx: &mut Ctx, p: params::Save) -> Result<Outcome, Failure> {
     })
 }
 
+/// A saved entry resolved against the live tree once, up front: `num`,
+/// whether it is still open, and the word for when it is not -- `None` when
+/// a hand edit or an old bug left the alias resolving to nothing at all.
+type MatchedEntry = Option<(u64, bool, String)>;
+
+/// The word for a saved entry that fell out of the rebuilt path: its state,
+/// or `"gone"` when it no longer resolves at all.
+fn lost_state(matched: &MatchedEntry) -> String {
+    matched
+        .as_ref()
+        .map(|(_, _, word)| word.clone())
+        .unwrap_or_else(|| "gone".to_string())
+}
+
+/// What `restore` rebuilds from a vivac's saved stack: the real lineage to
+/// put back (bottom to top), what stays on it despite not being open
+/// (`kept`), and everything the saved stack named that fell out of the
+/// rebuilt path entirely (`lost`), bottom to top itself.
+///
+/// `t533` §2.3: the stack it rebuilds is always a contiguous stretch of the
+/// real tree's lineage, even when the vivac itself was saved by a version
+/// whose own stack could skip over a closed ancestor. `N` is the saved
+/// entry's own **deepest still-open node**; `B` is the first saved entry, from
+/// the bottom, that is `N` or one of its ancestors. The new stack is the real
+/// lineage from `B` to `N` -- contiguous by construction, never the saved
+/// list itself. Every node from `B` to `N` that is not open is still on the
+/// path, and says so rather than pretending it is open. Everything else
+/// named by the saved stack is lost: above `N` as always, and below `B` too
+/// -- a saved stack that is a subsequence of its top's lineage, which is what
+/// every version has ever written, can only leave something unresolved down
+/// there, but `restore` never drops what it leaves out in silence.
+///
+/// Split out from `restore` itself so this can be tested against a folded
+/// `Tree` and a hand-built saved stack alone, with no store to write through.
+fn restore_path(
+    tree: &Tree,
+    saved_stack: &[(String, String)],
+) -> (
+    Vec<(u64, String)>,
+    Vec<outcome::KeptNode>,
+    Vec<outcome::LostNode>,
+) {
+    let matched: Vec<MatchedEntry> = saved_stack
+        .iter()
+        .map(|(alias, _)| {
+            tree.resolve(alias)
+                .map(|n| (n.num, n.state.is_open(), n.state.word(n.kind).to_string()))
+        })
+        .collect();
+    // `N`: the deepest (closest to the old top) saved entry that is still
+    // open.
+    let deepest_open = matched
+        .iter()
+        .rposition(|m| m.as_ref().is_some_and(|(_, open, _)| *open));
+
+    let mut kept: Vec<outcome::KeptNode> = Vec::new();
+    let mut lost: Vec<outcome::LostNode> = Vec::new();
+    let mut lineage: Vec<(u64, String)> = Vec::new();
+
+    match deepest_open {
+        None => {
+            // Nothing saved is still open: the whole point is lost, exactly
+            // as it always has been.
+            for (i, (alias, title)) in saved_stack.iter().enumerate() {
+                lost.push(outcome::LostNode {
+                    alias: alias.clone(),
+                    title: title.clone(),
+                    state: lost_state(&matched[i]),
+                });
+            }
+        }
+        Some(deepest_open) => {
+            let (deepest_num, _, _) = matched[deepest_open].clone().unwrap();
+            // The real lineage of `N`, root first: contiguous by
+            // construction, unlike the saved list it may have come from.
+            let full_lineage = tree.ancestors(deepest_num);
+            // `B`: the first saved entry, from the bottom, that is `N` or one
+            // of its ancestors.
+            let bottom_index = (0..=deepest_open)
+                .find(|&i| {
+                    matched[i]
+                        .as_ref()
+                        .is_some_and(|(num, _, _)| full_lineage.iter().any(|a| a.num == *num))
+                })
+                .unwrap_or(deepest_open);
+            let (bottom_num, _, _) = matched[bottom_index].clone().unwrap();
+            let start = full_lineage
+                .iter()
+                .position(|a| a.num == bottom_num)
+                .unwrap_or(0);
+            for n in &full_lineage[start..] {
+                lineage.push((n.num, n.id.clone()));
+                if !n.state.is_open() {
+                    kept.push(outcome::KeptNode {
+                        alias: n.alias(),
+                        title: n.title(tree).to_string(),
+                        state: n.state.word(n.kind).to_string(),
+                    });
+                }
+            }
+            // Below `B`: never reached the lineage at all, and still named.
+            for (i, (alias, title)) in saved_stack.iter().enumerate().take(bottom_index) {
+                lost.push(outcome::LostNode {
+                    alias: alias.clone(),
+                    title: title.clone(),
+                    state: lost_state(&matched[i]),
+                });
+            }
+            // Above `N`: as always.
+            for (i, (alias, title)) in saved_stack.iter().enumerate().skip(deepest_open + 1) {
+                lost.push(outcome::LostNode {
+                    alias: alias.clone(),
+                    title: title.clone(),
+                    state: lost_state(&matched[i]),
+                });
+            }
+        }
+    }
+    (lineage, kept, lost)
+}
+
 /// `restore <v>` — go back to a vivac.
 ///
 /// **It never touches the working tree.** Mixing context navigation with tree
 /// manipulation turns a tool for attention into a branch manager worse than
-/// git. It rebuilds the stack and presents the diff.
+/// git. It rebuilds the stack and presents the diff; `restore_path` above
+/// does the rebuilding.
 pub fn restore(ctx: &mut Ctx, p: params::Restore) -> Result<Outcome, Failure> {
     let v = ctx
         .tree
@@ -1246,25 +1396,8 @@ pub fn restore(ctx: &mut Ctx, p: params::Restore) -> Result<Outcome, Failure> {
         .ok_or_else(|| Failure::usage(format!("No such vivac: {}.", p.vivac)))?
         .clone();
 
-    // The vivac's stack is frozen by alias. Nodes that no longer exist or are
-    // closed get skipped and named: restoring resurrects nothing.
-    let mut lineage = Vec::new();
-    let mut lost: Vec<outcome::LostNode> = Vec::new();
-    for (alias, title) in &v.stack {
-        let state = match ctx.tree.resolve(alias) {
-            Some(n) if n.state.is_open() => {
-                lineage.push((n.num, n.id.clone()));
-                continue;
-            }
-            Some(n) => n.state.word(n.kind).to_string(),
-            None => "gone".to_string(),
-        };
-        lost.push(outcome::LostNode {
-            alias: alias.clone(),
-            title: title.clone(),
-            state,
-        });
-    }
+    let (lineage, kept, lost) = restore_path(&ctx.tree, &v.stack);
+
     let mut evs: Vec<Body> = ctx
         .tree
         .stack
@@ -1310,6 +1443,7 @@ pub fn restore(ctx: &mut Ctx, p: params::Restore) -> Result<Outcome, Failure> {
         ts: v.ts,
         label: v.label,
         next_intent: v.next_intent,
+        kept,
         lost,
         anchor,
     })
@@ -1364,4 +1498,71 @@ pub fn session_started(
         session,
     }])?;
     Ok(Outcome::SessionOpened)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::event::Event;
+    use crate::model::fold;
+
+    fn created(seq: u64, num: u64, kind: Kind, parent: Option<&str>) -> Event {
+        Event {
+            seq,
+            id: format!("e{seq}"),
+            ts: "2026-09-13T00:00:00Z".to_string(),
+            actor: "a".to_string(),
+            lane: "main".to_string(),
+            payload: Body::NodeCreated {
+                node: format!("n{num}"),
+                num,
+                kind,
+                title: format!("Node {num}"),
+                why: "it is needed".to_string(),
+                parent: parent.map(str::to_string),
+                blocks: false,
+                refs: vec![],
+                governs: vec![],
+                arms: vec![],
+                against: None,
+            },
+        }
+    }
+
+    /// `t533` §2.3, the hole a ruling caught: a saved entry sitting below `B`
+    /// that does not resolve at all used to vanish from the report -- not
+    /// `kept`, since it never reaches the rebuilt path, and not `lost`
+    /// either, because that loop only ever looked above `N`. A saved stack
+    /// that is a subsequence of its top's lineage -- what every version has
+    /// ever written -- can only leave something unresolved in that slot, but
+    /// `restore` still has to say so.
+    #[test]
+    fn a_saved_entry_below_the_path_that_does_not_resolve_is_reported_lost() {
+        let events = vec![
+            created(1, 1, Kind::Goal, None),
+            created(2, 2, Kind::Task, Some("n1")),
+            created(3, 3, Kind::Task, Some("n2")),
+            created(4, 4, Kind::Task, Some("n3")),
+        ];
+        let tree = fold(&events, 0);
+        let saved_stack = vec![
+            ("f9".to_string(), "Nothing here resolves".to_string()),
+            ("g1".to_string(), "Node 1".to_string()),
+            ("t2".to_string(), "Node 2".to_string()),
+            ("t3".to_string(), "Node 3".to_string()),
+            ("t4".to_string(), "Node 4".to_string()),
+        ];
+
+        let (lineage, kept, lost) = restore_path(&tree, &saved_stack);
+
+        assert_eq!(lineage.len(), 4, "the whole open lineage rebuilds");
+        assert!(kept.is_empty(), "nothing on this path is closed");
+        assert_eq!(
+            lost.len(),
+            1,
+            "the entry below B must not vanish from the report: {lost:?}"
+        );
+        assert_eq!(lost[0].alias, "f9");
+        assert_eq!(lost[0].state, "gone");
+    }
 }

@@ -121,6 +121,21 @@ pub(crate) fn constraints<'a>(a: &'a Tree, lineage: &[&Node]) -> Vec<&'a Node> {
     v
 }
 
+/// `t533` piece (c) (`f134`, `f55`): a node whose state is not open carries
+/// its word, in brackets, right after the title -- the same word `why` and
+/// `tree` already show (`render.rs`, `label`). Title and mark share the 44
+/// columns the title alone used to have, so the two fit together; the mark
+/// is never the part that gives. An open node keeps exactly the bytes it
+/// always has.
+fn spine_label(a: &Tree, n: &Node) -> String {
+    if n.state.is_open() {
+        return clip(n.title(a), 44);
+    }
+    let mark = format!("  [{}]", n.state.word(n.kind));
+    let budget = 44usize.saturating_sub(mark.chars().count());
+    format!("{}{mark}", clip(n.title(a), budget))
+}
+
 fn spine(a: &Tree, lineage: &[&Node]) -> Vec<String> {
     let mut v = Vec::new();
     for (i, n) in lineage.iter().enumerate() {
@@ -146,7 +161,7 @@ fn spine(a: &Tree, lineage: &[&Node]) -> Vec<String> {
         v.push(format!(
             "{branch}{:<6} {}{flag}{here_mark}",
             n.alias(),
-            clip(n.title(a), 44)
+            spine_label(a, n)
         ));
         let why = n.why(a);
         if !first && !why.is_empty() {
