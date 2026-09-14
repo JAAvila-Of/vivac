@@ -208,6 +208,7 @@ fn the_binary_takes_every_command_the_readme_shows() {
     let text = readme();
     let c = Sandbox::new_seeded("readme-commands");
     let help = c.ok(&["--help"]);
+    let commands = all_commands(&help);
     let mut seen = 0;
     for (tag, body) in blocks(&text) {
         for line in command_lines(&tag, &body) {
@@ -228,6 +229,15 @@ fn the_binary_takes_every_command_the_readme_shows() {
                 }
                 continue;
             }
+            // A retired command answers with neither of the words below:
+            // `vivac hooks` left a line saying where to go instead, and the
+            // README could have gone on showing it. So the command also has
+            // to be one the help still announces.
+            let command = args.first().copied().unwrap_or_default();
+            assert!(
+                commands.contains(command),
+                "the README shows `{line}`, and the help no longer lists `{command}`"
+            );
             let (out, _) = c.run(&args);
             assert!(
                 !out.contains("unknown command:") && !out.contains("does not take"),
