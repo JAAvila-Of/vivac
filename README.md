@@ -479,6 +479,13 @@ parking only ever said "maybe I will be back".
 vivac setup claude-code
 ```
 
+Run it in the folder you open Claude Code in. Claude Code reads its settings
+and its MCP servers only from there, not from the folders above, so that is
+where setup writes them. The tree is the `.vivac/` setup finds going up from
+there, or a new one planted in that folder. If you open Claude Code in more
+than one folder of the same project, run setup in each: they all share the
+tree above them. The plan names every folder before anything is written.
+
 Everything Claude Code needs to work with the tree, written into the project
 and nowhere else:
 
@@ -531,11 +538,13 @@ agent's context can call the same one, and any MCP client can run `vivac mcp`.
 
 **Nothing moves into vivac on its own.** If a project already lives in
 another memory system, engram or anything like it, or keeps what it has
-learned in `CLAUDE.md`, `AGENTS.md`, `MEMORY.md` or internal documents, none
-of that is in the tree after `vivac setup`. vivac never reads another system
-and never reads those files. Bringing them in is a job for the agent, with you
-deciding what goes in, and the `vivac-migrate` skill that setup installs tells
-the agent how to do it and how to check it.
+learned in `CLAUDE.md`, `AGENTS.md`, `MEMORY.md`, the harness's own memory or
+internal documents, none of that is in the tree after `vivac setup`. vivac
+never reads another system and never reads those files. Bringing them in is a
+job for the agent, with you deciding what goes in, and the `vivac-migrate`
+skill that setup installs tells the agent where to look, how to sort what it
+finds, how to check what it wrote, and how to retire the other maps
+afterwards.
 
 **We strongly recommend not running another memory or learning system
 alongside vivac in the same project.** Two maps collide: each one points the
@@ -556,55 +565,51 @@ two oriented the decision. This has been observed, not assumed:
   harness's own automatic memory kept injecting a copy of the project's
   doctrine for five days before anybody noticed.
 
-vivac does not turn anything off, and neither does setup: another system is
-not vivac's to touch. Turning it off is your call, in that system's own
-settings, and when you do, check its instructions as well. Turning its tools
-off in one project does not stop instructions that tell the agent to save
-memories there in every project.
+vivac itself does not turn anything off, and neither does setup: another
+system is not vivac's to touch. The skill finds every other map the agent
+receives, from a memory tool's plugin to lines in an instruction file that
+tell the agent to save somewhere else, and at the end offers to retire each
+one for this project. Your agent takes each step only after you say yes to
+it, in a form that can be undone, and never deletes another system's data or
+uninstalls it.
 
 ### Steps
 
-1. Install vivac and set the project up:
+1. Install vivac and set the project up, in the folder you open Claude Code
+   in:
 
    ```sh
    cargo install vivac
    vivac setup claude-code
    ```
 
-2. Open a new Claude Code session in the project, and let it use the `vivac`
-   server when it asks.
+2. Open a new Claude Code session in the project. If it asks whether to use
+   the `vivac` server, say yes.
 
-3. Bring in what another memory system knows. Ask the agent:
+3. Ask the agent:
 
-   > Use the vivac-migrate skill to bring what engram knows about this project
-   > into vivac. Show me the plan before you write anything.
+   > Use the vivac-migrate skill to bring everything this project knows into
+   > vivac.
 
-   Name whichever system you use. Its tools can be off in this project: the
-   skill reads it through its command line or its export instead.
+   It lists every source it finds, from a memory system to the harness's own
+   memory, instruction files and internal documents, and asks which to bring
+   in. It shows you a plan before writing anything, checks what it wrote,
+   and then offers to retire the other maps, one at a time.
 
-4. Bring in the instruction files and your own documents:
+4. Open a fresh session: the brief it starts with is what the tree now knows.
 
-   > Use the vivac-migrate skill to bring the rules, decisions and constraints
-   > in CLAUDE.md, AGENTS.md, MEMORY.md and docs/ into vivac. Keep the files
-   > as they are.
-
-5. Check it:
-
-   > Check the migration with the vivac-migrate skill and tell me what was left
-   > out, and why.
-
-6. Decide about the other system, and open a fresh session: the brief it
-   starts with is what the tree now knows.
-
-Keep the instruction files as they are for now. `vivac rules` is read on
-demand, not handed to the agent when a session opens, so the file is still
-what delivers them unasked.
+**What has to hold in every session goes in as a constraint under the root
+goal**, which the brief hands the agent every time. Pillars and rules are read
+on demand, with `vivac rules`, when work is checked. Instruction files stay as
+they are for now, because what they say still reaches every session from the
+file.
 
 ## MCP
 
 The tree as tools an agent can call. `vivac setup claude-code` writes the
-server into the project's `.mcp.json`, and Claude Code asks once whether to
-use it. Any other MCP client runs `vivac mcp`.
+server into the `.mcp.json` of the folder you open Claude Code in, and the
+first time Claude Code sees it, it may ask whether to use it: say yes. Any
+other MCP client runs `vivac mcp`.
 
 Fourteen of them. Five are reads: `vivac_brief`, `vivac_find`, `vivac_why`,
 `vivac_open` and `vivac_rules`. Nine are writes: `vivac_push`, `vivac_pop`,
@@ -689,10 +694,10 @@ without complaining, so this one is Windows only.
 Every [release](https://github.com/JAAvila-Of/vivac/releases) carries a
 precompiled binary: Linux and macOS on both `x86_64` and `aarch64`, Windows on
 `x86_64`. Unpack one, put `vivac` somewhere on your `PATH`, and run
-`vivac setup claude-code` inside a project, or `vivac init` for a tree with no
-harness around it. The Linux builds link against musl, so they run on
-older distributions too rather than on nothing older than the machine that
-built them.
+`vivac setup claude-code` in the folder you open Claude Code in, or
+`vivac init` for a tree with no harness around it. The Linux builds link
+against musl, so they run on older distributions too rather than on nothing
+older than the machine that built them.
 
 Every archive is listed in `SHA256SUMS` and carries signed build provenance,
 which ties the file to the workflow, the repository and the commit that
