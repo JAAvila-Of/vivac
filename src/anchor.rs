@@ -143,6 +143,36 @@ pub fn detect(root: &Path) -> Box<dyn Anchor> {
     }
 }
 
+/// Whether `root` sits inside a git working tree: the same upward walk the
+/// anchor already does, cached the same way.
+pub(crate) fn in_working_tree(root: &Path) -> bool {
+    locate_cached(root).is_some()
+}
+
+/// Whether git tracks `rel`, a path relative to `root`. Starts `git`, so
+/// only `setup` and `check` call it: nothing on the write path does.
+///
+/// `None` when git could not be asked: not on PATH, or it refused the
+/// folder. `--error-unmatch` exits `0` when `rel` is tracked and `1` when it
+/// is not; any other exit code, a signal, or a process that never started
+/// means the question itself failed, and the caller must not read that as
+/// "not tracked".
+pub(crate) fn tracks(root: &Path, rel: &str) -> Option<bool> {
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["ls-files", "--error-unmatch", "--", rel])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .ok()?;
+    match status.code() {
+        Some(0) => Some(true),
+        Some(1) => Some(false),
+        _ => None,
+    }
+}
+
 impl Git {
     fn new(root: &Path) -> Option<Git> {
         locate_cached(root).map(|l| Git {

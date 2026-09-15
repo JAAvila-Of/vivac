@@ -53,6 +53,16 @@ fn init_over_an_empty_vivac_directory_plants_a_tree() {
     assert!(c.0.join(".vivac").join("events").is_file());
 }
 
+/// `t594` §4.9: planting a tree writes `.vivac/.gitignore` alongside the
+/// config and the log, so a fresh tree is never one `git add .` away from
+/// being tracked.
+#[test]
+fn init_keeps_the_tree_out_of_version_control() {
+    let c = Sandbox::new_seeded("gitignore");
+    let g = std::fs::read_to_string(c.0.join(".vivac").join(".gitignore")).unwrap();
+    assert_eq!(g, "*\n");
+}
+
 /// `init` opens rather than creates when there is something to open: a
 /// `.vivac/` with a log and no config regenerates through `Store::open`,
 /// which locks the regenerated config if the log already holds a rule.

@@ -204,3 +204,75 @@ fn gates_is_a_known_flag() {
     let (s, code) = c.run(&["check", "--gates"]);
     assert_eq!(code, 0, "--gates was refused as unknown:\n{s}");
 }
+
+// ---------------------------------------------------------------------------
+// `t594` §4.9: git findings, on top of the store corruption above.
+// ---------------------------------------------------------------------------
+
+fn git(dir: &std::path::Path, args: &[&str]) {
+    let st = std::process::Command::new("git")
+        .current_dir(dir)
+        .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
+        .args(args)
+        .status()
+        .unwrap();
+    assert!(st.success(), "git {args:?}");
+}
+
+#[test]
+fn check_says_when_the_log_is_tracked_by_git() {
+    let c = Sandbox::new_seeded("tracked");
+    c.ok(&["push", "Something", "--why", "so the log is not empty"]);
+    git(&c.0, &["init", "-q"]);
+    git(&c.0, &["add", "-f", ".vivac/events"]);
+    git(&c.0, &["commit", "-q", "-m", "track the log by mistake"]);
+    let (out, code) = c.run(&["check"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        out.contains(".vivac/events is tracked by git here"),
+        "{out}"
+    );
+}
+
+#[test]
+fn check_says_when_the_gitignore_is_missing_inside_a_repo() {
+    let c = Sandbox::new_seeded("no-gitignore");
+    git(&c.0, &["init", "-q"]);
+    std::fs::remove_file(c.0.join(".vivac").join(".gitignore")).unwrap();
+    let (out, code) = c.run(&["check"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains(".vivac/.gitignore is missing"), "{out}");
+}
+
+#[test]
+fn outside_a_repo_check_says_nothing_about_git() {
+    let c = Sandbox::new_seeded("no-repo");
+    std::fs::remove_file(c.0.join(".vivac").join(".gitignore")).unwrap();
+    let (out, code) = c.run(&["check"]);
+    assert_eq!(code, 0, "{out}");
+}
+
+/// `anchor::tracks` cannot tell "git says no" apart from "git could not be
+/// asked" unless the caller lets it fail loudly: a `PATH` with no `git` on
+/// it is the easiest way to force that failure without touching the real
+/// one.
+#[test]
+fn check_says_when_it_could_not_ask_git() {
+    let c = Sandbox::new_seeded("no-git-on-path");
+    c.ok(&["push", "Something", "--why", "so the log is not empty"]);
+    git(&c.0, &["init", "-q"]);
+
+    let o = std::process::Command::new(env!("CARGO_BIN_EXE_vivac"))
+        .current_dir(&c.0)
+        .env("VIVAC_HOME", c.global_home())
+        .env("PATH", c.0.join("no-such-dir"))
+        .args(["check"])
+        .output()
+        .unwrap();
+    let out = String::from_utf8_lossy(&o.stdout).into_owned() + &String::from_utf8_lossy(&o.stderr);
+    assert_eq!(o.status.code(), Some(1), "{out}");
+    assert!(
+        out.contains("git could not tell whether .vivac/events is tracked here"),
+        "{out}"
+    );
+}

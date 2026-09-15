@@ -25,8 +25,9 @@ use crate::args::Args;
 use crate::event::{Body, Kind, State};
 use crate::model::Tree;
 use crate::output::outln;
+use std::path::Path;
 
-pub fn check(a: &Tree, args: &Args) -> Result<i32, crate::failure::Failure> {
+pub fn check(a: &Tree, root: &Path, args: &Args) -> Result<i32, crate::failure::Failure> {
     let mut store: Vec<String> = Vec::new();
     let mut project: Vec<String> = Vec::new();
     // Tracked apart from `project`'s own count so each footer prints only
@@ -106,6 +107,35 @@ pub fn check(a: &Tree, args: &Args) -> Result<i32, crate::failure::Failure> {
             undeclared_count += 1;
         }
     }
+
+    // `t594` §4.9: a log inside a git working tree is one `git add .` away
+    // from travelling to every clone, where each copy diverges.
+    if crate::anchor::in_working_tree(root) {
+        if !root
+            .join(crate::store::DIR)
+            .join(crate::store::GITIGNORE)
+            .is_file()
+        {
+            project.push(
+                ".vivac/.gitignore is missing, so git can pick up the log: vivac setup writes it"
+                    .to_string(),
+            );
+        }
+        match crate::anchor::tracks(root, ".vivac/events") {
+            Some(true) => project.push(
+                ".vivac/events is tracked by git here: every clone gets its own copy of the \
+                 log, and the copies diverge. git rm -r --cached .vivac"
+                    .to_string(),
+            ),
+            Some(false) => {}
+            None => project.push(
+                "git could not tell whether .vivac/events is tracked here: it is not on \
+                 PATH, or it refuses this folder. git status shows which"
+                    .to_string(),
+            ),
+        }
+    }
+
     store.sort();
     project.sort();
 
