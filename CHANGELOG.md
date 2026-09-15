@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.2](https://github.com/JAAvila-Of/vivac/compare/v0.11.1...v0.11.2) - 2026-09-15
+
+### Fixed
+
+- *(setup)* end with what this run changed, not the first-run text
+- *(setup)* freeze a harness memory that has no index yet
+- *(setup)* ask before searching services outside the project
+
 ## [0.11.1](https://github.com/JAAvila-Of/vivac/compare/v0.11.0...v0.11.1) - 2026-09-15
 
 ### Upgrading
