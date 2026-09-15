@@ -951,47 +951,42 @@ fn setup_refuses_when_the_trees_own_vivac_is_the_global_store() {
 }
 
 // ---------------------------------------------------------------------------
-// t579 §5.4: upgrading from the exact SKILL.md v0.10.0 wrote.
+// t579 §5.4, §14.7 and §15.6: upgrading from the exact SKILL.md each earlier
+// release wrote.
 // ---------------------------------------------------------------------------
 
-/// The literal SKILL.md v0.10.0 wrote: its frontmatter and body
-/// (`git show v0.10.0:src/setup/skill-frontmatter.md` and
-/// `skill-body.md`), joined by the marker line with the fingerprint that
-/// version's own `fnv1a64` computed over that text. Setup already knows how
-/// to replace a copy an earlier vivac wrote; this fixture is what that copy
-/// actually looked like.
-const OLD_RELEASE_SKILL: &str = include_str!("data/skill-v0.10.0.md");
+/// The literal SKILL.md each earlier release wrote: its frontmatter and body
+/// (`git show <tag>:src/setup/skill-frontmatter.md` and `skill-body.md`),
+/// joined by the marker line with the fingerprint that version's own
+/// `fnv1a64` computed over that text. Setup already knows how to replace a
+/// copy an earlier vivac wrote; these fixtures are what those copies actually
+/// looked like. The v0.11.0 and v0.11.1 ones are byte for byte the copies
+/// those releases wrote into real projects.
+const EARLIER_RELEASE_SKILLS: [(&str, &str); 3] = [
+    ("v0.10.0", include_str!("data/skill-v0.10.0.md")),
+    ("v0.11.0", include_str!("data/skill-v0.11.0.md")),
+    ("v0.11.1", include_str!("data/skill-v0.11.1.md")),
+];
 
-/// The same for v0.11.0, built from the `v0.11.0` tag the same way and
-/// byte for byte the copy that release wrote into a real project.
-const PREVIOUS_RELEASE_SKILL: &str = include_str!("data/skill-v0.11.0.md");
-
-fn an_earlier_release_skill_is_replaced(label: &str, old: &str) {
-    let fresh = Sandbox::new_empty(&format!("setup-skill-{label}-fresh"));
+#[test]
+fn every_earlier_release_skill_is_replaced_by_the_new_one() {
+    let fresh = Sandbox::new_empty("setup-skill-fresh");
     fresh.ok(&["setup", "claude-code", "--yes"]);
     let expected = read(&skill_path(&fresh));
 
-    let c = Sandbox::new_empty(&format!("setup-skill-{label}-upgrade"));
-    std::fs::create_dir_all(skill_path(&c).parent().unwrap()).unwrap();
-    std::fs::write(skill_path(&c), old).unwrap();
+    for (release, old) in EARLIER_RELEASE_SKILLS {
+        let c = Sandbox::new_empty(&format!("setup-skill-{release}-upgrade"));
+        std::fs::create_dir_all(skill_path(&c).parent().unwrap()).unwrap();
+        std::fs::write(skill_path(&c), old).unwrap();
 
-    let (out, code) = c.run(&["setup", "claude-code", "--yes"]);
-    assert_eq!(code, 0, "{out}");
-    assert!(
-        out.contains("replace the copy an earlier vivac wrote"),
-        "{out}"
-    );
-    assert_eq!(read(&skill_path(&c)), expected);
-}
-
-#[test]
-fn an_old_release_skill_is_replaced_by_the_new_one() {
-    an_earlier_release_skill_is_replaced("old-release", OLD_RELEASE_SKILL);
-}
-
-#[test]
-fn the_previous_release_skill_is_replaced_by_the_new_one() {
-    an_earlier_release_skill_is_replaced("previous-release", PREVIOUS_RELEASE_SKILL);
+        let (out, code) = c.run(&["setup", "claude-code", "--yes"]);
+        assert_eq!(code, 0, "{release}: {out}");
+        assert!(
+            out.contains("replace the copy an earlier vivac wrote"),
+            "{release}: {out}"
+        );
+        assert_eq!(read(&skill_path(&c)), expected, "{release}");
+    }
 }
 
 // ---------------------------------------------------------------------------

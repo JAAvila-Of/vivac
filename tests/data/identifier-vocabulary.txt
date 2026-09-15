@@ -987,7 +987,6 @@ preserves
 pretty
 prev
 preview
-previous
 prime
 print
 printed
@@ -1234,6 +1233,7 @@ sits
 six
 size
 skill
+skills
 skip
 skips
 slash
