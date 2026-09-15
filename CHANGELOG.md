@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.3](https://github.com/JAAvila-Of/vivac/compare/v0.11.2...v0.11.3) - 2026-09-15
+
+### Fixed
+
+- *(setup)* delete an export before asking the person anything
+
 ## [0.11.2](https://github.com/JAAvila-Of/vivac/compare/v0.11.1...v0.11.2) - 2026-09-15
 
 ### Upgrading
