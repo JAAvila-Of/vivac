@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.11.3](https://github.com/JAAvila-Of/vivac/compare/v0.11.2...v0.11.3) - 2026-09-15
 
+### Upgrading
+
+- **Run setup again to update the migration skill.** In each folder where
+  you ran `vivac setup claude-code`, run it again: it replaces the
+  vivac-migrate skill an earlier release wrote, if nobody changed it since,
+  and touches nothing else in the project.
+- **If you stopped a migration before it finished, look for an export it
+  left.** Until this release the skill deleted an export of another memory
+  tool only at its last check, so one made by a migration stopped earlier
+  may still be in the temporary folder the agent wrote it to. It holds
+  every memory that tool has, for every project: delete it.
+- **No event changed.** 0.11.2 reads a log 0.11.3 wrote.
+- **On Windows, close every session and any `vivac web` before installing.**
+  A running `vivac mcp` or `vivac web` holds the executable open, and
+  `cargo install` fails with `os error 5` until it is closed.
+
 ### Fixed
 
 - *(setup)* delete an export before asking the person anything
