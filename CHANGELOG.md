@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.1](https://github.com/JAAvila-Of/vivac/compare/v0.11.0...v0.11.1) - 2026-09-15
+
+### Documentation
+
+- *(readme)* say other memory systems keep talking until retired
+
+### Fixed
+
+- *(setup)* keep lines of code out of migrated nodes
+- *(setup)* retire other maps in every folder Claude Code opens in
+- *(setup)* say other memory systems keep talking until retired
+
 ## [0.11.0](https://github.com/JAAvila-Of/vivac/compare/v0.10.0...v0.11.0) - 2026-09-14
 
 ### Upgrading
