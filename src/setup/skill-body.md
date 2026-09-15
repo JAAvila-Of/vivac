@@ -168,7 +168,9 @@ it, and in a form that can be undone:
 - The harness's own memory, and each subagent's: freeze its index. Copy
   MEMORY.md to MEMORY.md.pre-freeze beside it, then replace it with a short
   note saying that the project's knowledge now lives in the vivac tree and how
-  to read it. Leave the files it pointed to where they are.
+  to read it. Leave the files it pointed to where they are. If it has no
+  MEMORY.md yet, write the note anyway: otherwise the first memory an agent
+  saves there starts a new index.
 - Lines that tell the agent to save or search somewhere other than vivac, in
   any instruction file: show them and say where they came from; an installer
   often marks its blocks. Keep a copy of the file beside it and remove only
