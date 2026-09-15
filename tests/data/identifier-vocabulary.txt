@@ -987,6 +987,7 @@ preserves
 pretty
 prev
 preview
+previous
 prime
 print
 printed
