@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0](https://github.com/JAAvila-Of/vivac/compare/v0.10.0...v0.11.0) - 2026-09-14
+
+### Upgrading
+
+- **setup writes Claude Code's files in the folder you run it in.** Claude
+  Code reads `.claude/settings.json` and `.mcp.json` only from the folder a
+  session is opened in. Under 0.10.0, setup run from a subfolder of a tree
+  wrote them next to the tree instead, where that session never read them.
+  If you open Claude Code in a folder that does not hold `.vivac/`, run
+  setup there: it finds the tree above and writes only that folder's files.
+- **setup refuses your home folder.** There, `.claude/` is Claude Code's
+  configuration for every project. If 0.10.0's setup ran there,
+  `vivac setup claude-code --undo` in your home folder takes out the hooks,
+  the server and the skill it wrote. If it also planted a tree, the `config`
+  and `events` files it added to the `.vivac` folder in your home can be
+  deleted.
+- **Running setup again updates the migration skill.** A copy an earlier
+  release wrote, and nobody changed since, is replaced by the new one, and
+  nothing else in the project is touched.
+- **A migration takes one prompt.** Ask the agent to use the vivac-migrate
+  skill to bring everything the project knows into vivac. It finds the
+  sources itself, shows a plan before writing anything, checks what it
+  wrote, and offers to retire the other maps one at a time, only if you say
+  yes.
+- **No event changed.** 0.10.0 reads a log 0.11.0 wrote.
+- **On Windows, close every session and any `vivac web` before installing.**
+  A running `vivac mcp` or `vivac web` holds the executable open, and
+  `cargo install` fails with `os error 5` until it is closed.
+
+### Added
+
+- *(setup)* end with the prompt that starts the migration
+- *(setup)* rewrite vivac-migrate so a migration needs no reviewer
+- *(setup)* [**breaking**] write Claude Code's files where it is opened
+
+### Documentation
+
+- *(readme)* run setup where Claude Code opens, migrate in one prompt
+
 ## [0.10.0](https://github.com/JAAvila-Of/vivac/compare/v0.9.0...v0.10.0) - 2026-09-14
 
 ### Upgrading
