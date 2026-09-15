@@ -26,6 +26,11 @@ pub struct Ctx {
     pub store: Store,
     pub tree: Tree,
     pub anchor: Box<dyn Anchor>,
+    /// The log's fingerprint taken **before** it was read: a write that
+    /// lands between that read and `lock_for_write` changes it, and a
+    /// write that landed just before is folded in anyway and only costs
+    /// one needless reload.
+    pub seen: (u64, Option<std::time::SystemTime>),
 }
 
 impl Ctx {
@@ -45,12 +50,14 @@ impl Ctx {
     }
 
     fn load_opt(store: Store, allow_index_refresh: bool) -> Result<Ctx, Failure> {
+        let seen = crate::store::fingerprint(&store.log());
         let tree = crate::index::load(&store, allow_index_refresh)?;
         let anchor = anchor::detect(&store.root);
         Ok(Ctx {
             store,
             tree,
             anchor,
+            seen,
         })
     }
 
@@ -61,6 +68,7 @@ impl Ctx {
     /// there is no tail to apply that would save the read those two need
     /// anyway.
     pub fn load_with_log(store: Store) -> Result<(Ctx, Vec<Event>), Failure> {
+        let seen = crate::store::fingerprint(&store.log());
         let (events, broken) = store.read_all()?;
         let tree = fold(&events, broken);
         let anchor = anchor::detect(&store.root);
@@ -69,9 +77,24 @@ impl Ctx {
                 store,
                 tree,
                 anchor,
+                seen,
             },
             events,
         ))
+    }
+
+    /// Takes the tree's write lock (`d598`) and makes the tree about to be
+    /// written against the one on disk: if the log moved since this `Ctx`
+    /// was loaded, it is loaded again through the index, which applies only
+    /// the tail. Hold what it returns until the write is done.
+    pub fn lock_for_write(&mut self) -> Result<crate::store::WriteLock, Failure> {
+        let lock = self.store.lock_for_write()?;
+        let now = crate::store::fingerprint(&self.store.log());
+        if now != self.seen {
+            self.tree = crate::index::load(&self.store, false)?;
+            self.seen = now;
+        }
+        Ok(lock)
     }
 
     /// Writes and **then applies in memory**, so that whatever gets printed
@@ -87,6 +110,7 @@ impl Ctx {
         for e in &written {
             self.tree.apply(e.seq, &e.ts, &e.payload);
         }
+        self.seen = crate::store::fingerprint(&self.store.log());
         Ok(())
     }
 
@@ -1464,6 +1488,12 @@ pub fn restore(ctx: &mut Ctx, p: params::Restore) -> Result<Outcome, Failure> {
         .ok_or_else(|| Failure::usage(format!("No such vivac: {}.", p.vivac)))?
         .clone();
 
+    // `d598`: git runs before the lock. A saved vivac never changes, so
+    // what changed since its anchor is the same either side of the lock;
+    // only the stack is decided under it, on the tree as it is then.
+    let changes = ctx.anchor.changed_since(&v.anchor);
+    let _lock = ctx.lock_for_write()?;
+
     let (lineage, kept, lost) = restore_path(&ctx.tree, &v.stack);
 
     let mut evs: Vec<Body> = ctx
@@ -1479,7 +1509,6 @@ pub fn restore(ctx: &mut Ctx, p: params::Restore) -> Result<Outcome, Failure> {
             evs.push(Body::Pushed { node: id.clone() });
         }
     }
-    let changes = ctx.anchor.changed_since(&v.anchor);
     ctx.emit(evs)?;
 
     let anchor = if v.anchor.is_empty_tree() {
@@ -1547,18 +1576,19 @@ pub fn auto_vivac(
 /// refused it and the opening is recorded regardless. The rest of the guard
 /// can afford to refuse because somebody is there to reword the sentence; a
 /// hook has nobody, and a hook that fails is a hook that gets switched off.
+///
+/// `focus` and `vivac` are handed in rather than read off `ctx.tree`: the
+/// caller takes them from what the brief actually painted, before
+/// `lock_for_write` could have reloaded the tree out from under it.
 pub fn session_started(
     ctx: &mut Ctx,
     source: &str,
     session: Option<String>,
+    focus: Option<String>,
+    vivac: Option<String>,
 ) -> Result<Outcome, Failure> {
     let source = guarded_or_refused("source", source);
     let session = session.map(|s| guarded_or_refused("session", &s));
-    // The focus the brief paints is the top of the stack: it walks the
-    // ancestors of `stack.last()` and keeps the last of the lineage, which is
-    // that same node again.
-    let focus = ctx.tree.focus().map(|n| n.id.clone());
-    let vivac = ctx.tree.vivacs.last().map(|v| v.id.clone());
     ctx.emit(vec![Body::SessionStarted {
         source,
         focus,

@@ -67,11 +67,39 @@ pub fn start(ctx: &mut crate::ops::Ctx, a: &Args, project: &str) -> R {
     // log missing an opening shows up on reading, an agent missing its brief
     // does not show up until the thread is already lost.
     let hook = HookInput::read();
-    crate::ops::session_started(ctx, &hook.source, hook.session).ok();
+    // The focus the brief paints is the top of the stack: it walks the
+    // ancestors of `stack.last()` and keeps the last of the lineage, which is
+    // that same node again.
+    //
+    // What the brief painted, taken before the lock: a writer that lands
+    // while this one waits must not rewrite what the agent was shown.
+    let shown_focus = ctx.tree.focus().map(|n| n.id.clone());
+    let shown_vivac = ctx.tree.vivacs.last().map(|v| v.id.clone());
+    match ctx.lock_for_write() {
+        Ok(_lock) => {
+            crate::ops::session_started(ctx, &hook.source, hook.session, shown_focus, shown_vivac)
+                .ok();
+        }
+        // The brief is already out. A session another writer kept from
+        // being recorded is a small hole in the log; say so where the
+        // agent reads, and never let it cost the brief (`d598`).
+        Err(Failure::Busy(_)) => {
+            outln!("  Session not recorded: another vivac process held the tree for 5 seconds.");
+        }
+        Err(_) => {}
+    }
     Ok(())
 }
 
 pub fn end(ctx: &mut crate::ops::Ctx, a: &Args) -> R {
+    // The decision whether anything changed has to be made on the tree on
+    // disk. A held lock in hook mode leaves this stop for the next turn:
+    // the change that armed it is still there, and nothing is lost.
+    let _lock = match ctx.lock_for_write() {
+        Ok(l) => l,
+        Err(Failure::Busy(_)) if a.has("hook") => return Ok(()),
+        Err(e) => return Err(e),
+    };
     // With no stack there is no thread to close, and an empty vivac is just
     // noise to be pruned later.
     if ctx.tree.stack.is_empty() {

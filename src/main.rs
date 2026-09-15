@@ -133,7 +133,8 @@ const USAGE: &str = r#"vivac - provenance of work
 
   Exit codes
     0 fine   1 the model refuses   2 usage   3 redaction guard   4 no .vivac
-    5 input/output error, or a tree written by a newer vivac
+    5 input/output error, a tree written by a newer vivac, or a tree
+      another process kept locked
 "#;
 
 /// A root that reached the registry with no identity to be keyed by, kept so
@@ -540,6 +541,19 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         )));
     }
 
+    // `d598`: a command that may append holds the tree's write lock from
+    // here until it returns, and writes against the tree as it is once the
+    // lock is held. It is taken after the command line is checked, so a
+    // usage error never waits on another writer. `session` and `restore`
+    // take their own: session once the brief is out, so a held lock never
+    // costs the agent its brief, and restore once git has answered, so a
+    // slow git never holds every other writer.
+    let _write_lock = if may_append(cmd) && !matches!(cmd, "session" | "restore") {
+        Some(ctx.lock_for_write()?)
+    } else {
+        None
+    };
+
     if let Some(o) = write_op(cmd, &mut ctx, a)? {
         print!("{}", outcome::to_text(&o));
         // Trap: `focus` and `restore` used to end by delegating to
@@ -675,6 +689,7 @@ mod tests {
             Failure::NoStore,
             Failure::Io(std::io::Error::other("disk full")),
             Failure::newer_vivac("this log holds an event this version does not know"),
+            Failure::busy(std::time::Duration::from_secs(5)),
         ];
         variants
             .into_iter()
@@ -685,6 +700,7 @@ mod tests {
                 Failure::NoStore => f.code(),
                 Failure::Io(_) => f.code(),
                 Failure::NewerVivac(_) => f.code(),
+                Failure::Busy(_) => f.code(),
             })
             .collect()
     }
