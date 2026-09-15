@@ -1,6 +1,7 @@
 abandon
 abandoned
 abandons
+about
 above
 abs
 absent
@@ -183,6 +184,7 @@ canonicalize
 cap
 capacity
 capped
+caps
 carried
 carries
 carry
@@ -213,6 +215,7 @@ chunk
 chunked
 civil
 claim
+claimant
 claimed
 claims
 clamp
@@ -484,6 +487,7 @@ fingerprint
 first
 fit
 fits
+five
 fixed
 fixture
 flag
@@ -847,6 +851,7 @@ nth
 null
 num
 number
+numbers
 nums
 obj
 object
@@ -1098,6 +1103,7 @@ reordered
 repeat
 repeated
 repeating
+repeats
 replace
 replaceable
 replaced
@@ -1219,6 +1225,7 @@ shape
 shaped
 share
 shared
+shares
 shell
 short
 should
