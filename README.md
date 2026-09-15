@@ -569,9 +569,9 @@ vivac itself does not turn anything off, and neither does setup: another
 system is not vivac's to touch. The skill finds every other map the agent
 receives, from a memory tool's plugin to lines in an instruction file that
 tell the agent to save somewhere else, and at the end offers to retire each
-one for this project. Your agent takes each step only after you say yes to
-it, in a form that can be undone, and never deletes another system's data or
-uninstalls it.
+one for this project, in every folder you open Claude Code in. Your agent
+takes each step only after you say yes to it, in a form that can be undone,
+and never deletes another system's data or uninstalls it.
 
 ### Steps
 
@@ -595,6 +595,10 @@ uninstalls it.
    memory, instruction files and internal documents, and asks which to bring
    in. It shows you a plan before writing anything, checks what it wrote,
    and then offers to retire the other maps, one at a time.
+
+   Until then, another memory system you use keeps talking to the agent as
+   before, and may tell it to use that system first. That is expected: the
+   skill only reads from it.
 
 4. Open a fresh session: the brief it starts with is what the tree now knows.
 
