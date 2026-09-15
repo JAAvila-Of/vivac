@@ -377,6 +377,26 @@ pub fn to_text(
         RULE.to_string(),
         String::new(),
     ]));
+    // `t429`'s second fix: repeated numbers are named, never hidden. One
+    // line, bounded, and only when there are any.
+    if !a.repeated_nums.is_empty() {
+        let mut nums: Vec<String> = a
+            .repeated_nums
+            .iter()
+            .take(5)
+            .map(|d| d.num.to_string())
+            .collect();
+        if a.repeated_nums.len() > 5 {
+            nums.push(format!("+{}", a.repeated_nums.len() - 5));
+        }
+        s.push(Section::fixed(vec![
+            format!(
+                " REPEATED NUMBERS  {}  <- each names two nodes; vivac check",
+                nums.join(", ")
+            ),
+            String::new(),
+        ]));
+    }
     s.push(Section::fixed(match focus {
         Some(_) => spine(a, &lineage),
         None => no_focus_block(a),

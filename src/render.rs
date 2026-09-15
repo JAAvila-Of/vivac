@@ -351,10 +351,16 @@ fn why_data_impl(a: &Tree, full: Option<&Full>, id: &str) -> Result<serde_json::
         .resolve(id)
         .ok_or_else(|| Failure::usage(format!("No such node: {id}.")))?;
     let lineage = a.ancestors(n.num);
-    let node_json = match full {
+    let mut node_json = match full {
         Some(f) => json_node_full(a, ag, f, n),
         None => json_node(a, ag, n),
     };
+    // `t429`'s second fix: the JSON names the hidden half too, but only when
+    // there is one -- without it the shape stays byte for byte what `d468`'s
+    // goldens already fixed.
+    if let Some(d) = a.repeated_nums.iter().find(|d| d.num == n.num) {
+        node_json["repeated"] = json!({"num": d.num, "hidden": d.second});
+    }
     let siblings: Vec<_> = n
         .parent
         .map(|p| a.children(p))
@@ -504,6 +510,14 @@ pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
     outln!();
     outln!("  Why we are here  ->  {}", n.alias());
     outln!("  {}", "-".repeat(66));
+    if let Some(d) = a.repeated_nums.iter().find(|d| d.num == n.num) {
+        outln!(
+            "  {} also names another node, {}, which this tree cannot show. vivac check lists it.",
+            n.alias(),
+            d.second
+        );
+        outln!();
+    }
     outln!();
     for (i, p) in lineage.iter().enumerate() {
         let is_last = i == lineage.len() - 1;
@@ -660,6 +674,20 @@ fn branch(a: &Tree, ag: &Aggregates, n: &Node, prefix: &str, is_last: bool, show
     }
 }
 
+/// `t429`'s second fix, by `d423`'s rule: a number two nodes share is
+/// something this tree can only show one half of, so it says which half.
+fn repeated_lines(a: &Tree) -> Vec<String> {
+    a.repeated_nums
+        .iter()
+        .map(|d| {
+            format!(
+                "  {} is repeated: {} is shown and {} is not. vivac check lists every one.",
+                d.num, d.first, d.second
+            )
+        })
+        .collect()
+}
+
 fn subtree_json(a: &Tree, ag: &Aggregates, n: &Node) -> serde_json::Value {
     let mut v = json_node(a, ag, n);
     v["children"] = json!(a
@@ -694,6 +722,13 @@ pub fn tree(a: &Tree, args: &Args) -> R {
         branch(a, ag, n, "  ", i == roots.len() - 1, show_all);
     }
     outln!();
+    let repeated = repeated_lines(a);
+    if !repeated.is_empty() {
+        for l in &repeated {
+            outln!("{l}");
+        }
+        outln!();
+    }
     if !show_all {
         outln!("  (closed nodes with no open descendants hidden; --all shows them)");
         outln!();
