@@ -15,8 +15,10 @@ is on this page; you do not need to read vivac's source.
   path inside someone's home directory. The redaction guard refuses some of
   these and exits with 3. When it does, write the node again without the
   value, and never work around the guard.
-- Never copy a file's contents or code into a node. Write what was decided or
-  learned and why, and point at files in the project with --ref.
+- Never copy a file's contents or code into a node, not even one line: say in
+  words what the code does, and name the files, types and functions involved.
+  Write what was decided or learned and why, and point at files in the
+  project with --ref.
 - Never point a node back at the other system: no memory ids, topic keys or
   links into it. Once it is retired they lead nowhere, and until then they
   send the next agent to a second map.
