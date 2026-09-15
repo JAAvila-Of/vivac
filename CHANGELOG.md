@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.2](https://github.com/JAAvila-Of/vivac/compare/v0.11.1...v0.11.2) - 2026-09-15
+
+### Upgrading
+
+- **Run setup again to update the migration skill.** In each folder where
+  you ran `vivac setup claude-code`, run it again: it replaces the
+  vivac-migrate skill an earlier release wrote, if nobody changed it since,
+  and touches nothing else in the project.
+- **If setup told you on an upgrade that nothing had been brought in, it was
+  wrong.** Until this release its last message was the one for a first
+  setup, whatever it had written. Setup never changes a tree that is already
+  there, so everything a migration wrote is still in it.
+- **No event changed.** 0.11.1 reads a log 0.11.2 wrote.
+- **On Windows, close every session and any `vivac web` before installing.**
+  A running `vivac mcp` or `vivac web` holds the executable open, and
+  `cargo install` fails with `os error 5` until it is closed.
+
+### Fixed
+
+- *(store)* apply in memory the events exactly as they were written
+- *(setup)* end with what this run changed, not the first-run text
+- *(setup)* freeze a harness memory that has no index yet
+- *(setup)* ask before searching services outside the project
+
 ## [0.11.1](https://github.com/JAAvila-Of/vivac/compare/v0.11.0...v0.11.1) - 2026-09-15
 
 ### Upgrading
