@@ -1,3 +1,8 @@
+---
+name: vivac-migrate
+description: Bring everything a project already knows into the vivac tree, from another memory system, the harness's own memory, instruction files for any agent, decision records and internal documents; check it, and retire the other maps with the person's yes. Use when asked to migrate, import or move memories, notes, rules, decisions or documentation into vivac, or to bring what a project knows into it.
+---
+<!-- written by vivac setup; fingerprint 4e6d6ced81cc7b56; vivac setup claude-code --undo removes it while the text is unchanged -->
 
 # Bringing what a project knows into vivac
 
@@ -65,10 +70,6 @@ it is, and ask which to bring in.
 - Decision records and internal documents: adr/, decisions/, docs/, design/,
   notes/, a wiki folder, and any other text that states rules, decisions or
   constraints. Skip vendored, generated and dependency folders.
-- Services you can reach from this session that are not a memory system,
-  like a drive, a wiki or an issue tracker behind a connector. They hold far
-  more than this project, so do not search them on your own: ask the person
-  whether this project keeps anything there, and search only what they name.
 
 Read whole what the person picks. If a long document is mostly finished steps
 or code, say so and read its prose.
