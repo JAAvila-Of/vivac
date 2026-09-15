@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.1](https://github.com/JAAvila-Of/vivac/compare/v0.11.0...v0.11.1) - 2026-09-15
+
+### Upgrading
+
+- **Run setup again to update the migration skill.** In each folder where
+  you ran `vivac setup claude-code`, run it again: it replaces the
+  vivac-migrate skill an earlier release wrote, if nobody changed it since,
+  and touches nothing else in the project.
+- **If you migrated with 0.11.0 and open Claude Code in more than one
+  folder of the project**, the other maps were retired only in the folder
+  that session ran in. In each other folder, run `vivac setup claude-code`,
+  and turn the memory plugin off there too, with
+  `"enabledPlugins": { "<plugin>": false }` in that folder's
+  `.claude/settings.json`.
+- **No event changed.** 0.11.0 reads a log 0.11.1 wrote.
+- **On Windows, close every session and any `vivac web` before installing.**
+  A running `vivac mcp` or `vivac web` holds the executable open, and
+  `cargo install` fails with `os error 5` until it is closed.
+
+### Documentation
+
+- *(readme)* say other memory systems keep talking until retired
+
+### Fixed
+
+- *(setup)* keep lines of code out of migrated nodes
+- *(setup)* retire other maps in every folder Claude Code opens in
+- *(setup)* say other memory systems keep talking until retired
+
 ## [0.11.0](https://github.com/JAAvila-Of/vivac/compare/v0.10.0...v0.11.0) - 2026-09-14
 
 ### Upgrading
