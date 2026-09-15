@@ -1,3 +1,8 @@
+---
+name: vivac-migrate
+description: Bring everything a project already knows into the vivac tree, from another memory system, the harness's own memory, instruction files for any agent, decision records and internal documents; check it, and retire the other maps with the person's yes. Use when asked to migrate, import or move memories, notes, rules, decisions or documentation into vivac, or to bring what a project knows into it.
+---
+<!-- written by vivac setup; fingerprint d86a7cc3eb50ae2a; vivac setup claude-code --undo removes it while the text is unchanged -->
 
 # Bringing what a project knows into vivac
 
@@ -29,8 +34,7 @@ is on this page; you do not need to read vivac's source.
   flags, and do not add one to a command that writes, not even --help: some
   tools take it as an argument. An export is a copy of everything the tool
   holds, for every project. If you need one, write it to a temporary folder
-  outside the project, and delete it before you ask the person anything:
-  they may stop there, and then nothing would delete it.
+  outside the project, and delete it after step 5.
 - Do not use vivac import. It reads trees from vivac's own prototype, not
   memories, and it changes kinds on the way in.
 
