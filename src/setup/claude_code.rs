@@ -16,6 +16,7 @@ const SETTINGS_LABEL: &str = ".claude/settings.json";
 const MCP_LABEL: &str = ".mcp.json";
 const SKILL_LABEL: &str = ".claude/skills/vivac-migrate/SKILL.md";
 const VIVAC_LABEL: &str = ".vivac/";
+const GITIGNORE_LABEL: &str = ".vivac/.gitignore";
 
 const SESSION_START_COMMAND: &str = "vivac session start --hook";
 const SESSION_END_COMMAND: &str = "vivac session end --hook";
@@ -522,6 +523,13 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     let stop_hook_state = hook_state(&settings_root, "Stop", "end", SESSION_END_COMMAND);
 
     let vivac_missing = !crate::store::already_planted(tree);
+    // A tree this run plants already carries its `.gitignore`, straight out
+    // of `Store::create`: only a tree from before `t594` §4.9 can lack it.
+    let gitignore_missing = !vivac_missing
+        && !tree
+            .join(crate::store::DIR)
+            .join(crate::store::GITIGNORE)
+            .is_file();
     let start_missing = matches!(start_hook_state, HookState::Missing);
     let stop_missing = matches!(stop_hook_state, HookState::Missing);
     let mcp_missing = matches!(mcp_server_state, McpState::Missing);
@@ -531,6 +539,7 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     );
 
     let nothing_to_write = !vivac_missing
+        && !gitignore_missing
         && !start_missing
         && !stop_missing
         && !mcp_missing
@@ -540,6 +549,7 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         here,
         tree,
         vivac_missing,
+        gitignore_missing,
         settings.exists,
         mcp.exists,
         &start_hook_state,
@@ -626,6 +636,14 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         ));
     }
 
+    if gitignore_missing {
+        writes.push(super::PlannedWrite::write(
+            tree.join(crate::store::DIR).join(crate::store::GITIGNORE),
+            "*\n".to_string(),
+            None,
+        ));
+    }
+
     super::commit(&writes)?;
 
     // `.vivac/` is planted only once the JSON commit above has already
@@ -651,6 +669,11 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
             && matches!(skill_file_state, SkillState::Missing),
     };
     print!("\n{}", written_text(&written));
+    if crate::anchor::in_working_tree(tree)
+        && crate::anchor::tracks(tree, ".vivac/events") == Some(true)
+    {
+        print!("{TRACKED_WARNING}");
+    }
     Ok(0)
 }
 
@@ -659,6 +682,7 @@ fn render_piece_block(
     here: &Path,
     tree: &Path,
     vivac_missing: bool,
+    gitignore_missing: bool,
     settings_exists: bool,
     mcp_exists: bool,
     start_hook_state: &HookState,
@@ -693,6 +717,12 @@ fn render_piece_block(
         format!("already there, in {}", tree.display())
     };
     s.push_str(&piece_line(VIVAC_LABEL, &vivac_status));
+    if gitignore_missing {
+        s.push_str(&piece_line(
+            GITIGNORE_LABEL,
+            "create: keeps .vivac/ out of version control",
+        ));
+    }
 
     let settings_status = match (settings_exists, start_missing, stop_missing) {
         (_, false, false) => "already has both hooks",
@@ -792,9 +822,11 @@ const MIGRATE_PARAGRAPHS: &str = "\n  Nothing has been brought in from anywhere 
 const TREE_KEPT_PARAGRAPH: &str =
     "\n  The tree was already there, and setup changed nothing in it.\n";
 
-const FILES_PARAGRAPH: &str = "\n  These are plain files in this project: commit them if everyone who works\n  here uses vivac, and keep them out of version control if only you do.\n";
+const FILES_PARAGRAPH: &str = "\n  The hooks, the server and the skill are plain files in this project:\n  commit them if everyone who works here uses vivac, and keep them out of\n  version control if only you do. .vivac/ is never committed: it is this\n  machine's record, and a copy of it in every clone would diverge from the\n  others. Its own .gitignore keeps it out.\n";
 
 const UNDO_LINE: &str = "\n  Undo:  vivac setup claude-code --undo\n";
+
+const TRACKED_WARNING: &str = "\n  .vivac/events is tracked by git here. Every clone and worktree gets its\n  own copy of the log, and the copies diverge. Remove it from the index\n  (git rm -r --cached .vivac) and let .vivac/.gitignore keep it out.\n";
 
 fn unreadable_conflict(label: &str, line: usize, column: usize) -> String {
     format!(

@@ -26,6 +26,11 @@ pub const LOG: &str = "events";
 pub const CONFIG: &str = "config";
 pub const INDEX: &str = "index";
 
+/// `t594` §4.9: every `.vivac/` ignores itself. One line, `*`, which a git
+/// reads as "everything here, this file included", so no file of the
+/// user's is touched and a clone never carries a copy of the log.
+pub const GITIGNORE: &str = ".gitignore";
+
 /// Where the global store lives, read from the environment.
 ///
 /// `VIVAC_HOME` names the directory itself, the same shape as `CARGO_HOME`:
@@ -253,6 +258,10 @@ impl Store {
         write_config(root, &config)?;
         if !d.join(LOG).exists() {
             File::create(d.join(LOG))?;
+        }
+        let ignore = d.join(GITIGNORE);
+        if !ignore.exists() {
+            fs::write(&ignore, "*\n")?;
         }
         Ok(Store {
             root: root.to_path_buf(),

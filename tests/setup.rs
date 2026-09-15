@@ -578,6 +578,35 @@ fn help_names_setup_and_not_hooks() {
 }
 
 // ---------------------------------------------------------------------------
+// 23. `.vivac/.gitignore` (`t594` §4.9).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn setup_writes_the_gitignore_a_tree_from_before_lacks() {
+    let c = Sandbox::new_seeded("setup-gitignore");
+    std::fs::remove_file(c.0.join(".vivac").join(".gitignore")).unwrap();
+    let plan = c.ok(&["setup", "claude-code", "--dry-run"]);
+    assert!(
+        plan.lines().any(|l| {
+            let l = l.trim_start();
+            l.starts_with(".vivac/.gitignore")
+                && l.contains("create: keeps .vivac/ out of version control")
+        }),
+        "{plan}"
+    );
+    c.ok(&["setup", "claude-code", "--yes"]);
+    let g = std::fs::read_to_string(c.0.join(".vivac").join(".gitignore")).unwrap();
+    assert_eq!(g, "*\n");
+}
+
+#[test]
+fn setup_no_longer_says_to_commit_the_tree() {
+    let c = Sandbox::new_empty("setup-files");
+    let out = c.ok(&["setup", "claude-code", "--yes"]);
+    assert!(out.contains(".vivac/ is never committed"), "{out}");
+}
+
+// ---------------------------------------------------------------------------
 // Coordinator's review: C, D, E, F.
 // ---------------------------------------------------------------------------
 
@@ -1177,7 +1206,7 @@ fn written_part(out: &str) -> &str {
     &out[idx..]
 }
 
-const WRITTEN_MESSAGE: &str = "  Written.\n\n  Open a new Claude Code session in this folder. The brief arrives on its\n  own when it starts. If Claude Code asks whether to use the \"vivac\" server\n  from .mcp.json, say yes: it is what lets the agent write to the tree.\n\n  Nothing has been brought in from anywhere yet. To bring in what this\n  project already knows, from another memory system, the harness's own\n  memory, instruction files or its documents, ask the agent:\n\n      Use the vivac-migrate skill to bring everything this project knows\n      into vivac.\n\n  It shows you a plan before writing anything, checks what it wrote, and\n  offers to retire the other maps one at a time, only if you say yes.\n\n  Until then, another memory system you use keeps talking to the agent as\n  before, and may tell it to use that system first. That is expected: the\n  skill only reads from it.\n\n  These are plain files in this project: commit them if everyone who works\n  here uses vivac, and keep them out of version control if only you do.\n\n  Undo:  vivac setup claude-code --undo\n";
+const WRITTEN_MESSAGE: &str = "  Written.\n\n  Open a new Claude Code session in this folder. The brief arrives on its\n  own when it starts. If Claude Code asks whether to use the \"vivac\" server\n  from .mcp.json, say yes: it is what lets the agent write to the tree.\n\n  Nothing has been brought in from anywhere yet. To bring in what this\n  project already knows, from another memory system, the harness's own\n  memory, instruction files or its documents, ask the agent:\n\n      Use the vivac-migrate skill to bring everything this project knows\n      into vivac.\n\n  It shows you a plan before writing anything, checks what it wrote, and\n  offers to retire the other maps one at a time, only if you say yes.\n\n  Until then, another memory system you use keeps talking to the agent as\n  before, and may tell it to use that system first. That is expected: the\n  skill only reads from it.\n\n  The hooks, the server and the skill are plain files in this project:\n  commit them if everyone who works here uses vivac, and keep them out of\n  version control if only you do. .vivac/ is never committed: it is this\n  machine's record, and a copy of it in every clone would diverge from the\n  others. Its own .gitignore keeps it out.\n\n  Undo:  vivac setup claude-code --undo\n";
 
 #[test]
 fn a_fresh_setup_prints_the_written_message_verbatim() {
@@ -1188,18 +1217,18 @@ fn a_fresh_setup_prints_the_written_message_verbatim() {
 
 /// §15.5 (b): a folder of its own under a tree that was already there, which
 /// is what step 6 of the skill offers in a workspace.
-const NEW_FOLDER_MESSAGE: &str = "  Written.\n\n  Open a new Claude Code session in this folder. The brief arrives on its\n  own when it starts. If Claude Code asks whether to use the \"vivac\" server\n  from .mcp.json, say yes: it is what lets the agent write to the tree.\n\n  The tree was already there, and setup changed nothing in it.\n\n  These are plain files in this project: commit them if everyone who works\n  here uses vivac, and keep them out of version control if only you do.\n\n  Undo:  vivac setup claude-code --undo\n";
+const NEW_FOLDER_MESSAGE: &str = "  Written.\n\n  Open a new Claude Code session in this folder. The brief arrives on its\n  own when it starts. If Claude Code asks whether to use the \"vivac\" server\n  from .mcp.json, say yes: it is what lets the agent write to the tree.\n\n  The tree was already there, and setup changed nothing in it.\n\n  The hooks, the server and the skill are plain files in this project:\n  commit them if everyone who works here uses vivac, and keep them out of\n  version control if only you do. .vivac/ is never committed: it is this\n  machine's record, and a copy of it in every clone would diverge from the\n  others. Its own .gitignore keeps it out.\n\n  Undo:  vivac setup claude-code --undo\n";
 
 /// §15.5 (c): only the skill, which is what an upgrade writes.
-const SKILL_REPLACED_MESSAGE: &str = "  Written.\n\n  The vivac-migrate skill is now the one this version of vivac ships.\n  Sessions opened from now on use it.\n\n  The tree was already there, and setup changed nothing in it.\n\n  These are plain files in this project: commit them if everyone who works\n  here uses vivac, and keep them out of version control if only you do.\n";
+const SKILL_REPLACED_MESSAGE: &str = "  Written.\n\n  The vivac-migrate skill is now the one this version of vivac ships.\n  Sessions opened from now on use it.\n\n  The tree was already there, and setup changed nothing in it.\n\n  The hooks, the server and the skill are plain files in this project:\n  commit them if everyone who works here uses vivac, and keep them out of\n  version control if only you do. .vivac/ is never committed: it is this\n  machine's record, and a copy of it in every clone would diverge from the\n  others. Its own .gitignore keeps it out.\n";
 
 /// §15.5 (d): only the server. `--undo` would take the hooks and the skill
 /// as well, so it is not offered.
-const SERVER_ADDED_MESSAGE: &str = "  Written.\n\n  Open a new Claude Code session in this folder. The brief arrives on its\n  own when it starts. If Claude Code asks whether to use the \"vivac\" server\n  from .mcp.json, say yes: it is what lets the agent write to the tree.\n\n  The tree was already there, and setup changed nothing in it.\n\n  These are plain files in this project: commit them if everyone who works\n  here uses vivac, and keep them out of version control if only you do.\n";
+const SERVER_ADDED_MESSAGE: &str = "  Written.\n\n  Open a new Claude Code session in this folder. The brief arrives on its\n  own when it starts. If Claude Code asks whether to use the \"vivac\" server\n  from .mcp.json, say yes: it is what lets the agent write to the tree.\n\n  The tree was already there, and setup changed nothing in it.\n\n  The hooks, the server and the skill are plain files in this project:\n  commit them if everyone who works here uses vivac, and keep them out of\n  version control if only you do. .vivac/ is never committed: it is this\n  machine's record, and a copy of it in every clone would diverge from the\n  others. Its own .gitignore keeps it out.\n";
 
 /// §15.5 (e): only the tree. Nothing the harness reads changed, so there is
 /// no session to open and nothing to undo.
-const TREE_PLANTED_MESSAGE: &str = "  Written.\n\n  Nothing has been brought in from anywhere yet. To bring in what this\n  project already knows, from another memory system, the harness's own\n  memory, instruction files or its documents, ask the agent:\n\n      Use the vivac-migrate skill to bring everything this project knows\n      into vivac.\n\n  It shows you a plan before writing anything, checks what it wrote, and\n  offers to retire the other maps one at a time, only if you say yes.\n\n  Until then, another memory system you use keeps talking to the agent as\n  before, and may tell it to use that system first. That is expected: the\n  skill only reads from it.\n\n  These are plain files in this project: commit them if everyone who works\n  here uses vivac, and keep them out of version control if only you do.\n";
+const TREE_PLANTED_MESSAGE: &str = "  Written.\n\n  Nothing has been brought in from anywhere yet. To bring in what this\n  project already knows, from another memory system, the harness's own\n  memory, instruction files or its documents, ask the agent:\n\n      Use the vivac-migrate skill to bring everything this project knows\n      into vivac.\n\n  It shows you a plan before writing anything, checks what it wrote, and\n  offers to retire the other maps one at a time, only if you say yes.\n\n  Until then, another memory system you use keeps talking to the agent as\n  before, and may tell it to use that system first. That is expected: the\n  skill only reads from it.\n\n  The hooks, the server and the skill are plain files in this project:\n  commit them if everyone who works here uses vivac, and keep them out of\n  version control if only you do. .vivac/ is never committed: it is this\n  machine's record, and a copy of it in every clone would diverge from the\n  others. Its own .gitignore keeps it out.\n";
 
 #[test]
 fn a_new_folder_under_a_tree_is_told_the_tree_was_already_there() {

@@ -283,6 +283,7 @@ corner
 correctly
 corrupt
 cors
+could
 count
 counted
 counts
@@ -536,6 +537,7 @@ getrandom
 gets
 git
 gitdir
+gitignore
 given
 gives
 glob
@@ -692,6 +694,7 @@ kind
 know
 known
 label
+lacks
 landing
 lands
 lane
@@ -1108,6 +1111,7 @@ replace
 replaceable
 replaced
 reply
+repo
 report
 reported
 reports
@@ -1282,6 +1286,7 @@ spent
 spine
 split
 src
+st
 stable
 stack
 stale
@@ -1409,6 +1414,7 @@ touching
 toward
 trace
 tracked
+tracks
 trailing
 trait
 transcript

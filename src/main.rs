@@ -513,7 +513,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
     // `check` is the only one with an exit code of its own: it separates
     // store corruption from a finding about the project.
     if cmd == "check" {
-        return check::check(&ctx.tree, a);
+        return check::check(&ctx.tree, &ctx.store.root, a);
     }
 
     // Words each command takes of its own. Anything past that is refused for
