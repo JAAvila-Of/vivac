@@ -1170,6 +1170,28 @@ mod resident_write_tests {
         cleanup(&root);
     }
 
+    /// `f590`: a write stamped the log and the resident tree from two reads
+    /// of the clock, so the two came out a second apart whenever the second
+    /// turned in between, which CI saw once in a while. With a clock that
+    /// turns on every read it would show every time.
+    #[test]
+    fn a_clock_that_turns_on_every_read_leaves_the_resident_tree_equal_to_a_fresh_fold() {
+        let _clock = crate::clock::Ticking::start(1_757_000_000);
+        let (root, mut project) = temp_project("ticking");
+        call_tool(
+            &mut project,
+            "vivac_push",
+            json!({"title": "Ship it", "why": "because"}),
+        );
+        call_tool(
+            &mut project,
+            "vivac_note",
+            json!({"note": "the rollback plan is untested"}),
+        );
+        assert_resident_matches_fresh_fold(&root, &mut project);
+        cleanup(&root);
+    }
+
     #[test]
     fn note_leaves_the_resident_tree_equal_to_a_fresh_fold() {
         let (root, mut project) = temp_project("note");
