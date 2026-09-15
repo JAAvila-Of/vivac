@@ -974,9 +974,11 @@ fn every_earlier_release_skill_is_replaced_by_the_new_one() {
     fresh.ok(&["setup", "claude-code", "--yes"]);
     let expected = read(&skill_path(&fresh));
 
+    // An upgrade: setup ran with that release, so everything else is
+    // already there and only the skill is behind.
     for (release, old) in EARLIER_RELEASE_SKILLS {
         let c = Sandbox::new_empty(&format!("setup-skill-{release}-upgrade"));
-        std::fs::create_dir_all(skill_path(&c).parent().unwrap()).unwrap();
+        c.ok(&["setup", "claude-code", "--yes"]);
         std::fs::write(skill_path(&c), old).unwrap();
 
         let (out, code) = c.run(&["setup", "claude-code", "--yes"]);
@@ -986,6 +988,7 @@ fn every_earlier_release_skill_is_replaced_by_the_new_one() {
             "{release}: {out}"
         );
         assert_eq!(read(&skill_path(&c)), expected, "{release}");
+        assert_eq!(written_part(&out), SKILL_REPLACED_MESSAGE, "{release}");
     }
 }
 
@@ -1162,9 +1165,16 @@ fn undo_in_the_home_folder_removes_only_the_hooks_setup_wrote() {
 }
 
 // ---------------------------------------------------------------------------
-// t579 §6 and §14.3: the written message, golden, from "  Written." to
-// the end.
+// t579 §6, §14.3 and §15.5: the written message, golden, from "  Written."
+// to the end. It only says what is true of the run that printed it.
 // ---------------------------------------------------------------------------
+
+fn written_part(out: &str) -> &str {
+    let idx = out
+        .find("  Written.")
+        .unwrap_or_else(|| panic!("no \"Written.\" in the output:\n{out}"));
+    &out[idx..]
+}
 
 const WRITTEN_MESSAGE: &str = "  Written.\n\n  Open a new Claude Code session in this folder. The brief arrives on its\n  own when it starts. If Claude Code asks whether to use the \"vivac\" server\n  from .mcp.json, say yes: it is what lets the agent write to the tree.\n\n  Nothing has been brought in from anywhere yet. To bring in what this\n  project already knows, from another memory system, the harness's own\n  memory, instruction files or its documents, ask the agent:\n\n      Use the vivac-migrate skill to bring everything this project knows\n      into vivac.\n\n  It shows you a plan before writing anything, checks what it wrote, and\n  offers to retire the other maps one at a time, only if you say yes.\n\n  Until then, another memory system you use keeps talking to the agent as\n  before, and may tell it to use that system first. That is expected: the\n  skill only reads from it.\n\n  These are plain files in this project: commit them if everyone who works\n  here uses vivac, and keep them out of version control if only you do.\n\n  Undo:  vivac setup claude-code --undo\n";
 
@@ -1172,8 +1182,48 @@ const WRITTEN_MESSAGE: &str = "  Written.\n\n  Open a new Claude Code session in
 fn a_fresh_setup_prints_the_written_message_verbatim() {
     let c = Sandbox::new_empty("setup-written-golden");
     let out = c.ok(&["setup", "claude-code", "--yes"]);
-    let idx = out
-        .find("  Written.")
-        .unwrap_or_else(|| panic!("no \"Written.\" in the output:\n{out}"));
-    assert_eq!(&out[idx..], WRITTEN_MESSAGE);
+    assert_eq!(written_part(&out), WRITTEN_MESSAGE);
+}
+
+/// §15.5 (b): a folder of its own under a tree that was already there, which
+/// is what step 6 of the skill offers in a workspace.
+const NEW_FOLDER_MESSAGE: &str = "  Written.\n\n  Open a new Claude Code session in this folder. The brief arrives on its\n  own when it starts. If Claude Code asks whether to use the \"vivac\" server\n  from .mcp.json, say yes: it is what lets the agent write to the tree.\n\n  The tree was already there, and setup changed nothing in it.\n\n  These are plain files in this project: commit them if everyone who works\n  here uses vivac, and keep them out of version control if only you do.\n\n  Undo:  vivac setup claude-code --undo\n";
+
+/// §15.5 (c): only the skill, which is what an upgrade writes.
+const SKILL_REPLACED_MESSAGE: &str = "  Written.\n\n  The vivac-migrate skill is now the one this version of vivac ships.\n  Sessions opened from now on use it.\n\n  The tree was already there, and setup changed nothing in it.\n\n  These are plain files in this project: commit them if everyone who works\n  here uses vivac, and keep them out of version control if only you do.\n";
+
+/// §15.5 (d): only the server. `--undo` would take the hooks and the skill
+/// as well, so it is not offered.
+const SERVER_ADDED_MESSAGE: &str = "  Written.\n\n  Open a new Claude Code session in this folder. The brief arrives on its\n  own when it starts. If Claude Code asks whether to use the \"vivac\" server\n  from .mcp.json, say yes: it is what lets the agent write to the tree.\n\n  The tree was already there, and setup changed nothing in it.\n\n  These are plain files in this project: commit them if everyone who works\n  here uses vivac, and keep them out of version control if only you do.\n";
+
+/// §15.5 (e): only the tree. Nothing the harness reads changed, so there is
+/// no session to open and nothing to undo.
+const TREE_PLANTED_MESSAGE: &str = "  Written.\n\n  Nothing has been brought in from anywhere yet. To bring in what this\n  project already knows, from another memory system, the harness's own\n  memory, instruction files or its documents, ask the agent:\n\n      Use the vivac-migrate skill to bring everything this project knows\n      into vivac.\n\n  It shows you a plan before writing anything, checks what it wrote, and\n  offers to retire the other maps one at a time, only if you say yes.\n\n  Until then, another memory system you use keeps talking to the agent as\n  before, and may tell it to use that system first. That is expected: the\n  skill only reads from it.\n\n  These are plain files in this project: commit them if everyone who works\n  here uses vivac, and keep them out of version control if only you do.\n";
+
+#[test]
+fn a_new_folder_under_a_tree_is_told_the_tree_was_already_there() {
+    let c = Sandbox::new_seeded("setup-written-new-folder");
+    let sub = c.0.join("workdir");
+    std::fs::create_dir_all(&sub).unwrap();
+    let (out, code) = run_in(&sub, c.global_home(), &["setup", "claude-code", "--yes"]);
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(written_part(&out), NEW_FOLDER_MESSAGE);
+}
+
+#[test]
+fn a_run_that_adds_only_the_server_offers_no_undo() {
+    let c = Sandbox::new_empty("setup-written-server-only");
+    c.ok(&["setup", "claude-code", "--yes"]);
+    std::fs::remove_file(c.0.join(".mcp.json")).unwrap();
+    let out = c.ok(&["setup", "claude-code", "--yes"]);
+    assert_eq!(written_part(&out), SERVER_ADDED_MESSAGE);
+}
+
+#[test]
+fn a_run_that_plants_only_the_tree_invites_a_migration() {
+    let c = Sandbox::new_empty("setup-written-tree-only");
+    c.ok(&["setup", "claude-code", "--yes"]);
+    std::fs::remove_dir_all(c.0.join(".vivac")).unwrap();
+    let out = c.ok(&["setup", "claude-code", "--yes"]);
+    assert_eq!(written_part(&out), TREE_PLANTED_MESSAGE);
 }

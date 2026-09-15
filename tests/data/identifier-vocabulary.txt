@@ -259,6 +259,7 @@ confirms
 conflict
 conflicts
 connect
+connection
 const
 constant
 constraint
@@ -657,6 +658,7 @@ invalid
 invariant
 invariants
 invents
+invites
 io
 ip
 is
@@ -782,6 +784,8 @@ metadata
 method
 mid
 middle
+migrate
+migration
 millis
 min
 minus
@@ -920,6 +924,7 @@ pairs
 panic
 panics
 paragraph
+paragraphs
 params
 parent
 parents
@@ -929,6 +934,7 @@ parked
 parks
 parse
 parsed
+part
 partial
 partition
 parts
@@ -1434,6 +1440,7 @@ unclaimed
 undeclared
 under
 undo
+undoable
 undone
 unfold
 ungoverned

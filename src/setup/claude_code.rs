@@ -641,7 +641,16 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         }
     }
 
-    print!("\n{WRITTEN_TEXT}");
+    let written = Written {
+        connection: start_missing || stop_missing || mcp_missing,
+        skill: skill_missing_or_replaceable,
+        planted: vivac_missing,
+        undoable: start_missing
+            && stop_missing
+            && mcp_missing
+            && matches!(skill_file_state, SkillState::Missing),
+    };
+    print!("\n{}", written_text(&written));
     Ok(0)
 }
 
@@ -740,7 +749,52 @@ const TRAILING_PARAGRAPH: &str = "  The hooks run a command in every session, an
 
 const NO_TERMINAL_TEXT: &str = "  setup asks before writing, and there is no terminal here to ask.\n  See what it would write:  vivac setup claude-code --dry-run\n  Then write it:            vivac setup claude-code --yes";
 
-const WRITTEN_TEXT: &str = "  Written.\n\n  Open a new Claude Code session in this folder. The brief arrives on its\n  own when it starts. If Claude Code asks whether to use the \"vivac\" server\n  from .mcp.json, say yes: it is what lets the agent write to the tree.\n\n  Nothing has been brought in from anywhere yet. To bring in what this\n  project already knows, from another memory system, the harness's own\n  memory, instruction files or its documents, ask the agent:\n\n      Use the vivac-migrate skill to bring everything this project knows\n      into vivac.\n\n  It shows you a plan before writing anything, checks what it wrote, and\n  offers to retire the other maps one at a time, only if you say yes.\n\n  Until then, another memory system you use keeps talking to the agent as\n  before, and may tell it to use that system first. That is expected: the\n  skill only reads from it.\n\n  These are plain files in this project: commit them if everyone who works\n  here uses vivac, and keep them out of version control if only you do.\n\n  Undo:  vivac setup claude-code --undo\n";
+/// What this run wrote, which decides how it ends (`t579` §15.5): a
+/// paragraph is only printed when it is true of this run.
+struct Written {
+    /// A hook or the server, which only a new session picks up.
+    connection: bool,
+    /// The skill, where it was missing or an earlier release's copy.
+    skill: bool,
+    /// The tree, planted by this run rather than found.
+    planted: bool,
+    /// All four of setup's pieces, the skill among them missing before:
+    /// `--undo` removes all four, so only then does it take back exactly
+    /// this run.
+    undoable: bool,
+}
+
+fn written_text(w: &Written) -> String {
+    let mut s = String::from("  Written.\n");
+    if w.connection {
+        s.push_str(SESSION_PARAGRAPH);
+    } else if w.skill {
+        s.push_str(SKILL_PARAGRAPH);
+    }
+    s.push_str(if w.planted {
+        MIGRATE_PARAGRAPHS
+    } else {
+        TREE_KEPT_PARAGRAPH
+    });
+    s.push_str(FILES_PARAGRAPH);
+    if w.undoable {
+        s.push_str(UNDO_LINE);
+    }
+    s
+}
+
+const SESSION_PARAGRAPH: &str = "\n  Open a new Claude Code session in this folder. The brief arrives on its\n  own when it starts. If Claude Code asks whether to use the \"vivac\" server\n  from .mcp.json, say yes: it is what lets the agent write to the tree.\n";
+
+const SKILL_PARAGRAPH: &str = "\n  The vivac-migrate skill is now the one this version of vivac ships.\n  Sessions opened from now on use it.\n";
+
+const MIGRATE_PARAGRAPHS: &str = "\n  Nothing has been brought in from anywhere yet. To bring in what this\n  project already knows, from another memory system, the harness's own\n  memory, instruction files or its documents, ask the agent:\n\n      Use the vivac-migrate skill to bring everything this project knows\n      into vivac.\n\n  It shows you a plan before writing anything, checks what it wrote, and\n  offers to retire the other maps one at a time, only if you say yes.\n\n  Until then, another memory system you use keeps talking to the agent as\n  before, and may tell it to use that system first. That is expected: the\n  skill only reads from it.\n";
+
+const TREE_KEPT_PARAGRAPH: &str =
+    "\n  The tree was already there, and setup changed nothing in it.\n";
+
+const FILES_PARAGRAPH: &str = "\n  These are plain files in this project: commit them if everyone who works\n  here uses vivac, and keep them out of version control if only you do.\n";
+
+const UNDO_LINE: &str = "\n  Undo:  vivac setup claude-code --undo\n";
 
 fn unreadable_conflict(label: &str, line: usize, column: usize) -> String {
     format!(
