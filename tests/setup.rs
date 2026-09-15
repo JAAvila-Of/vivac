@@ -962,15 +962,18 @@ fn setup_refuses_when_the_trees_own_vivac_is_the_global_store() {
 /// actually looked like.
 const OLD_RELEASE_SKILL: &str = include_str!("data/skill-v0.10.0.md");
 
-#[test]
-fn an_old_release_skill_is_replaced_by_the_new_one() {
-    let fresh = Sandbox::new_empty("setup-skill-old-release-fresh");
+/// The same for v0.11.0, built from the `v0.11.0` tag the same way and
+/// byte for byte the copy that release wrote into a real project.
+const PREVIOUS_RELEASE_SKILL: &str = include_str!("data/skill-v0.11.0.md");
+
+fn an_earlier_release_skill_is_replaced(label: &str, old: &str) {
+    let fresh = Sandbox::new_empty(&format!("setup-skill-{label}-fresh"));
     fresh.ok(&["setup", "claude-code", "--yes"]);
     let expected = read(&skill_path(&fresh));
 
-    let c = Sandbox::new_empty("setup-skill-old-release-upgrade");
+    let c = Sandbox::new_empty(&format!("setup-skill-{label}-upgrade"));
     std::fs::create_dir_all(skill_path(&c).parent().unwrap()).unwrap();
-    std::fs::write(skill_path(&c), OLD_RELEASE_SKILL).unwrap();
+    std::fs::write(skill_path(&c), old).unwrap();
 
     let (out, code) = c.run(&["setup", "claude-code", "--yes"]);
     assert_eq!(code, 0, "{out}");
@@ -981,6 +984,16 @@ fn an_old_release_skill_is_replaced_by_the_new_one() {
     assert_eq!(read(&skill_path(&c)), expected);
 }
 
+#[test]
+fn an_old_release_skill_is_replaced_by_the_new_one() {
+    an_earlier_release_skill_is_replaced("old-release", OLD_RELEASE_SKILL);
+}
+
+#[test]
+fn the_previous_release_skill_is_replaced_by_the_new_one() {
+    an_earlier_release_skill_is_replaced("previous-release", PREVIOUS_RELEASE_SKILL);
+}
+
 // ---------------------------------------------------------------------------
 // t579 §5.2/§9: the skill only teaches commands that exist. Every bare
 // "vivac <word>" and every "vivac_<word>" in its text is either a verb
@@ -989,10 +1002,11 @@ fn an_old_release_skill_is_replaced_by_the_new_one() {
 
 /// Words that follow a bare "vivac" in the skill's text without naming a
 /// command. Each entry is a real sentence read out of the text, not a
-/// guess: "vivac never imports anything by itself" and "... is another
-/// map." Widening this list to let a typo pass is the wrong fix; renaming
-/// or rewriting the sentence is the right one.
-const NOT_A_COMMAND: &[&str] = &["never", "is"];
+/// guess: "vivac never imports anything by itself", "... is another
+/// map." and "offer to set vivac up there". Widening this list to let a
+/// typo pass is the wrong fix; renaming or rewriting the sentence is the
+/// right one.
+const NOT_A_COMMAND: &[&str] = &["never", "is", "up"];
 
 /// Every verb `--help` lists on its own line, four spaces in.
 fn help_commands(help: &str) -> std::collections::BTreeSet<String> {

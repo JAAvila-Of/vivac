@@ -1,3 +1,8 @@
+---
+name: vivac-migrate
+description: Bring everything a project already knows into the vivac tree, from another memory system, the harness's own memory, instruction files for any agent, decision records and internal documents; check it, and retire the other maps with the person's yes. Use when asked to migrate, import or move memories, notes, rules, decisions or documentation into vivac, or to bring what a project knows into it.
+---
+<!-- written by vivac setup; fingerprint 9c94fb0b6caffd64; vivac setup claude-code --undo removes it while the text is unchanged -->
 
 # Bringing what a project knows into vivac
 
@@ -171,16 +176,6 @@ it, and in a form that can be undone:
 - Everything else in this project's instruction files stays as it is. Their
   rules still reach every session from the file, so list the ones the tree now
   repeats.
-
-In Claude Code, the plugin setting and the harness's own memory belong to the
-folder a session is opened in: it reads its settings only from that folder,
-and keeps a separate memory for each repository. If the person may open
-Claude Code in another folder of this project, like a repository inside it
-with its own .claude folder, or one a memory system files memories under,
-ask them. In each folder they do, offer those steps there as well, and offer
-to set vivac up there, so that sessions opened there get the brief: show them
-the plan that vivac setup claude-code --dry-run prints in that folder, and
-run vivac setup claude-code --yes there only after they say yes.
 
 Never delete another system's data and never uninstall it: whether it keeps
 running for other projects is the person's call.
