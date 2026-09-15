@@ -110,7 +110,7 @@ const TAG_LIMIT: usize = 16;
 
 impl Fence {
     fn sample(&self) -> String {
-        let marker: String = std::iter::repeat(self.marker).take(3).collect();
+        let marker: String = std::iter::repeat_n(self.marker, 3).collect();
         format!("{marker}{}, {} lines", self.tag, self.lines)
     }
 }

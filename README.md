@@ -711,7 +711,7 @@ produced it:
 gh attestation verify vivac-x86_64-unknown-linux-musl.tar.gz --repo JAAvila-Of/vivac
 ```
 
-With a Rust toolchain:
+With a Rust toolchain, 1.89 or newer:
 
 ```sh
 cargo install vivac
