@@ -377,14 +377,19 @@ impl Store {
     /// `body` reaches disk: the config locks in place, first, so a process
     /// that dies between the two leaves an unlocked config over a tree with
     /// no pillar and no rule, which is harmless.
+    ///
+    /// Returns the events as written, so a caller that keeps the tree in
+    /// memory applies exactly those and never stamps them a second time
+    /// (`f590`).
     pub fn append(
         &mut self,
         body: Vec<crate::event::Body>,
         from_seq: u64,
         tree_already_governed: bool,
-    ) -> std::io::Result<()> {
+    ) -> std::io::Result<Vec<crate::event::Event>> {
         self.lock_if_needed(&body, tree_already_governed)?;
         let mut buf = String::with_capacity(256 * body.len());
+        let mut written = Vec::with_capacity(body.len());
         for (i, c) in body.into_iter().enumerate() {
             let e = crate::event::Event {
                 seq: from_seq + i as u64 + 1,
@@ -396,12 +401,14 @@ impl Store {
             };
             buf.push_str(&serde_json::to_string(&e).map_err(std::io::Error::other)?);
             buf.push('\n');
+            written.push(e);
         }
         let mut f = OpenOptions::new()
             .create(true)
             .append(true)
             .open(self.log())?;
-        f.write_all(buf.as_bytes())
+        f.write_all(buf.as_bytes())?;
+        Ok(written)
     }
 
     /// `d444`: locks the config in place the moment this tree gains its

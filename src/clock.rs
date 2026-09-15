@@ -14,9 +14,52 @@ pub fn unix_millis() -> u64 {
         .unwrap_or(0)
 }
 
+#[cfg(not(test))]
+fn now_secs() -> u64 {
+    unix_millis() / 1000
+}
+
+#[cfg(test)]
+fn now_secs() -> u64 {
+    TICKING.with(|t| match t.get() {
+        Some(secs) => {
+            t.set(Some(secs + 1));
+            secs
+        }
+        None => unix_millis() / 1000,
+    })
+}
+
+#[cfg(test)]
+thread_local! {
+    static TICKING: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+}
+
+/// `f590`: while one of these is alive, every event stamp read on this
+/// thread is one second later than the one before, starting at `secs` since
+/// the epoch. A write that reads the clock twice then shows every time,
+/// instead of only when the second happens to turn between the two reads.
+#[cfg(test)]
+pub struct Ticking;
+
+#[cfg(test)]
+impl Ticking {
+    pub fn start(secs: u64) -> Ticking {
+        TICKING.with(|t| t.set(Some(secs)));
+        Ticking
+    }
+}
+
+#[cfg(test)]
+impl Drop for Ticking {
+    fn drop(&mut self) {
+        TICKING.with(|t| t.set(None));
+    }
+}
+
 /// Instant in UTC, RFC 3339 with seconds. This is what goes in the event.
 pub fn now_rfc3339() -> String {
-    let secs = unix_millis() / 1000;
+    let secs = now_secs();
     let (y, m, d) = civil_from_days((secs / 86_400) as i64);
     let rem = secs % 86_400;
     format!(
