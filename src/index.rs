@@ -376,7 +376,7 @@ fn persist(store: &Store, tree: &Tree, fold_end_offset: u64, last: Option<&LastE
     }
     let ids_fit = tree.nodes_sorted().iter().all(|n| is_ulid_shaped(&n.id))
         && tree.vivacs.iter().all(|v| is_ulid_shaped(&v.id))
-        && last.map_or(true, |l| is_ulid_shaped(&l.id));
+        && last.is_none_or(|l| is_ulid_shaped(&l.id));
     if !ids_fit {
         return;
     }

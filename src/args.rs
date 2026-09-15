@@ -259,7 +259,7 @@ mod tests {
                     pending.push(path);
                     continue;
                 }
-                if !path.extension().is_some_and(|x| x == "rs") {
+                if path.extension().is_none_or(|x| x != "rs") {
                     continue;
                 }
                 let src = std::fs::read_to_string(&path).unwrap();
