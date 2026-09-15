@@ -1571,3 +1571,86 @@ fn save_with_no_next_carries_the_warning_in_its_text() {
     assert!(text.contains("no --next"), "{text}");
     assert_eq!(text, expected);
 }
+
+/// `d598` over MCP: a server and a CLI writing at the same time never
+/// share a number, and the server's tree still agrees with a fresh fold.
+#[test]
+fn a_cli_writer_and_the_server_writing_at_once_never_share_a_number() {
+    let c = seeded("both-at-once");
+    let mut s = hello(&c);
+    let dir = c.0.clone();
+    let home = c.global_home().to_path_buf();
+    let cli = std::thread::spawn(move || {
+        for i in 0..30 {
+            let o = Command::new(BIN)
+                .current_dir(&dir)
+                .env("VIVAC_HOME", &home)
+                .args([
+                    "add",
+                    &format!("From the CLI {i}"),
+                    "--root",
+                    "--why",
+                    "concurrent",
+                ])
+                .output()
+                .unwrap();
+            assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        }
+    });
+    // The server keeps writing for as long as the CLI does: thirty quick
+    // writes finish before the second CLI process has even started, and a
+    // race that never overlaps proves nothing.
+    let mut i = 0;
+    while i < 30 || (!cli.is_finished() && i < 5_000) {
+        let r = s.ask(&format!(
+            r#"{{"jsonrpc":"2.0","id":{},"method":"tools/call","params":{{"name":"vivac_add","arguments":{{"title":"From MCP {i}","why":"concurrent","root":true}}}}}}"#,
+            100 + i
+        ));
+        assert_eq!(r["result"]["isError"], false, "{r}");
+        i += 1;
+    }
+    cli.join().unwrap();
+
+    let (out, code) = c.run(&["check"]);
+    assert_eq!(code, 0, "{out}");
+    let mcp_open: Value = serde_json::from_str(&text_of(&s.ask(
+        r#"{"jsonrpc":"2.0","id":1000000,"method":"tools/call","params":{"name":"vivac_open","arguments":{}}}"#,
+    )))
+    .unwrap();
+    let cli_open: Value = serde_json::from_str(&c.ok(&["open", "--json"])).unwrap();
+    assert_eq!(
+        mcp_open, cli_open,
+        "the server's tree disagrees with a fresh fold"
+    );
+}
+
+/// `d598` over MCP, without leaving it to a race: while another process
+/// holds the tree's lock the server waits, gives up after five seconds,
+/// and writes nothing.
+#[test]
+fn the_server_waits_for_a_held_lock_and_writes_nothing() {
+    let c = seeded("server-held-lock");
+    let mut s = hello(&c);
+    let before = c.log();
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(c.0.join(".vivac").join("lock"))
+        .unwrap();
+    lock.lock().unwrap();
+    let started = std::time::Instant::now();
+    let r = s.ask(
+        r#"{"jsonrpc":"2.0","id":300,"method":"tools/call","params":{"name":"vivac_add","arguments":{"title":"Blocked","why":"the lock is held","root":true}}}"#,
+    );
+    assert_eq!(r["result"]["isError"], true, "{r}");
+    assert!(text_of(&r).contains("held this tree for 5 seconds"), "{r}");
+    assert!(started.elapsed() >= std::time::Duration::from_secs(5));
+    assert_eq!(
+        c.log(),
+        before,
+        "the server wrote while another process held the lock"
+    );
+    lock.unlock().unwrap();
+}

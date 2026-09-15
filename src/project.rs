@@ -115,10 +115,16 @@ impl Project {
     /// fingerprint is taken again so the *next* call, read or write, does
     /// not pay to re-fold something this one already applied in memory --
     /// that second, avoidable fold was the actual cost `t192` measured.
+    ///
+    /// `d598`: held from before the refresh until after the fingerprint, so
+    /// no other writer can land between what this server folded and what it
+    /// appends. The window it closes is `f143`: the staleness check ran
+    /// before the write, and nothing kept it true until the append.
     pub fn write<T>(
         &mut self,
         f: impl FnOnce(&mut ops::Ctx) -> Result<T, Failure>,
     ) -> Result<T, Failure> {
+        let _lock = self.ctx.store.lock_for_write()?;
         self.refresh_if_stale()?;
         let result = f(&mut self.ctx);
         self.seen = store::fingerprint(&self.ctx.store.log());
