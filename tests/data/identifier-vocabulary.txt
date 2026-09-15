@@ -164,6 +164,7 @@ budget
 buf
 build
 built
+busy
 but
 bv
 by
@@ -318,6 +319,7 @@ day
 days
 de
 dead
+deadline
 debug
 dec
 decide
@@ -358,6 +360,7 @@ detect
 detected
 determinism
 deterministic
+died
 diff
 difference
 different
@@ -399,6 +402,8 @@ echoes
 edges
 edit
 edited
+eight
+elapsed
 element
 else
 email
@@ -443,6 +448,7 @@ exact
 exactly
 exclusive
 excuse
+exe
 exist
 existing
 exists
@@ -591,6 +597,7 @@ height
 held
 hello
 help
+helper
 here
 heuristic
 hex
@@ -604,6 +611,7 @@ hints
 hit
 hits
 hold
+holder
 hollow
 home
 hook
@@ -1063,6 +1071,7 @@ reconcile
 record
 recorded
 records
+recreates
 recv
 redact
 redaction
@@ -1089,6 +1098,7 @@ rejects
 rel
 relaxed
 release
+released
 rem
 remaining
 remembers
@@ -1187,6 +1197,7 @@ search
 searchable
 searched
 second
+seconds
 secret
 secs
 section
@@ -1205,6 +1216,7 @@ sentence
 separator
 separators
 seq
+seqs
 sequence
 ser
 serde
@@ -1283,6 +1295,7 @@ spec
 spelled
 spellings
 spent
+spin
 spine
 split
 src
@@ -1464,6 +1477,7 @@ unique
 unit
 unix
 unknown
+unlock
 unlocked
 unreachable
 unreadable
@@ -1525,7 +1539,9 @@ vocabulary
 vowels
 vv
 wait
+waited
 waiting
+waits
 walk
 walks
 want
@@ -1570,6 +1586,7 @@ wraps
 write
 writeln
 writer
+writers
 writes
 writing
 written
@@ -1577,6 +1594,7 @@ wrong
 wrote
 yes
 yet
+yield
 yoe
 you
 your

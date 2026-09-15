@@ -24,6 +24,10 @@ pub enum Failure {
     /// code -- the store is the thing this process cannot make sense of,
     /// same as any other log it fails to read.
     NewerVivac(String),
+    /// Another process held the tree's write lock past the deadline
+    /// (`d598`). Shares `Io`'s exit code: the store is what this process
+    /// could not get to.
+    Busy(String),
 }
 
 pub type R = Result<(), Failure>;
@@ -35,14 +39,16 @@ impl Failure {
             Failure::Usage(_) => 2,
             Failure::Redaction(_) => 3,
             Failure::NoStore => 4,
-            Failure::Io(_) | Failure::NewerVivac(_) => 5,
+            Failure::Io(_) | Failure::NewerVivac(_) | Failure::Busy(_) => 5,
         }
     }
 
     pub fn print_to_stderr(&self) {
         eprintln!();
         match self {
-            Failure::Model(m) | Failure::Usage(m) | Failure::NewerVivac(m) => eprintln!("{m}"),
+            Failure::Model(m) | Failure::Usage(m) | Failure::NewerVivac(m) | Failure::Busy(m) => {
+                eprintln!("{m}")
+            }
             Failure::Redaction(h) => eprintln!("{h}"),
             Failure::NoStore => {
                 eprintln!("  No .vivac/ here or further up.");
@@ -62,7 +68,9 @@ impl Failure {
     /// refusal it cannot act on. Two renderings of the same data, on purpose.
     pub fn message(&self) -> String {
         match self {
-            Failure::Model(m) | Failure::Usage(m) | Failure::NewerVivac(m) => m.trim().to_string(),
+            Failure::Model(m) | Failure::Usage(m) | Failure::NewerVivac(m) | Failure::Busy(m) => {
+                m.trim().to_string()
+            }
             Failure::Redaction(h) => h.to_string(),
             Failure::NoStore => "No .vivac/ here or further up. Plant one: vivac init".into(),
             Failure::Io(e) => format!("Input/output error: {e}"),
@@ -75,6 +83,15 @@ impl Failure {
 
     pub fn newer_vivac(m: impl Into<String>) -> Failure {
         Failure::NewerVivac(format!("  {}", m.into()))
+    }
+
+    pub fn busy(waited: std::time::Duration) -> Failure {
+        Failure::Busy(format!(
+            "  Another vivac process has held this tree for {} seconds, so nothing\n  \
+             was written. If no other session is writing, close the others and try\n  \
+             again.",
+            waited.as_secs()
+        ))
     }
 }
 

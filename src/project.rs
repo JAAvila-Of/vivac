@@ -22,13 +22,6 @@ use crate::{ops, store};
 use std::path::PathBuf;
 use std::time::SystemTime;
 
-fn fingerprint(log: &std::path::Path) -> (u64, Option<SystemTime>) {
-    match std::fs::metadata(log) {
-        Ok(m) => (m.len(), m.modified().ok()),
-        Err(_) => (0, None),
-    }
-}
-
 /// One root, folded, with enough of a fingerprint to know when it moved.
 pub struct Project {
     pub root: PathBuf,
@@ -55,7 +48,7 @@ pub struct Project {
 impl Project {
     pub fn open(root: PathBuf, name: String, slug: String) -> Result<Project, Failure> {
         let (ctx, log) = ops::Ctx::load_with_log(store::Store::open(root.clone())?)?;
-        let seen = fingerprint(&ctx.store.log());
+        let seen = store::fingerprint(&ctx.store.log());
         Ok(Project {
             root,
             slug,
@@ -102,7 +95,7 @@ impl Project {
     /// -- the same check a read already pays for, shared here so a write
     /// pays it too instead of folding unconditionally on every call.
     fn refresh_if_stale(&mut self) -> Result<(), Failure> {
-        let now = fingerprint(&self.ctx.store.log());
+        let now = store::fingerprint(&self.ctx.store.log());
         if now != self.seen {
             let (ctx, log) = ops::Ctx::load_with_log(store::Store::open(self.root.clone())?)?;
             self.ctx = ctx;
@@ -128,7 +121,7 @@ impl Project {
     ) -> Result<T, Failure> {
         self.refresh_if_stale()?;
         let result = f(&mut self.ctx);
-        self.seen = fingerprint(&self.ctx.store.log());
+        self.seen = store::fingerprint(&self.ctx.store.log());
         result
     }
 }

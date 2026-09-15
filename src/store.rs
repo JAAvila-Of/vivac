@@ -25,6 +25,14 @@ pub const DIR: &str = ".vivac";
 pub const LOG: &str = "events";
 pub const CONFIG: &str = "config";
 pub const INDEX: &str = "index";
+pub const LOCK: &str = "lock";
+
+/// How long a writer waits for another one before it gives up (`d598`).
+const LOCK_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
+/// How long it keeps retrying with a bare yield before it starts sleeping a
+/// millisecond between tries: a handoff between two writers takes
+/// microseconds, and a sleep would round that up to a timer tick.
+const LOCK_SPIN: std::time::Duration = std::time::Duration::from_millis(50);
 
 /// `t594` §4.9: every `.vivac/` ignores itself. One line, `*`, which a git
 /// reads as "everything here, this file included", so no file of the
@@ -171,6 +179,11 @@ impl Config {
 pub struct Store {
     pub root: PathBuf,
     pub config: Config,
+    /// Whether `events` existed when this store was opened. Only planting
+    /// creates the log; after that, an append that finds it gone fails
+    /// instead of starting a fresh one -- which is what a process whose
+    /// tree was moved underneath it would otherwise do in silence.
+    log_present: bool,
 }
 
 /// Walks up from `from_dir` looking for a `.vivac/`. No daemon and no environment
@@ -204,6 +217,64 @@ pub fn find_root(from_dir: &Path) -> Option<PathBuf> {
 pub fn already_planted(root: &Path) -> bool {
     let dir = root.join(DIR);
     dir.join(CONFIG).is_file() || dir.join(LOG).is_file()
+}
+
+/// The log's length and modification time: the whole change detector.
+/// The log only grows, so a different length is exact; the time rides
+/// along for a rewrite that lands on the same byte count.
+pub(crate) fn fingerprint(log: &Path) -> (u64, Option<std::time::SystemTime>) {
+    match fs::metadata(log) {
+        Ok(m) => (m.len(), m.modified().ok()),
+        Err(_) => (0, None),
+    }
+}
+
+/// One tree's write lock, held for as long as this value lives (`d598`).
+/// Dropping it releases the lock, and so does the process dying: the
+/// operating system lets go of every lock a dead process held, so there
+/// is never a stale lock to clean up by hand.
+///
+/// It locks `.vivac/lock` and never the log: on Windows a lock taken with
+/// `LockFileEx` is mandatory, and a locked log would refuse its readers.
+pub struct WriteLock {
+    file: File,
+}
+
+impl Drop for WriteLock {
+    fn drop(&mut self) {
+        let _ = self.file.unlock();
+    }
+}
+
+/// Takes the lock at `path`, retrying until `deadline`. A handoff is
+/// microseconds, so it yields for `LOCK_SPIN` before it starts sleeping.
+pub(crate) fn lock_with_deadline(
+    path: &Path,
+    deadline: std::time::Duration,
+) -> Result<WriteLock, Failure> {
+    let file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(path)?;
+    let start = std::time::Instant::now();
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Ok(WriteLock { file }),
+            Err(std::fs::TryLockError::WouldBlock) => {}
+            Err(std::fs::TryLockError::Error(e)) => return Err(e.into()),
+        }
+        let waited = start.elapsed();
+        if waited >= deadline {
+            return Err(Failure::busy(deadline));
+        }
+        if waited < LOCK_SPIN {
+            std::thread::yield_now();
+        } else {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
 }
 
 /// The `id` of line 1 of `<root>/.vivac/events`, without folding the rest of
@@ -244,7 +315,12 @@ impl Store {
                 c
             }
         };
-        Ok(Store { root, config })
+        let log_present = root.join(DIR).join(LOG).is_file();
+        Ok(Store {
+            root,
+            config,
+            log_present,
+        })
     }
 
     /// For a `.vivac/` that does not exist yet. `f566`: `init` on one that
@@ -266,6 +342,7 @@ impl Store {
         Ok(Store {
             root: root.to_path_buf(),
             config,
+            log_present: true,
         })
     }
 
@@ -275,6 +352,17 @@ impl Store {
 
     pub fn index_path(&self) -> PathBuf {
         self.root.join(DIR).join(INDEX)
+    }
+
+    pub fn lock_path(&self) -> PathBuf {
+        self.root.join(DIR).join(LOCK)
+    }
+
+    /// Takes this tree's write lock (`d598`), waiting for another writer
+    /// for up to five seconds. Hold it from the moment the tree is brought
+    /// up to date until the append is done.
+    pub fn lock_for_write(&self) -> Result<WriteLock, Failure> {
+        lock_with_deadline(&self.lock_path(), LOCK_DEADLINE)
     }
 }
 
@@ -380,7 +468,9 @@ impl Store {
     /// This is the critical path of the agent's turn: a p99 < 5 ms budget.
     /// That is why there is no `fsync` --on Windows it costs more than the
     /// whole budget-- and why it opens in `append` mode, which makes each
-    /// single-line write atomic and removes the need for a lock.
+    /// single-line write atomic. Atomic lines do not make two writers agree
+    /// on `seq` and `num`, though: every caller holds the tree's write lock
+    /// across loading, stamping and appending (`d598`).
     ///
     /// `tree_already_governed` is `d444`'s own check, paid before any of
     /// `body` reaches disk: the config locks in place, first, so a process
@@ -413,10 +503,11 @@ impl Store {
             written.push(e);
         }
         let mut f = OpenOptions::new()
-            .create(true)
+            .create(!self.log_present)
             .append(true)
             .open(self.log())?;
         f.write_all(buf.as_bytes())?;
+        self.log_present = true;
         Ok(written)
     }
 
@@ -519,7 +610,7 @@ impl Store {
             buf.push('\n');
         }
         let mut f = OpenOptions::new()
-            .create(true)
+            .create(!self.log_present)
             .append(true)
             .open(self.log())?;
         f.write_all(buf.as_bytes())
@@ -664,6 +755,59 @@ mod tests {
             .to_string();
         let want: crate::event::Event = serde_json::from_str(&first_line).unwrap();
         assert_eq!(first_event_id(&tmp), Some(want.id));
+        fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn a_second_writer_waits_for_the_lock_and_then_gives_up() {
+        let tmp = std::env::temp_dir().join(format!("vivac-lock-{}", id::ulid()));
+        fs::create_dir_all(&tmp).unwrap();
+        Store::create(&tmp).unwrap();
+        let s = Store::open(tmp.clone()).unwrap();
+        let held = s.lock_for_write().unwrap();
+        let second = lock_with_deadline(&s.lock_path(), std::time::Duration::from_millis(200));
+        assert!(
+            matches!(second, Err(Failure::Busy(_))),
+            "the lock let a second writer in"
+        );
+        drop(held);
+        assert!(
+            lock_with_deadline(&s.lock_path(), std::time::Duration::from_millis(200)).is_ok(),
+            "dropping the first lock did not release it"
+        );
+        fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn the_busy_failure_names_how_long_it_waited() {
+        let f = Failure::busy(std::time::Duration::from_secs(5));
+        assert_eq!(f.code(), 5);
+        assert!(
+            f.message().contains("held this tree for 5 seconds"),
+            "{}",
+            f.message()
+        );
+    }
+
+    #[test]
+    fn append_never_recreates_a_log_that_vanished() {
+        let tmp = std::env::temp_dir().join(format!("vivac-vanished-{}", id::ulid()));
+        fs::create_dir_all(&tmp).unwrap();
+        Store::create(&tmp).unwrap();
+        let mut s = Store::open(tmp.clone()).unwrap();
+        fs::remove_file(s.log()).unwrap();
+        let body = vec![crate::event::Body::NodeNoted {
+            node: "01VANISHEDAAAAAAAAAAAAAAAA".into(),
+            note: "x".into(),
+        }];
+        assert!(
+            s.append(body, 0, false).is_err(),
+            "append wrote into a log that is gone"
+        );
+        assert!(
+            !s.log().exists(),
+            "append created a new log where the old one was"
+        );
         fs::remove_dir_all(&tmp).ok();
     }
 }
