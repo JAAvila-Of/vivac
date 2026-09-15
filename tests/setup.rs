@@ -960,12 +960,13 @@ fn setup_refuses_when_the_trees_own_vivac_is_the_global_store() {
 /// joined by the marker line with the fingerprint that version's own
 /// `fnv1a64` computed over that text. Setup already knows how to replace a
 /// copy an earlier vivac wrote; these fixtures are what those copies actually
-/// looked like. The v0.11.0 and v0.11.1 ones are byte for byte the copies
-/// those releases wrote into real projects.
-const EARLIER_RELEASE_SKILLS: [(&str, &str); 3] = [
+/// looked like. The ones from v0.11.0 on are byte for byte the copies those
+/// releases wrote into real projects.
+const EARLIER_RELEASE_SKILLS: [(&str, &str); 4] = [
     ("v0.10.0", include_str!("data/skill-v0.10.0.md")),
     ("v0.11.0", include_str!("data/skill-v0.11.0.md")),
     ("v0.11.1", include_str!("data/skill-v0.11.1.md")),
+    ("v0.11.2", include_str!("data/skill-v0.11.2.md")),
 ];
 
 #[test]
