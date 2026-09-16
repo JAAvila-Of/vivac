@@ -132,7 +132,7 @@ pub fn load(store: &Store, allow_persist: bool) -> Result<Tree, Failure> {
         });
     }
     let tail = read_tracked(&store.log(), 0)?;
-    let tree = fold(&tail.events, tail.broken);
+    let tree = fold(&tail.events, tail.broken + usize::from(tail.unterminated));
     if allow_persist {
         persist(store, &tree, tail.end_offset, tail.last.as_ref());
     }
@@ -150,10 +150,10 @@ enum Loaded {
 }
 
 #[derive(Clone)]
-struct LastEvent {
-    line_offset: u64,
-    id: String,
-    seq: u64,
+pub(crate) struct LastEvent {
+    pub(crate) line_offset: u64,
+    pub(crate) id: String,
+    pub(crate) seq: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -166,39 +166,81 @@ struct LastEvent {
 // does.
 // ---------------------------------------------------------------------------
 
-struct Tracked {
-    events: Vec<Event>,
-    broken: usize,
+pub(crate) struct Tracked {
+    pub(crate) events: Vec<Event>,
+    pub(crate) broken: usize,
+    /// Whether this read ended in a line with no `\n` yet. Kept apart from
+    /// `broken`: it is not consumed, so the next read from the same offset
+    /// sees the same bytes and would count them again -- a caller that
+    /// keeps its own running total has to add this in fresh each time,
+    /// never accumulate it.
+    pub(crate) unterminated: bool,
     /// Byte offset at EOF, counted from the very start of the file
     /// regardless of `from_offset`.
-    end_offset: u64,
-    last: Option<LastEvent>,
+    pub(crate) end_offset: u64,
+    pub(crate) last: Option<LastEvent>,
 }
 
-fn read_tracked(path: &Path, from_offset: u64) -> Result<Tracked, Failure> {
+/// A last line with no `\n` yet still counts as broken, the way a whole
+/// read has always counted it -- reported through `unterminated`, apart
+/// from `broken`, since it is not consumed: an append that stopped
+/// mid-write is not a line until it ends, and `end_offset` never lands
+/// inside one -- which is what lets a tail read agree with a whole fold.
+pub(crate) fn read_tracked(path: &Path, from_offset: u64) -> Result<Tracked, Failure> {
     let f = match File::open(path) {
         Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             return Ok(Tracked {
                 events: Vec::new(),
                 broken: 0,
+                unterminated: false,
                 end_offset: from_offset,
                 last: None,
             })
         }
         Err(e) => return Err(e.into()),
     };
+    read_tracked_in(&f, path, from_offset)
+}
+
+/// The same read against a log already open, for a caller that keeps it
+/// open between refreshes. The open, not the read, is what the system
+/// charges for: reopening the log to read what another process appended
+/// cost the write path its budget under contention (`f599`).
+///
+/// `path` still travels alongside `f`: the one line here that meets a
+/// line neither valid JSON nor an unreadable-known-event -- `t411` §13's
+/// own case -- re-reads the whole file from scratch to name the right
+/// line number, and that has always meant its own independent open, not
+/// this one's handle.
+pub(crate) fn read_tracked_in(f: &File, path: &Path, from_offset: u64) -> Result<Tracked, Failure> {
     let mut reader = BufReader::new(f);
     reader.seek(SeekFrom::Start(from_offset))?;
     let mut cursor = from_offset;
     let mut events = Vec::new();
     let mut broken = 0usize;
+    let mut unterminated = false;
     let mut last = None;
     let mut raw = Vec::new();
     loop {
         raw.clear();
         let n = reader.read_until(b'\n', &mut raw)?;
         if n == 0 {
+            break;
+        }
+        if raw.last() != Some(&b'\n') {
+            // An append that stopped mid-write: these bytes are not a line
+            // yet. They still count as broken, the way a whole read has
+            // always counted them, but `cursor` stays behind them, so
+            // `end_offset` never lands inside a line and a tail read sees
+            // exactly the bytes a whole fold sees. Kept apart from `broken`
+            // rather than folded into it: unlike every other broken line,
+            // these bytes are not consumed, so the next read from the same
+            // offset counts them again, and a caller that accumulates its
+            // own total needs to know that this one does not accumulate.
+            if !String::from_utf8_lossy(&raw).trim().is_empty() {
+                unterminated = true;
+            }
             break;
         }
         let line_offset = cursor;
@@ -249,6 +291,7 @@ fn read_tracked(path: &Path, from_offset: u64) -> Result<Tracked, Failure> {
     Ok(Tracked {
         events,
         broken,
+        unterminated,
         end_offset: cursor,
         last,
     })
@@ -273,23 +316,22 @@ fn fingerprint(path: &Path) -> (u64, i64, u32) {
     }
 }
 
-/// Confirms the last event this index ever folded is still sitting where
-/// the header says it is -- the check that tells "the log grew" apart from
-/// "the log changed", per `LOADING.md` §4 "Vigencia".
-fn control_still_there(log_path: &Path, header: &Header) -> bool {
-    if !header.has_last {
-        // Nothing was ever folded, so there is nothing to confirm: growing
-        // from byte zero needs no control check.
-        return header.fold_end_offset == 0;
-    }
+/// Whether the event `last` names still sits where it was read: the check
+/// that tells "the log grew" apart from "the log changed" (`LOADING.md` §4
+/// "Vigencia"). Shared by the derived index and the resident server.
+pub(crate) fn event_still_at(log_path: &Path, last: &LastEvent) -> bool {
     let Ok(f) = File::open(log_path) else {
         return false;
     };
+    event_still_at_in(&f, last)
+}
+
+/// The same check against a log already open, for a caller that keeps it
+/// open between refreshes rather than reopening it on every one -- the
+/// open, not the read, is what the system charges for (`f599`).
+pub(crate) fn event_still_at_in(f: &File, last: &LastEvent) -> bool {
     let mut reader = BufReader::new(f);
-    if reader
-        .seek(SeekFrom::Start(header.last_line_offset))
-        .is_err()
-    {
+    if reader.seek(SeekFrom::Start(last.line_offset)).is_err() {
         return false;
     }
     let mut raw = Vec::new();
@@ -313,7 +355,26 @@ fn control_still_there(log_path: &Path, header: &Header) -> bool {
     let Ok(e) = serde_json::from_str::<Event>(line) else {
         return false;
     };
-    e.id == header.last_ulid && e.seq == header.last_seq
+    e.id == last.id && e.seq == last.seq
+}
+
+/// Confirms the last event this index ever folded is still sitting where
+/// the header says it is -- the check that tells "the log grew" apart from
+/// "the log changed", per `LOADING.md` §4 "Vigencia".
+fn control_still_there(log_path: &Path, header: &Header) -> bool {
+    if !header.has_last {
+        // Nothing was ever folded, so there is nothing to confirm: growing
+        // from byte zero needs no control check.
+        return header.fold_end_offset == 0;
+    }
+    event_still_at(
+        log_path,
+        &LastEvent {
+            line_offset: header.last_line_offset,
+            id: header.last_ulid.clone(),
+            seq: header.last_seq,
+        },
+    )
 }
 
 fn try_load_index(store: &Store) -> Option<Loaded> {
@@ -1701,6 +1762,123 @@ mod tests {
             assert_eq!(a.id, b.id);
             assert_eq!(a.seq, b.seq);
         }
+        std::fs::remove_dir_all(&store.root).ok();
+    }
+
+    /// `f599`: an append that stopped mid-write must not be read as a line,
+    /// or a tail read on top of it disagrees with what a whole fold would
+    /// see once the log finishes growing.
+    #[test]
+    fn read_tracked_stops_before_a_line_that_has_no_newline_yet() {
+        let store = tmp_store("partial");
+        let root_id = fixed_id(1);
+        let child_id = fixed_id(2);
+        let complete = vec![
+            created(1, &root_id, 1, Kind::Goal, None, "Root", vec![], vec![]),
+            created(
+                2,
+                &child_id,
+                2,
+                Kind::Task,
+                Some(&root_id),
+                "Child",
+                vec![],
+                vec![],
+            ),
+        ];
+        store.write_raw(&complete).unwrap();
+        let complete_end = fs::metadata(store.log()).unwrap().len();
+
+        let grandchild_id = fixed_id(3);
+        let partial = serde_json::to_string(&created(
+            3,
+            &grandchild_id,
+            3,
+            Kind::Task,
+            Some(&child_id),
+            "Grandchild",
+            vec![],
+            vec![],
+        ))
+        .unwrap();
+        {
+            let mut f = File::options().append(true).open(store.log()).unwrap();
+            f.write_all(partial.as_bytes()).unwrap();
+        }
+
+        let got = read_tracked(&store.log(), 0).unwrap();
+        assert_eq!(
+            got.events.len(),
+            2,
+            "the unfinished line must not count as an event"
+        );
+        assert_eq!(
+            got.broken, 0,
+            "the unfinished line is reported through `unterminated`, not folded into `broken`"
+        );
+        assert!(
+            got.unterminated,
+            "an unfinished line still counts as broken, the way a whole read counts it"
+        );
+        assert_eq!(
+            got.end_offset, complete_end,
+            "end_offset must not land inside the unfinished line"
+        );
+
+        // Completing the line lets a later read from `end_offset` pick it up,
+        // exactly as a fresh fold over the whole file would see it.
+        {
+            let mut f = File::options().append(true).open(store.log()).unwrap();
+            f.write_all(b"\n").unwrap();
+        }
+        let tail = read_tracked(&store.log(), got.end_offset).unwrap();
+        assert_eq!(tail.events.len(), 1);
+        assert_eq!(tail.events[0].id, grandchild_id);
+
+        std::fs::remove_dir_all(&store.root).ok();
+    }
+
+    /// `f599`: `read_all_from` (`why`, `changes`) and `read_tracked`
+    /// (`tree`, `check`, the resident server) have to agree on a torn
+    /// tail, even one cut off in the middle of a multi-byte character --
+    /// otherwise the same log is a hard error for one reading and
+    /// silently ignored by the other.
+    #[test]
+    fn read_all_from_and_read_tracked_agree_on_a_tail_torn_mid_character() {
+        let store = tmp_store("torn-char");
+        let root_id = fixed_id(1);
+        store
+            .write_raw(&[created(
+                1,
+                &root_id,
+                1,
+                Kind::Goal,
+                None,
+                "Root",
+                vec![],
+                vec![],
+            )])
+            .unwrap();
+        let mut partial =
+            format!("{{\"seq\":2,\"id\":\"{}\",\"note\":\"caf", fixed_id(2)).into_bytes();
+        // The first byte of "é", with no second byte and no `\n`: a tail
+        // torn mid-character, not just mid-line.
+        partial.push(0xC3);
+        {
+            let mut f = File::options().append(true).open(store.log()).unwrap();
+            f.write_all(&partial).unwrap();
+        }
+
+        let (all_events, all_broken) = crate::store::read_all_from(&store.log()).unwrap();
+        let got = read_tracked(&store.log(), 0).unwrap();
+
+        assert_eq!(got.events.len(), all_events.len());
+        for (a, b) in got.events.iter().zip(all_events.iter()) {
+            assert_eq!(a.id, b.id);
+            assert_eq!(a.seq, b.seq);
+        }
+        assert_eq!(got.broken + usize::from(got.unterminated), all_broken);
+
         std::fs::remove_dir_all(&store.root).ok();
     }
 

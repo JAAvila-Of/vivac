@@ -229,6 +229,16 @@ pub(crate) fn fingerprint(log: &Path) -> (u64, Option<std::time::SystemTime>) {
     }
 }
 
+/// The same pair as `fingerprint`, read off a handle already open, so the
+/// file it is still reading can be compared against whatever the path
+/// names now.
+pub(crate) fn fingerprint_in(f: &File) -> (u64, Option<std::time::SystemTime>) {
+    match f.metadata() {
+        Ok(m) => (m.len(), m.modified().ok()),
+        Err(_) => (0, None),
+    }
+}
+
 /// One tree's write lock, held for as long as this value lives (`d598`).
 /// Dropping it releases the lock, and so does the process dying: the
 /// operating system lets go of every lock a dead process held, so there
@@ -449,6 +459,22 @@ fn log_already_governed(root: &Path) -> bool {
     false
 }
 
+/// What an append left behind: the events as written, plus where the last
+/// of them begins and where the file now ends. A caller that keeps a tree
+/// in memory needs those two numbers to stay current without reading back
+/// what it just wrote -- and reading it back is not free: opening the log
+/// again right after writing it costs about six milliseconds a write on
+/// this machine, more than the whole write budget (`f599`).
+pub struct Appended {
+    pub events: Vec<crate::event::Event>,
+    /// The log's length right before this append, so a caller can tell
+    /// whether these lines are a clean continuation of what it already
+    /// folded, or landed behind bytes it never saw (`f599`).
+    pub previous_len: u64,
+    pub last_line_offset: u64,
+    pub end_offset: u64,
+}
+
 impl Store {
     /// Reads the whole log. An unreadable line **does not abort**: it is
     /// counted and skipped. A half-written log has to stay readable, or the
@@ -477,18 +503,21 @@ impl Store {
     /// that dies between the two leaves an unlocked config over a tree with
     /// no pillar and no rule, which is harmless.
     ///
-    /// Returns the events as written, so a caller that keeps the tree in
-    /// memory applies exactly those and never stamps them a second time
-    /// (`f590`).
+    /// Returns the events as written and where their bytes landed, so a
+    /// caller that keeps the tree in memory applies exactly those and never
+    /// stamps them a second time (`f590`), and a caller that keeps a
+    /// resident tree never has to read the log back to learn where its own
+    /// write landed (`f599`).
     pub fn append(
         &mut self,
         body: Vec<crate::event::Body>,
         from_seq: u64,
         tree_already_governed: bool,
-    ) -> std::io::Result<Vec<crate::event::Event>> {
+    ) -> std::io::Result<Appended> {
         self.lock_if_needed(&body, tree_already_governed)?;
         let mut buf = String::with_capacity(256 * body.len());
         let mut written = Vec::with_capacity(body.len());
+        let mut last_line_start = 0usize;
         for (i, c) in body.into_iter().enumerate() {
             let e = crate::event::Event {
                 seq: from_seq + i as u64 + 1,
@@ -498,6 +527,7 @@ impl Store {
                 lane: "main".into(),
                 payload: c,
             };
+            last_line_start = buf.len();
             buf.push_str(&serde_json::to_string(&e).map_err(std::io::Error::other)?);
             buf.push('\n');
             written.push(e);
@@ -506,9 +536,15 @@ impl Store {
             .create(!self.log_present)
             .append(true)
             .open(self.log())?;
+        let previous_len = f.metadata()?.len();
         f.write_all(buf.as_bytes())?;
         self.log_present = true;
-        Ok(written)
+        Ok(Appended {
+            previous_len,
+            last_line_offset: previous_len + last_line_start as u64,
+            end_offset: previous_len + buf.len() as u64,
+            events: written,
+        })
     }
 
     /// `d444`: locks the config in place the moment this tree gains its
@@ -560,17 +596,47 @@ pub(crate) fn read_all_from(path: &Path) -> Result<(Vec<crate::event::Event>, us
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((vec![], 0)),
         Err(e) => return Err(e.into()),
     };
+    let mut reader = BufReader::new(f);
     let mut events = Vec::new();
     let mut broken = 0usize;
-    for (i, line) in BufReader::new(f).lines().enumerate() {
-        let line = line?;
+    let mut line_no = 0usize;
+    let mut raw = Vec::new();
+    loop {
+        raw.clear();
+        let n = reader.read_until(b'\n', &mut raw)?;
+        if n == 0 {
+            break;
+        }
+        line_no += 1;
+        if raw.last() != Some(&b'\n') {
+            // An append that stopped mid-write is not a line until it
+            // ends -- the same rule `index::read_tracked` follows, so a
+            // log the two of them read agrees on what it holds (`f599`).
+            if !String::from_utf8_lossy(&raw).trim().is_empty() {
+                broken += 1;
+            }
+            break;
+        }
+        let mut bytes = raw.as_slice();
+        if bytes.last() == Some(&b'\n') {
+            bytes = &bytes[..bytes.len() - 1];
+        }
+        if bytes.last() == Some(&b'\r') {
+            bytes = &bytes[..bytes.len() - 1];
+        }
+        let line = String::from_utf8(bytes.to_vec()).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "stream did not contain valid UTF-8",
+            )
+        })?;
         if line.trim().is_empty() {
             continue;
         }
         match serde_json::from_str(&line) {
             Ok(e) => events.push(e),
             Err(_) => match crate::event::unknown_reason_for(&line) {
-                Some(reason) => return Err(newer_vivac_failure(i + 1, reason)),
+                Some(reason) => return Err(newer_vivac_failure(line_no, reason)),
                 None => broken += 1,
             },
         }

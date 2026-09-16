@@ -64,7 +64,9 @@ apart
 appear
 appears
 append
+appended
 appends
+applied
 applies
 apply
 are
@@ -204,6 +206,7 @@ change
 changed
 changes
 char
+character
 characters
 chars
 check
@@ -257,6 +260,7 @@ comment
 commit
 committed
 common
+complete
 component
 condition
 config
@@ -562,6 +566,7 @@ governance
 governed
 governing
 governs
+grandchild
 grew
 group
 groups
@@ -1011,6 +1016,7 @@ preserves
 pretty
 prev
 preview
+previous
 prime
 print
 printed
@@ -1121,6 +1127,7 @@ repeats
 replace
 replaceable
 replaced
+replacement
 reply
 repo
 report
@@ -1151,6 +1158,7 @@ reverse
 review
 revived
 rewrite
+rewritten
 rfc3339
 rfind
 rid
@@ -1193,6 +1201,7 @@ schema
 schemas
 scheme
 scope
+scratch
 script
 search
 searchable
@@ -1422,6 +1431,7 @@ too
 tool
 tools
 top
+torn
 total
 touches
 touching
@@ -1469,6 +1479,7 @@ unchanged
 unclaimed
 undeclared
 under
+underneath
 undo
 undoable
 undone
@@ -1487,6 +1498,7 @@ unrestorable
 unrestored
 unstable
 unstack
+unterminated
 until
 untouched
 unwrap

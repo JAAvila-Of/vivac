@@ -12,6 +12,11 @@
 //! exact change detector. The modification time rides along for the one case a length
 //! cannot see, which is a rewrite that lands on the same byte count.
 //!
+//! A rewrite of a line before the last one that lands on the same byte
+//! count is invisible to this tree, exactly as it is to the derived
+//! index (`index.rs`, "Staying current"): the log is append-only, and
+//! nothing vivac does rewrites it.
+//!
 //! This began inside the MCP server, the first thing here to outlive its own calls.
 //! The web is the second, and it needs the same thing over more than one root, so it
 //! moved out here.
@@ -19,7 +24,8 @@
 use crate::event::Event;
 use crate::failure::Failure;
 use crate::{ops, store};
-use std::path::PathBuf;
+use std::fs::File;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 /// One root, folded, with enough of a fingerprint to know when it moved.
@@ -43,19 +49,48 @@ pub struct Project {
     /// the same stretch -- needs them and the fold does not carry them.
     log: Vec<Event>,
     seen: (u64, Option<SystemTime>),
+    /// Where the last fold stopped reading, and the event it read last:
+    /// what lets a refresh read only what was appended since (`f599`),
+    /// the rule `index.rs` "Staying current" already follows.
+    fold_end: u64,
+    last: Option<crate::index::LastEvent>,
+    /// Broken lines already behind `fold_end`: an unterminated tail is not
+    /// among them, since it sits past `fold_end` and is re-evaluated, never
+    /// consumed, on every read -- see `refresh_if_stale`.
+    committed_broken: usize,
+    /// The log, kept open so a refresh never has to reopen it: reopening a
+    /// file another process just wrote costs milliseconds on this machine,
+    /// under contention, which is the whole write budget (`f599`). `None`
+    /// is not a failure -- a refresh still works by path, just slower.
+    log_file: Option<File>,
+    /// How many times this project folded its whole log after opening.
+    /// Only the tests read it: it is how `f599` is proven, not measured.
+    #[cfg(test)]
+    pub(crate) full_folds: usize,
 }
 
 impl Project {
     pub fn open(root: PathBuf, name: String, slug: String) -> Result<Project, Failure> {
-        let (ctx, log) = ops::Ctx::load_with_log(store::Store::open(root.clone())?)?;
-        let seen = store::fingerprint(&ctx.store.log());
+        let store = store::Store::open(root.clone())?;
+        let seen = store::fingerprint(&store.log());
+        let log_file = File::open(store.log()).ok();
+        let read = crate::index::read_tracked(&store.log(), 0)?;
+        let committed_broken = read.broken;
+        let mut ctx = ops::Ctx::from_events(store, &read.events, committed_broken, seen);
+        ctx.tree.broken_lines = committed_broken + usize::from(read.unterminated);
         Ok(Project {
             root,
             slug,
             name,
             ctx,
-            log,
+            log: read.events,
             seen,
+            fold_end: read.end_offset,
+            last: read.last,
+            committed_broken,
+            log_file,
+            #[cfg(test)]
+            full_folds: 0,
         })
     }
 
@@ -91,18 +126,92 @@ impl Project {
         Ok((&self.ctx, &self.log))
     }
 
-    /// Re-folds from disk, but only when the log moved since the last fold
-    /// -- the same check a read already pays for, shared here so a write
-    /// pays it too instead of folding unconditionally on every call.
+    /// Brings the resident tree up to the log (`f599`). A log that only
+    /// grew, with the last event folded still where it was, is caught up
+    /// by applying just what was appended; anything else is folded whole,
+    /// as it always was.
     fn refresh_if_stale(&mut self) -> Result<(), Failure> {
-        let now = store::fingerprint(&self.ctx.store.log());
-        if now != self.seen {
-            let (ctx, log) = ops::Ctx::load_with_log(store::Store::open(self.root.clone())?)?;
-            self.ctx = ctx;
-            self.log = log;
-            self.seen = now;
+        let log_path = self.ctx.store.log();
+        let now = store::fingerprint(&log_path);
+        if now == self.seen {
+            return Ok(());
         }
+        // A handle keeps reading the file it opened. A log that was replaced
+        // rather than grown -- a copy restored over it, a sync client, an edit
+        // by hand -- would leave this reading the old one for good, and the
+        // tail would come back empty every time. The two fingerprints agree
+        // exactly while it is the same file, so a difference means reopen.
+        let handle_is_current = self
+            .log_file
+            .as_ref()
+            .is_some_and(|f| store::fingerprint_in(f) == now);
+        if !handle_is_current {
+            self.log_file = File::open(&log_path).ok();
+        }
+        let grew = now.0 >= self.fold_end
+            && match &self.last {
+                Some(last) => match &self.log_file {
+                    Some(f) => crate::index::event_still_at_in(f, last),
+                    None => crate::index::event_still_at(&log_path, last),
+                },
+                None => self.fold_end == 0,
+            };
+        if grew {
+            let tail = self.tracked(&log_path, self.fold_end)?;
+            for e in &tail.events {
+                self.ctx.tree.apply(e.seq, &e.ts, &e.payload);
+            }
+            // `fold` sorts children and roots when it finishes, and applying a tail
+            // event by event does not: a `num` out of order, or a node that arrived
+            // before its parent and is resolved inside this tail, would leave the
+            // resident tree ordered differently from a fresh one.
+            self.ctx.tree.sort_nodes();
+            self.committed_broken += tail.broken;
+            // The unterminated tail is re-evaluated on every read, never
+            // consumed, so it is added in fresh here, not accumulated the
+            // way `committed_broken` is.
+            self.ctx.tree.broken_lines = self.committed_broken + usize::from(tail.unterminated);
+            self.log.extend(tail.events);
+            self.fold_end = tail.end_offset;
+            if tail.last.is_some() {
+                self.last = tail.last;
+            }
+            self.ctx.seen = now;
+        } else {
+            let store = store::Store::open(self.root.clone())?;
+            let store_log = store.log();
+            // A whole fold is starting from scratch over the file as it
+            // stands right now, so the reader does too.
+            self.log_file = File::open(&store_log).ok();
+            let read = self.tracked(&store_log, 0)?;
+            self.committed_broken = read.broken;
+            self.ctx = ops::Ctx::from_events(store, &read.events, self.committed_broken, now);
+            self.ctx.tree.broken_lines = self.committed_broken + usize::from(read.unterminated);
+            self.log = read.events;
+            self.fold_end = read.end_offset;
+            self.last = read.last;
+            #[cfg(test)]
+            {
+                self.full_folds += 1;
+            }
+        }
+        self.seen = now;
         Ok(())
+    }
+
+    /// Reads from `path` at `from_offset`, through the open handle when
+    /// there is one, and by path otherwise -- the open, not the read, is
+    /// what the system charges for (`f599`). A handle that stopped serving
+    /// is dropped and this same read falls back to path: a handle gone bad
+    /// must not leave the server unable to read at all.
+    fn tracked(&mut self, path: &Path, from_offset: u64) -> Result<crate::index::Tracked, Failure> {
+        if let Some(f) = &self.log_file {
+            match crate::index::read_tracked_in(f, path, from_offset) {
+                Ok(t) => return Ok(t),
+                Err(_) => self.log_file = None,
+            }
+        }
+        crate::index::read_tracked(path, from_offset)
     }
 
     /// Runs a write against the tree this `Project` already keeps folded,
@@ -126,8 +235,34 @@ impl Project {
     ) -> Result<T, Failure> {
         let _lock = self.ctx.store.lock_for_write()?;
         self.refresh_if_stale()?;
+        self.ctx.wrote = None;
         let result = f(&mut self.ctx);
-        self.seen = store::fingerprint(&self.ctx.store.log());
+        // What `f` appended is already applied to the tree (`Ctx::emit`),
+        // and the append said where its lines landed, so the log is never
+        // read back: reopening it right after writing it cost six
+        // milliseconds a write, against a five millisecond budget (`f599`).
+        if let Some(w) = self.ctx.wrote.take() {
+            if w.previous_len == self.fold_end {
+                if let Some(e) = w.events.last() {
+                    self.last = Some(crate::index::LastEvent {
+                        line_offset: w.last_line_offset,
+                        id: e.id.clone(),
+                        seq: e.seq,
+                    });
+                }
+                self.fold_end = w.end_offset;
+                self.log.extend(w.events);
+                self.seen = store::fingerprint(&self.ctx.store.log());
+            } else {
+                // The log did not end where this fold stopped: something --
+                // an append that died mid-write -- left bytes past it, and
+                // these lines were written behind them, so they are not a
+                // clean continuation. Fold the whole log next time, and let
+                // the tree be exactly what is on disk.
+                self.last = None;
+                self.seen = (0, None);
+            }
+        }
         result
     }
 }
