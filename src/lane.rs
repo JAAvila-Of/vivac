@@ -1,8 +1,12 @@
 //! `.vivac/lane`: which lane a working folder is, and of which tree.
 //!
 //! One tree per product, one lane per working folder (`d595`). The tree
-//! itself lives in exactly one folder; every other folder that works on it
-//! carries this file and nothing else.
+//! itself lives in exactly one folder, and every other folder that works
+//! on it carries this file and nothing else -- except the one folder
+//! whose own `main` has been claimed elsewhere (`d597`, §6.9): it still
+//! holds the tree, and it still is not `main` any more, so `setup` mints
+//! it a lane of its own too, right beside `config` and `events`
+//! (`t594` fix-1 round 2).
 //!
 //! **It holds no path.** Where the tree lives is the registry's job and the
 //! registry's alone (`f267`): a second home for that answer would need its
@@ -48,17 +52,22 @@ pub fn name_for(id: &str, _folder_name: &str) -> String {
 
 /// Reads `vivac_dir/lane`. `Ok(None)` only for the one case that really is
 /// an absence: no file at all, the ordinary shape of a folder that holds
-/// the tree itself.
+/// the tree itself and has never had its own `main` claimed elsewhere.
 ///
 /// Everything else that keeps this from handing back a `Lane` refuses
 /// instead of falling back to `None` -- unreadable, not JSON, JSON with the
-/// wrong shape. A lane file exists only in a folder that does *not* hold
-/// the tree, so reading a corrupt one as absent would feed the resolution
-/// that follows the story of a folder with no lane at all; `Store::open`
-/// would then seed that folder a config of its own, turning a folder that
-/// belongs to another tree into a fresh, empty one, splitting the product
-/// in two without telling anybody. The same convention `read_config`
-/// already uses in `store.rs`.
+/// wrong shape. A lane file almost always names a folder that does *not*
+/// hold the tree, so reading a corrupt one as absent would feed the
+/// resolution that follows the story of a folder with no lane at all;
+/// `Store::open` would then seed that folder a config of its own, turning
+/// a folder that belongs to another tree into a fresh, empty one,
+/// splitting the product in two without telling anybody. The one folder
+/// that holds the tree and still carries this file -- `main` claimed
+/// elsewhere, `t594` fix-1 round 2 -- already has its own config, so that
+/// particular disaster does not reach it; but reading its corrupt file as
+/// absent would just as quietly undo the very thing the file exists to
+/// say, and land the folder back in front of §6.9's own refusal. The same
+/// convention `read_config` already uses in `store.rs`.
 ///
 /// The one refusal with its own sentence is a `version` this release does
 /// not know: that shape is understood well enough to say it is not

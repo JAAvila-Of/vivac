@@ -861,6 +861,7 @@ migration
 millis
 min
 mine
+minted
 minus
 missing
 mod
