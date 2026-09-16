@@ -988,8 +988,8 @@ fn handle(project: &mut Project, line: &str) -> Option<String> {
     }
 }
 
-pub fn serve(root: PathBuf, lane: Option<String>) -> R {
-    let mut registry = Registry::open(vec![root.clone()], lane.map(|l| (root, l)))?;
+pub fn serve(root: PathBuf, located: Option<store::Located>) -> R {
+    let mut registry = Registry::open(vec![root.clone()], located.map(|l| (root, l)))?;
     let project = registry.first();
     let input = std::io::stdin();
     let mut output = std::io::stdout();
@@ -1026,13 +1026,8 @@ mod resident_write_tests {
         ));
         std::fs::create_dir_all(&root).unwrap();
         Store::create(&root).unwrap();
-        let project = Project::open(
-            root.clone(),
-            "t".into(),
-            "t".into(),
-            Some(crate::lane::MAIN.to_string()),
-        )
-        .unwrap_or_else(|e| panic!("{}", e.message()));
+        let project = Project::open(root.clone(), "t".into(), "t".into(), ops::Whose::Founding)
+            .unwrap_or_else(|e| panic!("{}", e.message()));
         (root, project)
     }
 
