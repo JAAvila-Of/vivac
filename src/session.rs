@@ -76,9 +76,15 @@ pub fn start(ctx: &mut crate::ops::Ctx, a: &Args, project: &str) -> R {
     let shown_focus = ctx.tree.focus().map(|n| n.id.clone());
     let shown_vivac = ctx.tree.vivacs.last().map(|v| v.id.clone());
     match ctx.lock_for_write() {
-        Ok(_lock) => {
+        Ok(mine) => {
             crate::ops::session_started(ctx, &hook.source, hook.session, shown_focus, shown_vivac)
                 .ok();
+            // The write is done; nothing after this needs the lock, and the
+            // process outlives it. Only released if this call is the one
+            // that took it (`f602`).
+            if mine {
+                ctx.unlock();
+            }
         }
         // The brief is already out. A session another writer kept from
         // being recorded is a small hole in the log; say so where the
@@ -108,8 +114,8 @@ pub fn end(ctx: &mut crate::ops::Ctx, a: &Args) -> R {
     // itself unsupported -- is swallowed the same way: the change that
     // armed this stop is still there for the next turn, and nothing is
     // lost. Without a hook it is still reported, as before.
-    let _lock = match ctx.lock_for_write() {
-        Ok(l) => l,
+    let mine = match ctx.lock_for_write() {
+        Ok(mine) => mine,
         Err(_) if a.has("hook") => return Ok(()),
         Err(e) => return Err(e),
     };
@@ -122,6 +128,11 @@ pub fn end(ctx: &mut crate::ops::Ctx, a: &Args) -> R {
     let label = segment_label(&ctx.tree);
     let num = ctx.tree.next_vivac_num.max(1);
     crate::ops::auto_vivac(ctx, VivacKind::Auto, &next, &label)?;
+    // The write is done; nothing after this needs the lock. Only released
+    // if this call is the one that took it (`f602`).
+    if mine {
+        ctx.unlock();
+    }
     if !a.has("hook") {
         outln!("  v{num}  automatic stop at session close");
     }

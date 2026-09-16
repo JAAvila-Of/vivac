@@ -1514,6 +1514,12 @@ mod tests {
         Store::create(&dir).unwrap()
     }
 
+    /// Takes `store`'s own write lock and writes `events` raw under it.
+    fn write_raw_locked(store: &Store, events: &[Event]) {
+        let lock = store.lock_for_write().unwrap();
+        store.write_raw(&lock, events).unwrap();
+    }
+
     /// A deterministic stand-in for `id::ulid()`: every id this format
     /// stores is fixed-width, so a test fixture needs the same shape a real
     /// one has, not a short mnemonic like `"n1"`.
@@ -1773,7 +1779,7 @@ mod tests {
     #[test]
     fn read_tracked_agrees_with_store_read_all() {
         let store = tmp_store("agree");
-        store.write_raw(&a_varied_event_set()).unwrap();
+        write_raw_locked(&store, &a_varied_event_set());
         let (want_events, want_broken) = store.read_all().unwrap();
         let got = read_tracked(&store.log(), 0).unwrap();
         assert_eq!(got.broken, want_broken);
@@ -1806,7 +1812,7 @@ mod tests {
                 vec![],
             ),
         ];
-        store.write_raw(&complete).unwrap();
+        write_raw_locked(&store, &complete);
         let complete_end = fs::metadata(store.log()).unwrap().len();
 
         let grandchild_id = fixed_id(3);
@@ -1867,8 +1873,9 @@ mod tests {
     fn read_all_from_and_read_tracked_agree_on_a_tail_torn_mid_character() {
         let store = tmp_store("torn-char");
         let root_id = fixed_id(1);
-        store
-            .write_raw(&[created(
+        write_raw_locked(
+            &store,
+            &[created(
                 1,
                 &root_id,
                 1,
@@ -1877,8 +1884,8 @@ mod tests {
                 "Root",
                 vec![],
                 vec![],
-            )])
-            .unwrap();
+            )],
+        );
         let mut partial =
             format!("{{\"seq\":2,\"id\":\"{}\",\"note\":\"caf", fixed_id(2)).into_bytes();
         // The first byte of "é", with no second byte and no `\n`: a tail
@@ -1908,7 +1915,7 @@ mod tests {
         let fresh = fold(&events, 0);
 
         let store = tmp_store("roundtrip");
-        store.write_raw(&events).unwrap();
+        write_raw_locked(&store, &events);
 
         let loaded = load(&store, true).expect("load should succeed");
         assert_eq!(snapshot(&fresh), snapshot(&loaded));
@@ -2029,7 +2036,7 @@ mod tests {
     fn a_corrupt_index_is_regenerated_rather_than_trusted() {
         let store = tmp_store("corrupt");
         let events = a_varied_event_set();
-        store.write_raw(&events).unwrap();
+        write_raw_locked(&store, &events);
         let want = fold(&events, 0);
 
         // Bad magic: the very first byte of every valid index.
@@ -2065,7 +2072,7 @@ mod tests {
     fn a_stale_index_picks_up_the_tail() {
         let store = tmp_store("stale");
         let events = a_varied_event_set();
-        store.write_raw(&events).unwrap();
+        write_raw_locked(&store, &events);
         load(&store, true).unwrap();
         assert!(store.index_path().is_file());
 
@@ -2079,7 +2086,7 @@ mod tests {
             vec![],
             vec![],
         )];
-        store.write_raw(&more).unwrap();
+        write_raw_locked(&store, &more);
 
         let (all_events, broken) = store.read_all().unwrap();
         let want = fold(&all_events, broken);
@@ -2099,7 +2106,7 @@ mod tests {
     fn a_broken_line_in_the_tail_is_not_lost_when_the_index_grows() {
         let store = tmp_store("broken-tail");
         let events = a_varied_event_set();
-        store.write_raw(&events).unwrap();
+        write_raw_locked(&store, &events);
         load(&store, true).unwrap();
         assert!(store.index_path().is_file());
 
@@ -2146,7 +2153,7 @@ mod tests {
                 vec![],
             ),
         ];
-        store.write_raw(&events).unwrap();
+        write_raw_locked(&store, &events);
 
         load(&store, true).unwrap();
         assert!(
@@ -2169,7 +2176,7 @@ mod tests {
             vec![],
             vec![],
         )];
-        store.write_raw(&events).unwrap();
+        write_raw_locked(&store, &events);
 
         load(&store, true).unwrap();
         assert!(
@@ -2182,7 +2189,7 @@ mod tests {
     fn deleting_the_index_changes_nothing() {
         let store = tmp_store("delete");
         let events = a_varied_event_set();
-        store.write_raw(&events).unwrap();
+        write_raw_locked(&store, &events);
         load(&store, true).unwrap();
         assert!(store.index_path().is_file());
 
@@ -2198,7 +2205,7 @@ mod tests {
     fn a_write_never_persists_the_index() {
         let store = tmp_store("writeonly");
         let events = a_varied_event_set();
-        store.write_raw(&events).unwrap();
+        write_raw_locked(&store, &events);
         load(&store, false).unwrap();
         assert!(
             !store.index_path().exists(),

@@ -548,11 +548,9 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
     // take their own: session once the brief is out, so a held lock never
     // costs the agent its brief, and restore once git has answered, so a
     // slow git never holds every other writer.
-    let _write_lock = if may_append(cmd) && !matches!(cmd, "session" | "restore") {
-        Some(ctx.lock_for_write()?)
-    } else {
-        None
-    };
+    if may_append(cmd) && !matches!(cmd, "session" | "restore") {
+        ctx.lock_for_write()?;
+    }
 
     if let Some(o) = write_op(cmd, &mut ctx, a)? {
         print!("{}", outcome::to_text(&o));

@@ -1318,9 +1318,9 @@ mod resident_write_tests {
             .unwrap();
 
         let mut other = crate::ops::Ctx::load(Store::open(root.clone()).unwrap()).unwrap();
-        let lock = other.lock_for_write().unwrap();
+        other.lock_for_write().unwrap();
         ops::add(&mut other, add("From another process")).unwrap();
-        drop(lock);
+        other.unlock();
 
         let folds_before = project.full_folds;
         project.current().unwrap();
@@ -1398,9 +1398,9 @@ mod resident_write_tests {
         assert_resident_matches_fresh_fold(&root, &mut project);
 
         let mut other = crate::ops::Ctx::load(Store::open(root.clone()).unwrap()).unwrap();
-        let lock = other.lock_for_write().unwrap();
+        other.lock_for_write().unwrap();
         ops::add(&mut other, add("From another process")).unwrap();
-        drop(lock);
+        other.unlock();
 
         project.current().unwrap();
         assert_resident_matches_fresh_fold(&root, &mut project);
@@ -1442,6 +1442,37 @@ mod resident_write_tests {
         cleanup(&root);
     }
 
+    /// `f602`, round two: the full-fold branch of `refresh_if_stale` used to
+    /// replace `self.ctx` outright, and `write` had already taken the lock
+    /// before calling it. Replacing the whole context dropped that lock on
+    /// the floor, so the write that followed inside the same call failed
+    /// with "write without the tree's lock" instead of writing. Truncating
+    /// the log short of `fold_end` is what forces the full fold from inside
+    /// a write that already holds the lock, rather than from a later read.
+    #[test]
+    fn a_full_fold_forced_inside_a_write_still_writes() {
+        let (root, mut project) = temp_project("full-fold-inside-write");
+        project
+            .write(|ctx| ops::add(ctx, add("Before the tear")))
+            .unwrap();
+
+        let log_path = root.join(".vivac").join("events");
+        let text = std::fs::read_to_string(&log_path).unwrap();
+        // Shorter than `fold_end`: on its own enough to force the full-fold
+        // branch, the way a process that died mid-append would leave it.
+        // Closed with its own newline, so the write that follows starts a
+        // line of its own instead of running on from this one -- that
+        // merge is `f599`'s own territory, not this test's.
+        std::fs::write(&log_path, format!("{}\n", &text[..text.len() - 6])).unwrap();
+
+        project
+            .write(|ctx| ops::add(ctx, add("After the fold was forced")))
+            .unwrap();
+
+        assert_resident_matches_fresh_fold(&root, &mut project);
+        cleanup(&root);
+    }
+
     /// `f599`: a log that was replaced, not grown -- a copy restored over
     /// it, a sync client, an edit by hand -- leaves an open handle reading
     /// the old file forever, unless the handle's own fingerprint is
@@ -1465,10 +1496,10 @@ mod resident_write_tests {
         Store::create(&scratch_root).unwrap();
         let mut scratch =
             crate::ops::Ctx::load(Store::open(scratch_root.clone()).unwrap()).unwrap();
-        let lock = scratch.lock_for_write().unwrap();
+        scratch.lock_for_write().unwrap();
         ops::add(&mut scratch, add("After the swap")).unwrap();
         ops::add(&mut scratch, add("Also after the swap")).unwrap();
-        drop(lock);
+        scratch.unlock();
 
         let log_path = root.join(".vivac").join("events");
         let replacement_path = root.join(".vivac").join("events.replacement");
