@@ -34,7 +34,9 @@
 //! ancestor chain, so the gutter is as wide as the tree is deep -- 15 --
 //! and not as wide as it is branched -- 125. That is the measurement the
 //! whole form rests on: 318 px of gutter on a desktop, 158 on a phone,
-//! fold controls included.
+//! fold controls included. This page's `Lane` is that drawing column, not
+//! the working-folder file `d595` names -- the two share a word and
+//! nothing else.
 //!
 //! Nothing here is carried by colour alone, which the DX pillar forbids:
 //! state is the fill of the station *and* a strike through the title *and*

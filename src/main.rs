@@ -22,6 +22,7 @@ mod glob;
 mod id;
 mod import;
 mod index;
+mod lane;
 mod mcp;
 mod model;
 mod ops;

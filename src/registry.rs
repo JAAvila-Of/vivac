@@ -93,6 +93,18 @@ fn try_note(store_dir: &Path, project_id: &str, root: &Path) -> std::io::Result<
     write(store_dir, &path, &contents)
 }
 
+/// Where the tree keyed by `project_id` lives, as the registry last heard.
+/// A lane names its tree by that key and by nothing else, so this is the
+/// lookup a working folder that does not hold the tree depends on.
+// Unused until the commit that resolves a folder's lane (`t594` §2.3).
+#[allow(dead_code)]
+pub fn root_of(store_dir: &Path, project_id: &str) -> Option<PathBuf> {
+    read(&store_dir.join(FILE))
+        .projects
+        .get(project_id)
+        .map(PathBuf::from)
+}
+
 /// Every root the registry currently points at, in no particular order.
 /// `find --everywhere` (`d273`) is the first reader that wants the roots
 /// themselves rather than the id each one is keyed by, so the map's keys
@@ -310,6 +322,20 @@ mod tests {
             contents.projects.get(&id),
             Some(&root.to_string_lossy().into_owned())
         );
+
+        std::fs::remove_dir_all(&store_dir).ok();
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn root_of_answers_a_noted_project_and_none_for_an_unknown_key() {
+        let store_dir = temp_dir("reg");
+        let (root, id) = seeded_project("proj");
+
+        note(&store_dir, &id, &root);
+
+        assert_eq!(root_of(&store_dir, &id), Some(root.clone()));
+        assert_eq!(root_of(&store_dir, "01nosuchprojectaaaaaaaaaaa"), None);
 
         std::fs::remove_dir_all(&store_dir).ok();
         std::fs::remove_dir_all(&root).ok();
