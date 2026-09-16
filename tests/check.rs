@@ -841,6 +841,56 @@ fn two_copies_one_name_withheld_says_more_hold_it_too() {
     std::fs::remove_dir_all(&home).ok();
 }
 
+/// The fifth form: two or more copies, none of them nameable. Distinct
+/// from the fourth (which lists whatever names it has before saying more
+/// exist) in that this one lists no name at all -- checked here word for
+/// word, since a name list that came out empty in this branch would still
+/// compile and would still look like output.
+#[test]
+fn two_copies_both_names_withheld_says_other_folders_with_no_list() {
+    let home = temp_dir("copy-multi-all-withheld-home");
+    let parent = temp_dir("copy-multi-all-withheld-parent");
+    std::fs::create_dir_all(&parent).unwrap();
+    let original_dir = parent.join("Orig");
+    std::fs::create_dir_all(&original_dir).unwrap();
+    run_bin(&original_dir, &home, &["init"]);
+    run_bin(
+        &original_dir,
+        &home,
+        &["push", "a goal", "--why", "so the log has a first event"],
+    );
+
+    let rejected_a = parent.join("someone@example.com");
+    std::fs::create_dir_all(rejected_a.join(".vivac")).unwrap();
+    std::fs::copy(
+        original_dir.join(".vivac").join("events"),
+        rejected_a.join(".vivac").join("events"),
+    )
+    .unwrap();
+    let (out_a, code_a) = run_bin(&rejected_a, &home, &["check"]);
+    assert_eq!(code_a, 1, "{out_a}");
+
+    let rejected_b = parent.join("another@example.com");
+    std::fs::create_dir_all(rejected_b.join(".vivac")).unwrap();
+    std::fs::copy(
+        original_dir.join(".vivac").join("events"),
+        rejected_b.join(".vivac").join("events"),
+    )
+    .unwrap();
+    let (out_b, code_b) = run_bin(&rejected_b, &home, &["check"]);
+    assert_eq!(code_b, 1, "{out_b}");
+
+    let (out, code) = run_bin(&original_dir, &home, &["check"]);
+    assert_eq!(code, 1, "{out}");
+    let expected = "  COPIES OF THIS TREE\n\n      Other folders on this machine hold a tree that starts with the same\n      event as this one, under names this tool will not write down. They\n      are copies of each other, and copies diverge in silence. Keep one,\n      delete the rest, and join the folders you still work in to the one\n      you kept:\n        vivac setup claude-code --join <the folder you kept>\n";
+    assert!(out.contains(expected), "{out}");
+    assert!(!out.contains("someone@example.com"), "{out}");
+    assert!(!out.contains("another@example.com"), "{out}");
+
+    std::fs::remove_dir_all(&parent).ok();
+    std::fs::remove_dir_all(&home).ok();
+}
+
 /// `A&B` carries no space, so the old rule -- quote only when there is
 /// one -- would have let it straight through: unquoted, `cmd.exe` runs
 /// `--join A` and then tries to run `B` as a command of its own.
