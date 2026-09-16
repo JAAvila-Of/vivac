@@ -791,7 +791,7 @@ fn note_registry(roots: &super::Roots) {
         });
         // This call's own `Noted::Copy` reaches nobody: `check` learns of
         // a copy through its own, separate read (`registry::copy_of`), and
-        // a stderr warning on every write like this one is `t594`'s task 5.
+        // a stderr warning on every write like this one is `t594` §4.7.
         let _ = crate::registry::note(
             &store_dir,
             &project_id,
