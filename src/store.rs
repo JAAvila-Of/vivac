@@ -1,9 +1,10 @@
-//! The store: one directory, three files.
+//! The store: one directory, several files.
 //!
 //! ```text
 //! .vivac/
 //!   events    append-only log, one JSON per line   <- SOURCE OF TRUTH
 //!   config    project_id and opaque actor
+//!   lane      which lane this folder is (`t594` §2.3), when it is one
 //!   index     derived projection of `events`       <- DISPOSABLE, REGENERABLE
 //! ```
 //!
@@ -197,10 +198,6 @@ impl Config {
 pub struct Store {
     pub root: PathBuf,
     pub config: Config,
-    /// The lane every event `append` writes signs as its own. `lane::MAIN`
-    /// until `with_lane` says otherwise, which is what keeps a tree nobody
-    /// ran `setup` on writing exactly what 0.11 wrote.
-    lane: String,
     /// Whether `events` was already there the moment this store opened it.
     /// A process that opens a tree whose log is already gone still recreates
     /// it on the next append, the same as planting would. What this guards
@@ -541,7 +538,6 @@ impl Store {
         Ok(Store {
             root,
             config,
-            lane: crate::lane::MAIN.to_string(),
             log_present,
         })
     }
@@ -562,26 +558,8 @@ impl Store {
         Ok(Store {
             root: root.to_path_buf(),
             config,
-            lane: crate::lane::MAIN.to_string(),
             log_present: true,
         })
-    }
-
-    /// Sets which lane this store signs every event as. Builder-style,
-    /// consuming `self`, so a caller that never calls it keeps the `main`
-    /// that `open` and `create` already set -- which is what keeps a tree
-    /// nobody ran `setup` on signing exactly what it always has.
-    pub fn with_lane(mut self, lane: String) -> Store {
-        self.lane = lane;
-        self
-    }
-
-    /// Same change as `with_lane`, in place: `Ctx::lock_for_write`'s own
-    /// join (`t594` §2.3) holds `self` as `&mut Ctx`, and `with_lane`'s
-    /// builder style needs to move `store` out from behind that reference
-    /// to call it, which a mutable reference alone does not allow.
-    pub(crate) fn set_lane(&mut self, lane: String) {
-        self.lane = lane;
     }
 
     pub fn log(&self) -> PathBuf {
@@ -754,6 +732,15 @@ impl Store {
     /// not compile, and `lock.covers` refuses one taken on another tree's
     /// `.vivac/lock` (`f602`).
     ///
+    /// `lane` is an argument for the same reason: which thread this write
+    /// signs as is a fact about *this* write, not a property of the folder
+    /// where it lands, and a `Store` that carried it as a field could be
+    /// asked to sign with whatever it happened to be left holding
+    /// (`f608`, third time -- the write lock in task 1, the tree's own
+    /// lane in task 6, and this one). `Ctx` is the only place that ever
+    /// knew which lane it was; now it is also the only place that can
+    /// forget.
+    ///
     /// `tree_already_governed` is `d444`'s own check, paid before any of
     /// `body` reaches disk: the config locks in place, first, so a process
     /// that dies between the two leaves an unlocked config over a tree with
@@ -767,6 +754,7 @@ impl Store {
     pub fn append(
         &mut self,
         lock: &WriteLock,
+        lane: &str,
         body: Vec<crate::event::Body>,
         from_seq: u64,
         tree_already_governed: bool,
@@ -784,7 +772,7 @@ impl Store {
                 id: id::ulid(),
                 ts: clock::now_rfc3339(),
                 actor: self.config.actor.clone(),
-                lane: self.lane.clone(),
+                lane: lane.to_string(),
                 payload: c,
             };
             last_line_start = buf.len();
@@ -1102,6 +1090,7 @@ mod tests {
         for _ in 0..500 {
             s.append(
                 &lock,
+                crate::lane::MAIN,
                 vec![crate::event::Body::NodeNoted {
                     node: "t1".into(),
                     note: "filler".into(),
@@ -1166,7 +1155,7 @@ mod tests {
             note: "x".into(),
         }];
         assert!(
-            s.append(&lock, body, 0, false).is_err(),
+            s.append(&lock, crate::lane::MAIN, body, 0, false).is_err(),
             "append wrote into a log that is gone"
         );
         assert!(
@@ -1190,7 +1179,8 @@ mod tests {
             note: "x".into(),
         }];
         assert!(
-            sa.append(&wrong, body, 0, false).is_err(),
+            sa.append(&wrong, crate::lane::MAIN, body, 0, false)
+                .is_err(),
             "append accepted a lock taken on a different tree"
         );
         fs::remove_dir_all(&a).ok();
@@ -1247,6 +1237,7 @@ mod tests {
         let lock = s.lock_for_write().unwrap();
         s.append(
             &lock,
+            crate::lane::MAIN,
             vec![crate::event::Body::NodeNoted {
                 node: "t1".into(),
                 note: "seed".into(),
@@ -1417,6 +1408,7 @@ mod tests {
         let lock = s.lock_for_write().unwrap();
         s.append(
             &lock,
+            crate::lane::MAIN,
             vec![crate::event::Body::NodeNoted {
                 node: "t1".into(),
                 note: "seed".into(),
@@ -1481,16 +1473,20 @@ mod tests {
     }
 
     #[test]
-    fn an_event_is_signed_by_the_lane_that_wrote_it() {
+    fn an_event_is_signed_by_whatever_lane_append_is_given() {
+        // `f608`, third time: the lane used to live on the `Store` itself
+        // (`with_lane`), and a `Store` freshly opened by `refold` carried
+        // `main` again no matter which lane the `Ctx` around it answered
+        // as. It is an argument now, exactly like the write lock, so
+        // there is nothing left on `Store` for a caller to leave stale.
         let tmp = std::env::temp_dir().join(format!("vivac-sign-{}", id::ulid()));
         Store::create(&tmp).unwrap();
-        let mut s = Store::open(tmp.clone())
-            .unwrap()
-            .with_lane("01M2XYZ".into());
+        let mut s = Store::open(tmp.clone()).unwrap();
         let lock = s.lock_for_write().unwrap();
         let w = s
             .append(
                 &lock,
+                "01M2XYZ",
                 vec![crate::event::Body::NodeNoted {
                     node: "t1".into(),
                     note: "x".into(),
@@ -1504,9 +1500,11 @@ mod tests {
     }
 
     #[test]
-    fn a_store_nobody_told_a_lane_still_signs_main() {
+    fn a_caller_that_passes_main_signs_main() {
         // Every tree that exists today, and every tree where nobody has run
-        // setup: the log has to stay byte for byte what 0.11 wrote.
+        // setup: the log has to stay byte for byte what 0.11 wrote, and
+        // `Ctx::emit` is the caller that keeps that true by passing
+        // `lane::MAIN` on its own once `self.lane` is `None`.
         let tmp = std::env::temp_dir().join(format!("vivac-signmain-{}", id::ulid()));
         Store::create(&tmp).unwrap();
         let mut s = Store::open(tmp.clone()).unwrap();
@@ -1514,6 +1512,7 @@ mod tests {
         let w = s
             .append(
                 &lock,
+                crate::lane::MAIN,
                 vec![crate::event::Body::NodeNoted {
                     node: "t1".into(),
                     note: "x".into(),
@@ -1561,6 +1560,7 @@ mod tests {
         let lock = s.lock_for_write().unwrap();
         s.append(
             &lock,
+            crate::lane::MAIN,
             vec![crate::event::Body::LaneDeclared {
                 lane: crate::lane::MAIN.to_string(),
                 name: crate::lane::MAIN.to_string(),

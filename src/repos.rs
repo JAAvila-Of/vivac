@@ -192,12 +192,11 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// `d600`: a folder name the redaction guard rejects never reaches the
-    /// log, and the lane is declared anyway under a name derived only from
-    /// its own id.
-    #[test]
-    fn a_folder_name_the_redaction_guard_rejects_becomes_lane_plus_four() {
-        let name = crate::lane::name_for("01M2ZZZZZZZZZZZZZZZZZZZZZZ", "ghp_0123456789abcdefghij");
-        assert_eq!(name, "lane-01M2");
-    }
+    // `d600`: a folder name the redaction guard rejects never reaches the
+    // log, and the lane is declared anyway under a name derived only from
+    // its own id. `name_for` ignores the folder name it is handed, so a
+    // test that only calls it proves nothing about the guard itself --
+    // `tests/lanes.rs`'s `a_worktree_named_a_secret_never_writes_it_to_the_log`
+    // is the one that declares a real lane from a rejected name and reads
+    // the real log (`t594` branch-fix-1 #7).
 }

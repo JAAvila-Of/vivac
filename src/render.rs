@@ -169,6 +169,18 @@ impl Full {
 /// the `seq` of its `node.created`, and its anchor. Empty with nothing
 /// earlier to point to -- there is no version control, or the node predates
 /// every stop -- and that is a value, not a failure.
+///
+/// **Deliberately not filtered by lane**, unlike `reconcile::reference`
+/// (`last_vivac`, `t594` task 6): `reconcile` compares *this folder's own*
+/// git against the anchor of a stop, so that stop has to be this lane's;
+/// asking any other lane's would compare against a commit this checkout
+/// may not even have. `anchor_of` answers a different question -- what
+/// commit was in `HEAD` when `n` itself was born, a property of the node,
+/// not of whoever is asking -- and a node born in a lane other than the
+/// reader's stays answered from that lane's own history. The answer can
+/// name a commit this checkout does not have; that is honest, since the
+/// node was born somewhere else, not a bug to filter away (`t594`
+/// branch-fix-1, "lo que NO se cambia").
 pub(crate) fn anchor_of(a: &Tree, full: &Full, n: &Node) -> AnchorRef {
     let Some(&seq) = full.created.get(&n.id) else {
         return AnchorRef::default();

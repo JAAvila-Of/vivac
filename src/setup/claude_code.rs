@@ -478,16 +478,6 @@ struct LanePlan {
     excluded: Option<(usize, &'static str)>,
 }
 
-/// `folder_name`, or what it becomes once the redaction guard rejects it
-/// (`d600`, `lane::name_for`): the folder's own name never reaches the
-/// log either way.
-fn declared_name(id: &str, folder_name: &str) -> String {
-    match crate::redact::check_field("lane name", folder_name) {
-        Some(_) => crate::lane::name_for(id, folder_name),
-        None => folder_name.to_string(),
-    }
-}
-
 /// `scanned`, filtered through the redaction guard (`d600`): what is left
 /// to declare, and the count and first rule of whatever it kept out.
 /// Shared by declaring a lane's own folder and by declaring `main` on the
@@ -590,17 +580,17 @@ fn plan_lane(roots: &super::Roots) -> LanePlan {
         }
         Some(l) if here_has_its_own_vivac && l.lane.is_none() => {
             let id = crate::lane::new_id();
-            let name = declared_name(&id, &folder_name);
+            let name = crate::lane::declared_name(&id, &folder_name);
             (id, name, true)
         }
         Some(l) if here_has_its_own_vivac => {
             let id = l.lane.as_ref().unwrap().id.clone();
-            let name = declared_name(&id, &folder_name);
+            let name = crate::lane::declared_name(&id, &folder_name);
             (id, name, false)
         }
         Some(_) => {
             let id = crate::lane::new_id();
-            let name = declared_name(&id, &folder_name);
+            let name = crate::lane::declared_name(&id, &folder_name);
             (id, name, true)
         }
     };

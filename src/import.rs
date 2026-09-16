@@ -113,14 +113,24 @@ pub fn import(ctx: &mut Ctx, args: &Args) -> R {
     }
 
     let ulids: BTreeMap<u64, String> = nodes.iter().map(|n| (n.id, id::ulid())).collect();
+
+    // `t594` branch-fix-1 #5: `lock_for_write` can reload the tree if
+    // another writer landed first, and everything that read the tree
+    // before this point -- `seq`, whether it still counts as empty --
+    // has to be read again after, or a second writer racing this one
+    // hands out the very `seq` `t594` fix-1 finding C already fixed a
+    // door over. Taken before `seq`/`lane` are read, not after: numbering
+    // happens under the lock, like any other write.
+    ctx.lock_for_write()?;
+    if !ctx.tree.is_empty_tree() {
+        return Err(Failure::Model(format!(
+            "  The tree already has {} nodes. Importing on top would duplicate numbers.\n\n  \
+             Import into a freshly created .vivac/.",
+            ctx.tree.total()
+        )));
+    }
+
     let mut events = Vec::new();
-    // Continues from the tree's own `seq` rather than assuming the log is
-    // empty: `import` only requires an empty tree of *nodes*
-    // (`is_empty_tree`, above), and a lane-context event -- `lane.declared`,
-    // `session.started` -- can already sit in a log with none. Assuming
-    // zero used to hand out a `seq` another event already had, which
-    // `check` never sees because nothing reads `seq` for anything but
-    // ordering (`t594` fix-1, finding C).
     let mut seq = ctx.tree.seq;
     let actor = ctx.store.config.actor.clone();
     // The lane this context actually runs as, `main` only as the fallback
@@ -194,7 +204,6 @@ pub fn import(ctx: &mut Ctx, args: &Args) -> R {
     }
 
     let total = nodes.len();
-    ctx.lock_for_write()?;
     let lock = ctx
         .lock
         .as_ref()

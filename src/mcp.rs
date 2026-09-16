@@ -1390,6 +1390,71 @@ mod resident_write_tests {
         cleanup(&root);
     }
 
+    /// `f608`, third time (`t594` branch-fix-1 #1): the lane used to live
+    /// on the `Store` itself, and `Ctx::refold` opened a fresh one with
+    /// `Store::open` -- which always started out signing `main` -- and
+    /// never reapplied the lane the `Ctx` around it was actually running
+    /// as. A resident project serving a joined lane that reloaded whole
+    /// after a torn write kept reading correctly (`adopt` still worked)
+    /// but signed every write after that `main`, from the door the agent
+    /// actually writes through. The lane is an argument to `append` now,
+    /// not a field anything can leave stale.
+    #[test]
+    fn a_resident_reload_after_a_torn_write_keeps_signing_its_own_lane() {
+        let root = std::env::temp_dir().join(format!(
+            "vivac-mcp-resident-reload-lane-{}-{}",
+            std::process::id(),
+            crate::id::ulid()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        Store::create(&root).unwrap();
+        let located = crate::store::Located {
+            root: root.clone(),
+            lane_dir: root.clone(),
+            lane: Some(crate::lane::Lane {
+                version: 1,
+                id: "b".to_string(),
+                project: String::new(),
+            }),
+            worktree: None,
+        };
+        let mut project = Project::open(
+            root.clone(),
+            "t".into(),
+            "t".into(),
+            ops::Whose::Resolved(&located),
+        )
+        .unwrap_or_else(|e| panic!("{}", e.message()));
+        project
+            .write(|ctx| ops::add(ctx, add("Before the reload")))
+            .unwrap();
+
+        // Same trick `a_log_rewritten_underneath_is_folded_whole` uses to
+        // force the next read through a full `refold` rather than a tail.
+        let log = root.join(".vivac").join("events");
+        let text = std::fs::read_to_string(&log).unwrap();
+        std::fs::write(&log, format!("\n{text}")).unwrap();
+        project.current().unwrap();
+
+        project
+            .write(|ctx| ops::add(ctx, add("After the reload")))
+            .unwrap();
+
+        let (_, log) = project.current_with_log().unwrap();
+        let after = log
+            .iter()
+            .find(|e| {
+                matches!(&e.payload, crate::event::Body::NodeCreated { title, .. } if title == "After the reload")
+            })
+            .expect("the write after the reload landed");
+        assert_eq!(
+            after.lane, "b",
+            "the write after refold signed {:?} instead of its own lane",
+            after.lane
+        );
+        cleanup(&root);
+    }
+
     /// What the server itself writes lands in `log` too, beside the tree
     /// it was already applied to.
     #[test]
