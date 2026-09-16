@@ -576,6 +576,14 @@ impl Store {
         self
     }
 
+    /// Same change as `with_lane`, in place: `Ctx::lock_for_write`'s own
+    /// join (`t594` §2.3) holds `self` as `&mut Ctx`, and `with_lane`'s
+    /// builder style needs to move `store` out from behind that reference
+    /// to call it, which a mutable reference alone does not allow.
+    pub(crate) fn set_lane(&mut self, lane: String) {
+        self.lane = lane;
+    }
+
     pub fn log(&self) -> PathBuf {
         self.root.join(DIR).join(LOG)
     }

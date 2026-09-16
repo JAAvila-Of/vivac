@@ -469,7 +469,8 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
     // and `changes` is the one command that needs them back. Reading here
     // and again below would read the log twice for nothing.
     if cmd == "changes" {
-        let (ctx, log) = ops::Ctx::load_with_log(store::Store::open(root)?, lane_id.clone())?;
+        let (ctx, log) =
+            ops::Ctx::load_with_log(store::Store::open(root)?, ops::Whose::Resolved(&located))?;
         return changes::changes(&ctx.tree, &log, a);
     }
 
@@ -524,11 +525,12 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
             return render::why(&tree, &[], a).map(|_| 0);
         }
         if a.has("full") {
-            let (ctx, log) = ops::Ctx::load_with_log(store::Store::open(root)?, lane_id.clone())?;
+            let (ctx, log) =
+                ops::Ctx::load_with_log(store::Store::open(root)?, ops::Whose::Resolved(&located))?;
             extra_word(a)?;
             return render::why(&ctx.tree, &log, a).map(|_| 0);
         }
-        let ctx = ops::Ctx::load(store::Store::open(root)?, lane_id.clone())?;
+        let ctx = ops::Ctx::load(store::Store::open(root)?, ops::Whose::Resolved(&located))?;
         extra_word(a)?;
         return render::why(&ctx.tree, &[], a).map(|_| 0);
     }
@@ -540,9 +542,9 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
     // to rewrite the derived index, even though reading a warm or stale one
     // stays free either way.
     let mut ctx = if may_append(cmd) {
-        ops::Ctx::load_for_write(store::Store::open(root)?, lane_id.clone())?
+        ops::Ctx::load_for_write(store::Store::open(root)?, ops::Whose::Resolved(&located))?
     } else {
-        ops::Ctx::load(store::Store::open(root)?, lane_id.clone())?
+        ops::Ctx::load(store::Store::open(root)?, ops::Whose::Resolved(&located))?
     };
 
     // `check` is the only one with an exit code of its own: it separates

@@ -1141,7 +1141,7 @@ mod resident_write_tests {
         let fresh = dump_tree(
             &ops::Ctx::load(
                 Store::open(root.to_path_buf()).unwrap(),
-                Some(crate::lane::MAIN.to_string()),
+                ops::Whose::Founding,
             )
             .unwrap_or_else(|e| panic!("{}", e.message()))
             .tree,
@@ -1348,11 +1348,9 @@ mod resident_write_tests {
             .write(|ctx| ops::add(ctx, add("From the server")))
             .unwrap();
 
-        let mut other = crate::ops::Ctx::load(
-            Store::open(root.clone()).unwrap(),
-            Some(crate::lane::MAIN.to_string()),
-        )
-        .unwrap();
+        let mut other =
+            crate::ops::Ctx::load(Store::open(root.clone()).unwrap(), ops::Whose::Founding)
+                .unwrap();
         other.lock_for_write().unwrap();
         ops::add(&mut other, add("From another process")).unwrap();
         other.unlock();
@@ -1432,11 +1430,9 @@ mod resident_write_tests {
         project.current().unwrap();
         assert_resident_matches_fresh_fold(&root, &mut project);
 
-        let mut other = crate::ops::Ctx::load(
-            Store::open(root.clone()).unwrap(),
-            Some(crate::lane::MAIN.to_string()),
-        )
-        .unwrap();
+        let mut other =
+            crate::ops::Ctx::load(Store::open(root.clone()).unwrap(), ops::Whose::Founding)
+                .unwrap();
         other.lock_for_write().unwrap();
         ops::add(&mut other, add("From another process")).unwrap();
         other.unlock();
@@ -1535,7 +1531,7 @@ mod resident_write_tests {
         Store::create(&scratch_root).unwrap();
         let mut scratch = crate::ops::Ctx::load(
             Store::open(scratch_root.clone()).unwrap(),
-            Some(crate::lane::MAIN.to_string()),
+            ops::Whose::Founding,
         )
         .unwrap();
         scratch.lock_for_write().unwrap();

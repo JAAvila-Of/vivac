@@ -429,6 +429,7 @@ either
 elapsed
 element
 else
+elsewhere
 email
 emit
 empty
@@ -520,6 +521,7 @@ find
 finding
 finds
 fingerprint
+finish
 finished
 first
 fit
@@ -691,6 +693,7 @@ index
 indexed
 indices
 info
+inherits
 init
 initial
 initialize
@@ -726,6 +729,7 @@ its
 itself
 jar
 join
+joined
 joins
 js
 json
@@ -799,6 +803,7 @@ log2
 lone
 long
 longer
+looking
 looks
 loop
 loopback
@@ -1202,6 +1207,7 @@ rescued
 rescuing
 resident
 resolve
+resolved
 resolves
 respects
 respond
@@ -1562,6 +1568,7 @@ ungoverned
 unique
 unit
 unix
+unjoined
 unknown
 unlock
 unlocked
