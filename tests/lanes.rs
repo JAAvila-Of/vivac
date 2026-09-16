@@ -132,6 +132,12 @@ fn log_text(c: &Sandbox) -> String {
     std::fs::read_to_string(c.0.join(".vivac").join("events")).expect("the log is there")
 }
 
+/// Whether `dir` holds a tree of its own: `store::already_planted`'s own
+/// definition, `config` **or** `events` (`t594` fix-1, finding 4).
+fn already_planted(dir: &Path) -> bool {
+    dir.join(".vivac").join("config").is_file() || dir.join(".vivac").join("events").is_file()
+}
+
 /// (1): `setup` in a second folder of the same product joins the tree
 /// above as a new lane instead of planting a second one -- the bug this
 /// task fixes: `.vivac/lane` appears with a fresh id, `lane.declared`
@@ -149,10 +155,7 @@ fn setup_in_a_second_folder_joins_the_tree_above_as_a_new_lane() {
         second.join(".vivac").join("lane").exists(),
         "the second folder never became a lane"
     );
-    assert!(
-        !second.join(".vivac").join("config").exists(),
-        "a second tree was planted"
-    );
+    assert!(!already_planted(&second), "a second tree was planted");
     assert!(
         log_text(&c).contains("\"type\":\"lane.declared\""),
         "no lane.declared reached the tree's own log"
@@ -240,4 +243,92 @@ fn setup_on_an_existing_trees_own_folder_declares_main_and_changes_nothing_else(
     let (after, code2) = run(&c.0, c.global_home(), &["brief"]);
     assert_eq!(code2, 0, "{after}");
     assert_eq!(before, after, "declaring main changed what brief answers");
+}
+
+// ---------------------------------------------------------------------------
+// `t594` fix-1, ronda 1.
+// ---------------------------------------------------------------------------
+
+fn git(dir: &Path, args: &[&str]) {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// Finding 1 (high): a linked worktree sits *beside* the tree's own
+/// folder, not above it, so the upward walk never finds it and the only
+/// way back is the registry. `setup` used to be the one command that
+/// never noted one, which left the worktree unable to read its own
+/// `brief` ever again once it declared a lane there. `setup` now notes
+/// the tree it joins, the same as any other command that writes to it.
+#[test]
+fn setup_in_a_linked_worktree_registers_the_tree_it_joins() {
+    let root = unique("worktree-root");
+    std::fs::create_dir_all(&root).unwrap();
+    git(&root, &["init", "-q"]);
+    git(&root, &["config", "user.email", "t@example.com"]);
+    git(&root, &["config", "user.name", "t"]);
+    std::fs::write(root.join("f.txt"), "x").unwrap();
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "-q", "-m", "first"]);
+
+    let home = unique("worktree-home");
+    let (init_out, init_code) = run(&root, &home, &["init"]);
+    assert_eq!(init_code, 0, "{init_out}");
+
+    let feature = root.parent().unwrap().join(format!(
+        "{}-feature",
+        root.file_name().unwrap().to_string_lossy()
+    ));
+    git(&root, &["worktree", "add", &feature.display().to_string()]);
+
+    let (setup_out, setup_code) = run(&feature, &home, &["setup", "claude-code", "--yes"]);
+    assert_eq!(setup_code, 0, "{setup_out}");
+
+    let (brief_out, brief_code) = run(&feature, &home, &["brief"]);
+    assert_eq!(brief_code, 0, "{brief_out}");
+    assert!(
+        !brief_out.contains("--join"),
+        "the worktree came back unusable:\n{brief_out}"
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+    std::fs::remove_dir_all(&feature).ok();
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Finding 5 (media-baja): `unchanged` used to decide `needs_lock` too, so
+/// a config whose lanes sentence was removed by hand -- or by an older
+/// `Store::open` regenerating one that went missing before it knew a lane
+/// event counts -- never got relocked by a later `setup` that had nothing
+/// new to declare.
+#[test]
+fn setup_relocks_the_config_when_its_lanes_sentence_was_removed_by_hand() {
+    let c = Sandbox::new_seeded("declare-relock");
+    setup_ok(&c.0, c.global_home());
+
+    let config_path = c.0.join(".vivac").join("config");
+    let mut cfg: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&config_path).unwrap()).unwrap();
+    cfg["version"] = serde_json::json!(1);
+    std::fs::write(
+        &config_path,
+        format!("{}\n", serde_json::to_string_pretty(&cfg).unwrap()),
+    )
+    .unwrap();
+
+    let out = setup_ok(&c.0, c.global_home());
+    let after = std::fs::read_to_string(&config_path).unwrap();
+    assert!(
+        after.contains("this tree holds lanes"),
+        "the sentence did not come back:\n{after}\n\n{out}"
+    );
 }

@@ -1766,11 +1766,12 @@ pub fn session_started(
 /// true, and the next `setup` writes the event that is still missing.
 ///
 /// **Not** where this folder's own `.vivac/lane` gets written, when this
-/// is a brand new lane: `t594` §4.5.2 puts that file down *before* this is
-/// even called, never after. The reverse -- an event with no file behind
-/// it -- would leave this very folder not knowing whose thread it is, and
-/// it would keep signing as `main` while the tree it just wrote to says
-/// otherwise, which is the one ordering nothing here is allowed to permit.
+/// is a brand new lane: the caller (`write_lane`, `setup/claude_code.rs`)
+/// puts that file down *before* this is even called, never after. The
+/// reverse -- an event with no file behind it -- would leave this very
+/// folder not knowing whose thread it is, and it would keep signing as
+/// `main` while the tree it just wrote to says otherwise, which is the one
+/// ordering nothing here is allowed to permit.
 pub fn declare_lane(ctx: &mut Ctx, name: String, repos: Vec<crate::event::Repo>) -> R {
     let lock = ctx
         .lock
