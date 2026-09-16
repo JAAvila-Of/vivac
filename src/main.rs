@@ -381,7 +381,17 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
             .iter()
             .map(std::path::PathBuf::from)
             .collect();
-        let cwd_root = store::locate(&cwd)?.map(|l| l.root);
+        let located_here = store::locate(&cwd)?;
+        let cwd_root = located_here.as_ref().map(|l| l.root.clone());
+        // Same total resolution `lane_id` uses below for the ordinary
+        // command path: `Located.lane` is `None` for exactly the folder
+        // that holds the tree itself, which is the implicit `main` every
+        // tree with no lane file is.
+        let cwd_lane = located_here.map(|l| {
+            l.lane
+                .map(|x| x.id)
+                .unwrap_or_else(|| lane::MAIN.to_string())
+        });
         let roots = if explicit.is_empty() {
             // The registry is where "every project on this machine" is
             // written down. The one underfoot can still be missing from it --
@@ -403,7 +413,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
                     Failure::usage(format!("--port needs a port number, not \"{p}\""))
                 })?),
             };
-        return web::serve(roots, cwd_root, port, !a.has("no-open")).map(|_| 0);
+        return web::serve(roots, cwd_root, cwd_lane, port, !a.has("no-open")).map(|_| 0);
     }
 
     let Some(located) = store::locate(&cwd)? else {
@@ -450,7 +460,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
     // loads the tree itself and reloads it when the log moves. Everything
     // below assumes one command, one process, one fold.
     if cmd == "mcp" {
-        return mcp::serve(root).map(|_| 0);
+        return mcp::serve(root, lane_id).map(|_| 0);
     }
 
     // Its own load, ahead of the generic one below, for the same reason as
@@ -494,6 +504,11 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         // other instead of `--full` silently answering half its question.
         if let Some(spec) = a.opt("project") {
             let foreign_root = registry::resolve(spec)?;
+            // No `for_lane`: this folder is not a lane of the foreign
+            // tree, so it reads that tree's founding lane, the same as
+            // any tree nobody ran `setup` in. Defensible and not a lie
+            // today; it stops being one the day a foreign tree has a
+            // second lane (`t594` task 6, review round 1).
             let tree = index::load(&store::Store::open(foreign_root)?, false)?;
             extra_word(a)?;
             if a.has("full") {

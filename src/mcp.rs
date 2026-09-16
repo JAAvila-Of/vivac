@@ -787,6 +787,12 @@ fn call(project: &mut Project, params: &Value) -> Result<String, Failure> {
             match a.str("project") {
                 Some(spec) => {
                     let foreign_root = registry::resolve(spec)?;
+                    // No `for_lane`: this folder is not a lane of the
+                    // foreign tree, so it reads that tree's founding
+                    // lane, the same as any tree nobody ran `setup` in.
+                    // Defensible and not a lie today; it stops being one
+                    // the day a foreign tree has a second lane (`t594`
+                    // task 6, review round 1).
                     let tree = index::load(&store::Store::open(foreign_root)?, false)?;
                     pretty(render::why_data(&tree, &id)?)
                 }
@@ -982,8 +988,8 @@ fn handle(project: &mut Project, line: &str) -> Option<String> {
     }
 }
 
-pub fn serve(root: PathBuf) -> R {
-    let mut registry = Registry::open(vec![root])?;
+pub fn serve(root: PathBuf, lane: Option<String>) -> R {
+    let mut registry = Registry::open(vec![root.clone()], lane.map(|l| (root, l)))?;
     let project = registry.first();
     let input = std::io::stdin();
     let mut output = std::io::stdout();
@@ -1020,8 +1026,13 @@ mod resident_write_tests {
         ));
         std::fs::create_dir_all(&root).unwrap();
         Store::create(&root).unwrap();
-        let project = Project::open(root.clone(), "t".into(), "t".into())
-            .unwrap_or_else(|e| panic!("{}", e.message()));
+        let project = Project::open(
+            root.clone(),
+            "t".into(),
+            "t".into(),
+            Some(crate::lane::MAIN.to_string()),
+        )
+        .unwrap_or_else(|e| panic!("{}", e.message()));
         (root, project)
     }
 

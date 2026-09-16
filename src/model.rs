@@ -1047,6 +1047,14 @@ impl Tree {
     /// The most recent vivac in the lane this tree is looked at from.
     /// Vivacs are appended in event order, so the last one whose `lane`
     /// matches is the last one in time for that lane.
+    ///
+    /// O(V) rather than the O(1) a single tree-wide `vivacs.last()` used to
+    /// be: a lane with no stops of its own walks every vivac the tree has
+    /// (`t594` task 6, review round 1). Bounded by how many stops exist, not by
+    /// nodes, and small enough not to matter -- 524 on this project's own
+    /// tree at the time this was written -- but it is the one change of
+    /// complexity class this commit made, and worth knowing before somebody
+    /// has to measure it again.
     pub fn last_vivac(&self) -> Option<&Vivac> {
         self.vivacs.iter().rev().find(|v| v.lane == self.lane())
     }

@@ -369,16 +369,25 @@ fn lane_label(tree: &Tree, lane: &str) -> String {
     }
 }
 
-/// What a line signed by `lane` carries in front of it: nothing when it is
-/// the lane this stretch is being read from, and the other lane's own name
-/// otherwise. Empty on a single-lane tree, because `lane` never differs
-/// from `tree.lane()` there -- which is what keeps this stretch printing
-/// the exact bytes it always has (`t594` §4.3).
+/// Whether `lane` is not the one this stretch is being read from -- the one
+/// condition both the text mark and the `--json` field share. Always false
+/// on a single-lane tree, since `lane` never differs from `tree.lane()`
+/// there, which is what keeps both outputs printing the exact bytes they
+/// always have (`t594` §4.3).
+fn is_foreign(tree: &Tree, lane: &str) -> bool {
+    lane != tree.lane()
+}
+
+/// What a line signed by `lane` carries: nothing when it is the lane this
+/// stretch is being read from, and the other lane's own name, bracketed,
+/// otherwise. Goes between the alias and the title -- `format!("[{}] ")`
+/// used to sit in front of the alias instead, and that shifted the `{:<6}`
+/// column every other line in the same group still reads by.
 fn foreign_mark(tree: &Tree, lane: &str) -> String {
-    if lane == tree.lane() {
-        String::new()
-    } else {
+    if is_foreign(tree, lane) {
         format!("[{}] ", lane_label(tree, lane))
+    } else {
+        String::new()
     }
 }
 
@@ -394,9 +403,9 @@ fn print_text(tree: &Tree, result: &Changed) {
         outln!("  OPENED ({})", result.opened.len());
         for o in &result.opened {
             outln!(
-                "    {}{:<6} {}",
-                foreign_mark(tree, &o.lane),
+                "    {:<6} {}{}",
                 o.node.alias(),
+                foreign_mark(tree, &o.lane),
                 o.node.title(tree)
             );
         }
@@ -408,9 +417,9 @@ fn print_text(tree: &Tree, result: &Changed) {
         outln!("  CLOSED ({})", result.closed.len());
         for c in &result.closed {
             outln!(
-                "    {}{:<6} {}",
-                foreign_mark(tree, &c.lane),
+                "    {:<6} {}{}",
                 c.node.alias(),
+                foreign_mark(tree, &c.lane),
                 c.node.title(tree)
             );
             let line = if c.forced {
@@ -434,9 +443,9 @@ fn print_text(tree: &Tree, result: &Changed) {
         outln!("  FLAGGED ({})", result.flagged.len());
         for f in &result.flagged {
             outln!(
-                "    {}{:<6} {}",
-                foreign_mark(tree, &f.lane),
+                "    {:<6} {}{}",
                 f.node.alias(),
+                foreign_mark(tree, &f.lane),
                 f.node.title(tree)
             );
             for l in wrap(
@@ -455,9 +464,9 @@ fn print_text(tree: &Tree, result: &Changed) {
         outln!("  MOVED ({})", result.moved.len());
         for m in &result.moved {
             outln!(
-                "    {}{:<6} {}",
-                foreign_mark(tree, &m.lane),
+                "    {:<6} {}{}",
                 m.node.alias(),
+                foreign_mark(tree, &m.lane),
                 m.node.title(tree)
             );
             let word = m.state.word(m.node.kind);
@@ -489,6 +498,22 @@ fn print_text(tree: &Tree, result: &Changed) {
     outln!();
 }
 
+/// Adds `"lane"` to `obj`, and only when `lane` is foreign -- the same
+/// condition `foreign_mark` uses for the text. An agent reading `--json`
+/// has no other way to tell a line came from another folder (DX pillar):
+/// the mark used to live only in the text, and the shape here follows
+/// `Repo.root`'s own `skip_serializing_if` (task 5) -- present only when
+/// there is something to say, so a single-lane tree's JSON never gains
+/// the key at all.
+fn with_lane_if_foreign(tree: &Tree, lane: &str, mut obj: serde_json::Value) -> serde_json::Value {
+    if is_foreign(tree, lane) {
+        if let serde_json::Value::Object(map) = &mut obj {
+            map.insert("lane".to_string(), json!(lane));
+        }
+    }
+    obj
+}
+
 fn as_json(tree: &Tree, result: &Changed) -> serde_json::Value {
     json!({
         // `kind` says how the boundary was chosen, not what kind of stop it
@@ -504,28 +529,28 @@ fn as_json(tree: &Tree, result: &Changed) -> serde_json::Value {
             }),
             Boundary::Beginning { .. } => serde_json::Value::Null,
         },
-        "opened": result.opened.iter().map(|o| json!({
+        "opened": result.opened.iter().map(|o| with_lane_if_foreign(tree, &o.lane, json!({
             "alias": o.node.alias(),
             "title": o.node.title(tree),
             "kind": o.node.kind,
-        })).collect::<Vec<_>>(),
-        "closed": result.closed.iter().map(|c| json!({
+        }))).collect::<Vec<_>>(),
+        "closed": result.closed.iter().map(|c| with_lane_if_foreign(tree, &c.lane, json!({
             "alias": c.node.alias(),
             "title": c.node.title(tree),
             "outcome": c.outcome,
             "forced": c.forced,
-        })).collect::<Vec<_>>(),
-        "flagged": result.flagged.iter().map(|f| json!({
+        }))).collect::<Vec<_>>(),
+        "flagged": result.flagged.iter().map(|f| with_lane_if_foreign(tree, &f.lane, json!({
             "alias": f.node.alias(),
             "title": f.node.title(tree),
             "flag": f.flag.word(),
             "reason": f.reason,
-        })).collect::<Vec<_>>(),
-        "moved": result.moved.iter().map(|m| json!({
+        }))).collect::<Vec<_>>(),
+        "moved": result.moved.iter().map(|m| with_lane_if_foreign(tree, &m.lane, json!({
             "alias": m.node.alias(),
             "title": m.node.title(tree),
             "state": m.state.word(m.node.kind),
-        })).collect::<Vec<_>>(),
+        }))).collect::<Vec<_>>(),
         "tail": {
             "focus_moves": result.tail.focus_moves,
             "notes": result.tail.notes,
@@ -802,5 +827,53 @@ mod tests {
         let events = vec![node_created(1, "n1", 1, "Node")];
         let tree = fold(&events, 0);
         assert_eq!(foreign_mark(&tree, "b"), "[b] ");
+    }
+
+    /// The DX pillar: an agent reading `--json` has no other way to learn a
+    /// line came from another folder. `lane` carries the opaque id, not the
+    /// declared name the text mark shows -- the two surfaces answer to
+    /// different readers and are allowed to differ in value, never in
+    /// whether they say anything at all.
+    #[test]
+    fn json_carries_lane_only_when_it_is_foreign() {
+        let events = vec![
+            node_created(1, "n1", 1, "Mine"),
+            ev_lane(
+                2,
+                "b",
+                Body::NodeCreated {
+                    node: "n2".to_string(),
+                    num: 2,
+                    kind: Kind::Task,
+                    title: "B's own".to_string(),
+                    why: "it is needed".to_string(),
+                    parent: None,
+                    blocks: false,
+                    refs: vec![],
+                    governs: vec![],
+                    arms: vec![],
+                    against: None,
+                },
+            ),
+        ];
+        let tree = fold(&events, 0);
+        let result = collect(&tree, &events, 0);
+        let v = as_json(&tree, &result);
+        assert!(
+            v["opened"][0].get("lane").is_none(),
+            "the context's own lane gained a lane field: {v}"
+        );
+        assert_eq!(v["opened"][1]["lane"], "b");
+    }
+
+    /// A single-lane tree's `--json` gains no `lane` key anywhere: the
+    /// condition is never true when there is only one lane to be.
+    #[test]
+    fn a_single_lane_json_never_gains_the_lane_key() {
+        let events = vec![node_created(1, "n1", 1, "Node")];
+        let tree = fold(&events, 0);
+        let result = collect(&tree, &events, 0);
+        let v = as_json(&tree, &result);
+        assert!(v["opened"][0].get("lane").is_none(), "{v}");
     }
 }

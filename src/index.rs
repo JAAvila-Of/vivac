@@ -2088,6 +2088,179 @@ mod tests {
         std::fs::remove_dir_all(&store.root).ok();
     }
 
+    /// `t594` task 6, review round 1 (hallazgo 4): every other lane fixture in
+    /// this file has `seg_notes == seg_closed == 0`, so transposing the
+    /// two in `write_lane` left the whole suite green. This one gives
+    /// every lane six counters that are all different from one another
+    /// and from zero, one lane a declared name and repositories,
+    /// `lane.claimed` so `main_claimed` travels too, and one vivac per
+    /// lane so `Vivac.lane` does as well. Goes straight at `encode`/
+    /// `build_tree`, the same way `two_notes_on_one_node_round_trip_
+    /// through_the_index_alone` does, so there is no fallback fold to
+    /// hide behind.
+    #[test]
+    fn a_lane_with_distinct_nonzero_counters_round_trips_through_the_index_alone() {
+        let mut events: Vec<Event> = Vec::new();
+        let mut seq = 0u64;
+        let mut next_num = 0u64;
+        let mut next_raw_id = 0u32;
+        let mut fresh_id = || {
+            next_raw_id += 1;
+            fixed_id(next_raw_id)
+        };
+
+        events.push(Event {
+            seq: {
+                seq += 1;
+                seq
+            },
+            id: fresh_id(),
+            ts: "2026-09-16T09:00:00Z".to_string(),
+            actor: "a_test".to_string(),
+            lane: "a".to_string(),
+            payload: Body::LaneDeclared {
+                lane: "a".to_string(),
+                name: "feature-a".to_string(),
+                repos: vec![crate::event::Repo {
+                    path: "webapi".to_string(),
+                    root: Some("abc123".to_string()),
+                }],
+            },
+        });
+        events.push(Event {
+            seq: {
+                seq += 1;
+                seq
+            },
+            id: fresh_id(),
+            ts: "2026-09-16T09:00:01Z".to_string(),
+            actor: "a_test".to_string(),
+            lane: "c".to_string(),
+            payload: Body::LaneClaimed {
+                lane: "main".to_string(),
+            },
+        });
+
+        // (lane, vivac num, new, closed, notes) -- chosen so the six
+        // counters end up mutually distinct within each lane: `seg_events`
+        // is their sum, `seq_vivac` is the vivac's own seq, and
+        // `seq_change` is the seq of the last of the three kinds below.
+        let plan = [
+            ("a", 1u64, 5usize, 6usize, 7usize),
+            ("b", 2u64, 4usize, 3usize, 2usize),
+            ("c", 3u64, 2usize, 5usize, 1usize),
+        ];
+
+        for (lane, vivac_num, new_count, closed_count, notes_count) in plan {
+            let vivac_root = fresh_id();
+            events.push(on_lane(
+                a_vivac(
+                    {
+                        seq += 1;
+                        seq
+                    },
+                    vivac_num,
+                    &vivac_root,
+                ),
+                lane,
+            ));
+
+            let mut ids = Vec::new();
+            for _ in 0..new_count {
+                next_num += 1;
+                let id = fresh_id();
+                events.push(on_lane(
+                    created(
+                        {
+                            seq += 1;
+                            seq
+                        },
+                        &id,
+                        next_num,
+                        Kind::Task,
+                        None,
+                        "node",
+                        vec![],
+                        vec![],
+                    ),
+                    lane,
+                ));
+                ids.push(id);
+            }
+            for i in 0..closed_count {
+                let id = ids[i % ids.len()].clone();
+                events.push(on_lane(
+                    a_close(
+                        {
+                            seq += 1;
+                            seq
+                        },
+                        &id,
+                        "done",
+                    ),
+                    lane,
+                ));
+            }
+            for i in 0..notes_count {
+                let id = ids[i % ids.len()].clone();
+                events.push(on_lane(
+                    a_note(
+                        {
+                            seq += 1;
+                            seq
+                        },
+                        &id,
+                        "note",
+                    ),
+                    lane,
+                ));
+            }
+        }
+
+        let tree = fold(&events, 0);
+        assert!(tree.main_claimed);
+        for (lane, _, new_count, closed_count, notes_count) in plan {
+            let s = tree.lanes.get(lane).expect("the lane was written to");
+            assert_eq!(s.seg_new as usize, new_count);
+            assert_eq!(s.seg_closed as usize, closed_count);
+            assert_eq!(s.seg_notes as usize, notes_count);
+            let mut six = vec![
+                s.seq_change,
+                s.seq_vivac,
+                s.seg_new,
+                s.seg_closed,
+                s.seg_notes,
+                s.seg_events,
+            ];
+            six.sort_unstable();
+            six.dedup();
+            assert_eq!(
+                six.len(),
+                6,
+                "lane {lane} has two equal counters: the fixture is not adversarial enough"
+            );
+            assert!(
+                [
+                    s.seq_change,
+                    s.seq_vivac,
+                    s.seg_new,
+                    s.seg_closed,
+                    s.seg_notes,
+                    s.seg_events
+                ]
+                .iter()
+                .all(|&v| v > 0),
+                "lane {lane} has a zero counter"
+            );
+        }
+
+        let bytes = encode(&tree, 0, 0, 0, None);
+        let header = Header::parse(&bytes).expect("the header this test just wrote parses");
+        let loaded = build_tree(&bytes, &header).expect("the body this test just wrote parses");
+
+        assert_eq!(snapshot(&tree), snapshot(&loaded));
+    }
+
     /// A version-6 index -- the shape this crate wrote before lanes existed
     /// -- is discarded rather than misread, and the tree that comes out of
     /// the fallback is exactly what a fresh fold produces.

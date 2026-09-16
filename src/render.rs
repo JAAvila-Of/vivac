@@ -1420,6 +1420,14 @@ pub fn vivacs(a: &Tree, args: &Args) -> R {
         return Ok(());
     }
     outln!();
+    // The whole tree's catalogue, on purpose: `restore`/`--since` accept
+    // any vivac by `num` (`model.rs`'s own `Tree::vivac`), not only the
+    // lane's own, and filtering this list would hide a stop those commands
+    // still take. With more than one lane, an active neighbour can still
+    // push a lane's own stops out of the last twenty before it gets here,
+    // and no row says which lane a stop belongs to -- both are §5, tramo 3,
+    // not fixed here, only written down so it is not forgotten by omission
+    // (`t594` task 6, review round 1).
     for v in a.vivacs.iter().rev().take(20) {
         let top = v
             .stack

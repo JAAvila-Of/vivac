@@ -47,6 +47,22 @@ pub struct Ctx {
 }
 
 impl Ctx {
+    /// The only place `self.tree` is ever replaced. Whatever rebuilt it --
+    /// a fresh fold, a reload from the index, one folded from events
+    /// already read -- the context keeps looking from its own lane:
+    /// `self.lane` is the folder's and does not move just because the tree
+    /// underneath it did. Two call sites used to assign `self.tree`
+    /// directly and disagreed about this, one of them only under lock
+    /// contention (`t594` task 6, review round 1): a reload nobody routed
+    /// through here answers from `main` while the store keeps signing as
+    /// whatever lane this context actually is.
+    fn adopt(&mut self, tree: Tree) {
+        self.tree = tree;
+        if let Some(l) = &self.lane {
+            self.tree.for_lane(l);
+        }
+    }
+
     /// For a command that only ever reads. `LOADING.md` §4: this is a read,
     /// so it is free to refresh the derived index once its tail passes the
     /// threshold -- see `index::load`.
@@ -68,23 +84,21 @@ impl Ctx {
         lane: Option<String>,
     ) -> Result<Ctx, Failure> {
         let seen = crate::store::fingerprint(&store.log());
-        let mut tree = crate::index::load(&store, allow_index_refresh)?;
-        // The tree answers from the lane this context runs as, the same
-        // way the store below signs as it: looking and writing must never
-        // disagree about whose thread they are (`t594`).
-        if let Some(l) = &lane {
-            tree.for_lane(l);
-        }
+        let tree = crate::index::load(&store, allow_index_refresh)?;
         let anchor = anchor::detect(&store.root);
         let mut ctx = Ctx {
             store,
             lane,
-            tree,
+            tree: Tree::default(),
             anchor,
             seen,
             wrote: None,
             lock: None,
         };
+        // `adopt` is what makes the tree answer from `ctx.lane`, the same
+        // way the store below signs as it: looking and writing must never
+        // disagree about whose thread they are (`t594`).
+        ctx.adopt(tree);
         // The store is what signs every event, so it takes the lane the
         // context itself was just given: a `Ctx` and what it writes must
         // never disagree about whose thread they are.
@@ -114,22 +128,20 @@ impl Ctx {
         seen: (u64, Option<std::time::SystemTime>),
         lane: Option<String>,
     ) -> Ctx {
-        let mut tree = fold(events, broken);
-        // Same as `load_opt`: the tree answers from the lane this context
-        // runs as, once that lane is known.
-        if let Some(l) = &lane {
-            tree.for_lane(l);
-        }
+        let tree = fold(events, broken);
         let anchor = anchor::detect(&store.root);
         let mut ctx = Ctx {
             store,
             lane,
-            tree,
+            tree: Tree::default(),
             anchor,
             seen,
             wrote: None,
             lock: None,
         };
+        // Same as `load_opt`: `adopt` is what makes the tree answer from
+        // the lane this context runs as, once that lane is known.
+        ctx.adopt(tree);
         // Same as `load_opt`: the store signs as the lane the context runs
         // as, once that lane is known.
         if let Some(l) = ctx.lane.clone() {
@@ -155,12 +167,9 @@ impl Ctx {
         seen: (u64, Option<std::time::SystemTime>),
     ) {
         self.store = store;
-        self.tree = fold(events, broken);
-        // Same lane as before the refold: `self.lane` is the context's own
-        // and does not change just because the tree underneath it did.
-        if let Some(l) = self.lane.clone() {
-            self.tree.for_lane(&l);
-        }
+        // `adopt`, not a direct assignment: `self.lane` is the context's
+        // own and does not move just because the tree underneath it did.
+        self.adopt(fold(events, broken));
         self.anchor = anchor::detect(&self.store.root);
         self.seen = seen;
         self.wrote = None;
@@ -183,7 +192,11 @@ impl Ctx {
         let lock = self.store.lock_for_write()?;
         let now = crate::store::fingerprint(&self.store.log());
         if now != self.seen {
-            self.tree = crate::index::load(&self.store, false)?;
+            // `adopt`, not a direct assignment (`t594` task 6, review round 1):
+            // this is the reload a second writer's append forces, and it
+            // used to leave this context reading `main` while its store
+            // kept signing as whatever lane it actually is.
+            self.adopt(crate::index::load(&self.store, false)?);
             self.seen = now;
         }
         self.lock = Some(lock);
@@ -1845,5 +1858,44 @@ mod tests {
             "an inner release dropped the caller's lock"
         );
         ctx.unlock();
+    }
+
+    /// `t594` task 6, review round 1: `lock_for_write` used to reload the tree by
+    /// assigning `self.tree` directly, the one call site `adopt` did not
+    /// yet cover, so a context on a lane other than `main` that reloaded
+    /// under the lock -- because a second writer appended while it
+    /// waited, exactly the two-writer scenario this whole tramo exists
+    /// for -- came back reading `main` while its own store kept signing
+    /// as the lane it actually is.
+    #[test]
+    fn a_reload_under_the_lock_keeps_answering_from_its_own_lane() {
+        let tmp = std::env::temp_dir().join(format!("vivac-ops-lane-reload-{}", id::ulid()));
+        let store = Store::create(&tmp).unwrap();
+        let mut ctx = Ctx::load(store, Some("b".to_string())).unwrap();
+
+        // A second writer, on the store's own default lane, appends
+        // underneath: the seam `lock_for_write` reloads for.
+        let mut other = Store::open(tmp.clone()).unwrap();
+        let lock = other.lock_for_write().unwrap();
+        other
+            .append(
+                &lock,
+                vec![Body::Pushed {
+                    node: "ghost".to_string(),
+                }],
+                0,
+                false,
+            )
+            .unwrap();
+        drop(lock);
+
+        ctx.lock_for_write().unwrap();
+        assert_eq!(
+            ctx.tree.lane(),
+            "b",
+            "the reload under the lock forgot which lane this context is"
+        );
+        ctx.unlock();
+        std::fs::remove_dir_all(&tmp).ok();
     }
 }
