@@ -1039,17 +1039,19 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         }
     }
 
-    // What *this run* actually did to the tree, for `written_text`: three
-    // different things can each make `TREE_KEPT_PARAGRAPH` false, and they
-    // are not the same sentence (`t594` fix-2, finding 3) -- a lane
-    // declared or redeclared recorded a thread; a relock on its own only
-    // closed the lock again, with no thread to speak of.
+    // What *this run* actually did to the tree, for `written_text`
+    // (`t594` fix-3): every one of these is independent, and `needs_lock`
+    // decides `config_locked` regardless of which branch above closed
+    // it -- both `write_lane`'s own `declare_lane` and `relock_lanes`
+    // close the same lock, and only ever do it for real when it was
+    // still open beforehand.
     let written = Written {
         connection: start_missing || stop_missing || mcp_missing,
         skill: skill_missing_or_replaceable,
         planted: vivac_missing,
+        gitignore_created: gitignore_missing,
         lane_declared: !lane.unchanged,
-        config_relocked: lane.unchanged && lane.needs_lock,
+        config_locked: lane.needs_lock,
         undoable: start_missing
             && stop_missing
             && mcp_missing
@@ -1226,7 +1228,10 @@ const TRAILING_PARAGRAPH: &str = "  The hooks run a command in every session, an
 const NO_TERMINAL_TEXT: &str = "  setup asks before writing, and there is no terminal here to ask.\n  See what it would write:  vivac setup claude-code --dry-run\n  Then write it:            vivac setup claude-code --yes";
 
 /// What this run wrote, which decides how it ends (`t579` §15.5): a
-/// paragraph is only printed when it is true of this run.
+/// paragraph is only printed when it is true of this run, and it says
+/// what that run did, no more and no less (`t594` fix-3) -- every one of
+/// these is a separate thing `apply` can write to the tree or the
+/// folder, and any subset of them can be true together.
 struct Written {
     /// A hook or the server, which only a new session picks up.
     connection: bool,
@@ -1234,14 +1239,20 @@ struct Written {
     skill: bool,
     /// The tree, planted by this run rather than found.
     planted: bool,
+    /// The tree's own `.vivac/.gitignore`, on a tree from before `t594`
+    /// §4.9 that never got one (`gitignore_missing`). Independent of
+    /// everything else here: a tree can be missing this and have its
+    /// lanes fully settled, or the other way round.
+    gitignore_created: bool,
     /// This run declared this folder's lane, or redeclared an existing
-    /// one: a real thread recorded, not only the config catching up.
+    /// one: a real thread recorded in the tree's own log.
     lane_declared: bool,
-    /// This run closed the lanes lock and recorded nothing else: the
-    /// declaration already matched, and the lock was the only thing
-    /// missing (`t594` fix-2, finding 3). Never true at the same time as
-    /// `lane_declared` -- `apply`'s own write phase is one or the other.
-    config_relocked: bool,
+    /// This run closed the lanes lock, whether that happened on its own
+    /// (nothing else changed) or alongside declaring the lane above
+    /// (`t594` fix-2, finding 3 first tried to treat these as mutually
+    /// exclusive, which they are not: a brand new lane commonly closes
+    /// the lock in the very same write that declares it).
+    config_locked: bool,
     /// All four of setup's pieces, the skill among them missing before:
     /// `--undo` removes all four, so only then does it take back exactly
     /// this run.
@@ -1255,20 +1266,94 @@ fn written_text(w: &Written) -> String {
     } else if w.skill {
         s.push_str(SKILL_PARAGRAPH);
     }
-    s.push_str(if w.planted {
-        MIGRATE_PARAGRAPHS
-    } else if w.lane_declared {
-        LANE_JOINED_PARAGRAPH
-    } else if w.config_relocked {
-        CONFIG_RELOCKED_PARAGRAPH
+    if w.planted {
+        s.push_str(MIGRATE_PARAGRAPHS);
     } else {
-        TREE_KEPT_PARAGRAPH
-    });
+        s.push_str(&tree_paragraph(
+            w.gitignore_created,
+            w.lane_declared,
+            w.config_locked,
+        ));
+    }
     s.push_str(FILES_PARAGRAPH);
     if w.undoable {
         s.push_str(UNDO_LINE);
     }
     s
+}
+
+/// The paragraph about the tree itself, once planting it is ruled out
+/// (`MIGRATE_PARAGRAPHS` covers that): `TREE_KEPT_PARAGRAPH` when none of
+/// the three actually happened, and one sentence naming exactly the ones
+/// that did otherwise -- never more than what this run wrote, and never
+/// silent about any of it.
+///
+/// The three are independent, and saying so in the type is the fix: they
+/// were mutually exclusive branches before, so a run that did two of them
+/// could only name one, and a run that only wrote the tree's `.gitignore`
+/// had no branch at all and claimed to have changed nothing -- two lines
+/// under its own plan announcing that write (`t594`).
+fn tree_paragraph(gitignore_created: bool, lane_declared: bool, config_locked: bool) -> String {
+    let mut clauses = Vec::new();
+    if gitignore_created {
+        clauses.push("its own .gitignore");
+    }
+    if lane_declared {
+        clauses.push("this folder's own thread");
+    }
+    if config_locked {
+        clauses.push("the sentence that stops an older vivac from reading it");
+    }
+    if clauses.is_empty() {
+        return TREE_KEPT_PARAGRAPH.to_string();
+    }
+    // Noun phrases rather than verb phrases: they share one subject, so
+    // two of them join without the reader having to carry a verb across
+    // the list, and none of them can be read as belonging to this run
+    // rather than to the tree.
+    format!(
+        "\n{}",
+        wrapped(&format!(
+            "The tree was already there, and setup wrote in it: {}.",
+            join_with_and(&clauses)
+        ))
+    )
+}
+
+/// `text`, wrapped to the same width every other paragraph in this file
+/// already wraps to by hand, each line indented by two spaces. A plain
+/// greedy word wrap is all this needs: nothing it ever wraps runs past a
+/// short sentence naming one to three clauses.
+fn wrapped(text: &str) -> String {
+    const WIDTH: usize = 76;
+    let mut out = String::new();
+    let mut line = String::from("  ");
+    for word in text.split_whitespace() {
+        if line.len() + word.len() + 1 > WIDTH && line.trim() != "" {
+            out.push_str(line.trim_end());
+            out.push('\n');
+            line = String::from("  ");
+        }
+        line.push_str(word);
+        line.push(' ');
+    }
+    out.push_str(line.trim_end());
+    out.push('\n');
+    out
+}
+
+/// `items`, in English list form: one on its own, two joined by "and",
+/// three or more comma-separated with "and" before the last.
+fn join_with_and(items: &[&str]) -> String {
+    match items {
+        [] => String::new(),
+        [one] => one.to_string(),
+        [a, b] => format!("{a} and {b}"),
+        _ => {
+            let (last, rest) = items.split_last().expect("checked non-empty above");
+            format!("{} and {last}", rest.join(", "))
+        }
+    }
 }
 
 const SESSION_PARAGRAPH: &str = "\n  Open a new Claude Code session in this folder. The brief arrives on its\n  own when it starts. If Claude Code asks whether to use the \"vivac\" server\n  from .mcp.json, say yes: it is what lets the agent write to the tree.\n";
@@ -1279,21 +1364,6 @@ const MIGRATE_PARAGRAPHS: &str = "\n  Nothing has been brought in from anywhere 
 
 const TREE_KEPT_PARAGRAPH: &str =
     "\n  The tree was already there, and setup changed nothing in it.\n";
-
-/// The tree was already there, and this run still recorded a real
-/// thread in it -- joined it as a new lane, or redeclared one that
-/// already existed. `TREE_KEPT_PARAGRAPH` would be false here (`t594`
-/// fix-1, finding 2).
-const LANE_JOINED_PARAGRAPH: &str =
-    "\n  The tree was already there. This run only recorded this folder's own\n  thread in it.\n";
-
-/// The tree was already there, this folder's own thread in it already
-/// said exactly this, and the only thing this run did was close the
-/// lanes lock again. `LANE_JOINED_PARAGRAPH` would overstate it -- no
-/// thread was recorded, and `TREE_KEPT_PARAGRAPH` would understate it --
-/// the config did change (`t594` fix-2, finding 3).
-const CONFIG_RELOCKED_PARAGRAPH: &str =
-    "\n  The tree was already there. This run only closed its lanes lock again.\n";
 
 const FILES_PARAGRAPH: &str = "\n  The hooks, the server and the skill are plain files in this project:\n  commit them if everyone who works here uses vivac, and keep them out of\n  version control if only you do. .vivac/ is never committed: it is this\n  machine's record, and a copy of it in every clone would diverge from the\n  others. Its own .gitignore keeps it out.\n";
 
