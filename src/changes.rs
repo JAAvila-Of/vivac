@@ -175,6 +175,10 @@ pub fn collect<'a>(tree: &'a Tree, log: &[Event], since_seq: u64) -> Changed<'a>
             },
             // Not naming a node: nothing to check against the tree.
             Body::VivacCreated { .. } => result.tail.stops += 1,
+            // Neither names a node, and neither moves the tree yet
+            // (`Tree::apply`): what a lane's own declaration adds to "what
+            // changed" is `t594`'s next commit, not this one.
+            Body::LaneDeclared { .. } | Body::LaneClaimed { .. } => {}
         }
     }
 

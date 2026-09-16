@@ -3,6 +3,7 @@
 //! Two homes for the same state contradict principle 1 of `MODEL.md`.
 
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 /// Node types. `MODEL.md` §4.2. `Pillar` and `Rule` are `t411`: added at the
 /// end, so the order of what already existed never moves.
@@ -213,6 +214,49 @@ pub struct Against {
     pub why: String,
 }
 
+/// One repository a lane declared. `Body::LaneDeclared` carries one per
+/// repository the folder holds, so a lane spanning more than one repository
+/// -- a product split across several -- says so in one event rather than one
+/// per repository.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Repo {
+    /// Relative to the lane's folder, with forward slashes, and "." when
+    /// the folder is the repository. **Never absolute**: the security
+    /// pillar keeps paths out of the log, and a relative one survives the
+    /// folder being moved besides.
+    pub path: String,
+    /// The repository's root commit, which is what makes two clones of one
+    /// repository recognisable as the same repository without a remote URL
+    /// ever being written down (`d597`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<String>,
+}
+
+impl Repo {
+    /// A repository at `path`, recorded relative to the lane's folder at
+    /// `base`, with forward slashes on every platform and "." when the
+    /// folder is the repository itself.
+    ///
+    /// `None` when `path` is not inside `base`: the security pillar keeps
+    /// absolute paths out of the log, and a path that cannot be made
+    /// relative to the lane is one this lane has no business recording.
+    // Consumed by `setup`'s own walk of a folder's repositories, a task
+    // still to come.
+    #[allow(dead_code)]
+    pub fn relative(base: &Path, path: &Path, root: Option<String>) -> Option<Repo> {
+        let rel = path.strip_prefix(base).ok()?;
+        let path = if rel.as_os_str().is_empty() {
+            ".".to_string()
+        } else {
+            rel.components()
+                .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join("/")
+        };
+        Some(Repo { path, root })
+    }
+}
+
 /// One event from the log. `MODEL.md` §3.2.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Event {
@@ -383,6 +427,24 @@ pub enum Body {
         #[serde(default)]
         session: Option<String>,
     },
+    /// This folder is a lane of this tree, and these are its repositories.
+    ///
+    /// Written by `setup`, by a linked worktree the first time it writes, and
+    /// again by `setup` whenever the repositories or the name change. The last
+    /// one wins: this is a statement about a folder as it is now, not an
+    /// event that accumulates.
+    #[serde(rename = "lane.declared")]
+    LaneDeclared {
+        lane: String,
+        name: String,
+        repos: Vec<Repo>,
+    },
+    /// The lane named `main` belongs to this folder. Only ever written for
+    /// `main`, and only by `relocate`: a tree whose folder moved leaves an
+    /// implicit `main` behind it, and this is what stops the folder it left
+    /// from answering as `main` too.
+    #[serde(rename = "lane.claimed")]
+    LaneClaimed { lane: String },
 }
 
 impl Body {
@@ -410,6 +472,8 @@ impl Body {
         "against.added",
         "vivac.created",
         "session.started",
+        "lane.declared",
+        "lane.claimed",
     ];
 }
 
@@ -482,6 +546,8 @@ mod tests {
             Body::AgainstAdded { .. } => "against.added",
             Body::VivacCreated { .. } => "vivac.created",
             Body::SessionStarted { .. } => "session.started",
+            Body::LaneDeclared { .. } => "lane.declared",
+            Body::LaneClaimed { .. } => "lane.claimed",
         }
     }
 
@@ -560,6 +626,17 @@ mod tests {
                 vivac: None,
                 session: None,
             },
+            Body::LaneDeclared {
+                lane: "01M2".into(),
+                name: "v2".into(),
+                repos: vec![Repo {
+                    path: "webapi".into(),
+                    root: Some("abc123".into()),
+                }],
+            },
+            Body::LaneClaimed {
+                lane: "main".into(),
+            },
         ]
     }
 
@@ -632,5 +709,96 @@ mod tests {
             unknown_reason_for(line),
             Some(UnknownReason::Shape("flag.raised".to_string()))
         );
+    }
+
+    #[test]
+    fn the_lane_events_are_named_as_the_spec_names_them() {
+        let d = Body::LaneDeclared {
+            lane: "01M2".into(),
+            name: "v2".into(),
+            repos: vec![Repo {
+                path: "webapi".into(),
+                root: Some("abc123".into()),
+            }],
+        };
+        let text = serde_json::to_string(&d).unwrap();
+        assert!(text.contains(r#""type":"lane.declared""#), "{text}");
+        let c = Body::LaneClaimed {
+            lane: "main".into(),
+        };
+        assert!(serde_json::to_string(&c)
+            .unwrap()
+            .contains(r#""type":"lane.claimed""#));
+    }
+
+    #[test]
+    fn a_repo_without_a_root_commit_does_not_write_the_field() {
+        let r = Repo {
+            path: ".".into(),
+            root: None,
+        };
+        assert_eq!(serde_json::to_string(&r).unwrap(), r#"{"path":"."}"#);
+    }
+
+    #[test]
+    fn a_repo_with_a_root_commit_round_trips_both_fields_and_no_others() {
+        let r = Repo {
+            path: "webapi".into(),
+            root: Some("abc123".into()),
+        };
+        let text = serde_json::to_string(&r).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let obj = v.as_object().unwrap();
+        let mut keys: Vec<&str> = obj.keys().map(|k| k.as_str()).collect();
+        keys.sort();
+        assert_eq!(keys, ["path", "root"]);
+        let back: Repo = serde_json::from_str(&text).unwrap();
+        assert_eq!(back, r);
+    }
+
+    #[test]
+    fn a_path_inside_the_base_comes_out_relative_with_forward_slashes() {
+        let base = Path::new("lane");
+        let path = base.join("nested").join("webapi");
+        let r = Repo::relative(base, &path, None).unwrap();
+        assert_eq!(r.path, "nested/webapi");
+    }
+
+    #[test]
+    fn the_base_itself_comes_out_as_dot() {
+        let base = Path::new("lane");
+        let r = Repo::relative(base, base, None).unwrap();
+        assert_eq!(r.path, ".");
+    }
+
+    #[test]
+    fn a_path_outside_the_base_is_none() {
+        let base = Path::new("lane");
+        let path = Path::new("elsewhere");
+        assert!(Repo::relative(base, path, None).is_none());
+    }
+
+    #[test]
+    fn a_windows_absolute_path_outside_the_base_is_none() {
+        let base = Path::new(r"C:\work\lane");
+        let path = Path::new(r"D:\other\place");
+        assert!(Repo::relative(base, path, None).is_none());
+    }
+
+    #[test]
+    fn this_version_knows_the_lane_events_and_does_not_refuse_them() {
+        // `t411` §13: a line whose own `type` is well-formed JSON but missing
+        // from `KNOWN_EVENTS` is treated as though a newer vivac wrote it,
+        // and refused outright. `lane.declared` and `lane.claimed` are known
+        // now, so neither must come back as an `EventType` refusal -- the
+        // day either stops being listed, this is what notices.
+        for tag in ["lane.declared", "lane.claimed"] {
+            let line = format!(r#"{{"seq":1,"payload":{{"type":"{tag}"}}}}"#);
+            assert_ne!(
+                unknown_reason_for(&line),
+                Some(UnknownReason::EventType(tag.to_string())),
+                "{tag} was refused as an event type this version does not know"
+            );
+        }
     }
 }
