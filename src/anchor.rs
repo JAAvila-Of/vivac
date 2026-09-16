@@ -199,13 +199,11 @@ pub(crate) fn main_copy_of(worktree_root: &Path) -> Option<PathBuf> {
 }
 
 /// Resolves `.` and `..` components one at a time, without touching the
-/// filesystem the way `canonicalize` would.
-///
-/// `pub(crate)`, not private: `ops.rs`'s own worktree-vs-declared-repository
-/// comparison (`t594` §2.3) needs the exact same criterion this module
-/// already worked out for `main_copy_of`, and a second implementation of
-/// the same rule is how the two quietly drift apart.
-pub(crate) fn normalize(p: &Path) -> PathBuf {
+/// filesystem the way `canonicalize` would. Private: every caller outside
+/// this module goes through `same_folder`, below, rather than at this
+/// pure string walk directly -- `same_folder` is the criterion a caller
+/// actually wants, and this is one piece of how it is computed.
+fn normalize(p: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for c in p.components() {
         match c {
@@ -217,6 +215,38 @@ pub(crate) fn normalize(p: &Path) -> PathBuf {
         }
     }
     out
+}
+
+/// Whether `a` and `b` name the same folder on disk, even when they are
+/// spelled differently. `normalize` above is the fast path -- a pure
+/// string walk, no filesystem cost -- and it is enough for the ordinary
+/// case of `.`/`..` and mixed separators. What it cannot catch is a
+/// genuine difference in spelling: a case difference, an 8.3 alias, a
+/// symlink, or a junction, all of which name the same directory while
+/// disagreeing textually.
+///
+/// This is `f612`, closed once rather than patched twice: `ops::repo_at`
+/// hit it first, comparing a path this process joined by hand against one
+/// `anchor::main_copy_of` read out of files git itself wrote, and
+/// `registry::detect_copy` hit it again comparing a path the registry
+/// wrote down at an earlier `cd` against the one the current `cd` spells
+/// now -- two different sources for the same failure, which is exactly
+/// why this lives here once rather than being fixed a third time
+/// somewhere else.
+///
+/// `canonicalize` runs only as a fallback, after `normalize` already
+/// disagrees, and its two results are compared and dropped in this same
+/// expression -- never stored, returned, or logged anywhere. On Windows
+/// `canonicalize` returns a `\\?\`-prefixed path that would poison any
+/// comparison it survived into; nothing here outlives this call, so there
+/// is nothing left to poison. Either side failing to canonicalize
+/// (missing, no permission) answers `false`, the same as the textual
+/// check alone would have.
+pub(crate) fn same_folder(a: &Path, b: &Path) -> bool {
+    if normalize(a) == normalize(b) {
+        return true;
+    }
+    matches!((a.canonicalize(), b.canonicalize()), (Ok(x), Ok(y)) if x == y)
 }
 
 /// Whether git tracks `rel`, a path relative to `root`. Starts `git`, so

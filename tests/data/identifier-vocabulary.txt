@@ -120,6 +120,7 @@ baskets
 be
 beats
 becomes
+been
 before
 began
 begin
@@ -298,6 +299,7 @@ continues
 control
 cookie
 copied
+copies
 copy
 corner
 correctly
@@ -539,6 +541,7 @@ flagged
 flags
 flat
 flatten
+flips
 flush
 fmt
 fn
@@ -1131,6 +1134,7 @@ rather
 raw
 rd
 reach
+reached
 reaches
 reaching
 read
@@ -1661,6 +1665,7 @@ walk
 walking
 walks
 want
+warn
 warning
 warns
 was

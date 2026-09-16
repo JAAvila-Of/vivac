@@ -325,12 +325,10 @@ fn run_bin(dir: &std::path::Path, home: &std::path::Path, args: &[&str]) -> (Str
     )
 }
 
-/// The registry only ever holds one path per project, so it is the folder
-/// that is *not* on file -- the copy -- that `check` can tell anything is
-/// wrong with. The folder already on file looks, from the registry's own
-/// side, exactly like an ordinary project with nothing to report: that
-/// asymmetry is `d201`'s own design (the registry keeps pointing at
-/// whichever folder it saw first), not a gap in `check`.
+/// The registry only ever holds one `path` per project, so the folder that
+/// is not on it -- the one that reached the registry second, not
+/// necessarily the copy in reality -- is what learns first, the moment it
+/// is sighted.
 #[test]
 fn check_exits_1_while_a_copy_exists() {
     let original = Sandbox::new_seeded("copy-exists-orig");
@@ -340,9 +338,6 @@ fn check_exits_1_while_a_copy_exists() {
     let (copy_out, copy_code) = copy.run(&["check"]);
     assert_eq!(copy_code, 1, "{copy_out}");
     assert!(copy_out.contains("COPY OF ANOTHER TREE"), "{copy_out}");
-
-    let (original_out, original_code) = original.run(&["check"]);
-    assert_eq!(original_code, 0, "{original_out}");
 }
 
 #[test]
@@ -434,4 +429,243 @@ fn deleting_one_copy_clears_the_warning() {
     let (out2, code2) = copy.run(&["check"]);
     assert_eq!(code2, 0, "{out2}");
     assert!(!out2.contains("COPY OF ANOTHER TREE"), "{out2}");
+}
+
+/// The folder not on `path` learns the moment it is sighted; the folder
+/// on `path` learns from its own `copies`, which that sighting is what
+/// wrote. Neither is favored once both have been used.
+#[test]
+fn both_folders_warn_once_the_copy_has_been_used() {
+    let original = Sandbox::new_seeded("copy-both-warn-orig");
+    original.ok(&["push", "a goal", "--why", "so the log has a first event"]);
+    let copy = a_copy_of(&original, "copy-both-warn-copy");
+
+    let (copy_out, copy_code) = copy.run(&["check"]);
+    assert_eq!(copy_code, 1, "{copy_out}");
+    assert!(copy_out.contains("COPY OF ANOTHER TREE"), "{copy_out}");
+
+    let (original_out, original_code) = original.run(&["check"]);
+    assert_eq!(original_code, 1, "{original_out}");
+    assert!(
+        original_out.contains("COPY OF ANOTHER TREE"),
+        "{original_out}"
+    );
+}
+
+/// The original's own warning comes from its `copies`, re-verified on
+/// every read rather than trusted once and kept forever: once the copy is
+/// gone, so is the warning, with nobody having to edit the registry.
+#[test]
+fn deleting_the_copy_clears_the_warning_in_the_original() {
+    let original = Sandbox::new_seeded("copy-clears-in-orig");
+    original.ok(&["push", "a goal", "--why", "so the log has a first event"]);
+    let copy = a_copy_of(&original, "copy-clears-in-orig-copy");
+
+    // A filesystem copy on its own teaches the registry nothing: the copy
+    // has to run a command at least once for `original`'s own `copies` to
+    // learn about it.
+    let (copy_out, copy_code) = copy.run(&["check"]);
+    assert_eq!(copy_code, 1, "{copy_out}");
+
+    let (out, code) = original.run(&["check"]);
+    assert_eq!(code, 1, "{out}");
+
+    std::fs::remove_dir_all(&copy.0).unwrap();
+
+    let (out2, code2) = original.run(&["check"]);
+    assert_eq!(code2, 0, "{out2}");
+    assert!(!out2.contains("COPY OF ANOTHER TREE"), "{out2}");
+}
+
+/// A second, independent spelling of `p`'s own folder name -- every ASCII
+/// letter's case swapped -- answered rather than assumed, so a caller
+/// with nothing to swap skips its own test with a reason instead of
+/// silently comparing a path against itself. Windows only: case is what
+/// `f612` was actually caught by.
+#[cfg(windows)]
+fn second_spelling(p: &std::path::Path) -> Option<std::path::PathBuf> {
+    let name = p.file_name()?.to_str()?;
+    let other: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_uppercase() {
+                c.to_ascii_lowercase()
+            } else if c.is_ascii_lowercase() {
+                c.to_ascii_uppercase()
+            } else {
+                c
+            }
+        })
+        .collect();
+    (other != name).then(|| p.with_file_name(other))
+}
+
+#[cfg(not(windows))]
+fn second_spelling(_p: &std::path::Path) -> Option<std::path::PathBuf> {
+    None
+}
+
+/// `f612`, the second time: the folder the registry already knows, visited
+/// under a different spelling of its own name, is not a copy of itself.
+#[test]
+fn the_same_folder_by_two_spellings_is_not_a_copy() {
+    let c = Sandbox::new_seeded("Spelling-Folder");
+    c.ok(&["push", "a goal", "--why", "so the log has a first event"]);
+
+    let Some(second) = second_spelling(&c.0) else {
+        eprintln!(
+            "skipped: this platform offers no second spelling of the same folder to check with"
+        );
+        return;
+    };
+
+    let (out, code) = run_bin(&second, c.global_home(), &["check"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(!out.contains("COPY OF ANOTHER TREE"), "{out}");
+}
+
+/// A folder name with a space breaks the line that copies and pastes it
+/// unless it is quoted -- the one line `t594` task 4 promises a test that
+/// runs literally.
+#[test]
+fn the_join_command_quotes_a_name_with_a_space() {
+    let home = temp_dir("copy-space-home");
+    let parent = temp_dir("copy-space-parent");
+    std::fs::create_dir_all(&parent).unwrap();
+    let original_dir = parent.join("My Project");
+    std::fs::create_dir_all(&original_dir).unwrap();
+    run_bin(&original_dir, &home, &["init"]);
+    run_bin(
+        &original_dir,
+        &home,
+        &["push", "a goal", "--why", "so the log has a first event"],
+    );
+
+    let copy_dir = temp_dir("copy-space-copy");
+    std::fs::create_dir_all(copy_dir.join(".vivac")).unwrap();
+    std::fs::copy(
+        original_dir.join(".vivac").join("events"),
+        copy_dir.join(".vivac").join("events"),
+    )
+    .unwrap();
+
+    let (out, code) = run_bin(&copy_dir, &home, &["check"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        out.contains("vivac setup claude-code --join \"My Project\""),
+        "{out}"
+    );
+
+    std::fs::remove_dir_all(&parent).ok();
+    std::fs::remove_dir_all(&copy_dir).ok();
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// The surface the agent actually reads: `--json` needs its own key
+/// checked, the same way `gates_json_carries_the_same_lines_as_a_key`
+/// already does for its own section.
+#[test]
+fn copy_json_carries_the_other_folder_and_flips_ok() {
+    let original = Sandbox::new_seeded("copy-json-orig");
+    original.ok(&["push", "a goal", "--why", "so the log has a first event"]);
+    let name = project_name(&original);
+    let copy = a_copy_of(&original, "copy-json-copy");
+
+    let (s, code) = copy.run(&["check", "--json"]);
+    assert_eq!(code, 1, "{s}");
+    let v: serde_json::Value = serde_json::from_str(&s).expect("check --json is not JSON");
+
+    assert_eq!(v["ok"], serde_json::json!(false), "{s}");
+    assert_eq!(v["copy"]["other"], serde_json::json!(name), "{s}");
+}
+
+#[test]
+fn copy_json_carries_a_null_other_when_the_guard_withholds_the_name() {
+    let rejected_name = "someone@example.com";
+    let home = temp_dir("copy-json-redacted-home");
+    let parent = temp_dir("copy-json-redacted-parent");
+    std::fs::create_dir_all(&parent).unwrap();
+    let original_dir = parent.join(rejected_name);
+    std::fs::create_dir_all(&original_dir).unwrap();
+    run_bin(&original_dir, &home, &["init"]);
+    run_bin(
+        &original_dir,
+        &home,
+        &["push", "a goal", "--why", "so the log has a first event"],
+    );
+
+    let copy_dir = temp_dir("copy-json-redacted-copy");
+    std::fs::create_dir_all(copy_dir.join(".vivac")).unwrap();
+    std::fs::copy(
+        original_dir.join(".vivac").join("events"),
+        copy_dir.join(".vivac").join("events"),
+    )
+    .unwrap();
+
+    let (s, code) = run_bin(&copy_dir, &home, &["check", "--json"]);
+    assert_eq!(code, 1, "{s}");
+    let v: serde_json::Value = serde_json::from_str(&s).expect("check --json is not JSON");
+    assert_eq!(v["copy"]["other"], serde_json::Value::Null, "{s}");
+
+    std::fs::remove_dir_all(&parent).ok();
+    std::fs::remove_dir_all(&copy_dir).ok();
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// `gates_output_carries_no_absolute_path` is the precedent: the same rule
+/// applies to this block.
+#[test]
+fn copy_output_carries_no_absolute_path() {
+    let original = Sandbox::new_seeded("copy-path-orig");
+    original.ok(&["push", "a goal", "--why", "so the log has a first event"]);
+    let copy = a_copy_of(&original, "copy-path-copy");
+
+    let (out, code) = copy.run(&["check"]);
+    assert_eq!(code, 1, "{out}");
+
+    for root in [&original.0, &copy.0] {
+        let full = root.to_string_lossy();
+        assert!(
+            !out.contains(full.as_ref()),
+            "an absolute path leaked:\n{out}"
+        );
+    }
+}
+
+#[test]
+fn copy_output_carries_no_absolute_path_when_the_guard_withholds_the_name() {
+    let rejected_name = "someone@example.com";
+    let home = temp_dir("copy-path-redacted-home");
+    let parent = temp_dir("copy-path-redacted-parent");
+    std::fs::create_dir_all(&parent).unwrap();
+    let original_dir = parent.join(rejected_name);
+    std::fs::create_dir_all(&original_dir).unwrap();
+    run_bin(&original_dir, &home, &["init"]);
+    run_bin(
+        &original_dir,
+        &home,
+        &["push", "a goal", "--why", "so the log has a first event"],
+    );
+
+    let copy_dir = temp_dir("copy-path-redacted-copy");
+    std::fs::create_dir_all(copy_dir.join(".vivac")).unwrap();
+    std::fs::copy(
+        original_dir.join(".vivac").join("events"),
+        copy_dir.join(".vivac").join("events"),
+    )
+    .unwrap();
+
+    let (out, code) = run_bin(&copy_dir, &home, &["check"]);
+    assert_eq!(code, 1, "{out}");
+    for root in [&original_dir, &copy_dir] {
+        let full = root.to_string_lossy();
+        assert!(
+            !out.contains(full.as_ref()),
+            "an absolute path leaked:\n{out}"
+        );
+    }
+
+    std::fs::remove_dir_all(&parent).ok();
+    std::fs::remove_dir_all(&copy_dir).ok();
+    std::fs::remove_dir_all(&home).ok();
 }

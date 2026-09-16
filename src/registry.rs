@@ -1,10 +1,13 @@
 //! The project registry: `<store_dir>/projects`.
 //!
 //! One file, one job: remember which projects exist on this machine and
-//! where, so a later fan-out (`d232`) does not have to be told by hand. It is
-//! not verified data and not a disposable projection either -- `f267` -- the
-//! project id and its path live nowhere else, so this file is the one place
-//! that answer holds.
+//! where, so a later fan-out (`d232`) does not have to be told by hand. It
+//! is not verified data and not a disposable projection either -- `f267` --
+//! and past `path` it also holds what using a project has turned up since:
+//! the root commit of every repository its lanes declare (`repos`), the
+//! folder each lane is (`lanes`), and any other folder seen holding a tree
+//! that starts with the same first event (`copies`). None of these four
+//! live anywhere else, so this file is the one place any of them holds.
 //!
 //! Keyed by the id of each project's first event (`d201`), not by
 //! `Config::project_id`: `Store::open` silently regenerates a missing
@@ -39,7 +42,11 @@ const VERSION: u32 = 2;
 /// repository the tree's lanes declare, so `setup` can tell that a folder
 /// it has never seen holds a product that is already mapped. `lanes` maps
 /// each lane id to the folder it is -- the only place a lane's path is
-/// ever written down, since `.vivac/lane` deliberately holds none.
+/// ever written down, since `.vivac/lane` deliberately holds none. `copies`
+/// holds every other folder seen holding a tree that starts with this same
+/// first event (`d201`): `path` never moves off whichever folder used a
+/// `vivac` command first while the registry already knew this project, and
+/// every other one is recorded here instead, so it can be told about too.
 #[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
 struct Project {
     path: String,
@@ -47,6 +54,8 @@ struct Project {
     repos: Vec<String>,
     #[serde(default)]
     lanes: BTreeMap<String, String>,
+    #[serde(default)]
+    copies: Vec<String>,
 }
 
 /// Version 1 wrote a project as a bare path string. It is read and never
@@ -88,10 +97,19 @@ pub struct Sighting<'a> {
 pub enum Noted {
     /// Nothing worth telling anybody.
     Fine,
-    /// Another folder still holds a tree that starts with the same event,
-    /// so one of the two is a copy (`d201`). The registry keeps pointing
-    /// at the folder already on file, and the caller says so: copies
-    /// diverge in silence, and that is the whole danger.
+    /// Another folder holds a tree that starts with the same event, so one
+    /// of the two is a copy of the other (`d201`) -- and which one that is
+    /// is **not** what this answers. The registry has room for one `path`
+    /// per project, so whichever folder used a `vivac` command first while
+    /// the registry already knew this project keeps that slot, and `path`
+    /// never moves off it; the other folder is recorded in `copies`
+    /// instead. That first folder can be the original or the copy in
+    /// reality -- nothing here knows which one came first, only which one
+    /// reached the registry first -- so both sides eventually learn: the
+    /// folder not on `path` learns the moment it is sighted (`detect_copy`),
+    /// and the folder on `path` learns from its own `copies`, re-verified
+    /// on every read (`first_event_id`) so a copy that gets deleted stops
+    /// being reported without anyone having to prune this by hand.
     ///
     /// The folder is named, never its path, and the name is withheld when
     /// the redaction guard rejects it (`d600`) -- this text reaches the
@@ -104,10 +122,11 @@ pub enum Noted {
 /// Steady state is two small reads and no write: an absent key is inserted,
 /// a key that already says exactly this writes nothing, and a key that
 /// says something else -- a different path, a new lane, an addition to
-/// `repos` -- is updated in place. The one exception is a copy
-/// (`Noted::Copy`): the registry already points elsewhere, and that
-/// elsewhere still holds a tree with `project_id`'s own first event, so the
-/// entry is left alone and the caller is told rather than overwritten.
+/// `repos` -- is updated in place. A copy (`Noted::Copy`) is the one case
+/// that never moves `path`: the registry already points elsewhere, and
+/// that elsewhere still holds a tree with `project_id`'s own first event,
+/// so `s.root` is recorded into `copies` instead, the first time it is
+/// seen -- steady state for a copy already known is a no-write read too.
 ///
 /// Never fails. The registry serves a surface that does not exist yet, so a
 /// missing or unwritable `store_dir`, a `projects` file that will not
@@ -121,14 +140,34 @@ pub fn note(store_dir: &Path, project_id: &str, s: Sighting<'_>) -> Noted {
 
 /// Whether another folder on this machine still holds a tree that starts
 /// with this same event. Read-only: unlike `note`, it never writes, so a
-/// reading command can ask without the registry moving under it. Shares
-/// `detect_copy` with `note` rather than repeating the rule that decides
-/// what counts as a copy.
+/// reading command can ask without the registry moving under it.
+///
+/// Two folders can ask this, and neither is favored: `detect_copy` answers
+/// for the folder that is not `path` -- the same rule `note` uses, shared
+/// rather than repeated -- and when `root` **is** `path`, this instead
+/// reads that entry's own `copies`, verifying each one is still there with
+/// `first_event_id` rather than trusting a write that could be stale by
+/// now. Both paths answer through the very same `Noted::Copy`, so neither
+/// side of a copy is told anything the other could not also be told.
 pub fn copy_of(store_dir: &Path, project_id: &str, root: &Path) -> Noted {
     let Some(projects) = read(&store_dir.join(FILE)) else {
         return Noted::Fine;
     };
-    detect_copy(&projects, project_id, root).unwrap_or(Noted::Fine)
+    if let Some(copy) = detect_copy(&projects, project_id, root) {
+        return copy;
+    }
+    let Some(existing) = projects.get(project_id) else {
+        return Noted::Fine;
+    };
+    existing
+        .copies
+        .iter()
+        .map(String::as_str)
+        .map(Path::new)
+        .find(|other| crate::store::first_event_id(other).as_deref() == Some(project_id))
+        .map_or(Noted::Fine, |other| Noted::Copy {
+            other: folder_name(other),
+        })
 }
 
 /// The sentence every surface that reports a copy repeats verbatim: `check`
@@ -141,12 +180,22 @@ pub fn copy_of(store_dir: &Path, project_id: &str, root: &Path) -> Noted {
 /// this was written.
 pub fn copy_notice(other: Option<&str>) -> String {
     match other {
-        Some(name) => format!(
-            "This tree starts with the same event as the one in folder \"{name}\",\n\
-             so one of them is a copy, and copies diverge in silence. Keep one:\n\
-             delete the other, or delete this one and join this folder to it with\n  \
-             vivac setup claude-code --join {name}"
-        ),
+        Some(name) => {
+            // A name with a space breaks in two on the shell that pastes
+            // it: quoted here, the same as any other argument this crate
+            // hands back for a person to run verbatim.
+            let arg = if name.contains(' ') {
+                format!("\"{name}\"")
+            } else {
+                name.to_string()
+            };
+            format!(
+                "This tree starts with the same event as the one in folder \"{name}\",\n\
+                 so one of them is a copy, and copies diverge in silence. Keep one:\n\
+                 delete the other, or delete this one and join this folder to it with\n  \
+                 vivac setup claude-code --join {arg}"
+            )
+        }
         None => "This tree starts with the same event as one in another folder on this\n\
              machine, so one of them is a copy, and copies diverge in silence.\n\
              Keep one: delete the other, or delete this one and join this folder\n\
@@ -167,16 +216,49 @@ const LOCK: &str = "registry.lock";
 /// command that already has its own answer.
 const LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
 
+/// What a read of the registry says to do next.
+enum Decision {
+    /// Nothing to write; this is the whole answer.
+    Done(Noted),
+    /// A copy not recorded yet: add `s.root` to the entry's `copies`,
+    /// `path` untouched. Carries the `Noted::Copy` `detect_copy` already
+    /// worked out, so the write side never has to recompute it.
+    RecordCopy(Noted),
+    /// An ordinary sighting with something new to say: fold `s` into the
+    /// entry the way `apply_sighting` always has.
+    RecordSighting,
+}
+
+/// One read, decided: whether there is nothing to do, a copy to add to
+/// `copies`, or an ordinary field to fold in. Called once outside the
+/// lock, to decide whether there is anything worth taking it for, and
+/// once again under it, on a fresh read, since another writer may have
+/// landed between the two.
+fn decide(projects: &BTreeMap<String, Project>, project_id: &str, s: &Sighting<'_>) -> Decision {
+    if let Some(copy) = detect_copy(projects, project_id, s.root) {
+        let root = s.root.to_string_lossy();
+        let known = projects
+            .get(project_id)
+            .is_some_and(|p| p.copies.iter().any(|c| *c == root));
+        return if known {
+            Decision::Done(copy)
+        } else {
+            Decision::RecordCopy(copy)
+        };
+    }
+    if unchanged(projects, project_id, s) {
+        return Decision::Done(Noted::Fine);
+    }
+    Decision::RecordSighting
+}
+
 fn try_note(store_dir: &Path, project_id: &str, s: &Sighting<'_>) -> std::io::Result<Noted> {
     let path = store_dir.join(FILE);
     let Some(projects) = read(&path) else {
         return Ok(Noted::Fine);
     };
-    if let Some(copy) = detect_copy(&projects, project_id, s.root) {
-        return Ok(copy);
-    }
-    if unchanged(&projects, project_id, s) {
-        return Ok(Noted::Fine);
+    if let Decision::Done(outcome) = decide(&projects, project_id, s) {
+        return Ok(outcome);
     }
     std::fs::create_dir_all(store_dir)?;
     let _lock = crate::store::lock_with_deadline(&store_dir.join(LOCK), LOCK_WAIT)
@@ -186,21 +268,36 @@ fn try_note(store_dir: &Path, project_id: &str, s: &Sighting<'_>) -> std::io::Re
     let Some(mut projects) = read(&path) else {
         return Ok(Noted::Fine);
     };
-    if let Some(copy) = detect_copy(&projects, project_id, s.root) {
-        return Ok(copy);
+    match decide(&projects, project_id, s) {
+        Decision::Done(outcome) => Ok(outcome),
+        Decision::RecordCopy(outcome) => {
+            projects
+                .entry(project_id.to_string())
+                .or_default()
+                .copies
+                .push(s.root.to_string_lossy().into_owned());
+            write(store_dir, &path, &projects)?;
+            Ok(outcome)
+        }
+        Decision::RecordSighting => {
+            apply_sighting(&mut projects, project_id, s);
+            write(store_dir, &path, &projects)?;
+            Ok(Noted::Fine)
+        }
     }
-    if unchanged(&projects, project_id, s) {
-        return Ok(Noted::Fine);
-    }
-    apply_sighting(&mut projects, project_id, s);
-    write(store_dir, &path, &projects)?;
-    Ok(Noted::Fine)
 }
 
 /// The registry already points somewhere else for this project, and that
 /// somewhere else still holds a tree whose first event is this one. That
-/// is not a move: both exist, so one is a copy of the other. The registry
-/// does not change -- whoever was on file stays -- and the caller is told.
+/// is not a move: both exist, so one is a copy of the other. `path` does
+/// not change -- whoever reached the registry first for this project keeps
+/// it -- and the caller is told.
+///
+/// `same_folder`, not a raw comparison: `other` and `root` are two
+/// spellings of a folder built by genuinely independent means -- one read
+/// back from a previous sighting, the other from the `cd` in force right
+/// now -- and a case difference or an alias between them is `f612`, the
+/// same class `ops::repo_at` already had to answer for once.
 fn detect_copy(
     projects: &BTreeMap<String, Project>,
     project_id: &str,
@@ -208,7 +305,9 @@ fn detect_copy(
 ) -> Option<Noted> {
     let existing = projects.get(project_id)?;
     let other = Path::new(&existing.path);
-    if other != root && crate::store::first_event_id(other).as_deref() == Some(project_id) {
+    if !crate::anchor::same_folder(other, root)
+        && crate::store::first_event_id(other).as_deref() == Some(project_id)
+    {
         return Some(Noted::Copy {
             other: folder_name(other),
         });
@@ -255,9 +354,19 @@ fn unchanged(projects: &BTreeMap<String, Project>, project_id: &str, s: &Sightin
 /// Folds `s` into `projects`, minting the entry when `project_id` is new.
 /// `s.repos` and `s.lane` only ever add: `None` leaves what is already
 /// there.
+///
+/// `copies` loses any entry that now names `path` itself: this runs on the
+/// "moved" case `detect_copy` already ruled out (the folder `copies`
+/// recorded a sighting of can, later, become `path` in its own right --
+/// its old owner's tree gone, `s.root` unchanged from what a stale
+/// `copies` entry already said) and a copy of yourself is not a copy of
+/// anything.
 fn apply_sighting(projects: &mut BTreeMap<String, Project>, project_id: &str, s: &Sighting<'_>) {
     let entry = projects.entry(project_id.to_string()).or_default();
     entry.path = s.root.to_string_lossy().into_owned();
+    entry
+        .copies
+        .retain(|c| !crate::anchor::same_folder(Path::new(c), s.root));
     if let Some(repos) = s.repos {
         entry.repos = repos.to_vec();
     }
@@ -568,21 +677,27 @@ mod tests {
                 empty
             })
         };
-        // Alternating `repos` keeps every one of these 200 rounds a real
-        // write -- copy detection (`t594` tramo 3 task 1) would otherwise
-        // turn a second root noted for the same project into a no-op, and
-        // the reader above would never see a rename at all.
-        let repo_a = vec!["repo-a".to_string()];
-        let repo_b = vec!["repo-b".to_string()];
+        // Alternating the lane keeps every one of these 200 rounds a real
+        // write -- copy detection (`t594` §4.7) would otherwise turn a
+        // second root noted for the same project into a no-op, and the
+        // reader above would never see a rename at all. The lane, not
+        // `repos`: every command `main.rs` runs passes one, and `repos`
+        // has no production caller yet, so alternating that would stress
+        // a write nothing real makes.
+        let lane_a_dir = temp_dir("torn-lane-a");
+        let lane_b_dir = temp_dir("torn-lane-b");
         for i in 0..200 {
-            let repos: &[String] = if i % 2 == 0 { &repo_a } else { &repo_b };
+            // Same lane id every round, its folder flipped back and forth:
+            // `lanes` only ever grows, so alternating the id instead would
+            // stop writing the moment both ids had been seen once each.
+            let dir = if i % 2 == 0 { &lane_a_dir } else { &lane_b_dir };
             note(
                 &store_dir,
                 &id2,
                 Sighting {
                     root: &root2,
-                    lane: None,
-                    repos: Some(repos),
+                    lane: Some(("lane-torn", dir)),
+                    repos: None,
                 },
             );
         }
@@ -815,6 +930,88 @@ mod tests {
         assert_eq!(
             project.lanes.get("lane-b").map(String::as_str),
             Some(lane_b_dir.to_string_lossy().as_ref())
+        );
+
+        std::fs::remove_dir_all(&store_dir).ok();
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// A second, independent spelling of `p`'s own folder name -- every
+    /// ASCII letter's case swapped -- answered rather than assumed, so a
+    /// caller with nothing to swap (a name with no letters at all) skips
+    /// its own test with a reason instead of silently comparing a path
+    /// against itself. Windows only: case is what `f612` was actually
+    /// caught by, and this crate makes no claim about case on a
+    /// filesystem where it is significant.
+    #[cfg(windows)]
+    fn second_spelling(p: &Path) -> Option<PathBuf> {
+        let name = p.file_name()?.to_str()?;
+        let other: String = name
+            .chars()
+            .map(|c| {
+                if c.is_ascii_uppercase() {
+                    c.to_ascii_lowercase()
+                } else if c.is_ascii_lowercase() {
+                    c.to_ascii_uppercase()
+                } else {
+                    c
+                }
+            })
+            .collect();
+        (other != name).then(|| p.with_file_name(other))
+    }
+
+    #[cfg(not(windows))]
+    fn second_spelling(_p: &Path) -> Option<PathBuf> {
+        None
+    }
+
+    /// The second harm `f612` did here and not in `ops::repo_at`: a false
+    /// `Noted::Copy` returns before `try_note` ever reaches
+    /// `apply_sighting`, so a sighting from the second spelling taught the
+    /// registry nothing at all -- not just "no copy", the lane it carried
+    /// went with it, in silence.
+    #[test]
+    fn a_folder_reached_by_two_spellings_still_gets_its_lane_recorded() {
+        let store_dir = temp_dir("reg-spelling-lane");
+        let (root, id) = seeded_project("Spelling");
+        let lane_dir = temp_dir("spelling-lane-dir");
+
+        note(
+            &store_dir,
+            &id,
+            Sighting {
+                root: &root,
+                lane: Some(("lane-a", &lane_dir)),
+                repos: None,
+            },
+        );
+
+        let Some(second) = second_spelling(&root) else {
+            eprintln!(
+                "skipped: this platform offers no second spelling of the same folder to test with"
+            );
+            std::fs::remove_dir_all(&store_dir).ok();
+            std::fs::remove_dir_all(&root).ok();
+            return;
+        };
+
+        note(
+            &store_dir,
+            &id,
+            Sighting {
+                root: &second,
+                lane: Some(("lane-b", &lane_dir)),
+                repos: None,
+            },
+        );
+
+        let projects = read(&store_dir.join(FILE)).unwrap();
+        let project = projects.get(&id).unwrap();
+        assert!(
+            project.lanes.contains_key("lane-b"),
+            "the second spelling's own sighting never reached the registry: {:?}",
+            project.lanes
         );
 
         std::fs::remove_dir_all(&store_dir).ok();

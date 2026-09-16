@@ -174,7 +174,7 @@ fn note_late() {
     if let Some(project_id) = store::first_event_id(root) {
         // This call's own `Noted::Copy` reaches nobody: `check` learns of a
         // copy through its own, separate read (`registry::copy_of`), and a
-        // stderr warning on every write like this one is `t594`'s task 5.
+        // stderr warning on every write like this one is `t594` §4.7.
         let _ = registry::note(
             &store_dir,
             &project_id,
@@ -455,7 +455,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
                 // This call's own `Noted::Copy` reaches nobody: `check`
                 // learns of a copy through its own, separate read
                 // (`registry::copy_of`), and a stderr warning on every
-                // write like this one is `t594`'s task 5.
+                // write like this one is `t594` §4.7.
                 let _ = registry::note(
                     &store_dir,
                     &project_id,
