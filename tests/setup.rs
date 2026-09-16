@@ -503,6 +503,28 @@ fn dry_run_never_regenerates_a_missing_config() {
     );
 }
 
+/// `t594` fix-2, finding 2: an already-set-up project runs into
+/// `nothing_to_write` before it ever reaches `--dry-run`'s own check, and
+/// that branch notes the machine's registry (`note_registry`) -- a write
+/// `--dry-run` must never make, in the registry or anywhere else. The
+/// registry is deleted first, so its own directory reappearing is exactly
+/// the write this catches.
+#[test]
+fn dry_run_never_writes_the_machine_registry_either() {
+    let c = Sandbox::new_empty("setup-dry-run-no-registry");
+    c.ok(&["setup", "claude-code", "--yes"]);
+    std::fs::remove_dir_all(c.global_home()).ok();
+    assert!(!c.global_home().exists());
+
+    let (out, code) = c.run(&["setup", "claude-code", "--dry-run"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("Nothing written: --dry-run."), "{out}");
+    assert!(
+        !c.global_home().exists(),
+        "--dry-run wrote to the machine's registry:\n{out}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // 12 and 13. `--undo`.
 // ---------------------------------------------------------------------------
