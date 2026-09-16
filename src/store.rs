@@ -26,6 +26,11 @@ pub const LOG: &str = "events";
 pub const CONFIG: &str = "config";
 pub const INDEX: &str = "index";
 pub const LOCK: &str = "lock";
+/// The lane file's own name (`d595`). `lane::FILE` reexports it, so the
+/// literal is written here and nowhere else.
+// Unused until the commit that resolves a folder's lane (`t594` §2.3).
+#[allow(dead_code)]
+pub const LANE: &str = "lane";
 
 /// How long a writer waits for another one before it gives up (`d598`).
 pub(crate) const LOCK_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
@@ -221,6 +226,18 @@ pub fn already_planted(root: &Path) -> bool {
     dir.join(CONFIG).is_file() || dir.join(LOG).is_file()
 }
 
+/// `t594` §4.9: every `.vivac/` ignores itself, tree or lane. Creates the
+/// directory if it is not there, and writes nothing over a file that
+/// already exists -- somebody may have added a line of their own.
+pub fn write_gitignore(vivac_dir: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(vivac_dir)?;
+    let ignore = vivac_dir.join(GITIGNORE);
+    if !ignore.exists() {
+        fs::write(&ignore, "*\n")?;
+    }
+    Ok(())
+}
+
 /// The log's length and modification time: the whole change detector.
 /// The log only grows, so a different length is exact; the time rides
 /// along for a rewrite that lands on the same byte count.
@@ -363,10 +380,7 @@ impl Store {
         if !d.join(LOG).exists() {
             File::create(d.join(LOG))?;
         }
-        let ignore = d.join(GITIGNORE);
-        if !ignore.exists() {
-            fs::write(&ignore, "*\n")?;
-        }
+        write_gitignore(&d)?;
         Ok(Store {
             root: root.to_path_buf(),
             config,

@@ -1469,6 +1469,7 @@ trim
 trimmed
 trimming
 trip
+trips
 true
 truncable
 truncate
