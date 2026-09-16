@@ -658,6 +658,109 @@ fn a_worktree_that_has_not_joined_yet_says_so_in_its_own_brief() {
     std::fs::remove_dir_all(&home).ok();
 }
 
+/// `t594` branch-fix-2 #1, the panic recipe reproduced whole: `setup`
+/// declares `main` for real, then `.vivac/events` is deleted by hand --
+/// crash, a bad `rm`, does not matter which -- and a `push` from a
+/// worktree that has never joined anything reads the gate. `config`
+/// still says this tree holds lanes; the log, which is where the truth
+/// actually lives, says nothing was ever declared, because there is
+/// nothing left to read. The gate now asks the log, so it answers no,
+/// and this write takes the same branch it always took before lanes
+/// existed at all -- signs `main`, recreates `events` -- exactly the
+/// recovery the tree's own folder already gets for the same missing
+/// file. What this proves is the absence of the panic `ops.rs:381` used
+/// to raise here, not a refusal: `first_event_id`'s own `Failure` is for
+/// a state this recipe can no longer reach (a lane the fold call this
+/// with genuinely believes was declared, whose log still has nothing).
+#[test]
+fn a_worktree_recreates_a_vanished_log_and_signs_main_like_the_tree_does() {
+    let root = unique("panic-recipe-root");
+    std::fs::create_dir_all(&root).unwrap();
+    git(&root, &["init", "-q"]);
+    git(&root, &["config", "user.email", "t@example.com"]);
+    git(&root, &["config", "user.name", "t"]);
+    std::fs::write(root.join("f.txt"), "x").unwrap();
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "-q", "-m", "first"]);
+    let home = unique("panic-recipe-home");
+    let (init_out, init_code) = run(&root, &home, &["init"]);
+    assert_eq!(init_code, 0, "{init_out}");
+    setup_ok(&root, &home);
+
+    let feature = root.join("wt");
+    git(&root, &["worktree", "add", "wt"]);
+    std::fs::remove_file(root.join(".vivac").join("events")).unwrap();
+
+    let (out, code) = run(&feature, &home, &["push", "Feature work", "--why", "seed"]);
+    assert_eq!(
+        code, 0,
+        "the recipe still fails instead of recovering:\n{out}"
+    );
+    assert!(
+        !feature.join(".vivac").join("lane").exists(),
+        "the worktree minted a lane over a tree the log no longer backs up"
+    );
+    let log = std::fs::read_to_string(root.join(".vivac").join("events")).unwrap();
+    assert!(
+        log.lines().all(|l| l.contains("\"lane\":\"main\"")),
+        "something signed as other than main once the log had nothing declared:\n{log}"
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// The mirror case, from the same finding: `config` is reverted to a
+/// version older than lanes by hand -- the same shape
+/// `setup_relocks_the_config_when_its_lanes_sentence_was_removed_by_hand`
+/// already exercises -- while the log still names two real lanes. The
+/// gate has to side with the log here too: a worktree joining for the
+/// first time still mints its own lane and signs with it, rather than
+/// reading `config`'s stale answer and folding silently into `main`.
+#[test]
+fn a_worktree_still_joins_when_config_is_stale_but_the_log_has_real_lanes() {
+    let (root, feature, home) = worktree_inside_fixture("config-reverted");
+    append_raw_line(
+        &root,
+        r#"{"seq":1,"id":"01SEEDMAINAAAAAAAAAAAAAAAA","ts":"2026-01-01T00:00:00Z","actor":"a_test0000000","lane":"main","payload":{"type":"lane.declared","lane":"main","name":"main","repos":[{"path":"."}]}}"#,
+    );
+    append_raw_line(
+        &root,
+        r#"{"seq":2,"id":"01SEEDOTHERAAAAAAAAAAAAAAA","ts":"2026-01-01T00:00:01Z","actor":"a_test0000000","lane":"01OTHERLANEAAAAAAAAAAAAAAA","payload":{"type":"lane.declared","lane":"01OTHERLANEAAAAAAAAAAAAAAA","name":"other","repos":[{"path":"../other-worktree"}]}}"#,
+    );
+    let config_path = root.join(".vivac").join("config");
+    let mut cfg: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&config_path).unwrap()).unwrap();
+    cfg["version"] = serde_json::json!(1);
+    std::fs::write(
+        &config_path,
+        format!("{}\n", serde_json::to_string_pretty(&cfg).unwrap()),
+    )
+    .unwrap();
+
+    let (out, code) = run(&feature, &home, &["push", "Feature work", "--why", "seed"]);
+    assert_eq!(code, 0, "{out}");
+
+    assert!(
+        feature.join(".vivac").join("lane").exists(),
+        "the worktree read config's reverted answer and never joined"
+    );
+    let lane_id = lane_id_of(&feature);
+    assert_ne!(
+        lane_id, "main",
+        "the worktree signed as main despite the log"
+    );
+    assert_ne!(lane_id, "01OTHERLANEAAAAAAAAAAAAAAA", "{lane_id}");
+    let log = std::fs::read_to_string(root.join(".vivac").join("events")).unwrap();
+    assert!(
+        log.contains(&lane_id) && log.contains("\"type\":\"lane.declared\""),
+        "no lane.declared naming the worktree's own id reached the log:\n{log}"
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+    std::fs::remove_dir_all(&home).ok();
+}
+
 /// Writes the `.git` file a linked worktree and a submodule both carry: a
 /// file at `working_dir` naming a `gitdir` elsewhere. Without a `commondir`
 /// inside that `gitdir`, this is exactly what a submodule looks like --

@@ -190,7 +190,10 @@ impl Ctx {
         // `t594` §2.3: whose lane a folder is needs the tree already
         // folded -- it depends on the repositories a lane declared, and
         // that is in the log -- so it is decided here, and nowhere else.
-        let tree_has_lanes = store.config.version == crate::store::ConfigVersion::Lanes;
+        // `t594` branch-fix-2 #1: read off the fold itself, not `config`'s
+        // own sentence, which can say either more or less than the log
+        // actually backs up (`Tree::has_a_declared_lane`'s own doc).
+        let tree_has_lanes = tree.has_a_declared_lane();
         let (lane, pending_lane, caller_declared) = resolve_whose(whose, &tree, tree_has_lanes);
         Ok(Ctx::finish(
             store,
@@ -212,7 +215,7 @@ impl Ctx {
         let seen = crate::store::fingerprint(&store.log());
         let (events, broken) = store.read_all()?;
         let tree = fold(&events, broken);
-        let tree_has_lanes = store.config.version == crate::store::ConfigVersion::Lanes;
+        let tree_has_lanes = tree.has_a_declared_lane();
         let (lane, pending_lane, caller_declared) = resolve_whose(whose, &tree, tree_has_lanes);
         let ctx = Ctx::finish(store, tree, seen, lane, pending_lane, caller_declared);
         Ok((ctx, events))
@@ -235,7 +238,7 @@ impl Ctx {
         whose: Whose,
     ) -> Ctx {
         let tree = fold(events, broken);
-        let tree_has_lanes = store.config.version == crate::store::ConfigVersion::Lanes;
+        let tree_has_lanes = tree.has_a_declared_lane();
         let (lane, pending_lane, caller_declared) = resolve_whose(whose, &tree, tree_has_lanes);
         Ctx::finish(store, tree, seen, lane, pending_lane, caller_declared)
     }
@@ -378,10 +381,28 @@ impl Ctx {
                 // exists -- so there is nothing left to seed here, and
                 // the question of whether an empty `repos` list would
                 // have lied about one does not arise either.
-                let project = crate::store::first_event_id(&self.store.root).expect(
-                    "resolve_whose only leaves a lane pending once the tree already has one \
-                     declared, and that write already gave it a first event",
-                );
+                //
+                // This should be unreachable now that `tree_has_lanes`
+                // reads `Tree::has_a_declared_lane`, the fold itself,
+                // rather than `config`'s own sentence (`t594`
+                // branch-fix-2 #1): a declared lane is an event, so a
+                // pending worktree can only exist once there is a first
+                // one to read here. It was reachable when `config` was
+                // the question instead -- `config` outliving a log a
+                // crash or a hand-deleted `events` left with nothing in
+                // it, `main` still claiming lanes existed when nothing
+                // any more said which one. A `Failure` and not another
+                // `expect`, so the day something moves this gate again
+                // without moving this along with it, the answer is a
+                // sentence and not a panic with a backtrace.
+                let Some(project) = crate::store::first_event_id(&self.store.root) else {
+                    return Err(Failure::Io(std::io::Error::other(
+                        "This tree says a lane was declared, but its log has no first \
+                         event to found a new one on. Run this from the tree's own \
+                         folder first: an ordinary write there recovers a log that was \
+                         deleted or emptied, the same way it always has.",
+                    )));
+                };
                 let id = crate::lane::new_id();
                 let lane_file = crate::lane::Lane {
                     version: 1,
