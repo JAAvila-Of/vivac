@@ -1257,3 +1257,58 @@ fn a_run_that_plants_only_the_tree_invites_a_migration() {
     let out = c.ok(&["setup", "claude-code", "--yes"]);
     assert_eq!(written_part(&out), TREE_PLANTED_MESSAGE);
 }
+
+// ---------------------------------------------------------------------------
+// `t594`: the tracked-log warning, in all three runs.
+// ---------------------------------------------------------------------------
+
+fn git(dir: &Path, args: &[&str]) {
+    let st = std::process::Command::new("git")
+        .current_dir(dir)
+        .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
+        .args(args)
+        .status()
+        .unwrap();
+    assert!(st.success(), "git {args:?}");
+}
+
+fn track_the_log(c: &Sandbox) {
+    git(&c.0, &["init", "-q"]);
+    git(&c.0, &["add", "-f", ".vivac/events"]);
+    git(&c.0, &["commit", "-q", "-m", "track the log by mistake"]);
+}
+
+/// The warning used to sit after `--dry-run`'s own early exit, so a plan
+/// never carried it.
+#[test]
+fn dry_run_warns_about_a_tracked_log() {
+    let c = Sandbox::new_seeded("tracked-dry-run");
+    track_the_log(&c);
+    let (out, code) = c.run(&["setup", "claude-code", "--dry-run"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("Nothing written: --dry-run."), "{out}");
+    assert!(
+        out.contains(".vivac/events is tracked by git here"),
+        "{out}"
+    );
+}
+
+/// And it used to sit after "nothing to write" as well, so whoever was
+/// already set up -- the one person who never reaches a run that writes
+/// something -- never saw it at all.
+#[test]
+fn an_already_set_up_project_still_warns_about_a_tracked_log() {
+    let c = Sandbox::new_seeded("tracked-nothing-to-write");
+    c.ok(&["setup", "claude-code", "--yes"]);
+    track_the_log(&c);
+    let (out, code) = c.run(&["setup", "claude-code", "--yes"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.contains("Nothing to write: this project is already set up."),
+        "{out}"
+    );
+    assert!(
+        out.contains(".vivac/events is tracked by git here"),
+        "{out}"
+    );
+}

@@ -355,11 +355,18 @@ fn why_data_impl(a: &Tree, full: Option<&Full>, id: &str) -> Result<serde_json::
         Some(f) => json_node_full(a, ag, f, n),
         None => json_node(a, ag, n),
     };
-    // `t429`'s second fix: the JSON names the hidden half too, but only when
-    // there is one -- without it the shape stays byte for byte what `d468`'s
-    // goldens already fixed.
-    if let Some(d) = a.repeated_nums.iter().find(|d| d.num == n.num) {
-        node_json["repeated"] = json!({"num": d.num, "hidden": d.second});
+    // `t429`'s second fix: the JSON names the hidden claimants too, and
+    // `t594` widens `hidden` to a list, since a hand-edited log can hand the
+    // same `num` to more than two -- the same claimants the prose names, in
+    // the same order.
+    let hidden: Vec<&str> = a
+        .repeated_nums
+        .iter()
+        .filter(|d| d.num == n.num)
+        .map(|d| d.second.as_str())
+        .collect();
+    if !hidden.is_empty() {
+        node_json["repeated"] = json!({"num": n.num, "hidden": hidden});
     }
     let siblings: Vec<_> = n
         .parent
@@ -510,13 +517,26 @@ pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
     outln!();
     outln!("  Why we are here  ->  {}", n.alias());
     outln!("  {}", "-".repeat(66));
-    if let Some(d) = a.repeated_nums.iter().find(|d| d.num == n.num) {
+    // A hand-edited log can hand the same `num` to more than two claimants;
+    // every one but the first is hidden the same way, so all of them are
+    // named here, not just whichever the fold met second.
+    let hidden: Vec<&str> = a
+        .repeated_nums
+        .iter()
+        .filter(|d| d.num == n.num)
+        .map(|d| d.second.as_str())
+        .collect();
+    if !hidden.is_empty() {
+        let (noun, pronoun) = if hidden.len() == 1 {
+            ("another node", "it")
+        } else {
+            ("other nodes", "them")
+        };
         outln!(
-            "  {} also names another node, {}, which this tree cannot show. vivac check lists it.",
+            "  {} also names {noun}, {}, which this tree cannot show. vivac check lists {pronoun}.",
             n.alias(),
-            d.second
+            hidden.join(", ")
         );
-        outln!();
     }
     outln!();
     for (i, p) in lineage.iter().enumerate() {
