@@ -488,37 +488,18 @@ fn declared_name(id: &str, folder_name: &str) -> String {
     }
 }
 
-/// What the tree already says about `lane_id`, read without taking the
-/// write lock: `config`'s own version, and the name and repositories its
-/// last `lane.declared` recorded, if it ever wrote one. `None` for a tree
-/// that cannot be opened at all -- the write this plans will surface that
-/// failure for real.
-struct ExistingLane {
-    config_version: crate::store::ConfigVersion,
-    declared: Option<(String, Vec<crate::event::Repo>)>,
-}
-
-fn existing_lane(tree: &Path, lane_id: &str) -> Option<ExistingLane> {
-    let store = crate::store::Store::open(tree.to_path_buf()).ok()?;
-    let (events, broken) = store.read_all().ok()?;
-    let folded = crate::model::fold(&events, broken);
-    Some(ExistingLane {
-        config_version: store.config.version,
-        declared: folded
-            .lanes
-            .get(lane_id)
-            .map(|s| (s.name.clone(), s.repos.clone())),
-    })
-}
-
-/// `t594` §4.5.2's five cases, decided from `roots` alone: whether there is
-/// a tree above `here` at all, and whether `here` already carries its own
-/// `.vivac/lane` (`Located::lane_dir == here`, rather than some ancestor's).
-fn plan_lane(roots: &super::Roots) -> LanePlan {
-    let scanned = crate::repos::scan(&roots.here);
+/// `scanned`, filtered through the redaction guard (`d600`): what is left
+/// to declare, and the count and first rule of whatever it kept out.
+/// Shared by declaring a lane's own folder and by declaring `main` on the
+/// tree's own folder, whether that happens because someone asked for it
+/// or because `ensure_first_event` needs to seed it -- one piece of work,
+/// one place that does it.
+fn filtered_repos(
+    scanned: Vec<crate::event::Repo>,
+) -> (Vec<crate::event::Repo>, Option<(usize, &'static str)>) {
     let mut excluded_count = 0usize;
     let mut excluded_rule: Option<&'static str> = None;
-    let repos: Vec<crate::event::Repo> = scanned
+    let repos = scanned
         .into_iter()
         .filter(
             |r| match crate::redact::check_field("repository path", &r.path) {
@@ -531,6 +512,44 @@ fn plan_lane(roots: &super::Roots) -> LanePlan {
             },
         )
         .collect();
+    (
+        repos,
+        (excluded_count > 0).then(|| (excluded_count, excluded_rule.unwrap())),
+    )
+}
+
+/// What the tree already says about `lane_id`, read without writing
+/// anything: `Store::open` would fill a missing `config` in on its own,
+/// and that write is one `--dry-run` must never trigger just by asking
+/// what a tree is on (`t594` fix-1, finding 6). `config_version` reads
+/// `ConfigVersion::One` for a tree with no config at all -- the same
+/// answer `Store::open` would settle on for a tree with no lane and no
+/// pillar or rule either, so `needs_lock` comes out right either way
+/// without this having to know why the file is missing.
+struct ExistingLane {
+    config_version: crate::store::ConfigVersion,
+    declared: Option<(String, Vec<crate::event::Repo>)>,
+}
+
+fn existing_lane(tree: &Path, lane_id: &str) -> Option<ExistingLane> {
+    let (events, broken) =
+        crate::store::read_all_from(&tree.join(crate::store::DIR).join(crate::store::LOG)).ok()?;
+    let folded = crate::model::fold(&events, broken);
+    Some(ExistingLane {
+        config_version: crate::store::peek_config_version(tree)
+            .unwrap_or(crate::store::ConfigVersion::One),
+        declared: folded
+            .lanes
+            .get(lane_id)
+            .map(|s| (s.name.clone(), s.repos.clone())),
+    })
+}
+
+/// `t594` §4.5.2's five cases, decided from `roots` alone: whether there is
+/// a tree above `here` at all, and whether `here` already carries its own
+/// `.vivac/lane` (`Located::lane_dir == here`, rather than some ancestor's).
+fn plan_lane(roots: &super::Roots) -> LanePlan {
+    let (repos, excluded) = filtered_repos(crate::repos::scan(&roots.here));
 
     let folder_name = roots
         .here
@@ -576,7 +595,7 @@ fn plan_lane(roots: &super::Roots) -> LanePlan {
         is_new,
         needs_lock,
         unchanged,
-        excluded: (excluded_count > 0).then(|| (excluded_count, excluded_rule.unwrap())),
+        excluded,
     }
 }
 
@@ -595,41 +614,56 @@ fn main_lane() -> (String, String, bool) {
 /// nothing stable to point at in a tree that has never written anything,
 /// which a tree fresh out of `init` or a bare plant still is.
 ///
-/// The seed is the tree's own implicit `main` declaring itself with no
-/// repositories yet: harmless to redeclare for real later, and the
-/// smallest write that gives the tree a first line. Taken and released
-/// under its own lock, before the new lane's own lock is taken, since a
-/// second attempt to lock the same file from this same process would
-/// otherwise wait on itself.
+/// The seed is the tree's own implicit `main` declaring itself for real,
+/// with its own folder's actual repositories -- the same walk declaring
+/// `main` by hand would do, and not a placeholder: task 8 decides with
+/// this list whether a linked worktree is one of the lane's own
+/// repositories or a lane apart, and an empty list would hand it the
+/// wrong answer (`t594` fix-1, finding 2). Taken and released under its
+/// own lock, before the new lane's own lock is taken, since a second
+/// attempt to lock the same file from this same process would otherwise
+/// wait on itself.
+///
+/// If this write succeeds and the log's first line still will not parse
+/// as an id right after, that is not this call's own failure to undo --
+/// it already appended a real event and already locked the config, and
+/// the log only ever grows. The error says so, since the caller cannot.
 fn ensure_first_event(tree: &Path) -> Result<String, Failure> {
     if let Some(id) = crate::store::first_event_id(tree) {
         return Ok(id);
     }
+    let (repos, _excluded) = filtered_repos(crate::repos::scan(tree));
     let store = crate::store::Store::open(tree.to_path_buf())?;
     let mut ctx = crate::ops::Ctx::load_for_write(store, Some(crate::lane::MAIN.to_string()))?;
     ctx.lock_for_write()?;
-    crate::ops::declare_lane(&mut ctx, crate::lane::MAIN.to_string(), vec![])?;
+    crate::ops::declare_lane(&mut ctx, crate::lane::MAIN.to_string(), repos)?;
     crate::store::first_event_id(tree).ok_or_else(|| {
         Failure::Io(std::io::Error::other(
-            "the tree still has no first event after seeding one",
+            "this folder's main lane was just declared to give the tree a first \
+             event, and locked its config to match, and the tree's own first \
+             line is still unreadable after that -- the log only ever grows, \
+             so what was just written stays either way",
         ))
     })
 }
 
-/// `t594` §4.5.2's own ordering: this folder's own `.vivac/lane` on disk
-/// first -- only for a brand new lane, and only after the tree has a
-/// first event to point back at -- and only then `declare_lane`, which
-/// takes the write lock, locks the config and emits `lane.declared`
-/// together.
+/// What this run actually does, in order: this folder's own `.vivac/lane`
+/// on disk first -- only for a brand new lane, and with no lock held over
+/// it at all -- and only then `declare_lane`, which takes the write lock,
+/// locks the config and emits `lane.declared` together.
 ///
-/// The file has to land before the event: the other way round, a
-/// `lane.declared` with no file behind it would leave this very folder
-/// not knowing whose thread it is the next time anything reads it, and it
-/// would keep signing as `main` while the tree it just wrote to already
-/// says otherwise. A file with no event yet -- what a crash right after
-/// writing it leaves behind -- costs nothing: the folder already knows
-/// who it is, the fold picks up the state the moment the event does
-/// arrive, and the next `setup` finishes the job.
+/// That is *not* `t594` §4.5.2's own order, which puts the file inside the
+/// lock and after the config is closed. This one is at least as safe: if
+/// the process dies between the file and the lock, the folder already
+/// knows whose thread it is and the tree finds out the moment the fold
+/// sees the matching event, which is exactly what dying between the file
+/// and the event -- the ordering the spec itself calls safe -- already
+/// leaves behind. If it dies between the file and the *config* closing
+/// specifically, the tree does not have a lane event yet either, so an
+/// older vivac reading it in between is not being lied to. What the file
+/// must never do is land *after* the event: that is the one ordering that
+/// leaves a folder signing as `main` while the tree already says
+/// otherwise, and nothing here permits it.
 fn write_lane(roots: &super::Roots, plan: &LanePlan) -> Result<(), Failure> {
     if plan.is_new {
         let project = ensure_first_event(&roots.tree)?;
@@ -645,6 +679,89 @@ fn write_lane(roots: &super::Roots, plan: &LanePlan) -> Result<(), Failure> {
     let mut ctx = crate::ops::Ctx::load_for_write(store, Some(plan.lane_id.clone()))?;
     ctx.lock_for_write()?;
     crate::ops::declare_lane(&mut ctx, plan.name.clone(), plan.repos.clone())
+}
+
+/// Locks the tree's config to `t594`'s own sentence without touching the
+/// log: for a lane whose declaration already matches (`unchanged`), there
+/// is nothing new to say, but the config can still have lost the lock
+/// underneath it -- by hand, or by an older `Store::open` regenerating one
+/// that went missing before it knew a lane event counts too (`t594` fix-1,
+/// finding 5). `unchanged` must never decide this on its own: a folder
+/// that has nothing new to declare can still be the reason the config
+/// needs relocking.
+fn relock_lanes(tree: &Path) -> Result<(), Failure> {
+    let mut store = crate::store::Store::open(tree.to_path_buf())?;
+    let lock = store.lock_for_write()?;
+    store.lock_lanes_in_config(&lock)?;
+    Ok(())
+}
+
+/// The clause text for a `Failure`, without doubling an `Io` variant's own
+/// "Input/output error:" prefix once `failure_with_rollback` wraps it a
+/// second time (`t594` fix-1, finding 3): `Failure::message` already adds
+/// that prefix for `Io`, and the planting failure this mirrors uses a raw
+/// `std::io::Error` -- which has no such prefix to begin with -- for the
+/// exact same reason.
+fn detail_of(e: &Failure) -> String {
+    match e {
+        Failure::Io(io) => io.to_string(),
+        other => other.message(),
+    }
+}
+
+/// The exit-5 text for a lane declaration or a config relock that failed,
+/// after `unrestored` -- what `super::rollback` could not put back among
+/// the settings/mcp/skill/gitignore pieces -- is already known.
+///
+/// Unlike `failure_with_rollback`, this never says every file came back:
+/// by the time either call above can fail, a real event may already sit
+/// in the tree's own log (`ensure_first_event`'s seed) or the config may
+/// already be locked, and neither of those is a file `rollback` ever
+/// touches or could undo. `t565` §7.7 accepts the same gap for planting,
+/// on the same reasoning -- but planting never writes anything of
+/// informational value before it can fail, and a lane's own event does,
+/// so this says the log stays instead of claiming a rollback it did not
+/// do and cannot do.
+fn lane_failure_with_rollback(clause: String, unrestored: &[PathBuf]) -> Failure {
+    let mut message = clause;
+    if unrestored.is_empty() {
+        message.push_str(
+            ", so setup put the settings, the server entry and the skill back\n  \
+             as they were. Whatever this already wrote to the tree's own log stays\n  \
+             either way: the log only ever grows.",
+        );
+    } else {
+        message.push_str(", and setup could not put these back as they were:\n");
+        for p in unrestored {
+            message.push_str(&format!("      {}\n", p.display()));
+        }
+        message.push_str(
+            "  setup keeps no copy on disk, so the only other copy is whatever\n  \
+             version control holds. Whatever this already wrote to the tree's own\n  \
+             log stays either way: the log only ever grows.",
+        );
+    }
+    Failure::Io(std::io::Error::other(message))
+}
+
+/// Notes `tree` in this machine's registry, the same bookkeeping every
+/// ordinary command already does on its way out (`main.rs`). `setup`
+/// itself never used to reach that block -- it returns before it
+/// (`f277`) -- and that was harmless while every folder it touched was
+/// found by walking up from itself. It stopped being harmless the moment
+/// `setup` could join a folder whose only path back to its tree is the
+/// registry: a linked worktree that sits beside the tree's own folder
+/// rather than above it, which `resolve_lane` (`store.rs`) can only ever
+/// find through here (`t594` fix-1, finding 1). Quiet when there is
+/// nowhere to note or nothing to note it with yet, the same as the
+/// ordinary path.
+fn note_registry(tree: &Path) {
+    let Some(store_dir) = crate::store::store_dir() else {
+        return;
+    };
+    if let Some(project_id) = crate::store::first_event_id(tree) {
+        crate::registry::note(&store_dir, &project_id, tree);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -748,7 +865,8 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         && !stop_missing
         && !mcp_missing
         && !skill_missing_or_replaceable
-        && lane.unchanged;
+        && lane.unchanged
+        && !lane.needs_lock;
 
     let piece_block = render_piece_block(
         here,
@@ -774,6 +892,10 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         && crate::anchor::tracks(tree, ".vivac/events") == Some(true);
 
     if nothing_to_write {
+        // A real run, not `--dry-run`: noting the registry is bookkeeping
+        // every ordinary command already does on a pure read, not a write
+        // this promise is about (`note_registry`).
+        note_registry(tree);
         outln!("{piece_block}  Nothing to write: this project is already set up.");
         if log_tracked {
             print!("{TRACKED_WARNING}");
@@ -882,29 +1004,51 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         }
     }
 
-    // Declaring the lane goes right after planting, next to it, and the
-    // same way: never rolled back on its own, only the JSON commit undone
-    // by hand if it fails (`t594` §4.5.2, `write_lane`'s own doc for why
-    // the order inside it is what it is).
+    // Declaring the lane, or just relocking the config, goes right after
+    // planting, next to it: never rolled back on its own, only the JSON
+    // commit undone by hand if it fails -- `write_lane`'s own doc explains
+    // why that is still safe.
     if !lane.unchanged {
         if let Err(e) = write_lane(roots, &lane) {
             let unrestored = super::rollback(&writes);
+            return Err(lane_failure_with_rollback(
+                format!("the lane could not be declared ({})", detail_of(&e)),
+                &unrestored,
+            ));
+        }
+    } else if lane.needs_lock {
+        // Nothing new to declare, but the config still needs the lock
+        // `unchanged` must never decide on its own (`t594` fix-1, finding
+        // 5): here the only write is the lock itself, so a failure has
+        // nothing irreversible to own up to and the ordinary wording is
+        // accurate as it stands.
+        if let Err(e) = relock_lanes(tree) {
+            let unrestored = super::rollback(&writes);
             return Err(super::failure_with_rollback(
-                format!("the lane could not be declared ({})", e.message()),
+                format!(
+                    "the tree's config could not be relocked ({})",
+                    detail_of(&e)
+                ),
                 &unrestored,
             ));
         }
     }
 
+    // Whether *this run* changed the tree at all, for `written_text`:
+    // `TREE_KEPT_PARAGRAPH` is only true when it did not.
+    let tree_touched = vivac_missing || !lane.unchanged || lane.needs_lock;
+
     let written = Written {
         connection: start_missing || stop_missing || mcp_missing,
         skill: skill_missing_or_replaceable,
         planted: vivac_missing,
+        tree_touched,
         undoable: start_missing
             && stop_missing
             && mcp_missing
             && matches!(skill_file_state, SkillState::Missing),
     };
+    note_registry(tree);
     print!("\n{}", written_text(&written));
     if log_tracked {
         print!("{TRACKED_WARNING}");
@@ -954,10 +1098,17 @@ fn render_piece_block(
     };
     s.push_str(&piece_line(VIVAC_LABEL, &vivac_status));
     if gitignore_missing {
-        s.push_str(&piece_line(
-            GITIGNORE_LABEL,
-            "create: keeps .vivac/ out of version control",
-        ));
+        // Two different files, in two different folders, can both need
+        // this line in the same run -- the tree's own, from before `t594`
+        // §4.9, and a brand new lane's own (below). Only then does the
+        // tree's own copy say whose it is; on its own it reads exactly as
+        // it always has (`t594` fix-1, finding 7).
+        let status = if lane.is_new {
+            "create: keeps the tree's .vivac/ out of version control"
+        } else {
+            "create: keeps .vivac/ out of version control"
+        };
+        s.push_str(&piece_line(GITIGNORE_LABEL, status));
     }
 
     let settings_status = match (settings_exists, start_missing, stop_missing) {
@@ -1021,31 +1172,42 @@ fn render_piece_block(
                 "create: keeps .vivac/ out of version control",
             ));
         } else {
+            // One sentence for both: declaring `main` on the tree's own
+            // folder and redeclaring a lane that already existed are the
+            // same write, and neither creates a file the way a brand new
+            // lane does above -- it is the log that changes.
             s.push_str(&piece_line(
-                "lane",
+                ".vivac/events",
                 &format!(
-                    "declare: this folder's repositories, as lane \"{}\"",
+                    "record: this folder is lane \"{}\", with its repositories",
                     lane.name
                 ),
             ));
         }
-        if let Some((count, rule)) = lane.excluded {
-            let noun = if count == 1 {
-                "repository"
-            } else {
-                "repositories"
-            };
-            s.push_str(&sub_line(
-                "kept out",
-                &format!("{count} {noun}, refused: {rule}"),
-            ));
-        }
-        if lane.needs_lock {
-            s.push_str(&piece_line(
-                "config",
-                "lock: from now on this tree needs vivac 0.12 or newer",
-            ));
-        }
+    }
+    // What the redaction guard kept out is the folder's own state, not a
+    // change: it is still true on a run that declares nothing new, so it
+    // is said every time rather than only on the run that first found it
+    // (`t594` fix-1, finding 8).
+    if let Some((count, rule)) = lane.excluded {
+        let noun = if count == 1 {
+            "repository"
+        } else {
+            "repositories"
+        };
+        s.push_str(&sub_line(
+            "kept out",
+            &format!("{count} {noun}, refused: {rule}"),
+        ));
+    }
+    // Independent of `unchanged`: the config can need the lock even when
+    // nothing about the declaration itself changed (`t594` fix-1, finding
+    // 5).
+    if lane.needs_lock {
+        s.push_str(&piece_line(
+            "config",
+            "lock: from now on this tree needs vivac 0.12 or newer",
+        ));
     }
 
     s.push('\n');
@@ -1065,6 +1227,11 @@ struct Written {
     skill: bool,
     /// The tree, planted by this run rather than found.
     planted: bool,
+    /// The tree was already there, but this run still changed it: a lane
+    /// declared or redeclared, or just its config relocked (`t594` fix-1,
+    /// finding 2). `TREE_KEPT_PARAGRAPH` is a lie the run this covers used
+    /// to tell.
+    tree_touched: bool,
     /// All four of setup's pieces, the skill among them missing before:
     /// `--undo` removes all four, so only then does it take back exactly
     /// this run.
@@ -1080,6 +1247,8 @@ fn written_text(w: &Written) -> String {
     }
     s.push_str(if w.planted {
         MIGRATE_PARAGRAPHS
+    } else if w.tree_touched {
+        LANE_JOINED_PARAGRAPH
     } else {
         TREE_KEPT_PARAGRAPH
     });
@@ -1098,6 +1267,12 @@ const MIGRATE_PARAGRAPHS: &str = "\n  Nothing has been brought in from anywhere 
 
 const TREE_KEPT_PARAGRAPH: &str =
     "\n  The tree was already there, and setup changed nothing in it.\n";
+
+/// The tree was already there, and this is the run that still changed it
+/// -- joined it as a lane, redeclared one, or only relocked its config.
+/// `TREE_KEPT_PARAGRAPH` would be false here (`t594` fix-1, finding 2).
+const LANE_JOINED_PARAGRAPH: &str =
+    "\n  The tree was already there. This run only recorded this folder's own\n  thread in it.\n";
 
 const FILES_PARAGRAPH: &str = "\n  The hooks, the server and the skill are plain files in this project:\n  commit them if everyone who works here uses vivac, and keep them out of\n  version control if only you do. .vivac/ is never committed: it is this\n  machine's record, and a copy of it in every clone would diverge from the\n  others. Its own .gitignore keeps it out.\n";
 

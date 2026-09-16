@@ -31,6 +31,16 @@ fn read_bytes(p: &Path) -> Vec<u8> {
     std::fs::read(p).unwrap_or_else(|e| panic!("reading {p:?}: {e}"))
 }
 
+/// Whether `dir` holds a tree of its own: `store::already_planted`'s own
+/// definition, `config` **or** `events`, copied here rather than asked of
+/// the crate because an integration test has no `pub` path to it. `t594`
+/// fix-1, finding 4: three tests used to check `config` alone, which a
+/// regression that planted only an `events` file would have slipped
+/// straight past.
+fn already_planted(dir: &Path) -> bool {
+    dir.join(".vivac").join("config").is_file() || dir.join(".vivac").join("events").is_file()
+}
+
 /// `p` the way the binary's own `current_dir()` would print it, for building
 /// an expected text around a path.
 ///
@@ -468,6 +478,31 @@ fn the_lane_config_warning_shows_up_before_anything_is_written() {
     assert!(!second.join(".vivac").exists(), "dry-run wrote something");
 }
 
+/// Finding 6 (baja): `plan_lane` used to read the tree's config through
+/// `Store::open`, which fills a missing one back in on its own -- a write
+/// `--dry-run` must never cause, even one this indirect, and even over a
+/// tree it is not planting.
+#[test]
+fn dry_run_never_regenerates_a_missing_config() {
+    let c = Sandbox::new_seeded("setup-dry-run-no-config");
+    std::fs::remove_file(c.0.join(".vivac").join("config")).unwrap();
+    assert!(!c.0.join(".vivac").join("config").exists());
+
+    let second = c.0.join("v2");
+    std::fs::create_dir_all(&second).unwrap();
+    let (out, code) = run_in(
+        &second,
+        c.global_home(),
+        &["setup", "claude-code", "--dry-run"],
+    );
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("Nothing written: --dry-run."), "{out}");
+    assert!(
+        !c.0.join(".vivac").join("config").exists(),
+        "--dry-run regenerated the tree's config:\n{out}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // 12 and 13. `--undo`.
 // ---------------------------------------------------------------------------
@@ -884,7 +919,7 @@ fn a_tree_above_keeps_claude_codes_files_below_and_names_the_tree_root() {
         "the subfolder never joined the tree above as a lane"
     );
     assert!(
-        !sub.join(".vivac").join("config").exists(),
+        !already_planted(&sub),
         "a second tree was planted below the existing one"
     );
     assert!(
@@ -910,7 +945,8 @@ fn undo_in_a_subfolder_removes_only_that_folders_files() {
         sub.join(".claude").join("settings.json").exists(),
         "setup did not write into the subfolder it ran in"
     );
-    let vivac_after_setup = std::fs::read(c.0.join(".vivac").join("config")).unwrap();
+    let config_after_setup = std::fs::read(c.0.join(".vivac").join("config")).unwrap();
+    let events_after_setup = std::fs::read(c.0.join(".vivac").join("events")).unwrap();
 
     let (out, code) = run_in(
         &sub,
@@ -928,10 +964,18 @@ fn undo_in_a_subfolder_removes_only_that_folders_files() {
         c.0.join(".vivac").exists(),
         "the tree above was touched by undo"
     );
+    // `undo` never touches the log, checked rather than only claimed
+    // (`t594` fix-1, finding 8): both `config` and `events` stay exactly
+    // as the earlier `setup` left them.
     assert_eq!(
-        vivac_after_setup,
+        config_after_setup,
         std::fs::read(c.0.join(".vivac").join("config")).unwrap(),
-        "undo changed the tree's config, and undo never touches the log"
+        "undo changed the tree's config"
+    );
+    assert_eq!(
+        events_after_setup,
+        std::fs::read(c.0.join(".vivac").join("events")).unwrap(),
+        "undo changed the tree's log"
     );
 }
 
@@ -967,7 +1011,7 @@ fn a_workspace_and_a_repository_inside_it_share_one_tree_and_get_two_sets_of_fil
         "the repository never joined the shared tree as a lane"
     );
     assert!(
-        !repository.join(".vivac").join("config").exists(),
+        !already_planted(&repository),
         "a second tree was planted inside the repository"
     );
 }
@@ -1304,8 +1348,12 @@ fn a_fresh_setup_prints_the_written_message_verbatim() {
 }
 
 /// §15.5 (b): a folder of its own under a tree that was already there, which
-/// is what step 6 of the skill offers in a workspace.
-const NEW_FOLDER_MESSAGE: &str = "  Written.\n\n  Open a new Claude Code session in this folder. The brief arrives on its\n  own when it starts. If Claude Code asks whether to use the \"vivac\" server\n  from .mcp.json, say yes: it is what lets the agent write to the tree.\n\n  The tree was already there, and setup changed nothing in it.\n\n  The hooks, the server and the skill are plain files in this project:\n  commit them if everyone who works here uses vivac, and keep them out of\n  version control if only you do. .vivac/ is never committed: it is this\n  machine's record, and a copy of it in every clone would diverge from the\n  others. Its own .gitignore keeps it out.\n\n  Undo:  vivac setup claude-code --undo\n";
+/// is what step 6 of the skill offers in a workspace. It joins that tree as
+/// a lane (`t594`), so this run did change the tree -- unlike a folder that
+/// merely gains the missing Claude Code pieces over an unrelated part of
+/// it (`SKILL_REPLACED_MESSAGE`, `SERVER_ADDED_MESSAGE`, below), which do
+/// not.
+const NEW_FOLDER_MESSAGE: &str = "  Written.\n\n  Open a new Claude Code session in this folder. The brief arrives on its\n  own when it starts. If Claude Code asks whether to use the \"vivac\" server\n  from .mcp.json, say yes: it is what lets the agent write to the tree.\n\n  The tree was already there. This run only recorded this folder's own\n  thread in it.\n\n  The hooks, the server and the skill are plain files in this project:\n  commit them if everyone who works here uses vivac, and keep them out of\n  version control if only you do. .vivac/ is never committed: it is this\n  machine's record, and a copy of it in every clone would diverge from the\n  others. Its own .gitignore keeps it out.\n\n  Undo:  vivac setup claude-code --undo\n";
 
 /// §15.5 (c): only the skill, which is what an upgrade writes.
 const SKILL_REPLACED_MESSAGE: &str = "  Written.\n\n  The vivac-migrate skill is now the one this version of vivac ships.\n  Sessions opened from now on use it.\n\n  The tree was already there, and setup changed nothing in it.\n\n  The hooks, the server and the skill are plain files in this project:\n  commit them if everyone who works here uses vivac, and keep them out of\n  version control if only you do. .vivac/ is never committed: it is this\n  machine's record, and a copy of it in every clone would diverge from the\n  others. Its own .gitignore keeps it out.\n";

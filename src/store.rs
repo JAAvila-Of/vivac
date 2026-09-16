@@ -489,16 +489,13 @@ impl Store {
                 // A `.vivac/` with no config comes from an earlier version or a
                 // half-finished delete. Fill it in rather than fail: the tree,
                 // which is what matters, lives in `events`. `d444`: if the log
-                // already carries a pillar or a rule, the regenerated config is
-                // born locked -- deleting one file must never hand an older
+                // already carries a pillar, a rule or a lane, the regenerated
+                // config is born locked to whichever of those sentences the
+                // log backs up -- deleting one file must never hand an older
                 // release a config that looks readable over a tree it is not.
-                let c = if log_already_governed(&root) {
-                    Config {
-                        version: ConfigVersion::Locked,
-                        ..Config::new_seeded()
-                    }
-                } else {
-                    Config::new_seeded()
+                let c = Config {
+                    version: regenerated_version(&root),
+                    ..Config::new_seeded()
                 };
                 write_config(&root, &c)?;
                 c
@@ -621,16 +618,22 @@ fn check_config_version(version: Option<&serde_json::Value>) -> Result<(), Failu
     }
 }
 
-/// The rare path `Store::open` takes when `config` itself is missing:
-/// whether the log already holds a pillar or a rule, in any state. Reads
-/// the whole log -- something no ordinary read ever pays for -- because a
-/// vanished config is itself the unusual case, and regenerating one that
-/// looks readable by any release over a tree that already governs
-/// something would undo the very lock `d444` exists to keep.
-fn log_already_governed(root: &Path) -> bool {
+/// The rare path `Store::open` takes when `config` itself is missing: which
+/// sentence, if any, the log already backs up. Reads the whole log --
+/// something no ordinary read ever pays for -- because a vanished config is
+/// itself the unusual case, and regenerating one that looks readable by any
+/// release over a tree that already governs something, or already holds a
+/// lane, would undo the very lock `d444` and `t594` §2.6 exist to keep.
+///
+/// A lane wins over a pillar or a rule when a log somehow carries both: 0.12
+/// reads both sentences, so a tree that holds pillars and lanes still says
+/// this one and loses nothing, and there is no third sentence for "both" to
+/// pick instead.
+fn regenerated_version(root: &Path) -> ConfigVersion {
     let Ok(f) = File::open(root.join(DIR).join(LOG)) else {
-        return false;
+        return ConfigVersion::One;
     };
+    let mut governed = false;
     for line in BufReader::new(f).lines().map_while(Result::ok) {
         if line.trim().is_empty() {
             continue;
@@ -638,13 +641,32 @@ fn log_already_governed(root: &Path) -> bool {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else {
             continue;
         };
-        if v["payload"]["type"] == "node.created"
-            && matches!(v["payload"]["kind"].as_str(), Some("pillar") | Some("rule"))
-        {
-            return true;
+        match v["payload"]["type"].as_str() {
+            Some("lane.declared") | Some("lane.claimed") => return ConfigVersion::Lanes,
+            Some("node.created")
+                if matches!(v["payload"]["kind"].as_str(), Some("pillar") | Some("rule")) =>
+            {
+                governed = true;
+            }
+            _ => {}
         }
     }
-    false
+    if governed {
+        ConfigVersion::Locked
+    } else {
+        ConfigVersion::One
+    }
+}
+
+/// `config`'s version, read directly and without writing anything: `None`
+/// for a tree with no config at all, or one this release cannot make sense
+/// of. `Store::open` would fill a missing one in, and that write is exactly
+/// what a caller that must never write -- `setup`'s own `--dry-run` -- is
+/// not allowed to trigger just by asking what version a tree is on
+/// (`t594` fix-1, finding 6).
+pub(crate) fn peek_config_version(root: &Path) -> Option<ConfigVersion> {
+    let raw = fs::read_to_string(root.join(DIR).join(CONFIG)).ok()?;
+    read_config(&raw).ok().map(|c| c.version)
 }
 
 /// What an append left behind: the events as written, plus where the last
@@ -1434,6 +1456,34 @@ mod tests {
                 .all(|e| !e.file_name().to_string_lossy().ends_with(".tmp")),
             "a temporary file was left behind"
         );
+        fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// `t594` fix-1, finding 5: a config that vanishes over a log that
+    /// already holds a `lane.declared` must come back locked to the lanes
+    /// sentence, the same as `d444` already does for a pillar or a rule --
+    /// `log_already_governed`'s blind spot before this test existed.
+    #[test]
+    fn a_missing_config_regenerates_the_lanes_sentence_when_the_log_has_a_lane_event() {
+        let tmp = std::env::temp_dir().join(format!("vivac-relock-{}", id::ulid()));
+        let mut s = Store::create(&tmp).unwrap();
+        let lock = s.lock_for_write().unwrap();
+        s.append(
+            &lock,
+            vec![crate::event::Body::LaneDeclared {
+                lane: crate::lane::MAIN.to_string(),
+                name: crate::lane::MAIN.to_string(),
+                repos: vec![],
+            }],
+            0,
+            false,
+        )
+        .unwrap();
+        drop(lock);
+        fs::remove_file(tmp.join(DIR).join(CONFIG)).unwrap();
+
+        let reopened = Store::open(tmp.clone()).unwrap();
+        assert_eq!(reopened.config.version, ConfigVersion::Lanes);
         fs::remove_dir_all(&tmp).ok();
     }
 }

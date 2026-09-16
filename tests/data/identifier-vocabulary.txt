@@ -501,6 +501,7 @@ falling
 falls
 false
 fan
+feature
 fence
 fenced
 fetch
@@ -511,6 +512,7 @@ file
 files
 fill
 filter
+filtered
 finalize
 find
 finding
@@ -721,6 +723,7 @@ its
 itself
 jar
 join
+joined
 joins
 js
 json
@@ -1008,6 +1011,7 @@ path
 paths
 pattern
 payload
+peek
 pending
 per
 percent
@@ -1154,6 +1158,8 @@ release
 released
 releases
 reload
+relock
+relocks
 rem
 remaining
 remembered
@@ -1168,6 +1174,7 @@ rename
 render
 rendered
 reopen
+reopened
 reordered
 repaired
 repeat
@@ -1496,6 +1503,7 @@ tools
 top
 torn
 total
+touched
 touches
 touching
 toward
