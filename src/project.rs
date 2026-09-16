@@ -76,7 +76,13 @@ impl Project {
         let log_file = File::open(store.log()).ok();
         let read = crate::index::read_tracked(&store.log(), 0)?;
         let committed_broken = read.broken;
-        let mut ctx = ops::Ctx::from_events(store, &read.events, committed_broken, seen);
+        let mut ctx = ops::Ctx::from_events(
+            store,
+            &read.events,
+            committed_broken,
+            seen,
+            Some(crate::lane::MAIN.to_string()),
+        );
         ctx.tree.broken_lines = committed_broken + usize::from(read.unterminated);
         Ok(Project {
             root,

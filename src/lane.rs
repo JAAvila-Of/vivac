@@ -9,12 +9,6 @@
 //! own curation rule, which is `f89`. It holds no repositories and no name
 //! either -- those are in the log, where `lane.declared` puts them.
 
-// Nothing reads a lane file yet: resolving a working folder's lane is the
-// commit after this one (`t594` §2.3), and that is where this comes off.
-// Kept scoped to this module and to one commit rather than left to make the
-// clippy gate red, which every commit of this branch has to pass.
-#![allow(dead_code)]
-
 use crate::failure::Failure;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
@@ -40,6 +34,10 @@ pub struct Lane {
 }
 
 /// A fresh id for a lane. As opaque as any other id this crate mints.
+// A lane file is written where a folder joins a tree: by setup, and by a
+// linked worktree the first time it writes (`t594` §2.3, §4.5). Reading
+// one is all this commit does.
+#[allow(dead_code)]
 pub fn new_id() -> String {
     crate::id::ulid()
 }
@@ -97,6 +95,10 @@ fn check_lane_version(version: Option<&serde_json::Value>) -> Result<(), Failure
 ///
 /// Also writes `vivac_dir`'s own `.gitignore`: a lane folder holds no tree,
 /// so nothing else would ever have written it.
+// A lane file is written where a folder joins a tree: by setup, and by a
+// linked worktree the first time it writes (`t594` §2.3, §4.5). Reading
+// one is all this commit does.
+#[allow(dead_code)]
 pub fn write(vivac_dir: &Path, lane: &Lane) -> std::io::Result<()> {
     std::fs::create_dir_all(vivac_dir)?;
     let tmp = vivac_dir.join(format!("{FILE}.{}.tmp", crate::id::ulid()));

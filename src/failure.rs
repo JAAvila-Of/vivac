@@ -28,6 +28,18 @@ pub enum Failure {
     /// (`d598`). Shares `Io`'s exit code: the store is what this process
     /// could not get to.
     Busy(String),
+    /// The folder holds the tree but is not one of its lanes: `main` was
+    /// claimed by another folder, which is what `relocate` leaves behind.
+    /// Exit 1, like any other refusal the model itself makes.
+    // Raised where the context decides which lane it is writing as: a folder
+    // that holds the tree but is not one of its lanes can be read and not
+    // written (`t594` §2.3, rule 3). Nothing reaches that decision yet.
+    #[allow(dead_code)]
+    NotALane(String),
+    /// A lane whose tree this machine's registry does not know. Shares
+    /// `NoStore`'s exit code: from the caller's side it is the same answer,
+    /// there is no tree to work on from here.
+    TreeNotFound(String),
 }
 
 pub type R = Result<(), Failure>;
@@ -35,10 +47,10 @@ pub type R = Result<(), Failure>;
 impl Failure {
     pub fn code(&self) -> i32 {
         match self {
-            Failure::Model(_) => 1,
+            Failure::Model(_) | Failure::NotALane(_) => 1,
             Failure::Usage(_) => 2,
             Failure::Redaction(_) => 3,
-            Failure::NoStore => 4,
+            Failure::NoStore | Failure::TreeNotFound(_) => 4,
             Failure::Io(_) | Failure::NewerVivac(_) | Failure::Busy(_) => 5,
         }
     }
@@ -46,9 +58,12 @@ impl Failure {
     pub fn print_to_stderr(&self) {
         eprintln!();
         match self {
-            Failure::Model(m) | Failure::Usage(m) | Failure::NewerVivac(m) | Failure::Busy(m) => {
-                eprintln!("{m}")
-            }
+            Failure::Model(m)
+            | Failure::Usage(m)
+            | Failure::NewerVivac(m)
+            | Failure::Busy(m)
+            | Failure::NotALane(m)
+            | Failure::TreeNotFound(m) => eprintln!("{m}"),
             Failure::Redaction(h) => eprintln!("{h}"),
             Failure::NoStore => {
                 eprintln!("  No .vivac/ here or further up.");
@@ -68,9 +83,12 @@ impl Failure {
     /// refusal it cannot act on. Two renderings of the same data, on purpose.
     pub fn message(&self) -> String {
         match self {
-            Failure::Model(m) | Failure::Usage(m) | Failure::NewerVivac(m) | Failure::Busy(m) => {
-                m.trim().to_string()
-            }
+            Failure::Model(m)
+            | Failure::Usage(m)
+            | Failure::NewerVivac(m)
+            | Failure::Busy(m)
+            | Failure::NotALane(m)
+            | Failure::TreeNotFound(m) => m.trim().to_string(),
             Failure::Redaction(h) => h.to_string(),
             Failure::NoStore => "No .vivac/ here or further up. Plant one: vivac init".into(),
             Failure::Io(e) => format!("Input/output error: {e}"),
@@ -92,6 +110,32 @@ impl Failure {
              again.",
             deadline.as_secs()
         ))
+    }
+
+    /// A folder whose `.vivac/lane` names a tree this machine's registry has
+    /// no path for: it once did, or was joined from another machine, and
+    /// nothing here can find where that tree lives now.
+    pub fn tree_not_found() -> Failure {
+        Failure::TreeNotFound(
+            "  This folder is a lane of a tree this machine's registry does not know.\n  \
+             Join it again:  vivac setup claude-code --join <path to the tree>"
+                .into(),
+        )
+    }
+
+    /// A folder that holds the tree itself, once `main` has been claimed by
+    /// another folder instead: `t594` §2.3 declares the sentence, and the
+    /// task that decides the context's lane is what will raise it.
+    // Raised where the context decides which lane it is writing as: a folder
+    // that holds the tree but is not one of its lanes can be read and not
+    // written (`t594` §2.3, rule 3). Nothing reaches that decision yet.
+    #[allow(dead_code)]
+    pub fn not_a_lane() -> Failure {
+        Failure::NotALane(
+            "  This folder holds the tree but is not one of its lanes. To write from\n  \
+             here, make it one:  vivac setup claude-code"
+                .into(),
+        )
     }
 }
 

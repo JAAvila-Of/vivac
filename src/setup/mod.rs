@@ -58,6 +58,11 @@ pub fn dispatch(cwd: &Path, a: &Args) -> Result<i32, Failure> {
 pub struct Roots {
     pub here: PathBuf,
     pub tree: PathBuf,
+    /// `None` when there is no tree yet and `setup` is about to plant one.
+    // The folder a lane file gets written to, which is setup's job (`t594`
+    // §4.5). Resolution answers it here so that nobody has to walk up twice.
+    #[allow(dead_code)]
+    pub located: Option<crate::store::Located>,
 }
 
 /// Resolves both roots, and refuses if the tree root turns out to be the
@@ -65,7 +70,11 @@ pub struct Roots {
 /// §7.2): a project's tree living inside that one would mix a project with
 /// the registry that lists every project.
 pub fn resolve_roots(cwd: &Path) -> Result<Roots, Failure> {
-    let tree = crate::store::find_root(cwd).unwrap_or_else(|| cwd.to_path_buf());
+    let located = crate::store::locate(cwd)?;
+    let tree = located
+        .as_ref()
+        .map(|l| l.root.clone())
+        .unwrap_or_else(|| cwd.to_path_buf());
     let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
     let is_registry = crate::store::store_dir().is_some_and(|d| canon(&d) == canon(&tree));
     if is_registry {
@@ -74,6 +83,7 @@ pub fn resolve_roots(cwd: &Path) -> Result<Roots, Failure> {
     Ok(Roots {
         here: cwd.to_path_buf(),
         tree,
+        located,
     })
 }
 

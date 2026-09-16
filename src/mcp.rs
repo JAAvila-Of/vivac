@@ -1111,9 +1111,12 @@ mod resident_write_tests {
                 .tree,
         );
         let fresh = dump_tree(
-            &ops::Ctx::load(Store::open(root.to_path_buf()).unwrap())
-                .unwrap_or_else(|e| panic!("{}", e.message()))
-                .tree,
+            &ops::Ctx::load(
+                Store::open(root.to_path_buf()).unwrap(),
+                Some(crate::lane::MAIN.to_string()),
+            )
+            .unwrap_or_else(|e| panic!("{}", e.message()))
+            .tree,
         );
         assert_eq!(
             resident, fresh,
@@ -1317,7 +1320,11 @@ mod resident_write_tests {
             .write(|ctx| ops::add(ctx, add("From the server")))
             .unwrap();
 
-        let mut other = crate::ops::Ctx::load(Store::open(root.clone()).unwrap()).unwrap();
+        let mut other = crate::ops::Ctx::load(
+            Store::open(root.clone()).unwrap(),
+            Some(crate::lane::MAIN.to_string()),
+        )
+        .unwrap();
         other.lock_for_write().unwrap();
         ops::add(&mut other, add("From another process")).unwrap();
         other.unlock();
@@ -1397,7 +1404,11 @@ mod resident_write_tests {
         project.current().unwrap();
         assert_resident_matches_fresh_fold(&root, &mut project);
 
-        let mut other = crate::ops::Ctx::load(Store::open(root.clone()).unwrap()).unwrap();
+        let mut other = crate::ops::Ctx::load(
+            Store::open(root.clone()).unwrap(),
+            Some(crate::lane::MAIN.to_string()),
+        )
+        .unwrap();
         other.lock_for_write().unwrap();
         ops::add(&mut other, add("From another process")).unwrap();
         other.unlock();
@@ -1494,8 +1505,11 @@ mod resident_write_tests {
         ));
         std::fs::create_dir_all(&scratch_root).unwrap();
         Store::create(&scratch_root).unwrap();
-        let mut scratch =
-            crate::ops::Ctx::load(Store::open(scratch_root.clone()).unwrap()).unwrap();
+        let mut scratch = crate::ops::Ctx::load(
+            Store::open(scratch_root.clone()).unwrap(),
+            Some(crate::lane::MAIN.to_string()),
+        )
+        .unwrap();
         scratch.lock_for_write().unwrap();
         ops::add(&mut scratch, add("After the swap")).unwrap();
         ops::add(&mut scratch, add("Also after the swap")).unwrap();

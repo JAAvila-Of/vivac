@@ -24,6 +24,15 @@ use std::path::Path;
 
 pub struct Ctx {
     pub store: Store,
+    /// The lane this context runs as: `Some(lane::MAIN)` for a tree's own
+    /// folder, the lane's own id for any other. Set by every constructor,
+    /// read by none yet -- resolving it is `t594` §2.3, deciding what to do
+    /// with it is a task still to come.
+    // Read by the store, which signs every event with the lane that wrote it
+    // (`t594` §2.4). Carried from here so the two commits that follow do not
+    // each work it out again.
+    #[allow(dead_code)]
+    pub lane: Option<String>,
     pub tree: Tree,
     pub anchor: Box<dyn Anchor>,
     /// The log's fingerprint taken **before** it was read: a write that
@@ -44,24 +53,29 @@ impl Ctx {
     /// For a command that only ever reads. `LOADING.md` §4: this is a read,
     /// so it is free to refresh the derived index once its tail passes the
     /// threshold -- see `index::load`.
-    pub fn load(store: Store) -> Result<Ctx, Failure> {
-        Ctx::load_opt(store, true)
+    pub fn load(store: Store, lane: Option<String>) -> Result<Ctx, Failure> {
+        Ctx::load_opt(store, true, lane)
     }
 
     /// For a command that may append to the log. Still free to read a warm
     /// or stale index -- applying its tail is cheap enough for the write
     /// budget -- but it must never pay to rewrite the file itself
     /// (`LOADING.md` §4 "Cuándo se reescribe").
-    pub fn load_for_write(store: Store) -> Result<Ctx, Failure> {
-        Ctx::load_opt(store, false)
+    pub fn load_for_write(store: Store, lane: Option<String>) -> Result<Ctx, Failure> {
+        Ctx::load_opt(store, false, lane)
     }
 
-    fn load_opt(store: Store, allow_index_refresh: bool) -> Result<Ctx, Failure> {
+    fn load_opt(
+        store: Store,
+        allow_index_refresh: bool,
+        lane: Option<String>,
+    ) -> Result<Ctx, Failure> {
         let seen = crate::store::fingerprint(&store.log());
         let tree = crate::index::load(&store, allow_index_refresh)?;
         let anchor = anchor::detect(&store.root);
         Ok(Ctx {
             store,
+            lane,
             tree,
             anchor,
             seen,
@@ -76,10 +90,10 @@ impl Ctx {
     /// always folds the whole log rather than going through `index::load`:
     /// there is no tail to apply that would save the read those two need
     /// anyway.
-    pub fn load_with_log(store: Store) -> Result<(Ctx, Vec<Event>), Failure> {
+    pub fn load_with_log(store: Store, lane: Option<String>) -> Result<(Ctx, Vec<Event>), Failure> {
         let seen = crate::store::fingerprint(&store.log());
         let (events, broken) = store.read_all()?;
-        Ok((Ctx::from_events(store, &events, broken, seen), events))
+        Ok((Ctx::from_events(store, &events, broken, seen, lane), events))
     }
 
     /// A `Ctx` over events already read, for a caller that keeps them.
@@ -88,11 +102,13 @@ impl Ctx {
         events: &[Event],
         broken: usize,
         seen: (u64, Option<std::time::SystemTime>),
+        lane: Option<String>,
     ) -> Ctx {
         let tree = fold(events, broken);
         let anchor = anchor::detect(&store.root);
         Ctx {
             store,
+            lane,
             tree,
             anchor,
             seen,
@@ -1767,7 +1783,10 @@ mod tests {
     fn seeded_ctx(name: &str) -> (std::path::PathBuf, Ctx) {
         let tmp = std::env::temp_dir().join(format!("vivac-ops-{name}-{}", id::ulid()));
         let store = Store::create(&tmp).unwrap();
-        (tmp, Ctx::load(store).unwrap())
+        (
+            tmp,
+            Ctx::load(store, Some(crate::lane::MAIN.to_string())).unwrap(),
+        )
     }
 
     #[test]
