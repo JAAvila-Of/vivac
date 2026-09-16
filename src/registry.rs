@@ -6,8 +6,11 @@
 //! and past `path` it also holds what using a project has turned up since:
 //! the root commit of every repository its lanes declare (`repos`), the
 //! folder each lane is (`lanes`), and any other folder seen holding a tree
-//! that starts with the same first event (`copies`). None of these four
-//! live anywhere else, so this file is the one place any of them holds.
+//! that starts with the same first event (`copies`). What is unique to this
+//! file is not what those four say -- a repository's root commit is also in
+//! the log, in `event::Repo::root` -- it is *where* each one is: `path`,
+//! every lane's folder, and every copy's folder are written down nowhere
+//! else.
 //!
 //! Keyed by the id of each project's first event (`d201`), not by
 //! `Config::project_id`: `Store::open` silently regenerates a missing
@@ -97,24 +100,29 @@ pub struct Sighting<'a> {
 pub enum Noted {
     /// Nothing worth telling anybody.
     Fine,
-    /// Another folder holds a tree that starts with the same event, so one
-    /// of the two is a copy of the other (`d201`) -- and which one that is
-    /// is **not** what this answers. The registry has room for one `path`
-    /// per project, so whichever folder used a `vivac` command first while
-    /// the registry already knew this project keeps that slot, and `path`
-    /// never moves off it; the other folder is recorded in `copies`
-    /// instead. That first folder can be the original or the copy in
+    /// One or more other folders hold a tree that starts with the same
+    /// event, so each of them -- together with this one -- is a copy of
+    /// the rest (`d201`). Which folder is "the" original is **not** what
+    /// this answers. The registry has room for one `path` per project, so
+    /// whichever folder used a `vivac` command first while the registry
+    /// already knew this project keeps that slot, and `path` never moves
+    /// off it; every other folder sighted since is recorded in `copies`
+    /// instead. That first folder can be the original or a copy in
     /// reality -- nothing here knows which one came first, only which one
     /// reached the registry first -- so both sides eventually learn: the
-    /// folder not on `path` learns the moment it is sighted (`detect_copy`),
-    /// and the folder on `path` learns from its own `copies`, re-verified
-    /// on every read (`first_event_id`) so a copy that gets deleted stops
-    /// being reported without anyone having to prune this by hand.
+    /// folder not on `path` learns the moment it is sighted (`detect_copy`,
+    /// always exactly one other: whatever is on `path`), and the folder on
+    /// `path` learns from its own `copies`, one entry per other folder
+    /// ever sighted, each re-verified on every read (`first_event_id`) so
+    /// a copy that gets deleted stops being reported without anyone having
+    /// to prune this by hand -- and, on the next write, actually is
+    /// pruned.
     ///
-    /// The folder is named, never its path, and the name is withheld when
+    /// Each folder is named, never its path, and a name is withheld when
     /// the redaction guard rejects it (`d600`) -- this text reaches the
-    /// agent's context.
-    Copy { other: Option<String> },
+    /// agent's context. Order matches `copies`: insertion order, never
+    /// reshuffled.
+    Copy { others: Vec<Option<String>> },
 }
 
 /// Records what `s` says about the project keyed by `project_id`.
@@ -159,58 +167,124 @@ pub fn copy_of(store_dir: &Path, project_id: &str, root: &Path) -> Noted {
     let Some(existing) = projects.get(project_id) else {
         return Noted::Fine;
     };
-    existing
+    let others: Vec<Option<String>> = existing
         .copies
         .iter()
         .map(String::as_str)
         .map(Path::new)
-        .find(|other| crate::store::first_event_id(other).as_deref() == Some(project_id))
-        .map_or(Noted::Fine, |other| Noted::Copy {
-            other: folder_name(other),
-        })
+        .filter(|other| crate::store::first_event_id(other).as_deref() == Some(project_id))
+        .map(folder_name)
+        .collect();
+    if others.is_empty() {
+        Noted::Fine
+    } else {
+        Noted::Copy { others }
+    }
 }
 
-/// The heading every surface puts above `copy_notice`. Here rather than in
-/// the surface that prints it first, for the same reason the sentence is:
-/// two surfaces are about to show this, and a heading defined twice agrees
-/// with itself only until somebody edits one of them.
+/// What every surface that reports one or more copies prints: the heading
+/// and the body, chosen together in the very same call so the two can
+/// never disagree about how many folders there are. `check` used to read
+/// a standalone `COPY_HEADING` and this function's body separately --
+/// harmless while there was only ever one shape, and exactly the kind of
+/// split that a second shape (this one; `t594` §4.7, fix round 2) would
+/// desync the moment only one of the two remembered to change.
 ///
-/// Each surface lays it out to its own shape -- `check` indents its blocks
-/// differently from the brief -- so the indentation is the caller's, and
-/// only the words are shared.
-pub const COPY_HEADING: &str = "COPY OF ANOTHER TREE";
-
-/// The sentence every surface that reports a copy repeats verbatim: `check`
+/// Kept in the one module that already owns what a copy is (`Noted::Copy`,
+/// `detect_copy`) rather than in whichever surface prints it first: `check`
 /// today, and the brief and the per-write stderr notice that `t594` §4.7
-/// still owes. Kept in the one module that already owns what a copy is
-/// (`Noted::Copy`, `detect_copy`) rather than in whichever surface happens
-/// to print it first -- a security-relevant sentence copied into more than
-/// one call site only agrees with itself until somebody edits one of them,
-/// which is exactly what happened elsewhere in this work two days before
-/// this was written.
-pub fn copy_notice(other: Option<&str>) -> String {
-    match other {
-        Some(name) => {
-            // A name with a space breaks in two on the shell that pastes
-            // it: quoted here, the same as any other argument this crate
-            // hands back for a person to run verbatim.
-            let arg = if name.contains(' ') {
-                format!("\"{name}\"")
-            } else {
-                name.to_string()
-            };
-            format!(
+/// still owes. A security-relevant sentence copied into more than one call
+/// site only agrees with itself until somebody edits one of them, which is
+/// exactly what happened elsewhere in this work two days before it was
+/// written the first time.
+///
+/// Each surface lays the result out to its own shape -- `check` indents its
+/// blocks differently from the brief -- so only the heading and the words
+/// are shared; indentation is the caller's.
+pub struct CopyNotice {
+    pub heading: &'static str,
+    pub body: String,
+}
+
+/// `others` is never empty: both callers that build a `Noted::Copy` only
+/// ever do it with at least one name (retained or withheld) in hand.
+pub fn copy_notice(others: &[Option<String>]) -> CopyNotice {
+    match others {
+        [Some(name)] => CopyNotice {
+            heading: "COPY OF ANOTHER TREE",
+            body: format!(
                 "This tree starts with the same event as the one in folder \"{name}\",\n\
                  so one of them is a copy, and copies diverge in silence. Keep one:\n\
                  delete the other, or delete this one and join this folder to it with\n  \
-                 vivac setup claude-code --join {arg}"
-            )
+                 vivac setup claude-code --join {}",
+                quote_if_needed(name)
+            ),
+        },
+        [None] => CopyNotice {
+            heading: "COPY OF ANOTHER TREE",
+            body: "This tree starts with the same event as one in another folder on this\n\
+                 machine, so one of them is a copy, and copies diverge in silence.\n\
+                 Keep one: delete the other, or delete this one and join this folder\n\
+                 to it with  vivac setup claude-code --join <path to that folder>"
+                .to_string(),
+        },
+        many => {
+            let named: Vec<&str> = many.iter().filter_map(|o| o.as_deref()).collect();
+            let names = named
+                .iter()
+                .map(|n| format!("\"{n}\""))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let body = if named.len() == many.len() {
+                format!(
+                    "These folders on this machine start with the same event as this one:\n\
+                     {names}. They are copies of each other, and copies diverge\n\
+                     in silence. Keep one, delete the rest, and join the folders you still\n\
+                     work in to the one you kept:\n  \
+                     vivac setup claude-code --join <the folder you kept>"
+                )
+            } else if named.is_empty() {
+                "Other folders on this machine hold a tree that starts with the same\n\
+                 event as this one, under names this tool will not write down. They\n\
+                 are copies of each other, and copies diverge in silence. Keep one,\n\
+                 delete the rest, and join the folders you still work in to the one\n\
+                 you kept:\n  \
+                 vivac setup claude-code --join <the folder you kept>"
+                    .to_string()
+            } else {
+                format!(
+                    "These folders on this machine start with the same event as this one:\n\
+                     {names}. More hold it too, under names this tool will not\n\
+                     write down. They are copies of each other, and copies diverge in\n\
+                     silence. Keep one, delete the rest, and join the folders you still\n\
+                     work in to the one you kept:\n  \
+                     vivac setup claude-code --join <the folder you kept>"
+                )
+            };
+            CopyNotice {
+                heading: "COPIES OF THIS TREE",
+                body,
+            }
         }
-        None => "This tree starts with the same event as one in another folder on this\n\
-             machine, so one of them is a copy, and copies diverge in silence.\n\
-             Keep one: delete the other, or delete this one and join this folder\n\
-             to it with  vivac setup claude-code --join <path to that folder>"
-            .to_string(),
+    }
+}
+
+/// Whether `name` is safe to paste into a shell unquoted: only letters,
+/// digits, `-`, `_` and `.`. The short list is the safe one and the long
+/// list is the dangerous one, so this names what is allowed rather than
+/// what is not -- a folder can be called almost anything, and guessing
+/// which of the rest a given shell treats specially is how `A&B` used to
+/// get through unquoted and split in two.
+fn shell_safe(name: &str) -> bool {
+    name.chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+}
+
+fn quote_if_needed(name: &str) -> String {
+    if shell_safe(name) {
+        name.to_string()
+    } else {
+        format!("\"{name}\"")
     }
 }
 
@@ -246,10 +320,11 @@ enum Decision {
 /// landed between the two.
 fn decide(projects: &BTreeMap<String, Project>, project_id: &str, s: &Sighting<'_>) -> Decision {
     if let Some(copy) = detect_copy(projects, project_id, s.root) {
-        let root = s.root.to_string_lossy();
-        let known = projects
-            .get(project_id)
-            .is_some_and(|p| p.copies.iter().any(|c| *c == root));
+        let known = projects.get(project_id).is_some_and(|p| {
+            p.copies
+                .iter()
+                .any(|c| crate::anchor::same_folder(Path::new(c), s.root))
+        });
         return if known {
             Decision::Done(copy)
         } else {
@@ -281,11 +356,9 @@ fn try_note(store_dir: &Path, project_id: &str, s: &Sighting<'_>) -> std::io::Re
     match decide(&projects, project_id, s) {
         Decision::Done(outcome) => Ok(outcome),
         Decision::RecordCopy(outcome) => {
-            projects
-                .entry(project_id.to_string())
-                .or_default()
-                .copies
-                .push(s.root.to_string_lossy().into_owned());
+            let entry = projects.entry(project_id.to_string()).or_default();
+            entry.copies.push(s.root.to_string_lossy().into_owned());
+            prune_dead_copies(entry, project_id);
             write(store_dir, &path, &projects)?;
             Ok(outcome)
         }
@@ -319,7 +392,7 @@ fn detect_copy(
         && crate::store::first_event_id(other).as_deref() == Some(project_id)
     {
         return Some(Noted::Copy {
-            other: folder_name(other),
+            others: vec![folder_name(other)],
         });
     }
     None
@@ -340,11 +413,17 @@ fn folder_name(p: &Path) -> Option<String> {
 /// the no-write path that keeps `note` off the write budget (`f603`).
 /// `s.repos` and `s.lane` read as "leave what is on file" when absent, so
 /// neither counts against an entry that has nothing to compare them to.
+///
+/// `path` and a lane's folder are both compared with `same_folder`, never
+/// as raw strings: entering the very folder this project's own entry
+/// already names, under a second spelling, must read as unchanged, not as
+/// a new value to write -- `f612` a third time is exactly the mistake this
+/// function existed to avoid catching.
 fn unchanged(projects: &BTreeMap<String, Project>, project_id: &str, s: &Sighting<'_>) -> bool {
     let Some(p) = projects.get(project_id) else {
         return false;
     };
-    if p.path != s.root.to_string_lossy() {
+    if !crate::anchor::same_folder(Path::new(&p.path), s.root) {
         return false;
     }
     if let Some(repos) = s.repos {
@@ -353,27 +432,48 @@ fn unchanged(projects: &BTreeMap<String, Project>, project_id: &str, s: &Sightin
         }
     }
     if let Some((id, dir)) = s.lane {
-        let dir_str = dir.to_string_lossy();
-        if p.lanes.get(id).map(|v| v.as_str()) != Some(dir_str.as_ref()) {
+        let same = p
+            .lanes
+            .get(id)
+            .is_some_and(|existing| crate::anchor::same_folder(Path::new(existing), dir));
+        if !same {
             return false;
         }
     }
     true
 }
 
+/// Drops every `copies` entry whose folder no longer holds a tree with
+/// `project_id`'s own first event, the moment this project has anything
+/// else to write anyway. Only ever called from a write already in
+/// progress: `copy_of` never prunes, since a read must never move the
+/// registry out from under whoever else might be reading it at the same
+/// time -- a dead entry still answers correctly there (`first_event_id`
+/// is re-checked on every read), it just waits for a real reason to leave
+/// the file.
+fn prune_dead_copies(entry: &mut Project, project_id: &str) {
+    entry
+        .copies
+        .retain(|c| crate::store::first_event_id(Path::new(c)).as_deref() == Some(project_id));
+}
+
 /// Folds `s` into `projects`, minting the entry when `project_id` is new.
 /// `s.repos` and `s.lane` only ever add: `None` leaves what is already
 /// there.
 ///
-/// `copies` loses any entry that now names `path` itself: this runs on the
-/// "moved" case `detect_copy` already ruled out (the folder `copies`
-/// recorded a sighting of can, later, become `path` in its own right --
-/// its old owner's tree gone, `s.root` unchanged from what a stale
-/// `copies` entry already said) and a copy of yourself is not a copy of
-/// anything.
+/// `copies` is pruned twice here, for two different reasons: dead entries
+/// go first (`prune_dead_copies` -- a copy that gets deleted stops being
+/// listed the next time there is anything to write, not only the next
+/// time somebody reads), and only then does an entry that now names
+/// `path` itself get dropped, with `same_folder` rather than a raw
+/// comparison -- the folder `copies` recorded a sighting of can later
+/// become `path` in its own right (its old owner's tree gone, `s.root`
+/// unchanged from what that entry already said), and a copy of yourself
+/// is not a copy of anything.
 fn apply_sighting(projects: &mut BTreeMap<String, Project>, project_id: &str, s: &Sighting<'_>) {
     let entry = projects.entry(project_id.to_string()).or_default();
     entry.path = s.root.to_string_lossy().into_owned();
+    prune_dead_copies(entry, project_id);
     entry
         .copies
         .retain(|c| !crate::anchor::same_folder(Path::new(c), s.root));
@@ -837,7 +937,7 @@ mod tests {
         let outcome = note(&store_dir, &id, sighting(&second));
 
         match outcome {
-            Noted::Copy { other } => assert_eq!(other, Some(expected_name)),
+            Noted::Copy { others } => assert_eq!(others, vec![Some(expected_name)]),
             Noted::Fine => panic!("a second tree with the same first event is a copy, not a move"),
         }
         let projects = read(&store_dir.join(FILE)).unwrap();
@@ -896,7 +996,7 @@ mod tests {
         let outcome = note(&store_dir, &id, sighting(&second));
 
         assert!(
-            matches!(outcome, Noted::Copy { other: None }),
+            matches!(outcome, Noted::Copy { others } if others == [None]),
             "a folder name the guard rejects must not reach the caller"
         );
 
@@ -1022,6 +1122,46 @@ mod tests {
             project.lanes.contains_key("lane-b"),
             "the second spelling's own sighting never reached the registry: {:?}",
             project.lanes
+        );
+
+        std::fs::remove_dir_all(&store_dir).ok();
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// `unchanged`'s own comparison, not `decide`'s: the folder already on
+    /// `path` re-entered under a second spelling must read as unchanged,
+    /// or every differently-cased command run in it would rewrite the
+    /// registry for nothing -- exactly the write budget
+    /// `nothing_changed_writes_nothing` already guards, a second spelling
+    /// standing in for a second, identical call.
+    #[test]
+    fn same_folder_by_two_spellings_writes_nothing_the_second_time() {
+        let store_dir = temp_dir("reg-spelling-unchanged");
+        let (root, id) = seeded_project("Spelling-Unchanged");
+
+        note(&store_dir, &id, sighting(&root));
+        let before = std::fs::metadata(store_dir.join(FILE))
+            .unwrap()
+            .modified()
+            .unwrap();
+
+        let Some(second) = second_spelling(&root) else {
+            eprintln!(
+                "skipped: this platform offers no second spelling of the same folder to test with"
+            );
+            std::fs::remove_dir_all(&store_dir).ok();
+            std::fs::remove_dir_all(&root).ok();
+            return;
+        };
+        note(&store_dir, &id, sighting(&second));
+        let after = std::fs::metadata(store_dir.join(FILE))
+            .unwrap()
+            .modified()
+            .unwrap();
+
+        assert_eq!(
+            before, after,
+            "a second spelling of the folder already on file must not write the registry again"
         );
 
         std::fs::remove_dir_all(&store_dir).ok();

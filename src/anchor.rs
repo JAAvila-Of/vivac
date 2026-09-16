@@ -12,6 +12,13 @@
 //! starting `git` on Windows costs between 15 and 30. `.git/HEAD` is read
 //! and the reference resolved by hand. `changed_since` does shell out to
 //! git, because it only runs on reads.
+//!
+//! **Also where the crate answers "do two paths name the same folder?"**
+//! (`same_folder`), a question this module already had to work out for its
+//! own worktree-following (`main_copy_of`) before `f612` gave it a second
+//! caller in `registry.rs`. A case difference, an alias or a link naming
+//! one real directory twice has nothing to do with git identity, but the
+//! two questions share one home rather than the same fix living twice.
 
 use std::path::{Path, PathBuf};
 
@@ -200,9 +207,9 @@ pub(crate) fn main_copy_of(worktree_root: &Path) -> Option<PathBuf> {
 
 /// Resolves `.` and `..` components one at a time, without touching the
 /// filesystem the way `canonicalize` would. Private: every caller outside
-/// this module goes through `same_folder`, below, rather than at this
-/// pure string walk directly -- `same_folder` is the criterion a caller
-/// actually wants, and this is one piece of how it is computed.
+/// this module goes through `same_folder`, below, rather than reaching
+/// this pure string walk directly -- `same_folder` is the criterion a
+/// caller actually wants, and this is one piece of how it is computed.
 fn normalize(p: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for c in p.components() {
@@ -242,6 +249,13 @@ fn normalize(p: &Path) -> PathBuf {
 /// is nothing left to poison. Either side failing to canonicalize
 /// (missing, no permission) answers `false`, the same as the textual
 /// check alone would have.
+///
+/// For `repo_at`'s own comparison this fallback is not just convenient,
+/// it is correct: git always resolves what it writes to one canonical
+/// spelling, so the two sides genuinely do name the same folder whenever
+/// `canonicalize` agrees. `detect_copy`'s two paths carry no such
+/// promise -- both are just whatever some `cd` happened to spell -- so
+/// there `canonicalize` is the best answer available, not a proof.
 pub(crate) fn same_folder(a: &Path, b: &Path) -> bool {
     if normalize(a) == normalize(b) {
         return true;

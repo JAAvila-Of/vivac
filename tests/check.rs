@@ -576,7 +576,18 @@ fn copy_json_carries_the_other_folder_and_flips_ok() {
     let v: serde_json::Value = serde_json::from_str(&s).expect("check --json is not JSON");
 
     assert_eq!(v["ok"], serde_json::json!(false), "{s}");
-    assert_eq!(v["copy"]["other"], serde_json::json!(name), "{s}");
+    // The key first, its value after: a mutation that renamed or dropped
+    // either `copy` or its own `others` must not read the same as one
+    // that just left `others` empty or null.
+    assert!(
+        v.get("copy").is_some(),
+        "check --json dropped the copy key: {s}"
+    );
+    assert!(
+        v["copy"].get("others").is_some(),
+        "check --json dropped copy's own others key: {s}"
+    );
+    assert_eq!(v["copy"]["others"], serde_json::json!([name]), "{s}");
 }
 
 #[test]
@@ -605,7 +616,15 @@ fn copy_json_carries_a_null_other_when_the_guard_withholds_the_name() {
     let (s, code) = run_bin(&copy_dir, &home, &["check", "--json"]);
     assert_eq!(code, 1, "{s}");
     let v: serde_json::Value = serde_json::from_str(&s).expect("check --json is not JSON");
-    assert_eq!(v["copy"]["other"], serde_json::Value::Null, "{s}");
+    assert!(
+        v.get("copy").is_some(),
+        "check --json dropped the copy key: {s}"
+    );
+    assert!(
+        v["copy"].get("others").is_some(),
+        "check --json dropped copy's own others key: {s}"
+    );
+    assert_eq!(v["copy"]["others"], serde_json::json!([null]), "{s}");
 
     std::fs::remove_dir_all(&parent).ok();
     std::fs::remove_dir_all(&copy_dir).ok();
@@ -664,6 +683,195 @@ fn copy_output_carries_no_absolute_path_when_the_guard_withholds_the_name() {
             "an absolute path leaked:\n{out}"
         );
     }
+
+    std::fs::remove_dir_all(&parent).ok();
+    std::fs::remove_dir_all(&copy_dir).ok();
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// The registry's own `projects` object, read directly: some assertions
+/// need to see `copies` itself, which no `check` output shows in words.
+fn registry_projects(home: &std::path::Path) -> serde_json::Value {
+    let text = std::fs::read_to_string(home.join("projects")).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    v["projects"].clone()
+}
+
+/// `f612` a third time, and this one is in the registry's own bookkeeping,
+/// not only in what `check` prints: entering the same folder under two
+/// spellings must not read as two folders sharing one tree, or `copies`
+/// grows one entry per spelling anybody ever used, and every command run
+/// from the new spelling writes the registry again for nothing.
+#[test]
+fn two_spellings_leave_one_entry_in_the_registry() {
+    let original = Sandbox::new_seeded("Two-Spelling-Orig");
+    original.ok(&["push", "a goal", "--why", "so the log has a first event"]);
+    let copy = a_copy_of(&original, "Two-Spelling-Copy");
+
+    let (first_out, first_code) = copy.run(&["check"]);
+    assert_eq!(first_code, 1, "{first_out}");
+
+    let Some(second) = second_spelling(&copy.0) else {
+        eprintln!(
+            "skipped: this platform offers no second spelling of the same folder to check with"
+        );
+        return;
+    };
+    let (out2, code2) = run_bin(&second, copy.global_home(), &["check"]);
+    assert_eq!(code2, 1, "{out2}");
+
+    let projects = registry_projects(copy.global_home());
+    let entries = projects.as_object().unwrap();
+    assert_eq!(
+        entries.len(),
+        1,
+        "two spellings of the same folder left more than one project entry: {projects}"
+    );
+    let project = entries.values().next().unwrap();
+    let copies = project["copies"].as_array().unwrap();
+    assert_eq!(
+        copies.len(),
+        1,
+        "two spellings of the same folder left more than one copy entry: {project}"
+    );
+}
+
+/// `note` prunes `copies` the next time it has anything to write anyway,
+/// never on a read: `copy_of` must not move the registry out from under
+/// whoever else might be reading it at the same time.
+#[test]
+fn a_deleted_copy_is_pruned_from_copies_on_the_next_write() {
+    let original = Sandbox::new_seeded("copy-prune-orig");
+    original.ok(&["push", "a goal", "--why", "so the log has a first event"]);
+    let copy_a = a_copy_of(&original, "copy-prune-a");
+
+    let (out_a, code_a) = copy_a.run(&["check"]);
+    assert_eq!(code_a, 1, "{out_a}");
+
+    std::fs::remove_dir_all(&copy_a.0).unwrap();
+
+    // A brand-new copy, sighted for the first time: this is what actually
+    // writes to `original`'s own entry, and pruning rides along on that
+    // write. Reading `original` or the now-deleted `copy_a` over and over
+    // would never touch the file at all.
+    let copy_b = a_copy_of(&original, "copy-prune-b");
+    let (out_b, code_b) = copy_b.run(&["check"]);
+    assert_eq!(code_b, 1, "{out_b}");
+
+    let projects = registry_projects(original.global_home());
+    let project = projects.as_object().unwrap().values().next().unwrap();
+    let copies = project["copies"].as_array().unwrap();
+    assert_eq!(
+        copies.len(),
+        1,
+        "the deleted copy survived a write that had every reason to prune it: {project}"
+    );
+}
+
+/// Two live copies: `dup` and `third` each warn from their own, ordinary
+/// one-other view, and `original` -- the only folder whose own `copies`
+/// holds more than one entry -- warns with both of them named.
+#[test]
+fn two_live_copies_all_three_folders_warn_and_are_both_named() {
+    let original = Sandbox::new_seeded("copy-multi-orig");
+    original.ok(&["push", "a goal", "--why", "so the log has a first event"]);
+    let copy_a = a_copy_of(&original, "copy-multi-a");
+    let copy_b = a_copy_of(&original, "copy-multi-b");
+
+    let (a_out, a_code) = copy_a.run(&["check"]);
+    assert_eq!(a_code, 1, "{a_out}");
+    let (b_out, b_code) = copy_b.run(&["check"]);
+    assert_eq!(b_code, 1, "{b_out}");
+
+    let (out, code) = original.run(&["check"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("COPIES OF THIS TREE"), "{out}");
+    assert!(out.contains(&project_name(&copy_a)), "{out}");
+    assert!(out.contains(&project_name(&copy_b)), "{out}");
+}
+
+/// One of two copies has a name the guard withholds: the block still
+/// names the one it can, and says in words that at least one more holds
+/// the same tree under a name it will not write down.
+#[test]
+fn two_copies_one_name_withheld_says_more_hold_it_too() {
+    let home = temp_dir("copy-multi-mixed-home");
+    let parent = temp_dir("copy-multi-mixed-parent");
+    std::fs::create_dir_all(&parent).unwrap();
+    let original_dir = parent.join("Orig");
+    std::fs::create_dir_all(&original_dir).unwrap();
+    run_bin(&original_dir, &home, &["init"]);
+    run_bin(
+        &original_dir,
+        &home,
+        &["push", "a goal", "--why", "so the log has a first event"],
+    );
+
+    let named_dir = parent.join("Named");
+    std::fs::create_dir_all(named_dir.join(".vivac")).unwrap();
+    std::fs::copy(
+        original_dir.join(".vivac").join("events"),
+        named_dir.join(".vivac").join("events"),
+    )
+    .unwrap();
+    let (named_out, named_code) = run_bin(&named_dir, &home, &["check"]);
+    assert_eq!(named_code, 1, "{named_out}");
+
+    let rejected_dir = parent.join("someone@example.com");
+    std::fs::create_dir_all(rejected_dir.join(".vivac")).unwrap();
+    std::fs::copy(
+        original_dir.join(".vivac").join("events"),
+        rejected_dir.join(".vivac").join("events"),
+    )
+    .unwrap();
+    let (rejected_out, rejected_code) = run_bin(&rejected_dir, &home, &["check"]);
+    assert_eq!(rejected_code, 1, "{rejected_out}");
+
+    let (out, code) = run_bin(&original_dir, &home, &["check"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("COPIES OF THIS TREE"), "{out}");
+    assert!(out.contains("\"Named\""), "{out}");
+    assert!(
+        out.contains("More hold it too, under names this tool will not"),
+        "{out}"
+    );
+    assert!(!out.contains("someone@example.com"), "{out}");
+
+    std::fs::remove_dir_all(&parent).ok();
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// `A&B` carries no space, so the old rule -- quote only when there is
+/// one -- would have let it straight through: unquoted, `cmd.exe` runs
+/// `--join A` and then tries to run `B` as a command of its own.
+#[test]
+fn the_join_command_quotes_a_name_that_is_not_just_safe_characters() {
+    let home = temp_dir("copy-symbol-home");
+    let parent = temp_dir("copy-symbol-parent");
+    std::fs::create_dir_all(&parent).unwrap();
+    let original_dir = parent.join("A&B");
+    std::fs::create_dir_all(&original_dir).unwrap();
+    run_bin(&original_dir, &home, &["init"]);
+    run_bin(
+        &original_dir,
+        &home,
+        &["push", "a goal", "--why", "so the log has a first event"],
+    );
+
+    let copy_dir = temp_dir("copy-symbol-copy");
+    std::fs::create_dir_all(copy_dir.join(".vivac")).unwrap();
+    std::fs::copy(
+        original_dir.join(".vivac").join("events"),
+        copy_dir.join(".vivac").join("events"),
+    )
+    .unwrap();
+
+    let (out, code) = run_bin(&copy_dir, &home, &["check"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        out.contains("vivac setup claude-code --join \"A&B\""),
+        "{out}"
+    );
 
     std::fs::remove_dir_all(&parent).ok();
     std::fs::remove_dir_all(&copy_dir).ok();
