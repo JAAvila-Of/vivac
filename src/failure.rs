@@ -113,10 +113,19 @@ impl Failure {
     /// A folder whose `.vivac/lane` names a tree this machine's registry has
     /// no path for: it once did, or was joined from another machine, and
     /// nothing here can find where that tree lives now.
+    ///
+    /// The remedy named here has to be one that works **today**. It used
+    /// to name `--join`, a flag no release of this crate has ever taken;
+    /// `setup` refused it with exit 2, and whoever was not standing in a
+    /// worktree -- the registry wiped, the machine reimaged, the folder
+    /// copied somewhere else -- had no way out this crate actually offers
+    /// (`t594` branch-fix-1 #5). Running `setup` in the tree's own folder
+    /// registers it again, which is exactly the gap. `--join` can replace
+    /// this once it exists, in `t594` tramo 3.
     pub fn tree_not_found() -> Failure {
         Failure::TreeNotFound(
             "  This folder is a lane of a tree this machine's registry does not know.\n  \
-             Join it again:  vivac setup claude-code --join <path to the tree>"
+             Run this in the tree's own folder to put it back:  vivac setup claude-code"
                 .into(),
         )
     }

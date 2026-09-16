@@ -34,6 +34,33 @@ fn run(dir: &Path, home: &Path, args: &[&str]) -> (String, i32) {
     )
 }
 
+/// Same as `run`, with a payload on stdin -- the way a hook is called.
+/// `common::Sandbox::run_stdin` does the same over a `Sandbox`; this file
+/// builds its worktree roots by hand instead.
+fn run_stdin(dir: &Path, home: &Path, args: &[&str], stdin: &str) -> (String, i32) {
+    use std::io::Write;
+    let mut child = std::process::Command::new(BIN)
+        .current_dir(dir)
+        .env("VIVAC_HOME", home)
+        .args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(stdin.as_bytes())
+        .unwrap();
+    let o = child.wait_with_output().unwrap();
+    (
+        String::from_utf8_lossy(&o.stdout).into_owned() + &String::from_utf8_lossy(&o.stderr),
+        o.status.code().unwrap_or(-1),
+    )
+}
+
 /// The `id` of line 1 of the log, which `d201` keys the registry by, read
 /// the same way `tests/registry.rs` does.
 fn first_event_id(c: &Sandbox) -> String {
@@ -438,6 +465,26 @@ fn append_raw_line(tree_root: &Path, line: &str) {
     writeln!(f, "{line}").unwrap();
 }
 
+/// Locks `tree_root`'s config to the lanes sentence by hand, the same
+/// change `Store::lock_lanes_in_config` makes, so a test that seeds a
+/// `lane.declared` with `append_raw_line` -- which never touches the
+/// config -- still leaves the tree looking like one where a real `setup`
+/// or a real auto-join already ran. `t594` branch-fix-1 #2 gates joining a
+/// worktree on nothing less than this.
+fn seed_lanes_config(tree_root: &Path) {
+    let path = tree_root.join(".vivac").join("config");
+    let mut cfg: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    cfg["version"] = serde_json::json!(
+        "this tree holds lanes, and this vivac is too old to read them: update vivac"
+    );
+    std::fs::write(
+        &path,
+        format!("{}\n", serde_json::to_string_pretty(&cfg).unwrap()),
+    )
+    .unwrap();
+}
+
 /// The `id` a `.vivac/lane` file names.
 fn lane_id_of(lane_dir: &Path) -> String {
     let text =
@@ -457,6 +504,14 @@ fn lane_id_of(lane_dir: &Path) -> String {
 #[test]
 fn a_worktree_inside_the_lanes_folder_joins_on_its_first_write() {
     let (root, feature, home) = worktree_inside_fixture("joins");
+    // `t594` branch-fix-1 #2: joining on its own requires the tree to
+    // already have a lane declared somewhere, so this stands in for a
+    // `setup` that ran before `feature` ever existed.
+    append_raw_line(
+        &root,
+        r#"{"seq":1,"id":"01SEEDMAINAAAAAAAAAAAAAAAA","ts":"2026-01-01T00:00:00Z","actor":"a_test0000000","lane":"main","payload":{"type":"lane.declared","lane":"main","name":"main","repos":[{"path":"."}]}}"#,
+    );
+    seed_lanes_config(&root);
 
     let (before, code) = run(&feature, &home, &["brief"]);
     assert_eq!(code, 0, "{before}");
@@ -503,6 +558,15 @@ fn a_worktree_inside_the_lanes_folder_joins_on_its_first_write() {
 #[test]
 fn a_worktree_outside_the_folder_joins_through_its_main_copy() {
     let (root, feature, home) = worktree_fixture("outside-joins");
+    // `t594` branch-fix-1 #2: joining on its own requires the tree to
+    // already have a lane declared somewhere. `feature` sits outside
+    // `root` entirely, so seeding this after it exists cannot make
+    // `repos::scan` find it and change what this test is proving.
+    append_raw_line(
+        &root,
+        r#"{"seq":1,"id":"01SEEDMAINAAAAAAAAAAAAAAAA","ts":"2026-01-01T00:00:00Z","actor":"a_test0000000","lane":"main","payload":{"type":"lane.declared","lane":"main","name":"main","repos":[{"path":"."}]}}"#,
+    );
+    seed_lanes_config(&root);
 
     let (out, code) = run(&feature, &home, &["add", "Outside work", "--why", "seed"]);
     assert_eq!(code, 0, "{out}");
@@ -536,6 +600,9 @@ fn a_pending_worktree_inherits_the_declared_root_commit_without_git() {
         &root,
         r#"{"seq":1,"id":"01SEEDMAINAAAAAAAAAAAAAAAA","ts":"2026-01-01T00:00:00Z","actor":"a_test0000000","lane":"main","payload":{"type":"lane.declared","lane":"main","name":"main","repos":[{"path":".","root":"01NOTARELCOMMITAAAAAAAAAAA"}]}}"#,
     );
+    // `t594` branch-fix-1 #2: joining on its own requires the tree to
+    // already have a lane declared somewhere.
+    seed_lanes_config(&root);
 
     let (out, code) = run(&feature, &home, &["add", "Inherits root", "--why", "seed"]);
     assert_eq!(code, 0, "{out}");
@@ -559,6 +626,32 @@ fn a_pending_worktree_inherits_the_declared_root_commit_without_git() {
     assert!(
         says(joined, r#""root":"01NOTARELCOMMITAAAAAAAAAAA""#),
         "the worktree's own lane.declared does not carry the root main already declared:\n{joined}"
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// `t594` branch-fix-1 #6: a worktree that has not joined yet reads from
+/// `ops::PENDING_VIEW`, an empty lane name, and the header used to print
+/// that empty string verbatim -- `lane: ` with nothing after the colon,
+/// the one byte of output that changed on a tree nobody had written to
+/// from this folder yet.
+#[test]
+fn a_worktree_that_has_not_joined_yet_says_so_in_its_own_brief() {
+    let (root, feature, home) = worktree_inside_fixture("not-joined");
+    append_raw_line(
+        &root,
+        r#"{"seq":1,"id":"01SEEDMAINAAAAAAAAAAAAAAAA","ts":"2026-01-01T00:00:00Z","actor":"a_test0000000","lane":"main","payload":{"type":"lane.declared","lane":"main","name":"main","repos":[{"path":"."}]}}"#,
+    );
+    seed_lanes_config(&root);
+
+    let (before, code) = run(&feature, &home, &["brief"]);
+    assert_eq!(code, 0, "{before}");
+    let header = before.lines().next().unwrap_or("");
+    assert!(
+        says(header, "lane: not joined yet"),
+        "a pending worktree's header does not say it has not joined yet:\n{header}"
     );
 
     std::fs::remove_dir_all(&root).ok();
@@ -766,6 +859,14 @@ fn mcp_joins_a_worktree_the_same_way_the_cli_does() {
     let home = unique("mcp-joins-home");
     let (init_out, init_code) = run(&root, &home, &["init"]);
     assert_eq!(init_code, 0, "{init_out}");
+    // `t594` branch-fix-1 #2: joining on its own requires the tree to
+    // already have a lane declared somewhere, so this stands in for a
+    // `setup` that ran before either worktree existed.
+    append_raw_line(
+        &root,
+        r#"{"seq":1,"id":"01SEEDMAINAAAAAAAAAAAAAAAA","ts":"2026-01-01T00:00:00Z","actor":"a_test0000000","lane":"main","payload":{"type":"lane.declared","lane":"main","name":"main","repos":[{"path":"."}]}}"#,
+    );
+    seed_lanes_config(&root);
 
     let cli_feature = root.join("cli-feature");
     let mcp_feature = root.join("mcp-feature");
@@ -946,4 +1047,189 @@ fn import_signs_the_contexts_own_lane_not_always_main() {
         !last.contains("\"lane\":\"main\""),
         "the imported node signed main instead of v2's own lane:\n{last}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// `t594` branch-fix-1, round with the final review of the whole branch.
+// ---------------------------------------------------------------------------
+
+/// Finding 2, the viga itself: a hook, not a person, writing
+/// `session.started` inside a worktree over a tree nobody ran `setup`
+/// on. Before this fix it joined anyway -- `.claude/settings.json` is
+/// usually versioned, so a worktree the harness throws away in an hour
+/// could convert a whole tree with no human asking for it. Now it does
+/// not: the log stays at 0 bytes and the config comes back byte for
+/// byte, the same as any other read from an unjoined worktree.
+#[test]
+fn a_hook_inside_a_worktree_does_not_join_a_tree_that_never_had_setup() {
+    let (root, feature, home) = worktree_inside_fixture("hook-no-setup");
+    let config_before = std::fs::read_to_string(root.join(".vivac").join("config")).unwrap();
+    let log_before =
+        std::fs::read_to_string(root.join(".vivac").join("events")).unwrap_or_default();
+    assert!(
+        log_before.is_empty(),
+        "a freshly init'd tree already has events:\n{log_before}"
+    );
+
+    let (out, code) = run_stdin(
+        &feature,
+        &home,
+        &["session", "start", "--hook"],
+        r#"{"session_id":"s1","source":"startup"}"#,
+    );
+    assert_eq!(code, 0, "{out}");
+
+    assert!(
+        !feature.join(".vivac").join("lane").exists(),
+        "the hook joined a tree nobody ran setup on"
+    );
+    // The viga does not say "writes nothing": `session.started` is
+    // recorded on every open, joined or not, the same as it was before
+    // this lane ever existed (`t594` task 4's own fallback through the
+    // main copy). It says the tree changes by exactly what it always
+    // changed by -- one `session.started`, signed `main` -- and not one
+    // byte more: no lane file, no `lane.declared`, no config lock.
+    let log = std::fs::read_to_string(root.join(".vivac").join("events")).unwrap_or_default();
+    let lines: Vec<&str> = log.lines().collect();
+    assert_eq!(
+        lines.len(),
+        1,
+        "the hook wrote something other than exactly one event:\n{log}"
+    );
+    let event: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+    assert_eq!(event["payload"]["type"], "session.started", "{log}");
+    assert_eq!(event["lane"], "main", "{log}");
+    assert_eq!(
+        std::fs::read_to_string(root.join(".vivac").join("config")).unwrap(),
+        config_before,
+        "the hook locked the config"
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// The other half of finding 2: once the tree already has a lane
+/// declared somewhere -- a real `setup`, here -- the same hook joins the
+/// worktree exactly as it always has.
+#[test]
+fn a_hook_inside_a_worktree_still_joins_once_the_tree_has_lanes() {
+    let (root, feature, home) = worktree_inside_fixture("hook-with-setup");
+    setup_ok(&root, &home);
+
+    let (out, code) = run_stdin(
+        &feature,
+        &home,
+        &["session", "start", "--hook"],
+        r#"{"session_id":"s1","source":"startup"}"#,
+    );
+    assert_eq!(code, 0, "{out}");
+
+    assert!(
+        feature.join(".vivac").join("lane").exists(),
+        "the hook stopped joining once the tree already had lanes"
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Finding 3: the `SessionStart` hook and the first `push` an MCP client
+/// sends both resolve the same worktree as pending before either has
+/// written, then both race for the lock. Only one lane may ever exist for
+/// this folder: whichever loses the race has to adopt the winner's id
+/// under the lock, not mint a second one that leaves the file naming an
+/// id nobody's stack, focus or counters actually sit under.
+#[test]
+fn two_writers_racing_to_join_a_worktree_mint_exactly_one_lane() {
+    let (root, feature, home) = worktree_inside_fixture("race-one-lane");
+    append_raw_line(
+        &root,
+        r#"{"seq":1,"id":"01SEEDMAINAAAAAAAAAAAAAAAA","ts":"2026-01-01T00:00:00Z","actor":"a_test0000000","lane":"main","payload":{"type":"lane.declared","lane":"main","name":"main","repos":[{"path":"."}]}}"#,
+    );
+    seed_lanes_config(&root);
+
+    let feature_a = feature.clone();
+    let home_a = home.clone();
+    let a = std::thread::spawn(move || {
+        run_stdin(
+            &feature_a,
+            &home_a,
+            &["session", "start", "--hook"],
+            r#"{"session_id":"a","source":"startup"}"#,
+        )
+    });
+    let (out_b, code_b) = run(&feature, &home, &["push", "From B", "--why", "seed"]);
+    let (out_a, code_a) = a.join().unwrap();
+    assert_eq!(code_a, 0, "{out_a}");
+    assert_eq!(code_b, 0, "{out_b}");
+
+    let log = std::fs::read_to_string(root.join(".vivac").join("events")).unwrap();
+    let declared = log
+        .lines()
+        .filter(|l| l.contains("\"type\":\"lane.declared\"") && !l.contains("\"lane\":\"main\""))
+        .count();
+    assert_eq!(
+        declared, 1,
+        "more than one lane got declared for the same worktree:\n{log}"
+    );
+    let lane_id = lane_id_of(&feature);
+    assert!(
+        log.contains(&lane_id),
+        "the file's own id never reached the log:\n{log}"
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Finding 7: `name_for` ignores the folder name it is handed, so a test
+/// that only calls it proves nothing about the redaction guard. This one
+/// joins a worktree literally named a credential, through the real
+/// auto-join path, and reads the real log: neither the name whole nor any
+/// fragment of it may appear anywhere in it.
+#[test]
+fn a_worktree_named_a_secret_never_writes_it_to_the_log() {
+    let secret = "ghp_16C7e42F292c6912E7710c838347Ae178B4a";
+    let root = unique("redacted-worktree-root");
+    std::fs::create_dir_all(&root).unwrap();
+    git(&root, &["init", "-q"]);
+    git(&root, &["config", "user.email", "t@example.com"]);
+    git(&root, &["config", "user.name", "t"]);
+    std::fs::write(root.join("f.txt"), "x").unwrap();
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "-q", "-m", "first"]);
+    let home = unique("redacted-worktree-home");
+    let (init_out, init_code) = run(&root, &home, &["init"]);
+    assert_eq!(init_code, 0, "{init_out}");
+    append_raw_line(
+        &root,
+        r#"{"seq":1,"id":"01SEEDMAINAAAAAAAAAAAAAAAA","ts":"2026-01-01T00:00:00Z","actor":"a_test0000000","lane":"main","payload":{"type":"lane.declared","lane":"main","name":"main","repos":[{"path":"."}]}}"#,
+    );
+    seed_lanes_config(&root);
+
+    let feature = root.join(secret);
+    git(&root, &["worktree", "add", secret]);
+
+    let (out, code) = run(&feature, &home, &["add", "Feature work", "--why", "seed"]);
+    assert_eq!(code, 0, "{out}");
+
+    let log = std::fs::read_to_string(root.join(".vivac").join("events")).unwrap();
+    assert!(
+        !log.contains(secret),
+        "the secret folder name reached the log whole:\n{log}"
+    );
+    for fragment in [&secret[..12], &secret[12..24], &secret[24..]] {
+        assert!(
+            !log.contains(fragment),
+            "a fragment of the secret name reached the log ({fragment}):\n{log}"
+        );
+    }
+    assert!(
+        log.contains("\"name\":\"lane-"),
+        "the redacted fallback name never reached the log:\n{log}"
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+    std::fs::remove_dir_all(&home).ok();
 }

@@ -50,6 +50,20 @@ pub fn name_for(id: &str, _folder_name: &str) -> String {
     format!("lane-{}", &id[..id.len().min(4)])
 }
 
+/// `folder_name`, or `name_for`'s fallback once the redaction guard
+/// rejects it (`d600`): the folder's own name never reaches the log
+/// either way. The one place this rule is written: `setup::plan_lane`
+/// and `Ctx::emit`'s own join both name a lane from a folder, and a
+/// security rule copied into two places is a rule that can go on
+/// agreeing with itself only until someone edits one of them
+/// (`t594` branch-fix-1 #7).
+pub fn declared_name(id: &str, folder_name: &str) -> String {
+    match crate::redact::check_field("lane name", folder_name) {
+        Some(_) => name_for(id, folder_name),
+        None => folder_name.to_string(),
+    }
+}
+
 /// Reads `vivac_dir/lane`. `Ok(None)` only for the one case that really is
 /// an absence: no file at all, the ordinary shape of a folder that holds
 /// the tree itself and has never had its own `main` claimed elsewhere.

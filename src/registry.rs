@@ -182,6 +182,7 @@ mod tests {
         let lock = s.lock_for_write().unwrap();
         s.append(
             &lock,
+            crate::lane::MAIN,
             vec![crate::event::Body::NodeNoted {
                 node: "t1".into(),
                 note: "seed".into(),

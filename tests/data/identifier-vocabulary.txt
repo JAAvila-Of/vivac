@@ -563,6 +563,7 @@ founding
 four
 fourteen
 fp
+fragment
 fragments
 fresh
 from
@@ -610,6 +611,7 @@ guarded
 guess
 guessed
 gutter
+had
 half
 hand
 handle
@@ -861,6 +863,7 @@ migration
 millis
 min
 mine
+mint
 minted
 minus
 missing
@@ -1112,6 +1115,7 @@ quiets
 quote
 quoted
 quotes
+racing
 radius
 radix
 raised
@@ -1344,6 +1348,7 @@ side
 sig
 sign
 signed
+signing
 signs
 silence
 since
@@ -1655,6 +1660,7 @@ way
 web
 weight
 what
+whatever
 when
 where
 wherever

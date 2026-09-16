@@ -228,6 +228,16 @@ pub struct Repo {
     /// The repository's root commit, which is what makes two clones of one
     /// repository recognisable as the same repository without a remote URL
     /// ever being written down (`d597`).
+    ///
+    /// **Captured now, compared later.** `setup` is the only place on the
+    /// write path allowed to ask git anything, so this is filled in there
+    /// (`repos::root_commit`) and only ever read back to copy forward into
+    /// the next declaration (`ops.rs`) -- nothing compares two of these
+    /// against each other yet, which is `d597`'s own point and is `t594`
+    /// tramo 3's job. Not dead data even so: asking again later would cost
+    /// the same `git rev-list` for strictly less information, since the
+    /// commit that was root when a lane first declared itself may no
+    /// longer be root by then.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub root: Option<String>,
 }

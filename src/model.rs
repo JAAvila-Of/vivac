@@ -362,7 +362,11 @@ pub struct Tree {
     pub lanes: BTreeMap<String, LaneState>,
     /// Whether some lane other than the founding one has ever claimed
     /// `main` (`lane.claimed`, `d597`). Only `relocate` writes it, and only
-    /// for `main`; the tramo that adds `relocate` is what reads it.
+    /// for `main` -- `relocate` itself is still `t594` tramo 3, so nothing
+    /// writes it yet outside a test. `ops::lock_for_write` (§6.9) and
+    /// `setup::plan_lane` both read it now, ahead of `relocate` existing:
+    /// the refusal and the folder it sends you to both need to know
+    /// before the write that finally sets it up.
     pub main_claimed: bool,
     /// The lane this tree is looked at from. Private: there is no invalid
     /// state to construct, so nothing outside `Tree` should be able to set
@@ -1014,9 +1018,12 @@ impl Tree {
         self.lane = Some(lane.to_string());
     }
 
-    /// The lane this tree is being looked at from. Never empty: nobody
-    /// having said otherwise resolves to `lane::MAIN`, the same lane every
-    /// event written before lanes existed is signed with (`t594` ruling A).
+    /// The lane this tree is being looked at from. Nobody having said
+    /// otherwise resolves to `lane::MAIN`, the same lane every event
+    /// written before lanes existed is signed with (`t594` ruling A). The
+    /// one case this can still be empty is a folder that has not joined
+    /// yet, looked at through `ops::PENDING_VIEW` -- not a lane, so
+    /// `lane_name` answers for it instead of handing the empty string on.
     pub fn lane(&self) -> &str {
         self.lane.as_deref().unwrap_or(crate::lane::MAIN)
     }
@@ -1025,7 +1032,17 @@ impl Tree {
     /// when it has one, and the lane itself otherwise -- `main`, or an id
     /// nobody has named yet. This is what the brief's header prints
     /// (`t594` §5.1).
+    ///
+    /// A folder that has not joined yet answers `ops::PENDING_VIEW`, the
+    /// empty string, from `lane()`: it is not a lane, so it has no entry to
+    /// find and no id to fall back to. That empty string used to reach the
+    /// header unchanged -- `lane: ` with nothing after the colon, the one
+    /// byte of output a tree with no lanes at all never had reason to grow
+    /// (`t594` branch-fix-1 #6).
     pub fn lane_name(&self) -> &str {
+        if self.lane().is_empty() {
+            return "not joined yet";
+        }
         match self.lanes.get(self.lane()) {
             Some(s) if !s.name.is_empty() => s.name.as_str(),
             _ => self.lane(),

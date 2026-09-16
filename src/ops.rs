@@ -139,9 +139,12 @@ impl Ctx {
     }
 
     /// Finishes building a `Ctx` once its tree is already folded and the
-    /// lane it runs as is already decided: the one place `store` is told
-    /// to sign as it too, so a `Ctx` and what it writes never disagree
-    /// about whose thread they are. Shared by every constructor below.
+    /// lane it runs as is already decided. Shared by every constructor
+    /// below. `store` carries no lane of its own to set here any more
+    /// (`f608`, third time -- see `Store::append`'s own doc): `self.lane`
+    /// is the only copy, and `emit` is what hands it to `append` on every
+    /// write, so a `Ctx` and what it writes cannot drift apart the way a
+    /// `Store` left holding a stale one could.
     fn finish(
         store: Store,
         tree: Tree,
@@ -163,9 +166,6 @@ impl Ctx {
             caller_declared,
         };
         ctx.adopt(tree);
-        if let Some(l) = ctx.lane.clone() {
-            ctx.store = ctx.store.with_lane(l);
-        }
         ctx
     }
 
@@ -190,7 +190,8 @@ impl Ctx {
         // `t594` §2.3: whose lane a folder is needs the tree already
         // folded -- it depends on the repositories a lane declared, and
         // that is in the log -- so it is decided here, and nowhere else.
-        let (lane, pending_lane, caller_declared) = resolve_whose(whose, &tree);
+        let tree_has_lanes = store.config.version == crate::store::ConfigVersion::Lanes;
+        let (lane, pending_lane, caller_declared) = resolve_whose(whose, &tree, tree_has_lanes);
         Ok(Ctx::finish(
             store,
             tree,
@@ -211,7 +212,8 @@ impl Ctx {
         let seen = crate::store::fingerprint(&store.log());
         let (events, broken) = store.read_all()?;
         let tree = fold(&events, broken);
-        let (lane, pending_lane, caller_declared) = resolve_whose(whose, &tree);
+        let tree_has_lanes = store.config.version == crate::store::ConfigVersion::Lanes;
+        let (lane, pending_lane, caller_declared) = resolve_whose(whose, &tree, tree_has_lanes);
         let ctx = Ctx::finish(store, tree, seen, lane, pending_lane, caller_declared);
         Ok((ctx, events))
     }
@@ -233,7 +235,8 @@ impl Ctx {
         whose: Whose,
     ) -> Ctx {
         let tree = fold(events, broken);
-        let (lane, pending_lane, caller_declared) = resolve_whose(whose, &tree);
+        let tree_has_lanes = store.config.version == crate::store::ConfigVersion::Lanes;
+        let (lane, pending_lane, caller_declared) = resolve_whose(whose, &tree, tree_has_lanes);
         Ctx::finish(store, tree, seen, lane, pending_lane, caller_declared)
     }
 
@@ -349,79 +352,63 @@ impl Ctx {
             let lock = self.lock.as_ref().ok_or_else(|| {
                 Failure::Io(std::io::Error::other("write without the tree's lock"))
             })?;
-            self.store.lock_lanes_in_config(lock)?;
-            // A lane file points back at its tree by the tree's own first
-            // event id (`store::resolve_lane`), and a tree nobody ever ran
-            // `setup` on has none yet -- the same hole `setup`'s own
-            // `ensure_first_event` fills, filled the same way: `main`
-            // declares that it exists, not what it contains, so a lane
-            // joining through this door never has to ask git either
-            // (`t594` fix-1, finding 7: empty `repos` here costs a
-            // sentence in the log, never the root commit -- that is
-            // already unrecoverable by the time this runs, for the same
-            // reason nothing else is declared: nobody ran `setup`).
-            //
-            // This is the one place the event lands **before** the file
-            // that names it, the reverse of the order kept everywhere
-            // else in this block. It is forced, not chosen: the file
-            // `lane::write` is about to write needs an id to point back
-            // at, and there is nothing to point at until this very event
-            // exists -- writing the file first would have nothing to put
-            // in it. The cost is real and accepted rather than hidden: if
-            // `lane::write` below fails -- a worktree mounted read-only,
-            // say -- this seed and the config lock it just took already
-            // sit on the tree, left behind by an operation that itself
-            // never wrote anything of its own and is about to return an
-            // error. There is no ordering of these three steps that
-            // removes that window; this is the one that keeps it
-            // smallest.
-            if crate::store::first_event_id(&self.store.root).is_none() {
-                let seed = self.store.append(
-                    lock,
-                    vec![Body::LaneDeclared {
-                        lane: crate::lane::MAIN.to_string(),
-                        name: crate::lane::MAIN.to_string(),
-                        repos: vec![],
-                    }],
-                    self.tree.seq,
-                    self.tree.has_governance,
-                )?;
-                for e in &seed.events {
-                    self.tree.apply(e.seq, &e.ts, &e.lane, &e.payload);
-                }
-                self.seen = crate::store::fingerprint(&self.store.log());
+            // `t594` branch-fix-1 #3: `pending_lane` was decided before
+            // this lock was even taken, and `lock_for_write`'s own reload
+            // re-plays the tree but never asks again whose folder this
+            // is. Two processes that both resolve pending before either
+            // writes -- the `SessionStart` hook and the first `push` an
+            // MCP client sends, a very ordinary pair -- would otherwise
+            // each mint an id of their own; the file keeps the second,
+            // and everything the first wrote -- its stack, its focus,
+            // its counters -- sits behind an id nobody ever reads again,
+            // invisible to `check`. Reading the file again here, with
+            // the lock already held, is the one place left that can
+            // still catch the other writer: if it is there now, this
+            // adopts it and signs with it, rather than declaring a
+            // second lane for the same folder.
+            if let Some(joined) = crate::lane::read(&dir.join(crate::store::DIR))? {
+                self.lane = Some(joined.id.clone());
+                self.tree.for_lane(&joined.id);
+                self.pending_lane = None;
+            } else {
+                self.store.lock_lanes_in_config(lock)?;
+                // `t594` branch-fix-1 #2: a worktree only ever gets this
+                // far when the tree already has a lane declared
+                // somewhere, which means at least one event already
+                // exists -- so there is nothing left to seed here, and
+                // the question of whether an empty `repos` list would
+                // have lied about one does not arise either.
+                let project = crate::store::first_event_id(&self.store.root).expect(
+                    "resolve_whose only leaves a lane pending once the tree already has one \
+                     declared, and that write already gave it a first event",
+                );
+                let id = crate::lane::new_id();
+                let lane_file = crate::lane::Lane {
+                    version: 1,
+                    id: id.clone(),
+                    project,
+                };
+                crate::lane::write(&dir.join(crate::store::DIR), &lane_file)?;
+                self.lane = Some(id.clone());
+                self.tree.for_lane(&id);
+                self.pending_lane = None;
+                // `t594` fix-1, finding F: redacted here, not when the
+                // pending lane was first noticed, because only here does
+                // the id exist to decorate the fallback with. Goes
+                // through `lane::declared_name`, the one place this rule
+                // is written (`t594` branch-fix-1 #7), the same as
+                // `setup` already does, so two redacted lanes on the
+                // same tree no longer share the bare word `lane`.
+                let name = crate::lane::declared_name(&id, &folder_name);
+                bodies.insert(
+                    0,
+                    Body::LaneDeclared {
+                        lane: id,
+                        name,
+                        repos: vec![repo],
+                    },
+                );
             }
-            let project = crate::store::first_event_id(&self.store.root)
-                .expect("seeded just above if it was missing");
-            let id = crate::lane::new_id();
-            let lane_file = crate::lane::Lane {
-                version: 1,
-                id: id.clone(),
-                project,
-            };
-            crate::lane::write(&dir.join(crate::store::DIR), &lane_file)?;
-            self.lane = Some(id.clone());
-            self.tree.for_lane(&id);
-            self.store.set_lane(id.clone());
-            self.pending_lane = None;
-            // `t594` fix-1, finding F: redacted here, not when the
-            // pending lane was first noticed, because only here does the
-            // id exist to decorate the fallback with -- the same
-            // `lane::name_for` `setup` already uses, so two redacted
-            // lanes on the same tree no longer share the bare word
-            // `lane`.
-            let name = match redact::check_field("lane name", &folder_name) {
-                Some(_) => crate::lane::name_for(&id, &folder_name),
-                None => folder_name,
-            };
-            bodies.insert(
-                0,
-                Body::LaneDeclared {
-                    lane: id,
-                    name,
-                    repos: vec![repo],
-                },
-            );
         }
         // `d444`: the one bit `Store::append`'s own write-lock needs and
         // cannot see for itself -- whether this tree already has a pillar
@@ -431,9 +418,10 @@ impl Ctx {
             .lock
             .as_ref()
             .ok_or_else(|| Failure::Io(std::io::Error::other("write without the tree's lock")))?;
+        let lane = self.lane.as_deref().unwrap_or(crate::lane::MAIN);
         let appended = self
             .store
-            .append(lock, bodies, self.tree.seq, already_governed)?;
+            .append(lock, lane, bodies, self.tree.seq, already_governed)?;
         for e in &appended.events {
             self.tree.apply(e.seq, &e.ts, &e.lane, &e.payload);
         }
@@ -482,9 +470,24 @@ impl Ctx {
 /// 2. It is `Some(w)` and `w` is one of the repositories the lane found
 ///    already declared: still `Located`'s lane. The worktree is that
 ///    lane's own repository at that path, and nothing more.
-/// 3. It is `Some(w)` and it is not: `w` is another lane, pending until it
-///    writes.
-fn resolve_whose(whose: Whose, tree: &Tree) -> (Option<String>, Option<PendingLane>, bool) {
+/// 3. It is `Some(w)`, it is not, **and `tree_has_lanes`**: `w` is another
+///    lane, pending until it writes.
+///
+/// `tree_has_lanes` gates case 3 on purpose (`t594` branch-fix-1 #2): it
+/// is the justification the task that built this already wrote down --
+/// "only happens when the repository already declared a lane" -- and
+/// never wired in. Without it, `session.started` alone -- a hook, not a
+/// person, and one `.claude/settings.json` usually ships versioned so a
+/// worktree the harness throws away can fire it before anyone runs
+/// `setup` anywhere -- silently converts a tree nobody asked to convert.
+/// With it, a worktree over a tree that has never had a lane declared
+/// reads as `Located`'s lane, same as case 1, and writes nothing of its
+/// own until a real lane exists to check it against.
+fn resolve_whose(
+    whose: Whose,
+    tree: &Tree,
+    tree_has_lanes: bool,
+) -> (Option<String>, Option<PendingLane>, bool) {
     let located = match whose {
         Whose::Founding => return (Some(crate::lane::MAIN.to_string()), None, false),
         Whose::Declared(id) => return (Some(id), None, true),
@@ -504,6 +507,9 @@ fn resolve_whose(whose: Whose, tree: &Tree) -> (Option<String>, Option<PendingLa
         .map(|s| s.repos.as_slice())
         .unwrap_or(&[]);
     if repo_at(declared, &located.lane_dir, w).is_some() {
+        return (Some(found_lane), None, false);
+    }
+    if !tree_has_lanes {
         return (Some(found_lane), None, false);
     }
     // Paso 4: the root commit is whatever the lane already declared for
@@ -2192,13 +2198,14 @@ mod tests {
         };
         let mut ctx = Ctx::load(store, Whose::Resolved(&located)).unwrap();
 
-        // A second writer, on the store's own default lane, appends
-        // underneath: the seam `lock_for_write` reloads for.
+        // A second writer, signing as `main`, appends underneath: the
+        // seam `lock_for_write` reloads for.
         let mut other = Store::open(tmp.clone()).unwrap();
         let lock = other.lock_for_write().unwrap();
         other
             .append(
                 &lock,
+                crate::lane::MAIN,
                 vec![Body::Pushed {
                     node: "ghost".to_string(),
                 }],
