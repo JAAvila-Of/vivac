@@ -891,20 +891,25 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     let log_tracked = crate::anchor::in_working_tree(tree)
         && crate::anchor::tracks(tree, ".vivac/events") == Some(true);
 
-    if nothing_to_write {
-        // A real run, not `--dry-run`: noting the registry is bookkeeping
-        // every ordinary command already does on a pure read, not a write
-        // this promise is about (`note_registry`).
-        note_registry(tree);
-        outln!("{piece_block}  Nothing to write: this project is already set up.");
+    // Checked before `nothing_to_write`, not after: that branch notes the
+    // registry (`note_registry`), and `--dry-run` promises to write
+    // nothing anywhere, the machine's registry included (`t594` fix-2,
+    // finding 2). An already-set-up project asking for `--dry-run` used
+    // to reach the other branch first and note it anyway.
+    if a.has("dry-run") {
+        outln!("{piece_block}{TRAILING_PARAGRAPH}\n  Nothing written: --dry-run.");
         if log_tracked {
             print!("{TRACKED_WARNING}");
         }
         return Ok(0);
     }
 
-    if a.has("dry-run") {
-        outln!("{piece_block}{TRAILING_PARAGRAPH}\n  Nothing written: --dry-run.");
+    if nothing_to_write {
+        // A real run, never `--dry-run`, thanks to the check above: noting
+        // the registry is bookkeeping every ordinary command already does
+        // on a pure read, not a write this promise is about.
+        note_registry(tree);
+        outln!("{piece_block}  Nothing to write: this project is already set up.");
         if log_tracked {
             print!("{TRACKED_WARNING}");
         }
@@ -1034,15 +1039,17 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         }
     }
 
-    // Whether *this run* changed the tree at all, for `written_text`:
-    // `TREE_KEPT_PARAGRAPH` is only true when it did not.
-    let tree_touched = vivac_missing || !lane.unchanged || lane.needs_lock;
-
+    // What *this run* actually did to the tree, for `written_text`: three
+    // different things can each make `TREE_KEPT_PARAGRAPH` false, and they
+    // are not the same sentence (`t594` fix-2, finding 3) -- a lane
+    // declared or redeclared recorded a thread; a relock on its own only
+    // closed the lock again, with no thread to speak of.
     let written = Written {
         connection: start_missing || stop_missing || mcp_missing,
         skill: skill_missing_or_replaceable,
         planted: vivac_missing,
-        tree_touched,
+        lane_declared: !lane.unchanged,
+        config_relocked: lane.unchanged && lane.needs_lock,
         undoable: start_missing
             && stop_missing
             && mcp_missing
@@ -1227,11 +1234,14 @@ struct Written {
     skill: bool,
     /// The tree, planted by this run rather than found.
     planted: bool,
-    /// The tree was already there, but this run still changed it: a lane
-    /// declared or redeclared, or just its config relocked (`t594` fix-1,
-    /// finding 2). `TREE_KEPT_PARAGRAPH` is a lie the run this covers used
-    /// to tell.
-    tree_touched: bool,
+    /// This run declared this folder's lane, or redeclared an existing
+    /// one: a real thread recorded, not only the config catching up.
+    lane_declared: bool,
+    /// This run closed the lanes lock and recorded nothing else: the
+    /// declaration already matched, and the lock was the only thing
+    /// missing (`t594` fix-2, finding 3). Never true at the same time as
+    /// `lane_declared` -- `apply`'s own write phase is one or the other.
+    config_relocked: bool,
     /// All four of setup's pieces, the skill among them missing before:
     /// `--undo` removes all four, so only then does it take back exactly
     /// this run.
@@ -1247,8 +1257,10 @@ fn written_text(w: &Written) -> String {
     }
     s.push_str(if w.planted {
         MIGRATE_PARAGRAPHS
-    } else if w.tree_touched {
+    } else if w.lane_declared {
         LANE_JOINED_PARAGRAPH
+    } else if w.config_relocked {
+        CONFIG_RELOCKED_PARAGRAPH
     } else {
         TREE_KEPT_PARAGRAPH
     });
@@ -1268,11 +1280,20 @@ const MIGRATE_PARAGRAPHS: &str = "\n  Nothing has been brought in from anywhere 
 const TREE_KEPT_PARAGRAPH: &str =
     "\n  The tree was already there, and setup changed nothing in it.\n";
 
-/// The tree was already there, and this is the run that still changed it
-/// -- joined it as a lane, redeclared one, or only relocked its config.
-/// `TREE_KEPT_PARAGRAPH` would be false here (`t594` fix-1, finding 2).
+/// The tree was already there, and this run still recorded a real
+/// thread in it -- joined it as a new lane, or redeclared one that
+/// already existed. `TREE_KEPT_PARAGRAPH` would be false here (`t594`
+/// fix-1, finding 2).
 const LANE_JOINED_PARAGRAPH: &str =
     "\n  The tree was already there. This run only recorded this folder's own\n  thread in it.\n";
+
+/// The tree was already there, this folder's own thread in it already
+/// said exactly this, and the only thing this run did was close the
+/// lanes lock again. `LANE_JOINED_PARAGRAPH` would overstate it -- no
+/// thread was recorded, and `TREE_KEPT_PARAGRAPH` would understate it --
+/// the config did change (`t594` fix-2, finding 3).
+const CONFIG_RELOCKED_PARAGRAPH: &str =
+    "\n  The tree was already there. This run only closed its lanes lock again.\n";
 
 const FILES_PARAGRAPH: &str = "\n  The hooks, the server and the skill are plain files in this project:\n  commit them if everyone who works here uses vivac, and keep them out of\n  version control if only you do. .vivac/ is never committed: it is this\n  machine's record, and a copy of it in every clone would diverge from the\n  others. Its own .gitignore keeps it out.\n";
 

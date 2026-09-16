@@ -357,6 +357,42 @@ fn resolve_lane(
             });
         }
     }
+    // `t594` fix-2, finding 1: writing this folder's own `.vivac/lane` is
+    // what takes away the one path that used to resolve it. A linked
+    // worktree with *no* lane file at all never reaches this function --
+    // `locate_here` answers `None` for it, and `locate_from`'s own
+    // fallback retries from the worktree's main copy. Once a lane file
+    // exists here, resolution comes through this function instead, and
+    // that fallback is never reached: neither the ancestor walk above nor
+    // the registry knows anything about a path found by retrying from a
+    // main copy. So this tries the retry itself, last, with the same
+    // fingerprint check the ancestor walk above already uses -- a main
+    // copy of some other repository entirely does not carry this lane's
+    // `project` as its first event, so it is walked past rather than
+    // mistaken for the right one. The registry stays a convenience that
+    // can fail quietly (`registry::note` swallows its own errors): this
+    // is what keeps a folder from going unusable just because it could
+    // not be written to.
+    if let Some(worktree_root) = crate::anchor::linked_worktree(lane_dir) {
+        if let Some(main_root) = crate::anchor::main_copy_of(&worktree_root) {
+            let mut up = main_root;
+            loop {
+                if already_planted(&up)
+                    && first_event_id(&up).as_deref() == Some(lane.project.as_str())
+                {
+                    return Ok(Located {
+                        root: up,
+                        lane_dir: lane_dir.to_path_buf(),
+                        lane: Some(lane),
+                        worktree: None,
+                    });
+                }
+                if !up.pop() {
+                    break;
+                }
+            }
+        }
+    }
     Err(Failure::tree_not_found())
 }
 
@@ -1355,6 +1391,53 @@ mod tests {
         assert_eq!(located.lane_dir, main_dir);
         assert!(located.lane.is_none());
         assert_eq!(located.worktree, Some(worktree_dir));
+
+        fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// `t594` fix-2, finding 1: once the folder inside a linked worktree
+    /// carries its own `.vivac/lane`, resolution takes `resolve_lane`
+    /// rather than the plain "no lane" fallback the test above exercises
+    /// -- and until this fix, that path never tried the worktree's main
+    /// copy at all, so a lane file with no registry entry to back it up
+    /// used to leave the folder unable to find its own tree.
+    #[test]
+    fn a_lane_file_inside_a_linked_worktree_still_resolves_through_its_main_copy() {
+        let tmp = locate_tmp("wt-lane-fallback");
+        let main_dir = tmp.join("main");
+        let mut s = Store::create(&main_dir).unwrap();
+        let lock = s.lock_for_write().unwrap();
+        s.append(
+            &lock,
+            vec![crate::event::Body::NodeNoted {
+                node: "t1".into(),
+                note: "seed".into(),
+            }],
+            0,
+            false,
+        )
+        .unwrap();
+        drop(lock);
+        let project = first_event_id(&main_dir).unwrap();
+
+        let worktree_dir = tmp.join("feature");
+        let gitdir = main_dir.join(".git").join("worktrees").join("feature");
+        write_git_file(&worktree_dir, &gitdir);
+        fs::write(gitdir.join("commondir"), "../..\n").unwrap();
+
+        let lane = crate::lane::Lane {
+            version: 1,
+            id: crate::lane::new_id(),
+            project: project.clone(),
+        };
+        crate::lane::write(&worktree_dir.join(DIR), &lane).unwrap();
+
+        // No registry at all: the only path left back to the tree is the
+        // main-copy retry inside `resolve_lane` itself.
+        let located = locate_from(&worktree_dir, None).unwrap().unwrap();
+        assert_eq!(located.root, main_dir);
+        assert_eq!(located.lane_dir, worktree_dir);
+        assert_eq!(located.lane.unwrap().project, project);
 
         fs::remove_dir_all(&tmp).ok();
     }

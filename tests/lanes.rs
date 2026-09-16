@@ -263,15 +263,12 @@ fn git(dir: &Path, args: &[&str]) {
     );
 }
 
-/// Finding 1 (high): a linked worktree sits *beside* the tree's own
-/// folder, not above it, so the upward walk never finds it and the only
-/// way back is the registry. `setup` used to be the one command that
-/// never noted one, which left the worktree unable to read its own
-/// `brief` ever again once it declared a lane there. `setup` now notes
-/// the tree it joins, the same as any other command that writes to it.
-#[test]
-fn setup_in_a_linked_worktree_registers_the_tree_it_joins() {
-    let root = unique("worktree-root");
+/// A repository with one commit at a fresh `root`, a linked worktree of
+/// it at `root`-`feature`, and a fresh `VIVAC_HOME` with the root's tree
+/// already `init`ed. Both round 1 and round 2 of the worktree finding
+/// need exactly this to reach the point where `setup` runs in `feature`.
+fn worktree_fixture(prefix: &str) -> (PathBuf, PathBuf, PathBuf) {
+    let root = unique(&format!("worktree-{prefix}-root"));
     std::fs::create_dir_all(&root).unwrap();
     git(&root, &["init", "-q"]);
     git(&root, &["config", "user.email", "t@example.com"]);
@@ -280,7 +277,7 @@ fn setup_in_a_linked_worktree_registers_the_tree_it_joins() {
     git(&root, &["add", "."]);
     git(&root, &["commit", "-q", "-m", "first"]);
 
-    let home = unique("worktree-home");
+    let home = unique(&format!("worktree-{prefix}-home"));
     let (init_out, init_code) = run(&root, &home, &["init"]);
     assert_eq!(init_code, 0, "{init_out}");
 
@@ -289,6 +286,19 @@ fn setup_in_a_linked_worktree_registers_the_tree_it_joins() {
         root.file_name().unwrap().to_string_lossy()
     ));
     git(&root, &["worktree", "add", &feature.display().to_string()]);
+
+    (root, feature, home)
+}
+
+/// Finding 1 (high): a linked worktree sits *beside* the tree's own
+/// folder, not above it, so the upward walk never finds it and the only
+/// way back is the registry. `setup` used to be the one command that
+/// never noted one, which left the worktree unable to read its own
+/// `brief` ever again once it declared a lane there. `setup` now notes
+/// the tree it joins, the same as any other command that writes to it.
+#[test]
+fn setup_in_a_linked_worktree_registers_the_tree_it_joins() {
+    let (root, feature, home) = worktree_fixture("registers");
 
     let (setup_out, setup_code) = run(&feature, &home, &["setup", "claude-code", "--yes"]);
     assert_eq!(setup_code, 0, "{setup_out}");
@@ -303,6 +313,35 @@ fn setup_in_a_linked_worktree_registers_the_tree_it_joins() {
     std::fs::remove_dir_all(&root).ok();
     std::fs::remove_dir_all(&feature).ok();
     std::fs::remove_dir_all(&home).ok();
+}
+
+/// `t594` fix-2, finding 1: `registry::note` swallows its own errors by
+/// design (`f603`), so noting the tree on its own cannot be what keeps a
+/// linked worktree usable -- a `VIVAC_HOME` that cannot be written to
+/// would leave it in exit 4 just the same, silently. What actually fixes
+/// it is `resolve_lane` trying the worktree's main copy on its own, the
+/// same retry `locate_from` already does for a folder with no lane file
+/// at all. The registry is deleted entirely here, not just left unable
+/// to write, to prove that path is not what this depends on any more.
+#[test]
+fn setup_in_a_linked_worktree_still_works_with_the_registry_gone() {
+    let (root, feature, home) = worktree_fixture("noreg");
+
+    let (setup_out, setup_code) = run(&feature, &home, &["setup", "claude-code", "--yes"]);
+    assert_eq!(setup_code, 0, "{setup_out}");
+
+    std::fs::remove_dir_all(&home).ok();
+    assert!(!home.exists(), "the registry survived its own deletion");
+
+    let (brief_out, brief_code) = run(&feature, &home, &["brief"]);
+    assert_eq!(brief_code, 0, "{brief_out}");
+    assert!(
+        !brief_out.contains("--join"),
+        "the worktree came back unusable with the registry gone:\n{brief_out}"
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+    std::fs::remove_dir_all(&feature).ok();
 }
 
 /// Finding 5 (media-baja): `unchanged` used to decide `needs_lock` too, so
@@ -331,4 +370,12 @@ fn setup_relocks_the_config_when_its_lanes_sentence_was_removed_by_hand() {
         after.contains("this tree holds lanes"),
         "the sentence did not come back:\n{after}\n\n{out}"
     );
+    // `t594` fix-2, finding 3: this run recorded no thread at all, only
+    // closed the lock again, and the message has to say that rather than
+    // the sentence a real declaration earns.
+    assert!(
+        out.contains("This run only closed its lanes lock again."),
+        "{out}"
+    );
+    assert!(!out.contains("recorded this folder's own thread"), "{out}");
 }

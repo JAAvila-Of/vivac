@@ -424,6 +424,7 @@ edges
 edit
 edited
 eight
+either
 elapsed
 element
 else
@@ -584,6 +585,7 @@ goals
 goes
 going
 golden
+gone
 good
 got
 govern
@@ -1159,6 +1161,7 @@ released
 releases
 reload
 relock
+relocked
 relocks
 rem
 remaining
@@ -1503,7 +1506,6 @@ tools
 top
 torn
 total
-touched
 touches
 touching
 toward
