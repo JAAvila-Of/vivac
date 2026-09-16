@@ -691,3 +691,249 @@ fn looking_inside_an_unjoined_worktree_leaves_no_trace() {
     std::fs::remove_dir_all(&root).ok();
     std::fs::remove_dir_all(&home).ok();
 }
+
+// ---------------------------------------------------------------------------
+// `t594` fix-1, round 1: joining moved from `lock_for_write` to `emit`, so a
+// command that refuses before it has anything to write never joins either.
+// ---------------------------------------------------------------------------
+
+/// Finding B: `pop` on an empty stack, `note` naming an id that does not
+/// resolve, and a title the redaction guard refuses -- three ways an
+/// operation can fail after `lock_for_write` ran and before it ever calls
+/// `emit`. Every one of them used to leave `feature/.vivac/lane`, a
+/// `lane.declared` for `main` and a config locked to "this tree holds
+/// lanes" behind, on a tree nobody had run `setup` on and a command that
+/// changed nothing of its own.
+#[test]
+fn a_refusal_from_an_unjoined_worktree_leaves_nothing_written() {
+    let (root, feature, home) = worktree_inside_fixture("refusal-writes-nothing");
+    let config_before = std::fs::read_to_string(root.join(".vivac").join("config")).unwrap();
+
+    let scenarios: [(&[&str], i32); 3] = [
+        (&["pop"], 2),
+        (&["note", "99", "x"], 2),
+        (
+            &[
+                "add",
+                "ghp_16C7e42F292c6912E7710c838347Ae178B4a",
+                "--why",
+                "seed",
+            ],
+            3,
+        ),
+    ];
+    for (args, want_code) in scenarios {
+        let (out, code) = run(&feature, &home, args);
+        assert_eq!(code, want_code, "{args:?}: {out}");
+        assert!(
+            !feature.join(".vivac").join("lane").exists(),
+            "{args:?} left a lane file behind"
+        );
+    }
+
+    let log = std::fs::read_to_string(root.join(".vivac").join("events")).unwrap_or_default();
+    assert!(
+        log.is_empty(),
+        "a refusal wrote to the tree's own log:\n{log}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join(".vivac").join("config")).unwrap(),
+        config_before,
+        "a refusal locked the config"
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Finding A: the same `push`, from two sibling worktrees, one door each.
+/// Before this fix, the CLI door joined and the MCP door signed `main` and
+/// put the node on the founding lane's own stack -- the exact "the log
+/// says the work happened on a branch it did not happen on" the tramo
+/// opened with, intact behind the door the agent actually writes through.
+#[test]
+fn mcp_joins_a_worktree_the_same_way_the_cli_does() {
+    use std::io::{BufRead, Write};
+
+    let root = unique("mcp-joins-root");
+    std::fs::create_dir_all(&root).unwrap();
+    git(&root, &["init", "-q"]);
+    git(&root, &["config", "user.email", "t@example.com"]);
+    git(&root, &["config", "user.name", "t"]);
+    std::fs::write(root.join("f.txt"), "x").unwrap();
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "-q", "-m", "first"]);
+    let home = unique("mcp-joins-home");
+    let (init_out, init_code) = run(&root, &home, &["init"]);
+    assert_eq!(init_code, 0, "{init_out}");
+
+    let cli_feature = root.join("cli-feature");
+    let mcp_feature = root.join("mcp-feature");
+    git(&root, &["worktree", "add", "cli-feature"]);
+    git(&root, &["worktree", "add", "mcp-feature"]);
+
+    let (out, code) = run(&cli_feature, &home, &["push", "CLI work", "--why", "seed"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        cli_feature.join(".vivac").join("lane").exists(),
+        "the CLI door never joined"
+    );
+
+    let mut child = std::process::Command::new(BIN)
+        .current_dir(&mcp_feature)
+        .env("VIVAC_HOME", &home)
+        .arg("mcp")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut input = child.stdin.take().unwrap();
+    let mut output = std::io::BufReader::new(child.stdout.take().unwrap());
+    fn ask(input: &mut impl Write, output: &mut impl BufRead, line: &str) -> String {
+        writeln!(input, "{line}").unwrap();
+        input.flush().unwrap();
+        let mut buf = String::new();
+        output.read_line(&mut buf).unwrap();
+        buf
+    }
+    ask(
+        &mut input,
+        &mut output,
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}"#,
+    );
+    writeln!(
+        input,
+        r#"{{"jsonrpc":"2.0","method":"notifications/initialized"}}"#
+    )
+    .unwrap();
+    input.flush().unwrap();
+    let reply = ask(
+        &mut input,
+        &mut output,
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"vivac_push","arguments":{"title":"MCP work","why":"seed"}}}"#,
+    );
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(
+        !reply.contains("\"isError\":true"),
+        "the MCP call itself failed: {reply}"
+    );
+
+    assert!(
+        mcp_feature.join(".vivac").join("lane").exists(),
+        "the MCP door never joined its own worktree:\n{reply}"
+    );
+
+    let (root_stack, code) = run(&root, &home, &["stack"]);
+    assert_eq!(code, 0, "{root_stack}");
+    assert!(
+        !root_stack.contains("MCP work"),
+        "the MCP write landed on the founding lane's stack:\n{root_stack}"
+    );
+    assert!(!root_stack.contains("CLI work"), "{root_stack}");
+
+    std::fs::remove_dir_all(&root).ok();
+    std::fs::remove_dir_all(&home).ok();
+}
+
+// `web` reaches `Registry::open` through the very same path `mcp::serve`
+// does (`Project::open`, given a `Whose` per root); `mcp_joins_a_worktree_
+// the_same_way_the_cli_does` above is what proves that path itself joins,
+// and there is no second implementation under `web` left to prove
+// separately -- see `src/web/mod.rs::serve`.
+
+/// Finding D: the §6.9 refusal's own remedy is `vivac setup claude-code`,
+/// and running it in the very folder §6.9 refuses used to refuse too,
+/// citing its own message back. `setup` is exempt (`Whose::Declared`), so
+/// it no longer does.
+///
+/// **Does not check that an ordinary write succeeds afterwards** --
+/// `main_claimed` only ever turns true (`model.rs`, `Tree::apply`) and
+/// nothing in this fix round makes `setup` clear it, so §6.9 still
+/// refuses the *next* plain command from this folder even once `setup`
+/// itself has run. Whether `setup` re-declaring `main` should also clear
+/// the claim is a question for `relocate` (`t594` tramo 3), not answered
+/// here.
+#[test]
+fn setup_fixes_a_folder_whose_main_was_claimed_instead_of_refusing() {
+    let c = Sandbox::new_seeded("claimed-setup-fixes-it");
+    c.append_raw_line(
+        r#"{"seq":1,"id":"01SEEDCLAIMAAAAAAAAAAAAAAA","ts":"2026-01-01T00:00:00Z","actor":"a_test0000000","lane":"main","payload":{"type":"lane.claimed","lane":"main"}}"#,
+    );
+
+    setup_ok(&c.0, c.global_home());
+}
+
+/// Finding C: `import` requires an empty tree of *nodes* (`is_empty_tree`),
+/// which a log holding only a context event -- `session.started`,
+/// `lane.declared` -- already satisfies. Numbering from zero handed the
+/// first imported event a `seq` another one already had.
+#[test]
+fn import_continues_the_logs_seq_rather_than_assuming_it_is_empty() {
+    let c = Sandbox::new_seeded("import-continues-seq");
+    c.append_raw_line(
+        r#"{"seq":1,"id":"01SEEDSESSIONAAAAAAAAAAAA","ts":"2026-01-01T00:00:00Z","actor":"a_test0000000","lane":"main","payload":{"type":"session.started","source":"test"}}"#,
+    );
+    let tree_json = c.0.join("tree.json");
+    std::fs::write(
+        &tree_json,
+        r#"{"nodes":{"1":{"id":1,"title":"Imported","kind":"goal","status":"active"}}}"#,
+    )
+    .unwrap();
+
+    let out = c.ok(&["import", tree_json.to_str().unwrap()]);
+    let _ = out;
+
+    let log = log_text(&c);
+    let seqs: Vec<u64> = log
+        .lines()
+        .map(|l| {
+            let v: serde_json::Value = serde_json::from_str(l).unwrap();
+            v["seq"].as_u64().expect("every line names a seq")
+        })
+        .collect();
+    let mut sorted = seqs.clone();
+    sorted.sort_unstable();
+    sorted.dedup();
+    assert_eq!(
+        sorted.len(),
+        seqs.len(),
+        "the log carries a duplicate seq: {seqs:?}"
+    );
+    assert_eq!(seqs, vec![1, 2], "{log}");
+
+    let (check_out, check_code) = c.run(&["check"]);
+    assert_eq!(check_code, 0, "{check_out}");
+}
+
+/// The other half of finding C: `import` used to sign every event `main`
+/// no matter which lane the context actually was.
+#[test]
+fn import_signs_the_contexts_own_lane_not_always_main() {
+    let c = Sandbox::new_seeded("import-signs-its-own-lane");
+    let second = c.0.join("v2");
+    std::fs::create_dir_all(&second).unwrap();
+    setup_ok(&second, c.global_home());
+
+    let tree_json = second.join("tree.json");
+    std::fs::write(
+        &tree_json,
+        r#"{"nodes":{"1":{"id":1,"title":"Imported from v2","kind":"goal","status":"active"}}}"#,
+    )
+    .unwrap();
+
+    let (out, code) = run(
+        &second,
+        c.global_home(),
+        &["import", tree_json.to_str().unwrap()],
+    );
+    assert_eq!(code, 0, "{out}");
+
+    let log = log_text(&c);
+    let last = log.lines().last().expect("import wrote a line");
+    assert!(
+        !last.contains("\"lane\":\"main\""),
+        "the imported node signed main instead of v2's own lane:\n{last}"
+    );
+}

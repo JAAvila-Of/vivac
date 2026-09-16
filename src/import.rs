@@ -114,8 +114,27 @@ pub fn import(ctx: &mut Ctx, args: &Args) -> R {
 
     let ulids: BTreeMap<u64, String> = nodes.iter().map(|n| (n.id, id::ulid())).collect();
     let mut events = Vec::new();
-    let mut seq = 0u64;
+    // Continues from the tree's own `seq` rather than assuming the log is
+    // empty: `import` only requires an empty tree of *nodes*
+    // (`is_empty_tree`, above), and a lane-context event -- `lane.declared`,
+    // `session.started` -- can already sit in a log with none. Assuming
+    // zero used to hand out a `seq` another event already had, which
+    // `check` never sees because nothing reads `seq` for anything but
+    // ordering (`t594` fix-1, finding C).
+    let mut seq = ctx.tree.seq;
     let actor = ctx.store.config.actor.clone();
+    // The lane this context actually runs as, `main` only as the fallback
+    // every write already uses (`emit`): `import` writes outside the
+    // funnel (`write_raw`, below), so it has to decide this itself rather
+    // than being signed for automatically (`t594` fix-1, finding C). A
+    // worktree still pending never joins through here -- `import` never
+    // calls `emit`, so it never mints a lane of its own -- and its nodes
+    // land on `main` exactly as they did before this lane ever existed,
+    // rather than inventing a second way to join one.
+    let lane = ctx
+        .lane
+        .clone()
+        .unwrap_or_else(|| crate::lane::MAIN.to_string());
     let mut push_event = |body: Body, ts: String| {
         seq += 1;
         events.push(Event {
@@ -123,7 +142,7 @@ pub fn import(ctx: &mut Ctx, args: &Args) -> R {
             id: id::ulid(),
             ts,
             actor: actor.clone(),
-            lane: "main".into(),
+            lane: lane.clone(),
             payload: body,
         });
     };

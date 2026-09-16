@@ -27,7 +27,7 @@ mod why;
 
 use crate::failure::{Failure, R};
 use crate::output::{flush, outln};
-use crate::project::{Named, Registry};
+use crate::project::{Located, Named, Registry};
 use gate::{Denial, Gate, Incoming, Verdict, SESSION_COOKIE};
 use std::path::PathBuf;
 
@@ -391,17 +391,17 @@ fn open_browser(url: &str) {
 
 /// Binds `127.0.0.1` -- and nothing else; there is no flag for another
 /// address -- serves `roots`, and blocks until the process is killed.
-/// `cwd_root` is the project the working directory sits inside, if it sits
-/// inside one. It is where `/` lands (`d199`); `None` means the server was
-/// started from somewhere that is not a project, which is the case the whole
-/// decision exists for, and then `/` is the index. `cwd_lane` is which lane
-/// of `cwd_root` that working directory is, and travels with it: `Registry`
-/// signs as it only for that one project, never for the others `roots` may
-/// also name (`t594` task 6, review round 1).
+/// `cwd_located` is what `store::locate` answered for the working
+/// directory, if it sits inside a project at all. Its `root` is where `/`
+/// lands (`d199`); `None` means the server was started from somewhere that
+/// is not a project, which is the case the whole decision exists for, and
+/// then `/` is the index. Handed to `Registry::open` whole, which is what
+/// lets it sign as that lane only for that one project, never for the
+/// others `roots` may also name (`t594` task 6, review round 1; and again
+/// in fix-1 round 1, before `Registry::open` reached this far).
 pub fn serve(
     roots: Vec<PathBuf>,
-    cwd_root: Option<PathBuf>,
-    cwd_lane: Option<String>,
+    cwd_located: Option<Located>,
     port: Option<u16>,
     open: bool,
 ) -> R {
@@ -416,7 +416,11 @@ pub fn serve(
     // The port is not known until after the bind when it was ephemeral, and
     // the gate's `Host`/`Origin` checks are pinned to it.
     let mut gate = Gate::new(bound_port)?;
-    let here = cwd_root.clone().zip(cwd_lane);
+    let cwd_root = cwd_located.as_ref().map(|l| l.root.clone());
+    let here = cwd_located.map(|l| {
+        let root = l.root.clone();
+        (root, l)
+    });
     let mut registry = Registry::open(roots, here)?;
 
     // Resolved once: the registry does not change while the server is up,

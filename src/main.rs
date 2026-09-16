@@ -384,15 +384,6 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
             .collect();
         let located_here = store::locate(&cwd)?;
         let cwd_root = located_here.as_ref().map(|l| l.root.clone());
-        // Same total resolution `lane_id` uses below for the ordinary
-        // command path: `Located.lane` is `None` for exactly the folder
-        // that holds the tree itself, which is the implicit `main` every
-        // tree with no lane file is.
-        let cwd_lane = located_here.map(|l| {
-            l.lane
-                .map(|x| x.id)
-                .unwrap_or_else(|| lane::MAIN.to_string())
-        });
         let roots = if explicit.is_empty() {
             // The registry is where "every project on this machine" is
             // written down. The one underfoot can still be missing from it --
@@ -414,7 +405,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
                     Failure::usage(format!("--port needs a port number, not \"{p}\""))
                 })?),
             };
-        return web::serve(roots, cwd_root, cwd_lane, port, !a.has("no-open")).map(|_| 0);
+        return web::serve(roots, located_here, port, !a.has("no-open")).map(|_| 0);
     }
 
     let Some(located) = store::locate(&cwd)? else {
@@ -427,17 +418,6 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         return Err(Failure::NoStore);
     };
     let root = located.root.clone();
-    // `Located.lane` is `None` for exactly the folder that holds the tree
-    // itself -- the implicit `main` every tree with no lane file is -- so
-    // this is total: a working folder always resolves to a lane, named or
-    // not.
-    let lane_id = Some(
-        located
-            .lane
-            .as_ref()
-            .map(|l| l.id.clone())
-            .unwrap_or_else(|| lane::MAIN.to_string()),
-    );
     // A side effect of using a project, not a step of any one command: every
     // command past this point runs once per process, so this is where the
     // registry learns where the project lives. It never fails the command
@@ -461,7 +441,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
     // loads the tree itself and reloads it when the log moves. Everything
     // below assumes one command, one process, one fold.
     if cmd == "mcp" {
-        return mcp::serve(root, lane_id).map(|_| 0);
+        return mcp::serve(root, Some(located)).map(|_| 0);
     }
 
     // Its own load, ahead of the generic one below, for the same reason as

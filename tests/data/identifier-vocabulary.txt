@@ -97,6 +97,7 @@ assemble
 assert
 assertions
 assign
+assuming
 assumption
 at
 atomic
@@ -291,6 +292,7 @@ containing
 contains
 content
 contents
+contexts
 continue
 continues
 control
@@ -528,6 +530,7 @@ fit
 fits
 five
 fixed
+fixes
 fixture
 flag
 flagged
@@ -800,6 +803,7 @@ locking
 locks
 log
 log2
+logs
 lone
 long
 longer
@@ -1150,6 +1154,7 @@ refusals
 refuse
 refused
 refuses
+refusing
 regardless
 regenerated
 regenerates
@@ -1268,6 +1273,7 @@ sb
 scan
 scanned
 scans
+scenarios
 schema
 schemas
 scheme

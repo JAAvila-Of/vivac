@@ -24,6 +24,12 @@
 use crate::event::Event;
 use crate::failure::Failure;
 use crate::{ops, store};
+// `t594` fix-1, finding A: `web` (`src/web`) is not allowed to reach into
+// `crate::store` directly (`tests/identifiers.rs`'s `web_never_touches_the_store`),
+// and it needs `Located` to build the `Whose` it hands `Registry::open`. This is
+// the one indirect path that guard already expects to survive: through the
+// project layer, not around it.
+pub use crate::store::Located;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -70,23 +76,24 @@ pub struct Project {
 }
 
 impl Project {
-    /// `lane` is which lane this project answers -- and, through
+    /// `whose` is which lane this project answers -- and, through
     /// `Project::write`, signs -- as. `Registry::open` is the one place
-    /// that decides it; a caller with no folder to compare against passes
-    /// `None`, which reads and writes as the founding lane, same as any
-    /// tree nobody ran `setup` in.
+    /// that decides it: `Whose::Resolved` for the root the process
+    /// started in, `Whose::Founding` for every other -- which reads and
+    /// writes as the founding lane, same as any tree nobody ran `setup`
+    /// in.
     pub fn open(
         root: PathBuf,
         name: String,
         slug: String,
-        lane: Option<String>,
+        whose: ops::Whose<'_>,
     ) -> Result<Project, Failure> {
         let store = store::Store::open(root.clone())?;
         let seen = store::fingerprint(&store.log());
         let log_file = File::open(store.log()).ok();
         let read = crate::index::read_tracked(&store.log(), 0)?;
         let committed_broken = read.broken;
-        let mut ctx = ops::Ctx::from_events(store, &read.events, committed_broken, seen, lane);
+        let mut ctx = ops::Ctx::from_events(store, &read.events, committed_broken, seen, whose);
         ctx.tree.broken_lines = committed_broken + usize::from(read.unterminated);
         Ok(Project {
             root,
@@ -298,18 +305,23 @@ pub struct Registry {
 }
 
 impl Registry {
-    /// `here` is the lane the folder this process started in resolves to,
-    /// paired with the tree root that lane belongs to (`Located.root`) --
-    /// `None` when the caller has nothing to compare, or the starting
-    /// folder is not inside any tree at all. Given to the one project
-    /// among `roots` whose own root is that root, and to no other: `web`
-    /// can serve several roots at once, and a folder is a lane of at most
-    /// one of them. Every other project reads -- and, through
-    /// `Project::write`, signs -- as its own founding lane, the same
-    /// answer a folder that never ran `setup` always gets. Getting this
-    /// wrong made the resident server read `main` from a joined folder and,
-    /// worse, write events signed `main` from it (`t594` task 6, review round 1).
-    pub fn open(roots: Vec<PathBuf>, here: Option<(PathBuf, String)>) -> Result<Registry, Failure> {
+    /// `here` is what `store::locate` answered for the folder this process
+    /// started in, paired with the tree root it belongs to (`Located.root`)
+    /// -- `None` when the caller has nothing to resolve, or the starting
+    /// folder is not inside any tree at all. Given to the one project among
+    /// `roots` whose own root is that root, as `Whose::Resolved`, and to no
+    /// other: `web` can serve several roots at once, and a folder is a lane
+    /// of at most one of them. Every other project answers -- and, through
+    /// `Project::write`, signs -- as `Whose::Founding`, the same as any
+    /// tree nobody ran `setup` in. Getting this wrong made the resident
+    /// server read `main` from a joined folder and, worse, write events
+    /// signed `main` from it (`t594` task 6, review round 1; and again in
+    /// fix-1 round 1, finding A, because `Ctx::from_events` had not caught
+    /// up to `Whose` yet).
+    pub fn open(
+        roots: Vec<PathBuf>,
+        here: Option<(PathBuf, store::Located)>,
+    ) -> Result<Registry, Failure> {
         if roots.is_empty() {
             return Err(Failure::usage(
                 "vivac needs at least one root to serve.".to_string(),
@@ -320,14 +332,23 @@ impl Registry {
         let here_key = here
             .as_ref()
             .map(|(root, _)| std::fs::canonicalize(root).unwrap_or_else(|_| root.clone()));
+        // `Located` is not `Clone` and only one project can ever match, so
+        // this is taken out of `here_located` exactly once, the moment the
+        // matching root is found -- `Whose::Founding` for every other.
+        let (_, mut here_located) = here.map_or((None, None), |(r, l)| (Some(r), Some(l)));
         let mut projects = Vec::with_capacity(unique.len());
         for (root, (name, id)) in unique.into_iter().zip(pairs) {
             let key = std::fs::canonicalize(&root).unwrap_or_else(|_| root.clone());
-            let lane = here
-                .as_ref()
-                .filter(|_| here_key.as_ref() == Some(&key))
-                .map(|(_, lane)| lane.clone());
-            projects.push(Project::open(root, name, id, lane)?);
+            let located_here = if here_key.as_ref() == Some(&key) {
+                here_located.take()
+            } else {
+                None
+            };
+            let whose = match &located_here {
+                Some(l) => ops::Whose::Resolved(l),
+                None => ops::Whose::Founding,
+            };
+            projects.push(Project::open(root, name, id, whose)?);
         }
         Ok(Registry { projects })
     }
@@ -670,11 +691,18 @@ mod tests {
         store::Store::create(&a).unwrap();
         store::Store::create(&b).unwrap();
 
-        let mut registry = Registry::open(
-            vec![a.clone(), b.clone()],
-            Some((a.clone(), "01mLANE".to_string())),
-        )
-        .unwrap_or_else(|e| panic!("{}", e.message()));
+        let located_a = store::Located {
+            root: a.clone(),
+            lane_dir: a.clone(),
+            lane: Some(crate::lane::Lane {
+                version: 1,
+                id: "01mLANE".to_string(),
+                project: String::new(),
+            }),
+            worktree: None,
+        };
+        let mut registry = Registry::open(vec![a.clone(), b.clone()], Some((a.clone(), located_a)))
+            .unwrap_or_else(|e| panic!("{}", e.message()));
 
         let with_lane = registry
             .all()
@@ -683,12 +711,19 @@ mod tests {
             .expect("project a is in the registry");
         assert_eq!(with_lane.ctx.lane.as_deref(), Some("01mLANE"));
 
+        // `t594` fix-1, finding E: `Whose::Founding` answers as the
+        // founding lane outright now, `Some(lane::MAIN)`, rather than the
+        // `None` `from_events` used to carry for "nobody said" -- the same
+        // value `Whose::Resolved` reaches for a folder that resolved to
+        // `main` on its own, which is what lets §6.9 tell the two apart by
+        // asking the tree, not by trusting whichever one happened to
+        // build this `Ctx`.
         let without_lane = registry
             .all()
             .iter()
             .find(|p| p.root == b)
             .expect("project b is in the registry");
-        assert_eq!(without_lane.ctx.lane, None);
+        assert_eq!(without_lane.ctx.lane.as_deref(), Some(crate::lane::MAIN));
 
         std::fs::remove_dir_all(&a).ok();
         std::fs::remove_dir_all(&b).ok();
