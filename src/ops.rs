@@ -562,16 +562,41 @@ fn resolve_whose(
 
 /// The declared repository, if any, whose path resolves to `target` once
 /// joined to `lane_dir`: `anchor::main_copy_of`'s own criterion (`t594`
-/// task 4), resolved by hand rather than through `canonicalize`, which on
-/// Windows returns a `\\?\`-prefixed path that would break the comparison.
+/// task 4), resolved by hand rather than through `canonicalize` first,
+/// which on Windows returns a `\\?\`-prefixed path that would break the
+/// comparison if it leaked into anything compared against a path that
+/// was never canonicalized.
+///
+/// Nothing here leaks, though: this is the one comparison in the crate
+/// between two paths built by genuinely independent means -- one this
+/// process joined by hand, the other read out of files git itself wrote
+/// -- and git always resolves what it writes to one canonical spelling.
+/// A folder reached through a second one -- a Windows CI runner's own
+/// temp directory handing out an 8.3 alias is what actually surfaced
+/// this, a case difference or a symlink would do the same -- passes
+/// neither side through `normalize`'s pure string walk the same way, so
+/// this falls back to `canonicalize`, and only as a fallback: the common
+/// case above is free, and the two canonicalized values are compared and
+/// dropped right here, never stored, printed, or logged, so the prefix
+/// that makes `canonicalize` unsafe to keep around never travels any
+/// further than this one `bool`. Either side failing to canonicalize --
+/// missing, no permission -- leaves the textual answer above standing,
+/// exactly what this returned before this fallback existed.
 fn repo_at<'a>(
     declared: &'a [crate::event::Repo],
     lane_dir: &Path,
     target: &Path,
 ) -> Option<&'a crate::event::Repo> {
-    declared
-        .iter()
-        .find(|r| anchor::normalize(&lane_dir.join(&r.path)) == anchor::normalize(target))
+    declared.iter().find(|r| {
+        let joined = lane_dir.join(&r.path);
+        if anchor::normalize(&joined) == anchor::normalize(target) {
+            return true;
+        }
+        matches!(
+            (joined.canonicalize(), target.canonicalize()),
+            (Ok(a), Ok(b)) if a == b
+        )
+    })
 }
 
 /// Builds a vivac out of the stack as it stands right now.

@@ -1388,6 +1388,7 @@ spawn
 spawning
 spec
 spelled
+spelling
 spellings
 spent
 spin
@@ -1459,6 +1460,7 @@ swallow
 swallowed
 switch
 switches
+symlink
 sync
 system
 table

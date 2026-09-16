@@ -761,6 +761,100 @@ fn a_worktree_still_joins_when_config_is_stale_but_the_log_has_real_lanes() {
     std::fs::remove_dir_all(&home).ok();
 }
 
+/// A second, independent spelling of `target` at `alias`: a junction on
+/// Windows (`mklink /J`, which asks for no privilege a normal account
+/// lacks) and a symlink on Unix. `false` when the platform refuses --
+/// answered rather than asserted, so a caller that cannot get one skips
+/// its own test with a reason instead of passing in the one shape that
+/// was supposed to fail.
+#[cfg(windows)]
+fn make_second_spelling(alias: &Path, target: &Path) -> bool {
+    std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(alias)
+        .arg(target)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+#[cfg(unix)]
+fn make_second_spelling(alias: &Path, target: &Path) -> bool {
+    std::os::unix::fs::symlink(target, alias).is_ok()
+}
+
+/// `t594`, the Windows-CI finding: `ops::repo_at` compares a path this
+/// process built by hand against one `anchor::main_copy_of` read out of
+/// files git itself wrote, and git always resolves those to one
+/// canonical spelling. A folder reached through a second spelling of the
+/// same name -- an 8.3 alias in a CI runner's temp folder is what
+/// actually triggered this, a junction here because it is reproducible
+/// on demand -- textually disagrees with git's own spelling even though
+/// both name the same folder, and the worktree used to join with no
+/// declared root commit to inherit, in silence.
+#[test]
+fn a_worktree_found_through_a_second_spelling_still_inherits_the_root_commit() {
+    let real_root = unique("second-spelling-root");
+    std::fs::create_dir_all(&real_root).unwrap();
+    git(&real_root, &["init", "-q"]);
+    git(&real_root, &["config", "user.email", "t@example.com"]);
+    git(&real_root, &["config", "user.name", "t"]);
+    std::fs::write(real_root.join("f.txt"), "x").unwrap();
+    git(&real_root, &["add", "."]);
+    git(&real_root, &["commit", "-q", "-m", "first"]);
+    let home = unique("second-spelling-home");
+    let (init_out, init_code) = run(&real_root, &home, &["init"]);
+    assert_eq!(init_code, 0, "{init_out}");
+    setup_ok(&real_root, &home);
+    git(&real_root, &["worktree", "add", "wt"]);
+
+    let root_line = std::fs::read_to_string(real_root.join(".vivac").join("events"))
+        .unwrap()
+        .lines()
+        .next()
+        .expect("setup wrote a first line")
+        .to_string();
+    let root_commit = serde_json::from_str::<serde_json::Value>(&root_line).unwrap()["payload"]
+        ["repos"][0]["root"]
+        .as_str()
+        .expect("setup's own lane.declared names a root commit")
+        .to_string();
+
+    let alias = unique("second-spelling-alias");
+    if !make_second_spelling(&alias, &real_root) {
+        eprintln!("skipped: this platform would not create a second spelling of the same folder");
+        std::fs::remove_dir_all(&real_root).ok();
+        std::fs::remove_dir_all(&home).ok();
+        return;
+    }
+
+    let (out, code) = run(
+        &alias.join("wt"),
+        &home,
+        &["push", "Feature work", "--why", "seed"],
+    );
+    assert_eq!(code, 0, "{out}");
+
+    let log = std::fs::read_to_string(real_root.join(".vivac").join("events")).unwrap();
+    let joined = log
+        .lines()
+        .nth(1)
+        .expect("the worktree's own join wrote a second line");
+    assert!(
+        joined.contains("\"type\":\"lane.declared\""),
+        "the second line is not the worktree's own join:\n{log}"
+    );
+    assert!(
+        says(joined, &format!(r#""root":"{root_commit}""#)),
+        "the worktree reached through a second spelling did not inherit the root \
+         commit:\n{joined}"
+    );
+
+    std::fs::remove_dir_all(&real_root).ok();
+    std::fs::remove_dir_all(&home).ok();
+    std::fs::remove_dir_all(&alias).ok();
+}
+
 /// Writes the `.git` file a linked worktree and a submodule both carry: a
 /// file at `working_dir` naming a `gitdir` elsewhere. Without a `commondir`
 /// inside that `gitdir`, this is exactly what a submodule looks like --
