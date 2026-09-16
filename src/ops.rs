@@ -360,6 +360,21 @@ impl Ctx {
             // sentence in the log, never the root commit -- that is
             // already unrecoverable by the time this runs, for the same
             // reason nothing else is declared: nobody ran `setup`).
+            //
+            // This is the one place the event lands **before** the file
+            // that names it, the reverse of the order kept everywhere
+            // else in this block. It is forced, not chosen: the file
+            // `lane::write` is about to write needs an id to point back
+            // at, and there is nothing to point at until this very event
+            // exists -- writing the file first would have nothing to put
+            // in it. The cost is real and accepted rather than hidden: if
+            // `lane::write` below fails -- a worktree mounted read-only,
+            // say -- this seed and the config lock it just took already
+            // sit on the tree, left behind by an operation that itself
+            // never wrote anything of its own and is about to return an
+            // error. There is no ordering of these three steps that
+            // removes that window; this is the one that keeps it
+            // smallest.
             if crate::store::first_event_id(&self.store.root).is_none() {
                 let seed = self.store.append(
                     lock,

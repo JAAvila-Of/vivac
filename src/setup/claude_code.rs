@@ -518,6 +518,20 @@ fn filtered_repos(
     )
 }
 
+/// The tree at `tree_root`, folded once. A `.vivac/` that is empty or not
+/// there at all (`f566`, or no tree yet) folds to `Tree::default`, which
+/// answers every question below the same way absence always has --
+/// `main_claimed: false`, nothing declared -- so callers never need to
+/// know which kind of "nothing" they got. Shared by `plan_lane`'s own
+/// decision and by `existing_lane`, so a `setup` run folds the tree once
+/// rather than once per question asked of it.
+fn fold_tree(tree_root: &Path) -> crate::model::Tree {
+    let (events, broken) =
+        crate::store::read_all_from(&tree_root.join(crate::store::DIR).join(crate::store::LOG))
+            .unwrap_or_default();
+    crate::model::fold(&events, broken)
+}
+
 /// What the tree already says about `lane_id`, read without writing
 /// anything: `Store::open` would fill a missing `config` in on its own,
 /// and that write is one `--dry-run` must never trigger just by asking
@@ -531,23 +545,25 @@ struct ExistingLane {
     declared: Option<(String, Vec<crate::event::Repo>)>,
 }
 
-fn existing_lane(tree: &Path, lane_id: &str) -> Option<ExistingLane> {
-    let (events, broken) =
-        crate::store::read_all_from(&tree.join(crate::store::DIR).join(crate::store::LOG)).ok()?;
-    let folded = crate::model::fold(&events, broken);
-    Some(ExistingLane {
+fn existing_lane(tree: &Path, lane_id: &str, folded: &crate::model::Tree) -> ExistingLane {
+    ExistingLane {
         config_version: crate::store::peek_config_version(tree)
             .unwrap_or(crate::store::ConfigVersion::One),
         declared: folded
             .lanes
             .get(lane_id)
             .map(|s| (s.name.clone(), s.repos.clone())),
-    })
+    }
 }
 
 /// `t594` §4.5.2's five cases, decided from `roots` alone: whether there is
 /// a tree above `here` at all, and whether `here` already carries its own
-/// `.vivac/lane` (`Located::lane_dir == here`, rather than some ancestor's).
+/// `.vivac/lane` (`Located::lane_dir == here`, rather than some ancestor's)
+/// -- plus a sixth, `t594` fix-1 round 2: `here` holds the tree, has no
+/// lane file, and `main` has already been claimed by another folder
+/// (`main_claimed`). Declaring `main` there again would be a lie about
+/// where `main` actually lives, so this mints `here` a lane of its own
+/// instead, the same as any other folder that never had one.
 fn plan_lane(roots: &super::Roots) -> LanePlan {
     let (repos, excluded) = filtered_repos(crate::repos::scan(&roots.here));
 
@@ -560,10 +576,23 @@ fn plan_lane(roots: &super::Roots) -> LanePlan {
         .located
         .as_ref()
         .is_some_and(|l| l.lane_dir == roots.here);
+    // Folded once, ahead of the decision below, which needs to know
+    // whether `main` has already been claimed elsewhere before it can
+    // tell "here is main" apart from "here holds the tree, but is not
+    // main any more" -- and `existing_lane`, further down, needs the
+    // very same fold.
+    let folded = fold_tree(&roots.tree);
 
     let (lane_id, name, is_new) = match &roots.located {
         None => main_lane(),
-        Some(l) if here_has_its_own_vivac && l.lane.is_none() => main_lane(),
+        Some(l) if here_has_its_own_vivac && l.lane.is_none() && !folded.main_claimed => {
+            main_lane()
+        }
+        Some(l) if here_has_its_own_vivac && l.lane.is_none() => {
+            let id = crate::lane::new_id();
+            let name = declared_name(&id, &folder_name);
+            (id, name, true)
+        }
         Some(l) if here_has_its_own_vivac => {
             let id = l.lane.as_ref().unwrap().id.clone();
             let name = declared_name(&id, &folder_name);
@@ -576,16 +605,10 @@ fn plan_lane(roots: &super::Roots) -> LanePlan {
         }
     };
 
-    let existing = roots
-        .located
-        .as_ref()
-        .and_then(|_| existing_lane(&roots.tree, &lane_id));
-    let needs_lock = existing
-        .as_ref()
-        .map(|e| e.config_version != crate::store::ConfigVersion::Lanes)
-        .unwrap_or(true);
+    let existing = existing_lane(&roots.tree, &lane_id, &folded);
+    let needs_lock = existing.config_version != crate::store::ConfigVersion::Lanes;
     let unchanged = existing
-        .and_then(|e| e.declared)
+        .declared
         .is_some_and(|(n, r)| n == name && r == repos);
 
     LanePlan {

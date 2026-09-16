@@ -843,18 +843,13 @@ fn mcp_joins_a_worktree_the_same_way_the_cli_does() {
 // and there is no second implementation under `web` left to prove
 // separately -- see `src/web/mod.rs::serve`.
 
-/// Finding D: the §6.9 refusal's own remedy is `vivac setup claude-code`,
-/// and running it in the very folder §6.9 refuses used to refuse too,
-/// citing its own message back. `setup` is exempt (`Whose::Declared`), so
-/// it no longer does.
-///
-/// **Does not check that an ordinary write succeeds afterwards** --
-/// `main_claimed` only ever turns true (`model.rs`, `Tree::apply`) and
-/// nothing in this fix round makes `setup` clear it, so §6.9 still
-/// refuses the *next* plain command from this folder even once `setup`
-/// itself has run. Whether `setup` re-declaring `main` should also clear
-/// the claim is a question for `relocate` (`t594` tramo 3), not answered
-/// here.
+/// Finding D, closed for real in fix-1 round 2: the §6.9 refusal's own
+/// remedy is `vivac setup claude-code`, and running it in the very folder
+/// §6.9 refuses used to refuse too, citing its own message back. `setup`
+/// now mints this folder a lane of its own instead of declaring `main`
+/// again -- `main` genuinely lives elsewhere, and nothing here pretends
+/// otherwise -- so an ordinary write from here works afterwards, signed
+/// with the lane `setup` just minted rather than `main`.
 #[test]
 fn setup_fixes_a_folder_whose_main_was_claimed_instead_of_refusing() {
     let c = Sandbox::new_seeded("claimed-setup-fixes-it");
@@ -863,6 +858,21 @@ fn setup_fixes_a_folder_whose_main_was_claimed_instead_of_refusing() {
     );
 
     setup_ok(&c.0, c.global_home());
+    assert!(
+        c.0.join(".vivac").join("lane").exists(),
+        "setup declared main again instead of minting this folder a lane"
+    );
+    let minted_id = lane_id_of(&c.0);
+    assert_ne!(minted_id, "main");
+
+    let (out, code) = c.run(&["push", "After setup", "--why", "seed"]);
+    assert_eq!(code, 0, "{out}");
+    let log = log_text(&c);
+    let last = log.lines().last().expect("push wrote a line");
+    assert!(
+        last.contains(&format!("\"lane\":\"{minted_id}\"")),
+        "the write after setup did not sign the lane setup just minted:\n{last}"
+    );
 }
 
 /// Finding C: `import` requires an empty tree of *nodes* (`is_empty_tree`),
