@@ -233,8 +233,8 @@ pub struct Repo {
     /// write path allowed to ask git anything, so this is filled in there
     /// (`repos::root_commit`) and only ever read back to copy forward into
     /// the next declaration (`ops.rs`) -- nothing compares two of these
-    /// against each other yet, which is `d597`'s own point and is `t594`
-    /// tramo 3's job. Not dead data even so: asking again later would cost
+    /// against each other yet, which is `d597`'s own point and is left to
+    /// `t594` §4.6. Not dead data even so: asking again later would cost
     /// the same `git rev-list` for strictly less information, since the
     /// commit that was root when a lane first declared itself may no
     /// longer be root by then.

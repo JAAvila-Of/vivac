@@ -121,7 +121,7 @@ impl Failure {
     /// copied somewhere else -- had no way out this crate actually offers
     /// (`t594` branch-fix-1 #5). Running `setup` in the tree's own folder
     /// registers it again, which is exactly the gap. `--join` can replace
-    /// this once it exists, in `t594` tramo 3.
+    /// this once it exists, which is `t594` §4.5.4.
     pub fn tree_not_found() -> Failure {
         Failure::TreeNotFound(
             "  This folder is a lane of a tree this machine's registry does not know.\n  \

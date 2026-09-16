@@ -362,7 +362,7 @@ pub struct Tree {
     pub lanes: BTreeMap<String, LaneState>,
     /// Whether some lane other than the founding one has ever claimed
     /// `main` (`lane.claimed`, `d597`). Only `relocate` writes it, and only
-    /// for `main` -- `relocate` itself is still `t594` tramo 3, so nothing
+    /// for `main` -- `relocate` itself is still `t594` §4.6, so nothing
     /// writes it yet outside a test. `ops::lock_for_write` (§6.9) and
     /// `setup::plan_lane` both read it now, ahead of `relocate` existing:
     /// the refusal and the folder it sends you to both need to know

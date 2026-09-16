@@ -2204,8 +2204,8 @@ mod tests {
     /// assigning `self.tree` directly, the one call site `adopt` did not
     /// yet cover, so a context on a lane other than `main` that reloaded
     /// under the lock -- because a second writer appended while it
-    /// waited, exactly the two-writer scenario this whole tramo exists
-    /// for -- came back reading `main` while its own store kept signing
+    /// waited, exactly the two-writer scenario this whole stretch of work
+    /// exists for -- came back reading `main` while its own store signed
     /// as the lane it actually is.
     #[test]
     fn a_reload_under_the_lock_keeps_answering_from_its_own_lane() {
