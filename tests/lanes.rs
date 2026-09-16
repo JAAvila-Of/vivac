@@ -10,6 +10,17 @@ use std::path::{Path, PathBuf};
 
 const BIN: &str = env!("CARGO_BIN_EXE_vivac");
 
+/// Whether the output says `sentence`, ignoring where the lines break.
+/// Paragraphs are wrapped to a fixed width, so a sentence lands across two
+/// lines as often as not, and a test that compares the raw text fails on a
+/// rewrap while claiming the wording changed.
+fn says(out: &str, sentence: &str) -> bool {
+    out.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .contains(sentence)
+}
+
 fn run(dir: &Path, home: &Path, args: &[&str]) -> (String, i32) {
     let o = std::process::Command::new(BIN)
         .current_dir(dir)
@@ -370,12 +381,15 @@ fn setup_relocks_the_config_when_its_lanes_sentence_was_removed_by_hand() {
         after.contains("this tree holds lanes"),
         "the sentence did not come back:\n{after}\n\n{out}"
     );
-    // `t594` fix-2, finding 3: this run recorded no thread at all, only
-    // closed the lock again, and the message has to say that rather than
-    // the sentence a real declaration earns.
+    // `t594` fix-3: this run recorded no thread at all, only closed the
+    // lock again, and the message has to say that rather than the
+    // sentence a real declaration earns.
     assert!(
-        out.contains("This run only closed its lanes lock again."),
+        says(
+            &out,
+            "setup wrote in it: the sentence that stops an older vivac"
+        ),
         "{out}"
     );
-    assert!(!out.contains("recorded this folder's own thread"), "{out}");
+    assert!(!says(&out, "this folder's own thread"), "{out}");
 }

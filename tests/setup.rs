@@ -728,6 +728,26 @@ fn setup_writes_the_gitignore_a_tree_from_before_lacks() {
     assert_eq!(g, "*\n");
 }
 
+/// `t594` fix-3, finding 1: a project already fully set up, and already
+/// declared as a lane, whose tree still predates `t594` §4.9 -- so it
+/// never got its own `.vivac/.gitignore` -- creates that file on the very
+/// next `setup`, and the closing message has to say so, instead of
+/// claiming the tree changed nothing two lines under the plan line that
+/// names this very write.
+#[test]
+fn setup_says_it_created_the_trees_gitignore_instead_of_claiming_nothing_changed() {
+    let c = Sandbox::new_empty("setup-gitignore-message");
+    c.ok(&["setup", "claude-code", "--yes"]);
+    std::fs::remove_file(c.0.join(".vivac").join(".gitignore")).unwrap();
+
+    let out = c.ok(&["setup", "claude-code", "--yes"]);
+    assert!(
+        out.contains("setup wrote in it: its own .gitignore."),
+        "{out}"
+    );
+    assert!(!out.contains("setup changed nothing in it"), "{out}");
+}
+
 #[test]
 fn setup_no_longer_says_to_commit_the_tree() {
     let c = Sandbox::new_empty("setup-files");
@@ -1371,11 +1391,12 @@ fn a_fresh_setup_prints_the_written_message_verbatim() {
 
 /// §15.5 (b): a folder of its own under a tree that was already there, which
 /// is what step 6 of the skill offers in a workspace. It joins that tree as
-/// a lane (`t594`), so this run did change the tree -- unlike a folder that
-/// merely gains the missing Claude Code pieces over an unrelated part of
-/// it (`SKILL_REPLACED_MESSAGE`, `SERVER_ADDED_MESSAGE`, below), which do
-/// not.
-const NEW_FOLDER_MESSAGE: &str = "  Written.\n\n  Open a new Claude Code session in this folder. The brief arrives on its\n  own when it starts. If Claude Code asks whether to use the \"vivac\" server\n  from .mcp.json, say yes: it is what lets the agent write to the tree.\n\n  The tree was already there. This run only recorded this folder's own\n  thread in it.\n\n  The hooks, the server and the skill are plain files in this project:\n  commit them if everyone who works here uses vivac, and keep them out of\n  version control if only you do. .vivac/ is never committed: it is this\n  machine's record, and a copy of it in every clone would diverge from the\n  others. Its own .gitignore keeps it out.\n\n  Undo:  vivac setup claude-code --undo\n";
+/// a new lane (`t594`), which also closes the tree's lanes lock in the same
+/// write -- a fresh tree's config starts at `1` -- so this run did change
+/// the tree in two ways at once, unlike a folder that merely gains the
+/// missing Claude Code pieces over an unrelated part of it
+/// (`SKILL_REPLACED_MESSAGE`, `SERVER_ADDED_MESSAGE`, below), which do not.
+const NEW_FOLDER_MESSAGE: &str = "  Written.\n\n  Open a new Claude Code session in this folder. The brief arrives on its\n  own when it starts. If Claude Code asks whether to use the \"vivac\" server\n  from .mcp.json, say yes: it is what lets the agent write to the tree.\n\n  The tree was already there, and setup wrote in it: this folder's own\n  thread and the sentence that stops an older vivac from reading it.\n\n  The hooks, the server and the skill are plain files in this project:\n  commit them if everyone who works here uses vivac, and keep them out of\n  version control if only you do. .vivac/ is never committed: it is this\n  machine's record, and a copy of it in every clone would diverge from the\n  others. Its own .gitignore keeps it out.\n\n  Undo:  vivac setup claude-code --undo\n";
 
 /// §15.5 (c): only the skill, which is what an upgrade writes.
 const SKILL_REPLACED_MESSAGE: &str = "  Written.\n\n  The vivac-migrate skill is now the one this version of vivac ships.\n  Sessions opened from now on use it.\n\n  The tree was already there, and setup changed nothing in it.\n\n  The hooks, the server and the skill are plain files in this project:\n  commit them if everyone who works here uses vivac, and keep them out of\n  version control if only you do. .vivac/ is never committed: it is this\n  machine's record, and a copy of it in every clone would diverge from the\n  others. Its own .gitignore keeps it out.\n";
