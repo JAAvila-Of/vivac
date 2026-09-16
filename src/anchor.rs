@@ -149,6 +149,71 @@ pub(crate) fn in_working_tree(root: &Path) -> bool {
     locate_cached(root).is_some()
 }
 
+/// The root of the linked worktree `from` sits inside, when there is one.
+///
+/// A submodule's `.git` is a file too, pointing at a gitdir of its own --
+/// the same shape a linked worktree has. What tells them apart is
+/// `commondir`, a file git writes into a worktree's gitdir and nowhere
+/// else: it names the repository the worktree shares. A submodule owns its
+/// repository outright and carries no such file, so it is not another
+/// working folder of anything -- it belongs to the lane that contains it.
+pub(crate) fn linked_worktree(from: &Path) -> Option<PathBuf> {
+    let location = locate_cached(from)?;
+    if !location.root.join(".git").is_file() {
+        return None;
+    }
+    location
+        .gitdir
+        .join("commondir")
+        .is_file()
+        .then_some(location.root)
+}
+
+/// The root of the main copy a linked worktree's history lives in, read off
+/// `commondir` inside its gitdir. That path can be relative to the gitdir
+/// that holds it, so it is resolved against it and its `..` walked off by
+/// hand -- never through `canonicalize`, which on Windows returns a
+/// `\\?\`-prefixed path that would break every comparison made against one
+/// that was never canonicalized.
+pub(crate) fn main_copy_of(worktree_root: &Path) -> Option<PathBuf> {
+    let location = locate_cached(worktree_root)?;
+    let raw = std::fs::read_to_string(location.gitdir.join("commondir")).ok()?;
+    let rel = raw.trim();
+    if rel.is_empty() {
+        return None;
+    }
+    let common_gitdir = if Path::new(rel).is_absolute() {
+        PathBuf::from(rel)
+    } else {
+        normalize(&location.gitdir.join(rel))
+    };
+    // A bare repository's common gitdir is the repository itself, not a
+    // working copy's `.git`, so its parent is whatever directory happens to
+    // hold it. Walking up from there could find a tree that has nothing to
+    // do with this worktree and attach it to the wrong product, which is
+    // worse than finding nothing at all.
+    if common_gitdir.file_name() != Some(std::ffi::OsStr::new(".git")) {
+        return None;
+    }
+    common_gitdir.parent().map(Path::to_path_buf)
+}
+
+/// Resolves `.` and `..` components one at a time, without touching the
+/// filesystem the way `canonicalize` would.
+fn normalize(p: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for c in p.components() {
+        match c {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
 /// Whether git tracks `rel`, a path relative to `root`. Starts `git`, so
 /// only `setup` and `check` call it: nothing on the write path does.
 ///
@@ -348,6 +413,64 @@ mod tests {
             "the cached walk froze the commit instead of just the location"
         );
 
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// `git worktree add` from a bare repository is an ordinary flow, and a
+    /// bare repository's `commondir` names the repository itself --
+    /// typically `something.git` -- never a working copy's `.git`. Trusting
+    /// its parent would risk walking up from a directory that just happens
+    /// to hold the bare repository and finding a tree that has nothing to
+    /// do with this worktree.
+    #[test]
+    fn main_copy_of_refuses_a_bare_repository() {
+        let root = std::env::temp_dir().join(format!(
+            "vivac-anchor-bare-{}-{}",
+            std::process::id(),
+            crate::id::ulid()
+        ));
+        let bare_repo = root.join("proj.git");
+        let worktree_dir = root.join("feature");
+        let gitdir = bare_repo.join("worktrees").join("feature");
+        std::fs::create_dir_all(&gitdir).unwrap();
+        std::fs::create_dir_all(&worktree_dir).unwrap();
+        std::fs::write(
+            worktree_dir.join(".git"),
+            format!("gitdir: {}\n", gitdir.display()),
+        )
+        .unwrap();
+        // Relative to the gitdir, `../..` lands on the bare repository
+        // itself, not on a `.git` inside it.
+        std::fs::write(gitdir.join("commondir"), "../..\n").unwrap();
+
+        assert!(main_copy_of(&worktree_dir).is_none());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// The two existing worktree tests only ever see a relative `commondir`
+    /// (`../..`); this is the one with an absolute path, which git also
+    /// writes.
+    #[test]
+    fn main_copy_of_resolves_an_absolute_common_directory() {
+        let root = std::env::temp_dir().join(format!(
+            "vivac-anchor-abscommon-{}-{}",
+            std::process::id(),
+            crate::id::ulid()
+        ));
+        let main_dir = root.join("main");
+        let worktree_dir = root.join("feature");
+        let gitdir = main_dir.join(".git").join("worktrees").join("feature");
+        std::fs::create_dir_all(&gitdir).unwrap();
+        std::fs::create_dir_all(&worktree_dir).unwrap();
+        std::fs::write(
+            worktree_dir.join(".git"),
+            format!("gitdir: {}\n", gitdir.display()),
+        )
+        .unwrap();
+        let common = main_dir.join(".git");
+        std::fs::write(gitdir.join("commondir"), format!("{}\n", common.display())).unwrap();
+
+        assert_eq!(main_copy_of(&worktree_dir), Some(main_dir));
         std::fs::remove_dir_all(&root).ok();
     }
 }

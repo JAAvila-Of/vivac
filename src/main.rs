@@ -381,7 +381,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
             .iter()
             .map(std::path::PathBuf::from)
             .collect();
-        let cwd_root = store::find_root(&cwd);
+        let cwd_root = store::locate(&cwd)?.map(|l| l.root);
         let roots = if explicit.is_empty() {
             // The registry is where "every project on this machine" is
             // written down. The one underfoot can still be missing from it --
@@ -406,7 +406,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         return web::serve(roots, cwd_root, port, !a.has("no-open")).map(|_| 0);
     }
 
-    let Some(root) = store::find_root(&cwd) else {
+    let Some(located) = store::locate(&cwd)? else {
         // The hooks stay quiet where there is no tree. One that fails in
         // every unrelated directory gets switched off within two days, and
         // the two that matter go with it.
@@ -415,6 +415,18 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         }
         return Err(Failure::NoStore);
     };
+    let root = located.root.clone();
+    // `Located.lane` is `None` for exactly the folder that holds the tree
+    // itself -- the implicit `main` every tree with no lane file is -- so
+    // this is total: a working folder always resolves to a lane, named or
+    // not.
+    let lane_id = Some(
+        located
+            .lane
+            .as_ref()
+            .map(|l| l.id.clone())
+            .unwrap_or_else(|| lane::MAIN.to_string()),
+    );
     // A side effect of using a project, not a step of any one command: every
     // command past this point runs once per process, so this is where the
     // registry learns where the project lives. It never fails the command
@@ -446,7 +458,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
     // and `changes` is the one command that needs them back. Reading here
     // and again below would read the log twice for nothing.
     if cmd == "changes" {
-        let (ctx, log) = ops::Ctx::load_with_log(store::Store::open(root)?)?;
+        let (ctx, log) = ops::Ctx::load_with_log(store::Store::open(root)?, lane_id.clone())?;
         return changes::changes(&ctx.tree, &log, a);
     }
 
@@ -496,11 +508,11 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
             return render::why(&tree, &[], a).map(|_| 0);
         }
         if a.has("full") {
-            let (ctx, log) = ops::Ctx::load_with_log(store::Store::open(root)?)?;
+            let (ctx, log) = ops::Ctx::load_with_log(store::Store::open(root)?, lane_id.clone())?;
             extra_word(a)?;
             return render::why(&ctx.tree, &log, a).map(|_| 0);
         }
-        let ctx = ops::Ctx::load(store::Store::open(root)?)?;
+        let ctx = ops::Ctx::load(store::Store::open(root)?, lane_id.clone())?;
         extra_word(a)?;
         return render::why(&ctx.tree, &[], a).map(|_| 0);
     }
@@ -512,9 +524,9 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
     // to rewrite the derived index, even though reading a warm or stale one
     // stays free either way.
     let mut ctx = if may_append(cmd) {
-        ops::Ctx::load_for_write(store::Store::open(root)?)?
+        ops::Ctx::load_for_write(store::Store::open(root)?, lane_id.clone())?
     } else {
-        ops::Ctx::load(store::Store::open(root)?)?
+        ops::Ctx::load(store::Store::open(root)?, lane_id.clone())?
     };
 
     // `check` is the only one with an exit code of its own: it separates
@@ -694,6 +706,8 @@ mod tests {
             Failure::Io(std::io::Error::other("disk full")),
             Failure::newer_vivac("this log holds an event this version does not know"),
             Failure::busy(std::time::Duration::from_secs(5)),
+            Failure::not_a_lane(),
+            Failure::tree_not_found(),
         ];
         variants
             .into_iter()
@@ -705,6 +719,8 @@ mod tests {
                 Failure::Io(_) => f.code(),
                 Failure::NewerVivac(_) => f.code(),
                 Failure::Busy(_) => f.code(),
+                Failure::NotALane(_) => f.code(),
+                Failure::TreeNotFound(_) => f.code(),
             })
             .collect()
     }
