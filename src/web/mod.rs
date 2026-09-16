@@ -394,8 +394,17 @@ fn open_browser(url: &str) {
 /// `cwd_root` is the project the working directory sits inside, if it sits
 /// inside one. It is where `/` lands (`d199`); `None` means the server was
 /// started from somewhere that is not a project, which is the case the whole
-/// decision exists for, and then `/` is the index.
-pub fn serve(roots: Vec<PathBuf>, cwd_root: Option<PathBuf>, port: Option<u16>, open: bool) -> R {
+/// decision exists for, and then `/` is the index. `cwd_lane` is which lane
+/// of `cwd_root` that working directory is, and travels with it: `Registry`
+/// signs as it only for that one project, never for the others `roots` may
+/// also name (`t594` task 6, review round 1).
+pub fn serve(
+    roots: Vec<PathBuf>,
+    cwd_root: Option<PathBuf>,
+    cwd_lane: Option<String>,
+    port: Option<u16>,
+    open: bool,
+) -> R {
     let server = tiny_http::Server::http(("127.0.0.1", port.unwrap_or(0)))
         .map_err(|e| Failure::Io(std::io::Error::other(e)))?;
     let bound_port = server
@@ -407,7 +416,8 @@ pub fn serve(roots: Vec<PathBuf>, cwd_root: Option<PathBuf>, port: Option<u16>, 
     // The port is not known until after the bind when it was ephemeral, and
     // the gate's `Host`/`Origin` checks are pinned to it.
     let mut gate = Gate::new(bound_port)?;
-    let mut registry = Registry::open(roots)?;
+    let here = cwd_root.clone().zip(cwd_lane);
+    let mut registry = Registry::open(roots, here)?;
 
     // Resolved once: the registry does not change while the server is up,
     // and canonicalizing per request would put a filesystem call on the one

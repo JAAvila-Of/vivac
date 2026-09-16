@@ -74,7 +74,12 @@ pub fn start(ctx: &mut crate::ops::Ctx, a: &Args, project: &str) -> R {
     // What the brief painted, taken before the lock: a writer that lands
     // while this one waits must not rewrite what the agent was shown.
     let shown_focus = ctx.tree.focus().map(|n| n.id.clone());
-    let shown_vivac = ctx.tree.vivacs.last().map(|v| v.id.clone());
+    // By lane, matching what `brief`/`to_text` just painted (`brief.rs`'s
+    // own resume line reads `last_vivac()` too): the tree-wide
+    // `vivacs.last()` used to record a stop this session never saw,
+    // whenever another lane's stop happened to sit last in the log
+    // (`t594` task 6, review round 1).
+    let shown_vivac = ctx.tree.last_vivac().map(|v| v.id.clone());
     match ctx.lock_for_write() {
         Ok(mine) => {
             crate::ops::session_started(ctx, &hook.source, hook.session, shown_focus, shown_vivac)

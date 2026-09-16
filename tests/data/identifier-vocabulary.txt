@@ -20,6 +20,7 @@ addr
 adds
 admit
 admitted
+adopt
 advice
 after
 ag
@@ -300,6 +301,7 @@ cors
 could
 count
 counted
+counters
 counts
 cover
 covers
@@ -883,6 +885,7 @@ nodes
 non
 none
 nonexistent
+nonzero
 normalize
 normalized
 not
@@ -1142,6 +1145,7 @@ relaxed
 release
 released
 releases
+reload
 rem
 remaining
 remembered

@@ -70,19 +70,23 @@ pub struct Project {
 }
 
 impl Project {
-    pub fn open(root: PathBuf, name: String, slug: String) -> Result<Project, Failure> {
+    /// `lane` is which lane this project answers -- and, through
+    /// `Project::write`, signs -- as. `Registry::open` is the one place
+    /// that decides it; a caller with no folder to compare against passes
+    /// `None`, which reads and writes as the founding lane, same as any
+    /// tree nobody ran `setup` in.
+    pub fn open(
+        root: PathBuf,
+        name: String,
+        slug: String,
+        lane: Option<String>,
+    ) -> Result<Project, Failure> {
         let store = store::Store::open(root.clone())?;
         let seen = store::fingerprint(&store.log());
         let log_file = File::open(store.log()).ok();
         let read = crate::index::read_tracked(&store.log(), 0)?;
         let committed_broken = read.broken;
-        let mut ctx = ops::Ctx::from_events(
-            store,
-            &read.events,
-            committed_broken,
-            seen,
-            Some(crate::lane::MAIN.to_string()),
-        );
+        let mut ctx = ops::Ctx::from_events(store, &read.events, committed_broken, seen, lane);
         ctx.tree.broken_lines = committed_broken + usize::from(read.unterminated);
         Ok(Project {
             root,
@@ -294,7 +298,18 @@ pub struct Registry {
 }
 
 impl Registry {
-    pub fn open(roots: Vec<PathBuf>) -> Result<Registry, Failure> {
+    /// `here` is the lane the folder this process started in resolves to,
+    /// paired with the tree root that lane belongs to (`Located.root`) --
+    /// `None` when the caller has nothing to compare, or the starting
+    /// folder is not inside any tree at all. Given to the one project
+    /// among `roots` whose own root is that root, and to no other: `web`
+    /// can serve several roots at once, and a folder is a lane of at most
+    /// one of them. Every other project reads -- and, through
+    /// `Project::write`, signs -- as its own founding lane, the same
+    /// answer a folder that never ran `setup` always gets. Getting this
+    /// wrong made the resident server read `main` from a joined folder and,
+    /// worse, write events signed `main` from it (`t594` task 6, review round 1).
+    pub fn open(roots: Vec<PathBuf>, here: Option<(PathBuf, String)>) -> Result<Registry, Failure> {
         if roots.is_empty() {
             return Err(Failure::usage(
                 "vivac needs at least one root to serve.".to_string(),
@@ -302,9 +317,17 @@ impl Registry {
         }
         let unique = dedup_by_target(roots);
         let pairs = assign_names_and_slugs(&unique);
+        let here_key = here
+            .as_ref()
+            .map(|(root, _)| std::fs::canonicalize(root).unwrap_or_else(|_| root.clone()));
         let mut projects = Vec::with_capacity(unique.len());
         for (root, (name, id)) in unique.into_iter().zip(pairs) {
-            projects.push(Project::open(root, name, id)?);
+            let key = std::fs::canonicalize(&root).unwrap_or_else(|_| root.clone());
+            let lane = here
+                .as_ref()
+                .filter(|_| here_key.as_ref() == Some(&key))
+                .map(|(_, lane)| lane.clone());
+            projects.push(Project::open(root, name, id, lane)?);
         }
         Ok(Registry { projects })
     }
@@ -613,7 +636,7 @@ mod tests {
         std::fs::create_dir_all(&tmp).unwrap();
         store::Store::create(&tmp).unwrap();
         let want = tmp.file_name().unwrap().to_string_lossy().into_owned();
-        let mut registry = Registry::open(vec![tmp.clone(), tmp.clone()])
+        let mut registry = Registry::open(vec![tmp.clone(), tmp.clone()], None)
             .unwrap_or_else(|e| panic!("{}", e.message()));
         assert_eq!(registry.first().slug, want);
         std::fs::remove_dir_all(&tmp).ok();
@@ -630,8 +653,44 @@ mod tests {
         std::fs::create_dir_all(&tmp).unwrap();
         store::Store::create(&tmp).unwrap();
         let mut registry =
-            Registry::open(vec![tmp.clone()]).unwrap_or_else(|e| panic!("{}", e.message()));
+            Registry::open(vec![tmp.clone()], None).unwrap_or_else(|e| panic!("{}", e.message()));
         assert_eq!(registry.first().ulid(), None);
         std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// `t594` task 6, review round 1: the resident server used to sign every
+    /// project `main`, hard-coded, whether or not the folder it started in
+    /// was actually that project's founding lane.
+    #[test]
+    fn only_the_project_the_starting_folder_resolves_to_gets_its_lane() {
+        let a = std::env::temp_dir().join(format!("vivac-registry-a-{}", crate::id::ulid()));
+        let b = std::env::temp_dir().join(format!("vivac-registry-b-{}", crate::id::ulid()));
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        store::Store::create(&a).unwrap();
+        store::Store::create(&b).unwrap();
+
+        let mut registry = Registry::open(
+            vec![a.clone(), b.clone()],
+            Some((a.clone(), "01mLANE".to_string())),
+        )
+        .unwrap_or_else(|e| panic!("{}", e.message()));
+
+        let with_lane = registry
+            .all()
+            .iter()
+            .find(|p| p.root == a)
+            .expect("project a is in the registry");
+        assert_eq!(with_lane.ctx.lane.as_deref(), Some("01mLANE"));
+
+        let without_lane = registry
+            .all()
+            .iter()
+            .find(|p| p.root == b)
+            .expect("project b is in the registry");
+        assert_eq!(without_lane.ctx.lane, None);
+
+        std::fs::remove_dir_all(&a).ok();
+        std::fs::remove_dir_all(&b).ok();
     }
 }
