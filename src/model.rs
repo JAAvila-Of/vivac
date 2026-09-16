@@ -1018,6 +1018,26 @@ impl Tree {
         self.lane = Some(lane.to_string());
     }
 
+    /// Whether any lane in this tree has ever actually been declared by
+    /// name. `lane.declared` is the only event that puts a name on a lane,
+    /// so a non-empty `LaneState.name` is the fold's own record that one
+    /// happened -- no field of its own to keep in step, no derived file to
+    /// trust. **Not** the same question as "is `lanes` non-empty": `main`
+    /// gets an entry the moment anybody writes at all, declared or not, so
+    /// every tree that has ever been written to would answer yes to that
+    /// one -- the founding lane included, which is exactly the case this
+    /// has to say no to.
+    ///
+    /// `t594` branch-fix-2 #1: this used to read `config`'s own "this tree
+    /// holds lanes" sentence instead, and the two can disagree in both
+    /// directions -- a `config` hand-reverted to an older version while the
+    /// log still names two lanes, or a `config` left behind by a log a
+    /// crash truncated back to nothing after it locked. The fold is the one
+    /// copy that cannot drift from itself.
+    pub fn has_a_declared_lane(&self) -> bool {
+        self.lanes.values().any(|s| !s.name.is_empty())
+    }
+
     /// The lane this tree is being looked at from. Nobody having said
     /// otherwise resolves to `lane::MAIN`, the same lane every event
     /// written before lanes existed is signed with (`t594` ruling A). The
