@@ -221,7 +221,7 @@ pub fn check(a: &Tree, root: &Path, args: &Args) -> Result<i32, crate::failure::
             outln!();
         }
         if let Some(other) = &copy {
-            outln!("  COPY OF ANOTHER TREE");
+            outln!("  {}", crate::registry::COPY_HEADING);
             outln!();
             for line in crate::registry::copy_notice(other.as_deref()).lines() {
                 outln!("      {line}");
