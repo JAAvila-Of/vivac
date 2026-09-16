@@ -62,10 +62,30 @@ pub fn note(store_dir: &Path, project_id: &str, root: &Path) {
     let _ = try_note(store_dir, project_id, root);
 }
 
+/// The registry's own lock, in the global store. It is **not** any tree's
+/// lock: two different projects can be planted at the same time, and the
+/// file they both write is this one. Taken only when there is something to
+/// write -- the steady state is two small reads and no write, and that is
+/// what keeps `note` off the write budget (`f603`).
+const LOCK: &str = "registry.lock";
+
+/// Nobody holds this lock longer than a rename takes, and `note` can never
+/// fail its caller, so giving up quickly and staying quiet beats hanging a
+/// command that already has its own answer.
+const LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
+
 fn try_note(store_dir: &Path, project_id: &str, root: &Path) -> std::io::Result<()> {
     let path = store_dir.join(FILE);
-    let mut contents = read(&path);
     let value = root.to_string_lossy().into_owned();
+    if read(&path).projects.get(project_id) == Some(&value) {
+        return Ok(());
+    }
+    std::fs::create_dir_all(store_dir)?;
+    let _lock = crate::store::lock_with_deadline(&store_dir.join(LOCK), LOCK_WAIT)
+        .map_err(|e| std::io::Error::other(e.message()))?;
+    // Read again under the lock: the value that decided there was work to
+    // do was read outside it, and another writer may have landed since.
+    let mut contents = read(&path);
     if contents.projects.get(project_id) == Some(&value) {
         return Ok(());
     }
@@ -126,9 +146,13 @@ fn read(path: &Path) -> Contents {
 
 fn write(store_dir: &Path, path: &Path, contents: &Contents) -> std::io::Result<()> {
     std::fs::create_dir_all(store_dir)?;
-    let mut f = File::create(path)?;
-    f.write_all(serde_json::to_string_pretty(contents)?.as_bytes())?;
-    f.write_all(b"\n")
+    let tmp = store_dir.join(format!("{FILE}.{}.tmp", crate::id::ulid()));
+    {
+        let mut f = File::create(&tmp)?;
+        f.write_all(serde_json::to_string_pretty(contents)?.as_bytes())?;
+        f.write_all(b"\n")?;
+    }
+    std::fs::rename(&tmp, path)
 }
 
 #[cfg(test)]
@@ -289,5 +313,70 @@ mod tests {
 
         std::fs::remove_dir_all(&store_dir).ok();
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn two_writers_do_not_lose_a_project() {
+        let store_dir = temp_dir("reg-race");
+        std::fs::create_dir_all(&store_dir).unwrap();
+        let projects: Vec<(std::path::PathBuf, String)> = (0..8)
+            .map(|i| seeded_project(&format!("race-{i}")))
+            .collect();
+        std::thread::scope(|s| {
+            for (root, id) in &projects {
+                let dir = store_dir.clone();
+                s.spawn(move || note(&dir, id, root));
+            }
+        });
+        let text = std::fs::read_to_string(store_dir.join(FILE)).unwrap();
+        let contents: Contents = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            contents.projects.len(),
+            8,
+            "a concurrent write dropped a project the registry already had"
+        );
+        std::fs::remove_dir_all(&store_dir).ok();
+        for (root, _) in &projects {
+            std::fs::remove_dir_all(root).ok();
+        }
+    }
+
+    #[test]
+    fn the_registry_is_never_left_half_written() {
+        // The torn read `f603` names: a reader that opens the file between
+        // truncate and write parses an empty registry and answers that the
+        // machine knows no projects at all. With a rename there is no such
+        // window: the file is either the old one or the new one.
+        let store_dir = temp_dir("reg-torn");
+        let (root, id) = seeded_project("torn");
+        note(&store_dir, &id, &root);
+        let before = std::fs::read(store_dir.join(FILE)).unwrap();
+        let (root2, id2) = seeded_project("torn2");
+        let reader = {
+            let dir = store_dir.clone();
+            std::thread::spawn(move || {
+                let mut empty = 0;
+                for _ in 0..2_000 {
+                    if let Ok(t) = std::fs::read_to_string(dir.join(FILE)) {
+                        if serde_json::from_str::<Contents>(&t)
+                            .map(|c| c.projects.is_empty())
+                            .unwrap_or(true)
+                        {
+                            empty += 1;
+                        }
+                    }
+                }
+                empty
+            })
+        };
+        for _ in 0..200 {
+            note(&store_dir, &id2, &root2);
+            note(&store_dir, &id2, &std::path::PathBuf::from("elsewhere"));
+        }
+        assert_eq!(reader.join().unwrap(), 0, "a reader saw an empty registry");
+        assert!(!before.is_empty());
+        std::fs::remove_dir_all(&store_dir).ok();
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::remove_dir_all(&root2).ok();
     }
 }

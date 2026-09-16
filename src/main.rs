@@ -143,10 +143,15 @@ static LATE_ROOT: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock:
 
 fn main() {
     let code = run();
-    note_late();
     // `std::process::exit` skips `Drop`, so a line still sitting in
     // `output`'s buffer would be lost rather than reach the reader.
+    //
+    // Flushed *before* the registry is written, not after: writing it can
+    // wait on another process holding the registry lock, and the answer
+    // this command already produced must not sit in a buffer behind a wait
+    // for a side effect nobody asked about (`f603`).
     output::flush();
+    note_late();
     std::process::exit(code);
 }
 

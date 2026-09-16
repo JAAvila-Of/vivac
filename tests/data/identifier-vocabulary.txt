@@ -381,6 +381,7 @@ dispatch
 display
 distinct
 div
+do
 documented
 doe
 does
@@ -643,6 +644,7 @@ hunts
 i32
 i64
 id
+id2
 ident
 identifier
 ids
@@ -770,6 +772,7 @@ looks
 loop
 loopback
 loose
+lose
 lossy
 lost
 lower
@@ -1180,6 +1183,7 @@ rollback
 rolls
 room
 root
+root2
 roots
 rotate
 round
