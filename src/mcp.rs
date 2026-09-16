@@ -1290,4 +1290,197 @@ mod resident_write_tests {
         );
         cleanup(&root);
     }
+
+    fn add(title: &str) -> crate::params::Add {
+        crate::params::Add {
+            title: title.into(),
+            parent: None,
+            kind: None,
+            why: "t".into(),
+            refs: vec![],
+            governs: vec![],
+            blocks: false,
+            arms: vec![],
+            arm_dir: None,
+            against: vec![],
+            via_mcp: false,
+            root: true,
+        }
+    }
+
+    /// `f599`: another process's append reaches the resident tree as a
+    /// tail, not as a second fold of the whole log.
+    #[test]
+    fn a_tail_another_process_appended_is_applied_without_a_full_fold() {
+        let (root, mut project) = temp_project("tail");
+        project
+            .write(|ctx| ops::add(ctx, add("From the server")))
+            .unwrap();
+
+        let mut other = crate::ops::Ctx::load(Store::open(root.clone()).unwrap()).unwrap();
+        let lock = other.lock_for_write().unwrap();
+        ops::add(&mut other, add("From another process")).unwrap();
+        drop(lock);
+
+        let folds_before = project.full_folds;
+        project.current().unwrap();
+        assert_eq!(
+            project.full_folds, folds_before,
+            "it folded the whole log again"
+        );
+        assert_resident_matches_fresh_fold(&root, &mut project);
+
+        let (_, log) = project.current_with_log().unwrap();
+        assert!(
+            log.iter().any(|e| matches!(&e.payload,
+                crate::event::Body::NodeCreated { title, .. } if title == "From another process")),
+            "what the other process wrote must reach the events this Project keeps beside the tree"
+        );
+        cleanup(&root);
+    }
+
+    /// A log changed underneath, not just grown, is folded whole: there is
+    /// no tail to trust.
+    #[test]
+    fn a_log_rewritten_underneath_is_folded_whole() {
+        let (root, mut project) = temp_project("rewritten");
+        project
+            .write(|ctx| ops::add(ctx, add("Before the edit")))
+            .unwrap();
+        let log = root.join(".vivac").join("events");
+        let text = std::fs::read_to_string(&log).unwrap();
+        // One blank line at the front: the log is a byte longer, so it "grew",
+        // and every offset after it moved, so the event the last fold read is
+        // no longer where it was. A reader skips the blank line, so a fresh
+        // fold sees exactly the same events.
+        std::fs::write(&log, format!("\n{text}")).unwrap();
+
+        let folds_before = project.full_folds;
+        project.current().unwrap();
+        assert_eq!(project.full_folds, folds_before + 1);
+        assert_resident_matches_fresh_fold(&root, &mut project);
+        cleanup(&root);
+    }
+
+    /// What the server itself writes lands in `log` too, beside the tree
+    /// it was already applied to.
+    #[test]
+    fn the_servers_own_writes_reach_its_log() {
+        let (root, mut project) = temp_project("own");
+        project.write(|ctx| ops::add(ctx, add("Mine"))).unwrap();
+        let (_, log) = project.current_with_log().unwrap();
+        assert!(log.iter().any(|e| matches!(&e.payload,
+            crate::event::Body::NodeCreated { title, .. } if title == "Mine")));
+        cleanup(&root);
+    }
+
+    /// `f599`: an unterminated tail is not consumed, so a reader that meets
+    /// it more than once must not keep adding it to a running total -- the
+    /// resident tree would end up with more broken lines than a fresh fold
+    /// counts, and stay that way forever, since the tail itself never
+    /// becomes a line for anyone to consume.
+    #[test]
+    fn a_torn_tail_is_counted_once_however_many_times_it_is_read() {
+        let (root, mut project) = temp_project("torn");
+        project
+            .write(|ctx| ops::add(ctx, add("Before the tear")))
+            .unwrap();
+        let log_path = root.join(".vivac").join("events");
+        {
+            let mut f = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&log_path)
+                .unwrap();
+            f.write_all(b"{\"seq\":2,\"id\":\"torn").unwrap();
+        }
+
+        project.current().unwrap();
+        assert_resident_matches_fresh_fold(&root, &mut project);
+
+        let mut other = crate::ops::Ctx::load(Store::open(root.clone()).unwrap()).unwrap();
+        let lock = other.lock_for_write().unwrap();
+        ops::add(&mut other, add("From another process")).unwrap();
+        drop(lock);
+
+        project.current().unwrap();
+        assert_resident_matches_fresh_fold(&root, &mut project);
+        cleanup(&root);
+    }
+
+    /// `f599`: a write that lands behind a torn tail is not a clean
+    /// continuation of what this server already folded -- the tail's own
+    /// bytes sit between `fold_end` and where the write's own offsets say
+    /// its lines begin, so the next refresh cannot trust them and folds
+    /// the whole log instead.
+    #[test]
+    fn a_write_behind_a_torn_tail_is_folded_whole() {
+        let (root, mut project) = temp_project("torn-write");
+        project
+            .write(|ctx| ops::add(ctx, add("Before the tear")))
+            .unwrap();
+        let log_path = root.join(".vivac").join("events");
+        {
+            let mut f = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&log_path)
+                .unwrap();
+            f.write_all(b"{\"seq\":2,\"id\":\"torn").unwrap();
+        }
+
+        let folds_before = project.full_folds;
+        project
+            .write(|ctx| ops::add(ctx, add("Behind the tear")))
+            .unwrap();
+
+        project.current().unwrap();
+        assert_eq!(
+            project.full_folds,
+            folds_before + 1,
+            "offsets from a write behind an unconsumed torn tail must not be trusted for a tail"
+        );
+        assert_resident_matches_fresh_fold(&root, &mut project);
+        cleanup(&root);
+    }
+
+    /// `f599`: a log that was replaced, not grown -- a copy restored over
+    /// it, a sync client, an edit by hand -- leaves an open handle reading
+    /// the old file forever, unless the handle's own fingerprint is
+    /// checked against the path's before it is trusted.
+    #[test]
+    fn a_replaced_log_is_read_fresh_not_through_the_old_handle() {
+        let (root, mut project) = temp_project("replaced");
+        project
+            .write(|ctx| ops::add(ctx, add("Before the swap")))
+            .unwrap();
+
+        // Built somewhere else entirely, so its content is simply
+        // different from what this `Project` already folded, and the
+        // swap onto the log's own path is the one moment that matters.
+        let scratch_root = std::env::temp_dir().join(format!(
+            "vivac-mcp-resident-replaced-scratch-{}-{}",
+            std::process::id(),
+            crate::id::ulid()
+        ));
+        std::fs::create_dir_all(&scratch_root).unwrap();
+        Store::create(&scratch_root).unwrap();
+        let mut scratch =
+            crate::ops::Ctx::load(Store::open(scratch_root.clone()).unwrap()).unwrap();
+        let lock = scratch.lock_for_write().unwrap();
+        ops::add(&mut scratch, add("After the swap")).unwrap();
+        ops::add(&mut scratch, add("Also after the swap")).unwrap();
+        drop(lock);
+
+        let log_path = root.join(".vivac").join("events");
+        let replacement_path = root.join(".vivac").join("events.replacement");
+        std::fs::copy(
+            scratch_root.join(".vivac").join("events"),
+            &replacement_path,
+        )
+        .unwrap();
+        std::fs::rename(&replacement_path, &log_path).unwrap();
+        std::fs::remove_dir_all(&scratch_root).ok();
+
+        assert_resident_matches_fresh_fold(&root, &mut project);
+        cleanup(&root);
+    }
 }

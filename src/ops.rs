@@ -31,6 +31,10 @@ pub struct Ctx {
     /// write that landed just before is folded in anyway and only costs
     /// one needless reload.
     pub seen: (u64, Option<std::time::SystemTime>),
+    /// What the last `emit` wrote, so a caller keeping a resident tree
+    /// never has to read the log back to learn where its own writes
+    /// landed (`f599`).
+    pub wrote: Option<crate::store::Appended>,
 }
 
 impl Ctx {
@@ -58,6 +62,7 @@ impl Ctx {
             tree,
             anchor,
             seen,
+            wrote: None,
         })
     }
 
@@ -70,17 +75,25 @@ impl Ctx {
     pub fn load_with_log(store: Store) -> Result<(Ctx, Vec<Event>), Failure> {
         let seen = crate::store::fingerprint(&store.log());
         let (events, broken) = store.read_all()?;
-        let tree = fold(&events, broken);
+        Ok((Ctx::from_events(store, &events, broken, seen), events))
+    }
+
+    /// A `Ctx` over events already read, for a caller that keeps them.
+    pub fn from_events(
+        store: Store,
+        events: &[Event],
+        broken: usize,
+        seen: (u64, Option<std::time::SystemTime>),
+    ) -> Ctx {
+        let tree = fold(events, broken);
         let anchor = anchor::detect(&store.root);
-        Ok((
-            Ctx {
-                store,
-                tree,
-                anchor,
-                seen,
-            },
-            events,
-        ))
+        Ctx {
+            store,
+            tree,
+            anchor,
+            seen,
+            wrote: None,
+        }
     }
 
     /// Takes the tree's write lock (`d598`) and makes the tree about to be
@@ -106,11 +119,29 @@ impl Ctx {
         // cannot see for itself -- whether this tree already has a pillar
         // or a rule, from a write before this one.
         let already_governed = self.tree.has_governance;
-        let written = self.store.append(bodies, self.tree.seq, already_governed)?;
-        for e in &written {
+        let appended = self.store.append(bodies, self.tree.seq, already_governed)?;
+        for e in &appended.events {
             self.tree.apply(e.seq, &e.ts, &e.payload);
         }
         self.seen = crate::store::fingerprint(&self.store.log());
+        // Kept for a caller that maintains a resident tree (`f599`): more
+        // than one `emit` can run under a single `Project::write`, so a
+        // second append's events join the first's and its own offsets win.
+        // An `emit` that wrote nothing -- `focus` and `restore` can, though
+        // no MCP tool reaches either today -- leaves `wrote` exactly as it
+        // was: there is nothing new to fold in, and an empty append's own
+        // offsets would only overwrite a real one's with a no-op.
+        if !appended.events.is_empty() {
+            match self.wrote.take() {
+                Some(mut w) => {
+                    w.events.extend(appended.events);
+                    w.last_line_offset = appended.last_line_offset;
+                    w.end_offset = appended.end_offset;
+                    self.wrote = Some(w);
+                }
+                None => self.wrote = Some(appended),
+            }
+        }
         Ok(())
     }
 
