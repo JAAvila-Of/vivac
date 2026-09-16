@@ -1066,27 +1066,44 @@ mod resident_write_tests {
 
     fn dump_tree(tree: &Tree) -> String {
         let mut out = format!(
-            "roots={:?} stack={:?} seq={} seq_change={} seq_vivac={} next_num={} \
-             next_vivac_num={} broken={}\n",
+            "roots={:?} seq={} next_num={} next_vivac_num={} broken={} main_claimed={}\n",
             tree.roots,
-            tree.stack,
             tree.seq,
-            tree.seq_change,
-            tree.seq_vivac,
             tree.next_num,
             tree.next_vivac_num,
             tree.broken_lines,
+            tree.main_claimed,
         );
+        // Every lane, not only the one this tree is looked at from: the
+        // property this dump exists for (`t192`) compares the resident
+        // tree against a fresh fold of the same log, and a divergence in a
+        // lane nobody is looking from right now would otherwise go unseen.
+        for (key, s) in &tree.lanes {
+            out.push_str(&format!(
+                "lane key={key:?} name={:?} repos={:?} stack={:?} seq_change={} \
+                 seq_vivac={} seg_new={} seg_closed={} seg_notes={} seg_events={}\n",
+                s.name,
+                s.repos,
+                s.stack,
+                s.seq_change,
+                s.seq_vivac,
+                s.seg_new,
+                s.seg_closed,
+                s.seg_notes,
+                s.seg_events,
+            ));
+        }
         for n in tree.nodes_sorted() {
             out.push_str(&dump_node(tree, n));
         }
         for v in &tree.vivacs {
             out.push_str(&format!(
-                "vivac num={} id={} seq={} kind={:?} stack={:?} working_set={:?} \
+                "vivac num={} id={} seq={} lane={:?} kind={:?} stack={:?} working_set={:?} \
                  next_intent={:?} anchor={:?} node_ref={:?} label={:?} ts={:?}\n",
                 v.num,
                 v.id,
                 v.seq,
+                v.lane,
                 v.kind,
                 v.stack,
                 v.working_set,

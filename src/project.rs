@@ -165,7 +165,7 @@ impl Project {
         if grew {
             let tail = self.tracked(&log_path, self.fold_end)?;
             for e in &tail.events {
-                self.ctx.tree.apply(e.seq, &e.ts, &e.payload);
+                self.ctx.tree.apply(e.seq, &e.ts, &e.lane, &e.payload);
             }
             // `fold` sorts children and roots when it finishes, and applying a tail
             // event by event does not: a `num` out of order, or a node that arrived

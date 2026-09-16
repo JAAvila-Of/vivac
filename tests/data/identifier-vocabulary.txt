@@ -122,6 +122,7 @@ began
 begin
 beginning
 behind
+being
 belongs
 below
 best
@@ -149,6 +150,8 @@ bogus
 bool
 boot
 born
+borrow
+borrowed
 both
 bottom
 bound
@@ -225,6 +228,7 @@ claim
 claimant
 claimants
 claimed
+claiming
 claims
 clamp
 class
@@ -299,6 +303,7 @@ counted
 counts
 cover
 covers
+cow
 crash
 crate
 create
@@ -427,6 +432,7 @@ end
 ends
 english
 enter
+entirely
 entries
 entropy
 entry
@@ -537,6 +543,7 @@ format
 formatter
 forward
 found
+founding
 four
 fourteen
 fp
@@ -686,6 +693,7 @@ instead
 intact
 integer
 intent
+interleaved
 intern
 into
 invalid
@@ -1067,6 +1075,7 @@ pt
 pub
 push
 pushed
+pushes
 px
 query
 question
@@ -1096,6 +1105,7 @@ readme
 reads
 real
 reason
+rebuilt
 recognise
 reconcile
 record
@@ -1134,6 +1144,7 @@ released
 releases
 rem
 remaining
+remembered
 remembers
 removal
 removals
@@ -1146,6 +1157,7 @@ render
 rendered
 reopen
 reordered
+repaired
 repeat
 repeated
 repeating
@@ -1343,6 +1355,7 @@ src
 st
 stable
 stack
+stacks
 stale
 stamp
 standard

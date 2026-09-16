@@ -42,23 +42,33 @@ pub enum Boundary<'a> {
 pub struct Changed<'a> {
     /// The boundary the stretch is measured from.
     pub since: Boundary<'a>,
-    pub opened: Vec<&'a Node>,
+    pub opened: Vec<Opened<'a>>,
     pub closed: Vec<Closed<'a>>,
     pub flagged: Vec<Flagged<'a>>,
     pub moved: Vec<Moved<'a>>,
     pub tail: Tail,
 }
 
+/// A node born in this stretch, and the lane whose event bore it: `changes`
+/// stays the whole tree's own reading, and `lane` is what lets a line from
+/// another lane carry its name (`t594` §4.3).
+pub struct Opened<'a> {
+    pub node: &'a Node,
+    pub lane: String,
+}
+
 pub struct Closed<'a> {
     pub node: &'a Node,
     pub outcome: String,
     pub forced: bool,
+    pub lane: String,
 }
 
 pub struct Flagged<'a> {
     pub node: &'a Node,
     pub flag: Flag,
     pub reason: String,
+    pub lane: String,
 }
 
 pub struct Moved<'a> {
@@ -66,6 +76,7 @@ pub struct Moved<'a> {
     /// The word this state goes by for this kind: `State::word` already
     /// knows it, and a second spelling here would drift from the first.
     pub state: State,
+    pub lane: String,
 }
 
 /// What moved the tree without naming a node movement. It is counted and
@@ -119,7 +130,10 @@ pub fn collect<'a>(tree: &'a Tree, log: &[Event], since_seq: u64) -> Changed<'a>
             // way.
             Body::SessionStarted { .. } => {}
             Body::NodeCreated { node, .. } => match tree.node(node) {
-                Some(n) => result.opened.push(n),
+                Some(n) => result.opened.push(Opened {
+                    node: n,
+                    lane: e.lane.clone(),
+                }),
                 None => result.tail.unreadable += 1,
             },
             Body::StateChanged {
@@ -132,10 +146,12 @@ pub fn collect<'a>(tree: &'a Tree, log: &[Event], since_seq: u64) -> Changed<'a>
                     node: n,
                     outcome: outcome.clone(),
                     forced: *forced,
+                    lane: e.lane.clone(),
                 }),
                 Some(n) => result.moved.push(Moved {
                     node: n,
                     state: *state,
+                    lane: e.lane.clone(),
                 }),
                 None => result.tail.unreadable += 1,
             },
@@ -144,6 +160,7 @@ pub fn collect<'a>(tree: &'a Tree, log: &[Event], since_seq: u64) -> Changed<'a>
                     node: n,
                     flag: *flag,
                     reason: reason.clone(),
+                    lane: e.lane.clone(),
                 }),
                 None => result.tail.unreadable += 1,
             },
@@ -175,9 +192,9 @@ pub fn collect<'a>(tree: &'a Tree, log: &[Event], since_seq: u64) -> Changed<'a>
             },
             // Not naming a node: nothing to check against the tree.
             Body::VivacCreated { .. } => result.tail.stops += 1,
-            // Neither names a node, and neither moves the tree yet
-            // (`Tree::apply`): what a lane's own declaration adds to "what
-            // changed" is `t594`'s next commit, not this one.
+            // Neither names a node, and `Tree::apply` already keeps either
+            // one from counting as work: joining or being claimed is not a
+            // change, so there is nothing here for it to add.
             Body::LaneDeclared { .. } | Body::LaneClaimed { .. } => {}
         }
     }
@@ -341,6 +358,30 @@ pub(crate) fn tail_phrase(tail: &Tail) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join(", "))
 }
 
+/// The name to show for `lane`: its own declared name when it has one, and
+/// the bare lane otherwise -- the same rule `Tree::lane_name` uses for the
+/// lane a tree is looked at from, applied here to a lane that only ever
+/// wrote one line of this stretch.
+fn lane_label(tree: &Tree, lane: &str) -> String {
+    match tree.lanes.get(lane) {
+        Some(s) if !s.name.is_empty() => s.name.clone(),
+        _ => lane.to_string(),
+    }
+}
+
+/// What a line signed by `lane` carries in front of it: nothing when it is
+/// the lane this stretch is being read from, and the other lane's own name
+/// otherwise. Empty on a single-lane tree, because `lane` never differs
+/// from `tree.lane()` there -- which is what keeps this stretch printing
+/// the exact bytes it always has (`t594` §4.3).
+fn foreign_mark(tree: &Tree, lane: &str) -> String {
+    if lane == tree.lane() {
+        String::new()
+    } else {
+        format!("[{}] ", lane_label(tree, lane))
+    }
+}
+
 fn print_text(tree: &Tree, result: &Changed) {
     outln!();
     outln!("{}", header(&result.since, result.tail.stops));
@@ -351,8 +392,13 @@ fn print_text(tree: &Tree, result: &Changed) {
         said_something = true;
         outln!();
         outln!("  OPENED ({})", result.opened.len());
-        for n in &result.opened {
-            outln!("    {:<6} {}", n.alias(), n.title(tree));
+        for o in &result.opened {
+            outln!(
+                "    {}{:<6} {}",
+                foreign_mark(tree, &o.lane),
+                o.node.alias(),
+                o.node.title(tree)
+            );
         }
     }
 
@@ -361,7 +407,12 @@ fn print_text(tree: &Tree, result: &Changed) {
         outln!();
         outln!("  CLOSED ({})", result.closed.len());
         for c in &result.closed {
-            outln!("    {:<6} {}", c.node.alias(), c.node.title(tree));
+            outln!(
+                "    {}{:<6} {}",
+                foreign_mark(tree, &c.lane),
+                c.node.alias(),
+                c.node.title(tree)
+            );
             let line = if c.forced {
                 if c.outcome.is_empty() {
                     "forced".to_string()
@@ -382,7 +433,12 @@ fn print_text(tree: &Tree, result: &Changed) {
         outln!();
         outln!("  FLAGGED ({})", result.flagged.len());
         for f in &result.flagged {
-            outln!("    {:<6} {}", f.node.alias(), f.node.title(tree));
+            outln!(
+                "    {}{:<6} {}",
+                foreign_mark(tree, &f.lane),
+                f.node.alias(),
+                f.node.title(tree)
+            );
             for l in wrap(
                 &format!("{}: {}", f.flag.word(), f.reason),
                 WIDTH,
@@ -398,7 +454,12 @@ fn print_text(tree: &Tree, result: &Changed) {
         outln!();
         outln!("  MOVED ({})", result.moved.len());
         for m in &result.moved {
-            outln!("    {:<6} {}", m.node.alias(), m.node.title(tree));
+            outln!(
+                "    {}{:<6} {}",
+                foreign_mark(tree, &m.lane),
+                m.node.alias(),
+                m.node.title(tree)
+            );
             let word = m.state.word(m.node.kind);
             for l in wrap(
                 &format!("{word}: {}", m.node.outcome(tree)),
@@ -443,10 +504,10 @@ fn as_json(tree: &Tree, result: &Changed) -> serde_json::Value {
             }),
             Boundary::Beginning { .. } => serde_json::Value::Null,
         },
-        "opened": result.opened.iter().map(|n| json!({
-            "alias": n.alias(),
-            "title": n.title(tree),
-            "kind": n.kind,
+        "opened": result.opened.iter().map(|o| json!({
+            "alias": o.node.alias(),
+            "title": o.node.title(tree),
+            "kind": o.node.kind,
         })).collect::<Vec<_>>(),
         "closed": result.closed.iter().map(|c| json!({
             "alias": c.node.alias(),
@@ -578,7 +639,7 @@ mod tests {
         let tree = fold(&events, 0);
         let result = collect(&tree, &events, 1);
         assert_eq!(result.opened.len(), 1);
-        assert_eq!(result.opened[0].id, "n2");
+        assert_eq!(result.opened[0].node.id, "n2");
     }
 
     /// `SessionStarted` says something about the session and nothing about
@@ -655,5 +716,91 @@ mod tests {
         let result = collect(&tree, &events, 0);
         assert!(result.flagged.is_empty());
         assert_eq!(result.tail.unreadable, 1);
+    }
+
+    /// Like `ev`, signed by a lane other than `main`: the fixture the
+    /// marking tests below need, since every other helper in this module
+    /// hardcodes the single lane `changes` used to be the whole of.
+    fn ev_lane(seq: u64, lane: &str, payload: Body) -> Event {
+        Event {
+            seq,
+            id: format!("e{seq}"),
+            ts: "2026-09-03T10:00:00Z".to_string(),
+            actor: "a".to_string(),
+            lane: lane.to_string(),
+            payload,
+        }
+    }
+
+    /// `t594` §4.3: a line born from another lane carries that lane, so a
+    /// renderer can mark it -- and one born from this stretch's own lane
+    /// carries that one, indistinguishable from every line `changes` has
+    /// always shown.
+    #[test]
+    fn each_group_carries_the_lane_its_event_was_signed_with() {
+        let events = vec![
+            node_created(1, "n1", 1, "Mine"),
+            ev_lane(
+                2,
+                "b",
+                Body::NodeCreated {
+                    node: "n2".to_string(),
+                    num: 2,
+                    kind: Kind::Task,
+                    title: "B's own".to_string(),
+                    why: "it is needed".to_string(),
+                    parent: None,
+                    blocks: false,
+                    refs: vec![],
+                    governs: vec![],
+                    arms: vec![],
+                    against: None,
+                },
+            ),
+            ev_lane(
+                3,
+                "b",
+                Body::StateChanged {
+                    node: "n2".to_string(),
+                    state: State::Done,
+                    outcome: "shipped".to_string(),
+                    forced: false,
+                },
+            ),
+            ev_lane(
+                5,
+                "b",
+                Body::FlagRaised {
+                    node: "n1".to_string(),
+                    flag: Flag::Suspect,
+                    reason: "from over there".to_string(),
+                },
+            ),
+        ];
+        let tree = fold(&events, 0);
+        let result = collect(&tree, &events, 0);
+        assert_eq!(result.opened[0].lane, "main");
+        assert_eq!(result.opened[1].lane, "b");
+        assert_eq!(result.closed[0].lane, "b");
+        assert_eq!(result.flagged[0].lane, "b");
+    }
+
+    /// A single-lane tree marks nothing: every entry's `lane` equals the
+    /// lane the tree is looked at from, which is the byte-for-byte
+    /// guarantee `foreign_mark` exists to keep.
+    #[test]
+    fn a_single_lane_carries_no_foreign_mark() {
+        let events = vec![node_created(1, "n1", 1, "Node")];
+        let tree = fold(&events, 0);
+        assert_eq!(foreign_mark(&tree, "main"), "");
+    }
+
+    /// A line from another lane is marked with that lane's own name, and
+    /// falls back to the bare lane when it was never declared.
+    #[test]
+    fn a_foreign_lane_is_marked_with_its_name() {
+        let events = vec![node_created(1, "n1", 1, "Node")];
+        let tree = fold(&events, 0);
+        assert_eq!(foreign_mark(&tree, "b"), "[b] ");
     }
 }

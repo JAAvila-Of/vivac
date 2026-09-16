@@ -144,7 +144,7 @@ pub fn end(ctx: &mut crate::ops::Ctx, a: &Args) -> R {
 fn nothing_to_stop(t: &crate::model::Tree, a: &Args) -> bool {
     // With no stack there is no thread to close, and an empty vivac is just
     // noise to be pruned later.
-    if t.stack.is_empty() {
+    if t.stack().is_empty() {
         if !a.has("hook") {
             outln!("  Empty stack: no stop worth saving.");
         }
@@ -155,7 +155,7 @@ fn nothing_to_stop(t: &crate::model::Tree, a: &Args) -> bool {
     // turn, so the last stop never depends on the session closing cleanly
     // (`f568`). Without this guard it would be forty identical stops a day,
     // and a stop that repeats is not a stop, it is a log.
-    if t.seq_change <= t.seq_vivac {
+    if t.state().seq_change <= t.state().seq_vivac {
         if !a.has("hook") {
             outln!("  Nothing changed since the last stop.");
         }
@@ -173,23 +173,24 @@ fn nothing_to_stop(t: &crate::model::Tree, a: &Args) -> bool {
 /// carries what it can know without asking --how much the segment held-- and
 /// leaves `next_intent` honestly empty (`f59`).
 fn segment_label(t: &crate::model::Tree) -> String {
+    let s = t.state();
     let mut parts = Vec::new();
-    if t.seg_new > 0 {
-        parts.push(format!("{} new", t.seg_new));
+    if s.seg_new > 0 {
+        parts.push(format!("{} new", s.seg_new));
     }
-    if t.seg_closed > 0 {
-        parts.push(format!("{} closed", t.seg_closed));
+    if s.seg_closed > 0 {
+        parts.push(format!("{} closed", s.seg_closed));
     }
-    if t.seg_notes == 1 {
+    if s.seg_notes == 1 {
         parts.push("1 note".to_string());
-    } else if t.seg_notes > 1 {
-        parts.push(format!("{} notes", t.seg_notes));
+    } else if s.seg_notes > 1 {
+        parts.push(format!("{} notes", s.seg_notes));
     }
-    if parts.is_empty() && t.seg_events > 0 {
-        parts.push(if t.seg_events == 1 {
+    if parts.is_empty() && s.seg_events > 0 {
+        parts.push(if s.seg_events == 1 {
             "1 change".to_string()
         } else {
-            format!("{} changes", t.seg_events)
+            format!("{} changes", s.seg_events)
         });
     }
     parts.join(", ")
