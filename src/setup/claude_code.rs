@@ -560,13 +560,26 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         &skill_file_state,
     );
 
+    // Asked once per run, and before either early exit below, so a log
+    // already tracked is flagged whether this run has anything else to
+    // write or not: someone already set up is exactly who never reaches
+    // the branch that used to be the only one carrying this warning.
+    let log_tracked = crate::anchor::in_working_tree(tree)
+        && crate::anchor::tracks(tree, ".vivac/events") == Some(true);
+
     if nothing_to_write {
         outln!("{piece_block}  Nothing to write: this project is already set up.");
+        if log_tracked {
+            print!("{TRACKED_WARNING}");
+        }
         return Ok(0);
     }
 
     if a.has("dry-run") {
         outln!("{piece_block}{TRAILING_PARAGRAPH}\n  Nothing written: --dry-run.");
+        if log_tracked {
+            print!("{TRACKED_WARNING}");
+        }
         return Ok(0);
     }
 
@@ -646,9 +659,13 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
 
     super::commit(&writes)?;
 
-    // `.vivac/` is planted only once the JSON commit above has already
-    // landed, and a failure here undoes that commit by hand: `.vivac/`
-    // itself is never touched, planted or rolled back (`t565` §7.7).
+    // Planting is the one step this run takes after the commit above, which
+    // may already have written `.vivac/.gitignore` (`gitignore_missing`) --
+    // so `.vivac/` is not untouched by the time this runs. What stays true
+    // is narrower: planting itself never rolls back. A failure here undoes
+    // the JSON commit by hand, but whatever `Store::create` managed to
+    // write in `.vivac/` before failing is left exactly as it is (`t565`
+    // §7.7).
     if vivac_missing {
         if let Err(e) = crate::store::Store::create(tree) {
             let unrestored = super::rollback(&writes);
@@ -669,9 +686,7 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
             && matches!(skill_file_state, SkillState::Missing),
     };
     print!("\n{}", written_text(&written));
-    if crate::anchor::in_working_tree(tree)
-        && crate::anchor::tracks(tree, ".vivac/events") == Some(true)
-    {
+    if log_tracked {
         print!("{TRACKED_WARNING}");
     }
     Ok(0)

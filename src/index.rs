@@ -57,12 +57,15 @@ use std::io::{BufRead, BufReader, Seek, SeekFrom, Write as IoWrite};
 use std::path::Path;
 
 const MAGIC: u64 = u64::from_le_bytes(*b"vivacIDX");
-// `t426`: a decision's `against` is a new field on `Node`, plus the bit
-// that says whether its `node.created` carried the key at all.
-// `Header::parse` refuses any version but this one and `try_load_index`
-// falls back to folding the log, which is what the index is derived from --
-// so bumping this needs no migration and no command.
-const FORMAT_VERSION: u32 = 5;
+// `t594`: an index this binary wrote before now could have folded a
+// trailing chunk with no `\n` yet into `broken_lines` as if it were
+// committed. Reading it as version 5 would count that chunk twice -- once
+// from the header, again from the tail that sees it as unterminated -- and
+// the error would only compound on every write after. `Header::parse`
+// refuses any version but this one and `try_load_index` falls back to
+// folding the log, which is what the index is derived from -- so bumping
+// this needs no migration and no command.
+const FORMAT_VERSION: u32 = 6;
 const ULID_LEN: usize = 26;
 const SPAN_LEN: usize = 8;
 const FLAG_RECORD_LEN: usize = 1 + SPAN_LEN;
@@ -119,23 +122,31 @@ pub fn load(store: &Store, allow_persist: bool) -> Result<Tree, Failure> {
         return Ok(match loaded {
             Loaded::Fresh(tree) => tree,
             Loaded::Grown {
-                tree,
+                mut tree,
                 tail_len,
                 fold_end_offset,
                 last,
+                unterminated,
             } => {
                 if allow_persist && tail_len > TAIL_REFRESH_THRESHOLD {
                     persist(store, &tree, fold_end_offset, last.as_ref());
                 }
+                // A trailing chunk with no `\n` yet is re-evaluated on every
+                // read, so it counts for whoever reads now and is never
+                // written down: what gets persisted above is only what will
+                // not change again.
+                tree.broken_lines += usize::from(unterminated);
                 tree
             }
         });
     }
     let tail = read_tracked(&store.log(), 0)?;
-    let tree = fold(&tail.events, tail.broken + usize::from(tail.unterminated));
+    let mut tree = fold(&tail.events, tail.broken);
     if allow_persist {
         persist(store, &tree, tail.end_offset, tail.last.as_ref());
     }
+    // Same reasoning as above: added only now, never persisted.
+    tree.broken_lines += usize::from(tail.unterminated);
     Ok(tree)
 }
 
@@ -146,6 +157,10 @@ enum Loaded {
         tail_len: usize,
         fold_end_offset: u64,
         last: Option<LastEvent>,
+        /// Whether the tail read behind this tree stopped on a line with no
+        /// `\n` yet. Carried out separately from `tree.broken_lines` so the
+        /// caller can persist the committed count first and add this after.
+        unterminated: bool,
     },
 }
 
@@ -397,6 +412,10 @@ fn try_load_index(store: &Store) -> Option<Loaded> {
     for e in &tail.events {
         tree.apply(e.seq, &e.ts, &e.payload);
     }
+    // The tail carries broken lines that already sit behind `fold_end`, and
+    // this tree gets persisted, so they have to be added in. `tail.unterminated`
+    // is not: `load` adds that to what this returns only after persisting.
+    tree.broken_lines += tail.broken;
     let last = tail.last.clone().or_else(|| {
         header.has_last.then(|| LastEvent {
             line_offset: header.last_line_offset,
@@ -409,6 +428,7 @@ fn try_load_index(store: &Store) -> Option<Loaded> {
         tail_len: tail.events.len(),
         fold_end_offset: tail.end_offset,
         last,
+        unterminated: tail.unterminated,
     })
 }
 
@@ -2067,6 +2087,36 @@ mod tests {
         let got = load(&store, false).unwrap();
         assert_eq!(snapshot(&want), snapshot(&got));
         assert_eq!(got.total(), 3);
+
+        std::fs::remove_dir_all(&store.root).ok();
+    }
+
+    /// `t594`: the `Grown` branch used to drop the tail's own broken lines
+    /// on the floor instead of folding them into the tree it persists, so a
+    /// tree read incrementally undercounted them next to a fresh fold over
+    /// the same bytes.
+    #[test]
+    fn a_broken_line_in_the_tail_is_not_lost_when_the_index_grows() {
+        let store = tmp_store("broken-tail");
+        let events = a_varied_event_set();
+        store.write_raw(&events).unwrap();
+        load(&store, true).unwrap();
+        assert!(store.index_path().is_file());
+
+        {
+            let mut f = File::options().append(true).open(store.log()).unwrap();
+            f.write_all(b"not json at all\n").unwrap();
+        }
+
+        let (all_events, all_broken) = store.read_all().unwrap();
+        let want = fold(&all_events, all_broken);
+        assert_eq!(want.broken_lines, 1, "the fixture's own line is not broken");
+
+        let got = load(&store, false).unwrap();
+        assert_eq!(
+            got.broken_lines, want.broken_lines,
+            "a broken line in the tail must count the same as a fresh fold"
+        );
 
         std::fs::remove_dir_all(&store.root).ok();
     }

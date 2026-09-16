@@ -379,15 +379,22 @@ pub fn to_text(
     ]));
     // `t429`'s second fix: repeated numbers are named, never hidden. One
     // line, bounded, and only when there are any.
+    //
+    // `repeated_nums` carries one entry per extra claimant, so a number
+    // three nodes claim shows up twice: deduplicated here, in the order the
+    // fold first met each one, so the five-wide cap counts distinct numbers
+    // rather than claimants.
     if !a.repeated_nums.is_empty() {
-        let mut nums: Vec<String> = a
+        let mut seen = HashSet::new();
+        let distinct_nums: Vec<u64> = a
             .repeated_nums
             .iter()
-            .take(5)
-            .map(|d| d.num.to_string())
+            .map(|d| d.num)
+            .filter(|num| seen.insert(*num))
             .collect();
-        if a.repeated_nums.len() > 5 {
-            nums.push(format!("+{}", a.repeated_nums.len() - 5));
+        let mut nums: Vec<String> = distinct_nums.iter().take(5).map(u64::to_string).collect();
+        if distinct_nums.len() > 5 {
+            nums.push(format!("+{}", distinct_nums.len() - 5));
         }
         s.push(Section::fixed(vec![
             format!(

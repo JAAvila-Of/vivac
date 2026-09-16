@@ -112,6 +112,32 @@ fn a_writer_that_cannot_get_the_lock_gives_up_after_five_seconds() {
     );
     assert_eq!(code, 0, "{out}");
     assert_eq!(c.log(), before);
+
+    // A turn with nothing to stop must never even ask for the lock: the
+    // check that decides that is cheap and runs on the tree already in
+    // memory, so a lock somebody else holds must not slow it down at all,
+    // let alone up to the five-second deadline above.
+    let quiet = Sandbox::new_seeded("held-lock-nothing-to-stop");
+    let quiet_lock = std::fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(quiet.0.join(".vivac").join("lock"))
+        .unwrap();
+    quiet_lock.lock().unwrap();
+    let started = Instant::now();
+    let (out, code) = quiet.run_stdin(
+        &["session", "end", "--hook"],
+        r#"{"source":"startup","session_id":"s-quiet"}"#,
+    );
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "took the lock even though there was nothing to stop"
+    );
+    quiet_lock.unlock().unwrap();
+
     lock.unlock().unwrap();
 }
 

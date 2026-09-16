@@ -85,12 +85,12 @@ impl Failure {
         Failure::NewerVivac(format!("  {}", m.into()))
     }
 
-    pub fn busy(waited: std::time::Duration) -> Failure {
+    pub fn busy(deadline: std::time::Duration) -> Failure {
         Failure::Busy(format!(
             "  Another vivac process has held this tree for {} seconds, so nothing\n  \
              was written. If no other session is writing, close the others and try\n  \
              again.",
-            waited.as_secs()
+            deadline.as_secs()
         ))
     }
 }

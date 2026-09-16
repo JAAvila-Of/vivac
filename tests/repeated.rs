@@ -8,6 +8,10 @@ use serde_json::Value;
 /// A second `node.created` for number 1, the shape a merged log leaves.
 const SECOND_CLAIMANT: &str = r#"{"seq":900,"id":"01REPEATEDNUMAAAAAAAAAAAAA","ts":"2026-09-15T00:00:00Z","actor":"a_test0000000","lane":"main","payload":{"type":"node.created","node":"01REPEATEDNUMBBBBBBBBBBBBB","num":1,"kind":"task","title":"The second claimant of number one"}}"#;
 
+/// A third `node.created` for number 1, of a different kind so its alias
+/// (`f1`) is never mistaken for the second claimant's (`t1`).
+const THIRD_CLAIMANT: &str = r#"{"seq":901,"id":"01REPEATEDNUMCCCCCCCCCCCCC","ts":"2026-09-15T00:00:00Z","actor":"a_test0000000","lane":"main","payload":{"type":"node.created","node":"01REPEATEDNUMDDDDDDDDDDDDD","num":1,"kind":"finding","title":"The third claimant of number one"}}"#;
+
 fn with_a_repeated_number(name: &str) -> Sandbox {
     let c = Sandbox::new_seeded(name);
     c.ok(&[
@@ -17,6 +21,12 @@ fn with_a_repeated_number(name: &str) -> Sandbox {
         "it came first",
     ]);
     c.append_raw_line(SECOND_CLAIMANT);
+    c
+}
+
+fn with_three_claimants_of_a_number(name: &str) -> Sandbox {
+    let c = with_a_repeated_number(name);
+    c.append_raw_line(THIRD_CLAIMANT);
     c
 }
 
@@ -58,7 +68,11 @@ fn why_json_names_the_hidden_claimant() {
     let c = with_a_repeated_number("repeated-why-json");
     let v: Value = serde_json::from_str(&c.ok(&["why", "g1", "--json"])).unwrap();
     assert_eq!(v["node"]["repeated"]["num"], 1, "{v}");
-    assert_eq!(v["node"]["repeated"]["hidden"], "t1", "{v}");
+    assert_eq!(
+        v["node"]["repeated"]["hidden"],
+        serde_json::json!(["t1"]),
+        "{v}"
+    );
 }
 
 #[test]
@@ -94,4 +108,29 @@ fn the_brief_caps_the_repeated_numbers_list_at_five() {
     }
     let out = c.ok(&["brief"]);
     assert!(out.contains("REPEATED NUMBERS  1, 2, 3, 4, 5, +1"), "{out}");
+}
+
+/// `t594`: three claimants of the same number, not just two. `repeated_nums`
+/// carries one entry per extra claimant, so the naive read names `1` twice
+/// in the brief and only the second claimant in `why`, leaving the third
+/// with no mention anywhere.
+#[test]
+fn three_claimants_of_one_number_are_named_once_in_the_brief_and_both_in_why() {
+    let c = with_three_claimants_of_a_number("repeated-three-claimants");
+
+    let brief = c.ok(&["brief"]);
+    assert_eq!(brief.matches("REPEATED NUMBERS").count(), 1, "{brief}");
+    assert!(brief.contains("REPEATED NUMBERS  1"), "{brief}");
+    assert!(!brief.contains("REPEATED NUMBERS  1, 1"), "{brief}");
+
+    let why = c.ok(&["why", "g1"]);
+    assert!(why.contains("g1 also names other nodes, t1, f1"), "{why}");
+
+    let v: Value = serde_json::from_str(&c.ok(&["why", "g1", "--json"])).unwrap();
+    assert_eq!(v["node"]["repeated"]["num"], 1, "{v}");
+    assert_eq!(
+        v["node"]["repeated"]["hidden"],
+        serde_json::json!(["t1", "f1"]),
+        "{v}"
+    );
 }

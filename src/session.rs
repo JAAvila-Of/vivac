@@ -84,7 +84,10 @@ pub fn start(ctx: &mut crate::ops::Ctx, a: &Args, project: &str) -> R {
         // being recorded is a small hole in the log; say so where the
         // agent reads, and never let it cost the brief (`d598`).
         Err(Failure::Busy(_)) => {
-            outln!("  Session not recorded: another vivac process held the tree for 5 seconds.");
+            outln!(
+                "  Session not recorded: another vivac process held the tree for {} seconds.",
+                crate::store::LOCK_DEADLINE.as_secs()
+            );
         }
         Err(_) => {}
     }
@@ -92,31 +95,27 @@ pub fn start(ctx: &mut crate::ops::Ctx, a: &Args, project: &str) -> R {
 }
 
 pub fn end(ctx: &mut crate::ops::Ctx, a: &Args) -> R {
-    // The decision whether anything changed has to be made on the tree on
-    // disk. A held lock in hook mode leaves this stop for the next turn:
-    // the change that armed it is still there, and nothing is lost.
-    let _lock = match ctx.lock_for_write() {
-        Ok(l) => l,
-        Err(Failure::Busy(_)) if a.has("hook") => return Ok(()),
-        Err(e) => return Err(e),
-    };
-    // With no stack there is no thread to close, and an empty vivac is just
-    // noise to be pruned later.
-    if ctx.tree.stack.is_empty() {
-        if !a.has("hook") {
-            outln!("  Empty stack: no stop worth saving.");
-        }
+    // The cheap checks go first, against whatever this process already
+    // loaded, so a turn with nothing to stop never asks for the lock at
+    // all: a read-only tree or a filesystem with no lock support would
+    // otherwise fail this hook on every ordinary turn instead of only on
+    // the one that actually has something to close.
+    if nothing_to_stop(&ctx.tree, a) {
         return Ok(());
     }
-    // Nor with nothing new. Claude Code does have a `SessionEnd` event, but
-    // the automatic stop hangs off `Stop` instead: `Stop` fires on every
-    // turn, so the last stop never depends on the session closing cleanly
-    // (`f568`). Without this guard it would be forty identical stops a day,
-    // and a stop that repeats is not a stop, it is a log.
-    if ctx.tree.seq_change <= ctx.tree.seq_vivac {
-        if !a.has("hook") {
-            outln!("  Nothing changed since the last stop.");
-        }
+    // The decision whether anything changed has to be made on the tree on
+    // disk. In hook mode any failure to take the lock -- busy, or the lock
+    // itself unsupported -- is swallowed the same way: the change that
+    // armed this stop is still there for the next turn, and nothing is
+    // lost. Without a hook it is still reported, as before.
+    let _lock = match ctx.lock_for_write() {
+        Ok(l) => l,
+        Err(_) if a.has("hook") => return Ok(()),
+        Err(e) => return Err(e),
+    };
+    // The lock may have reloaded the tree from disk, so the same cheap
+    // checks are repeated here against what is actually there now.
+    if nothing_to_stop(&ctx.tree, a) {
         return Ok(());
     }
     let next = a.opt_or("next");
@@ -127,6 +126,31 @@ pub fn end(ctx: &mut crate::ops::Ctx, a: &Args) -> R {
         outln!("  v{num}  automatic stop at session close");
     }
     Ok(())
+}
+
+/// Whether `t` has nothing worth an automatic stop: an empty stack, or
+/// nothing new since the last one.
+fn nothing_to_stop(t: &crate::model::Tree, a: &Args) -> bool {
+    // With no stack there is no thread to close, and an empty vivac is just
+    // noise to be pruned later.
+    if t.stack.is_empty() {
+        if !a.has("hook") {
+            outln!("  Empty stack: no stop worth saving.");
+        }
+        return true;
+    }
+    // Nor with nothing new. Claude Code does have a `SessionEnd` event, but
+    // the automatic stop hangs off `Stop` instead: `Stop` fires on every
+    // turn, so the last stop never depends on the session closing cleanly
+    // (`f568`). Without this guard it would be forty identical stops a day,
+    // and a stop that repeats is not a stop, it is a log.
+    if t.seq_change <= t.seq_vivac {
+        if !a.has("hook") {
+            outln!("  Nothing changed since the last stop.");
+        }
+        return true;
+    }
+    false
 }
 
 /// What the segment being closed contained, counted off the seams.

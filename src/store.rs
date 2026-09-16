@@ -28,7 +28,7 @@ pub const INDEX: &str = "index";
 pub const LOCK: &str = "lock";
 
 /// How long a writer waits for another one before it gives up (`d598`).
-const LOCK_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
+pub(crate) const LOCK_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
 /// How long it keeps retrying with a bare yield before it starts sleeping a
 /// millisecond between tries: a handoff between two writers takes
 /// microseconds, and a sleep would round that up to a timer tick.
@@ -179,10 +179,12 @@ impl Config {
 pub struct Store {
     pub root: PathBuf,
     pub config: Config,
-    /// Whether `events` existed when this store was opened. Only planting
-    /// creates the log; after that, an append that finds it gone fails
-    /// instead of starting a fresh one -- which is what a process whose
-    /// tree was moved underneath it would otherwise do in silence.
+    /// Whether `events` was already there the moment this store opened it.
+    /// A process that opens a tree whose log is already gone still recreates
+    /// it on the next append, the same as planting would. What this guards
+    /// against is narrower: a process that had the log open while it was
+    /// there, and then had it moved out from underneath it, fails instead
+    /// of silently starting a fresh one in its place.
     log_present: bool,
 }
 
@@ -845,7 +847,7 @@ mod tests {
     }
 
     #[test]
-    fn the_busy_failure_names_how_long_it_waited() {
+    fn the_busy_failure_names_the_deadline_it_was_given() {
         let f = Failure::busy(std::time::Duration::from_secs(5));
         assert_eq!(f.code(), 5);
         assert!(
