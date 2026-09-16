@@ -170,13 +170,23 @@ pub fn copy_of(store_dir: &Path, project_id: &str, root: &Path) -> Noted {
         })
 }
 
+/// The heading every surface puts above `copy_notice`. Here rather than in
+/// the surface that prints it first, for the same reason the sentence is:
+/// two surfaces are about to show this, and a heading defined twice agrees
+/// with itself only until somebody edits one of them.
+///
+/// Each surface lays it out to its own shape -- `check` indents its blocks
+/// differently from the brief -- so the indentation is the caller's, and
+/// only the words are shared.
+pub const COPY_HEADING: &str = "COPY OF ANOTHER TREE";
+
 /// The sentence every surface that reports a copy repeats verbatim: `check`
-/// (`t594` tramo 3 task 1), and the brief and the per-write stderr notice
-/// task 5 adds. Kept in the one module that already owns what a copy is
+/// today, and the brief and the per-write stderr notice that `t594` §4.7
+/// still owes. Kept in the one module that already owns what a copy is
 /// (`Noted::Copy`, `detect_copy`) rather than in whichever surface happens
 /// to print it first -- a security-relevant sentence copied into more than
 /// one call site only agrees with itself until somebody edits one of them,
-/// which is exactly what happened elsewhere in this tramo two days before
+/// which is exactly what happened elsewhere in this work two days before
 /// this was written.
 pub fn copy_notice(other: Option<&str>) -> String {
     match other {
