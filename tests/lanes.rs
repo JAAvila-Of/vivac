@@ -393,3 +393,301 @@ fn setup_relocks_the_config_when_its_lanes_sentence_was_removed_by_hand() {
     );
     assert!(!says(&out, "this folder's own thread"), "{out}");
 }
+
+// ---------------------------------------------------------------------------
+// `t594` task 8: a linked worktree that is nobody's lane yet joins the tree
+// the first time anything writes from it, and a folder whose `main` was
+// claimed elsewhere can read but not write.
+// ---------------------------------------------------------------------------
+
+/// A repository with one commit at a fresh `root`, and a linked worktree of
+/// it *inside* `root` at `root/feature` -- `git worktree add feature`, run
+/// from `root` itself, the shape a harness that keeps its worktrees beside
+/// the checkout leaves behind.
+fn worktree_inside_fixture(prefix: &str) -> (PathBuf, PathBuf, PathBuf) {
+    let root = unique(&format!("worktree-in-{prefix}-root"));
+    std::fs::create_dir_all(&root).unwrap();
+    git(&root, &["init", "-q"]);
+    git(&root, &["config", "user.email", "t@example.com"]);
+    git(&root, &["config", "user.name", "t"]);
+    std::fs::write(root.join("f.txt"), "x").unwrap();
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "-q", "-m", "first"]);
+
+    let home = unique(&format!("worktree-in-{prefix}-home"));
+    let (init_out, init_code) = run(&root, &home, &["init"]);
+    assert_eq!(init_code, 0, "{init_out}");
+
+    let feature = root.join("feature");
+    git(&root, &["worktree", "add", "feature"]);
+
+    (root, feature, home)
+}
+
+/// Appends a line straight to `tree_root/.vivac/events`: the same escape
+/// hatch `common::Sandbox::append_raw_line` gives the tests in this crate's
+/// other files, for a tree this file builds by hand rather than through a
+/// `Sandbox`.
+fn append_raw_line(tree_root: &Path, line: &str) {
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(tree_root.join(".vivac").join("events"))
+        .unwrap();
+    writeln!(f, "{line}").unwrap();
+}
+
+/// The `id` a `.vivac/lane` file names.
+fn lane_id_of(lane_dir: &Path) -> String {
+    let text =
+        std::fs::read_to_string(lane_dir.join(".vivac").join("lane")).expect("the lane file reads");
+    let v: serde_json::Value = serde_json::from_str(&text).expect("the lane file parses");
+    v["id"]
+        .as_str()
+        .expect("a lane file names an id")
+        .to_string()
+}
+
+/// (1): a worktree nested inside the lane's own folder. Before it writes,
+/// its brief has no `HERE` -- nothing is on its stack yet, because it reads
+/// from a lane nobody has written to. After a `push`, it has its own
+/// `.vivac/lane` naming a fresh id, a `lane.declared` in the tree's own
+/// log, and its own stack, kept apart from `root`'s.
+#[test]
+fn a_worktree_inside_the_lanes_folder_joins_on_its_first_write() {
+    let (root, feature, home) = worktree_inside_fixture("joins");
+
+    let (before, code) = run(&feature, &home, &["brief"]);
+    assert_eq!(code, 0, "{before}");
+    assert!(!before.contains("<== HERE"), "{before}");
+
+    let (out, code) = run(&feature, &home, &["push", "Feature work", "--why", "seed"]);
+    assert_eq!(code, 0, "{out}");
+
+    assert!(
+        feature.join(".vivac").join("lane").exists(),
+        "no lane file appeared in the worktree"
+    );
+    let lane_id = lane_id_of(&feature);
+    assert_ne!(
+        lane_id, "main",
+        "the worktree joined signing as main itself"
+    );
+
+    let log = std::fs::read_to_string(root.join(".vivac").join("events")).unwrap();
+    assert!(
+        log.contains("\"type\":\"lane.declared\""),
+        "no lane.declared reached the tree's own log:\n{log}"
+    );
+    assert!(
+        log.contains(&lane_id),
+        "the log's lane.declared does not name the id the worktree just minted:\n{log}"
+    );
+
+    let (root_stack, code) = run(&root, &home, &["stack"]);
+    assert_eq!(code, 0, "{root_stack}");
+    assert!(!root_stack.contains("Feature work"), "{root_stack}");
+
+    let (feature_stack, code) = run(&feature, &home, &["stack"]);
+    assert_eq!(code, 0, "{feature_stack}");
+    assert!(feature_stack.contains("Feature work"), "{feature_stack}");
+
+    std::fs::remove_dir_all(&root).ok();
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// (2): `git worktree add ../feature`, outside `root`'s own folder. It
+/// joins exactly the same way, found through its main copy the same way
+/// `setup` already was (`t594` fix-1).
+#[test]
+fn a_worktree_outside_the_folder_joins_through_its_main_copy() {
+    let (root, feature, home) = worktree_fixture("outside-joins");
+
+    let (out, code) = run(&feature, &home, &["add", "Outside work", "--why", "seed"]);
+    assert_eq!(code, 0, "{out}");
+
+    assert!(
+        feature.join(".vivac").join("lane").exists(),
+        "no lane file appeared in the worktree"
+    );
+    let lane_id = lane_id_of(&feature);
+
+    let log = std::fs::read_to_string(root.join(".vivac").join("events")).unwrap();
+    assert!(
+        log.contains(&lane_id) && log.contains("\"type\":\"lane.declared\""),
+        "no lane.declared naming the worktree's id reached the tree's own log:\n{log}"
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+    std::fs::remove_dir_all(&feature).ok();
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// (3): the worktree's own repository inherits the root commit `main`
+/// already declared for it, and never asks git for one of its own -- the
+/// seeded value is not one `git rev-list` could ever produce, so if
+/// anything here called out to git, the value the new lane declares would
+/// not match it.
+#[test]
+fn a_pending_worktree_inherits_the_declared_root_commit_without_git() {
+    let (root, feature, home) = worktree_inside_fixture("inherits-root");
+    append_raw_line(
+        &root,
+        r#"{"seq":1,"id":"01SEEDMAINAAAAAAAAAAAAAAAA","ts":"2026-01-01T00:00:00Z","actor":"a_test0000000","lane":"main","payload":{"type":"lane.declared","lane":"main","name":"main","repos":[{"path":".","root":"01NOTARELCOMMITAAAAAAAAAAA"}]}}"#,
+    );
+
+    let (out, code) = run(&feature, &home, &["add", "Inherits root", "--why", "seed"]);
+    assert_eq!(code, 0, "{out}");
+
+    let log = std::fs::read_to_string(root.join(".vivac").join("events")).unwrap();
+    // Line 1 is the seed above, unchanged; line 2 is the worktree's own
+    // join, and it is that second line -- not the seed still sitting
+    // there -- that has to carry the inherited value.
+    let joined = log
+        .lines()
+        .nth(1)
+        .expect("the worktree's own join wrote a second line");
+    assert!(
+        joined.contains("\"type\":\"lane.declared\""),
+        "the second line is not the worktree's own join:\n{log}"
+    );
+    assert!(
+        !joined.contains("\"lane\":\"main\""),
+        "the second line still signs as main:\n{log}"
+    );
+    assert!(
+        says(joined, r#""root":"01NOTARELCOMMITAAAAAAAAAAA""#),
+        "the worktree's own lane.declared does not carry the root main already declared:\n{joined}"
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Writes the `.git` file a linked worktree and a submodule both carry: a
+/// file at `working_dir` naming a `gitdir` elsewhere. Without a `commondir`
+/// inside that `gitdir`, this is exactly what a submodule looks like --
+/// `anchor::linked_worktree`'s own criterion (`t594` task 4).
+fn write_submodule_git_file(working_dir: &Path, gitdir: &Path) {
+    std::fs::create_dir_all(working_dir).unwrap();
+    std::fs::create_dir_all(gitdir).unwrap();
+    std::fs::write(
+        working_dir.join(".git"),
+        format!("gitdir: {}\n", gitdir.display()),
+    )
+    .unwrap();
+}
+
+/// (4): a submodule inside a linked worktree is not a worktree of its own
+/// (`t594` task 4) and does not mint a lane of its own either: it stays
+/// part of whatever lane already contains it, here `main`, since the
+/// worktree around it never joined.
+#[test]
+fn a_submodule_inside_a_worktree_does_not_join_a_lane_of_its_own() {
+    let (root, feature, home) = worktree_inside_fixture("submodule");
+    let sub = feature.join("sub");
+    write_submodule_git_file(&sub, &feature.join("sub-gitdir"));
+
+    let (out, code) = run(&sub, &home, &["add", "From the submodule", "--why", "seed"]);
+    assert_eq!(code, 0, "{out}");
+
+    assert!(
+        !sub.join(".vivac").join("lane").exists(),
+        "the submodule minted a lane of its own"
+    );
+    assert!(
+        !feature.join(".vivac").join("lane").exists(),
+        "the worktree around the submodule joined a lane on the submodule's behalf"
+    );
+    let log = std::fs::read_to_string(root.join(".vivac").join("events")).unwrap();
+    assert!(
+        !log.contains("\"type\":\"lane.declared\""),
+        "a lane.declared reached the log for a folder that never asked to join:\n{log}"
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// (5), §6.9: with `lane.claimed` seeded by hand, a folder that holds the
+/// tree but is not one of its lanes can still be read, and cannot write.
+#[test]
+fn a_folder_whose_main_was_claimed_elsewhere_can_read_but_not_write() {
+    let c = Sandbox::new_seeded("claimed-main");
+    c.append_raw_line(
+        r#"{"seq":1,"id":"01SEEDCLAIMAAAAAAAAAAAAAAA","ts":"2026-01-01T00:00:00Z","actor":"a_test0000000","lane":"main","payload":{"type":"lane.claimed","lane":"main"}}"#,
+    );
+
+    let (brief, code) = c.run(&["brief"]);
+    assert_eq!(code, 0, "{brief}");
+
+    let (out, code) = c.run(&["push", "x", "--why", "y"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        says(
+            &out,
+            "This folder holds the tree but is not one of its lanes"
+        ),
+        "{out}"
+    );
+}
+
+/// (6): a worktree `main` already declared as one of its own repositories
+/// does not join a lane of its own -- it is that lane's repository at that
+/// path, and nothing more (paso 1, rule 2).
+#[test]
+fn a_worktree_already_declared_as_a_repo_does_not_join_a_new_lane() {
+    let (root, feature, home) = worktree_inside_fixture("already-declared");
+    append_raw_line(
+        &root,
+        r#"{"seq":1,"id":"01SEEDMAINAAAAAAAAAAAAAAAA","ts":"2026-01-01T00:00:00Z","actor":"a_test0000000","lane":"main","payload":{"type":"lane.declared","lane":"main","name":"main","repos":[{"path":"."},{"path":"feature"}]}}"#,
+    );
+
+    let (out, code) = run(
+        &feature,
+        &home,
+        &["add", "Should stay main", "--why", "seed"],
+    );
+    assert_eq!(code, 0, "{out}");
+
+    assert!(
+        !feature.join(".vivac").join("lane").exists(),
+        "an already-declared repository still minted a lane of its own"
+    );
+    let log = std::fs::read_to_string(root.join(".vivac").join("events")).unwrap();
+    assert_eq!(
+        log.matches("\"type\":\"lane.declared\"").count(),
+        1,
+        "a second lane.declared reached the log:\n{log}"
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// (7): looking joins nothing. Opening a brief inside a linked worktree
+/// that never wrote leaves no `.vivac/lane` and no event -- a worktree the
+/// harness throws away must not leave a lane behind for having been read.
+#[test]
+fn looking_inside_an_unjoined_worktree_leaves_no_trace() {
+    let (root, feature, home) = worktree_inside_fixture("looking");
+
+    let (brief, code) = run(&feature, &home, &["brief"]);
+    assert_eq!(code, 0, "{brief}");
+    let (why, code) = run(&feature, &home, &["why", "1"]);
+    assert_eq!(code, 2, "{why}");
+
+    assert!(
+        !feature.join(".vivac").join("lane").exists(),
+        "looking left a lane file behind"
+    );
+    let log = std::fs::read_to_string(root.join(".vivac").join("events")).unwrap_or_default();
+    assert!(
+        log.is_empty(),
+        "looking wrote to the tree's own log:\n{log}"
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+    std::fs::remove_dir_all(&home).ok();
+}

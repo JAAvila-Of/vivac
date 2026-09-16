@@ -30,11 +30,9 @@ pub enum Failure {
     Busy(String),
     /// The folder holds the tree but is not one of its lanes: `main` was
     /// claimed by another folder, which is what `relocate` leaves behind.
-    /// Exit 1, like any other refusal the model itself makes.
-    // Raised where the context decides which lane it is writing as: a folder
-    // that holds the tree but is not one of its lanes can be read and not
-    // written (`t594` §2.3, rule 3). Nothing reaches that decision yet.
-    #[allow(dead_code)]
+    /// Exit 1, like any other refusal the model itself makes. Raised by
+    /// `Ctx::lock_for_write` (`ops.rs`), the only place that decides which
+    /// lane a folder is writing as (`t594` §2.3 rule 3, §6.9).
     NotALane(String),
     /// A lane whose tree this machine's registry does not know. Shares
     /// `NoStore`'s exit code: from the caller's side it is the same answer,
@@ -124,12 +122,9 @@ impl Failure {
     }
 
     /// A folder that holds the tree itself, once `main` has been claimed by
-    /// another folder instead: `t594` §2.3 declares the sentence, and the
-    /// task that decides the context's lane is what will raise it.
-    // Raised where the context decides which lane it is writing as: a folder
-    // that holds the tree but is not one of its lanes can be read and not
-    // written (`t594` §2.3, rule 3). Nothing reaches that decision yet.
-    #[allow(dead_code)]
+    /// another folder instead: `t594` §2.3 declares the sentence, and
+    /// `Ctx::lock_for_write` is what raises it, on the write path only --
+    /// reading from such a folder still works.
     pub fn not_a_lane() -> Failure {
         Failure::NotALane(
             "  This folder holds the tree but is not one of its lanes. To write from\n  \

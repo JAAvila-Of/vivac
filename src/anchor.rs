@@ -200,7 +200,12 @@ pub(crate) fn main_copy_of(worktree_root: &Path) -> Option<PathBuf> {
 
 /// Resolves `.` and `..` components one at a time, without touching the
 /// filesystem the way `canonicalize` would.
-fn normalize(p: &Path) -> PathBuf {
+///
+/// `pub(crate)`, not private: `ops.rs`'s own worktree-vs-declared-repository
+/// comparison (`t594` §2.3) needs the exact same criterion this module
+/// already worked out for `main_copy_of`, and a second implementation of
+/// the same rule is how the two quietly drift apart.
+pub(crate) fn normalize(p: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for c in p.components() {
         match c {

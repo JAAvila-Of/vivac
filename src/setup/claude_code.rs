@@ -634,7 +634,7 @@ fn ensure_first_event(tree: &Path) -> Result<String, Failure> {
     }
     let (repos, _excluded) = filtered_repos(crate::repos::scan(tree));
     let store = crate::store::Store::open(tree.to_path_buf())?;
-    let mut ctx = crate::ops::Ctx::load_for_write(store, Some(crate::lane::MAIN.to_string()))?;
+    let mut ctx = crate::ops::Ctx::load_for_write(store, crate::ops::Whose::Founding)?;
     ctx.lock_for_write()?;
     crate::ops::declare_lane(&mut ctx, crate::lane::MAIN.to_string(), repos)?;
     crate::store::first_event_id(tree).ok_or_else(|| {
@@ -676,7 +676,18 @@ fn write_lane(roots: &super::Roots, plan: &LanePlan) -> Result<(), Failure> {
     }
 
     let store = crate::store::Store::open(roots.tree.clone())?;
-    let mut ctx = crate::ops::Ctx::load_for_write(store, Some(plan.lane_id.clone()))?;
+    // `Whose::Founding`, not `Whose::Resolved`: this lane is `plan`'s own
+    // decision, already made from `roots` and `repos::scan` above, and
+    // `t594` §2.3's own resolution -- built for a folder that has not
+    // said which lane it is yet -- would ask a question this call already
+    // answered, and could answer it differently for a worktree `setup`
+    // is declaring by hand rather than leaving to join on its own. The
+    // three lines below are exactly what passing `plan.lane_id` used to do
+    // before that resolution existed.
+    let mut ctx = crate::ops::Ctx::load_for_write(store, crate::ops::Whose::Founding)?;
+    ctx.lane = Some(plan.lane_id.clone());
+    ctx.tree.for_lane(&plan.lane_id);
+    ctx.store.set_lane(plan.lane_id.clone());
     ctx.lock_for_write()?;
     crate::ops::declare_lane(&mut ctx, plan.name.clone(), plan.repos.clone())
 }
