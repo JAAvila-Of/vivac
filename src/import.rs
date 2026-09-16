@@ -175,7 +175,12 @@ pub fn import(ctx: &mut Ctx, args: &Args) -> R {
     }
 
     let total = nodes.len();
-    ctx.store.write_raw(&events)?;
+    ctx.lock_for_write()?;
+    let lock = ctx
+        .lock
+        .as_ref()
+        .ok_or_else(|| Failure::Io(std::io::Error::other("write without the tree's lock")))?;
+    ctx.store.write_raw(lock, &events)?;
     outln!("  {total} nodes imported from {file_path}");
     outln!("        {} events written to .vivac/events", events.len());
     outln!();

@@ -35,6 +35,9 @@ pub struct Ctx {
     /// never has to read the log back to learn where its own writes
     /// landed (`f599`).
     pub wrote: Option<crate::store::Appended>,
+    /// The write lock, once `lock_for_write` has taken it. `None` until
+    /// then, and set back to `None` by `unlock`.
+    pub lock: Option<crate::store::WriteLock>,
 }
 
 impl Ctx {
@@ -63,6 +66,7 @@ impl Ctx {
             anchor,
             seen,
             wrote: None,
+            lock: None,
         })
     }
 
@@ -93,21 +97,71 @@ impl Ctx {
             anchor,
             seen,
             wrote: None,
+            lock: None,
         }
     }
 
-    /// Takes the tree's write lock (`d598`) and makes the tree about to be
-    /// written against the one on disk: if the log moved since this `Ctx`
-    /// was loaded, it is loaded again through the index, which applies only
-    /// the tail. Hold what it returns until the write is done.
-    pub fn lock_for_write(&mut self) -> Result<crate::store::WriteLock, Failure> {
+    /// Replaces what this context knows about the tree -- the store handle, the
+    /// folded tree and the fingerprint it was folded at -- without replacing the
+    /// context itself. The write lock, which belongs to the caller's turn and
+    /// not to the fold, survives: replacing the whole context mid-write would
+    /// drop the lock on the floor and leave the write running with nothing
+    /// holding the tree (`f602`). `wrote` does not survive -- it is the record
+    /// of one particular write, and a fold triggered by a read that happens to
+    /// run between two writes must not leave a stale one behind for the next
+    /// `emit` to append to.
+    pub fn refold(
+        &mut self,
+        store: Store,
+        events: &[Event],
+        broken: usize,
+        seen: (u64, Option<std::time::SystemTime>),
+    ) {
+        self.store = store;
+        self.tree = fold(events, broken);
+        self.anchor = anchor::detect(&self.store.root);
+        self.seen = seen;
+        self.wrote = None;
+    }
+
+    /// Takes the tree's write lock (`d598`) and brings the tree up to date.
+    /// **Idempotent**: a `Ctx` that already holds it returns without taking it
+    /// again, so an operation that locks on its own inside a caller that
+    /// already locked does not wait five seconds for itself (`f602`).
+    ///
+    /// Returns whether *this* call is the one that took it. An operation that
+    /// locks on its own releases only what it took: releasing a lock somebody
+    /// above it is still holding would leave that caller writing with nothing
+    /// holding the tree, which is the same bug the argument to `append` exists
+    /// to make impossible.
+    pub fn lock_for_write(&mut self) -> Result<bool, Failure> {
+        if self.lock.is_some() {
+            return Ok(false);
+        }
         let lock = self.store.lock_for_write()?;
         let now = crate::store::fingerprint(&self.store.log());
         if now != self.seen {
             self.tree = crate::index::load(&self.store, false)?;
             self.seen = now;
         }
-        Ok(lock)
+        self.lock = Some(lock);
+        Ok(true)
+    }
+
+    /// Whether this context currently holds the write lock. Only the tests
+    /// read it, the same way only they read `Project::full_folds`: nothing
+    /// else needs to ask, since every caller either took the lock itself or
+    /// trusts the one that did.
+    #[cfg(test)]
+    pub fn holds_write_lock(&self) -> bool {
+        self.lock.is_some()
+    }
+
+    /// Releases the write lock. The CLI never calls it -- the process ends and
+    /// the operating system lets go -- and the resident server calls it after
+    /// every write, because it outlives its own writes.
+    pub fn unlock(&mut self) {
+        self.lock = None;
     }
 
     /// Writes and **then applies in memory**, so that whatever gets printed
@@ -119,7 +173,13 @@ impl Ctx {
         // cannot see for itself -- whether this tree already has a pillar
         // or a rule, from a write before this one.
         let already_governed = self.tree.has_governance;
-        let appended = self.store.append(bodies, self.tree.seq, already_governed)?;
+        let lock = self
+            .lock
+            .as_ref()
+            .ok_or_else(|| Failure::Io(std::io::Error::other("write without the tree's lock")))?;
+        let appended = self
+            .store
+            .append(lock, bodies, self.tree.seq, already_governed)?;
         for e in &appended.events {
             self.tree.apply(e.seq, &e.ts, &e.payload);
         }
@@ -1523,7 +1583,7 @@ pub fn restore(ctx: &mut Ctx, p: params::Restore) -> Result<Outcome, Failure> {
     // what changed since its anchor is the same either side of the lock;
     // only the stack is decided under it, on the tree as it is then.
     let changes = ctx.anchor.changed_since(&v.anchor);
-    let _lock = ctx.lock_for_write()?;
+    let mine = ctx.lock_for_write()?;
 
     let (lineage, kept, lost) = restore_path(&ctx.tree, &v.stack);
 
@@ -1541,6 +1601,15 @@ pub fn restore(ctx: &mut Ctx, p: params::Restore) -> Result<Outcome, Failure> {
         }
     }
     ctx.emit(evs)?;
+    // The write is done and nothing after this reads or writes the tree
+    // under the lock: `main.rs` still renders the stack before it returns,
+    // and holding the lock through that would be a window nobody asked
+    // for. Only released if this call is the one that took it: releasing a
+    // lock a caller above is still holding would leave that caller writing
+    // with nothing holding the tree (`f602`).
+    if mine {
+        ctx.unlock();
+    }
 
     let anchor = if v.anchor.is_empty_tree() {
         outcome::RestoreAnchor::Empty
@@ -1693,5 +1762,43 @@ mod tests {
         );
         assert_eq!(lost[0].alias, "f9");
         assert_eq!(lost[0].state, "gone");
+    }
+
+    fn seeded_ctx(name: &str) -> (std::path::PathBuf, Ctx) {
+        let tmp = std::env::temp_dir().join(format!("vivac-ops-{name}-{}", id::ulid()));
+        let store = Store::create(&tmp).unwrap();
+        (tmp, Ctx::load(store).unwrap())
+    }
+
+    #[test]
+    fn taking_the_write_lock_twice_does_not_deadlock() {
+        let (tmp, mut ctx) = seeded_ctx("relock");
+        ctx.lock_for_write().unwrap();
+        ctx.lock_for_write()
+            .expect("a second take blocked on the first");
+        ctx.unlock();
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn an_inner_release_does_not_take_the_lock_from_the_caller_above() {
+        let (_tmp, mut ctx) = seeded_ctx("inner-release");
+        assert!(
+            ctx.lock_for_write().unwrap(),
+            "the first take should be the one that locks"
+        );
+        let mine = ctx.lock_for_write().unwrap();
+        assert!(
+            !mine,
+            "a second take must not claim the lock it already holds"
+        );
+        if mine {
+            ctx.unlock();
+        }
+        assert!(
+            ctx.holds_write_lock(),
+            "an inner release dropped the caller's lock"
+        );
+        ctx.unlock();
     }
 }

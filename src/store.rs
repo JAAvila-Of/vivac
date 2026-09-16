@@ -250,6 +250,17 @@ pub(crate) fn fingerprint_in(f: &File) -> (u64, Option<std::time::SystemTime>) {
 /// `LockFileEx` is mandatory, and a locked log would refuse its readers.
 pub struct WriteLock {
     file: File,
+    path: PathBuf,
+}
+
+impl WriteLock {
+    /// Whether this lock is the one that covers `lock_path`. `Store::append`
+    /// asks before it writes: a lock is only a lock over the tree whose file
+    /// it holds, and taking one tree's lock to write another's would look
+    /// exactly like holding no lock at all (`f602`).
+    pub fn covers(&self, lock_path: &Path) -> bool {
+        self.path == lock_path
+    }
 }
 
 impl Drop for WriteLock {
@@ -273,7 +284,12 @@ pub(crate) fn lock_with_deadline(
     let start = std::time::Instant::now();
     loop {
         match file.try_lock() {
-            Ok(()) => return Ok(WriteLock { file }),
+            Ok(()) => {
+                return Ok(WriteLock {
+                    file,
+                    path: path.to_path_buf(),
+                })
+            }
             Err(std::fs::TryLockError::WouldBlock) => {}
             Err(std::fs::TryLockError::Error(e)) => return Err(e.into()),
         }
@@ -497,8 +513,10 @@ impl Store {
     /// That is why there is no `fsync` --on Windows it costs more than the
     /// whole budget-- and why it opens in `append` mode, which makes each
     /// single-line write atomic. Atomic lines do not make two writers agree
-    /// on `seq` and `num`, though: every caller holds the tree's write lock
-    /// across loading, stamping and appending (`d598`).
+    /// on `seq` and `num`, though: the write lock is an argument here, not a
+    /// convention a caller could forget or take twice. Without one this does
+    /// not compile, and `lock.covers` refuses one taken on another tree's
+    /// `.vivac/lock` (`f602`).
     ///
     /// `tree_already_governed` is `d444`'s own check, paid before any of
     /// `body` reaches disk: the config locks in place, first, so a process
@@ -512,10 +530,14 @@ impl Store {
     /// write landed (`f599`).
     pub fn append(
         &mut self,
+        lock: &WriteLock,
         body: Vec<crate::event::Body>,
         from_seq: u64,
         tree_already_governed: bool,
     ) -> std::io::Result<Appended> {
+        if !lock.covers(&self.lock_path()) {
+            return Err(std::io::Error::other("write lock does not cover this tree"));
+        }
         self.lock_if_needed(&body, tree_already_governed)?;
         let mut buf = String::with_capacity(256 * body.len());
         let mut written = Vec::with_capacity(body.len());
@@ -670,8 +692,18 @@ pub(crate) fn newer_vivac_failure(line_no: usize, reason: crate::event::UnknownR
 impl Store {
     /// Writes already-built events, keeping their original timestamp. Only
     /// `import` uses it: a tree from elsewhere keeps its dates, because
-    /// otherwise the migration flattens the only timeline it had.
-    pub fn write_raw(&self, events: &[crate::event::Event]) -> std::io::Result<()> {
+    /// otherwise the migration flattens the only timeline it had. Takes the
+    /// write lock as an argument for the same reason `append` does: without
+    /// one this does not compile, and `lock.covers` refuses one taken on
+    /// another tree's `.vivac/lock` (`f602`).
+    pub fn write_raw(
+        &self,
+        lock: &WriteLock,
+        events: &[crate::event::Event],
+    ) -> std::io::Result<()> {
+        if !lock.covers(&self.lock_path()) {
+            return Err(std::io::Error::other("write lock does not cover this tree"));
+        }
         let mut buf = String::with_capacity(256 * events.len());
         for e in events {
             buf.push_str(&serde_json::to_string(e).map_err(std::io::Error::other)?);
@@ -802,10 +834,12 @@ mod tests {
     fn first_event_id_reads_line_one_without_folding() {
         let tmp = std::env::temp_dir().join(format!("vivac-fe-{}", id::ulid()));
         let mut s = Store::create(&tmp).unwrap();
+        let lock = s.lock_for_write().unwrap();
         // A log large enough that folding the whole thing would be visible
         // in the timing, if this ever regressed into calling `read_all`.
         for _ in 0..500 {
             s.append(
+                &lock,
                 vec![crate::event::Body::NodeNoted {
                     node: "t1".into(),
                     note: "filler".into(),
@@ -863,13 +897,14 @@ mod tests {
         fs::create_dir_all(&tmp).unwrap();
         Store::create(&tmp).unwrap();
         let mut s = Store::open(tmp.clone()).unwrap();
+        let lock = s.lock_for_write().unwrap();
         fs::remove_file(s.log()).unwrap();
         let body = vec![crate::event::Body::NodeNoted {
             node: "01VANISHEDAAAAAAAAAAAAAAAA".into(),
             note: "x".into(),
         }];
         assert!(
-            s.append(body, 0, false).is_err(),
+            s.append(&lock, body, 0, false).is_err(),
             "append wrote into a log that is gone"
         );
         assert!(
@@ -877,5 +912,26 @@ mod tests {
             "append created a new log where the old one was"
         );
         fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn appending_with_another_trees_lock_is_refused() {
+        let a = std::env::temp_dir().join(format!("vivac-locka-{}", id::ulid()));
+        let b = std::env::temp_dir().join(format!("vivac-lockb-{}", id::ulid()));
+        Store::create(&a).unwrap();
+        Store::create(&b).unwrap();
+        let mut sa = Store::open(a.clone()).unwrap();
+        let sb = Store::open(b.clone()).unwrap();
+        let wrong = sb.lock_for_write().unwrap();
+        let body = vec![crate::event::Body::NodeNoted {
+            node: "t1".into(),
+            note: "x".into(),
+        }];
+        assert!(
+            sa.append(&wrong, body, 0, false).is_err(),
+            "append accepted a lock taken on a different tree"
+        );
+        fs::remove_dir_all(&a).ok();
+        fs::remove_dir_all(&b).ok();
     }
 }

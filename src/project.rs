@@ -185,7 +185,8 @@ impl Project {
             self.log_file = File::open(&store_log).ok();
             let read = self.tracked(&store_log, 0)?;
             self.committed_broken = read.broken;
-            self.ctx = ops::Ctx::from_events(store, &read.events, self.committed_broken, now);
+            self.ctx
+                .refold(store, &read.events, self.committed_broken, now);
             self.ctx.tree.broken_lines = self.committed_broken + usize::from(read.unterminated);
             self.log = read.events;
             self.fold_end = read.end_offset;
@@ -233,7 +234,21 @@ impl Project {
         &mut self,
         f: impl FnOnce(&mut ops::Ctx) -> Result<T, Failure>,
     ) -> Result<T, Failure> {
-        let _lock = self.ctx.store.lock_for_write()?;
+        self.ctx.lock_for_write()?;
+        let result = self.locked_write(f);
+        self.ctx.unlock();
+        result
+    }
+
+    /// The body of `write`, run with the lock already held. Split out so
+    /// `write` can release the lock on every path out of here -- an early
+    /// return from `refresh_if_stale` or from `f` must not leave it behind
+    /// (`f602`): a resident server that keeps a lock nobody is using again
+    /// holds the tree for the rest of its life.
+    fn locked_write<T>(
+        &mut self,
+        f: impl FnOnce(&mut ops::Ctx) -> Result<T, Failure>,
+    ) -> Result<T, Failure> {
         self.refresh_if_stale()?;
         self.ctx.wrote = None;
         let result = f(&mut self.ctx);

@@ -145,7 +145,9 @@ mod tests {
     fn seeded_project(prefix: &str) -> (std::path::PathBuf, String) {
         let root = temp_dir(prefix);
         let mut s = store::Store::create(&root).unwrap();
+        let lock = s.lock_for_write().unwrap();
         s.append(
+            &lock,
             vec![crate::event::Body::NodeNoted {
                 node: "t1".into(),
                 note: "seed".into(),

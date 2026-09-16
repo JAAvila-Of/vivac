@@ -65,6 +65,7 @@ appear
 appears
 append
 appended
+appending
 appends
 applied
 applies
@@ -325,6 +326,7 @@ days
 de
 dead
 deadline
+deadlock
 debug
 dec
 decide
@@ -621,6 +623,7 @@ hit
 hits
 hold
 holder
+holds
 hollow
 home
 hook
@@ -813,6 +816,7 @@ migrate
 migration
 millis
 min
+mine
 minus
 missing
 mod
@@ -1092,6 +1096,7 @@ redirects
 ref
 reference
 refname
+refold
 refresh
 refs
 refusal
@@ -1111,6 +1116,7 @@ rel
 relaxed
 release
 released
+releases
 rem
 remaining
 remembers
@@ -1190,6 +1196,7 @@ rules
 run
 running
 runs
+sa
 said
 same
 sample
@@ -1384,6 +1391,7 @@ tail
 take
 taken
 takes
+taking
 target
 task
 tcp

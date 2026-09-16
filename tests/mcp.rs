@@ -1654,3 +1654,30 @@ fn the_server_waits_for_a_held_lock_and_writes_nothing() {
     );
     lock.unlock().unwrap();
 }
+
+/// `f602`: `Project::write` releases the tree's lock once its own write is
+/// done. A resident server that never let go would leave every writer after
+/// it waiting five seconds and giving up, forever, for a lock nobody still
+/// needed.
+#[test]
+fn the_server_releases_the_lock_once_its_write_is_done() {
+    let c = seeded("server-releases-lock");
+    let mut s = hello(&c);
+    let r = s.ask(
+        r#"{"jsonrpc":"2.0","id":301,"method":"tools/call","params":{"name":"vivac_add","arguments":{"title":"Written over MCP","why":"the lock must be free after","root":true}}}"#,
+    );
+    assert_eq!(r["result"]["isError"], false, "{r}");
+
+    // Exit code 5 is `Busy`: if the server still held the lock, this would
+    // wait five seconds and fail with it. Success says it did not, without
+    // timing a process spawn and a fold against a clock a loaded machine
+    // cannot promise.
+    let (out, code) = c.run(&[
+        "add",
+        "From outside",
+        "--why",
+        "the lock should be free",
+        "--root",
+    ]);
+    assert_eq!(code, 0, "{out}");
+}
