@@ -139,9 +139,25 @@ pub fn check(a: &Tree, root: &Path, args: &Args) -> Result<i32, crate::failure::
     store.sort();
     project.sort();
 
-    // Read only when asked: without `--gates` this never touches the
-    // registry or any other project's log, and the JSON and the exit code
-    // stay exactly what they were before this flag existed.
+    // `t594` §4.7: another folder on this machine may still hold a tree
+    // that starts with this same event -- a copy, not a move (`d201`) --
+    // and `check` is where that gets said. `copy_of` is a single, bounded
+    // lookup (one registry key, at most one other tree's first line), not
+    // the `--gates` fan-out below, so it runs on every `check` rather than
+    // only that one.
+    let copy: Option<Option<String>> = crate::store::first_event_id(root).and_then(|project_id| {
+        let store_dir = crate::store::store_dir()?;
+        match crate::registry::copy_of(&store_dir, &project_id, root) {
+            crate::registry::Noted::Copy { other } => Some(other),
+            crate::registry::Noted::Fine => None,
+        }
+    });
+
+    // The fan-out over every root the registry knows, read only when asked:
+    // without `--gates` this never reads another project's log, and the
+    // JSON and the exit code stay exactly what they were before this flag
+    // existed. The single, bounded registry lookup above is unconditional;
+    // this multi-project scan is the one `--gates` guards.
     let mut gates: Vec<String> = Vec::new();
     if args.has("gates") {
         if let Some(store_dir) = crate::store::store_dir() {
@@ -178,7 +194,7 @@ pub fn check(a: &Tree, root: &Path, args: &Args) -> Result<i32, crate::failure::
         }
         gates.sort();
     }
-    let ok = store.is_empty() && project.is_empty() && gates.is_empty();
+    let ok = store.is_empty() && project.is_empty() && gates.is_empty() && copy.is_none();
 
     if args.has("json") {
         let mut payload = serde_json::json!({
@@ -186,8 +202,11 @@ pub fn check(a: &Tree, root: &Path, args: &Args) -> Result<i32, crate::failure::
             "project": project,
             "ok": ok,
         });
-        if args.has("gates") {
-            if let serde_json::Value::Object(fields) = &mut payload {
+        if let serde_json::Value::Object(fields) = &mut payload {
+            if let Some(other) = &copy {
+                fields.insert("copy".to_string(), serde_json::json!({ "other": other }));
+            }
+            if args.has("gates") {
                 fields.insert("gates".to_string(), serde_json::json!(gates));
             }
         }
@@ -199,6 +218,14 @@ pub fn check(a: &Tree, root: &Path, args: &Args) -> Result<i32, crate::failure::
         outln!();
         if ok {
             outln!("  No findings. {} nodes checked.", a.total());
+            outln!();
+        }
+        if let Some(other) = &copy {
+            outln!("  COPY OF ANOTHER TREE");
+            outln!();
+            for line in crate::registry::copy_notice(other.as_deref()).lines() {
+                outln!("      {line}");
+            }
             outln!();
         }
         if !store.is_empty() {

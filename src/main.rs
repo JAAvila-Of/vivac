@@ -139,9 +139,14 @@ const USAGE: &str = r#"vivac - provenance of work
       another process kept locked
 "#;
 
-/// A root that reached the registry with no identity to be keyed by, kept so
-/// the attempt can be made again once the command has run. See `note_late`.
-static LATE_ROOT: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+/// A root that reached the registry with no identity to be keyed by, and
+/// the lane it was seen under (its id and folder, when the folder carries
+/// one), kept so the attempt can be made again once the command has run.
+/// See `note_late`.
+static LATE_SIGHTING: std::sync::OnceLock<(
+    std::path::PathBuf,
+    Option<(String, std::path::PathBuf)>,
+)> = std::sync::OnceLock::new();
 
 fn main() {
     let code = run();
@@ -163,11 +168,22 @@ fn main() {
 /// where it exists. Still silent, and still unable to fail anything: the command
 /// has already produced its answer by the time this runs.
 fn note_late() {
-    let (Some(root), Some(store_dir)) = (LATE_ROOT.get(), store::store_dir()) else {
+    let (Some((root, lane)), Some(store_dir)) = (LATE_SIGHTING.get(), store::store_dir()) else {
         return;
     };
     if let Some(project_id) = store::first_event_id(root) {
-        registry::note(&store_dir, &project_id, root);
+        // This call's own `Noted::Copy` reaches nobody: `check` learns of a
+        // copy through its own, separate read (`registry::copy_of`), and a
+        // stderr warning on every write like this one is `t594`'s task 5.
+        let _ = registry::note(
+            &store_dir,
+            &project_id,
+            registry::Sighting {
+                root,
+                lane: lane.as_ref().map(|(id, dir)| (id.as_str(), dir.as_path())),
+                repos: None,
+            },
+        );
     }
 }
 
@@ -430,10 +446,28 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
     // next, without saying so. `f277`. So the root is kept and tried again on
     // the way out, where the event exists.
     if let Some(store_dir) = store::store_dir() {
+        let lane = located
+            .lane
+            .as_ref()
+            .map(|l| (l.id.clone(), located.lane_dir.clone()));
         match store::first_event_id(&root) {
-            Some(project_id) => registry::note(&store_dir, &project_id, &root),
+            Some(project_id) => {
+                // This call's own `Noted::Copy` reaches nobody: `check`
+                // learns of a copy through its own, separate read
+                // (`registry::copy_of`), and a stderr warning on every
+                // write like this one is `t594`'s task 5.
+                let _ = registry::note(
+                    &store_dir,
+                    &project_id,
+                    registry::Sighting {
+                        root: &root,
+                        lane: lane.as_ref().map(|(id, dir)| (id.as_str(), dir.as_path())),
+                        repos: None,
+                    },
+                );
+            }
             None => {
-                let _ = LATE_ROOT.set(root.clone());
+                let _ = LATE_SIGHTING.set((root.clone(), lane));
             }
         }
     }
