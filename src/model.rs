@@ -9,6 +9,7 @@
 
 use crate::anchor::AnchorRef;
 use crate::event::{Body, Event, Flag, Kind, State, VivacKind};
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 
@@ -208,6 +209,10 @@ pub struct Vivac {
     /// alone ties within the same second, and a stop cannot anchor a
     /// boundary with a number it does not remember.
     pub seq: u64,
+    /// The lane it was written from. `last_vivac` and `last_manual_vivac`
+    /// read this to answer for the lane they are asked from, the same
+    /// `Tree::stack` already does (`t594`).
+    pub lane: String,
     pub kind: VivacKind,
     pub stack: Vec<(String, String)>,
     pub working_set: Vec<String>,
@@ -287,6 +292,24 @@ impl Counts {
     }
 }
 
+/// Everything about a tree that belongs to one working folder instead of to
+/// the product. The knowledge -- nodes, edges, decisions, and the numbering
+/// that names them -- is shared by every lane; the thread is not (`d595`).
+#[derive(Debug, Default, Clone)]
+pub struct LaneState {
+    /// What the folder calls itself, from `lane.declared`. Empty for a lane
+    /// nobody declared, which is every tree written before lanes existed.
+    pub name: String,
+    pub repos: Vec<crate::event::Repo>,
+    pub stack: Vec<u64>,
+    pub seq_change: u64,
+    pub seq_vivac: u64,
+    pub seg_new: u64,
+    pub seg_closed: u64,
+    pub seg_notes: u64,
+    pub seg_events: u64,
+}
+
 #[derive(Debug, Default)]
 pub struct Tree {
     /// Every node's text, appended once and never rewritten: a `Span` handed
@@ -316,28 +339,9 @@ pub struct Tree {
     /// well-formed log: nothing here is on any hot path a real write takes.
     pending: HashMap<String, u64>,
     pub roots: Vec<u64>,
-    pub stack: Vec<u64>,
     pub vivacs: Vec<Vivac>,
     pub next_vivac_num: u64,
     pub seq: u64,
-    /// Seq of the last event that **changed something**, and of the last
-    /// vivac. Together they tell whether anything happened since the previous
-    /// stop, which is what separates a useful stop from forty identical ones:
-    /// Claude Code's `Stop` hook runs every turn, not at session close (`f35`).
-    pub seq_change: u64,
-    pub seq_vivac: u64,
-    /// How many nodes were born since the last stop. An automatic stop has no
-    /// declared intent --nobody was asked for one-- so what it can honestly
-    /// carry is what its segment contained (`f59`).
-    pub seg_new: u64,
-    /// How many were settled in it.
-    pub seg_closed: u64,
-    /// And how much was written down against the ones already there.
-    pub seg_notes: u64,
-    /// Everything the segment held, births and closes and notes included. It
-    /// is what the label falls back to when the segment moved the tree in some
-    /// other way --a flag, a park, a bare push-- so that a stop is never blank.
-    pub seg_events: u64,
     pub next_num: u64,
     pub broken_lines: usize,
     /// Every `num` a hand edit handed to two different ULIDs, in the order
@@ -349,6 +353,23 @@ pub struct Tree {
     /// a rule superseded or abandoned still counts, since the config it
     /// locked stays locked.
     pub has_governance: bool,
+    /// The stack, the focus, the last vivac and the four segment counters,
+    /// each kept apart per lane (`d595`): two folders working on the same
+    /// product must not overwrite each other's thread. Keyed by the lane's
+    /// own id, `lane::MAIN` included -- every event written before lanes
+    /// existed is signed with it, so a tree with none of its own still
+    /// answers from here.
+    pub lanes: BTreeMap<String, LaneState>,
+    /// Whether some lane other than the founding one has ever claimed
+    /// `main` (`lane.claimed`, `d597`). Only `relocate` writes it, and only
+    /// for `main`; the tramo that adds `relocate` is what reads it.
+    pub main_claimed: bool,
+    /// The lane this tree is looked at from. Private: there is no invalid
+    /// state to construct, so nothing outside `Tree` should be able to set
+    /// this to anything but a real lane (`for_lane`) or leave it at `None`,
+    /// which answers as `lane::MAIN` the same way a `Store` nobody told a
+    /// lane signs as `main` (`t594` ruling A).
+    lane: Option<String>,
 }
 
 pub fn fold(events: &[Event], broken: usize) -> Tree {
@@ -357,7 +378,7 @@ pub fn fold(events: &[Event], broken: usize) -> Tree {
         ..Default::default()
     };
     for e in events {
-        a.apply(e.seq, &e.ts, &e.payload);
+        a.apply(e.seq, &e.ts, &e.lane, &e.payload);
     }
     a.sort_nodes();
     a
@@ -371,14 +392,24 @@ impl Tree {
     /// print the count from **before** doing it --"back to the parent, 1 open
     /// below" for the node you just closed-- which is the kind of small lie
     /// that makes you stop trusting the rest.
-    pub fn apply(&mut self, seq: u64, ts: &str, body: &Body) {
+    ///
+    /// `lane` is the lane the event was signed with, never the lane this
+    /// tree happens to be looked at from (`t594` ruling B): `apply` writes
+    /// into `self.lanes.entry(lane)`, and every accessor below reads
+    /// `self.lane()` instead. Mixing the two would fold every lane's events
+    /// into whichever one the caller is looking from.
+    pub fn apply(&mut self, seq: u64, ts: &str, lane: &str, body: &Body) {
         self.seq = self.seq.max(seq);
         if matches!(body, Body::VivacCreated { .. }) {
-            self.seq_vivac = self.seq_vivac.max(seq);
-            self.seg_new = 0;
-            self.seg_closed = 0;
-            self.seg_notes = 0;
-            self.seg_events = 0;
+            // The event's own lane, not the context's: a stop closes the
+            // segment of the lane that made it, never another one's
+            // (`t594` ruling B).
+            let s = self.lanes.entry(lane.to_string()).or_default();
+            s.seq_vivac = s.seq_vivac.max(seq);
+            s.seg_new = 0;
+            s.seg_closed = 0;
+            s.seg_notes = 0;
+            s.seg_events = 0;
         } else if matches!(body, Body::SessionStarted { .. }) {
             // Neither a change nor a stop. Opening a session says something
             // about the session and nothing about the tree: counted as a
@@ -391,12 +422,13 @@ impl Tree {
             // and close a segment nobody opened -- one lane arming another
             // lane's stop, or a context event arming one of its own.
         } else {
-            self.seq_change = self.seq_change.max(seq);
-            self.seg_events += 1;
+            let s = self.lanes.entry(lane.to_string()).or_default();
+            s.seq_change = s.seq_change.max(seq);
+            s.seg_events += 1;
             match body {
-                Body::NodeCreated { .. } => self.seg_new += 1,
-                Body::StateChanged { state, .. } if *state == State::Done => self.seg_closed += 1,
-                Body::NodeNoted { .. } => self.seg_notes += 1,
+                Body::NodeCreated { .. } => s.seg_new += 1,
+                Body::StateChanged { state, .. } if *state == State::Done => s.seg_closed += 1,
+                Body::NodeNoted { .. } => s.seg_notes += 1,
                 _ => {}
             }
         }
@@ -542,13 +574,18 @@ impl Tree {
                 // fix-up-on-arrival treatment as a forward-referenced
                 // `parent` gets.
                 let num = self.resolve_pending(node);
-                if !self.stack.contains(&num) {
-                    self.stack.push(num);
+                let s = self.lanes.entry(lane.to_string()).or_default();
+                if !s.stack.contains(&num) {
+                    s.stack.push(num);
                 }
             }
             Body::Popped { node } => {
                 let num = self.resolve_ulid(node);
-                self.stack.retain(|&x| x != num);
+                self.lanes
+                    .entry(lane.to_string())
+                    .or_default()
+                    .stack
+                    .retain(|&x| x != num);
             }
             Body::FlagRaised { node, flag, reason } => {
                 let reason_span = self.intern(reason);
@@ -624,6 +661,7 @@ impl Tree {
                     id: vivac.clone(),
                     num: *num,
                     seq,
+                    lane: lane.to_string(),
                     kind: *kind,
                     stack: stack.clone(),
                     working_set: working_set.clone(),
@@ -642,20 +680,27 @@ impl Tree {
                 // The stack is cut at the promoted node: it becomes the root
                 // of its own. The provenance chain is untouched: where it was
                 // born does not change because its rank did.
-                if let Some(i) = self.stack.iter().position(|&x| x == num) {
-                    self.stack.drain(..i);
+                let s = self.lanes.entry(lane.to_string()).or_default();
+                if let Some(i) = s.stack.iter().position(|&x| x == num) {
+                    s.stack.drain(..i);
                 }
             }
             // An opening moves nothing in the tree. What it does to the
             // counters is decided above, and it is deliberate.
             Body::SessionStarted { .. } => {}
-            // Neither event moves the tree yet. `t594`'s next commit is what
-            // folds a lane in -- who declared what, which folder claimed
-            // `main` -- and every event `apply` does not yet contemplate
-            // would be a hole waiting for somebody to write it, so both are
-            // named here rather than left to a wildcard arm.
-            Body::LaneDeclared { .. } => {}
-            Body::LaneClaimed { .. } => {}
+            // The last one wins (`MODEL.md` §2.4): a redeclaration after
+            // the repositories or the name change replaces both rather than
+            // accumulating.
+            Body::LaneDeclared { name, repos, .. } => {
+                let s = self.lanes.entry(lane.to_string()).or_default();
+                s.name = name.clone();
+                s.repos = repos.clone();
+            }
+            // Only ever written for `main` (`d597`), and this is the only
+            // thing that sets it.
+            Body::LaneClaimed { .. } => {
+                self.main_claimed = true;
+            }
         }
     }
 
@@ -701,6 +746,14 @@ impl Tree {
     /// matching slot on `stack`. A ULID nothing was waiting on leaves this
     /// a no-op, which is the common case -- a well-formed log never has
     /// anything here to fix.
+    ///
+    /// Walks **every** lane's stack, not only the one that is about to
+    /// apply this `node.created` (`t594` ruling B): the provisional `num`
+    /// this is fixing up can sit on another lane's stack -- lane B pushed a
+    /// ULID that did not exist yet, and lane A is the one that creates it.
+    /// Repairing only one stack would leave the other holding a `num`
+    /// nobody owns, and that lane would lose its focus without anything
+    /// saying so.
     fn apply_pending(&mut self, ulid: &str, num: u64) {
         let Some(was) = self.pending.remove(ulid) else {
             return;
@@ -713,9 +766,11 @@ impl Tree {
         if let Some(kids) = self.children.remove(&was) {
             self.children.entry(num).or_default().extend(kids);
         }
-        for slot in self.stack.iter_mut() {
-            if *slot == was {
-                *slot = num;
+        for lane in self.lanes.values_mut() {
+            for slot in lane.stack.iter_mut() {
+                if *slot == was {
+                    *slot = num;
+                }
             }
         }
     }
@@ -951,22 +1006,61 @@ impl Tree {
         }
     }
 
-    /// The most recent vivac. Vivacs are appended in event order, so the last
-    /// one in the vector is the last one in time.
-    pub fn last_vivac(&self) -> Option<&Vivac> {
-        self.vivacs.last()
+    /// Sets which lane this tree answers from. Looking never writes: any
+    /// string is accepted, `lane::MAIN` included, and this never inserts an
+    /// entry into `lanes` -- a lane earns one only by being written to
+    /// (`apply`), never by being asked about (`t594`).
+    pub fn for_lane(&mut self, lane: &str) {
+        self.lane = Some(lane.to_string());
     }
 
-    /// The last stop somebody made. `Auto` is what the `Stop` hook writes on
-    /// every turn that moves the tree, and `Push`, `Pop` and `Park` ride along
-    /// with the operation that caused them: `Manual` is the only kind a person
-    /// sat down and wrote, which is what makes it a boundary rather than a
-    /// heartbeat.
+    /// The lane this tree is being looked at from. Never empty: nobody
+    /// having said otherwise resolves to `lane::MAIN`, the same lane every
+    /// event written before lanes existed is signed with (`t594` ruling A).
+    pub fn lane(&self) -> &str {
+        self.lane.as_deref().unwrap_or(crate::lane::MAIN)
+    }
+
+    /// What a person reads for the lane in view: its own declared `name`
+    /// when it has one, and the lane itself otherwise -- `main`, or an id
+    /// nobody has named yet. This is what the brief's header prints
+    /// (`t594` §5.1).
+    pub fn lane_name(&self) -> &str {
+        match self.lanes.get(self.lane()) {
+            Some(s) if !s.name.is_empty() => s.name.as_str(),
+            _ => self.lane(),
+        }
+    }
+
+    /// The state of the lane in view, or an empty one for a lane nobody has
+    /// written to yet. Borrowed when the lane already has an entry, so
+    /// reading it never clones the stack or the repositories along with the
+    /// six counters; owned only for a lane with none, which never happens
+    /// on a hot path -- looking must not insert (`t594`).
+    pub fn state(&self) -> Cow<'_, LaneState> {
+        match self.lanes.get(self.lane()) {
+            Some(s) => Cow::Borrowed(s),
+            None => Cow::Owned(LaneState::default()),
+        }
+    }
+
+    /// The most recent vivac in the lane this tree is looked at from.
+    /// Vivacs are appended in event order, so the last one whose `lane`
+    /// matches is the last one in time for that lane.
+    pub fn last_vivac(&self) -> Option<&Vivac> {
+        self.vivacs.iter().rev().find(|v| v.lane == self.lane())
+    }
+
+    /// The last stop somebody in this lane made by hand. `Auto` is what the
+    /// `Stop` hook writes on every turn that moves the tree, and `Push`,
+    /// `Pop` and `Park` ride along with the operation that caused them:
+    /// `Manual` is the only kind a person sat down and wrote, which is what
+    /// makes it a boundary rather than a heartbeat.
     pub fn last_manual_vivac(&self) -> Option<&Vivac> {
         self.vivacs
             .iter()
             .rev()
-            .find(|v| v.kind == VivacKind::Manual)
+            .find(|v| v.lane == self.lane() && v.kind == VivacKind::Manual)
     }
 
     pub fn vivac(&self, s: &str) -> Option<&Vivac> {
@@ -974,8 +1068,17 @@ impl Tree {
         self.vivacs.iter().find(|v| v.num == n)
     }
 
+    /// The stack of the lane in view. Empty for a lane nobody has written
+    /// to yet.
+    pub fn stack(&self) -> &[u64] {
+        self.lanes
+            .get(self.lane())
+            .map(|s| s.stack.as_slice())
+            .unwrap_or(&[])
+    }
+
     pub fn focus(&self) -> Option<&Node> {
-        self.stack.last().and_then(|&num| self.nodes.get(&num))
+        self.stack().last().and_then(|&num| self.nodes.get(&num))
     }
 
     /// `focus`'s counterpart at the other end: the node this stack was opened
@@ -990,11 +1093,11 @@ impl Tree {
     /// saved entry whose node is gone, the bottom included. Nothing here reads
     /// the kind, and nothing should start.
     pub fn stack_bottom(&self) -> Option<&Node> {
-        self.stack.first().and_then(|&num| self.nodes.get(&num))
+        self.stack().first().and_then(|&num| self.nodes.get(&num))
     }
 
     pub fn stack_depth(&self) -> usize {
-        self.stack.len()
+        self.stack().len()
     }
 }
 
@@ -1007,18 +1110,13 @@ pub(crate) struct RawParts {
     pub spans: Vec<Span>,
     pub nodes: Vec<Node>,
     pub roots: Vec<u64>,
-    pub stack: Vec<u64>,
+    pub lanes: BTreeMap<String, LaneState>,
     pub vivacs: Vec<Vivac>,
     pub next_vivac_num: u64,
     pub seq: u64,
-    pub seq_change: u64,
-    pub seq_vivac: u64,
-    pub seg_new: u64,
-    pub seg_closed: u64,
-    pub seg_notes: u64,
-    pub seg_events: u64,
     pub next_num: u64,
     pub broken_lines: usize,
+    pub main_claimed: bool,
 }
 
 impl Tree {
@@ -1058,20 +1156,19 @@ impl Tree {
             ulid_index,
             pending: HashMap::new(),
             roots: p.roots,
-            stack: p.stack,
             vivacs: p.vivacs,
             next_vivac_num: p.next_vivac_num,
             seq: p.seq,
-            seq_change: p.seq_change,
-            seq_vivac: p.seq_vivac,
-            seg_new: p.seg_new,
-            seg_closed: p.seg_closed,
-            seg_notes: p.seg_notes,
-            seg_events: p.seg_events,
             next_num: p.next_num,
             broken_lines: p.broken_lines,
             repeated_nums: Vec::new(),
             has_governance,
+            lanes: p.lanes,
+            main_claimed: p.main_claimed,
+            // Not persisted: this is where the tree is looked at from, not
+            // a fact about the tree itself. Whoever loads it calls
+            // `for_lane` (`t594`).
+            lane: None,
         }
     }
 
@@ -1274,6 +1371,7 @@ mod tests {
         t.apply(
             1,
             "2026-09-16T00:00:00Z",
+            "01M2",
             &Body::LaneDeclared {
                 lane: "01M2".to_string(),
                 name: "v2".to_string(),
@@ -1283,16 +1381,263 @@ mod tests {
         t.apply(
             2,
             "2026-09-16T00:00:00Z",
+            "main",
             &Body::LaneClaimed {
                 lane: "main".to_string(),
             },
         );
         assert_eq!(t.seq, 2, "seq itself still advances");
-        assert_eq!(t.seq_change, 0);
-        assert_eq!(t.seg_events, 0);
-        assert_eq!(t.seg_new, 0);
-        assert_eq!(t.seg_closed, 0);
-        assert_eq!(t.seg_notes, 0);
+        assert_eq!(t.state().seq_change, 0);
+        assert_eq!(t.state().seg_events, 0);
+        assert_eq!(t.state().seg_new, 0);
+        assert_eq!(t.state().seg_closed, 0);
+        assert_eq!(t.state().seg_notes, 0);
+    }
+
+    /// A signed event, for a lane the fixed-lane helpers above cannot name.
+    fn lane_event(seq: u64, lane: &str, payload: Body) -> Event {
+        Event {
+            seq,
+            id: format!("e{seq}"),
+            ts: "2026-09-16T00:00:00Z".to_string(),
+            actor: "a".to_string(),
+            lane: lane.to_string(),
+            payload,
+        }
+    }
+
+    fn lane_node_created(seq: u64, lane: &str, ulid: &str, num: u64) -> Event {
+        lane_event(
+            seq,
+            lane,
+            Body::NodeCreated {
+                node: ulid.to_string(),
+                num,
+                kind: Kind::Task,
+                title: format!("Node {num}"),
+                why: "it is needed".to_string(),
+                parent: None,
+                blocks: false,
+                refs: vec![],
+                governs: vec![],
+                arms: vec![],
+                against: None,
+            },
+        )
+    }
+
+    fn lane_vivac(seq: u64, lane: &str, num: u64) -> Event {
+        lane_event(
+            seq,
+            lane,
+            Body::VivacCreated {
+                vivac: format!("v{seq}"),
+                num,
+                kind: VivacKind::Manual,
+                stack: vec![],
+                working_set: vec![],
+                next_intent: String::new(),
+                anchor: AnchorRef::default(),
+                node_ref: None,
+                label: String::new(),
+            },
+        )
+    }
+
+    /// A log written before lanes existed: every event signed `main`, with
+    /// the same fixed-lane helpers every other test in this module already
+    /// uses.
+    fn a_varied_event_set() -> Vec<Event> {
+        vec![node(1, 1, Kind::Goal, None), pushed(2, "n1"), stop(3)]
+    }
+
+    /// A empuja, B empuja, A empuja, C empuja, B saca -- deliberately
+    /// interleaved, so a fix that only reaches one lane's stack shows up.
+    fn interleaved_three_lanes() -> Vec<Event> {
+        vec![
+            lane_node_created(1, "main", "n1", 1),
+            lane_node_created(2, "main", "n2", 2),
+            lane_node_created(3, "main", "n3", 3),
+            lane_node_created(4, "main", "n4", 4),
+            lane_event(
+                5,
+                "a",
+                Body::Pushed {
+                    node: "n1".to_string(),
+                },
+            ),
+            lane_event(
+                6,
+                "b",
+                Body::Pushed {
+                    node: "n3".to_string(),
+                },
+            ),
+            lane_event(
+                7,
+                "a",
+                Body::Pushed {
+                    node: "n2".to_string(),
+                },
+            ),
+            lane_event(
+                8,
+                "c",
+                Body::Pushed {
+                    node: "n4".to_string(),
+                },
+            ),
+            lane_event(
+                9,
+                "b",
+                Body::Popped {
+                    node: "n3".to_string(),
+                },
+            ),
+        ]
+    }
+
+    /// B writes ten times after A's own stop; A never writes again.
+    fn b_writes_ten_times_after_a_vivac_in_a() -> Vec<Event> {
+        let mut events = vec![lane_node_created(1, "a", "n1", 1), lane_vivac(2, "a", 1)];
+        for i in 0..10u64 {
+            events.push(lane_node_created(3 + i, "b", &format!("b{i}"), 100 + i));
+        }
+        events
+    }
+
+    /// `main` stops, and then a different lane declares itself. The
+    /// declaration must not look like more work happened in `main`.
+    fn a_vivac_then_a_lane_declared() -> Vec<Event> {
+        vec![
+            lane_node_created(1, "main", "n1", 1),
+            lane_vivac(2, "main", 1),
+            lane_event(
+                3,
+                "b",
+                Body::LaneDeclared {
+                    lane: "b".to_string(),
+                    name: "feature".to_string(),
+                    repos: vec![],
+                },
+            ),
+        ]
+    }
+
+    /// `lane.claimed` for `main`, the way `relocate` will write it.
+    fn a_log_that_claims_main() -> Vec<Event> {
+        vec![lane_event(
+            1,
+            "other",
+            Body::LaneClaimed {
+                lane: "main".to_string(),
+            },
+        )]
+    }
+
+    /// B pushes a ULID that does not exist yet; A is the one that creates
+    /// it, under the id B already named.
+    fn b_pushes_a_ulid_a_creates_later() -> Vec<Event> {
+        vec![
+            lane_event(
+                1,
+                "b",
+                Body::Pushed {
+                    node: "ghost".to_string(),
+                },
+            ),
+            lane_node_created(2, "a", "ghost", 1),
+        ]
+    }
+
+    #[test]
+    fn three_lanes_keep_three_stacks() {
+        let mut t = fold(&interleaved_three_lanes(), 0);
+        t.for_lane("a");
+        assert_eq!(t.stack().len(), 2);
+        assert_eq!(t.focus().unwrap().num, 2);
+        t.for_lane("b");
+        assert_eq!(
+            t.stack().len(),
+            0,
+            "B's pop emptied B's stack and nobody else's"
+        );
+        t.for_lane("c");
+        assert_eq!(t.focus().unwrap().num, 4);
+    }
+
+    #[test]
+    fn a_log_written_before_lanes_folds_entirely_into_main() {
+        let t = fold(&a_varied_event_set(), 0);
+        assert_eq!(t.lanes.len(), 1);
+        assert!(t.lanes.contains_key(crate::lane::MAIN));
+    }
+
+    #[test]
+    fn a_tree_nobody_told_a_lane_answers_as_main() {
+        // Ruling A: the field is born unset and has to fall back to `main`,
+        // which is where everything written before there were lanes lives.
+        let t = fold(&a_varied_event_set(), 0);
+        assert_eq!(t.lane(), crate::lane::MAIN);
+        assert!(t.focus().is_some());
+    }
+
+    #[test]
+    fn one_lane_does_not_trip_another_lanes_automatic_stop() {
+        // §4.3 and §9.1.5. B writes ten times, A does not, and A still has
+        // nothing to stop for.
+        let mut t = fold(&b_writes_ten_times_after_a_vivac_in_a(), 0);
+        t.for_lane("a");
+        assert!(
+            t.state().seq_change <= t.state().seq_vivac,
+            "B tripped A's stop"
+        );
+        t.for_lane("b");
+        assert!(t.state().seq_change > t.state().seq_vivac);
+    }
+
+    #[test]
+    fn a_lane_event_is_not_a_change() {
+        // §4.3: a folder joining cannot arm a stop nobody asked for, not
+        // even its own. The prologue of `apply` already fixed this; this
+        // pins it now that the counters are per lane.
+        let mut t = fold(&a_vivac_then_a_lane_declared(), 0);
+        t.for_lane("main");
+        assert!(t.state().seq_change <= t.state().seq_vivac);
+        assert_eq!(t.state().seg_events, 0, "declaring a lane counted as work");
+    }
+
+    #[test]
+    fn claiming_main_is_remembered() {
+        // §6.9, which the worktree task reads.
+        let t = fold(&a_log_that_claims_main(), 0);
+        assert!(t.main_claimed);
+        assert!(!fold(&a_varied_event_set(), 0).main_claimed);
+    }
+
+    #[test]
+    fn a_lane_nobody_wrote_answers_empty_without_being_created() {
+        // A folder that just joined looks before it writes: it answers
+        // empty and does not invent an entry the index would then persist
+        // as a real lane.
+        let mut t = fold(&a_varied_event_set(), 0);
+        let before = t.lanes.len();
+        t.for_lane("01MNOBODY");
+        assert!(t.stack().is_empty());
+        assert!(t.focus().is_none());
+        assert!(t.last_vivac().is_none());
+        assert_eq!(t.lanes.len(), before, "looking created a lane");
+    }
+
+    #[test]
+    fn a_node_created_late_is_repaired_on_every_lane_that_waited() {
+        // Ruling B: B pushes a ULID that does not exist yet, and A is the
+        // one that creates it. A fix that only walks one stack would leave
+        // B holding a `num` nobody owns.
+        let mut t = fold(&b_pushes_a_ulid_a_creates_later(), 0);
+        t.for_lane("b");
+        assert!(t.focus().is_some(), "B's stack kept a num nobody owns");
+        assert_eq!(t.focus().unwrap().id, "ghost");
     }
 
     /// The distance `triage` warns on is to the goal a node answers to, and a
@@ -1433,7 +1778,7 @@ mod tests {
         let tree = fold(&events, 0);
         let child = tree.node_by_num(2).expect("the child was created");
         assert_eq!(child.parent, Some(1), "the parent resolves once it exists");
-        assert_eq!(tree.stack, vec![1], "the push resolves the same way");
+        assert_eq!(tree.stack(), vec![1], "the push resolves the same way");
         assert!(
             !tree.roots.contains(&2),
             "a resolved parent is not the same as none"

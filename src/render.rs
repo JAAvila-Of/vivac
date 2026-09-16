@@ -1305,7 +1305,7 @@ pub fn parked(a: &Tree, args: &Args) -> R {
 pub fn stack(a: &Tree, args: &Args) -> R {
     let ag = &a.aggregates();
     let stack: Vec<&Node> = a
-        .stack
+        .stack()
         .iter()
         .filter_map(|&num| a.node_by_num(num))
         .collect();

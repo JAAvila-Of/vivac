@@ -68,7 +68,13 @@ impl Ctx {
         lane: Option<String>,
     ) -> Result<Ctx, Failure> {
         let seen = crate::store::fingerprint(&store.log());
-        let tree = crate::index::load(&store, allow_index_refresh)?;
+        let mut tree = crate::index::load(&store, allow_index_refresh)?;
+        // The tree answers from the lane this context runs as, the same
+        // way the store below signs as it: looking and writing must never
+        // disagree about whose thread they are (`t594`).
+        if let Some(l) = &lane {
+            tree.for_lane(l);
+        }
         let anchor = anchor::detect(&store.root);
         let mut ctx = Ctx {
             store,
@@ -108,7 +114,12 @@ impl Ctx {
         seen: (u64, Option<std::time::SystemTime>),
         lane: Option<String>,
     ) -> Ctx {
-        let tree = fold(events, broken);
+        let mut tree = fold(events, broken);
+        // Same as `load_opt`: the tree answers from the lane this context
+        // runs as, once that lane is known.
+        if let Some(l) = &lane {
+            tree.for_lane(l);
+        }
         let anchor = anchor::detect(&store.root);
         let mut ctx = Ctx {
             store,
@@ -145,6 +156,11 @@ impl Ctx {
     ) {
         self.store = store;
         self.tree = fold(events, broken);
+        // Same lane as before the refold: `self.lane` is the context's own
+        // and does not change just because the tree underneath it did.
+        if let Some(l) = self.lane.clone() {
+            self.tree.for_lane(&l);
+        }
         self.anchor = anchor::detect(&self.store.root);
         self.seen = seen;
         self.wrote = None;
@@ -207,7 +223,7 @@ impl Ctx {
             .store
             .append(lock, bodies, self.tree.seq, already_governed)?;
         for e in &appended.events {
-            self.tree.apply(e.seq, &e.ts, &e.payload);
+            self.tree.apply(e.seq, &e.ts, &e.lane, &e.payload);
         }
         self.seen = crate::store::fingerprint(&self.store.log());
         // Kept for a caller that maintains a resident tree (`f599`): more
@@ -253,14 +269,14 @@ fn vivac(
 ) -> Body {
     let stack: Vec<(String, String)> = ctx
         .tree
-        .stack
+        .stack()
         .iter()
         .filter_map(|&num| ctx.tree.node_by_num(num))
         .map(|n| (n.alias(), n.title(&ctx.tree).to_string()))
         .collect();
     let mut working_set: Vec<String> = ctx
         .tree
-        .stack
+        .stack()
         .iter()
         .filter_map(|&num| ctx.tree.node_by_num(num))
         .flat_map(|n| n.governs(&ctx.tree).into_iter().map(str::to_string))
@@ -635,7 +651,7 @@ pub fn push(ctx: &mut Ctx, p: params::Push) -> Result<Outcome, Failure> {
     // The old stack, bottom to top, kept only for `--root`: it is what
     // `left_stack` reports and what the vivac below freezes.
     let old_stack: Vec<u64> = if p.root {
-        ctx.tree.stack.clone()
+        ctx.tree.stack().to_vec()
     } else {
         Vec::new()
     };
@@ -837,7 +853,7 @@ pub fn park(ctx: &mut Ctx, p: params::Park) -> Result<Outcome, Failure> {
     });
     // `t533` §2.1: only when it is the stack's own top. Anywhere else, the
     // path still runs through it and the spine marks it parked instead.
-    if ctx.tree.stack.last() == Some(&node.num) {
+    if ctx.tree.stack().last() == Some(&node.num) {
         evs.push(Body::Popped {
             node: node.id.clone(),
         });
@@ -889,7 +905,7 @@ fn close_node(
     }];
     // `t533` §2.1: only when it is the stack's own top. Anywhere else, the
     // path still runs through it and the spine marks it closed instead.
-    if unstack && ctx.tree.stack.last() == Some(&n.num) {
+    if unstack && ctx.tree.stack().last() == Some(&n.num) {
         evs.push(Body::Popped { node: n.id.clone() });
     }
     ctx.emit(evs)?;
@@ -1143,7 +1159,7 @@ pub fn abandon(ctx: &mut Ctx, p: params::Abandon) -> Result<Outcome, Failure> {
             .map(|d| (d.num, d.id.clone())),
     );
     for (num, id) in out_of_scope {
-        if ctx.tree.stack.contains(&num) {
+        if ctx.tree.stack().contains(&num) {
             evs.push(Body::Popped { node: id });
         }
     }
@@ -1193,7 +1209,7 @@ pub fn focus(ctx: &mut Ctx, p: params::Focus) -> Result<Outcome, Failure> {
         .collect();
     let mut evs: Vec<Body> = ctx
         .tree
-        .stack
+        .stack()
         .iter()
         .filter(|num| !lineage.iter().any(|(lineage_num, _)| lineage_num == *num))
         .filter_map(|&num| ctx.tree.node_by_num(num))
@@ -1208,7 +1224,7 @@ pub fn focus(ctx: &mut Ctx, p: params::Focus) -> Result<Outcome, Failure> {
         });
     }
     for (num, id) in &lineage {
-        if !ctx.tree.stack.contains(num) {
+        if !ctx.tree.stack().contains(num) {
             evs.push(Body::Pushed { node: id.clone() });
         }
     }
@@ -1615,14 +1631,14 @@ pub fn restore(ctx: &mut Ctx, p: params::Restore) -> Result<Outcome, Failure> {
 
     let mut evs: Vec<Body> = ctx
         .tree
-        .stack
+        .stack()
         .iter()
         .filter(|num| !lineage.iter().any(|(lineage_num, _)| lineage_num == *num))
         .filter_map(|&num| ctx.tree.node_by_num(num))
         .map(|n| Body::Popped { node: n.id.clone() })
         .collect();
     for (num, id) in &lineage {
-        if !ctx.tree.stack.contains(num) {
+        if !ctx.tree.stack().contains(num) {
             evs.push(Body::Pushed { node: id.clone() });
         }
     }

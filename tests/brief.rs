@@ -96,6 +96,21 @@ fn determinism() {
     assert!(a.contains("2026-09-15"), "--now overrides the clock:\n{a}");
 }
 
+/// `t594` §5.1, the golden case: a tree nobody ran `setup` in has one lane,
+/// the founding one, and it is called `main`. The header has to keep
+/// printing exactly that -- byte for byte what it printed before this
+/// tree learned there could be more than one lane.
+#[test]
+fn the_header_names_the_founding_lane_main() {
+    let c = Sandbox::new_seeded("lane-header");
+    let b = c.ok(&["brief", "--now", "2026-09-16T10:00:00Z"]);
+    let header = b.lines().next().unwrap_or("");
+    assert!(
+        header.contains(" · lane: main · 2026-09-16"),
+        "the founding lane's own header changed:\n{header}"
+    );
+}
+
 /// §10.2 — With the budget squeezed, the spine comes out whole and says so.
 ///
 /// It is the hardest rule in the specification: if the spine does not fit, the

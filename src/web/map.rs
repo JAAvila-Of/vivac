@@ -1254,6 +1254,7 @@ mod tests {
         tree.apply(
             *seq,
             "2026-09-04T10:00:00Z",
+            "main",
             &Body::NodeCreated {
                 node: id.clone(),
                 num: *num,
@@ -1377,6 +1378,7 @@ mod tests {
         tree.apply(
             seq,
             "2026-09-09T10:00:00Z",
+            "main",
             &Body::NodeCreated {
                 node: "n3".to_string(),
                 num,
@@ -1395,6 +1397,7 @@ mod tests {
         tree.apply(
             seq,
             "2026-09-09T11:00:00Z",
+            "main",
             &Body::StateChanged {
                 node: branch,
                 state: State::Done,
@@ -1587,6 +1590,7 @@ mod tests {
             tree.apply(
                 seq,
                 at,
+                "main",
                 &Body::NodeNoted {
                     node: id.clone(),
                     note: text.to_string(),
@@ -1658,6 +1662,7 @@ mod tests {
         tree.apply(
             seq,
             "2026-09-09T10:00:00Z",
+            "main",
             &Body::NodeCreated {
                 node: id,
                 num,
@@ -1915,6 +1920,7 @@ mod tests {
         tree.apply(
             seq,
             "2026-09-09T10:00:00Z",
+            "main",
             &Body::NodeCreated {
                 node: "n2".to_string(),
                 num,

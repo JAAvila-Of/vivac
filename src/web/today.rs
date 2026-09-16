@@ -251,7 +251,7 @@ fn moved_section(project: &str, tree: &Tree, changed: &Changed) -> String {
         changed
             .opened
             .iter()
-            .map(|n| row(project, tree, n, "", ""))
+            .map(|o| row(project, tree, o.node, "", ""))
             .collect(),
     ));
     body.push_str(&group(
@@ -319,7 +319,7 @@ fn moved_section(project: &str, tree: &Tree, changed: &Changed) -> String {
 /// colour or a border carries.
 fn stack_section(project: &str, tree: &Tree) -> String {
     let stack: Vec<&Node> = tree
-        .stack
+        .stack()
         .iter()
         .filter_map(|&num| tree.node_by_num(num))
         .collect();

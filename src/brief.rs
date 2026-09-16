@@ -361,7 +361,7 @@ pub fn to_text(
         .and_then(|s| s.parse().ok())
         .unwrap_or(BUDGET);
 
-    let lineage: Vec<&Node> = match a.stack.last() {
+    let lineage: Vec<&Node> = match a.stack().last() {
         Some(&num) => a.ancestors(num),
         None => vec![],
     };
@@ -370,10 +370,15 @@ pub fn to_text(
     let mut s: Vec<Section> = Vec::new();
 
     // 1. Header. 2. Spine, or -- with no focus -- the fixed block that takes
-    // its place (`t533` §3.6). Neither is ever truncated, and the header is
-    // the same either way: `lane` has never named more than one lane.
+    // its place (`t533` §3.6). Neither is ever truncated. `lane_name` reads
+    // `main` for the founding lane and its own declared name for any other,
+    // so a tree with one lane prints the exact bytes it always has (`t594`
+    // §5.1).
     s.push(Section::fixed(vec![
-        format!("vivac · project: {project} · lane: main · {date}"),
+        format!(
+            "vivac · project: {project} · lane: {} · {date}",
+            a.lane_name()
+        ),
         RULE.to_string(),
         String::new(),
     ]));

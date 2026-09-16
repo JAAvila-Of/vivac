@@ -49,7 +49,9 @@
 use crate::anchor::AnchorRef;
 use crate::event::{Event, Flag, Kind, State, VivacKind};
 use crate::failure::Failure;
-use crate::model::{fold, AgainstSpan, ArmSpan, Node, Note, RawParts, Span, Tree, Vivac};
+use crate::model::{
+    fold, AgainstSpan, ArmSpan, LaneState, Node, Note, RawParts, Span, Tree, Vivac,
+};
 use crate::store::Store;
 use std::collections::BTreeMap;
 use std::fs::{self, File};
@@ -57,15 +59,13 @@ use std::io::{BufRead, BufReader, Seek, SeekFrom, Write as IoWrite};
 use std::path::Path;
 
 const MAGIC: u64 = u64::from_le_bytes(*b"vivacIDX");
-// `t594`: an index this binary wrote before now could have folded a
-// trailing chunk with no `\n` yet into `broken_lines` as if it were
-// committed. Reading it as version 5 would count that chunk twice -- once
-// from the header, again from the tail that sees it as unterminated -- and
-// the error would only compound on every write after. `Header::parse`
-// refuses any version but this one and `try_load_index` falls back to
-// folding the log, which is what the index is derived from -- so bumping
-// this needs no migration and no command.
-const FORMAT_VERSION: u32 = 6;
+// `t594`: version 6's header carried one stack and four segment counters
+// for the whole tree; version 7 carries a lane table instead, one stack
+// and six counters per lane, plus whether `main` has ever been claimed.
+// `Header::parse` refuses any version but this one and `try_load_index`
+// falls back to folding the log, which is what the index is derived from
+// -- so bumping this needs no migration and no command.
+const FORMAT_VERSION: u32 = 7;
 const ULID_LEN: usize = 26;
 const SPAN_LEN: usize = 8;
 const FLAG_RECORD_LEN: usize = 1 + SPAN_LEN;
@@ -410,7 +410,7 @@ fn try_load_index(store: &Store) -> Option<Loaded> {
     let tail = read_tracked(&log_path, header.fold_end_offset).ok()?;
     let mut tree = build_tree(&bytes, &header)?;
     for e in &tail.events {
-        tree.apply(e.seq, &e.ts, &e.payload);
+        tree.apply(e.seq, &e.ts, &e.lane, &e.payload);
     }
     // The tail carries broken lines that already sit behind `fold_end`, and
     // this tree gets persisted, so they have to be added in. `tail.unterminated`
@@ -519,12 +519,9 @@ struct Header {
     mtime_nanos: u32,
     next_num: u64,
     next_vivac_num: u64,
-    seq_change: u64,
-    seq_vivac: u64,
-    seg_new: u64,
-    seg_closed: u64,
-    seg_notes: u64,
-    seg_events: u64,
+    /// Whether some lane other than the founding one has ever claimed
+    /// `main` (`Tree::main_claimed`, `d597`).
+    main_claimed: bool,
     broken_lines: u64,
     node_count: u64,
     spans_count: u64,
@@ -533,7 +530,7 @@ struct Header {
     arms_count: u64,
     against_count: u64,
     roots_count: u64,
-    stack_count: u64,
+    lanes_count: u64,
     vivac_count: u64,
     nodes_offset: u64,
     spans_offset: u64,
@@ -542,7 +539,7 @@ struct Header {
     arms_offset: u64,
     against_offset: u64,
     roots_offset: u64,
-    stack_offset: u64,
+    lanes_offset: u64,
     vivacs_offset: u64,
     text_offset: u64,
     text_len: u64,
@@ -570,12 +567,7 @@ impl Header {
             mtime_nanos: c.u32()?,
             next_num: c.u64()?,
             next_vivac_num: c.u64()?,
-            seq_change: c.u64()?,
-            seq_vivac: c.u64()?,
-            seg_new: c.u64()?,
-            seg_closed: c.u64()?,
-            seg_notes: c.u64()?,
-            seg_events: c.u64()?,
+            main_claimed: c.bool_()?,
             broken_lines: c.u64()?,
             node_count: c.u64()?,
             spans_count: c.u64()?,
@@ -584,7 +576,7 @@ impl Header {
             arms_count: c.u64()?,
             against_count: c.u64()?,
             roots_count: c.u64()?,
-            stack_count: c.u64()?,
+            lanes_count: c.u64()?,
             vivac_count: c.u64()?,
             nodes_offset: c.u64()?,
             spans_offset: c.u64()?,
@@ -593,7 +585,7 @@ impl Header {
             arms_offset: c.u64()?,
             against_offset: c.u64()?,
             roots_offset: c.u64()?,
-            stack_offset: c.u64()?,
+            lanes_offset: c.u64()?,
             vivacs_offset: c.u64()?,
             text_offset: c.u64()?,
             text_len: c.u64()?,
@@ -640,11 +632,16 @@ impl Header {
         if !fits(self.roots_offset, self.roots_count, 8)? {
             return None;
         }
-        if !fits(self.stack_offset, self.stack_count, 8)? {
-            return None;
-        }
         let text_end = self.text_offset.checked_add(self.text_len)?;
         if text_end as usize > len {
+            return None;
+        }
+        // The lanes and vivacs tables are self-delimiting, like the flat
+        // ones above are not: a lane's own `name` and its repositories, and
+        // a vivac's `stack` and `working_set`, are all variable-length. All
+        // this can check up front is that the table starts inside the
+        // file; a truncated record past that fails to parse on its own.
+        if self.lanes_offset as usize > len {
             return None;
         }
         if self.vivacs_offset as usize > len {
@@ -669,12 +666,7 @@ fn write_header(buf: &mut Vec<u8>, h: &Header) {
     write_u32(buf, h.mtime_nanos);
     write_u64(buf, h.next_num);
     write_u64(buf, h.next_vivac_num);
-    write_u64(buf, h.seq_change);
-    write_u64(buf, h.seq_vivac);
-    write_u64(buf, h.seg_new);
-    write_u64(buf, h.seg_closed);
-    write_u64(buf, h.seg_notes);
-    write_u64(buf, h.seg_events);
+    write_bool(buf, h.main_claimed);
     write_u64(buf, h.broken_lines);
     write_u64(buf, h.node_count);
     write_u64(buf, h.spans_count);
@@ -683,7 +675,7 @@ fn write_header(buf: &mut Vec<u8>, h: &Header) {
     write_u64(buf, h.arms_count);
     write_u64(buf, h.against_count);
     write_u64(buf, h.roots_count);
-    write_u64(buf, h.stack_count);
+    write_u64(buf, h.lanes_count);
     write_u64(buf, h.vivac_count);
     write_u64(buf, h.nodes_offset);
     write_u64(buf, h.spans_offset);
@@ -692,7 +684,7 @@ fn write_header(buf: &mut Vec<u8>, h: &Header) {
     write_u64(buf, h.arms_offset);
     write_u64(buf, h.against_offset);
     write_u64(buf, h.roots_offset);
-    write_u64(buf, h.stack_offset);
+    write_u64(buf, h.lanes_offset);
     write_u64(buf, h.vivacs_offset);
     write_u64(buf, h.text_offset);
     write_u64(buf, h.text_len);
@@ -712,12 +704,7 @@ fn header_len() -> usize {
         mtime_nanos: 0,
         next_num: 0,
         next_vivac_num: 0,
-        seq_change: 0,
-        seq_vivac: 0,
-        seg_new: 0,
-        seg_closed: 0,
-        seg_notes: 0,
-        seg_events: 0,
+        main_claimed: false,
         broken_lines: 0,
         node_count: 0,
         spans_count: 0,
@@ -726,7 +713,7 @@ fn header_len() -> usize {
         arms_count: 0,
         against_count: 0,
         roots_count: 0,
-        stack_count: 0,
+        lanes_count: 0,
         vivac_count: 0,
         nodes_offset: 0,
         spans_offset: 0,
@@ -735,7 +722,7 @@ fn header_len() -> usize {
         arms_offset: 0,
         against_offset: 0,
         roots_offset: 0,
-        stack_offset: 0,
+        lanes_offset: 0,
         vivacs_offset: 0,
         text_offset: 0,
         text_len: 0,
@@ -1162,6 +1149,7 @@ fn write_vivac(buf: &mut Vec<u8>, v: &Vivac) {
     write_ulid(buf, &v.id);
     write_u64(buf, v.num);
     write_u64(buf, v.seq);
+    write_str(buf, &v.lane);
     write_u8(buf, vivac_kind_to_u8(v.kind));
     write_str(buf, &v.next_intent);
     write_str(buf, &v.anchor.kind);
@@ -1196,6 +1184,7 @@ fn parse_vivacs(bytes: &[u8], header: &Header) -> Option<Vec<Vivac>> {
         let id = c.fixed_str(ULID_LEN)?;
         let num = c.u64()?;
         let seq = c.u64()?;
+        let lane = c.str()?;
         let kind = u8_to_vivac_kind(c.u8()?)?;
         let next_intent = c.str()?;
         let anchor_kind = c.str()?;
@@ -1221,6 +1210,7 @@ fn parse_vivacs(bytes: &[u8], header: &Header) -> Option<Vec<Vivac>> {
             id,
             num,
             seq,
+            lane,
             kind,
             stack,
             working_set,
@@ -1233,6 +1223,82 @@ fn parse_vivacs(bytes: &[u8], header: &Header) -> Option<Vec<Vivac>> {
             label,
             ts,
         });
+    }
+    Some(out)
+}
+
+// ---------------------------------------------------------------------------
+// The lanes table: one variable-length record per lane, self-delimiting the
+// same way the vivacs table above is -- a lane's own `name` and its
+// repositories have no fixed width either. `t594`: this replaces the single
+// stack and the four segment counters version 6 kept for the whole tree.
+// ---------------------------------------------------------------------------
+
+fn write_lane(buf: &mut Vec<u8>, key: &str, s: &LaneState) {
+    write_str(buf, key);
+    write_str(buf, &s.name);
+    write_u32(buf, s.repos.len() as u32);
+    for r in &s.repos {
+        write_str(buf, &r.path);
+        match &r.root {
+            Some(root) => {
+                write_bool(buf, true);
+                write_str(buf, root);
+            }
+            None => {
+                write_bool(buf, false);
+                write_str(buf, "");
+            }
+        }
+    }
+    write_u32(buf, s.stack.len() as u32);
+    for &n in &s.stack {
+        write_u64(buf, n);
+    }
+    write_u64(buf, s.seq_change);
+    write_u64(buf, s.seq_vivac);
+    write_u64(buf, s.seg_new);
+    write_u64(buf, s.seg_closed);
+    write_u64(buf, s.seg_notes);
+    write_u64(buf, s.seg_events);
+}
+
+fn parse_lanes(bytes: &[u8], header: &Header) -> Option<BTreeMap<String, LaneState>> {
+    let mut c = Cursor::new(bytes.get(header.lanes_offset as usize..)?);
+    let mut out = BTreeMap::new();
+    for _ in 0..header.lanes_count {
+        let key = c.str()?;
+        let name = c.str()?;
+        let repos_count = c.u32()?;
+        let mut repos = Vec::with_capacity(repos_count as usize);
+        for _ in 0..repos_count {
+            let path = c.str()?;
+            let root_present = c.bool_()?;
+            let root_raw = c.str()?;
+            repos.push(crate::event::Repo {
+                path,
+                root: root_present.then_some(root_raw),
+            });
+        }
+        let stack_count = c.u32()?;
+        let mut stack = Vec::with_capacity(stack_count as usize);
+        for _ in 0..stack_count {
+            stack.push(c.u64()?);
+        }
+        out.insert(
+            key,
+            LaneState {
+                name,
+                repos,
+                stack,
+                seq_change: c.u64()?,
+                seq_vivac: c.u64()?,
+                seg_new: c.u64()?,
+                seg_closed: c.u64()?,
+                seg_notes: c.u64()?,
+                seg_events: c.u64()?,
+            },
+        );
     }
     Some(out)
 }
@@ -1347,7 +1413,7 @@ fn build_tree(bytes: &[u8], header: &Header) -> Option<Tree> {
     )?;
     let spans = parse_spans(bytes, header)?;
     let roots = parse_u64_list(bytes, header.roots_offset, header.roots_count)?;
-    let stack = parse_u64_list(bytes, header.stack_offset, header.stack_count)?;
+    let lanes = parse_lanes(bytes, header)?;
     let vivacs = parse_vivacs(bytes, header)?;
     let text = parse_text(bytes, header)?;
     Some(Tree::from_parts(RawParts {
@@ -1355,18 +1421,13 @@ fn build_tree(bytes: &[u8], header: &Header) -> Option<Tree> {
         spans,
         nodes,
         roots,
-        stack,
+        lanes,
         vivacs,
         next_vivac_num: header.next_vivac_num,
         seq: header.seq,
-        seq_change: header.seq_change,
-        seq_vivac: header.seq_vivac,
-        seg_new: header.seg_new,
-        seg_closed: header.seg_closed,
-        seg_notes: header.seg_notes,
-        seg_events: header.seg_events,
         next_num: header.next_num,
         broken_lines: header.broken_lines as usize,
+        main_claimed: header.main_claimed,
     }))
 }
 
@@ -1409,9 +1470,12 @@ fn encode(
     for &r in &tree.roots {
         write_u64(&mut roots_buf, r);
     }
-    let mut stack_buf = Vec::new();
-    for &s in &tree.stack {
-        write_u64(&mut stack_buf, s);
+    // `BTreeMap` iterates in key order already, so the table on disk comes
+    // out sorted for free -- the same determinism `nodes_sorted` gives the
+    // node table above.
+    let mut lanes_buf = Vec::new();
+    for (key, s) in &tree.lanes {
+        write_lane(&mut lanes_buf, key, s);
     }
     let mut vivacs_buf = Vec::new();
     for v in &tree.vivacs {
@@ -1428,8 +1492,8 @@ fn encode(
     let arms_offset = notes_offset + notes_buf.len() as u64;
     let against_offset = arms_offset + arms_buf.len() as u64;
     let roots_offset = against_offset + against_buf.len() as u64;
-    let stack_offset = roots_offset + roots_buf.len() as u64;
-    let vivacs_offset = stack_offset + stack_buf.len() as u64;
+    let lanes_offset = roots_offset + roots_buf.len() as u64;
+    let vivacs_offset = lanes_offset + lanes_buf.len() as u64;
     let text_offset = vivacs_offset + vivacs_buf.len() as u64;
     let file_len = text_offset + text_bytes.len() as u64;
 
@@ -1453,12 +1517,7 @@ fn encode(
         mtime_nanos,
         next_num: tree.next_num,
         next_vivac_num: tree.next_vivac_num,
-        seq_change: tree.seq_change,
-        seq_vivac: tree.seq_vivac,
-        seg_new: tree.seg_new,
-        seg_closed: tree.seg_closed,
-        seg_notes: tree.seg_notes,
-        seg_events: tree.seg_events,
+        main_claimed: tree.main_claimed,
         broken_lines: tree.broken_lines as u64,
         node_count: nodes.len() as u64,
         spans_count: tree.raw_spans().len() as u64,
@@ -1467,7 +1526,7 @@ fn encode(
         arms_count: (arms_buf.len() / ARM_RECORD_LEN) as u64,
         against_count: (against_buf.len() / AGAINST_RECORD_LEN) as u64,
         roots_count: tree.roots.len() as u64,
-        stack_count: tree.stack.len() as u64,
+        lanes_count: tree.lanes.len() as u64,
         vivac_count: tree.vivacs.len() as u64,
         nodes_offset,
         spans_offset,
@@ -1476,7 +1535,7 @@ fn encode(
         arms_offset,
         against_offset,
         roots_offset,
-        stack_offset,
+        lanes_offset,
         vivacs_offset,
         text_offset,
         text_len: text_bytes.len() as u64,
@@ -1493,7 +1552,7 @@ fn encode(
     out.extend_from_slice(&arms_buf);
     out.extend_from_slice(&against_buf);
     out.extend_from_slice(&roots_buf);
-    out.extend_from_slice(&stack_buf);
+    out.extend_from_slice(&lanes_buf);
     out.extend_from_slice(&vivacs_buf);
     out.extend_from_slice(text_bytes);
     out
@@ -1677,22 +1736,33 @@ mod tests {
     fn snapshot(tree: &Tree) -> String {
         let mut out = String::new();
         out.push_str(&format!(
-            "seq={} seq_change={} seq_vivac={} next_num={} next_vivac_num={} broken={} \
-             seg_new={} seg_closed={} seg_notes={} seg_events={} total={}\n",
+            "seq={} next_num={} next_vivac_num={} broken={} main_claimed={} total={}\n",
             tree.seq,
-            tree.seq_change,
-            tree.seq_vivac,
             tree.next_num,
             tree.next_vivac_num,
             tree.broken_lines,
-            tree.seg_new,
-            tree.seg_closed,
-            tree.seg_notes,
-            tree.seg_events,
+            tree.main_claimed,
             tree.total(),
         ));
         out.push_str(&format!("roots={:?}\n", tree.roots));
-        out.push_str(&format!("stack={:?}\n", tree.stack));
+        // Every lane, not only the one this tree happens to be looked at
+        // from: a round trip that only compared one lane would pass even
+        // if the index had swallowed the rest (`t594` ruling F).
+        for (key, s) in &tree.lanes {
+            out.push_str(&format!(
+                "lane key={key:?} name={:?} repos={:?} stack={:?} seq_change={} \
+                 seq_vivac={} seg_new={} seg_closed={} seg_notes={} seg_events={}\n",
+                s.name,
+                s.repos,
+                s.stack,
+                s.seq_change,
+                s.seq_vivac,
+                s.seg_new,
+                s.seg_closed,
+                s.seg_notes,
+                s.seg_events,
+            ));
+        }
         out.push_str(&format!("repeated_nums={}\n", tree.repeated_nums.len()));
         for n in tree.nodes_sorted() {
             out.push_str(&format!(
@@ -1726,11 +1796,12 @@ mod tests {
         }
         for v in &tree.vivacs {
             out.push_str(&format!(
-                "vivac num={} id={} seq={} kind={:?} stack={:?} working_set={:?} \
+                "vivac num={} id={} seq={} lane={:?} kind={:?} stack={:?} working_set={:?} \
                  next_intent={:?} anchor={:?} node_ref={:?} label={:?} ts={:?}\n",
                 v.num,
                 v.id,
                 v.seq,
+                v.lane,
                 v.kind,
                 v.stack,
                 v.working_set,
@@ -1928,6 +1999,113 @@ mod tests {
         // has to agree too.
         let loaded_again = load(&store, false).expect("load should succeed");
         assert_eq!(snapshot(&fresh), snapshot(&loaded_again));
+
+        std::fs::remove_dir_all(&store.root).ok();
+    }
+
+    /// Overrides the lane a fixture's event was signed with, since the
+    /// helpers above -- `created`, `push_of` -- are all written for the
+    /// single-lane fixtures the rest of this file needs.
+    fn on_lane(mut e: Event, lane: &str) -> Event {
+        e.lane = lane.to_string();
+        e
+    }
+
+    fn push_of(seq: u64, ulid: &str) -> Event {
+        Event {
+            seq,
+            id: fixed_id(seq as u32),
+            ts: "2026-09-05T10:05:00Z".to_string(),
+            actor: "a_test".to_string(),
+            lane: "main".to_string(),
+            payload: Body::Pushed {
+                node: ulid.to_string(),
+            },
+        }
+    }
+
+    /// The round trip that already exists, with three lanes instead of
+    /// one. Compared with `snapshot`, which after ruling F prints every
+    /// lane: a fix that only reached one of them would still pass a
+    /// round-trip test that only had one to compare.
+    #[test]
+    fn a_tree_with_three_lanes_survives_the_round_trip() {
+        let a_node = fixed_id(1);
+        let b_node = fixed_id(2);
+        let c_node = fixed_id(3);
+        let events = vec![
+            created(1, &a_node, 1, Kind::Goal, None, "A's root", vec![], vec![]),
+            on_lane(
+                created(2, &b_node, 2, Kind::Task, None, "B's own", vec![], vec![]),
+                "b",
+            ),
+            on_lane(
+                created(3, &c_node, 3, Kind::Task, None, "C's own", vec![], vec![]),
+                "c",
+            ),
+            push_of(4, &a_node),
+            on_lane(push_of(5, &b_node), "b"),
+            on_lane(push_of(6, &c_node), "c"),
+            Event {
+                seq: 7,
+                id: fixed_id(7),
+                ts: "2026-09-05T10:06:00Z".to_string(),
+                actor: "a_test".to_string(),
+                lane: "b".to_string(),
+                payload: Body::LaneDeclared {
+                    lane: "b".to_string(),
+                    name: "feature".to_string(),
+                    repos: vec![crate::event::Repo {
+                        path: "webapi".to_string(),
+                        root: Some("abc123".to_string()),
+                    }],
+                },
+            },
+        ];
+        let fresh = fold(&events, 0);
+        assert_eq!(
+            fresh.lanes.len(),
+            3,
+            "the fixture itself has to touch three lanes"
+        );
+
+        let store = tmp_store("three-lanes");
+        write_raw_locked(&store, &events);
+
+        let loaded = load(&store, true).expect("load should succeed");
+        assert_eq!(snapshot(&fresh), snapshot(&loaded));
+        assert!(
+            store.index_path().is_file(),
+            "a clean fold should be indexed"
+        );
+
+        // Purely from the index this time, with no tail to apply -- the
+        // check that this really came off disk and not off the fallback
+        // fold, `LOADING.md` §4.
+        let loaded_again = load(&store, false).expect("load should succeed");
+        assert_eq!(snapshot(&fresh), snapshot(&loaded_again));
+
+        std::fs::remove_dir_all(&store.root).ok();
+    }
+
+    /// A version-6 index -- the shape this crate wrote before lanes existed
+    /// -- is discarded rather than misread, and the tree that comes out of
+    /// the fallback is exactly what a fresh fold produces.
+    #[test]
+    fn an_index_of_the_previous_format_is_rebuilt() {
+        let store = tmp_store("old-format");
+        let events = a_varied_event_set();
+        write_raw_locked(&store, &events);
+        let want = fold(&events, 0);
+
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&MAGIC.to_le_bytes());
+        bytes.extend_from_slice(&6u32.to_le_bytes());
+        bytes.extend_from_slice(&[0u8; 200]);
+        fs::write(store.index_path(), &bytes).unwrap();
+
+        let got = load(&store, false).unwrap();
+        assert_eq!(snapshot(&want), snapshot(&got));
 
         std::fs::remove_dir_all(&store.root).ok();
     }
