@@ -276,3 +276,162 @@ fn check_says_when_it_could_not_ask_git() {
         "{out}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// `t594` §4.7: another folder on this machine holding the same first event.
+// ---------------------------------------------------------------------------
+
+/// A second folder, sharing `original`'s home, whose log starts with the
+/// very same first event: not a fixture, an actual copy of the tree, which
+/// is what turns into `d201`'s "copy" the moment both reach the registry.
+fn a_copy_of(original: &Sandbox, name: &str) -> Sandbox {
+    let copy = Sandbox::new_empty_in(name, original.global_home());
+    std::fs::create_dir_all(copy.0.join(".vivac")).unwrap();
+    std::fs::copy(
+        original.0.join(".vivac").join("events"),
+        copy.0.join(".vivac").join("events"),
+    )
+    .unwrap();
+    copy
+}
+
+/// A directory name nothing else can take, for the one test below that
+/// needs a folder with an exact name `Sandbox` cannot mint on its own.
+fn temp_dir(name: &str) -> std::path::PathBuf {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "vivac-check-{name}-{}-{n}-{ts}",
+        std::process::id()
+    ))
+}
+
+/// Runs the binary in a folder that is not a `Sandbox`, for the one test
+/// that needs a folder name `Sandbox` cannot produce.
+fn run_bin(dir: &std::path::Path, home: &std::path::Path, args: &[&str]) -> (String, i32) {
+    let o = std::process::Command::new(env!("CARGO_BIN_EXE_vivac"))
+        .current_dir(dir)
+        .env("VIVAC_HOME", home)
+        .args(args)
+        .output()
+        .unwrap();
+    (
+        String::from_utf8_lossy(&o.stdout).into_owned() + &String::from_utf8_lossy(&o.stderr),
+        o.status.code().unwrap_or(-1),
+    )
+}
+
+/// The registry only ever holds one path per project, so it is the folder
+/// that is *not* on file -- the copy -- that `check` can tell anything is
+/// wrong with. The folder already on file looks, from the registry's own
+/// side, exactly like an ordinary project with nothing to report: that
+/// asymmetry is `d201`'s own design (the registry keeps pointing at
+/// whichever folder it saw first), not a gap in `check`.
+#[test]
+fn check_exits_1_while_a_copy_exists() {
+    let original = Sandbox::new_seeded("copy-exists-orig");
+    original.ok(&["push", "a goal", "--why", "so the log has a first event"]);
+    let copy = a_copy_of(&original, "copy-exists-copy");
+
+    let (copy_out, copy_code) = copy.run(&["check"]);
+    assert_eq!(copy_code, 1, "{copy_out}");
+    assert!(copy_out.contains("COPY OF ANOTHER TREE"), "{copy_out}");
+
+    let (original_out, original_code) = original.run(&["check"]);
+    assert_eq!(original_code, 0, "{original_out}");
+}
+
+#[test]
+fn check_names_the_other_folder() {
+    let original = Sandbox::new_seeded("copy-name-orig");
+    original.ok(&["push", "a goal", "--why", "so the log has a first event"]);
+    let name = project_name(&original);
+    let copy = a_copy_of(&original, "copy-name-copy");
+
+    let (out, code) = copy.run(&["check"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        out.contains(&format!("the one in folder \"{name}\"")),
+        "{out}"
+    );
+    assert!(
+        out.contains(&format!("vivac setup claude-code --join {name}")),
+        "{out}"
+    );
+}
+
+#[test]
+fn check_withholds_a_name_the_guard_rejects() {
+    let rejected_name = "someone@example.com";
+    // The guard's classification does not depend on which field it is told
+    // the text came from -- only the message does -- so a push whose own
+    // title is this string goes through the very same check `folder_name`
+    // runs on it. An integration test has no direct call into
+    // `redact::check_field`, so this is the closest thing to affirming it
+    // first: proven here, not assumed.
+    let c = Sandbox::new_seeded("copy-redacted-push");
+    let (push_out, push_code) = c.run(&[
+        "push",
+        rejected_name,
+        "--why",
+        "proving the guard actually rejects this name before trusting the rest",
+    ]);
+    assert_eq!(
+        push_code, 3,
+        "the guard must actually reject this name, or the test proves nothing: {push_out}"
+    );
+
+    let home = temp_dir("copy-redacted-home");
+    let parent = temp_dir("copy-redacted-parent");
+    std::fs::create_dir_all(&parent).unwrap();
+    let original_dir = parent.join(rejected_name);
+    std::fs::create_dir_all(&original_dir).unwrap();
+    run_bin(&original_dir, &home, &["init"]);
+    run_bin(
+        &original_dir,
+        &home,
+        &["push", "a goal", "--why", "so the log has a first event"],
+    );
+
+    let copy_dir = temp_dir("copy-redacted-copy");
+    std::fs::create_dir_all(copy_dir.join(".vivac")).unwrap();
+    std::fs::copy(
+        original_dir.join(".vivac").join("events"),
+        copy_dir.join(".vivac").join("events"),
+    )
+    .unwrap();
+
+    let (out, code) = run_bin(&copy_dir, &home, &["check"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("COPY OF ANOTHER TREE"), "{out}");
+    assert!(
+        !out.contains(rejected_name),
+        "the rejected name leaked into check's output:\n{out}"
+    );
+    assert!(out.contains("as one in another folder on this"), "{out}");
+    assert!(out.contains("--join <path to that folder>"), "{out}");
+
+    std::fs::remove_dir_all(&parent).ok();
+    std::fs::remove_dir_all(&copy_dir).ok();
+    std::fs::remove_dir_all(&home).ok();
+}
+
+#[test]
+fn deleting_one_copy_clears_the_warning() {
+    let original = Sandbox::new_seeded("copy-clears-orig");
+    original.ok(&["push", "a goal", "--why", "so the log has a first event"]);
+    let copy = a_copy_of(&original, "copy-clears-copy");
+
+    let (out, code) = copy.run(&["check"]);
+    assert_eq!(code, 1, "{out}");
+
+    std::fs::remove_dir_all(&original.0).unwrap();
+
+    let (out2, code2) = copy.run(&["check"]);
+    assert_eq!(code2, 0, "{out2}");
+    assert!(!out2.contains("COPY OF ANOTHER TREE"), "{out2}");
+}

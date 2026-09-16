@@ -992,7 +992,15 @@ mod tests {
         fs::create_dir_all(&deep).unwrap();
         Store::create(&tmp).unwrap();
         assert_eq!(find_root(&deep).unwrap(), tmp);
-        crate::registry::note(&tmp.join(DIR), "01aaaaaaaaaaaaaaaaaaaaaaaa", &deep);
+        crate::registry::note(
+            &tmp.join(DIR),
+            "01aaaaaaaaaaaaaaaaaaaaaaaa",
+            crate::registry::Sighting {
+                root: &deep,
+                lane: None,
+                repos: None,
+            },
+        );
         assert_ne!(find_root(&deep), Some(tmp.clone()));
         fs::remove_dir_all(&tmp).ok();
     }
@@ -1005,7 +1013,15 @@ mod tests {
         let deep = project.join("src").join("deep");
         fs::create_dir_all(&deep).unwrap();
         Store::create(&tmp).unwrap();
-        crate::registry::note(&tmp.join(DIR), "01aaaaaaaaaaaaaaaaaaaaaaaa", &project);
+        crate::registry::note(
+            &tmp.join(DIR),
+            "01aaaaaaaaaaaaaaaaaaaaaaaa",
+            crate::registry::Sighting {
+                root: &project,
+                lane: None,
+                repos: None,
+            },
+        );
         Store::create(&project).unwrap();
         assert_eq!(find_root(&deep).unwrap(), project);
         fs::remove_dir_all(&tmp).ok();
@@ -1275,7 +1291,15 @@ mod tests {
 
         let registry_dir = locate_tmp("outside-registry");
         let noted_root = locate_tmp("outside-fake-root");
-        crate::registry::note(&registry_dir, &lane.project, &noted_root);
+        crate::registry::note(
+            &registry_dir,
+            &lane.project,
+            crate::registry::Sighting {
+                root: &noted_root,
+                lane: None,
+                repos: None,
+            },
+        );
 
         let located = locate_from(&lane_dir, Some(&registry_dir))
             .unwrap()
@@ -1324,7 +1348,15 @@ mod tests {
 
         let registry_dir = locate_tmp("nearest-registry");
         let noted_root = locate_tmp("nearest-fake-root");
-        crate::registry::note(&registry_dir, &lane.project, &noted_root);
+        crate::registry::note(
+            &registry_dir,
+            &lane.project,
+            crate::registry::Sighting {
+                root: &noted_root,
+                lane: None,
+                repos: None,
+            },
+        );
 
         let located = locate_from(&deep, Some(&registry_dir)).unwrap().unwrap();
         assert_eq!(
@@ -1358,7 +1390,15 @@ mod tests {
 
         let registry_dir = locate_tmp("wt-inside-registry");
         let noted_root = locate_tmp("wt-inside-fake-root");
-        crate::registry::note(&registry_dir, &lane.project, &noted_root);
+        crate::registry::note(
+            &registry_dir,
+            &lane.project,
+            crate::registry::Sighting {
+                root: &noted_root,
+                lane: None,
+                repos: None,
+            },
+        );
 
         let deep = worktree_dir.join("src").join("deep");
         fs::create_dir_all(&deep).unwrap();
@@ -1467,7 +1507,15 @@ mod tests {
         let deep = tmp.join("a").join("b");
         fs::create_dir_all(&deep).unwrap();
         Store::create(&tmp).unwrap();
-        crate::registry::note(&tmp.join(DIR), "01aaaaaaaaaaaaaaaaaaaaaaaa", &deep);
+        crate::registry::note(
+            &tmp.join(DIR),
+            "01aaaaaaaaaaaaaaaaaaaaaaaa",
+            crate::registry::Sighting {
+                root: &deep,
+                lane: None,
+                repos: None,
+            },
+        );
         assert!(locate(&deep).unwrap().is_none());
         fs::remove_dir_all(&tmp).ok();
     }

@@ -779,12 +779,28 @@ fn lane_failure_with_rollback(clause: String, unrestored: &[PathBuf]) -> Failure
 /// find through here (`t594` fix-1, finding 1). Quiet when there is
 /// nowhere to note or nothing to note it with yet, the same as the
 /// ordinary path.
-fn note_registry(tree: &Path) {
+fn note_registry(roots: &super::Roots) {
     let Some(store_dir) = crate::store::store_dir() else {
         return;
     };
-    if let Some(project_id) = crate::store::first_event_id(tree) {
-        crate::registry::note(&store_dir, &project_id, tree);
+    if let Some(project_id) = crate::store::first_event_id(&roots.tree) {
+        let lane = roots.located.as_ref().and_then(|l| {
+            l.lane
+                .as_ref()
+                .map(|lane| (lane.id.as_str(), l.lane_dir.as_path()))
+        });
+        // This call's own `Noted::Copy` reaches nobody: `check` learns of
+        // a copy through its own, separate read (`registry::copy_of`), and
+        // a stderr warning on every write like this one is `t594`'s task 5.
+        let _ = crate::registry::note(
+            &store_dir,
+            &project_id,
+            crate::registry::Sighting {
+                root: &roots.tree,
+                lane,
+                repos: None,
+            },
+        );
     }
 }
 
@@ -932,7 +948,7 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         // A real run, never `--dry-run`, thanks to the check above: noting
         // the registry is bookkeeping every ordinary command already does
         // on a pure read, not a write this promise is about.
-        note_registry(tree);
+        note_registry(roots);
         outln!("{piece_block}  Nothing to write: this project is already set up.");
         if log_tracked {
             print!("{TRACKED_WARNING}");
@@ -1081,7 +1097,7 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
             && mcp_missing
             && matches!(skill_file_state, SkillState::Missing),
     };
-    note_registry(tree);
+    note_registry(roots);
     print!("\n{}", written_text(&written));
     if log_tracked {
         print!("{TRACKED_WARNING}");

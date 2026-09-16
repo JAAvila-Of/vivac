@@ -242,6 +242,7 @@ clean
 cleanup
 clear
 cleared
+clears
 cli
 clip
 clipping
@@ -291,7 +292,6 @@ contained
 containing
 contains
 content
-contents
 contexts
 continue
 continues
@@ -392,6 +392,7 @@ dir
 direct
 directory
 disclosure
+disk
 dispatch
 display
 distinct
@@ -522,6 +523,7 @@ finalize
 find
 finding
 finds
+fine
 fingerprint
 finish
 finished
@@ -765,6 +767,7 @@ launched
 le
 leaf
 leap
+learn
 leave
 leaves
 left
@@ -918,6 +921,7 @@ note
 noted
 notes
 nothing
+notice
 notification
 notify
 noun
@@ -1163,7 +1167,6 @@ refusing
 regardless
 regenerated
 regenerates
-registering
 registers
 registry
 rejected
@@ -1346,6 +1349,7 @@ siblings
 sid
 side
 sig
+sighting
 sign
 signed
 signing
@@ -1593,6 +1597,7 @@ unrestorable
 unrestored
 unstable
 unstack
+untagged
 unterminated
 until
 untouched
@@ -1601,7 +1606,6 @@ unwritable
 unwritten
 up
 updated
-updates
 upper
 uppercase
 upto
@@ -1617,6 +1621,8 @@ using
 usize
 utf8
 uv
+v1
+v2
 val
 valid
 validate
@@ -1670,6 +1676,7 @@ which
 while
 whitespace
 whoami
+whoever
 whole
 whose
 why
@@ -1680,6 +1687,7 @@ width
 windows
 wins
 with
+withholds
 without
 word
 words
