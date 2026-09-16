@@ -61,6 +61,7 @@ answered
 answering
 answers
 any
+anything
 anywhere
 apart
 appear
@@ -285,6 +286,7 @@ constraint
 constraints
 cont
 contained
+containing
 contains
 content
 contents
@@ -433,7 +435,9 @@ encoded
 end
 ends
 english
+ensure
 enter
+enters
 entirely
 entries
 entropy
@@ -466,6 +470,7 @@ everywhere
 evs
 exact
 exactly
+excluded
 exclusive
 excuse
 exe
@@ -716,6 +721,7 @@ its
 itself
 jar
 join
+joins
 js
 json
 judged
@@ -803,6 +809,7 @@ macro
 made
 magic
 main
+make
 makes
 malformed
 mandatory
@@ -1027,6 +1034,7 @@ plan
 planned
 planted
 plants
+platform
 plural
 pluralised
 plus
@@ -1242,6 +1250,9 @@ save
 saved
 says
 sb
+scan
+scanned
+scans
 schema
 schemas
 scheme
@@ -1399,6 +1410,7 @@ stripped
 strips
 struct
 sub
+subdirs
 subfolder
 submodule
 subsec

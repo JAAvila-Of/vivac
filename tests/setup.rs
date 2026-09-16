@@ -397,6 +397,78 @@ fn no_terminal_and_no_yes_refuses_without_a_plan() {
 }
 
 // ---------------------------------------------------------------------------
+// `t594` §4.5.2, §6.1: the lane plan lines, for a folder that becomes a
+// brand new lane of the tree above it.
+// ---------------------------------------------------------------------------
+
+fn lane_line_containing(out: &str, label: &str, rest: &str) -> bool {
+    out.lines()
+        .any(|l| l.trim_start().starts_with(label) && l.contains(rest))
+}
+
+#[test]
+fn the_plan_for_a_new_lane_shows_the_three_lines_the_spec_gives() {
+    let c = Sandbox::new_seeded("setup-lane-plan-lines");
+    let second = c.0.join("v2");
+    std::fs::create_dir_all(&second).unwrap();
+
+    let (out, code) = run_in(&second, c.global_home(), &["setup", "claude-code", "--yes"]);
+    assert_eq!(code, 0, "{out}");
+
+    assert!(
+        lane_line_containing(
+            &out,
+            ".vivac/lane",
+            "create: this folder becomes lane \"v2\" of the tree above",
+        ),
+        "{out}"
+    );
+    assert!(
+        lane_line_containing(
+            &out,
+            ".vivac/.gitignore",
+            "create: keeps .vivac/ out of version control",
+        ),
+        "{out}"
+    );
+    assert!(
+        lane_line_containing(
+            &out,
+            "config",
+            "lock: from now on this tree needs vivac 0.12 or newer",
+        ),
+        "{out}"
+    );
+}
+
+/// The config warning is part of the *plan*, not of what gets printed
+/// after writing: `--dry-run` never writes anything, and it still shows
+/// the line, exactly where the plan showed it above.
+#[test]
+fn the_lane_config_warning_shows_up_before_anything_is_written() {
+    let c = Sandbox::new_seeded("setup-lane-plan-dry-run");
+    let second = c.0.join("v2");
+    std::fs::create_dir_all(&second).unwrap();
+
+    let (out, code) = run_in(
+        &second,
+        c.global_home(),
+        &["setup", "claude-code", "--dry-run"],
+    );
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("Nothing written: --dry-run."), "{out}");
+    assert!(
+        lane_line_containing(
+            &out,
+            "config",
+            "lock: from now on this tree needs vivac 0.12 or newer",
+        ),
+        "{out}"
+    );
+    assert!(!second.join(".vivac").exists(), "dry-run wrote something");
+}
+
+// ---------------------------------------------------------------------------
 // 12 and 13. `--undo`.
 // ---------------------------------------------------------------------------
 
@@ -808,7 +880,11 @@ fn a_tree_above_keeps_claude_codes_files_below_and_names_the_tree_root() {
     assert!(sub.join(".claude").join("settings.json").exists());
     assert!(sub.join(".mcp.json").exists());
     assert!(
-        !sub.join(".vivac").exists(),
+        sub.join(".vivac").join("lane").exists(),
+        "the subfolder never joined the tree above as a lane"
+    );
+    assert!(
+        !sub.join(".vivac").join("config").exists(),
         "a second tree was planted below the existing one"
     );
     assert!(
@@ -819,11 +895,13 @@ fn a_tree_above_keeps_claude_codes_files_below_and_names_the_tree_root() {
 }
 
 /// (f): `--undo` in a subfolder of a tree removes only what was written
-/// there, and leaves the tree above untouched.
+/// there, and leaves the tree above exactly as the earlier `setup`
+/// (which joined it as a lane, `t594` §4.5) left it: `--undo` never
+/// touches the log, so it has nothing to say about the lane that call
+/// already declared.
 #[test]
 fn undo_in_a_subfolder_removes_only_that_folders_files() {
     let c = Sandbox::new_seeded("setup-two-roots-undo-subfolder");
-    let vivac_before = std::fs::read(c.0.join(".vivac").join("config")).unwrap();
     let sub = c.0.join("workdir");
     std::fs::create_dir_all(&sub).unwrap();
     let (setup_out, setup_code) = run_in(&sub, c.global_home(), &["setup", "claude-code", "--yes"]);
@@ -832,6 +910,7 @@ fn undo_in_a_subfolder_removes_only_that_folders_files() {
         sub.join(".claude").join("settings.json").exists(),
         "setup did not write into the subfolder it ran in"
     );
+    let vivac_after_setup = std::fs::read(c.0.join(".vivac").join("config")).unwrap();
 
     let (out, code) = run_in(
         &sub,
@@ -842,12 +921,17 @@ fn undo_in_a_subfolder_removes_only_that_folders_files() {
     assert!(!sub.join(".claude").exists());
     assert!(!sub.join(".mcp.json").exists());
     assert!(
+        sub.join(".vivac").join("lane").exists(),
+        "undo removed the lane file, which is not one of the four pieces it undoes"
+    );
+    assert!(
         c.0.join(".vivac").exists(),
         "the tree above was touched by undo"
     );
     assert_eq!(
-        vivac_before,
-        std::fs::read(c.0.join(".vivac").join("config")).unwrap()
+        vivac_after_setup,
+        std::fs::read(c.0.join(".vivac").join("config")).unwrap(),
+        "undo changed the tree's config, and undo never touches the log"
     );
 }
 
@@ -879,7 +963,11 @@ fn a_workspace_and_a_repository_inside_it_share_one_tree_and_get_two_sets_of_fil
     assert!(c.0.join(".claude").join("settings.json").exists());
     assert!(repository.join(".claude").join("settings.json").exists());
     assert!(
-        !repository.join(".vivac").exists(),
+        repository.join(".vivac").join("lane").exists(),
+        "the repository never joined the shared tree as a lane"
+    );
+    assert!(
+        !repository.join(".vivac").join("config").exists(),
         "a second tree was planted inside the repository"
     );
 }
@@ -1299,8 +1387,12 @@ fn dry_run_warns_about_a_tracked_log() {
 #[test]
 fn an_already_set_up_project_still_warns_about_a_tracked_log() {
     let c = Sandbox::new_seeded("tracked-nothing-to-write");
-    c.ok(&["setup", "claude-code", "--yes"]);
+    // Before the first `setup`, not after: tracking the log with `git
+    // init` also turns this folder into a repository of its own, and a
+    // repository appearing *between* two runs is a real change for the
+    // lane to redeclare, not nothing to write.
     track_the_log(&c);
+    c.ok(&["setup", "claude-code", "--yes"]);
     let (out, code) = c.run(&["setup", "claude-code", "--yes"]);
     assert_eq!(code, 0, "{out}");
     assert!(

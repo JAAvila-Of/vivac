@@ -241,9 +241,10 @@ pub struct Located {
     pub root: PathBuf,
     /// The folder whose thread this is. Equal to `root` for a tree whose
     /// own folder is its founding lane, which is every tree today.
-    // The folder a lane file gets written to, which is setup's job (`t594`
-    // §4.5). Resolution answers it here so that nobody has to walk up twice.
-    #[allow(dead_code)]
+    ///
+    /// The folder a lane file gets written to, which is setup's job (`t594`
+    /// §4.5). Resolution answers it here so that nobody has to walk up
+    /// twice.
     pub lane_dir: PathBuf,
     /// The lane as `.vivac/lane` names it. `None` when the folder holding
     /// the tree carries no lane file: the implicit `main` of rule 2.
@@ -784,10 +785,6 @@ impl Store {
     /// one taken on another tree's `.vivac/lock` (`f602`) -- `config.tmp`'s
     /// own name is fixed, so it is only safe with nobody else writing at
     /// the same time.
-    // Called by `setup` and by a linked worktree the first time it writes,
-    // both of which are tasks still to come, and both write under the lock
-    // by spec.
-    #[allow(dead_code)]
     pub fn lock_lanes_in_config(&mut self, lock: &WriteLock) -> std::io::Result<()> {
         if !lock.covers(&self.lock_path()) {
             return Err(std::io::Error::other("write lock does not cover this tree"));

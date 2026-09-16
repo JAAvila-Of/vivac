@@ -240,9 +240,6 @@ impl Repo {
     /// `None` when `path` is not inside `base`: the security pillar keeps
     /// absolute paths out of the log, and a path that cannot be made
     /// relative to the lane is one this lane has no business recording.
-    // Consumed by `setup`'s own walk of a folder's repositories, a task
-    // still to come.
-    #[allow(dead_code)]
     pub fn relative(base: &Path, path: &Path, root: Option<String>) -> Option<Repo> {
         let rel = path.strip_prefix(base).ok()?;
         let path = if rel.as_os_str().is_empty() {

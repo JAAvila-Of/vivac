@@ -17,6 +17,7 @@ const MCP_LABEL: &str = ".mcp.json";
 const SKILL_LABEL: &str = ".claude/skills/vivac-migrate/SKILL.md";
 const VIVAC_LABEL: &str = ".vivac/";
 const GITIGNORE_LABEL: &str = ".vivac/.gitignore";
+const LANE_LABEL: &str = ".vivac/lane";
 
 const SESSION_START_COMMAND: &str = "vivac session start --hook";
 const SESSION_END_COMMAND: &str = "vivac session end --hook";
@@ -446,6 +447,207 @@ fn paths(root: &Path) -> Paths {
 }
 
 // ---------------------------------------------------------------------------
+// The lane: `t594` §4.5, joining the tree above rather than planting a
+// second one.
+// ---------------------------------------------------------------------------
+
+/// What this run has to do about the lane `roots.here` is, worked out
+/// before anything is written so the plan can say it.
+struct LanePlan {
+    lane_id: String,
+    name: String,
+    repos: Vec<crate::event::Repo>,
+    /// This folder does not carry `.vivac/lane` yet, so this run has to
+    /// write it before it can declare (`t594` §4.5.2, case (c)). The id
+    /// this points back at is minted here, since it never depends on the
+    /// tree's own state; the project it points back at does, and is
+    /// worked out at write time instead (`write_lane`).
+    is_new: bool,
+    /// Whether the config still needs `lock_lanes_in_config`: absent for
+    /// a tree that does not exist yet, which always needs it once
+    /// planted, and read off the existing one otherwise.
+    needs_lock: bool,
+    /// The tree already says exactly this (`t594` §4.5.2, case (e)):
+    /// nothing to write, and running `setup` twice in a row does not
+    /// leave two events behind.
+    unchanged: bool,
+    /// How many repositories the redaction guard kept out, and the first
+    /// rule that caught one. `d600`: they are still missing from the
+    /// declaration, and that is said rather than left silent, without
+    /// repeating which repository it was.
+    excluded: Option<(usize, &'static str)>,
+}
+
+/// `folder_name`, or what it becomes once the redaction guard rejects it
+/// (`d600`, `lane::name_for`): the folder's own name never reaches the
+/// log either way.
+fn declared_name(id: &str, folder_name: &str) -> String {
+    match crate::redact::check_field("lane name", folder_name) {
+        Some(_) => crate::lane::name_for(id, folder_name),
+        None => folder_name.to_string(),
+    }
+}
+
+/// What the tree already says about `lane_id`, read without taking the
+/// write lock: `config`'s own version, and the name and repositories its
+/// last `lane.declared` recorded, if it ever wrote one. `None` for a tree
+/// that cannot be opened at all -- the write this plans will surface that
+/// failure for real.
+struct ExistingLane {
+    config_version: crate::store::ConfigVersion,
+    declared: Option<(String, Vec<crate::event::Repo>)>,
+}
+
+fn existing_lane(tree: &Path, lane_id: &str) -> Option<ExistingLane> {
+    let store = crate::store::Store::open(tree.to_path_buf()).ok()?;
+    let (events, broken) = store.read_all().ok()?;
+    let folded = crate::model::fold(&events, broken);
+    Some(ExistingLane {
+        config_version: store.config.version,
+        declared: folded
+            .lanes
+            .get(lane_id)
+            .map(|s| (s.name.clone(), s.repos.clone())),
+    })
+}
+
+/// `t594` §4.5.2's five cases, decided from `roots` alone: whether there is
+/// a tree above `here` at all, and whether `here` already carries its own
+/// `.vivac/lane` (`Located::lane_dir == here`, rather than some ancestor's).
+fn plan_lane(roots: &super::Roots) -> LanePlan {
+    let scanned = crate::repos::scan(&roots.here);
+    let mut excluded_count = 0usize;
+    let mut excluded_rule: Option<&'static str> = None;
+    let repos: Vec<crate::event::Repo> = scanned
+        .into_iter()
+        .filter(
+            |r| match crate::redact::check_field("repository path", &r.path) {
+                Some(f) => {
+                    excluded_count += 1;
+                    excluded_rule.get_or_insert(f.rule);
+                    false
+                }
+                None => true,
+            },
+        )
+        .collect();
+
+    let folder_name = roots
+        .here
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let here_has_its_own_vivac = roots
+        .located
+        .as_ref()
+        .is_some_and(|l| l.lane_dir == roots.here);
+
+    let (lane_id, name, is_new) = match &roots.located {
+        None => main_lane(),
+        Some(l) if here_has_its_own_vivac && l.lane.is_none() => main_lane(),
+        Some(l) if here_has_its_own_vivac => {
+            let id = l.lane.as_ref().unwrap().id.clone();
+            let name = declared_name(&id, &folder_name);
+            (id, name, false)
+        }
+        Some(_) => {
+            let id = crate::lane::new_id();
+            let name = declared_name(&id, &folder_name);
+            (id, name, true)
+        }
+    };
+
+    let existing = roots
+        .located
+        .as_ref()
+        .and_then(|_| existing_lane(&roots.tree, &lane_id));
+    let needs_lock = existing
+        .as_ref()
+        .map(|e| e.config_version != crate::store::ConfigVersion::Lanes)
+        .unwrap_or(true);
+    let unchanged = existing
+        .and_then(|e| e.declared)
+        .is_some_and(|(n, r)| n == name && r == repos);
+
+    LanePlan {
+        lane_id,
+        name,
+        repos,
+        is_new,
+        needs_lock,
+        unchanged,
+        excluded: (excluded_count > 0).then(|| (excluded_count, excluded_rule.unwrap())),
+    }
+}
+
+fn main_lane() -> (String, String, bool) {
+    (
+        crate::lane::MAIN.to_string(),
+        crate::lane::MAIN.to_string(),
+        false,
+    )
+}
+
+/// The tree's own first event id, seeding one when there is none: a brand
+/// new lane's own `.vivac/lane` needs a stable id to point back at
+/// (`resolve_lane`, `store.rs` -- it reads a tree's first line as the
+/// cheap fingerprint that ties a lane to the right tree), and there is
+/// nothing stable to point at in a tree that has never written anything,
+/// which a tree fresh out of `init` or a bare plant still is.
+///
+/// The seed is the tree's own implicit `main` declaring itself with no
+/// repositories yet: harmless to redeclare for real later, and the
+/// smallest write that gives the tree a first line. Taken and released
+/// under its own lock, before the new lane's own lock is taken, since a
+/// second attempt to lock the same file from this same process would
+/// otherwise wait on itself.
+fn ensure_first_event(tree: &Path) -> Result<String, Failure> {
+    if let Some(id) = crate::store::first_event_id(tree) {
+        return Ok(id);
+    }
+    let store = crate::store::Store::open(tree.to_path_buf())?;
+    let mut ctx = crate::ops::Ctx::load_for_write(store, Some(crate::lane::MAIN.to_string()))?;
+    ctx.lock_for_write()?;
+    crate::ops::declare_lane(&mut ctx, crate::lane::MAIN.to_string(), vec![])?;
+    crate::store::first_event_id(tree).ok_or_else(|| {
+        Failure::Io(std::io::Error::other(
+            "the tree still has no first event after seeding one",
+        ))
+    })
+}
+
+/// `t594` §4.5.2's own ordering: this folder's own `.vivac/lane` on disk
+/// first -- only for a brand new lane, and only after the tree has a
+/// first event to point back at -- and only then `declare_lane`, which
+/// takes the write lock, locks the config and emits `lane.declared`
+/// together.
+///
+/// The file has to land before the event: the other way round, a
+/// `lane.declared` with no file behind it would leave this very folder
+/// not knowing whose thread it is the next time anything reads it, and it
+/// would keep signing as `main` while the tree it just wrote to already
+/// says otherwise. A file with no event yet -- what a crash right after
+/// writing it leaves behind -- costs nothing: the folder already knows
+/// who it is, the fold picks up the state the moment the event does
+/// arrive, and the next `setup` finishes the job.
+fn write_lane(roots: &super::Roots, plan: &LanePlan) -> Result<(), Failure> {
+    if plan.is_new {
+        let project = ensure_first_event(&roots.tree)?;
+        let lane = crate::lane::Lane {
+            version: 1,
+            id: plan.lane_id.clone(),
+            project,
+        };
+        crate::lane::write(&roots.here.join(crate::store::DIR), &lane)?;
+    }
+
+    let store = crate::store::Store::open(roots.tree.clone())?;
+    let mut ctx = crate::ops::Ctx::load_for_write(store, Some(plan.lane_id.clone()))?;
+    ctx.lock_for_write()?;
+    crate::ops::declare_lane(&mut ctx, plan.name.clone(), plan.repos.clone())
+}
+
+// ---------------------------------------------------------------------------
 // Formatting: the two-column plan lines `t565` §7.8 fixes the width of.
 // ---------------------------------------------------------------------------
 
@@ -538,12 +740,15 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         SkillState::Missing | SkillState::Replaceable
     );
 
+    let lane = plan_lane(roots);
+
     let nothing_to_write = !vivac_missing
         && !gitignore_missing
         && !start_missing
         && !stop_missing
         && !mcp_missing
-        && !skill_missing_or_replaceable;
+        && !skill_missing_or_replaceable
+        && lane.unchanged;
 
     let piece_block = render_piece_block(
         here,
@@ -558,6 +763,7 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         stop_missing,
         &mcp_server_state,
         &skill_file_state,
+        &lane,
     );
 
     // Asked once per run, and before either early exit below, so a log
@@ -676,6 +882,20 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         }
     }
 
+    // Declaring the lane goes right after planting, next to it, and the
+    // same way: never rolled back on its own, only the JSON commit undone
+    // by hand if it fails (`t594` §4.5.2, `write_lane`'s own doc for why
+    // the order inside it is what it is).
+    if !lane.unchanged {
+        if let Err(e) = write_lane(roots, &lane) {
+            let unrestored = super::rollback(&writes);
+            return Err(super::failure_with_rollback(
+                format!("the lane could not be declared ({})", e.message()),
+                &unrestored,
+            ));
+        }
+    }
+
     let written = Written {
         connection: start_missing || stop_missing || mcp_missing,
         skill: skill_missing_or_replaceable,
@@ -706,6 +926,7 @@ fn render_piece_block(
     stop_missing: bool,
     mcp_server_state: &McpState,
     skill_file_state: &SkillState,
+    lane: &LanePlan,
 ) -> String {
     let mut s = format!("  vivac setup claude-code, in {}\n\n", here.display());
 
@@ -784,6 +1005,47 @@ fn render_piece_block(
         )),
         SkillState::Same => s.push_str(&piece_line(SKILL_LABEL, "already there")),
         SkillState::Conflict => unreachable!("a skill conflict never reaches the plan"),
+    }
+
+    if !lane.unchanged {
+        if lane.is_new {
+            s.push_str(&piece_line(
+                LANE_LABEL,
+                &format!(
+                    "create: this folder becomes lane \"{}\" of the tree above",
+                    lane.name
+                ),
+            ));
+            s.push_str(&piece_line(
+                GITIGNORE_LABEL,
+                "create: keeps .vivac/ out of version control",
+            ));
+        } else {
+            s.push_str(&piece_line(
+                "lane",
+                &format!(
+                    "declare: this folder's repositories, as lane \"{}\"",
+                    lane.name
+                ),
+            ));
+        }
+        if let Some((count, rule)) = lane.excluded {
+            let noun = if count == 1 {
+                "repository"
+            } else {
+                "repositories"
+            };
+            s.push_str(&sub_line(
+                "kept out",
+                &format!("{count} {noun}, refused: {rule}"),
+            ));
+        }
+        if lane.needs_lock {
+            s.push_str(&piece_line(
+                "config",
+                "lock: from now on this tree needs vivac 0.12 or newer",
+            ));
+        }
     }
 
     s.push('\n');
