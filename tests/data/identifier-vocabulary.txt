@@ -364,6 +364,7 @@ degradation
 degree
 degrees
 delete
+deleted
 deleting
 denial
 denied
@@ -1107,6 +1108,7 @@ property
 prose
 protocol
 prune
+pruned
 ps
 pt
 pub
@@ -1270,6 +1272,7 @@ run
 running
 runs
 sa
+safe
 said
 same
 sample
@@ -1692,6 +1695,7 @@ width
 windows
 wins
 with
+withheld
 withholds
 without
 word
