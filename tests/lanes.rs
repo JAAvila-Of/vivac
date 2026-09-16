@@ -1039,7 +1039,7 @@ fn a_refusal_from_an_unjoined_worktree_leaves_nothing_written() {
 /// Finding A: the same `push`, from two sibling worktrees, one door each.
 /// Before this fix, the CLI door joined and the MCP door signed `main` and
 /// put the node on the founding lane's own stack -- the exact "the log
-/// says the work happened on a branch it did not happen on" the tramo
+/// says the work happened on a branch it did not happen on" this work
 /// opened with, intact behind the door the agent actually writes through.
 #[test]
 fn mcp_joins_a_worktree_the_same_way_the_cli_does() {

@@ -2088,7 +2088,7 @@ mod tests {
         std::fs::remove_dir_all(&store.root).ok();
     }
 
-    /// `t594` task 6, review round 1 (hallazgo 4): every other lane fixture in
+    /// `t594` task 6, review round 1 (finding 4): every other lane fixture in
     /// this file has `seg_notes == seg_closed == 0`, so transposing the
     /// two in `write_lane` left the whole suite green. This one gives
     /// every lane six counters that are all different from one another
