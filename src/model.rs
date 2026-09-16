@@ -385,6 +385,11 @@ impl Tree {
             // change it would arm an automatic stop for a session that did
             // nothing, and counted as a stop it would swallow the next real
             // one.
+        } else if matches!(body, Body::LaneDeclared { .. } | Body::LaneClaimed { .. }) {
+            // Context events: they say where work happens, not that it did.
+            // Counted as a change, joining a tree would look like work done
+            // and close a segment nobody opened -- one lane arming another
+            // lane's stop, or a context event arming one of its own.
         } else {
             self.seq_change = self.seq_change.max(seq);
             self.seg_events += 1;
@@ -644,6 +649,13 @@ impl Tree {
             // An opening moves nothing in the tree. What it does to the
             // counters is decided above, and it is deliberate.
             Body::SessionStarted { .. } => {}
+            // Neither event moves the tree yet. `t594`'s next commit is what
+            // folds a lane in -- who declared what, which folder claimed
+            // `main` -- and every event `apply` does not yet contemplate
+            // would be a hole waiting for somebody to write it, so both are
+            // named here rather than left to a wildcard arm.
+            Body::LaneDeclared { .. } => {}
+            Body::LaneClaimed { .. } => {}
         }
     }
 
@@ -1250,6 +1262,37 @@ mod tests {
                 label: String::new(),
             },
         }
+    }
+
+    /// `t594` §4.3, word for word: `lane.declared` and `lane.claimed` do not
+    /// count as a change -- without this, one lane would arm another's
+    /// stop, and a context event would arm one of its own. Same rule
+    /// `SessionStarted` already gets, three lines above the code this pins.
+    #[test]
+    fn a_lane_event_does_not_count_as_a_change() {
+        let mut t = Tree::default();
+        t.apply(
+            1,
+            "2026-09-16T00:00:00Z",
+            &Body::LaneDeclared {
+                lane: "01M2".to_string(),
+                name: "v2".to_string(),
+                repos: vec![],
+            },
+        );
+        t.apply(
+            2,
+            "2026-09-16T00:00:00Z",
+            &Body::LaneClaimed {
+                lane: "main".to_string(),
+            },
+        );
+        assert_eq!(t.seq, 2, "seq itself still advances");
+        assert_eq!(t.seq_change, 0);
+        assert_eq!(t.seg_events, 0);
+        assert_eq!(t.seg_new, 0);
+        assert_eq!(t.seg_closed, 0);
+        assert_eq!(t.seg_notes, 0);
     }
 
     /// The distance `triage` warns on is to the goal a node answers to, and a

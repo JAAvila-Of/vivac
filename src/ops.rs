@@ -26,12 +26,9 @@ pub struct Ctx {
     pub store: Store,
     /// The lane this context runs as: `Some(lane::MAIN)` for a tree's own
     /// folder, the lane's own id for any other. Set by every constructor,
-    /// read by none yet -- resolving it is `t594` §2.3, deciding what to do
-    /// with it is a task still to come.
-    // Read by the store, which signs every event with the lane that wrote it
-    // (`t594` §2.4). Carried from here so the two commits that follow do not
-    // each work it out again.
-    #[allow(dead_code)]
+    /// and applied to `store` there too: the store is what signs every
+    /// event, so a `Ctx` and the events it writes never disagree about
+    /// whose thread they are.
     pub lane: Option<String>,
     pub tree: Tree,
     pub anchor: Box<dyn Anchor>,
@@ -73,7 +70,7 @@ impl Ctx {
         let seen = crate::store::fingerprint(&store.log());
         let tree = crate::index::load(&store, allow_index_refresh)?;
         let anchor = anchor::detect(&store.root);
-        Ok(Ctx {
+        let mut ctx = Ctx {
             store,
             lane,
             tree,
@@ -81,7 +78,14 @@ impl Ctx {
             seen,
             wrote: None,
             lock: None,
-        })
+        };
+        // The store is what signs every event, so it takes the lane the
+        // context itself was just given: a `Ctx` and what it writes must
+        // never disagree about whose thread they are.
+        if let Some(l) = ctx.lane.clone() {
+            ctx.store = ctx.store.with_lane(l);
+        }
+        Ok(ctx)
     }
 
     /// Same read `changes` and `why` need, handing back the events instead
@@ -106,7 +110,7 @@ impl Ctx {
     ) -> Ctx {
         let tree = fold(events, broken);
         let anchor = anchor::detect(&store.root);
-        Ctx {
+        let mut ctx = Ctx {
             store,
             lane,
             tree,
@@ -114,7 +118,13 @@ impl Ctx {
             seen,
             wrote: None,
             lock: None,
+        };
+        // Same as `load_opt`: the store signs as the lane the context runs
+        // as, once that lane is known.
+        if let Some(l) = ctx.lane.clone() {
+            ctx.store = ctx.store.with_lane(l);
         }
+        ctx
     }
 
     /// Replaces what this context knows about the tree -- the store handle, the

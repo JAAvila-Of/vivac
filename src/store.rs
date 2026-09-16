@@ -107,20 +107,22 @@ fn non_blank(v: Option<&OsStr>) -> Option<&OsStr> {
     }
 }
 
-/// `config`'s `version`, once it is known to be one of the two shapes this
+/// `config`'s `version`, once it is known to be one of the three shapes this
 /// release can act on. `d444`: a tree that gains its first pillar or rule
 /// turns this from `One` to `Locked`, in place, before the event that
 /// creates it is appended -- and a release earlier than that fails to parse
-/// `Locked`'s own sentence, which is the whole point.
+/// `Locked`'s own sentence, which is the whole point. `Lanes` does the same
+/// the moment a tree gains a lane.
 ///
-/// No `#[derive(Serialize, Deserialize)]`: neither shape is an enum tag in
-/// the usual sense, one is the bare integer `1` and the other is a string,
-/// and `check_config_version` -- not this type -- is what tells a genuinely
-/// unknown version apart from one of these two.
+/// No `#[derive(Serialize, Deserialize)]`: none of the three is an enum tag
+/// in the usual sense, one is the bare integer `1` and the other two are
+/// strings, and `check_config_version` -- not this type -- is what tells a
+/// genuinely unknown version apart from one of these three.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfigVersion {
     One,
     Locked,
+    Lanes,
 }
 
 /// The sentence a config's `version` becomes the moment its tree gains a
@@ -130,6 +132,16 @@ pub enum ConfigVersion {
 pub const LOCK_SENTENCE: &str =
     "this tree holds pillars and rules, and this vivac is too old to read them: update vivac";
 
+/// What a tree's `config` version becomes the moment it holds lanes. Same
+/// mechanism as `d444`'s own sentence and for the same reason: a release
+/// that does not know lanes must stop with a sentence a person can act on,
+/// not read half a tree and act on it.
+///
+/// 0.12 reads both sentences, so a tree that holds pillars and lanes says
+/// this one and loses nothing.
+pub const LANE_SENTENCE: &str =
+    "this tree holds lanes, and this vivac is too old to read them: update vivac";
+
 impl Serialize for ConfigVersion {
     fn serialize<S>(&self, s: S) -> Result<S::Ok, S::Error>
     where
@@ -138,16 +150,17 @@ impl Serialize for ConfigVersion {
         match self {
             ConfigVersion::One => s.serialize_u32(1),
             ConfigVersion::Locked => s.serialize_str(LOCK_SENTENCE),
+            ConfigVersion::Lanes => s.serialize_str(LANE_SENTENCE),
         }
     }
 }
 
 impl<'de> Deserialize<'de> for ConfigVersion {
     /// Only ever reached once `check_config_version` has already let the raw
-    /// value through: a `1`, or the lock sentence. Anything else refuses
-    /// generically here, which is `d444`'s "como hoy" for a version this
-    /// deserializer was never meant to explain -- negative, a float, an
-    /// object, `null`.
+    /// value through: a `1`, the lock sentence, or the lane sentence.
+    /// Anything else refuses generically here, which is `d444`'s "como hoy"
+    /// for a version this deserializer was never meant to explain --
+    /// negative, a float, an object, `null`.
     fn deserialize<D>(d: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -156,6 +169,7 @@ impl<'de> Deserialize<'de> for ConfigVersion {
         match &v {
             serde_json::Value::Number(n) if n.as_u64() == Some(1) => Ok(ConfigVersion::One),
             serde_json::Value::String(s) if s == LOCK_SENTENCE => Ok(ConfigVersion::Locked),
+            serde_json::Value::String(s) if s == LANE_SENTENCE => Ok(ConfigVersion::Lanes),
             _ => Err(serde::de::Error::custom("unsupported config version")),
         }
     }
@@ -183,6 +197,10 @@ impl Config {
 pub struct Store {
     pub root: PathBuf,
     pub config: Config,
+    /// The lane every event `append` writes signs as its own. `lane::MAIN`
+    /// until `with_lane` says otherwise, which is what keeps a tree nobody
+    /// ran `setup` on writing exactly what 0.11 wrote.
+    lane: String,
     /// Whether `events` was already there the moment this store opened it.
     /// A process that opens a tree whose log is already gone still recreates
     /// it on the next append, the same as planting would. What this guards
@@ -489,6 +507,7 @@ impl Store {
         Ok(Store {
             root,
             config,
+            lane: crate::lane::MAIN.to_string(),
             log_present,
         })
     }
@@ -509,8 +528,18 @@ impl Store {
         Ok(Store {
             root: root.to_path_buf(),
             config,
+            lane: crate::lane::MAIN.to_string(),
             log_present: true,
         })
+    }
+
+    /// Sets which lane this store signs every event as. Builder-style,
+    /// consuming `self`, so a caller that never calls it keeps the `main`
+    /// that `open` and `create` already set -- which is what keeps a tree
+    /// nobody ran `setup` on signing exactly what it always has.
+    pub fn with_lane(mut self, lane: String) -> Store {
+        self.lane = lane;
+        self
     }
 
     pub fn log(&self) -> PathBuf {
@@ -582,6 +611,7 @@ fn check_config_version(version: Option<&serde_json::Value>) -> Result<(), Failu
             None => Ok(()),
         },
         Some(serde_json::Value::String(s)) if s == LOCK_SENTENCE => Ok(()),
+        Some(serde_json::Value::String(s)) if s == LANE_SENTENCE => Ok(()),
         Some(serde_json::Value::String(s)) => Err(Failure::newer_vivac(format!(
             "This tree was written by a newer vivac: its config says {s:?}. Update vivac \
              to read it. Nothing was written."
@@ -687,7 +717,7 @@ impl Store {
                 id: id::ulid(),
                 ts: clock::now_rfc3339(),
                 actor: self.config.actor.clone(),
-                lane: "main".into(),
+                lane: self.lane.clone(),
                 payload: c,
             };
             last_line_start = buf.len();
@@ -737,6 +767,36 @@ impl Store {
         }
         let locked = Config {
             version: ConfigVersion::Locked,
+            project_id: self.config.project_id.clone(),
+            actor: self.config.actor.clone(),
+        };
+        write_config_atomic(&self.root, &locked)?;
+        self.config = locked;
+        Ok(())
+    }
+
+    /// Locks the config in place the moment this tree gains a lane, the same
+    /// mechanism `lock_if_needed` uses for a pillar or a rule and by the same
+    /// `write_config_atomic`. A no-op once the config already says `Lanes`.
+    ///
+    /// Takes the write lock as an argument for the same reason `append`
+    /// does: without one this does not compile, and `lock.covers` refuses
+    /// one taken on another tree's `.vivac/lock` (`f602`) -- `config.tmp`'s
+    /// own name is fixed, so it is only safe with nobody else writing at
+    /// the same time.
+    // Called by `setup` and by a linked worktree the first time it writes,
+    // both of which are tasks still to come, and both write under the lock
+    // by spec.
+    #[allow(dead_code)]
+    pub fn lock_lanes_in_config(&mut self, lock: &WriteLock) -> std::io::Result<()> {
+        if !lock.covers(&self.lock_path()) {
+            return Err(std::io::Error::other("write lock does not cover this tree"));
+        }
+        if self.config.version == ConfigVersion::Lanes {
+            return Ok(());
+        }
+        let locked = Config {
+            version: ConfigVersion::Lanes,
             project_id: self.config.project_id.clone(),
             actor: self.config.actor.clone(),
         };
@@ -1307,6 +1367,76 @@ mod tests {
         Store::create(&tmp).unwrap();
         crate::registry::note(&tmp.join(DIR), "01aaaaaaaaaaaaaaaaaaaaaaaa", &deep);
         assert!(locate(&deep).unwrap().is_none());
+        fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn an_event_is_signed_by_the_lane_that_wrote_it() {
+        let tmp = std::env::temp_dir().join(format!("vivac-sign-{}", id::ulid()));
+        Store::create(&tmp).unwrap();
+        let mut s = Store::open(tmp.clone())
+            .unwrap()
+            .with_lane("01M2XYZ".into());
+        let lock = s.lock_for_write().unwrap();
+        let w = s
+            .append(
+                &lock,
+                vec![crate::event::Body::NodeNoted {
+                    node: "t1".into(),
+                    note: "x".into(),
+                }],
+                0,
+                false,
+            )
+            .unwrap();
+        assert_eq!(w.events[0].lane, "01M2XYZ");
+        fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn a_store_nobody_told_a_lane_still_signs_main() {
+        // Every tree that exists today, and every tree where nobody has run
+        // setup: the log has to stay byte for byte what 0.11 wrote.
+        let tmp = std::env::temp_dir().join(format!("vivac-signmain-{}", id::ulid()));
+        Store::create(&tmp).unwrap();
+        let mut s = Store::open(tmp.clone()).unwrap();
+        let lock = s.lock_for_write().unwrap();
+        let w = s
+            .append(
+                &lock,
+                vec![crate::event::Body::NodeNoted {
+                    node: "t1".into(),
+                    note: "x".into(),
+                }],
+                0,
+                false,
+            )
+            .unwrap();
+        assert_eq!(w.events[0].lane, crate::lane::MAIN);
+        fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn locking_the_config_for_lanes_is_idempotent_and_atomic() {
+        // Same mechanism as `d444`'s own sentence: the config is written to a
+        // sibling and renamed, and saying it twice writes once.
+        let tmp = std::env::temp_dir().join(format!("vivac-lanelock-{}", id::ulid()));
+        let mut s = Store::create(&tmp).unwrap();
+        let lock = s.lock_for_write().unwrap();
+        s.lock_lanes_in_config(&lock).unwrap();
+        assert_eq!(s.config.version, ConfigVersion::Lanes);
+        let text = fs::read_to_string(tmp.join(DIR).join(CONFIG)).unwrap();
+        assert!(text.contains(LANE_SENTENCE));
+
+        s.lock_lanes_in_config(&lock).unwrap();
+        assert_eq!(s.config.version, ConfigVersion::Lanes);
+        assert!(
+            fs::read_dir(tmp.join(DIR))
+                .unwrap()
+                .filter_map(|e| e.ok())
+                .all(|e| !e.file_name().to_string_lossy().ends_with(".tmp")),
+            "a temporary file was left behind"
+        );
         fs::remove_dir_all(&tmp).ok();
     }
 }

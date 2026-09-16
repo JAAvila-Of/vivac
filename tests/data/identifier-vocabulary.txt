@@ -535,6 +535,7 @@ foreign
 form
 format
 formatter
+forward
 found
 four
 fourteen
@@ -648,6 +649,7 @@ i32
 i64
 id
 id2
+idempotent
 ident
 identifier
 ids
@@ -701,6 +703,7 @@ items
 iter
 iterator
 its
+itself
 jar
 join
 js
@@ -718,6 +721,7 @@ kill
 kind
 know
 known
+knows
 label
 lacks
 landing
@@ -767,6 +771,7 @@ located
 location
 lock
 locked
+locking
 locks
 log
 log2
@@ -864,6 +869,7 @@ newer
 newline
 next
 no
+nobody
 node
 nodes
 non
@@ -1121,6 +1127,7 @@ registry
 rejected
 rejects
 rel
+relative
 relaxed
 release
 released
@@ -1152,6 +1159,7 @@ repo
 report
 reported
 reports
+repos
 repository
 request
 requested
@@ -1286,6 +1294,8 @@ sid
 side
 sig
 sign
+signed
+signs
 silence
 since
 single
