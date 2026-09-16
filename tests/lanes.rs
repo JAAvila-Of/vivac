@@ -115,3 +115,129 @@ fn a_lane_whose_registry_entry_is_removed_refuses_with_exit_4() {
 
     std::fs::remove_dir_all(&lane_dir).ok();
 }
+
+// ---------------------------------------------------------------------------
+// `t594` §4.5: `setup` actually declaring a folder a lane, rather than the
+// resolution above, which only ever reads a `.vivac/lane` some other path
+// already wrote. From here on, `setup` writes it.
+// ---------------------------------------------------------------------------
+
+fn setup_ok(dir: &Path, home: &Path) -> String {
+    let (s, code) = run(dir, home, &["setup", "claude-code", "--yes"]);
+    assert_eq!(code, 0, "{s}");
+    s
+}
+
+fn log_text(c: &Sandbox) -> String {
+    std::fs::read_to_string(c.0.join(".vivac").join("events")).expect("the log is there")
+}
+
+/// (1): `setup` in a second folder of the same product joins the tree
+/// above as a new lane instead of planting a second one -- the bug this
+/// task fixes: `.vivac/lane` appears with a fresh id, `lane.declared`
+/// lands in the tree's own log, and no `config` or `events` appears
+/// under the second folder.
+#[test]
+fn setup_in_a_second_folder_joins_the_tree_above_as_a_new_lane() {
+    let c = Sandbox::new_seeded("declare-second-folder");
+    let second = c.0.join("v2");
+    std::fs::create_dir_all(&second).unwrap();
+
+    setup_ok(&second, c.global_home());
+
+    assert!(
+        second.join(".vivac").join("lane").exists(),
+        "the second folder never became a lane"
+    );
+    assert!(
+        !second.join(".vivac").join("config").exists(),
+        "a second tree was planted"
+    );
+    assert!(
+        log_text(&c).contains("\"type\":\"lane.declared\""),
+        "no lane.declared reached the tree's own log"
+    );
+}
+
+/// (2): each folder keeps its own stack and its own focus -- pushing in
+/// one never moves the other's.
+#[test]
+fn each_folder_keeps_its_own_stack_and_focus() {
+    let c = Sandbox::new_seeded("declare-own-stack");
+    let second = c.0.join("v2");
+    std::fs::create_dir_all(&second).unwrap();
+    setup_ok(&second, c.global_home());
+
+    c.ok(&["push", "Main lane work", "--why", "seed main"]);
+    let (out, code) = run(
+        &second,
+        c.global_home(),
+        &["push", "Second lane work", "--why", "seed second"],
+    );
+    assert_eq!(code, 0, "{out}");
+
+    let (main_stack, code) = run(&c.0, c.global_home(), &["stack"]);
+    assert_eq!(code, 0, "{main_stack}");
+    assert!(main_stack.contains("Main lane work"), "{main_stack}");
+    assert!(!main_stack.contains("Second lane work"), "{main_stack}");
+
+    let (second_stack, code2) = run(&second, c.global_home(), &["stack"]);
+    assert_eq!(code2, 0, "{second_stack}");
+    assert!(second_stack.contains("Second lane work"), "{second_stack}");
+    assert!(!second_stack.contains("Main lane work"), "{second_stack}");
+}
+
+/// (3): each folder's brief carries its own name in the header (`t594`
+/// §5.1's `lane_name`), not the other's and not the bare id.
+#[test]
+fn each_folders_brief_names_its_own_lane_in_the_header() {
+    let c = Sandbox::new_seeded("declare-brief-header");
+    let second = c.0.join("v2");
+    std::fs::create_dir_all(&second).unwrap();
+    setup_ok(&second, c.global_home());
+
+    let (main_brief, code) = run(&c.0, c.global_home(), &["brief"]);
+    assert_eq!(code, 0, "{main_brief}");
+    assert!(main_brief.contains("lane: main"), "{main_brief}");
+
+    let (second_brief, code2) = run(&second, c.global_home(), &["brief"]);
+    assert_eq!(code2, 0, "{second_brief}");
+    assert!(second_brief.contains("lane: v2"), "{second_brief}");
+}
+
+/// (4): running `setup` again in the same folder, with nothing changed,
+/// does not leave a second `lane.declared` behind (`t594` §4.5.2, case
+/// (e)).
+#[test]
+fn running_setup_again_unchanged_does_not_write_a_second_event() {
+    let c = Sandbox::new_seeded("declare-no-repeat");
+    let second = c.0.join("v2");
+    std::fs::create_dir_all(&second).unwrap();
+    setup_ok(&second, c.global_home());
+
+    let before = log_text(&c);
+    let out = setup_ok(&second, c.global_home());
+    assert!(
+        out.contains("Nothing to write: this project is already set up."),
+        "{out}"
+    );
+    assert_eq!(before, log_text(&c), "a second run wrote to the log");
+}
+
+/// (5): a tree of today, where `setup` had never run, gets `main`
+/// declared when `setup` runs in its own folder (`t594` §4.5.2, case
+/// (b)) -- and every other command answers exactly as it did before,
+/// down to the byte.
+#[test]
+fn setup_on_an_existing_trees_own_folder_declares_main_and_changes_nothing_else() {
+    let c = Sandbox::new_seeded("declare-existing-main");
+    c.ok(&["push", "Some node", "--why", "seed"]);
+    let (before, code) = run(&c.0, c.global_home(), &["brief"]);
+    assert_eq!(code, 0, "{before}");
+
+    setup_ok(&c.0, c.global_home());
+
+    let (after, code2) = run(&c.0, c.global_home(), &["brief"]);
+    assert_eq!(code2, 0, "{after}");
+    assert_eq!(before, after, "declaring main changed what brief answers");
+}

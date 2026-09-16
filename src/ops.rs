@@ -1753,6 +1753,37 @@ pub fn session_started(
     Ok(Outcome::SessionOpened)
 }
 
+/// Declares this folder a lane of the tree, and locks the tree's config so
+/// that a vivac too old to know lanes stops instead of reading half of it
+/// (`d444`, §2.6).
+///
+/// `ctx` already holds the write lock and already runs as the lane being
+/// declared (`Ctx::load_for_write`, then `lock_for_write`): this only ever
+/// locks the config and then emits, in that order, never the other way.
+/// A process that dies between the two leaves the config asking for a
+/// vivac that knows lanes with no `lane.declared` to back it up yet, and
+/// that is nothing to worry about -- the sentence it wrote is already
+/// true, and the next `setup` writes the event that is still missing.
+///
+/// **Not** where this folder's own `.vivac/lane` gets written, when this
+/// is a brand new lane: `t594` §4.5.2 puts that file down *before* this is
+/// even called, never after. The reverse -- an event with no file behind
+/// it -- would leave this very folder not knowing whose thread it is, and
+/// it would keep signing as `main` while the tree it just wrote to says
+/// otherwise, which is the one ordering nothing here is allowed to permit.
+pub fn declare_lane(ctx: &mut Ctx, name: String, repos: Vec<crate::event::Repo>) -> R {
+    let lock = ctx
+        .lock
+        .as_ref()
+        .ok_or_else(|| Failure::Io(std::io::Error::other("write without the tree's lock")))?;
+    ctx.store.lock_lanes_in_config(lock)?;
+    let lane = ctx
+        .lane
+        .clone()
+        .unwrap_or_else(|| crate::lane::MAIN.to_string());
+    ctx.emit(vec![Body::LaneDeclared { lane, name, repos }])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -34,12 +34,16 @@ pub struct Lane {
 }
 
 /// A fresh id for a lane. As opaque as any other id this crate mints.
-// A lane file is written where a folder joins a tree: by setup, and by a
-// linked worktree the first time it writes (`t594` §2.3, §4.5). Reading
-// one is all this commit does.
-#[allow(dead_code)]
 pub fn new_id() -> String {
     crate::id::ulid()
+}
+
+/// What a lane is called when its folder's own name cannot be written
+/// down (`d600`): `lane-` and the first four characters of its id. The
+/// name is withheld, never the lane -- refusing to join a folder because
+/// of what it is called would cost the person their tree over a word.
+pub fn name_for(id: &str, _folder_name: &str) -> String {
+    format!("lane-{}", &id[..id.len().min(4)])
 }
 
 /// Reads `vivac_dir/lane`. `Ok(None)` only for the one case that really is
@@ -95,10 +99,6 @@ fn check_lane_version(version: Option<&serde_json::Value>) -> Result<(), Failure
 ///
 /// Also writes `vivac_dir`'s own `.gitignore`: a lane folder holds no tree,
 /// so nothing else would ever have written it.
-// A lane file is written where a folder joins a tree: by setup, and by a
-// linked worktree the first time it writes (`t594` §2.3, §4.5). Reading
-// one is all this commit does.
-#[allow(dead_code)]
 pub fn write(vivac_dir: &Path, lane: &Lane) -> std::io::Result<()> {
     std::fs::create_dir_all(vivac_dir)?;
     let tmp = vivac_dir.join(format!("{FILE}.{}.tmp", crate::id::ulid()));

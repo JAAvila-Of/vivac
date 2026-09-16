@@ -34,6 +34,7 @@ mod reconcile;
 mod redact;
 mod registry;
 mod render;
+mod repos;
 mod session;
 mod setup;
 mod store;

@@ -59,9 +59,6 @@ pub struct Roots {
     pub here: PathBuf,
     pub tree: PathBuf,
     /// `None` when there is no tree yet and `setup` is about to plant one.
-    // The folder a lane file gets written to, which is setup's job (`t594`
-    // §4.5). Resolution answers it here so that nobody has to walk up twice.
-    #[allow(dead_code)]
     pub located: Option<crate::store::Located>,
 }
 
