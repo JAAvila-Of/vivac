@@ -1493,3 +1493,162 @@ fn a_worktree_named_a_secret_never_writes_it_to_the_log() {
     std::fs::remove_dir_all(&root).ok();
     std::fs::remove_dir_all(&home).ok();
 }
+
+// ---------------------------------------------------------------------------
+// `t594` task 6: `f612`, back a sixth time -- reaching the very same folder
+// through two different spellings, this time at `relocate`'s and `--join`'s
+// own doors rather than a worktree's.
+// ---------------------------------------------------------------------------
+
+/// The `id` of line 1 of `root/.vivac/events`, the same way `first_event_id`
+/// above reads it off a `Sandbox`, for a tree this test builds by hand
+/// instead.
+fn first_event_id_at(root: &Path) -> String {
+    let text = std::fs::read_to_string(root.join(".vivac").join("events")).unwrap();
+    let line = text.lines().next().expect("the log has a first line");
+    let v: serde_json::Value = serde_json::from_str(line).unwrap();
+    v["id"].as_str().expect("an event has an id").to_string()
+}
+
+/// `f612`, closed once in `anchor::same_folder`'s own canonicalize fallback
+/// and reachable from more doors than the worktree one above: a second,
+/// genuine spelling of the very same folder -- a junction on Windows, a
+/// symlink on Unix -- has to be recognised as the folder itself by
+/// `relocate`'s own destination check and by `--join`'s own "is this
+/// already the tree I resolve to" check, not read as some other folder
+/// that merely happens to sit at a different-looking path.
+#[test]
+fn relocate_and_join_treat_two_spellings_of_the_same_folder_as_one() {
+    let home = unique("f612-home");
+    let real = unique("f612-real");
+    std::fs::create_dir_all(&real).unwrap();
+    let (init_out, init_code) = run(&real, &home, &["init"]);
+    assert_eq!(init_code, 0, "{init_out}");
+    let (push_out, push_code) = run(&real, &home, &["push", "seed", "--why", "seed"]);
+    assert_eq!(push_code, 0, "{push_out}");
+
+    let alias = unique("f612-alias");
+    if !make_second_spelling(&alias, &real) {
+        eprintln!(
+            "skipped relocate_and_join_treat_two_spellings_of_the_same_folder_as_one: \
+             this platform offers no second spelling of the same folder here -- no 8.3 \
+             alias, and this account cannot create a junction or a symlink"
+        );
+        std::fs::remove_dir_all(&real).ok();
+        std::fs::remove_dir_all(&home).ok();
+        return;
+    }
+
+    // `--join`, reached through the alias: a lane already pointing at
+    // `real` has to be recognised as already pointing at the very tree
+    // the alias names too, not refused as though it named another one.
+    let project = first_event_id_at(&real);
+    let lane_dir = unique("f612-lane");
+    std::fs::create_dir_all(&lane_dir).unwrap();
+    write_lane(&lane_dir, &project);
+    let (join_out, join_code) = run(
+        &lane_dir,
+        &home,
+        &["setup", "claude-code", "--join", alias.to_str().unwrap()],
+    );
+    assert_eq!(join_code, 0, "{join_out}");
+    assert!(
+        !says(&join_out, "This folder is already a lane of another tree"),
+        "the alias was read as a different tree from --join:\n{join_out}"
+    );
+
+    // `relocate`, given the alias as its own destination: the same
+    // refusal it gives its own folder spelled plainly, since the
+    // destination and the folder it would move out of are one and the
+    // same.
+    let (reloc_out, reloc_code) = run(&real, &home, &["relocate", alias.to_str().unwrap()]);
+    assert_eq!(reloc_code, 1, "{reloc_out}");
+    assert!(
+        says(
+            &reloc_out,
+            "The destination is this folder, so there is nothing to move."
+        ),
+        "the alias was read as a different destination from relocate:\n{reloc_out}"
+    );
+
+    std::fs::remove_dir_all(&real).ok();
+    std::fs::remove_dir_all(&alias).ok();
+    std::fs::remove_dir_all(&lane_dir).ok();
+    std::fs::remove_dir_all(&home).ok();
+}
+
+// ---------------------------------------------------------------------------
+// `t594` task 6: the load-bearing property from `t594` fix-1 round 2,
+// exercised once more with the registry carrying another, unrelated
+// project -- the state this task introduces and the existing test above
+// never had a chance to try, since every sandbox up to this task minted
+// its own private `VIVAC_HOME`.
+// ---------------------------------------------------------------------------
+
+/// Everything `a_hook_inside_a_worktree_does_not_join_a_tree_that_never_had_setup`
+/// already proves -- reading, a hook, and a write that fails all leave a
+/// tree nobody ran `setup` on untouched -- proved again with this
+/// `VIVAC_HOME` already carrying a second, unrelated project by the time
+/// any of the three ever runs.
+#[test]
+fn an_unjoined_worktree_still_writes_nothing_with_another_project_in_the_registry() {
+    let (root, feature, home) = worktree_inside_fixture("beam-registry-populated");
+
+    let elsewhere = unique("beam-elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    let (init_out, init_code) = run(&elsewhere, &home, &["init"]);
+    assert_eq!(init_code, 0, "{init_out}");
+    let (push_out, push_code) = run(
+        &elsewhere,
+        &home,
+        &["push", "Unrelated work", "--why", "seed"],
+    );
+    assert_eq!(push_code, 0, "{push_out}");
+
+    let config_before = std::fs::read_to_string(root.join(".vivac").join("config")).unwrap();
+    let log_before =
+        std::fs::read_to_string(root.join(".vivac").join("events")).unwrap_or_default();
+    assert!(
+        log_before.is_empty(),
+        "a freshly init'd tree already has events:\n{log_before}"
+    );
+
+    // Read.
+    let (brief_out, brief_code) = run(&feature, &home, &["brief"]);
+    assert_eq!(brief_code, 0, "{brief_out}");
+    // A hook.
+    let (hook_out, hook_code) = run_stdin(
+        &feature,
+        &home,
+        &["session", "start", "--hook"],
+        r#"{"session_id":"s1","source":"startup"}"#,
+    );
+    assert_eq!(hook_code, 0, "{hook_out}");
+    // A write that fails.
+    let (pop_out, pop_code) = run(&feature, &home, &["pop"]);
+    assert_eq!(pop_code, 2, "{pop_out}");
+
+    assert!(
+        !feature.join(".vivac").join("lane").exists(),
+        "the worktree joined once the registry already held another project"
+    );
+    let log_after = std::fs::read_to_string(root.join(".vivac").join("events")).unwrap_or_default();
+    let lines: Vec<&str> = log_after.lines().collect();
+    assert_eq!(
+        lines.len(),
+        1,
+        "the hook wrote something other than exactly one event:\n{log_after}"
+    );
+    let event: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+    assert_eq!(event["payload"]["type"], "session.started", "{log_after}");
+    assert_eq!(event["lane"], "main", "{log_after}");
+    assert_eq!(
+        std::fs::read_to_string(root.join(".vivac").join("config")).unwrap(),
+        config_before,
+        "the config changed once the registry already held another project"
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+    std::fs::remove_dir_all(&home).ok();
+    std::fs::remove_dir_all(&elsewhere).ok();
+}

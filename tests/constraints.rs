@@ -104,3 +104,178 @@ fn a_constraint_a_pillar_and_a_rule_are_not_open_fronts() {
         "the real front disappeared, which is a different bug:\n{out}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// `t594` task 6: security, the class the security pillar's ban on paths in
+// the log already governs (`check.rs`'s own `gates_output_carries_no_
+// absolute_path` is the precedent), stretched across the surfaces this
+// task added -- a copy, a move to another folder, and a folder whose
+// repositories are already tracked elsewhere.
+// ---------------------------------------------------------------------------
+
+fn git(dir: &std::path::Path, args: &[&str]) {
+    let out = std::process::Command::new("git")
+        .current_dir(dir)
+        .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+fn run_split(c: &Sandbox, args: &[&str]) -> (String, String, i32) {
+    let o = std::process::Command::new(env!("CARGO_BIN_EXE_vivac"))
+        .current_dir(&c.0)
+        .env("VIVAC_HOME", c.global_home())
+        .args(args)
+        .output()
+        .unwrap();
+    (
+        String::from_utf8_lossy(&o.stdout).into_owned(),
+        String::from_utf8_lossy(&o.stderr).into_owned(),
+        o.status.code().unwrap_or(-1),
+    )
+}
+
+/// A copy of `original`'s log, at a folder of its own sharing `original`'s
+/// home -- a real copy of the tree, the same shape `check.rs`'s own
+/// `a_copy_of` builds, not a fixture.
+fn a_copy_of(original: &Sandbox, name: &str) -> Sandbox {
+    let copy = Sandbox::new_empty_in(name, original.global_home());
+    std::fs::create_dir_all(copy.0.join(".vivac")).unwrap();
+    std::fs::copy(
+        original.0.join(".vivac").join("events"),
+        copy.0.join(".vivac").join("events"),
+    )
+    .unwrap();
+    copy
+}
+
+/// 1: every `.vivac/` a `relocate`, a copy and a `--join` leave behind --
+/// the origin's own renamed files, the destination's log and config, the
+/// copy's log, and the joined lane's own lane file -- carries no absolute
+/// path and no URL.
+#[test]
+fn every_vivac_directory_this_task_touches_carries_no_absolute_path_or_url() {
+    let origin = Sandbox::new_seeded("sec-path-origin");
+    origin.ok(&["push", "a goal", "--why", "seed"]);
+
+    let destination = Sandbox::new_empty_in("sec-path-dest", origin.global_home());
+    let (reloc_out, reloc_code) = origin.run(&[
+        "relocate",
+        destination.0.to_str().unwrap(),
+        "--lane-name",
+        "moved",
+    ]);
+    assert_eq!(reloc_code, 0, "{reloc_out}");
+
+    let copy = a_copy_of(&destination, "sec-path-copy");
+    let (copy_out, copy_code) = copy.run(&["check"]);
+    assert_eq!(copy_code, 1, "{copy_out}");
+
+    let joined = Sandbox::new_empty_in("sec-path-joined", origin.global_home());
+    let (join_out, join_code) = joined.run(&[
+        "setup",
+        "claude-code",
+        "--join",
+        destination.0.to_str().unwrap(),
+    ]);
+    assert_eq!(join_code, 0, "{join_out}");
+
+    let files = [
+        origin.0.join(".vivac").join("events.relocated"),
+        origin.0.join(".vivac").join("config.relocated"),
+        origin.0.join(".vivac").join("lane"),
+        destination.0.join(".vivac").join("events"),
+        destination.0.join(".vivac").join("config"),
+        copy.0.join(".vivac").join("events"),
+        joined.0.join(".vivac").join("lane"),
+    ];
+    let roots = [&origin.0, &destination.0, &copy.0, &joined.0];
+    for path in &files {
+        let Ok(text) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        for root in roots {
+            let full = root.to_string_lossy();
+            assert!(
+                !text.contains(full.as_ref()),
+                "an absolute path leaked into {}:\n{text}",
+                path.display()
+            );
+        }
+        assert!(
+            !text.contains("://"),
+            "a url leaked into {}:\n{text}",
+            path.display()
+        );
+    }
+}
+
+/// 2: no text a `setup` refusal, a copy notice on `stderr`, or `relocate`'s
+/// own output prints carries an absolute path -- every one of them names a
+/// folder, never a path.
+#[test]
+fn no_printed_surface_this_task_added_names_an_absolute_path() {
+    // A setup refusal: two folders sharing one repository's root commit.
+    let a = Sandbox::new_empty("sec-print-setup-a");
+    git(&a.0, &["init", "-q"]);
+    std::fs::write(a.0.join("f.txt"), "x").unwrap();
+    git(&a.0, &["add", "."]);
+    git(&a.0, &["commit", "-q", "-m", "first"]);
+    a.ok(&["init"]);
+    a.ok(&["setup", "claude-code", "--yes"]);
+
+    let b = Sandbox::new_empty_in("sec-print-setup-b", a.global_home());
+    let out = std::process::Command::new("git")
+        .current_dir(&b.0)
+        .args(["clone", "-q", a.0.to_str().unwrap(), "."])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "git clone failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let (refusal, refusal_code) = b.run(&["setup", "claude-code", "--yes"]);
+    assert_eq!(refusal_code, 1, "{refusal}");
+    assert!(refusal.contains("--join"), "{refusal}");
+
+    // The copy notice, on stderr, from a write.
+    let orig = Sandbox::new_seeded("sec-print-copy-orig");
+    orig.ok(&["push", "a goal", "--why", "seed"]);
+    let copy = a_copy_of(&orig, "sec-print-copy-copy");
+    let (_, copy_stderr, copy_code) = run_split(&copy, &["push", "another", "--why", "seed"]);
+    assert_eq!(copy_code, 0, "{copy_stderr}");
+    assert!(
+        copy_stderr.contains("COPY OF ANOTHER TREE"),
+        "the write from a copy never warned:\n{copy_stderr}"
+    );
+
+    // `relocate`'s own output, given a destination one directory up rather
+    // than an absolute path.
+    let reloc_origin = Sandbox::new_seeded("sec-print-reloc-origin");
+    reloc_origin.ok(&["push", "a goal", "--why", "seed"]);
+    let dest_name = "sec-print-reloc-destination";
+    let dest_abs = reloc_origin.0.parent().unwrap().join(dest_name);
+    let (reloc_out, reloc_code) = reloc_origin.run(&["relocate", &format!("../{dest_name}")]);
+    assert_eq!(reloc_code, 0, "{reloc_out}");
+
+    let texts = [&refusal, &copy_stderr, &reloc_out];
+    let roots = [&a.0, &b.0, &orig.0, &copy.0, &reloc_origin.0, &dest_abs];
+    for text in texts {
+        for root in roots {
+            let full = root.to_string_lossy();
+            assert!(
+                !text.contains(full.as_ref()),
+                "an absolute path leaked:\n{text}"
+            );
+        }
+    }
+
+    std::fs::remove_dir_all(&dest_abs).ok();
+}
