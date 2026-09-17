@@ -1145,7 +1145,17 @@ fn join(roots: &super::Roots, spec: &str, lane_name: Option<&str>) -> Result<i32
         }
     }
 
-    outln!("  This folder now writes as one of that tree's lanes.");
+    // What a person does not already know after joining, which is the whole
+    // of `d595` in two sentences: the knowledge stayed the product's and the
+    // thread became this folder's. The tree is named by its folder, never by
+    // its path, and the name is withheld when the redaction guard rejects it
+    // (`d600`) -- the sentence survives without it.
+    match crate::registry::folder_name(&target) {
+        Some(name) => outln!("  This folder is now a lane of the tree in \"{name}\"."),
+        None => outln!("  This folder is now a lane of a tree elsewhere on this machine."),
+    }
+    outln!("  The nodes and their numbering are the product's; the stack, the focus");
+    outln!("  and the last stop are this folder's.");
     Ok(0)
 }
 
