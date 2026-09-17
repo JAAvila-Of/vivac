@@ -381,6 +381,8 @@ describe
 description
 deserialize
 deserializer
+dest
+destination
 detached
 detail
 detect
@@ -694,6 +696,7 @@ ignore
 ignored
 ignores
 impl
+implicit
 import
 in
 include
@@ -1159,6 +1162,7 @@ recreates
 recv
 redact
 redaction
+redeclare
 redirect
 redirects
 ref
@@ -1187,6 +1191,8 @@ release
 released
 releases
 reload
+relocate
+relocated
 relock
 relocks
 rem
@@ -1200,6 +1206,7 @@ removed
 removes
 removing
 rename
+renames
 render
 rendered
 reopen
@@ -1594,6 +1601,7 @@ undoable
 undone
 unfold
 ungoverned
+union
 unique
 unit
 unix

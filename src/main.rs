@@ -33,6 +33,7 @@ mod project;
 mod reconcile;
 mod redact;
 mod registry;
+mod relocate;
 mod render;
 mod repos;
 mod session;
@@ -130,6 +131,10 @@ const USAGE: &str = r#"vivac - provenance of work
     vivac setup claude-code [--dry-run] [--yes] [--undo]
                                               write what Claude Code needs here:
                                               hooks, the MCP server, a skill
+    vivac relocate <destination> [--lane-name <name>]
+                                              move the tree there; this folder
+                                              stays one of its lanes, with its
+                                              own thread
     vivac init                                plant .vivac/ here
     vivac import <tree.json>                  bring in a tree from the spike
 
@@ -293,6 +298,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         "web" => &["port", "no-open", "project"],
         "init" | "hooks" | "mcp" => &[],
         "setup" => &["dry-run", "yes", "undo"],
+        "relocate" => &["lane-name"],
         // The reads that speak JSON, spelled out. No shorthand: a shorthand
         // is what let the brief claim it for two releases.
         // `open` also takes `--all`, the same escape hatch `tree` gives the
@@ -470,6 +476,31 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
                 let _ = LATE_SIGHTING.set((root.clone(), lane));
             }
         }
+    }
+    // `relocate` moves data outright rather than updating or undoing a
+    // step, the shapes the rest of this dispatch is built around, so it
+    // manages its own store and its own lock instead of going through
+    // `Ctx`. That is also why it stays out of MCP (`t594` §4.6): every
+    // tool there either reads or undoes one step, and this does neither.
+    if cmd == "relocate" {
+        if let [first, ..] = a.extra(1) {
+            return Err(Failure::usage(format!(
+                "{cmd} does not take \"{first}\".
+
+  It takes one word of its own. Everything else goes behind a --flag, and a flag
+  that repeats is written out again:  --governs a --governs b"
+            )));
+        }
+        let Some(destination) = a.positional(0) else {
+            return Err(Failure::usage(
+                "relocate needs a destination: vivac relocate <destination>",
+            ));
+        };
+        return relocate::run(
+            &located,
+            std::path::Path::new(destination),
+            a.opt("lane-name"),
+        );
     }
     // The server outlives its calls and it is not the only writer, so it
     // loads the tree itself and reloads it when the log moves. Everything
