@@ -113,6 +113,19 @@ pub struct Ctx {
     /// sets this is `setup`, the command §6.9's own message names as the
     /// way out (`t594` fix-1, finding D).
     caller_declared: bool,
+    /// Whether `lane` is only a fallback -- no `.vivac/lane` file backs it
+    /// up -- rather than read off one that actually names it.
+    ///
+    /// §6.9's own sentence is about the first case: "a folder that holds
+    /// the tree, has no lane file of its own and answers as `main` only
+    /// because nothing said otherwise". The check below used to ask a
+    /// narrower question than that sentence -- whether `lane` spelled
+    /// `main`, not whether anything was actually read -- and the two only
+    /// ever agreed because, until `relocate` (`t594` §4.6), no folder's own
+    /// `.vivac/lane` file had ever named `main`: the first one it writes,
+    /// at the folder a tree moved out of, would have been refused by a
+    /// check built to catch the folder with no file at all.
+    lane_assumed: bool,
 }
 
 impl Ctx {
@@ -138,32 +151,31 @@ impl Ctx {
         }
     }
 
-    /// Finishes building a `Ctx` once its tree is already folded and the
-    /// lane it runs as is already decided. Shared by every constructor
-    /// below. `store` carries no lane of its own to set here any more
-    /// (`f608`, third time -- see `Store::append`'s own doc): `self.lane`
-    /// is the only copy, and `emit` is what hands it to `append` on every
-    /// write, so a `Ctx` and what it writes cannot drift apart the way a
-    /// `Store` left holding a stale one could.
+    /// Finishes building a `Ctx` once its tree is already folded and
+    /// `resolve_whose` has already decided whose lane it runs as. Shared by
+    /// every constructor below. `store` carries no lane of its own to set
+    /// here any more (`f608`, third time -- see `Store::append`'s own doc):
+    /// `self.lane` is the only copy, and `emit` is what hands it to
+    /// `append` on every write, so a `Ctx` and what it writes cannot drift
+    /// apart the way a `Store` left holding a stale one could.
     fn finish(
         store: Store,
         tree: Tree,
         seen: (u64, Option<std::time::SystemTime>),
-        lane: Option<String>,
-        pending_lane: Option<PendingLane>,
-        caller_declared: bool,
+        whose_lane: WhoseLane,
     ) -> Ctx {
         let anchor = anchor::detect(&store.root);
         let mut ctx = Ctx {
             store,
-            lane,
+            lane: whose_lane.lane,
             tree: Tree::default(),
             anchor,
             seen,
             wrote: None,
             lock: None,
-            pending_lane,
-            caller_declared,
+            pending_lane: whose_lane.pending_lane,
+            caller_declared: whose_lane.caller_declared,
+            lane_assumed: whose_lane.lane_assumed,
         };
         ctx.adopt(tree);
         ctx
@@ -194,15 +206,8 @@ impl Ctx {
         // own sentence, which can say either more or less than the log
         // actually backs up (`Tree::has_a_declared_lane`'s own doc).
         let tree_has_lanes = tree.has_a_declared_lane();
-        let (lane, pending_lane, caller_declared) = resolve_whose(whose, &tree, tree_has_lanes);
-        Ok(Ctx::finish(
-            store,
-            tree,
-            seen,
-            lane,
-            pending_lane,
-            caller_declared,
-        ))
+        let whose_lane = resolve_whose(whose, &tree, tree_has_lanes);
+        Ok(Ctx::finish(store, tree, seen, whose_lane))
     }
 
     /// Same read `changes` and `why` need, handing back the events instead
@@ -216,8 +221,8 @@ impl Ctx {
         let (events, broken) = store.read_all()?;
         let tree = fold(&events, broken);
         let tree_has_lanes = tree.has_a_declared_lane();
-        let (lane, pending_lane, caller_declared) = resolve_whose(whose, &tree, tree_has_lanes);
-        let ctx = Ctx::finish(store, tree, seen, lane, pending_lane, caller_declared);
+        let whose_lane = resolve_whose(whose, &tree, tree_has_lanes);
+        let ctx = Ctx::finish(store, tree, seen, whose_lane);
         Ok((ctx, events))
     }
 
@@ -239,8 +244,8 @@ impl Ctx {
     ) -> Ctx {
         let tree = fold(events, broken);
         let tree_has_lanes = tree.has_a_declared_lane();
-        let (lane, pending_lane, caller_declared) = resolve_whose(whose, &tree, tree_has_lanes);
-        Ctx::finish(store, tree, seen, lane, pending_lane, caller_declared)
+        let whose_lane = resolve_whose(whose, &tree, tree_has_lanes);
+        Ctx::finish(store, tree, seen, whose_lane)
     }
 
     /// Replaces what this context knows about the tree -- the store handle, the
@@ -294,7 +299,18 @@ impl Ctx {
         // very command §6.9's own message sends you to -- refusing it too
         // would be a message that answers itself (`t594` fix-1, finding
         // D).
+        //
+        // `lane_assumed`, not just the word `main`: the sentence above is
+        // about a folder with nothing on disk to back up its answer, and
+        // until `relocate` (`t594` §4.6) that was the only way `lane` ever
+        // came out as `main` once `main_claimed` was true, so checking the
+        // word alone happened to agree with checking the file. `relocate`
+        // is the first thing that writes a `.vivac/lane` naming `main`
+        // itself, at the folder a tree moves out of, and that folder is
+        // exactly one of the tree's lanes -- the sentence's own exception,
+        // not its target.
         if !self.caller_declared
+            && self.lane_assumed
             && self.lane.as_deref() == Some(crate::lane::MAIN)
             && self.tree.main_claimed
         {
@@ -475,14 +491,32 @@ impl Ctx {
     }
 }
 
+/// What `resolve_whose` decided, bundled rather than a tuple: a fourth
+/// element (`lane_assumed`) is one past what a tuple keeps readable as
+/// which field is which.
+struct WhoseLane {
+    lane: Option<String>,
+    pending_lane: Option<PendingLane>,
+    /// See `Whose::Declared` and `Ctx::caller_declared`.
+    caller_declared: bool,
+    /// See `Ctx::lane_assumed`.
+    lane_assumed: bool,
+}
+
 /// `t594` §2.3, paso 1: decides whose lane a folder is, once its tree is
-/// already folded, and whether the caller already named it outright
-/// (the third element -- `t594` fix-1, finding G). `Whose::Founding` and
-/// `Whose::Declared` never have anything to decide -- there is no
-/// `Located` to read a worktree off -- and never leave a lane pending.
-/// Only `Declared` is exempt from §6.9 (`lock_for_write`): it is the one
-/// case where the caller, not a resolved folder, is the reason this
-/// answers as it does.
+/// already folded, whether the caller already named it outright, and
+/// whether `lane` is only a fallback with no `.vivac/lane` file behind it
+/// (`WhoseLane::lane_assumed` -- `t594` §4.6, review round 1: the check this
+/// used to feed `lock_for_write` a plain tuple for could not tell "answers
+/// `main` because nothing said otherwise" apart from "answers `main`
+/// because its own file says so", and only the first is what §6.9 is
+/// about). `Whose::Founding` and `Whose::Declared` never have anything to
+/// decide -- there is no `Located` to read a worktree off -- and never
+/// leave a lane pending. `Founding` counts as assumed: it never had a
+/// `Located` to read a lane file off in the first place. `Declared` is
+/// exempt from §6.9 (`lock_for_write`) outright, regardless of
+/// `lane_assumed`: it is the one case where the caller, not a resolved
+/// folder, is the reason this answers as it does.
 ///
 /// For `Whose::Resolved`, three cases:
 ///
@@ -504,23 +538,43 @@ impl Ctx {
 /// With it, a worktree over a tree that has never had a lane declared
 /// reads as `Located`'s lane, same as case 1, and writes nothing of its
 /// own until a real lane exists to check it against.
-fn resolve_whose(
-    whose: Whose,
-    tree: &Tree,
-    tree_has_lanes: bool,
-) -> (Option<String>, Option<PendingLane>, bool) {
+///
+/// `lane_assumed` is fixed once, from `located.lane.is_none()`, ahead of
+/// all three cases: none of them touches whether `Located` itself carried
+/// a lane file, only what a worktree underneath it is doing.
+fn resolve_whose(whose: Whose, tree: &Tree, tree_has_lanes: bool) -> WhoseLane {
     let located = match whose {
-        Whose::Founding => return (Some(crate::lane::MAIN.to_string()), None, false),
-        Whose::Declared(id) => return (Some(id), None, true),
+        Whose::Founding => {
+            return WhoseLane {
+                lane: Some(crate::lane::MAIN.to_string()),
+                pending_lane: None,
+                caller_declared: false,
+                lane_assumed: true,
+            }
+        }
+        Whose::Declared(id) => {
+            return WhoseLane {
+                lane: Some(id),
+                pending_lane: None,
+                caller_declared: true,
+                lane_assumed: false,
+            }
+        }
         Whose::Resolved(l) => l,
     };
+    let lane_assumed = located.lane.is_none();
     let found_lane = located
         .lane
         .as_ref()
         .map(|l| l.id.clone())
         .unwrap_or_else(|| crate::lane::MAIN.to_string());
     let Some(w) = located.worktree.as_ref() else {
-        return (Some(found_lane), None, false);
+        return WhoseLane {
+            lane: Some(found_lane),
+            pending_lane: None,
+            caller_declared: false,
+            lane_assumed,
+        };
     };
     let declared: &[crate::event::Repo] = tree
         .lanes
@@ -528,12 +582,22 @@ fn resolve_whose(
         .map(|s| s.repos.as_slice())
         .unwrap_or(&[]);
     if repo_at(declared, &located.lane_dir, w).is_some() {
-        return (Some(found_lane), None, false);
+        return WhoseLane {
+            lane: Some(found_lane),
+            pending_lane: None,
+            caller_declared: false,
+            lane_assumed,
+        };
     }
     if !tree_has_lanes {
-        return (Some(found_lane), None, false);
+        return WhoseLane {
+            lane: Some(found_lane),
+            pending_lane: None,
+            caller_declared: false,
+            lane_assumed,
+        };
     }
-    // Paso 4: the root commit is whatever the lane already declared for
+    // Step 4: the root commit is whatever the lane already declared for
     // the repository whose `.git` is this worktree's `commondir` -- never
     // asked of git again, since the datum is already in the log and this
     // runs on the write path.
@@ -544,9 +608,9 @@ fn resolve_whose(
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default();
-    (
-        None,
-        Some(PendingLane {
+    WhoseLane {
+        lane: None,
+        pending_lane: Some(PendingLane {
             dir: w.clone(),
             // `d600`'s own guard runs in `emit`, not here (`t594` fix-1,
             // finding F): see `PendingLane::name`.
@@ -556,8 +620,9 @@ fn resolve_whose(
                 root,
             },
         }),
-        false,
-    )
+        caller_declared: false,
+        lane_assumed,
+    }
 }
 
 /// The declared repository, if any, whose path resolves to `target` once
