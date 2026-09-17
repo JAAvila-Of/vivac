@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.12.0](https://github.com/JAAvila-Of/vivac/compare/v0.11.3...v0.12.0) - 2026-09-17
 
+### Upgrading
+
+- **A tree does not change until `setup` is run in it.** Until then this
+  version writes exactly what 0.11 wrote, and every version keeps reading
+  it.
+- **Once a tree holds lanes it needs 0.12 or newer.** `setup`, `relocate`,
+  or a linked worktree writing for the first time rewrites the config's
+  `version` field to `this tree holds lanes, and this vivac is too old to
+  read them: update vivac`. Versions 0.7 to 0.11 refuse a version they do
+  not know and print that sentence, and `setup` names the same thing in
+  what it reports having written.
+- **Two events are new**, and neither appears until `setup` has run:
+  `lane.declared` and `lane.claimed`.
+- **Every tree gains `.vivac/lock`, and `setup` also writes
+  `.vivac/.gitignore`.** If `.vivac` was committed to git, `vivac check`
+  points at the missing `.gitignore`, and `setup` writes it.
+- **On Windows, close every session and any `vivac web` before installing.**
+  A running `vivac mcp` or `vivac web` holds the executable open, and
+  `cargo install` fails with `os error 5` until it is closed.
+
 ### Added
 
 - *(brief)* open with the warning when this tree is a copy
