@@ -1564,13 +1564,34 @@ mod tests {
     use crate::anchor::AnchorRef;
     use crate::event::Body;
 
-    fn tmp_store(name: &str) -> Store {
+    /// A `Store` whose directory is removed when this value drops, whether
+    /// the test that made it passed or panicked -- the same promise
+    /// `tests/relocate.rs`'s own `Owned` and `tests/lanes.rs`'s own
+    /// `RemoveOnDrop` already make for the folders outside every `Sandbox`.
+    /// Two tests below never got past a bare `Store::create` at all, and
+    /// left their directory behind on every run, not only a failing one.
+    struct TmpStore(Store);
+
+    impl std::ops::Deref for TmpStore {
+        type Target = Store;
+        fn deref(&self) -> &Store {
+            &self.0
+        }
+    }
+
+    impl Drop for TmpStore {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.0.root).ok();
+        }
+    }
+
+    fn tmp_store(name: &str) -> TmpStore {
         let dir = std::env::temp_dir().join(format!(
             "vivac-index-t-{name}-{}-{}",
             std::process::id(),
             crate::id::ulid()
         ));
-        Store::create(&dir).unwrap()
+        TmpStore(Store::create(&dir).unwrap())
     }
 
     /// Takes `store`'s own write lock and writes `events` raw under it.

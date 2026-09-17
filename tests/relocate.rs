@@ -159,15 +159,32 @@ fn a_refused_relocate_from_a_copy_writes_nothing_anywhere() {
     }
 }
 
-/// A directory removed when this value is dropped, whether the test passed
-/// or panicked: the same promise `Sandbox` already makes for its own two
-/// folders, for the ones a test builds beside them. Every folder the tests
-/// below create outside a `Sandbox` is held in one of these.
+/// A directory, a file, or a symlink removed when this value is dropped,
+/// whether the test passed or panicked: the same promise `Sandbox` already
+/// makes for its own two folders, for the paths a test builds beside them.
+/// Every path the tests below create outside a `Sandbox` is held in one of
+/// these -- including `global_home()` once a test turns it into a plain
+/// file on purpose, which `remove_dir_all` alone cannot take back.
 struct Owned(PathBuf);
 
 impl Drop for Owned {
     fn drop(&mut self) {
-        std::fs::remove_dir_all(&self.0).ok();
+        remove_whatever(&self.0);
+    }
+}
+
+/// Removes whatever sits at `path`, regardless of whether it is a
+/// directory, a file, or a symlink, and does nothing if there is nothing
+/// there.
+fn remove_whatever(path: &Path) {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_dir() => {
+            std::fs::remove_dir_all(path).ok();
+        }
+        Ok(_) => {
+            std::fs::remove_file(path).ok();
+        }
+        Err(_) => {}
     }
 }
 
@@ -969,12 +986,15 @@ fn a_registry_that_cannot_be_written_leaves_the_source_alone() {
     // The seed push above already created `VIVAC_HOME` as a directory,
     // writing the registry into it. Replaced with a plain file so
     // `record_move`'s own `create_dir_all` cannot make a directory where
-    // a file already sits.
+    // a file already sits. `_home` sweeps that file up on its own --
+    // `Sandbox::drop`'s `remove_dir_all` cannot, once it is not a directory
+    // any more.
     std::fs::remove_dir_all(c.global_home()).ok();
     std::fs::write(c.global_home(), b"not a directory").unwrap();
-    let dest = sibling_dir(&c, "registry-blocked");
+    let _home = Owned(c.global_home().to_path_buf());
+    let dest = Owned(sibling_dir(&c, "registry-blocked"));
 
-    let (out, code) = c.run(&["relocate", dest.to_str().unwrap()]);
+    let (out, code) = c.run(&["relocate", dest.0.to_str().unwrap()]);
     assert_ne!(code, 0, "{out}");
 
     assert!(
@@ -987,11 +1007,9 @@ fn a_registry_that_cannot_be_written_leaves_the_source_alone() {
         "the origin must not gain a lane file before the registry landed"
     );
     assert!(
-        !dest.join(".vivac").join("events").exists(),
+        !dest.0.join(".vivac").join("events").exists(),
         "no events must be left at a destination whose registry write failed"
     );
-
-    std::fs::remove_file(c.global_home()).ok();
 }
 
 /// `t594`: a failure *inside* step 8 -- after the origin's

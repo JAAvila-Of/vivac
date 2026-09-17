@@ -2731,6 +2731,34 @@ fn a_join_to_a_different_tree_is_still_refused_and_a_first_join_still_works() {
     );
 }
 
+/// A folder that holds the tree itself **and** carries its own
+/// `.vivac/lane` -- the shape `tests/lanes.rs`'s own
+/// `a_folder_whose_own_lane_file_names_main_keeps_writing` builds for the
+/// folder `main` was claimed away from, still holding the tree it always
+/// held. `--join` naming that very folder has to resolve through
+/// `lane_carried_by`, the same as any other self-join: `l.root` and
+/// `target` are the same folder here too, so this reaches the branch
+/// above rather than `already_has_a_tree`, which is for a folder with a
+/// tree of its own and no lane to redirect at all.
+#[test]
+fn a_join_of_a_folder_that_is_both_the_tree_and_its_own_lane_says_so() {
+    let c = Sandbox::new_seeded("setup-join-self-lane");
+    c.append_raw_line(
+        r#"{"seq":1,"id":"01SEEDSELFJOINAAAAAAAAAAAA","ts":"2026-01-01T00:00:00Z","actor":"a_test0000000","lane":"main","payload":{"type":"lane.claimed","lane":"main"}}"#,
+    );
+    std::fs::write(
+        c.0.join(".vivac").join("lane"),
+        r#"{"version":1,"id":"main","project":"01SEEDSELFJOINAAAAAAAAAAAA"}"#,
+    )
+    .unwrap();
+
+    let here = c.0.to_string_lossy().into_owned();
+    let (out, code) = c.run(&["setup", "claude-code", "--join", &here]);
+
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains(ALREADY_THAT_TREE), "{out}");
+}
+
 /// `t594`: `--lane-name` used to be accepted and
 /// silently ignored when planting fresh -- worse than either using it or
 /// refusing it outright, since accepting a flag and doing nothing with it
