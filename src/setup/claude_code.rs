@@ -37,6 +37,19 @@ pub fn run(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     if let Some(refusal) = super::refuse_home_or_global_store(roots) {
         return Err(refusal);
     }
+    // Here for the same reason, and it took a second round to actually put
+    // it here: `refuse_second_map`'s own doc already said trees below run
+    // in both branches, but the check itself stayed inside it, and
+    // `refuse_second_map` is only ever called from `apply` -- so `--join`
+    // walked around this one exactly the way it walked around the guard
+    // above. §4.5.1 still decides the order within `apply`: a tree below
+    // describes a state of the disk that has to be fixed before the
+    // product question, or "plant or join", means anything at all, and
+    // moving it up here only makes that truer.
+    let below = trees_below(&roots.here);
+    if !below.is_empty() {
+        return Err(tree_below_refusal(&below));
+    }
     if let Some(spec) = a.opt("join") {
         return join(roots, spec, a.opt("lane-name"), a.has("dry-run"));
     }
@@ -537,23 +550,13 @@ fn guarded_folder_name(path: &Path) -> Option<String> {
     }
 }
 
-/// A folder's name, quoted, or `"another folder"` once the guard has
-/// withheld it: the one placeholder every text below falls back to,
-/// rather than three copies of the same fallback prose.
-fn label_for(name: Option<&str>) -> String {
-    match name {
-        Some(n) => format!("\"{n}\""),
-        None => "another folder".to_string(),
-    }
-}
-
 /// §6.4: a tree already sitting inside this folder. Named, unless the
 /// guard withholds a name; with two or more, the withheld ones are simply
 /// left out rather than replaced one by one.
 fn tree_below_refusal(paths: &[PathBuf]) -> Failure {
     let names: Vec<Option<String>> = paths.iter().map(|p| guarded_folder_name(p)).collect();
     if let [only] = names.as_slice() {
-        let label = label_for(only.as_deref());
+        let label = crate::registry::label_for(only.as_deref());
         return Failure::Model(format!(
             "  There is already a tree inside this folder, in {label}.\n  \
              Planting another one here would split this project: sessions opened in\n  \
@@ -577,6 +580,28 @@ fn tree_below_refusal(paths: &[PathBuf]) -> Failure {
         "  There are trees inside this folder, {where_clause}.\n  \
          vivac cannot merge trees: keep one per product, move it up here with\n  \
          vivac relocate, and leave the others as they are."
+    ))
+}
+
+/// §6.4's mirror image, upward: a folder with no `.vivac/` of its own,
+/// told to `--join` a tree somewhere else while the tree it already
+/// resolves to sits above it.
+///
+/// `Failure::already_a_lane` used to answer here, and its own doc says
+/// what is wrong with that: it is for "a folder that already carries
+/// somebody else's `.vivac/lane`", and this folder carries none at all.
+/// The refusal itself was never in doubt -- joining would split the
+/// product either way -- so what changes is only the sentence, which now
+/// says the thing that is true and where to go and read it.
+///
+/// Named, and the name withheld when the redaction guard rejects it
+/// (`d600`), the same as every other folder this module names.
+fn tree_above_refusal(tree_root: &Path) -> Failure {
+    let label = crate::registry::label_for(guarded_folder_name(tree_root).as_deref());
+    Failure::Model(format!(
+        "  A tree sits above this folder, in {label}, so this folder already belongs to\n  \
+         that product. Joining it to a different tree would split the two. To see\n  \
+         where it belongs:  vivac brief"
     ))
 }
 
@@ -621,25 +646,21 @@ fn product_registered_refusal(
     }
 }
 
-/// `t594` §4.5, case 3's own two refusals, in the order §4.5.1 fixes: trees
-/// below first, since they describe a state of the disk that has to be
-/// fixed before either the product question or "plant or join" means
-/// anything; a registered product second, unless `bypass_registered` --
-/// `--new-tree` (`t594` §4.5's own escape for two forks that share a root
-/// commit) -- and only when there is no tree above `here` at all, since
-/// with one this is an ordinary join and the product question does not
-/// arise.
+/// `t594` §4.5, case 3's own second refusal: this folder's repositories
+/// already belong to a project the registry tracks. Skipped for
+/// `bypass_registered` -- `--new-tree` (`t594` §4.5's own escape for two
+/// forks that share a root commit) -- and skipped when there is a tree
+/// above `here` at all, since with one this is an ordinary join and the
+/// product question does not arise.
 ///
-/// Trees below run in both branches (`t594` fix-1, finding 6): a tree
-/// above `here` used to make this return before ever calling
-/// `trees_below`, so joining the closer tree above silently ignored a
-/// tree sitting below `here` too -- exactly the split product §6.4 exists
-/// to catch, just reached by joining instead of planting.
+/// Case 3's *first* refusal, a tree below, is **not** here: it is `run`'s
+/// own, checked before it picks a branch at all. It lived here once, which
+/// made it a guard only the planting branch ever ran -- the same shape
+/// that let `--join` walk around `refuse_home_or_global_store`. The order
+/// §4.5.1 fixes is unchanged, and firmer: a tree below describes a state
+/// of the disk that has to be fixed before the product question means
+/// anything, and `run` now refuses one before this is ever called.
 fn refuse_second_map(roots: &super::Roots, bypass_registered: bool) -> Result<(), Failure> {
-    let below = trees_below(&roots.here);
-    if !below.is_empty() {
-        return Err(tree_below_refusal(&below));
-    }
     if roots.located.is_some() {
         return Ok(());
     }
@@ -681,7 +702,7 @@ fn tree_root_above(tree_root: &Path) -> Option<PathBuf> {
 }
 
 fn tree_above_warning(name: Option<&str>) -> String {
-    let label = label_for(name);
+    let label = crate::registry::label_for(name);
     format!(
         "\n  This tree sits inside another one, in folder {label}. Sessions opened\n  \
          above this folder use that one: keep one tree per product.\n"
@@ -1139,7 +1160,16 @@ fn join(
             if crate::anchor::same_folder(&roots.here, &l.root) {
                 return Err(Failure::already_has_a_tree());
             }
-            return Err(Failure::already_a_lane());
+            // Two different folders reach this line, and only one of them
+            // is a lane: the one that carries `.vivac/lane` itself.
+            // Everything else here has no `.vivac/` of its own at all and
+            // simply resolves up into the tree above it, which is a
+            // different sentence -- `already_a_lane` names a file that
+            // folder does not have.
+            if l.lane.is_some() && crate::anchor::same_folder(&l.lane_dir, &roots.here) {
+                return Err(Failure::already_a_lane());
+            }
+            return Err(tree_above_refusal(&l.root));
         }
     }
     // Never `spec`, and never `target` either (`t594` fix-1, finding 10):
@@ -2134,6 +2164,28 @@ mod tests {
         );
         assert!(!msg.contains(secret_a), "{msg}");
         assert!(!msg.contains(secret_b), "{msg}");
+    }
+
+    /// The same promise for the refusal's mirror image, upward: the tree
+    /// above is named, and a name the redaction guard rejects is not
+    /// written down at all -- the sentence still says where to go and
+    /// read it.
+    #[test]
+    fn tree_above_refusal_with_the_name_withheld_says_so_without_naming_anyone() {
+        let secret = "someone@example.com";
+        assert!(
+            crate::redact::check_field("folder name", secret).is_some(),
+            "the guard must actually reject this name, or the test proves nothing"
+        );
+
+        let msg = tree_above_refusal(&PathBuf::from("/tmp").join(secret)).message();
+
+        assert!(
+            msg.contains("A tree sits above this folder, in another folder,"),
+            "{msg}"
+        );
+        assert!(msg.contains("vivac brief"), "{msg}");
+        assert!(!msg.contains(secret), "{msg}");
     }
 
     #[test]

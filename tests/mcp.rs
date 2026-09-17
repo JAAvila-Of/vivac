@@ -231,6 +231,72 @@ fn mcp_brief_carries_the_copy_notice_on_every_call() {
     );
 }
 
+/// `t594` fix-1, Ruling 22's other half, and the one nothing but a
+/// dead-code lint used to defend: a resident server never echoes the copy
+/// warning on `stderr`,
+/// however much it writes. That stream reaches nobody once the server is
+/// running headless -- not a terminal a person reads, not the stream an
+/// agent parses -- so the brief is its seat instead, which the test above
+/// pins.
+///
+/// A write and no `vivac_brief` anywhere near it, on purpose: with a brief
+/// called first `store::shown` would keep `stderr` quiet on its own, and
+/// this would pass whether or not the server ever knew it was resident.
+/// The write itself is checked too, so the silence is a decision and not
+/// the sound of nothing having happened.
+#[test]
+fn a_resident_server_writing_from_a_copy_says_nothing_on_stderr() {
+    let original = Sandbox::new_seeded("mcp-copy-quiet-orig");
+    original.ok(&["push", "a goal", "--why", "so the log has a first event"]);
+    let copy = Sandbox::new_empty_in("mcp-copy-quiet-copy", original.global_home());
+    std::fs::create_dir_all(copy.0.join(".vivac")).unwrap();
+    std::fs::copy(
+        original.0.join(".vivac").join("events"),
+        copy.0.join(".vivac").join("events"),
+    )
+    .unwrap();
+
+    let mut child = Command::new(BIN)
+        .current_dir(&copy.0)
+        .env("VIVAC_HOME", copy.global_home())
+        .arg("mcp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    {
+        // Dropped at the end of this block, which is what ends the
+        // server's own read loop and lets it reach the one place the
+        // warning could still be printed from.
+        let mut input = child.stdin.take().unwrap();
+        writeln!(input, "{HELLO}").unwrap();
+        writeln!(
+            input,
+            r#"{{"jsonrpc":"2.0","method":"notifications/initialized"}}"#
+        )
+        .unwrap();
+        writeln!(
+            input,
+            r#"{{"jsonrpc":"2.0","id":40,"method":"tools/call","params":{{"name":"vivac_push","arguments":{{"title":"Written from a copy over the server","why":"the copy warning must not reach this stream"}}}}}}"#
+        )
+        .unwrap();
+        input.flush().unwrap();
+    }
+    let finished = child.wait_with_output().unwrap();
+    let stderr = String::from_utf8_lossy(&finished.stderr).into_owned();
+
+    let log = std::fs::read_to_string(copy.0.join(".vivac").join("events")).unwrap();
+    assert!(
+        log.contains("Written from a copy over the server"),
+        "the write this test is about never landed:\n{log}"
+    );
+    assert!(
+        !stderr.contains("COPY OF ANOTHER TREE"),
+        "a resident server echoed the copy warning on a stream that reaches nobody:\n{stderr}"
+    );
+}
+
 #[test]
 fn find_comes_back_as_the_json_the_cli_would_print() {
     let c = seeded("find");
