@@ -2030,6 +2030,76 @@ fn join_by_path_works_the_same_way() {
     );
 }
 
+/// `run_in`, with `stdout` and `stderr` kept apart: proving the copy
+/// warning lands on the stream the agent's own parsing does not touch
+/// needs the two kept separate, the same reason `tests/registry.rs`'s own
+/// `run_split` exists.
+fn run_in_split(dir: &Path, home: &Path, args: &[&str]) -> (String, String, i32) {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_vivac"))
+        .current_dir(dir)
+        .env("VIVAC_HOME", home)
+        .args(args)
+        .output()
+        .unwrap();
+    (
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+        out.status.code().unwrap_or(-1),
+    )
+}
+
+/// `t594`: `--join` used to note the registry and throw
+/// the answer away (`let _ = registry::note(...)`), so joining a folder
+/// that is itself a known copy -- exactly the mistake the warning exists
+/// to catch -- passed in silence. `original` keeps the registry's `path`,
+/// alive; `copy` is registered as one of its copies (a plain `brief` run
+/// there first); a third folder joins `copy` itself.
+#[test]
+fn join_to_a_folder_that_is_itself_a_copy_warns_on_stderr() {
+    let c = Sandbox::new_empty("setup-join-copy");
+    let original = c.0.join("orig");
+    std::fs::create_dir_all(&original).unwrap();
+    run_in(
+        &original,
+        c.global_home(),
+        &["setup", "claude-code", "--yes"],
+    );
+    run_in(
+        &original,
+        c.global_home(),
+        &["push", "a goal", "--why", "so the log has a first event"],
+    );
+
+    let copy = c.0.join("copy");
+    std::fs::create_dir_all(copy.join(".vivac")).unwrap();
+    std::fs::copy(
+        original.join(".vivac").join("events"),
+        copy.join(".vivac").join("events"),
+    )
+    .unwrap();
+    // Registers `copy` in `orig`'s own `copies`, before the join this test
+    // is about ever runs.
+    run_in(&copy, c.global_home(), &["brief"]);
+
+    let here = c.0.join("third");
+    std::fs::create_dir_all(&here).unwrap();
+    let copy_str = copy.to_string_lossy().into_owned();
+    let (stdout, stderr, code) = run_in_split(
+        &here,
+        c.global_home(),
+        &["setup", "claude-code", "--join", &copy_str],
+    );
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert!(
+        stderr.contains("COPY OF ANOTHER TREE"),
+        "join to a known copy never warned:\n{stderr}"
+    );
+    assert!(
+        !stdout.contains("COPY OF ANOTHER TREE"),
+        "the warning leaked into stdout:\n{stdout}"
+    );
+}
+
 /// Case 3: `--join` to a folder with no tree refuses, and nothing is
 /// written. Only the exit code used to be checked (`t594` fix-1, finding
 /// 13); the text is what tells this refusal apart from any other exit-1

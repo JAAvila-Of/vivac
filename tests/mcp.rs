@@ -194,6 +194,43 @@ fn the_brief_comes_back_as_the_prose_it_is() {
     assert!(t.contains("Ship the release apparatus"), "{t}");
 }
 
+/// `t594` fix-1, Ruling 22: a resident server's own `stderr` reaches
+/// nobody, so its seat for the copy warning is the brief -- recalculated
+/// fresh on every `vivac_brief` call, never shown once and then withheld.
+/// Two calls in the same session, both carrying the notice, is what tells
+/// that apart from a guard that would silently drop the second one.
+#[test]
+fn mcp_brief_carries_the_copy_notice_on_every_call() {
+    let original = Sandbox::new_seeded("mcp-copy-orig");
+    original.ok(&["push", "a goal", "--why", "so the log has a first event"]);
+    let copy = Sandbox::new_empty_in("mcp-copy-copy", original.global_home());
+    std::fs::create_dir_all(copy.0.join(".vivac")).unwrap();
+    std::fs::copy(
+        original.0.join(".vivac").join("events"),
+        copy.0.join(".vivac").join("events"),
+    )
+    .unwrap();
+
+    let mut s = hello(&copy);
+    let first = s.ask(
+        r#"{"jsonrpc":"2.0","id":30,"method":"tools/call","params":{"name":"vivac_brief","arguments":{}}}"#,
+    );
+    let second = s.ask(
+        r#"{"jsonrpc":"2.0","id":31,"method":"tools/call","params":{"name":"vivac_brief","arguments":{}}}"#,
+    );
+    assert!(
+        text_of(&first).contains("COPY OF ANOTHER TREE"),
+        "{}",
+        text_of(&first)
+    );
+    assert!(
+        text_of(&second).contains("COPY OF ANOTHER TREE"),
+        "the second call dropped the notice, as though something governed it once per \
+         session:\n{}",
+        text_of(&second)
+    );
+}
+
 #[test]
 fn find_comes_back_as_the_json_the_cli_would_print() {
     let c = seeded("find");

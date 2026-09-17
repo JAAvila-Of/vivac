@@ -360,6 +360,12 @@ fn copy_block(root: &Path) -> Vec<String> {
         crate::registry::Noted::Copy { first, rest } => (first, rest),
         crate::registry::Noted::Fine => return vec![],
     };
+    // `session start` reaches this before it ever writes anything
+    // (`t594`): marking here, rather than after the block is
+    // printed, is what lets `registry::warn_if_wrote` see that the very
+    // same words already reached whoever is reading before it decides
+    // whether to say them again on `stderr`.
+    crate::store::mark_shown();
     let notice = crate::registry::copy_notice(first.as_deref(), &rest);
     let mut v = vec![format!(" {}", notice.heading), String::new()];
     v.extend(notice.body.lines().map(|l| format!("  {l}")));

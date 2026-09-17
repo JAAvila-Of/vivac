@@ -995,6 +995,17 @@ fn handle(project: &mut Project, line: &str) -> Option<String> {
 }
 
 pub fn serve(root: PathBuf, located: Option<store::Located>) -> R {
+    // A resident server outlives every one of its own calls, and its own
+    // `stderr` reaches nobody once it is running headless -- never a
+    // terminal a person is reading, never the stream an agent parses
+    // either. Declaring that here is what keeps `main`'s own
+    // `registry::warn_if_wrote` from echoing the copy warning on `stderr`
+    // once this process finally exits, whatever it wrote in between: this
+    // server's seat for that warning is the brief, recomputed fresh on
+    // every `vivac_brief` call for as long as it lives, not a one-shot
+    // echo made for a process that runs once and is gone (`t594` fix-1,
+    // Ruling 22).
+    store::mark_resident();
     let mut registry = Registry::open(vec![root.clone()], located.map(|l| (root, l)))?;
     let project = registry.first();
     let input = std::io::stdin();

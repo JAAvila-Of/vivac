@@ -29,6 +29,24 @@ fn run_in(dir: &Path, home: &Path, args: &[&str]) -> (String, i32) {
     )
 }
 
+/// `run_in`, with `stdout` and `stderr` kept apart: proving the copy
+/// warning lands on the stream the agent's own parsing does not touch
+/// needs the two kept separate, the same reason `tests/registry.rs`'s own
+/// `run_split` exists.
+fn run_in_split(dir: &Path, home: &Path, args: &[&str]) -> (String, String, i32) {
+    let o = std::process::Command::new(BIN)
+        .current_dir(dir)
+        .env("VIVAC_HOME", home)
+        .args(args)
+        .output()
+        .unwrap();
+    (
+        String::from_utf8_lossy(&o.stdout).into_owned(),
+        String::from_utf8_lossy(&o.stderr).into_owned(),
+        o.status.code().unwrap_or(-1),
+    )
+}
+
 /// The `id` of line 1 of the log, the same way `tests/lanes.rs` and
 /// `tests/registry.rs` read it, so a lane fabricated by hand can name the
 /// right project.
@@ -89,6 +107,44 @@ fn the_tree_moves_and_the_old_folder_stays_a_lane() {
         "the old folder keeps its own thread"
     );
 
+    std::fs::remove_dir_all(&dest).ok();
+}
+
+/// `t594`: `relocate` used to sit outside `may_append`,
+/// so the ambient sighting the generic dispatch already computes for the
+/// origin -- correctly `Noted::Copy` here -- never reached `stderr`. The
+/// origin writes its own `.vivac/lane` as part of the move (`t594` §4.6,
+/// step 8), which is exactly the write `warn_if_wrote` hangs off.
+#[test]
+fn relocate_from_a_copy_warns_on_stderr() {
+    let original = Sandbox::new_seeded("reloc-copy-orig");
+    original.ok(&["push", "a goal", "--why", "so the log has a first event"]);
+
+    let copy_src = sibling_dir(&original, "copy-src");
+    std::fs::create_dir_all(copy_src.join(".vivac")).unwrap();
+    std::fs::copy(
+        original.0.join(".vivac").join("events"),
+        copy_src.join(".vivac").join("events"),
+    )
+    .unwrap();
+
+    let dest = sibling_dir(&original, "copy-dest");
+    let (stdout, stderr, code) = run_in_split(
+        &copy_src,
+        original.global_home(),
+        &["relocate", dest.to_str().unwrap()],
+    );
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert!(
+        stderr.contains("COPY OF ANOTHER TREE"),
+        "relocate from a copy never warned:\n{stderr}"
+    );
+    assert!(
+        !stdout.contains("COPY OF ANOTHER TREE"),
+        "the warning leaked into stdout:\n{stdout}"
+    );
+
+    std::fs::remove_dir_all(&copy_src).ok();
     std::fs::remove_dir_all(&dest).ok();
 }
 
