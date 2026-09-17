@@ -412,7 +412,7 @@ fn relocate_refuses_a_tree_with_no_events_yet() {
 }
 
 /// `t594` fix-2, finding 10: `relocate ..` is the very thing another text
-/// in this tramo recommends, so the destination sitting *above* the
+/// in `t594` §6.4 recommends, so the destination sitting *above* the
 /// origin has to keep working. What is refused is the opposite direction.
 #[test]
 fn relocate_into_a_subfolder_of_the_origin_is_refused() {
@@ -497,8 +497,8 @@ fn relocate_with_a_relative_destination_still_lets_another_lane_find_it() {
 }
 
 /// `t594` fix-2, finding 3: `relocate ..` by name, the exact command this
-/// tramo's own advice recommends, moving the tree from a nested clone up
-/// into the folder that holds the product.
+/// crate's own advice recommends in `t594` §6.4, moving the tree up out
+/// of a nested clone into the folder that holds the product.
 #[test]
 fn relocate_dot_dot_moves_the_tree_up_one_level() {
     let home = unique_dir("dotdot-home");
