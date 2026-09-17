@@ -393,6 +393,9 @@ fn setup_in_a_linked_worktree_registers_the_tree_it_joins() {
 #[test]
 fn setup_in_a_linked_worktree_still_works_with_the_registry_gone() {
     let (root, feature, home) = worktree_fixture("noreg");
+    let _root = RemoveOnDrop(root);
+    let _feature = RemoveOnDrop(feature.clone());
+    let _home = RemoveOnDrop(home.clone());
 
     let (setup_out, setup_code) = run(&feature, &home, &["setup", "claude-code", "--yes"]);
     assert_eq!(setup_code, 0, "{setup_out}");
@@ -400,15 +403,15 @@ fn setup_in_a_linked_worktree_still_works_with_the_registry_gone() {
     std::fs::remove_dir_all(&home).ok();
     assert!(!home.exists(), "the registry survived its own deletion");
 
+    // `brief` below is free to recreate `home` on its own -- it is the
+    // registry's own folder, not a test fixture -- and `_home` above
+    // still has to sweep up whatever it leaves behind.
     let (brief_out, brief_code) = run(&feature, &home, &["brief"]);
     assert_eq!(brief_code, 0, "{brief_out}");
     assert!(
         !brief_out.contains("--join"),
         "the worktree came back unusable with the registry gone:\n{brief_out}"
     );
-
-    std::fs::remove_dir_all(&root).ok();
-    std::fs::remove_dir_all(&feature).ok();
 }
 
 /// Finding 5 (media-baja): `unchanged` used to decide `needs_lock` too, so
@@ -1507,10 +1510,10 @@ fn a_worktree_named_a_secret_never_writes_it_to_the_log() {
 // ---------------------------------------------------------------------------
 
 /// Removes its path when dropped, whether the test that made it passed or
-/// panicked. The folders below sit outside every `Sandbox`, so nothing else
-/// sweeps them up, and one of them is a junction or a symlink rather than a
-/// directory -- a failed assertion must leave neither behind on the machine
-/// that ran the suite.
+/// panicked. The folders it wraps sit outside every `Sandbox`, so nothing
+/// else sweeps them up, and one of them is a junction or a symlink rather
+/// than a directory -- a failed assertion must leave neither behind on the
+/// machine that ran the suite.
 struct RemoveOnDrop(PathBuf);
 
 impl Drop for RemoveOnDrop {

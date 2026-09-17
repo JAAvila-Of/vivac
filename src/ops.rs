@@ -2226,20 +2226,33 @@ mod tests {
         assert_eq!(lost[0].state, "gone");
     }
 
-    fn seeded_ctx(name: &str) -> (std::path::PathBuf, Ctx) {
+    /// A directory removed when this value drops, whether the test that
+    /// made it passed or panicked -- the same promise `tests/relocate.rs`'s
+    /// own `Owned` and `tests/lanes.rs`'s own `RemoveOnDrop` already make.
+    /// `an_inner_release_does_not_take_the_lock_from_the_caller_above`
+    /// below discarded its own path into `_tmp` and never cleaned it up at
+    /// all, on every run, not only a failing one.
+    struct TmpDir(std::path::PathBuf);
+
+    impl Drop for TmpDir {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.0).ok();
+        }
+    }
+
+    fn seeded_ctx(name: &str) -> (TmpDir, Ctx) {
         let tmp = std::env::temp_dir().join(format!("vivac-ops-{name}-{}", id::ulid()));
         let store = Store::create(&tmp).unwrap();
-        (tmp, Ctx::load(store, Whose::Founding).unwrap())
+        (TmpDir(tmp), Ctx::load(store, Whose::Founding).unwrap())
     }
 
     #[test]
     fn taking_the_write_lock_twice_does_not_deadlock() {
-        let (tmp, mut ctx) = seeded_ctx("relock");
+        let (_tmp, mut ctx) = seeded_ctx("relock");
         ctx.lock_for_write().unwrap();
         ctx.lock_for_write()
             .expect("a second take blocked on the first");
         ctx.unlock();
-        std::fs::remove_dir_all(&tmp).ok();
     }
 
     #[test]
