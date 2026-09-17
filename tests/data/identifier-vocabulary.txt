@@ -13,6 +13,7 @@ action
 active
 actor
 actual
+actually
 add
 added
 additions
@@ -387,6 +388,7 @@ describe
 description
 deserialize
 deserializer
+despite
 dest
 destination
 detached

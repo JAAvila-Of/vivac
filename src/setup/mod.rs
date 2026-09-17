@@ -29,6 +29,12 @@ pub fn dispatch(cwd: &Path, a: &Args) -> Result<i32, Failure> {
              Give one or the other.",
         ));
     }
+    if a.has("join") && a.has("new-tree") {
+        return Err(Failure::usage(
+            "--join joins a tree that already exists, and --new-tree plants a \
+             separate one, so they contradict each other.\n\n  Give one or the other.",
+        ));
+    }
     if let [first, ..] = a.extra(1) {
         return Err(Failure::usage(format!(
             "setup does not take \"{first}\".\n\n  It takes one word of its own: the harness to set up."

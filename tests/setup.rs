@@ -41,6 +41,18 @@ fn already_planted(dir: &Path) -> bool {
     dir.join(".vivac").join("config").is_file() || dir.join(".vivac").join("events").is_file()
 }
 
+/// The `id` a lane's own `.vivac/lane` names, the same field
+/// `tests/lanes.rs`'s own `lane_id_of` reads.
+fn lane_id_of(lane_dir: &Path) -> String {
+    let text =
+        std::fs::read_to_string(lane_dir.join(".vivac").join("lane")).expect("the lane file reads");
+    let v: serde_json::Value = serde_json::from_str(&text).expect("the lane file parses");
+    v["id"]
+        .as_str()
+        .expect("a lane file names an id")
+        .to_string()
+}
+
 /// `p` the way the binary's own `current_dir()` would print it, for building
 /// an expected text around a path.
 ///
@@ -1798,4 +1810,266 @@ fn a_tree_below_wins_over_a_registered_product() {
         "the product-registered refusal must not win here: {out}"
     );
     std::fs::remove_dir_all(&other_root).ok();
+}
+
+// ---------------------------------------------------------------------------
+// `t594` §4.5's own escapes: `--join`, `--new-tree`, `--lane-name`.
+// ---------------------------------------------------------------------------
+
+/// A command line, split the way a shell would: whitespace-separated,
+/// except inside a pair of double quotes. Just enough to run the exact
+/// command a refusal just printed back at it, quotes included.
+fn shell_split(line: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    for c in line.chars() {
+        match c {
+            '"' => in_quotes = !in_quotes,
+            c if c.is_whitespace() && !in_quotes => {
+                if !current.is_empty() {
+                    args.push(std::mem::take(&mut current));
+                }
+            }
+            c => current.push(c),
+        }
+    }
+    if !current.is_empty() {
+        args.push(current);
+    }
+    args
+}
+
+/// Case 1: `--join <name>` over a registered project: the folder gains
+/// `.vivac/lane`, the tree gains a `lane.declared`, and a write from
+/// there signs with that lane -- never with `main`.
+#[test]
+fn join_by_name_declares_a_lane_and_signs_writes_with_it() {
+    let c = Sandbox::new_empty("setup-join-name");
+    let target = c.0.join("IQuorum");
+    std::fs::create_dir_all(&target).unwrap();
+    run_in(&target, c.global_home(), &["setup", "claude-code", "--yes"]);
+
+    let here = c.0.join("IQuorum-v2");
+    std::fs::create_dir_all(&here).unwrap();
+    let (out, code) = run_in(
+        &here,
+        c.global_home(),
+        &["setup", "claude-code", "--join", "IQuorum"],
+    );
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        here.join(".vivac").join("lane").exists(),
+        "no lane file appeared in the joining folder"
+    );
+
+    let log_before = std::fs::read_to_string(target.join(".vivac").join("events")).unwrap();
+    assert!(
+        log_before.contains("\"type\":\"lane.declared\""),
+        "{log_before}"
+    );
+
+    let (push_out, push_code) = run_in(
+        &here,
+        c.global_home(),
+        &["push", "Work from the joined folder", "--why", "seed"],
+    );
+    assert_eq!(push_code, 0, "{push_out}");
+
+    let lane_id = lane_id_of(&here);
+    assert_ne!(lane_id, "main", "the joined folder signs as main itself");
+    let log_after = std::fs::read_to_string(target.join(".vivac").join("events")).unwrap();
+    assert!(
+        log_after.contains(&format!("\"lane\":\"{lane_id}\"")),
+        "the write did not sign with the joined lane:\n{log_after}"
+    );
+}
+
+/// Case 2: `--join <path>` works the same way.
+#[test]
+fn join_by_path_works_the_same_way() {
+    let c = Sandbox::new_empty("setup-join-path");
+    let target = c.0.join("Prod");
+    std::fs::create_dir_all(&target).unwrap();
+    run_in(&target, c.global_home(), &["setup", "claude-code", "--yes"]);
+
+    let here = c.0.join("Prod-v2");
+    std::fs::create_dir_all(&here).unwrap();
+    let target_str = target.to_string_lossy().into_owned();
+    let (out, code) = run_in(
+        &here,
+        c.global_home(),
+        &["setup", "claude-code", "--join", &target_str],
+    );
+    assert_eq!(code, 0, "{out}");
+    assert!(here.join(".vivac").join("lane").exists());
+}
+
+/// Case 3: `--join` to a folder with no tree refuses, and nothing is
+/// written.
+#[test]
+fn join_to_a_folder_with_no_tree_refuses() {
+    let c = Sandbox::new_empty("setup-join-no-tree");
+    let here = c.0.join("F");
+    std::fs::create_dir_all(&here).unwrap();
+    let empty_target = c.0.join("NoTreeHere").to_string_lossy().into_owned();
+
+    let (out, code) = run_in(
+        &here,
+        c.global_home(),
+        &["setup", "claude-code", "--join", &empty_target],
+    );
+    assert_eq!(code, 1, "{out}");
+    assert!(!here.join(".vivac").exists());
+}
+
+/// Case 4: `--join` from a folder that is already a lane of another tree
+/// refuses.
+#[test]
+fn join_from_a_folder_already_a_lane_of_another_tree_refuses() {
+    let c = Sandbox::new_empty("setup-join-already-lane");
+    let a = c.0.join("A");
+    std::fs::create_dir_all(&a).unwrap();
+    run_in(&a, c.global_home(), &["setup", "claude-code", "--yes"]);
+    let b = c.0.join("B");
+    std::fs::create_dir_all(&b).unwrap();
+    run_in(&b, c.global_home(), &["setup", "claude-code", "--yes"]);
+
+    let here = c.0.join("F");
+    std::fs::create_dir_all(&here).unwrap();
+    let (join_out, join_code) = run_in(
+        &here,
+        c.global_home(),
+        &["setup", "claude-code", "--join", "A"],
+    );
+    assert_eq!(join_code, 0, "{join_out}");
+
+    let (out, code) = run_in(
+        &here,
+        c.global_home(),
+        &["setup", "claude-code", "--join", "B"],
+    );
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        out.contains("This folder is already a lane of another tree."),
+        "{out}"
+    );
+}
+
+/// Case 5: `--new-tree` plants despite a shared root commit -- the
+/// negative of 1.3 shown first, without it.
+#[test]
+fn new_tree_plants_despite_a_shared_root_commit() {
+    let c = Sandbox::new_empty("setup-new-tree");
+    let first = c.0.join("Prod");
+    real_git_repo(&first.join("webapi"));
+    run_in(&first, c.global_home(), &["setup", "claude-code", "--yes"]);
+
+    let second = c.0.join("Prod-fork");
+    clone_repo(&first.join("webapi"), &second.join("webapi"));
+
+    let (refused_out, refused_code) =
+        run_in(&second, c.global_home(), &["setup", "claude-code", "--yes"]);
+    assert_eq!(refused_code, 1, "{refused_out}");
+    assert!(
+        refused_out.contains("already tracked by project"),
+        "{refused_out}"
+    );
+
+    let (out, code) = run_in(
+        &second,
+        c.global_home(),
+        &["setup", "claude-code", "--new-tree", "--yes"],
+    );
+    assert_eq!(code, 0, "{out}");
+    assert!(already_planted(&second));
+}
+
+/// Case 6: `--join` and `--new-tree` together is a usage error.
+#[test]
+fn join_and_new_tree_together_is_a_usage_error() {
+    let c = Sandbox::new_empty("setup-join-new-tree-exclusive");
+    let (out, code) = c.run(&["setup", "claude-code", "--join", "X", "--new-tree"]);
+    assert_eq!(code, 2, "{out}");
+}
+
+/// Case 7, first half: `--lane-name` names the lane.
+#[test]
+fn lane_name_names_the_lane() {
+    let c = Sandbox::new_seeded("setup-lane-name-ok");
+    let second = c.0.join("v2");
+    std::fs::create_dir_all(&second).unwrap();
+
+    let (out, code) = run_in(
+        &second,
+        c.global_home(),
+        &[
+            "setup",
+            "claude-code",
+            "--yes",
+            "--lane-name",
+            "custom-name",
+        ],
+    );
+    assert_eq!(code, 0, "{out}");
+    let log = std::fs::read_to_string(c.0.join(".vivac").join("events")).unwrap();
+    assert!(log.contains("\"name\":\"custom-name\""), "{log}");
+}
+
+/// Case 7, second half: a name the guard rejects falls back without
+/// failing the operation, and neither the name nor a fragment of it
+/// reaches the log. The same literal secret is pinned directly against
+/// the guard by `relocate.rs`'s own
+/// `a_lane_name_the_guard_rejects_falls_back_without_failing`.
+#[test]
+fn a_lane_name_the_guard_rejects_falls_back_without_failing() {
+    let secret = "ghp_16C7e42F292c6912E7710c838347Ae178B4a";
+    let c = Sandbox::new_seeded("setup-lane-name-guard");
+    let second = c.0.join("v2");
+    std::fs::create_dir_all(&second).unwrap();
+
+    let (out, code) = run_in(
+        &second,
+        c.global_home(),
+        &["setup", "claude-code", "--yes", "--lane-name", secret],
+    );
+    assert_eq!(code, 0, "{out}");
+    let log = std::fs::read_to_string(c.0.join(".vivac").join("events")).unwrap();
+    assert!(!log.contains(secret), "the secret leaked whole: {log}");
+    assert!(
+        !log.contains("16C7e42F292c6912E7710c838347Ae178B4a"),
+        "a fragment of the secret leaked: {log}"
+    );
+}
+
+/// Case 8, the one that closes the circle: a refusal from 1.3 prints a
+/// `--join` command naming a project whose folder has a space in it, so
+/// the printed command quotes it -- and running that exact command,
+/// quotes respected, actually works.
+#[test]
+fn the_join_command_printed_by_the_refusal_actually_works() {
+    let c = Sandbox::new_empty("setup-close-the-loop");
+    let first = c.0.join("IQ Suite");
+    real_git_repo(&first.join("webapi"));
+    run_in(&first, c.global_home(), &["setup", "claude-code", "--yes"]);
+
+    let second = c.0.join("IQ-Suite-v2");
+    clone_repo(&first.join("webapi"), &second.join("webapi"));
+
+    let (out, code) = run_in(&second, c.global_home(), &["setup", "claude-code", "--yes"]);
+    assert_eq!(code, 1, "{out}");
+    let join_line = out
+        .lines()
+        .find(|l| l.trim_start().starts_with("vivac setup claude-code --join"))
+        .unwrap_or_else(|| panic!("no --join command line in the refusal:\n{out}"));
+    assert!(
+        join_line.contains("\"IQ Suite\""),
+        "the printed command did not quote the name with a space: {join_line}"
+    );
+    let words = shell_split(join_line.trim());
+    let cli_args: Vec<&str> = words[1..].iter().map(String::as_str).collect();
+
+    let (join_out, join_code) = run_in(&second, c.global_home(), &cli_args);
+    assert_eq!(join_code, 0, "{join_out}");
+    assert!(second.join(".vivac").join("lane").exists());
 }
