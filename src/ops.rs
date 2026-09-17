@@ -352,7 +352,7 @@ impl Ctx {
     /// fresh fold of the log would apply (`f590`).
     fn emit(&mut self, bodies: Vec<Body>) -> R {
         let mut bodies = bodies;
-        // `t594` §2.3 rule 3, paso 3, moved here in fix-1 round 1
+        // `t594` §2.3 rule 3, step 3, moved here in fix-1 round 1
         // (finding B): a worktree joins the moment something actually
         // writes, never merely because the write lock was taken.
         // `lock_for_write` runs before an operation even knows whether it
@@ -503,7 +503,7 @@ struct WhoseLane {
     lane_assumed: bool,
 }
 
-/// `t594` §2.3, paso 1: decides whose lane a folder is, once its tree is
+/// `t594` §2.3, step 1: decides whose lane a folder is, once its tree is
 /// already folded, whether the caller already named it outright, and
 /// whether `lane` is only a fallback with no `.vivac/lane` file behind it
 /// (`WhoseLane::lane_assumed` -- `t594` §4.6, review round 1: the check this
