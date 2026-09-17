@@ -170,7 +170,7 @@ fn main() {
     // for a side effect nobody asked about (`f603`).
     output::flush();
     note_late();
-    // The single seat for the copy warning (`t594` fix-1, Ruling 21): by
+    // The single seat for the copy warning (`t594`): by
     // now the command has either written or it has not, so this is the one
     // place left in the whole process that can answer honestly.
     registry::warn_if_wrote();
@@ -354,7 +354,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
     }
 
     if cmd == "init" {
-        // `t594` fix-4, finding N7a: a folder can carry a `.vivac/lane`
+        // `t594`: a folder can carry a `.vivac/lane`
         // naming another tree entirely -- exactly what `relocate` leaves
         // the origin holding -- without itself being `already_planted`, the
         // renamed-away log and config never counting as one. Planting a
@@ -495,7 +495,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
                 );
                 // Left for `warn_if_wrote` to decide, once this command is
                 // done running and can say whether it actually wrote
-                // anything (`t594` fix-1, Ruling 21) -- never here, where
+                // anything (`t594`) -- never here, where
                 // nothing has written yet no matter which verb this is.
                 registry::set_pending(noted);
             }
@@ -586,7 +586,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
             // tree, so it reads that tree's founding lane, the same as
             // any tree nobody ran `setup` in. Defensible and not a lie
             // today; it stops being one the day a foreign tree has a
-            // second lane (`t594` task 6, review round 1).
+            // second lane (`t594`).
             let tree = index::load(&store::Store::open(foreign_root)?, false)?;
             extra_word(a)?;
             if a.has("full") {

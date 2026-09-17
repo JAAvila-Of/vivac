@@ -194,7 +194,7 @@ fn the_brief_comes_back_as_the_prose_it_is() {
     assert!(t.contains("Ship the release apparatus"), "{t}");
 }
 
-/// `t594` fix-1, Ruling 22: a resident server's own `stderr` reaches
+/// `t594`: a resident server's own `stderr` reaches
 /// nobody, so its seat for the copy warning is the brief -- recalculated
 /// fresh on every `vivac_brief` call, never shown once and then withheld.
 /// Two calls in the same session, both carrying the notice, is what tells
@@ -231,7 +231,7 @@ fn mcp_brief_carries_the_copy_notice_on_every_call() {
     );
 }
 
-/// `t594` fix-1, Ruling 22's other half, and the one nothing but a
+/// `t594`'s other half, and the one nothing but a
 /// dead-code lint used to defend: a resident server never echoes the copy
 /// warning on `stderr`,
 /// however much it writes. That stream reaches nobody once the server is

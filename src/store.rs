@@ -43,8 +43,8 @@ const LOCK_SPIN: std::time::Duration = std::time::Duration::from_millis(50);
 /// (`registry::warn_if_wrote`) cares about: an event appended (`append`,
 /// below) or a `.vivac/lane` file written (`lane::write`). The warning
 /// hangs off this fact and off nothing else -- not which verb ran, and not
-/// whether the verb is merely capable of writing (`t594` fix-1, Ruling
-/// 21). A usage failure that never reaches either write leaves this
+/// whether the verb is merely capable of writing (`t594`). A usage
+/// failure that never reaches either write leaves this
 /// `false`, and a write through any path -- an ordinary `push`, `setup
 /// --join`, `relocate` -- sets it the same way.
 static WROTE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -84,7 +84,7 @@ pub(crate) fn shown() -> bool {
 /// agent parses either -- so the copy warning is not this process's own to
 /// print on that stream at all: its seat is the brief instead, recomputed
 /// fresh on every `vivac_brief` call for as long as the server lives
-/// (`t594` fix-1, Ruling 22).
+/// (`t594`).
 static RESIDENT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Declares this process resident. Called once, from `mcp::serve`, before
@@ -447,7 +447,7 @@ fn resolve_lane(
             });
         }
     }
-    // `t594` fix-2, finding 1: writing this folder's own `.vivac/lane` is
+    // `t594`: writing this folder's own `.vivac/lane` is
     // what takes away the one path that used to resolve it. A linked
     // worktree with *no* lane file at all never reaches this function --
     // `locate_here` answers `None` for it, and `locate_from`'s own
@@ -778,7 +778,7 @@ fn regenerated_version(root: &Path) -> ConfigVersion {
 /// of. `Store::open` would fill a missing one in, and that write is exactly
 /// what a caller that must never write -- `setup`'s own `--dry-run` -- is
 /// not allowed to trigger just by asking what version a tree is on
-/// (`t594` fix-1, finding 6).
+/// (`t594`).
 pub(crate) fn peek_config_version(root: &Path) -> Option<ConfigVersion> {
     let raw = fs::read_to_string(root.join(DIR).join(CONFIG)).ok()?;
     read_config(&raw).ok().map(|c| c.version)
@@ -1319,7 +1319,7 @@ mod tests {
     // no real use for the registry: `locate` reads it from `VIVAC_HOME`,
     // and this whole module's own unit tests run under `cfg(test)`, where
     // `store_dir` now refuses to answer with this machine's real home at
-    // all -- `t594` fix-4, the same reason it refuses for a unit test
+    // all -- `t594`, the same reason it refuses for a unit test
     // anywhere in the crate. `None` says outright that these are testing
     // the walk itself, not the fallback.
     #[test]
@@ -1414,7 +1414,7 @@ mod tests {
         fs::remove_dir_all(&registry_dir).ok();
     }
 
-    /// `t594` fix-3: a folder can carry both a lane file and a stray
+    /// `t594`: a folder can carry both a lane file and a stray
     /// `config` of its own without the two agreeing. `Store::open` writes
     /// a fresh, empty config the moment `events` is missing where `config`
     /// is not -- no crash needed, a plain read does it -- and this is
@@ -1590,7 +1590,7 @@ mod tests {
         fs::remove_dir_all(&tmp).ok();
     }
 
-    /// `t594` fix-2, finding 1: once the folder inside a linked worktree
+    /// `t594`: once the folder inside a linked worktree
     /// carries its own `.vivac/lane`, resolution takes `resolve_lane`
     /// rather than the plain "no lane" fallback the test above exercises
     /// -- and until this fix, that path never tried the worktree's main
@@ -1753,7 +1753,7 @@ mod tests {
         fs::remove_dir_all(&tmp).ok();
     }
 
-    /// `t594` fix-1, finding 5: a config that vanishes over a log that
+    /// `t594`: a config that vanishes over a log that
     /// already holds a `lane.declared` must come back locked to the lanes
     /// sentence, the same as `d444` already does for a pillar or a rule --
     /// `log_already_governed`'s blind spot before this test existed.

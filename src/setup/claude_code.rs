@@ -31,8 +31,8 @@ pub fn run(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     }
     // Checked here, before the branch below, rather than inside `apply`
     // alone: a guard that lives in one branch is a guard the other branch
-    // does not have, and `--join` used to skip it entirely (`t594` fix-1,
-    // finding 2). `--undo` is still excluded, on purpose: undoing whatever
+    // does not have, and `--join` used to skip it entirely (`t594`).
+    // `--undo` is still excluded, on purpose: undoing whatever
     // an earlier setup wrote there is always safe.
     if let Some(refusal) = super::refuse_home_or_global_store(roots) {
         return Err(refusal);
@@ -491,7 +491,7 @@ const TREE_SCAN_DEPTH: u32 = 2;
 /// found -- but looking for a tree instead of a repository, and never
 /// checking `folder` itself. That last part used to be unreachable rather
 /// than absent: the only caller skipped calling this at all once `folder`
-/// already had a tree of its own. `t594` fix-1, finding 6 made that call
+/// already had a tree of its own. `t594` made that call
 /// reachable, and it surfaced the gap -- calling this on a folder that
 /// already holds a tree used to report the folder itself as a tree
 /// sitting "below" it.
@@ -788,7 +788,7 @@ fn fold_tree(tree_root: &Path) -> crate::model::Tree {
 /// What the tree already says about `lane_id`, read without writing
 /// anything: `Store::open` would fill a missing `config` in on its own,
 /// and that write is one `--dry-run` must never trigger just by asking
-/// what a tree is on (`t594` fix-1, finding 6). `config_version` reads
+/// what a tree is on (`t594`). `config_version` reads
 /// `ConfigVersion::One` for a tree with no config at all -- the same
 /// answer `Store::open` would settle on for a tree with no lane and no
 /// pillar or rule either, so `needs_lock` comes out right either way
@@ -812,7 +812,7 @@ fn existing_lane(tree: &Path, lane_id: &str, folded: &crate::model::Tree) -> Exi
 /// `t594` §4.5.2's five cases, decided from `roots` alone: whether there is
 /// a tree above `here` at all, and whether `here` already carries its own
 /// `.vivac/lane` (`Located::lane_dir == here`, rather than some ancestor's)
-/// -- plus a sixth, `t594` fix-1 round 2: `here` holds the tree, has no
+/// -- plus a sixth, `t594`: `here` holds the tree, has no
 /// lane file, and `main` has already been claimed by another folder
 /// (`main_claimed`). Declaring `main` there again would be a lie about
 /// where `main` actually lives, so this mints `here` a lane of its own
@@ -833,8 +833,7 @@ fn plan_lane(roots: &super::Roots, lane_name: Option<&str>) -> LanePlan {
     // as opaque as a ULID when nobody asks to rename it (`lane::MAIN`'s
     // own doc), but accepting `--lane-name` and silently doing nothing
     // with it -- §2.3 names both planting and joining -- would be worse
-    // than either using it or refusing it outright (`t594` fix-1, finding
-    // 8).
+    // than either using it or refusing it outright (`t594`).
     let requested_name = lane_name.unwrap_or(&folder_name);
     let here_has_its_own_vivac = roots
         .located
@@ -888,8 +887,7 @@ fn plan_lane(roots: &super::Roots, lane_name: Option<&str>) -> LanePlan {
 
 /// `main`'s id never changes, and neither does its name, unless
 /// `lane_name` explicitly asks for one -- never a fallback to this
-/// folder's own name, the way every other lane gets one (`t594` fix-1,
-/// finding 8).
+/// folder's own name, the way every other lane gets one (`t594`).
 fn main_lane(lane_name: Option<&str>) -> (String, String, bool) {
     let name = match lane_name {
         Some(requested) => crate::lane::declared_name(crate::lane::MAIN, requested),
@@ -910,7 +908,7 @@ fn main_lane(lane_name: Option<&str>) -> (String, String, bool) {
 /// `main` by hand would do, and not a placeholder: task 8 decides with
 /// this list whether a linked worktree is one of the lane's own
 /// repositories or a lane apart, and an empty list would hand it the
-/// wrong answer (`t594` fix-1, finding 2). Taken and released under its
+/// wrong answer (`t594`). Taken and released under its
 /// own lock, before the new lane's own lock is taken, since a second
 /// attempt to lock the same file from this same process would otherwise
 /// wait on itself.
@@ -976,7 +974,7 @@ fn write_lane(roots: &super::Roots, plan: &LanePlan) -> Result<(), Failure> {
     // said which lane it is yet -- would ask a question this call already
     // answered, and could answer it differently for a worktree `setup`
     // is declaring by hand rather than leaving to join on its own
-    // (`t594` fix-1, finding G).
+    // (`t594`).
     let mut ctx =
         crate::ops::Ctx::load_for_write(store, crate::ops::Whose::Declared(plan.lane_id.clone()))?;
     ctx.lock_for_write()?;
@@ -987,8 +985,8 @@ fn write_lane(roots: &super::Roots, plan: &LanePlan) -> Result<(), Failure> {
 /// log: for a lane whose declaration already matches (`unchanged`), there
 /// is nothing new to say, but the config can still have lost the lock
 /// underneath it -- by hand, or by an older `Store::open` regenerating one
-/// that went missing before it knew a lane event counts too (`t594` fix-1,
-/// finding 5). `unchanged` must never decide this on its own: a folder
+/// that went missing before it knew a lane event counts too (`t594`).
+/// `unchanged` must never decide this on its own: a folder
 /// that has nothing new to declare can still be the reason the config
 /// needs relocking.
 fn relock_lanes(tree: &Path) -> Result<(), Failure> {
@@ -1000,7 +998,7 @@ fn relock_lanes(tree: &Path) -> Result<(), Failure> {
 
 /// The clause text for a `Failure`, without doubling an `Io` variant's own
 /// "Input/output error:" prefix once `failure_with_rollback` wraps it a
-/// second time (`t594` fix-1, finding 3): `Failure::message` already adds
+/// second time (`t594`): `Failure::message` already adds
 /// that prefix for `Io`, and the planting failure this mirrors uses a raw
 /// `std::io::Error` -- which has no such prefix to begin with -- for the
 /// exact same reason.
@@ -1073,7 +1071,7 @@ fn union_repo_roots(tree: &crate::model::Tree) -> Vec<String> {
 /// `setup` could join a folder whose only path back to its tree is the
 /// registry: a linked worktree that sits beside the tree's own folder
 /// rather than above it, which `resolve_lane` (`store.rs`) can only ever
-/// find through here (`t594` fix-1, finding 1). Quiet when there is
+/// find through here (`t594`). Quiet when there is
 /// nowhere to note or nothing to note it with yet, the same as the
 /// ordinary path.
 fn note_registry(roots: &super::Roots) {
@@ -1104,7 +1102,7 @@ fn note_registry(roots: &super::Roots) {
         // Left for `registry::warn_if_wrote` to decide, once this run is
         // done and can say whether it actually wrote anything: the
         // `nothing_to_write` branch above reaches this call too, and that
-        // one is a read (`t594` fix-1, Ruling 21).
+        // one is a read (`t594`).
         crate::registry::set_pending(noted);
     }
 }
@@ -1154,7 +1152,7 @@ fn join(
     // joining the very one it already resolves to does nothing at all, since
     // there is nothing left to do. A folder that holds a tree of its own
     // gets a different text: it carries no lane to redirect, it carries
-    // the tree (`t594` fix-1, finding 9).
+    // the tree (`t594`).
     if let Some(l) = &roots.located {
         if !crate::anchor::same_folder(&l.root, &target) {
             if crate::anchor::same_folder(&roots.here, &l.root) {
@@ -1183,7 +1181,7 @@ fn join(
             return Ok(0);
         }
     }
-    // Never `spec`, and never `target` either (`t594` fix-1, finding 10):
+    // Never `spec`, and never `target` either (`t594`):
     // unlike the "no tree yet" refusal above, this is the one place `join`
     // would otherwise echo a path back that a person did not necessarily
     // type themselves -- `spec` might have resolved through a project
@@ -1205,9 +1203,9 @@ fn join(
     let name = crate::lane::declared_name(&id, lane_name.unwrap_or(&folder_name));
     let (repos, _excluded) = filtered_repos(crate::repos::scan(&roots.here));
 
-    // `--dry-run` promises nothing is written by any path (`t594` fix-2,
-    // finding 2 restored that for `apply`; `--join` reopened it, `t594`
-    // fix-1, finding 4): nothing below this point runs.
+    // `--dry-run` promises nothing is written by any path: `apply` got
+    // that back once and `--join` reopened it (`t594`), so nothing below
+    // this point runs.
     if dry_run {
         match crate::registry::folder_name(&target) {
             Some(name) => outln!("  This folder would become a lane of the tree in \"{name}\"."),
@@ -1293,8 +1291,8 @@ fn lane_carried_by<'a>(l: &'a crate::store::Located, here: &Path) -> Option<&'a 
 ///
 /// The second sentence is for `--lane-name` asking for a name the lane
 /// does not have: the flag was read and not acted on, and a flag accepted
-/// in silence leaves nothing behind to say it was ignored (`t594` fix-1,
-/// finding 8). Asking for the name it already carries needs no sentence --
+/// in silence leaves nothing behind to say it was ignored (`t594`).
+/// Asking for the name it already carries needs no sentence --
 /// nothing was left undone. The tree is folded only for that question, so
 /// a run without the flag reads no log at all.
 fn say_nothing_was_done(target: &Path, lane_id: &str, lane_name: Option<&str>) {
@@ -1323,7 +1321,7 @@ fn say_nothing_was_done(target: &Path, lane_id: &str, lane_name: Option<&str>) {
 
 fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     // `run` already refused the home folder and the global store before
-    // reaching here (`t594` fix-1, finding 2): both guards used to live in
+    // reaching here (`t594`): both guards used to live in
     // this function alone, which is exactly what let `--join` skip them.
     refuse_second_map(roots, a.has("new-tree"))?;
 
@@ -1436,8 +1434,8 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
 
     // Checked before `nothing_to_write`, not after: that branch notes the
     // registry (`note_registry`), and `--dry-run` promises to write
-    // nothing anywhere, the machine's registry included (`t594` fix-2,
-    // finding 2). An already-set-up project asking for `--dry-run` used
+    // nothing anywhere, the machine's registry included (`t594`).
+    // An already-set-up project asking for `--dry-run` used
     // to reach the other branch first and note it anyway.
     if a.has("dry-run") {
         outln!("{piece_block}{TRAILING_PARAGRAPH}\n  Nothing written: --dry-run.");
@@ -1572,8 +1570,8 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         }
     } else if lane.needs_lock {
         // Nothing new to declare, but the config still needs the lock
-        // `unchanged` must never decide on its own (`t594` fix-1, finding
-        // 5): here the only write is the lock itself, so a failure has
+        // `unchanged` must never decide on its own (`t594`):
+        // here the only write is the lock itself, so a failure has
         // nothing irreversible to own up to and the ordinary wording is
         // accurate as it stands.
         if let Err(e) = relock_lanes(tree) {
@@ -1589,7 +1587,7 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     }
 
     // What *this run* actually did to the tree, for `written_text`
-    // (`t594` fix-3): every one of these is independent, and `needs_lock`
+    // (`t594`): every one of these is independent, and `needs_lock`
     // decides `config_locked` regardless of which branch above closed
     // it -- both `write_lane`'s own `declare_lane` and `relock_lanes`
     // close the same lock, and only ever do it for real when it was
@@ -1663,7 +1661,7 @@ fn render_piece_block(
         // this line in the same run -- the tree's own, from before `t594`
         // §4.9, and a brand new lane's own (below). Only then does the
         // tree's own copy say whose it is; on its own it reads exactly as
-        // it always has (`t594` fix-1, finding 7).
+        // it always has (`t594`).
         let status = if lane.is_new {
             "create: keeps the tree's .vivac/ out of version control"
         } else {
@@ -1749,7 +1747,7 @@ fn render_piece_block(
     // What the redaction guard kept out is the folder's own state, not a
     // change: it is still true on a run that declares nothing new, so it
     // is said every time rather than only on the run that first found it
-    // (`t594` fix-1, finding 8).
+    // (`t594`).
     if let Some((count, rule)) = lane.excluded {
         let noun = if count == 1 {
             "repository"
@@ -1762,8 +1760,7 @@ fn render_piece_block(
         ));
     }
     // Independent of `unchanged`: the config can need the lock even when
-    // nothing about the declaration itself changed (`t594` fix-1, finding
-    // 5).
+    // nothing about the declaration itself changed (`t594`).
     if lane.needs_lock {
         s.push_str(&piece_line(
             "config",
@@ -1781,7 +1778,7 @@ const NO_TERMINAL_TEXT: &str = "  setup asks before writing, and there is no ter
 
 /// What this run wrote, which decides how it ends (`t579` §15.5): a
 /// paragraph is only printed when it is true of this run, and it says
-/// what that run did, no more and no less (`t594` fix-3) -- every one of
+/// what that run did, no more and no less (`t594`) -- every one of
 /// these is a separate thing `apply` can write to the tree or the
 /// folder, and any subset of them can be true together.
 struct Written {
@@ -1801,7 +1798,7 @@ struct Written {
     lane_declared: bool,
     /// This run closed the lanes lock, whether that happened on its own
     /// (nothing else changed) or alongside declaring the lane above
-    /// (`t594` fix-2, finding 3 first tried to treat these as mutually
+    /// (`t594` first tried to treat these as mutually
     /// exclusive, which they are not: a brand new lane commonly closes
     /// the lock in the very same write that declares it).
     config_locked: bool,
@@ -2194,8 +2191,7 @@ mod tests {
     /// whose names the redaction guard withholds entirely: unspecified by
     /// `t594` §1.2, which only names the plural form's shape, not what it
     /// says once nothing is nameable at all -- so it earns its keep by
-    /// having a test rather than by being removed (`t594` fix-1, finding
-    /// 11).
+    /// having a test rather than by being removed (`t594`).
     #[test]
     fn tree_below_refusal_with_every_name_withheld_says_so_without_naming_anyone() {
         let secret_a = "someone@example.com";

@@ -159,7 +159,7 @@ fn a_lane_whose_registry_entry_is_removed_refuses_with_exit_4() {
     std::fs::remove_dir_all(&lane_dir).ok();
 }
 
-/// `t594` fix-4, finding N7a: `init` inside a folder that already carries
+/// `t594`: `init` inside a folder that already carries
 /// somebody else's `.vivac/lane` -- exactly what `relocate` leaves the
 /// origin holding -- must refuse rather than plant a second, empty tree
 /// there and let `stack`/`push` go on writing to the one the lane names.
@@ -200,7 +200,7 @@ fn log_text(c: &Sandbox) -> String {
 }
 
 /// Whether `dir` holds a tree of its own: `store::already_planted`'s own
-/// definition, `config` **or** `events` (`t594` fix-1, finding 4).
+/// definition, `config` **or** `events` (`t594`).
 fn already_planted(dir: &Path) -> bool {
     dir.join(".vivac").join("config").is_file() || dir.join(".vivac").join("events").is_file()
 }
@@ -313,7 +313,7 @@ fn setup_on_an_existing_trees_own_folder_declares_main_and_changes_nothing_else(
 }
 
 // ---------------------------------------------------------------------------
-// `t594` fix-1, ronda 1.
+// `t594`.
 // ---------------------------------------------------------------------------
 
 fn git(dir: &Path, args: &[&str]) {
@@ -382,7 +382,7 @@ fn setup_in_a_linked_worktree_registers_the_tree_it_joins() {
     std::fs::remove_dir_all(&home).ok();
 }
 
-/// `t594` fix-2, finding 1: `registry::note` swallows its own errors by
+/// `t594`: `registry::note` swallows its own errors by
 /// design (`f603`), so noting the tree on its own cannot be what keeps a
 /// linked worktree usable -- a `VIVAC_HOME` that cannot be written to
 /// would leave it in exit 4 just the same, silently. What actually fixes
@@ -437,7 +437,7 @@ fn setup_relocks_the_config_when_its_lanes_sentence_was_removed_by_hand() {
         after.contains("this tree holds lanes"),
         "the sentence did not come back:\n{after}\n\n{out}"
     );
-    // `t594` fix-3: this run recorded no thread at all, only closed the
+    // `t594`: this run recorded no thread at all, only closed the
     // lock again, and the message has to say that rather than the
     // sentence a real declaration earns.
     assert!(
@@ -498,7 +498,7 @@ fn append_raw_line(tree_root: &Path, line: &str) {
 /// change `Store::lock_lanes_in_config` makes, so a test that seeds a
 /// `lane.declared` with `append_raw_line` -- which never touches the
 /// config -- still leaves the tree looking like one where a real `setup`
-/// or a real auto-join already ran. `t594` branch-fix-1 #2 gates joining a
+/// or a real auto-join already ran. `t594` gates joining a
 /// worktree on nothing less than this.
 fn seed_lanes_config(tree_root: &Path) {
     let path = tree_root.join(".vivac").join("config");
@@ -533,7 +533,7 @@ fn lane_id_of(lane_dir: &Path) -> String {
 #[test]
 fn a_worktree_inside_the_lanes_folder_joins_on_its_first_write() {
     let (root, feature, home) = worktree_inside_fixture("joins");
-    // `t594` branch-fix-1 #2: joining on its own requires the tree to
+    // `t594`: joining on its own requires the tree to
     // already have a lane declared somewhere, so this stands in for a
     // `setup` that ran before `feature` ever existed.
     append_raw_line(
@@ -583,11 +583,11 @@ fn a_worktree_inside_the_lanes_folder_joins_on_its_first_write() {
 
 /// (2): `git worktree add ../feature`, outside `root`'s own folder. It
 /// joins exactly the same way, found through its main copy the same way
-/// `setup` already was (`t594` fix-1).
+/// `setup` already was (`t594`).
 #[test]
 fn a_worktree_outside_the_folder_joins_through_its_main_copy() {
     let (root, feature, home) = worktree_fixture("outside-joins");
-    // `t594` branch-fix-1 #2: joining on its own requires the tree to
+    // `t594`: joining on its own requires the tree to
     // already have a lane declared somewhere. `feature` sits outside
     // `root` entirely, so seeding this after it exists cannot make
     // `repos::scan` find it and change what this test is proving.
@@ -629,7 +629,7 @@ fn a_pending_worktree_inherits_the_declared_root_commit_without_git() {
         &root,
         r#"{"seq":1,"id":"01SEEDMAINAAAAAAAAAAAAAAAA","ts":"2026-01-01T00:00:00Z","actor":"a_test0000000","lane":"main","payload":{"type":"lane.declared","lane":"main","name":"main","repos":[{"path":".","root":"01NOTARELCOMMITAAAAAAAAAAA"}]}}"#,
     );
-    // `t594` branch-fix-1 #2: joining on its own requires the tree to
+    // `t594`: joining on its own requires the tree to
     // already have a lane declared somewhere.
     seed_lanes_config(&root);
 
@@ -661,7 +661,7 @@ fn a_pending_worktree_inherits_the_declared_root_commit_without_git() {
     std::fs::remove_dir_all(&home).ok();
 }
 
-/// `t594` branch-fix-1 #6: a worktree that has not joined yet reads from
+/// `t594`: a worktree that has not joined yet reads from
 /// `ops::PENDING_VIEW`, an empty lane name, and the header used to print
 /// that empty string verbatim -- `lane: ` with nothing after the colon,
 /// the one byte of output that changed on a tree nobody had written to
@@ -687,7 +687,7 @@ fn a_worktree_that_has_not_joined_yet_says_so_in_its_own_brief() {
     std::fs::remove_dir_all(&home).ok();
 }
 
-/// `t594` branch-fix-2 #1, the panic recipe reproduced whole: `setup`
+/// `t594`, the panic recipe reproduced whole: `setup`
 /// declares `main` for real, then `.vivac/events` is deleted by hand --
 /// crash, a bad `rm`, does not matter which -- and a `push` from a
 /// worktree that has never joined anything reads the gate. `config`
@@ -1052,7 +1052,7 @@ fn looking_inside_an_unjoined_worktree_leaves_no_trace() {
 }
 
 // ---------------------------------------------------------------------------
-// `t594` fix-1, round 1: joining moved from `lock_for_write` to `emit`, so a
+// `t594`: joining moved from `lock_for_write` to `emit`, so a
 // command that refuses before it has anything to write never joins either.
 // ---------------------------------------------------------------------------
 
@@ -1125,7 +1125,7 @@ fn mcp_joins_a_worktree_the_same_way_the_cli_does() {
     let home = unique("mcp-joins-home");
     let (init_out, init_code) = run(&root, &home, &["init"]);
     assert_eq!(init_code, 0, "{init_out}");
-    // `t594` branch-fix-1 #2: joining on its own requires the tree to
+    // `t594`: joining on its own requires the tree to
     // already have a lane declared somewhere, so this stands in for a
     // `setup` that ran before either worktree existed.
     append_raw_line(
@@ -1210,7 +1210,7 @@ fn mcp_joins_a_worktree_the_same_way_the_cli_does() {
 // and there is no second implementation under `web` left to prove
 // separately -- see `src/web/mod.rs::serve`.
 
-/// Finding D, closed for real in fix-1 round 2: the §6.9 refusal's own
+/// Closed for real later in `t594`: the §6.9 refusal's own
 /// remedy is `vivac setup claude-code`, and running it in the very folder
 /// §6.9 refuses used to refuse too, citing its own message back. `setup`
 /// now mints this folder a lane of its own instead of declaring `main`
@@ -1316,7 +1316,7 @@ fn import_signs_the_contexts_own_lane_not_always_main() {
 }
 
 // ---------------------------------------------------------------------------
-// `t594` branch-fix-1, round with the final review of the whole branch.
+// `t594` the final review of the whole branch.
 // ---------------------------------------------------------------------------
 
 /// Finding 2, the viga itself: a hook, not a person, writing
@@ -1617,7 +1617,7 @@ fn relocate_and_join_treat_two_spellings_of_the_same_folder_as_one() {
 }
 
 // ---------------------------------------------------------------------------
-// `t594` task 6: the load-bearing property from `t594` fix-1 round 2,
+// `t594` task 6: the load-bearing property from `t594`,
 // exercised once more with the registry carrying another, unrelated
 // project -- the state this task introduces and the existing test above
 // never had a chance to try, since every sandbox up to this task minted

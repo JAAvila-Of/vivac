@@ -15,7 +15,7 @@
 //! between any two of them leaves a folder `store::already_planted` would
 //! call a tree that is not the real one.
 //!
-//! Ten steps (`t594` fix-2 corrects the eight the original task named):
+//! Ten steps (`t594` corrects the eight the original task named):
 //!
 //! 1. Refuse from anywhere but the folder that holds the tree.
 //! 2. Refuse a destination that is this folder itself, or sits inside it.
@@ -234,7 +234,7 @@ pub fn run(
 
     // Step 6. `written` is filled in as it happens, so a rollback removes
     // exactly what this run created and nothing that was already there
-    // (`t594` fix-2, finding M1).
+    // (`t594`).
     let destination_vivac = destination_abs.join(crate::store::DIR);
     let mut written = Written {
         vivac_dir_created: !destination_vivac.is_dir(),
@@ -389,8 +389,8 @@ fn copy_refusal(name: Option<&str>) -> Failure {
 /// access -- which is not cosmetic: `vivac relocate ..` used to leave the
 /// registry holding `…\clone\..` outright, and `Path::file_name` of a path
 /// ending in `..` is `None`, so `render::project_name` read that back as
-/// the bare word `"-"` rather than the folder's own name (`t594` fix-3,
-/// finding N1) -- every project this ever ran on would have collided on
+/// the bare word `"-"` rather than the folder's own name (`t594`) --
+/// every project this ever ran on would have collided on
 /// that one name in `find --everywhere`.
 ///
 /// Nothing this touches is a promise about the destination's real, on-disk
@@ -441,7 +441,7 @@ fn destination_holds_a_tree_or_lane(destination: &Path) -> bool {
 }
 
 /// What step 6 has created so far, so a rollback removes exactly that and
-/// nothing else. `t594` fix-2, finding M1: an earlier round of this task
+/// nothing else. `t594`: an earlier round of this task
 /// tore down the destination's whole `.vivac/` on any failure, which took
 /// a destination's own `notes.txt` and an unrelated `events.relocated`
 /// from an earlier move along with it.
@@ -469,7 +469,7 @@ impl Written {
     }
 }
 
-/// `Verified`'s own module. `t594` fix-4, finding N9: a unit test proved a
+/// `Verified`'s own module. `t594`: a unit test proved a
 /// plain `bool`, or a `Verified` sitting as a private struct beside
 /// `verify_copy` and `commit_copy` in `relocate` itself, is not enough --
 /// `let _ = same_bytes(a, b)?;` called the comparison, threw its verdict
@@ -545,10 +545,10 @@ fn verify_copy(
 ///
 /// A `.gitignore` the destination already had is left exactly as it was,
 /// the same promise `store::write_gitignore` already makes for the branch
-/// that writes one from nothing: `t594` fix-3, finding N3, a rollback that
+/// that writes one from nothing: `t594`, a rollback that
 /// deleted one the destination brought with it because this used to copy
-/// over it and track the result as its own regardless. `t594` fix-4,
-/// finding N9 applies the same rule to `lock`: a destination that already
+/// over it and track the result as its own regardless. `t594` applies
+/// the same rule to `lock`: a destination that already
 /// had one keeps it, rather than a rollback deleting a lock this run never
 /// created.
 fn commit_copy(
@@ -764,7 +764,7 @@ mod tests {
     /// this value lives: `run` calls it directly for step 7's registry
     /// write, with no parameter to hand it a path instead, and under
     /// `cfg(test)` it now refuses outright to answer with this machine's
-    /// real home (`t594` fix-4) -- the very thing this exists to avoid
+    /// real home (`t594`) -- the very thing this exists to avoid
     /// needing in the first place.
     ///
     /// `std::env::set_var` is process-global and the test harness runs
@@ -911,7 +911,7 @@ mod tests {
         std::fs::remove_file(&destination).ok();
     }
 
-    /// `t594` fix-2, finding 11 (B3): `--lane-name` with a value the
+    /// `t594` (B3): `--lane-name` with a value the
     /// redaction guard rejects must fall back rather than fail the move
     /// -- `lane::declared_name` already promises exactly this for every
     /// other caller that names a lane from a word a person typed, and

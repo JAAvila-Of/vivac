@@ -114,11 +114,11 @@ pub fn import(ctx: &mut Ctx, args: &Args) -> R {
 
     let ulids: BTreeMap<u64, String> = nodes.iter().map(|n| (n.id, id::ulid())).collect();
 
-    // `t594` branch-fix-1 #5: `lock_for_write` can reload the tree if
+    // `t594`: `lock_for_write` can reload the tree if
     // another writer landed first, and everything that read the tree
     // before this point -- `seq`, whether it still counts as empty --
     // has to be read again after, or a second writer racing this one
-    // hands out the very `seq` `t594` fix-1 finding C already fixed a
+    // hands out the very `seq` `t594` already fixed a
     // door over. Taken before `seq`/`lane` are read, not after: numbering
     // happens under the lock, like any other write.
     ctx.lock_for_write()?;
@@ -136,7 +136,7 @@ pub fn import(ctx: &mut Ctx, args: &Args) -> R {
     // The lane this context actually runs as, `main` only as the fallback
     // every write already uses (`emit`): `import` writes outside the
     // funnel (`write_raw`, below), so it has to decide this itself rather
-    // than being signed for automatically (`t594` fix-1, finding C). A
+    // than being signed for automatically (`t594`). A
     // worktree still pending never joins through here -- `import` never
     // calls `emit`, so it never mints a lane of its own -- and its nodes
     // land on `main` exactly as they did before this lane ever existed,

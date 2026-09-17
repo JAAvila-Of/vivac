@@ -1028,7 +1028,7 @@ impl Tree {
     /// one -- the founding lane included, which is exactly the case this
     /// has to say no to.
     ///
-    /// `t594` branch-fix-2 #1: this used to read `config`'s own "this tree
+    /// `t594`: this used to read `config`'s own "this tree
     /// holds lanes" sentence instead, and the two can disagree in both
     /// directions -- a `config` hand-reverted to an older version while the
     /// log still names two lanes, or a `config` left behind by a log a
@@ -1058,7 +1058,7 @@ impl Tree {
     /// find and no id to fall back to. That empty string used to reach the
     /// header unchanged -- `lane: ` with nothing after the colon, the one
     /// byte of output a tree with no lanes at all never had reason to grow
-    /// (`t594` branch-fix-1 #6).
+    /// (`t594`).
     pub fn lane_name(&self) -> &str {
         if self.lane().is_empty() {
             return "not joined yet";
@@ -1087,7 +1087,7 @@ impl Tree {
     ///
     /// O(V) rather than the O(1) a single tree-wide `vivacs.last()` used to
     /// be: a lane with no stops of its own walks every vivac the tree has
-    /// (`t594` task 6, review round 1). Bounded by how many stops exist, not by
+    /// (`t594`). Bounded by how many stops exist, not by
     /// nodes, and small enough not to matter -- 524 on this project's own
     /// tree at the time this was written -- but it is the one change of
     /// complexity class this commit made, and worth knowing before somebody
