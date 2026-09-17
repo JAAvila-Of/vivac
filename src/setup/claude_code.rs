@@ -1080,7 +1080,11 @@ fn note_registry(roots: &super::Roots) {
                 repos: Some(&repos),
             },
         );
-        crate::registry::warn_once_if_copy(&noted);
+        // Left for `registry::warn_if_wrote` to decide, once this run is
+        // done and can say whether it actually wrote anything: the
+        // `nothing_to_write` branch above reaches this call too, and that
+        // one is a read (`t594` fix-1, Ruling 21).
+        crate::registry::set_pending(noted);
     }
 }
 
@@ -1196,11 +1200,14 @@ fn join(
     // The same registry bookkeeping `note_registry` does for `apply`, but
     // keyed by `target` -- this folder's own tree, not `roots.tree`, which
     // still names no tree of its own at all. Quiet on any failure, the
-    // same promise `note_registry` already makes.
+    // same promise `note_registry` already makes -- but not thrown away:
+    // `lane::write` and `declare_lane` above have already written for
+    // real by the time this runs, so whatever `note` says here is left
+    // for `registry::warn_if_wrote` to act on (`t594`).
     if let Some(store_dir) = crate::store::store_dir() {
         if let Some(project_id) = crate::store::first_event_id(&target) {
             let target_repos = union_repo_roots(&fold_tree(&target));
-            let _ = crate::registry::note(
+            let noted = crate::registry::note(
                 &store_dir,
                 &project_id,
                 crate::registry::Sighting {
@@ -1209,6 +1216,7 @@ fn join(
                     repos: Some(&target_repos),
                 },
             );
+            crate::registry::set_pending(noted);
         }
     }
 

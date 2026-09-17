@@ -131,6 +131,7 @@ pub fn write(vivac_dir: &Path, lane: &Lane) -> std::io::Result<()> {
         f.write_all(b"\n")?;
     }
     std::fs::rename(&tmp, vivac_dir.join(FILE))?;
+    crate::store::mark_write();
     crate::store::write_gitignore(vivac_dir)
 }
 

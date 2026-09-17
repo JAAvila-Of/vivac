@@ -39,6 +39,65 @@ pub(crate) const LOCK_DEADLINE: std::time::Duration = std::time::Duration::from_
 /// microseconds, and a sleep would round that up to a timer tick.
 const LOCK_SPIN: std::time::Duration = std::time::Duration::from_millis(50);
 
+/// Whether this process has made either of the two writes the copy warning
+/// (`registry::warn_if_wrote`) cares about: an event appended (`append`,
+/// below) or a `.vivac/lane` file written (`lane::write`). The warning
+/// hangs off this fact and off nothing else -- not which verb ran, and not
+/// whether the verb is merely capable of writing (`t594` fix-1, Ruling
+/// 21). A usage failure that never reaches either write leaves this
+/// `false`, and a write through any path -- an ordinary `push`, `setup
+/// --join`, `relocate` -- sets it the same way.
+static WROTE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Marks the one fact `WROTE` exists to carry. Called from `append`,
+/// below, and from `lane::write`; nowhere else.
+pub(crate) fn mark_write() {
+    WROTE.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether `mark_write` has run at least once in this process.
+pub(crate) fn wrote() -> bool {
+    WROTE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Whether the brief has already put the copy notice in front of whoever
+/// is reading, somewhere earlier in this same process. `session start`
+/// prints it this way before it ever writes anything (`t594`):
+/// the stderr echo checks this so that a folder which already saw the block once, on `stdout`, never sees it said again on `stderr`
+/// for the very same reason.
+static SHOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Marks the one fact `SHOWN` exists to carry. Called from `brief`'s own
+/// rendering, and nowhere else.
+pub(crate) fn mark_shown() {
+    SHOWN.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether `mark_shown` has run at least once in this process.
+pub(crate) fn shown() -> bool {
+    SHOWN.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Whether this process is a resident server (`vivac mcp`) rather than a
+/// one-shot command. Its own `stderr` reaches nobody once it is running
+/// headless -- never a terminal a person is reading, never the stream an
+/// agent parses either -- so the copy warning is not this process's own to
+/// print on that stream at all: its seat is the brief instead, recomputed
+/// fresh on every `vivac_brief` call for as long as the server lives
+/// (`t594` fix-1, Ruling 22).
+static RESIDENT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Declares this process resident. Called once, from `mcp::serve`, before
+/// it starts answering calls.
+pub(crate) fn mark_resident() {
+    RESIDENT.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether `mark_resident` has run in this process.
+pub(crate) fn is_resident() -> bool {
+    RESIDENT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// `t594` §4.9: every `.vivac/` ignores itself. One line, `*`, which a git
 /// reads as "everything here, this file included", so no file of the
 /// user's is touched and a clone never carries a copy of the log.
@@ -821,6 +880,9 @@ impl Store {
         let previous_len = f.metadata()?.len();
         f.write_all(buf.as_bytes())?;
         self.log_present = true;
+        if !written.is_empty() {
+            mark_write();
+        }
         Ok(Appended {
             previous_len,
             last_line_offset: previous_len + last_line_start as u64,

@@ -170,6 +170,10 @@ fn main() {
     // for a side effect nobody asked about (`f603`).
     output::flush();
     note_late();
+    // The single seat for the copy warning (`t594` fix-1, Ruling 21): by
+    // now the command has either written or it has not, so this is the one
+    // place left in the whole process that can answer honestly.
+    registry::warn_if_wrote();
     std::process::exit(code);
 }
 
@@ -178,7 +182,7 @@ fn main() {
 /// get one; a tree whose first node was planted a moment ago does, and this is
 /// where it exists. Still unable to fail anything: the command has already
 /// produced its answer by the time this runs, and the one thing this can still
-/// add is the copy warning on `stderr` (`t594` §4.7).
+/// add is leaving `noted` for `warn_if_wrote`, below, to decide about.
 fn note_late() {
     let (Some((root, lane)), Some(store_dir)) = (LATE_SIGHTING.get(), store::store_dir()) else {
         return;
@@ -193,7 +197,7 @@ fn note_late() {
                 repos: None,
             },
         );
-        registry::warn_once_if_copy(&noted);
+        registry::set_pending(noted);
     }
 }
 
@@ -489,15 +493,11 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
                         repos: None,
                     },
                 );
-                // Only for a command shaped to write: `check` already says
-                // the same thing on `stdout` with an exit code, and `brief`
-                // opens with it (`t594` §4.7) -- echoing it again on
-                // `stderr` for either would be noise repeating what the
-                // command's own answer already carries, not a second place
-                // the agent needs to have looked.
-                if may_append(cmd) {
-                    registry::warn_once_if_copy(&noted);
-                }
+                // Left for `warn_if_wrote` to decide, once this command is
+                // done running and can say whether it actually wrote
+                // anything (`t594` fix-1, Ruling 21) -- never here, where
+                // nothing has written yet no matter which verb this is.
+                registry::set_pending(noted);
             }
             None => {
                 let _ = LATE_SIGHTING.set((root.clone(), lane));

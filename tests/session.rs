@@ -11,6 +11,67 @@ fn how_many(vivacs: &str, kind: &str) -> usize {
     vivacs.lines().filter(|l| l.contains(kind)).count()
 }
 
+/// `Sandbox::run_stdin`, with `stdout` and `stderr` kept apart: proving the
+/// copy warning does not repeat what the brief already showed needs the
+/// two streams told apart, the same reason `tests/registry.rs`'s own
+/// `run_split` exists.
+fn run_stdin_split(c: &Sandbox, args: &[&str], stdin: &str) -> (String, String, i32) {
+    use std::io::Write;
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_vivac"))
+        .current_dir(&c.0)
+        .env("VIVAC_HOME", c.global_home())
+        .args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(stdin.as_bytes())
+        .unwrap();
+    let o = child.wait_with_output().unwrap();
+    (
+        String::from_utf8_lossy(&o.stdout).into_owned(),
+        String::from_utf8_lossy(&o.stderr).into_owned(),
+        o.status.code().unwrap_or(-1),
+    )
+}
+
+/// `t594`: `session start --hook` printed the brief --
+/// which already opens with the copy block (`t594` §4.7) -- and then, once
+/// its own write ran, the generic dispatch preamble said the very same
+/// thing again on `stderr`. The two streams are checked apart, not
+/// together: the review's own reproduction counted both at once, and that
+/// is exactly what let the leak into `stderr` hide behind a passing count.
+#[test]
+fn session_start_hook_from_a_copy_shows_the_notice_once() {
+    let original = Sandbox::new_seeded("session-copy-orig");
+    original.ok(&["push", "a goal", "--why", "so the log has a first event"]);
+    let copy = Sandbox::new_empty_in("session-copy-copy", original.global_home());
+    std::fs::create_dir_all(copy.0.join(".vivac")).unwrap();
+    std::fs::copy(
+        original.0.join(".vivac").join("events"),
+        copy.0.join(".vivac").join("events"),
+    )
+    .unwrap();
+
+    let (stdout, stderr, code) = run_stdin_split(&copy, &["session", "start", "--hook"], "{}");
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert_eq!(
+        stdout.matches("COPY OF ANOTHER TREE").count(),
+        1,
+        "the brief itself must still carry it once:\n{stdout}"
+    );
+    assert_eq!(
+        stderr.matches("COPY OF ANOTHER TREE").count(),
+        0,
+        "the stderr echo repeated what the brief already showed:\n{stderr}"
+    );
+}
+
 /// Forty turns are not forty stops. A stop that repeats identically is not a
 /// stop: it is a log.
 #[test]

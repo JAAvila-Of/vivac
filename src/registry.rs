@@ -325,44 +325,82 @@ pub fn copy_notice(first: Option<&str>, rest: &[Option<String>]) -> CopyNotice {
     }
 }
 
-/// Warns on `stderr` the moment a write this process made turns out to be a
-/// copy (`t594` §4.7) -- once per process, never once per event: a command
-/// that appends three events through `note` calls this three times and
-/// warns once. The `Once` lives here, the one place every caller already
-/// goes through, rather than one static per call site, so "once" actually
-/// means once across the whole process and not once per site that happens
-/// to remember to declare its own.
+/// Where every caller that works out a `Noted` leaves it for `warn_if_wrote`
+/// to decide about, once whichever command produced it is done running.
+/// Never printed from here, and never printed from any of those callers
+/// either (`t594` fix-1, Ruling 21): at every one of those call sites the
+/// write the warning would be reporting on has not necessarily happened
+/// yet, so deciding there -- by which verb is running, `may_append`'s old
+/// mistake -- got the order backwards. Exactly one of `main.rs`'s two call
+/// sites, `setup::claude_code`'s `note_registry` and `--join`, ever sets
+/// this in a given process: a fresh project has no first event to be a
+/// copy of yet, and an existing one is read by exactly one of them, so
+/// nothing here is ever asked to arbitrate between two real answers.
+static PENDING_NOTICE: std::sync::OnceLock<Noted> = std::sync::OnceLock::new();
+
+/// Leaves `noted` for `warn_if_wrote` to read once this process is done
+/// running. Ignores a second call in the same process rather than
+/// panicking: harmless, since the doc above already says it should not
+/// happen, and a copy warning is not worth a crash if it somehow does.
+pub fn set_pending(noted: Noted) {
+    let _ = PENDING_NOTICE.set(noted);
+}
+
+/// Prints the copy warning on `stderr`. Private: `warn_if_wrote`, below, is
+/// the only caller, which is what makes "once" true here -- not a runtime
+/// guard racing every call site to be first, the mistake a `std::sync::Once`
+/// used to paper over (`t594`): no real path ever called
+/// this function more than once in a process, guard or no guard, because
+/// nothing outside this module ever called it directly at all.
 ///
 /// `stderr`, never `stdout`: the DX pillar says the agent's own output gets
 /// parsed, so this can never land inside a JSON payload or in the middle of
-/// a verb's own rendering. Takes the `Noted` `note` already worked out
-/// rather than asking `copy_of` again -- that would be a second way to
-/// decide whether something is a copy, and `live_others`'s own doc is
-/// explicit that there is only supposed to be one.
-///
-/// `Noted::Fine` is silently a no-op and never touches the `Once`: only an
-/// actual copy ever starts the countdown to "never again this process".
+/// a verb's own rendering.
 ///
 /// Flushes `stdout` first, the same discipline every other stderr write in
 /// this crate follows: a terminal that merges the two streams shows them out
-/// of order otherwise, and every call site would have to remember this one
-/// on its own if it were not done here instead.
-pub fn warn_once_if_copy(noted: &Noted) {
+/// of order otherwise.
+fn warn_once_if_copy(noted: &Noted) {
     let Noted::Copy { first, rest } = noted else {
         return;
     };
-    static WARN_ONCE: std::sync::Once = std::sync::Once::new();
-    WARN_ONCE.call_once(|| {
-        crate::output::flush();
-        let notice = copy_notice(first.as_deref(), rest);
-        eprintln!();
-        eprintln!("{}", notice.heading);
-        eprintln!();
-        for line in notice.body.lines() {
-            eprintln!("  {line}");
-        }
-        eprintln!();
-    });
+    crate::output::flush();
+    let notice = copy_notice(first.as_deref(), rest);
+    eprintln!();
+    eprintln!("{}", notice.heading);
+    eprintln!();
+    for line in notice.body.lines() {
+        eprintln!("  {line}");
+    }
+    eprintln!();
+}
+
+/// The single seat (`t594` fix-1, Ruling 21): called once, from `main`,
+/// after the command that might have written has already finished running
+/// -- never before, and never keyed by which verb ran. Warns only when
+/// this process actually wrote to a tree (`store::wrote`): a usage failure
+/// that never reaches a real write leaves that `false`, and stays silent
+/// here too, no matter which verb refused.
+///
+/// Two exceptions, both read off a fact rather than off a verb's name:
+/// `store::shown` is true once the brief has already put the very same
+/// words in front of whoever is reading, earlier in this same process
+/// (`session start` does this before it ever writes a byte), so saying
+/// them again here would be the block twice for the one reason it exists
+/// once; and `store::is_resident` is true for a server that outlives every
+/// one of its own calls (`vivac mcp`) -- its `stderr` reaches nobody once
+/// it is running headless, so this is not that process's warning to print
+/// on that stream at all. Its own seat is the brief instead, recomputed
+/// fresh on every `vivac_brief` call for as long as it lives, which is
+/// exactly what `store::shown` being unable to silence a *later* call
+/// leaves in place: nothing here ever turns that recomputation off.
+pub fn warn_if_wrote() {
+    if crate::store::is_resident() || crate::store::shown() || !crate::store::wrote() {
+        return;
+    }
+    if let Some(noted) = PENDING_NOTICE.get() {
+        warn_once_if_copy(noted);
+    }
 }
 
 /// Whether `name` is safe to paste into a shell unquoted: only letters,

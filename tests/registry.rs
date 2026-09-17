@@ -195,6 +195,25 @@ fn writing_from_a_copy_warns_on_stderr_and_still_writes() {
     );
 }
 
+/// `t594`: the warning used to hang off `may_append` --
+/// whether the verb is merely *capable* of writing -- checked before the
+/// verb ever ran, so a usage failure that touched nothing still warned.
+/// `push` with no title and no `--why` refuses before the redaction guard,
+/// before the write lock, before anything reaches `store::append`.
+#[test]
+fn a_usage_failure_from_a_copy_never_warns() {
+    let original = Sandbox::new_seeded("reg-usage-orig");
+    original.ok(&["push", "a goal", "--why", "so the log has a first event"]);
+    let copy = a_copy_of(&original, "reg-usage-copy");
+
+    let (stdout, stderr, code) = run_split(&copy, &["push"]);
+    assert_eq!(code, 2, "expected a usage failure:\n{stdout}{stderr}");
+    assert!(
+        !stderr.contains("COPY OF ANOTHER TREE"),
+        "a usage failure that never wrote anything must not warn:\n{stderr}"
+    );
+}
+
 /// A parent with two open children, both falling in one `abandon --cascade`:
 /// one command, several events appended in a single write. The warning is
 /// about the process, not the event, so it still comes out exactly once.
@@ -218,6 +237,16 @@ fn branch_with_two_children(c: &Sandbox) {
     ]);
 }
 
+/// `t594`: the `std::sync::Once` this used to lean on was
+/// decorative -- deleting it changed nothing this test could see, because
+/// no real path ever called the print it guarded more than once in the
+/// first place. What actually keeps this at one block is structural now
+/// (`registry::warn_if_wrote`, called exactly once, from `main`, after
+/// `abandon --cascade` has already appended every one of its several
+/// events): this pins that a multi-event write still surfaces as a single
+/// notice, and it is falsifiable through the mechanism that is really
+/// there -- disable `store::mark_write` inside `Store::append` and this
+/// goes red with "warned 0 times", not "warned 2 times".
 #[test]
 fn the_warning_is_printed_once_per_process() {
     let original = Sandbox::new_seeded("reg-once-orig");
