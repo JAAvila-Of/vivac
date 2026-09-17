@@ -13,7 +13,6 @@
 //! two more clones elsewhere on the machine that `setup` refuses and
 //! `--join` admits.
 
-mod common;
 use std::path::{Path, PathBuf};
 
 const BIN: &str = env!("CARGO_BIN_EXE_vivac");
@@ -30,6 +29,44 @@ fn unique(name: &str) -> PathBuf {
         "vivac-iquorum-{name}-{}-{n}-{ts}",
         std::process::id()
     ))
+}
+
+/// A unique directory this test created, removed the moment this goes
+/// out of scope. A panicked assertion unwinds through it exactly the
+/// way it already unwinds through `tests/common::Sandbox`'s own `Drop`,
+/// so a failure here leaves nothing behind in `%TEMP%` for whoever
+/// runs this suite next.
+struct TempDir(PathBuf);
+
+impl TempDir {
+    fn new(name: &str) -> Self {
+        TempDir(unique(name))
+    }
+}
+
+impl std::ops::Deref for TempDir {
+    type Target = Path;
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl AsRef<std::ffi::OsStr> for TempDir {
+    fn as_ref(&self) -> &std::ffi::OsStr {
+        self.0.as_os_str()
+    }
+}
+
+impl AsRef<Path> for TempDir {
+    fn as_ref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(&self.0).ok();
+    }
 }
 
 fn run(dir: &Path, home: &Path, args: &[&str]) -> (String, i32) {
@@ -100,7 +137,7 @@ fn clone_into(template: &Path, dest: &Path) {
 /// Clones every one of `templates` into `root`, one subfolder per
 /// repository -- the shape `repos::scan` walks, two levels deep at most, so
 /// a repository directly under `root` is well inside its reach.
-fn seed_repos(root: &Path, templates: &[PathBuf]) {
+fn seed_repos(root: &Path, templates: &[TempDir]) {
     for (i, template) in templates.iter().enumerate() {
         clone_into(template, &root.join(format!("repo{i}")));
     }
@@ -123,15 +160,15 @@ fn log_lines(root: &Path) -> Vec<String> {
 /// `--everywhere`.
 #[test]
 fn the_iquorum_scenario_moves_joins_and_shares_one_tree_across_five_roots() {
-    let home = unique("home");
-    let templates: Vec<PathBuf> = (0..4)
+    let home = TempDir::new("home");
+    let templates: Vec<TempDir> = (0..4)
         .map(|i| {
-            let t = unique(&format!("template-{i}"));
+            let t = TempDir::new(&format!("template-{i}"));
             make_repo(&t, &format!("repo{i}"));
             t
         })
         .collect();
-    let extra_template = unique("template-extra");
+    let extra_template = TempDir::new("template-extra");
     make_repo(&extra_template, "extra");
 
     // -----------------------------------------------------------------
@@ -139,8 +176,8 @@ fn the_iquorum_scenario_moves_joins_and_shares_one_tree_across_five_roots() {
     // P with a lane name, and C2 keeps its own stack afterwards --
     // checked by reading the stack, never the lane file.
     // -----------------------------------------------------------------
-    let p = unique("p");
-    let c2 = unique("c2");
+    let p = TempDir::new("p");
+    let c2 = TempDir::new("c2");
     std::fs::create_dir_all(&c2).unwrap();
     seed_repos(&c2, &templates);
     ok(&c2, &home, &["init"]);
@@ -180,13 +217,30 @@ fn the_iquorum_scenario_moves_joins_and_shares_one_tree_across_five_roots() {
         c1.join(".vivac").join("lane").is_file(),
         "C1 never became a lane of the tree above it"
     );
+    // A `lane` file names no path -- it holds an id and a `project`,
+    // the id of the tree's own first event. Existing alone proves a
+    // lane of *some* tree; naming the same first event as P's own log
+    // proves it is a lane of *this* one.
+    let c1_lane: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(c1.join(".vivac").join("lane")).unwrap())
+            .unwrap();
+    let p_first_event: serde_json::Value = serde_json::from_str(
+        log_lines(&p)
+            .first()
+            .expect("P's tree has at least one event"),
+    )
+    .unwrap();
+    assert_eq!(
+        c1_lane["project"], p_first_event["id"],
+        "C1's lane names a different tree from P's own"
+    );
 
     // -----------------------------------------------------------------
     // 3: C3, a clone outside P sharing the same four repositories, is
     // refused and joins with --join. C4 carries one repository more of
     // its own, and is refused and joins the same way.
     // -----------------------------------------------------------------
-    let c3 = unique("c3");
+    let c3 = TempDir::new("c3");
     std::fs::create_dir_all(&c3).unwrap();
     seed_repos(&c3, &templates);
     let (refusal3, code3) = run(&c3, &home, &["setup", "claude-code", "--yes"]);
@@ -199,7 +253,7 @@ fn the_iquorum_scenario_moves_joins_and_shares_one_tree_across_five_roots() {
     );
     assert!(c3.join(".vivac").join("lane").is_file());
 
-    let c4 = unique("c4");
+    let c4 = TempDir::new("c4");
     std::fs::create_dir_all(&c4).unwrap();
     seed_repos(&c4, &templates);
     clone_into(&extra_template, &c4.join("repo4"));
@@ -214,25 +268,51 @@ fn the_iquorum_scenario_moves_joins_and_shares_one_tree_across_five_roots() {
     assert!(c4.join(".vivac").join("lane").is_file());
 
     // -----------------------------------------------------------------
-    // 4: C1 and C2 write at the same time, from two real processes --
-    // both spawned before either is waited on -- and no number repeats.
+    // 4: C1 and C2 write at the same time, from several real processes
+    // per round on each side -- every one spawned before any of them
+    // is waited on -- and no number repeats. A single pair rarely
+    // lands both writes inside the same critical section; four from
+    // each side, spawned together, reliably queue on the write lock
+    // and reliably reproduced a collision once the lock's own reread
+    // was removed, which a lone pair did not.
     // -----------------------------------------------------------------
-    let mut a = std::process::Command::new(BIN)
-        .current_dir(&c1)
-        .env("VIVAC_HOME", &home)
-        .args(["push", "Ship the sonar dashboard", "--why", "seed a"])
-        .spawn()
-        .unwrap();
-    let mut b = std::process::Command::new(BIN)
-        .current_dir(&c2)
-        .env("VIVAC_HOME", &home)
-        .args(["push", "Guard the sonar release notes", "--why", "seed b"])
-        .spawn()
-        .unwrap();
-    let status_a = a.wait().unwrap();
-    let status_b = b.wait().unwrap();
-    assert!(status_a.success(), "C1's concurrent push failed");
-    assert!(status_b.success(), "C2's concurrent push failed");
+    let rounds = 3;
+    let writers_per_side = 4;
+    for round in 0..rounds {
+        let mut children = Vec::new();
+        for i in 0..writers_per_side {
+            let last = round + 1 == rounds && i + 1 == writers_per_side;
+            let title_a = format!("Ship the sonar dashboard, round {round} writer {i}");
+            let title_b = if last {
+                "Guard the sonar release notes".to_string()
+            } else {
+                format!("Guard the sonar release notes, round {round} writer {i}")
+            };
+            children.push(
+                std::process::Command::new(BIN)
+                    .current_dir(&c1)
+                    .env("VIVAC_HOME", &home)
+                    .args(["push", &title_a, "--why", "seed a"])
+                    .spawn()
+                    .unwrap(),
+            );
+            children.push(
+                std::process::Command::new(BIN)
+                    .current_dir(&c2)
+                    .env("VIVAC_HOME", &home)
+                    .args(["push", &title_b, "--why", "seed b"])
+                    .spawn()
+                    .unwrap(),
+            );
+        }
+        for (i, mut child) in children.into_iter().enumerate() {
+            let status = child.wait().unwrap();
+            assert!(
+                status.success(),
+                "a concurrent push failed in round {round}, writer {i}"
+            );
+        }
+    }
 
     let lines = log_lines(&p);
     let seqs: Vec<u64> = lines
@@ -253,22 +333,23 @@ fn the_iquorum_scenario_moves_joins_and_shares_one_tree_across_five_roots() {
     // -----------------------------------------------------------------
     // 5: find from C1 sees what C2 just wrote, with no --everywhere.
     // -----------------------------------------------------------------
-    let (found, found_code) = run(&c1, &home, &["find", "Guard the sonar release notes"]);
+    let (found, found_code) = run(
+        &c1,
+        &home,
+        &["find", "Guard the sonar release notes", "--json"],
+    );
     assert_eq!(found_code, 0, "{found}");
+    let hits: serde_json::Value = serde_json::from_str(&found)
+        .unwrap_or_else(|e| panic!("find --json did not print an array: {e}\n{found}"));
+    let hits = hits.as_array().expect("find --json prints an array");
     assert!(
-        found.contains("Guard the sonar release notes"),
+        hits.iter()
+            .any(|h| h["title"] == "Guard the sonar release notes"),
         "find from C1 did not see what C2 wrote:\n{found}"
     );
 
-    std::fs::remove_dir_all(&home).ok();
-    for t in &templates {
-        std::fs::remove_dir_all(t).ok();
-    }
-    std::fs::remove_dir_all(&extra_template).ok();
-    std::fs::remove_dir_all(&p).ok();
-    std::fs::remove_dir_all(&c2).ok();
-    std::fs::remove_dir_all(&c3).ok();
-    std::fs::remove_dir_all(&c4).ok();
+    // No cleanup here: every root above is a `TempDir`, and its own
+    // `Drop` removes it whether this line is ever reached or not.
 }
 
 // ---------------------------------------------------------------------------
@@ -280,18 +361,25 @@ fn the_iquorum_scenario_moves_joins_and_shares_one_tree_across_five_roots() {
 
 /// `t594`, the next stretch: `brief`'s `<== HERE` marker, shown once per
 /// lane's own stack rather than only the one this process is standing in.
+/// No section of `t594`'s own plan names this one on its own.
 #[ignore = "t594, next stretch: HERE per lane in `brief`"]
 #[test]
-fn brief_marks_here_on_every_lanes_own_front_not_only_this_ones() {}
+fn brief_marks_here_on_every_lanes_own_front_not_only_this_ones() {
+    todo!("t594, next stretch: HERE per lane in `brief`")
+}
 
 /// `t594`, the next stretch: an `OTHER LANES` block in `brief`, naming what
-/// the tree's other lanes have open.
-#[ignore = "t594, next stretch: the OTHER LANES block in `brief`"]
+/// the tree's other lanes have open. `t594` §5.3.
+#[ignore = "t594 §5.3, next stretch: the OTHER LANES block in `brief`"]
 #[test]
-fn brief_carries_an_other_lanes_block() {}
+fn brief_carries_an_other_lanes_block() {
+    todo!("t594 §5.3, next stretch: the OTHER LANES block in `brief`")
+}
 
 /// `t594`, the next stretch: `vivac stack --lanes`, listing every lane's
-/// own stack rather than only the one this folder is.
-#[ignore = "t594, next stretch: `stack --lanes`"]
+/// own stack rather than only the one this folder is. `t594` §5.5.
+#[ignore = "t594 §5.5, next stretch: `stack --lanes`"]
 #[test]
-fn stack_lanes_lists_every_lanes_own_stack() {}
+fn stack_lanes_lists_every_lanes_own_stack() {
+    todo!("t594 §5.5, next stretch: `stack --lanes`")
+}

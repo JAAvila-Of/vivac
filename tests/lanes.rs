@@ -793,9 +793,9 @@ fn a_worktree_still_joins_when_config_is_stale_but_the_log_has_real_lanes() {
 /// A second, independent spelling of `target` at `alias`: a junction on
 /// Windows (`mklink /J`, which asks for no privilege a normal account
 /// lacks) and a symlink on Unix. `false` when the platform refuses --
-/// answered rather than asserted, so a caller that cannot get one skips
-/// its own test with a reason instead of passing in the one shape that
-/// was supposed to fail.
+/// answered rather than asserted, so the one caller of this asserts on
+/// it out loud instead of passing in the one shape that was supposed
+/// to fail.
 #[cfg(windows)]
 fn make_second_spelling(alias: &Path, target: &Path) -> bool {
     std::process::Command::new("cmd")
@@ -849,13 +849,19 @@ fn a_worktree_found_through_a_second_spelling_still_inherits_the_root_commit() {
         .expect("setup's own lane.declared names a root commit")
         .to_string();
 
+    // A silent early return here used to be indistinguishable from this
+    // test never running at all: `cargo test` only shows a passing
+    // test's own stdout on request, so a platform that could not make a
+    // second spelling left the suite green with nothing to see why. A
+    // hard failure is loud on every platform, with no flag needed --
+    // and every platform this suite runs on, junctions and symlinks
+    // alike, can make one.
     let alias = unique("second-spelling-alias");
-    if !make_second_spelling(&alias, &real_root) {
-        eprintln!("skipped: this platform would not create a second spelling of the same folder");
-        std::fs::remove_dir_all(&real_root).ok();
-        std::fs::remove_dir_all(&home).ok();
-        return;
-    }
+    assert!(
+        make_second_spelling(&alias, &real_root),
+        "this platform would not create a second spelling of the same folder, \
+         so the shape this test exists to exercise never got made"
+    );
 
     let (out, code) = run(
         &alias.join("wt"),
@@ -1527,21 +1533,30 @@ fn relocate_and_join_treat_two_spellings_of_the_same_folder_as_one() {
     let (push_out, push_code) = run(&real, &home, &["push", "seed", "--why", "seed"]);
     assert_eq!(push_code, 0, "{push_out}");
 
+    // A silent early return here left the same hole the other f612 test
+    // did: a green suite with nothing to say why this one never ran. A
+    // hard failure is loud without a flag, on every platform this suite
+    // actually runs on.
     let alias = unique("f612-alias");
-    if !make_second_spelling(&alias, &real) {
-        eprintln!(
-            "skipped relocate_and_join_treat_two_spellings_of_the_same_folder_as_one: \
-             this platform offers no second spelling of the same folder here -- no 8.3 \
-             alias, and this account cannot create a junction or a symlink"
-        );
-        std::fs::remove_dir_all(&real).ok();
-        std::fs::remove_dir_all(&home).ok();
-        return;
-    }
+    assert!(
+        make_second_spelling(&alias, &real),
+        "this platform offers no second spelling of the same folder here -- no \
+         8.3 alias, and this account cannot create a junction or a symlink"
+    );
 
     // `--join`, reached through the alias: a lane already pointing at
     // `real` has to be recognised as already pointing at the very tree
     // the alias names too, not refused as though it named another one.
+    //
+    // `write_lane` below fabricates `.vivac/lane` by hand rather than
+    // running `setup --join` twice against a folder that already
+    // joined once: a real second join is `t594`'s own next round,
+    // parked on purpose (already reproduced -- it mints a fresh lane
+    // id instead of recognising the folder as already joined). What
+    // this proves is narrower: that `--join`, reached through a second
+    // spelling of the target, does not refuse it as a *different*
+    // tree. It does not prove two joins of the very same folder
+    // collapse into one lane.
     let project = first_event_id_at(&real);
     let lane_dir = unique("f612-lane");
     std::fs::create_dir_all(&lane_dir).unwrap();
@@ -1604,6 +1619,22 @@ fn an_unjoined_worktree_still_writes_nothing_with_another_project_in_the_registr
         &["push", "Unrelated work", "--why", "seed"],
     );
     assert_eq!(push_code, 0, "{push_out}");
+
+    // This test's own name promises the registry already holds another
+    // project by the time the worktree below ever runs -- checked here,
+    // not assumed, since a registry write that silently stopped
+    // happening would leave every assertion past this point proving
+    // nothing about that case.
+    let registry = std::fs::read_to_string(home.join("projects")).unwrap_or_default();
+    assert!(
+        registry.contains(
+            &elsewhere
+                .to_string_lossy()
+                .replace('\\', "\\\\")
+                .to_string()
+        ),
+        "the registry never gained the unrelated project this test needs:\n{registry}"
+    );
 
     let config_before = std::fs::read_to_string(root.join(".vivac").join("config")).unwrap();
     let log_before =
