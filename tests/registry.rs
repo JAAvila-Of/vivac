@@ -122,3 +122,113 @@ fn working_on_it_again_does_not_enter_it_twice() {
     );
     assert_eq!(keys(&c).len(), 1);
 }
+
+// ---------------------------------------------------------------------------
+// `t594` §4.7: the stderr warning every write makes when this folder turns
+// out to be a copy. `tests/check.rs` already covers `check`'s own block and
+// the registry's `path`/`copies` bookkeeping; these are only the two
+// surfaces that file does not reach.
+// ---------------------------------------------------------------------------
+
+/// A second folder, sharing `original`'s home, whose log starts with the
+/// very same first event: not a fixture, an actual copy of the tree.
+fn a_copy_of(original: &Sandbox, name: &str) -> Sandbox {
+    let copy = Sandbox::new_empty_in(name, original.global_home());
+    std::fs::create_dir_all(copy.0.join(".vivac")).unwrap();
+    std::fs::copy(
+        original.0.join(".vivac").join("events"),
+        copy.0.join(".vivac").join("events"),
+    )
+    .unwrap();
+    copy
+}
+
+/// Runs the binary with `stdout` and `stderr` kept apart. `Sandbox::run`
+/// merges the two, which is right for most tests here but wrong for the
+/// two below: they prove the warning landed on the stream the agent's own
+/// parsing does not touch, and merging the streams first would hide
+/// exactly the mistake they exist to catch.
+fn run_split(c: &Sandbox, args: &[&str]) -> (String, String, i32) {
+    let o = std::process::Command::new(env!("CARGO_BIN_EXE_vivac"))
+        .current_dir(&c.0)
+        .env("VIVAC_HOME", c.global_home())
+        .args(args)
+        .output()
+        .unwrap();
+    (
+        String::from_utf8_lossy(&o.stdout).into_owned(),
+        String::from_utf8_lossy(&o.stderr).into_owned(),
+        o.status.code().unwrap_or(-1),
+    )
+}
+
+/// The write is never refused for being a copy (`d201`, §4.7): the registry
+/// is a side effect of using a project, not a gate on whether the project
+/// can be used. The warning goes to `stderr` and never `stdout`, because
+/// the agent's own output on `stdout` gets parsed and this can never land
+/// inside it.
+#[test]
+fn writing_from_a_copy_warns_on_stderr_and_still_writes() {
+    let original = Sandbox::new_seeded("reg-write-warn-orig");
+    original.ok(&["push", "a goal", "--why", "so the log has a first event"]);
+    let copy = a_copy_of(&original, "reg-write-warn-copy");
+
+    let (stdout, stderr, code) = run_split(
+        &copy,
+        &["push", "a second thing", "--why", "checking the streams"],
+    );
+    assert_eq!(
+        code, 0,
+        "a copy must still be free to write:\n{stdout}{stderr}"
+    );
+    assert!(
+        stderr.contains("COPY OF ANOTHER TREE"),
+        "the warning never reached stderr:\n{stderr}"
+    );
+    assert!(
+        !stdout.contains("COPY OF ANOTHER TREE"),
+        "the warning leaked into stdout, where the agent parses:\n{stdout}"
+    );
+    assert!(
+        copy.log().contains("a second thing"),
+        "the event this command was asked to write never reached the log"
+    );
+}
+
+/// A parent with two open children, both falling in one `abandon --cascade`:
+/// one command, several events appended in a single write. The warning is
+/// about the process, not the event, so it still comes out exactly once.
+fn branch_with_two_children(c: &Sandbox) {
+    c.ok(&["push", "a parent", "--why", "root of what falls together"]);
+    c.ok(&[
+        "add",
+        "a child",
+        "--parent",
+        "1",
+        "--why",
+        "one of several that fall",
+    ]);
+    c.ok(&[
+        "add",
+        "another child",
+        "--parent",
+        "1",
+        "--why",
+        "a second one that falls",
+    ]);
+}
+
+#[test]
+fn the_warning_is_printed_once_per_process() {
+    let original = Sandbox::new_seeded("reg-once-orig");
+    branch_with_two_children(&original);
+    let copy = a_copy_of(&original, "reg-once-copy");
+
+    let (_, stderr, code) = run_split(&copy, &["abandon", "1", "--cascade", "letting it go"]);
+    assert_eq!(code, 0, "{stderr}");
+    let count = stderr.matches("COPY OF ANOTHER TREE").count();
+    assert_eq!(
+        count, 1,
+        "a command that wrote several events warned {count} times:\n{stderr}"
+    );
+}

@@ -576,3 +576,37 @@ fn no_focus_says_open_the_next_one_when_everything_is_closed() {
     assert!(!b.contains("OPEN GOALS"), "{b}");
     assert!(b.contains("Open the next one:  vivac push"), "{b}");
 }
+
+/// `t594` §4.7: everything else the brief says about lineage can already be
+/// a lie the moment this folder is a copy, so the warning has to come out
+/// ahead of it -- the very first line, not merely somewhere in the output.
+/// Checked in both folders: the registry only ever keeps one `path`, and
+/// whichever folder is not on it learns from `copies` instead, so a check
+/// that only covered one side would miss the other folder's own brief
+/// going without the warning.
+#[test]
+fn the_brief_of_a_copy_opens_with_the_warning() {
+    let original = Sandbox::new_seeded("brief-copy-orig");
+    original.ok(&["push", "a goal", "--why", "so the log has a first event"]);
+    let copy = Sandbox::new_empty_in("brief-copy-copy", original.global_home());
+    std::fs::create_dir_all(copy.0.join(".vivac")).unwrap();
+    std::fs::copy(
+        original.0.join(".vivac").join("events"),
+        copy.0.join(".vivac").join("events"),
+    )
+    .unwrap();
+
+    let copy_brief = copy.ok(&["brief"]);
+    assert_eq!(
+        copy_brief.lines().next().unwrap_or("").trim(),
+        "COPY OF ANOTHER TREE",
+        "the warning did not open the copy's own brief:\n{copy_brief}"
+    );
+
+    let original_brief = original.ok(&["brief"]);
+    assert_eq!(
+        original_brief.lines().next().unwrap_or("").trim(),
+        "COPY OF ANOTHER TREE",
+        "the original's own brief did not open with the warning either:\n{original_brief}"
+    );
+}

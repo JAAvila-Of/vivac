@@ -1071,10 +1071,7 @@ fn note_registry(roots: &super::Roots) {
         // tree's repositories as they stand once this run is done, the
         // same union `relocate` already writes on a move (`t594` §4.8).
         let repos = union_repo_roots(&fold_tree(&roots.tree));
-        // This call's own `Noted::Copy` reaches nobody: `check` learns of
-        // a copy through its own, separate read (`registry::copy_of`), and
-        // a stderr warning on every write like this one is `t594` §4.7.
-        let _ = crate::registry::note(
+        let noted = crate::registry::note(
             &store_dir,
             &project_id,
             crate::registry::Sighting {
@@ -1083,6 +1080,7 @@ fn note_registry(roots: &super::Roots) {
                 repos: Some(&repos),
             },
         );
+        crate::registry::warn_once_if_copy(&noted);
     }
 }
 
