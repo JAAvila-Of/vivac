@@ -235,7 +235,7 @@ fn normalize(p: &Path) -> PathBuf {
 /// This is `f612`, closed once rather than patched twice: `ops::repo_at`
 /// hit it first, comparing a path this process joined by hand against one
 /// `anchor::main_copy_of` read out of files git itself wrote, and
-/// `registry::detect_copy` hit it again comparing a path the registry
+/// `registry::path_disagrees` hit it again comparing a path the registry
 /// wrote down at an earlier `cd` against the one the current `cd` spells
 /// now -- two different sources for the same failure, which is exactly
 /// why this lives here once rather than being fixed a third time
@@ -253,9 +253,9 @@ fn normalize(p: &Path) -> PathBuf {
 /// For `repo_at`'s own comparison this fallback is not just convenient,
 /// it is correct: git always resolves what it writes to one canonical
 /// spelling, so the two sides genuinely do name the same folder whenever
-/// `canonicalize` agrees. `detect_copy`'s two paths carry no such
-/// promise -- both are just whatever some `cd` happened to spell -- so
-/// there `canonicalize` is the best answer available, not a proof.
+/// `canonicalize` agrees. The registry's own callers carry no such
+/// promise -- both sides are just whatever some `cd` happened to spell --
+/// so there `canonicalize` is the best answer available, not a proof.
 pub(crate) fn same_folder(a: &Path, b: &Path) -> bool {
     if normalize(a) == normalize(b) {
         return true;

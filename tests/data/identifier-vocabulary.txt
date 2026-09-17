@@ -92,6 +92,7 @@ ascii
 ask
 asked
 asker
+asking
 asks
 assemble
 assert
@@ -394,6 +395,7 @@ digit
 dir
 direct
 directory
+disagrees
 disclosure
 disk
 dispatch
@@ -1309,6 +1311,7 @@ seed
 seeded
 seek
 seen
+sees
 seg
 segment
 selected
