@@ -10,11 +10,13 @@
 //!
 //! 1. Refuse from anywhere but the folder that holds the tree.
 //! 2. Take the tree's write lock. Everything after this runs with it held.
-//! 3. Refuse a destination that already holds a tree or a lane.
+//! 3. Refuse a destination that is this folder itself, or that already
+//!    holds a tree or a lane.
 //! 4. Copy `events`, `config` and `.gitignore` there, and a fresh `lock`.
-//! 5. Compare the two copies byte for byte. A mismatch rolls the copy back
-//!    and fails without having touched the origin -- this is what makes the
-//!    move safe, not an explanation of it.
+//! 5. Compare the two copies byte for byte. Any failure along the way --
+//!    a copy that cannot land, or a mismatch once everything did -- rolls
+//!    the copy back and fails without having touched the origin. This is
+//!    what makes the move safe, not an explanation of it.
 //! 6. Point the registry at the destination.
 //! 7. In the origin: rename `events` and `config` out of the way, drop the
 //!    stale index, and write `.vivac/lane` so this folder keeps answering as
@@ -28,6 +30,19 @@
 //! record a copy and never move `path` at all. The origin is silent about
 //! this either way -- what changes is only which of the two steps a reader
 //! finds first below.
+//!
+//! **Step 5's own byte mismatch has no trigger a black-box test can reach.**
+//! The copy and the read that verifies it run back to back inside one
+//! synchronous call, with no point in between where anything else could
+//! land a write to the source -- not without adding an injection point to
+//! this very path, which is worse than the gap it would close. What
+//! `tests/relocate.rs` exercises instead is the rollback itself, shared by
+//! both failures step 5 can report: a copy that never lands at all, forced
+//! by a `.vivac/.gitignore` at the destination that is already a
+//! directory. No operating system lets a file land where a directory
+//! already sits, so that trigger is deterministic and needs nothing this
+//! crate does not already have. A hole named here is a hole; one left
+//! unsaid would be a lie.
 //!
 //! Not reachable over MCP (`t594` §4.6): it moves data and does not undo a
 //! step, the same reason `abandon` and `restore` stay CLI-only.
@@ -85,14 +100,20 @@ pub fn run(located: &Located, destination: &Path, lane_name: Option<&str>) -> Re
 
     let origin_vivac = located.root.join(crate::store::DIR);
 
-    // Step 3. `destination` is compared against the origin with
-    // `same_folder`, never raw: it is a path this process just parsed
-    // against one `store::locate` resolved by an entirely different route,
-    // and a second spelling of the same folder must read as busy, not as
-    // free to write into.
-    if crate::anchor::same_folder(destination, &located.root)
-        || destination_holds_a_tree_or_lane(destination)
-    {
+    // Step 3, first half: the destination is this very folder, reached by
+    // whatever spelling `same_folder` sees through. Its own sentence, and
+    // checked ahead of "already holds a tree" below -- that one is
+    // technically true here too, but it names the wrong problem: this is
+    // not another tree occupying the spot, it is the one being asked to
+    // move onto itself.
+    if crate::anchor::same_folder(destination, &located.root) {
+        return Err(Failure::Model(
+            "  The destination is this folder, so there is nothing to move.".to_string(),
+        ));
+    }
+    // Step 3, second half: a destination that already holds a tree or a
+    // lane of its own.
+    if destination_holds_a_tree_or_lane(destination) {
         return Err(Failure::Model(format!(
             "  {} already holds a tree or a lane. Choose a folder with neither.",
             destination.display()
@@ -100,46 +121,15 @@ pub fn run(located: &Located, destination: &Path, lane_name: Option<&str>) -> Re
     }
     std::fs::create_dir_all(destination)?;
 
-    // Step 4.
+    // Steps 4 and 5 share one rollback: whatever stops the copy from
+    // landing whole -- a file that cannot be written, or a byte mismatch
+    // once everything did get written -- tears down what step 4 put at
+    // the destination and leaves the origin exactly as it was, before
+    // either kind of failure ever reaches the caller.
     let destination_vivac = destination.join(crate::store::DIR);
-    std::fs::create_dir_all(&destination_vivac)?;
-    std::fs::copy(
-        origin_vivac.join(crate::store::LOG),
-        destination_vivac.join(crate::store::LOG),
-    )?;
-    std::fs::copy(
-        origin_vivac.join(crate::store::CONFIG),
-        destination_vivac.join(crate::store::CONFIG),
-    )?;
-    let origin_gitignore = origin_vivac.join(crate::store::GITIGNORE);
-    if origin_gitignore.is_file() {
-        std::fs::copy(
-            &origin_gitignore,
-            destination_vivac.join(crate::store::GITIGNORE),
-        )?;
-    } else {
-        crate::store::write_gitignore(&destination_vivac)?;
-    }
-    std::fs::File::create(destination_vivac.join(crate::store::LOCK))?;
-
-    // Step 5. The one comparison this whole operation's safety rests on: if
-    // the destination did not end up with exactly what the origin has, the
-    // copy is torn down and nothing about the origin is touched -- no
-    // rename, no lane file, no registry write.
-    let log_matches = same_bytes(
-        &origin_vivac.join(crate::store::LOG),
-        &destination_vivac.join(crate::store::LOG),
-    )?;
-    let config_matches = same_bytes(
-        &origin_vivac.join(crate::store::CONFIG),
-        &destination_vivac.join(crate::store::CONFIG),
-    )?;
-    if !log_matches || !config_matches {
+    if let Err(e) = copy_and_verify(&origin_vivac, &destination_vivac) {
         std::fs::remove_dir_all(&destination_vivac).ok();
-        return Err(Failure::Io(std::io::Error::other(
-            "the copy at the destination did not match the source byte for byte; \
-             nothing was moved",
-        )));
+        return Err(e);
     }
 
     // The lane that stays at the origin: its own id, or `lane::MAIN` for the
@@ -248,6 +238,53 @@ fn destination_holds_a_tree_or_lane(destination: &Path) -> bool {
     vivac.join(crate::store::LOG).is_file()
         || vivac.join(crate::store::CONFIG).is_file()
         || vivac.join(crate::store::LANE).is_file()
+}
+
+/// Steps 4 and 5 together: copies `events`, `config` and `.gitignore` from
+/// `origin_vivac` into `destination_vivac`, creates a fresh `lock` there,
+/// and compares the two logs and the two configs byte for byte. `run` owns
+/// the rollback -- tearing down `destination_vivac` on any error this
+/// returns -- so every failure in here, a copy that never lands included,
+/// goes through the very same cleanup rather than each needing its own.
+fn copy_and_verify(origin_vivac: &Path, destination_vivac: &Path) -> Result<(), Failure> {
+    std::fs::create_dir_all(destination_vivac)?;
+    std::fs::copy(
+        origin_vivac.join(crate::store::LOG),
+        destination_vivac.join(crate::store::LOG),
+    )?;
+    std::fs::copy(
+        origin_vivac.join(crate::store::CONFIG),
+        destination_vivac.join(crate::store::CONFIG),
+    )?;
+    let origin_gitignore = origin_vivac.join(crate::store::GITIGNORE);
+    if origin_gitignore.is_file() {
+        std::fs::copy(
+            &origin_gitignore,
+            destination_vivac.join(crate::store::GITIGNORE),
+        )?;
+    } else {
+        crate::store::write_gitignore(destination_vivac)?;
+    }
+    std::fs::File::create(destination_vivac.join(crate::store::LOCK))?;
+
+    // Step 5. The one comparison this whole operation's safety rests on: if
+    // the destination did not end up with exactly what the origin has, the
+    // caller tears the copy down and nothing about the origin is touched --
+    // no rename, no lane file, no registry write.
+    let log_matches = same_bytes(
+        &origin_vivac.join(crate::store::LOG),
+        &destination_vivac.join(crate::store::LOG),
+    )?;
+    let config_matches = same_bytes(
+        &origin_vivac.join(crate::store::CONFIG),
+        &destination_vivac.join(crate::store::CONFIG),
+    )?;
+    if !log_matches || !config_matches {
+        return Err(Failure::Io(std::io::Error::other(
+            "the copy at the destination did not match the source byte for byte",
+        )));
+    }
+    Ok(())
 }
 
 /// Whether the two files are identical, byte for byte. Small enough files --

@@ -110,6 +110,53 @@ fn a_busy_destination_is_refused() {
     );
 }
 
+/// `run`'s own byte-mismatch branch (step 5) has no trigger a black-box
+/// test can reach -- the copy and the read that verifies it run back to
+/// back with no window for anything else to land a write in between. What
+/// this proves instead is the property that actually matters: a move that
+/// cannot finish leaves the origin whole and the destination clean,
+/// whichever half of step 5 stopped it.
+///
+/// The trigger: `.vivac/.gitignore` at the destination, already a
+/// directory before `relocate` ever runs. Step 3 never looks at that file,
+/// so the order goes ahead, copies `events` and `config` cleanly, and then
+/// cannot write `.gitignore` where a directory already sits -- no
+/// operating system allows a file to land on top of one, so this is
+/// deterministic and portable rather than a race against anything.
+#[test]
+fn a_move_that_cannot_finish_leaves_the_source_alone() {
+    let c = Sandbox::new_seeded("reloc-cannot-finish");
+    c.ok(&["push", "a goal", "--why", "seed"]);
+    let dest = sibling_dir(&c, "cannot-finish");
+    std::fs::create_dir_all(dest.join(".vivac").join(".gitignore")).unwrap();
+
+    let (out, code) = c.run(&["relocate", dest.to_str().unwrap()]);
+    assert_ne!(code, 0, "{out}");
+
+    assert!(
+        c.0.join(".vivac").join("events").is_file(),
+        "the origin's own log must survive a move that could not finish"
+    );
+    assert!(
+        c.0.join(".vivac").join("config").is_file(),
+        "the origin's own config must survive a move that could not finish"
+    );
+    assert!(
+        !c.0.join(".vivac").join("events.relocated").exists(),
+        "the origin must not be renamed for a move that never finished"
+    );
+    assert!(
+        !c.0.join(".vivac").join("lane").exists(),
+        "the origin must not gain a lane file for a move that never finished"
+    );
+    assert!(
+        !dest.join(".vivac").join("events").exists(),
+        "no events must be left at a destination whose move could not finish"
+    );
+
+    std::fs::remove_dir_all(&dest).ok();
+}
+
 #[cfg(windows)]
 fn second_spelling(p: &Path) -> Option<PathBuf> {
     let name = p.file_name()?.to_str()?;
@@ -137,8 +184,15 @@ fn second_spelling(_p: &Path) -> Option<PathBuf> {
 /// different spellings of the very same folder. On a platform with no
 /// second spelling to offer, this says so on `stderr` and skips rather than
 /// passing in silence.
+///
+/// Names the sentence, not just the exit code: without `same_folder` in
+/// `run`'s own step 3, the raw existence check further down still refuses
+/// this (the second spelling really does already hold the tree), but with
+/// the wrong reason -- "already holds a tree", when what is actually true
+/// is that this *is* the tree. Removing `same_folder` and watching the
+/// message change is how to see this test earn its keep.
 #[test]
-fn a_destination_spelled_differently_from_the_origin_is_still_the_origin() {
+fn relocate_to_this_folder_by_another_spelling_is_refused() {
     let c = Sandbox::new_seeded("reloc-spelling-src");
     c.ok(&["push", "a goal", "--why", "seed"]);
 
@@ -151,6 +205,17 @@ fn a_destination_spelled_differently_from_the_origin_is_still_the_origin() {
 
     let (out, code) = c.run(&["relocate", destination.to_str().unwrap()]);
     assert_eq!(code, 1, "{out}");
+    assert!(
+        says(
+            &out,
+            "The destination is this folder, so there is nothing to move."
+        ),
+        "{out}"
+    );
+    assert!(
+        !says(&out, "already holds a tree or a lane"),
+        "a destination that is this folder must not be confused with one that is busy: {out}"
+    );
     assert!(
         c.0.join(".vivac").join("events").is_file(),
         "the origin's own log must survive a relocate onto a second spelling of itself"
