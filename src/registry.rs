@@ -494,7 +494,7 @@ fn copy_or_fine(mut others: Vec<Option<String>>) -> Noted {
 /// The folder's own name, or nothing when the redaction guard rejects it.
 /// Never the path: where a copy sits is this machine's business, and this
 /// name travels into an agent's context.
-fn folder_name(p: &Path) -> Option<String> {
+pub fn folder_name(p: &Path) -> Option<String> {
     let name = p.file_name()?.to_string_lossy().into_owned();
     match crate::redact::check_field("project name", &name) {
         Some(_) => None,
