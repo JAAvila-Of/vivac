@@ -29,24 +29,6 @@ fn run_in(dir: &Path, home: &Path, args: &[&str]) -> (String, i32) {
     )
 }
 
-/// `run_in`, with `stdout` and `stderr` kept apart: proving the copy
-/// warning lands on the stream the agent's own parsing does not touch
-/// needs the two kept separate, the same reason `tests/registry.rs`'s own
-/// `run_split` exists.
-fn run_in_split(dir: &Path, home: &Path, args: &[&str]) -> (String, String, i32) {
-    let o = std::process::Command::new(BIN)
-        .current_dir(dir)
-        .env("VIVAC_HOME", home)
-        .args(args)
-        .output()
-        .unwrap();
-    (
-        String::from_utf8_lossy(&o.stdout).into_owned(),
-        String::from_utf8_lossy(&o.stderr).into_owned(),
-        o.status.code().unwrap_or(-1),
-    )
-}
-
 /// The `id` of line 1 of the log, the same way `tests/lanes.rs` and
 /// `tests/registry.rs` read it, so a lane fabricated by hand can name the
 /// right project.
@@ -110,42 +92,220 @@ fn the_tree_moves_and_the_old_folder_stays_a_lane() {
     std::fs::remove_dir_all(&dest).ok();
 }
 
-/// `t594`: `relocate` used to sit outside `may_append`,
-/// so the ambient sighting the generic dispatch already computes for the
-/// origin -- correctly `Noted::Copy` here -- never reached `stderr`. The
-/// origin writes its own `.vivac/lane` as part of the move (`t594` §4.6,
-/// step 8), which is exactly the write `warn_if_wrote` hangs off.
+/// The half of the copy refusal that matters most, and the one its own
+/// sentence cannot prove: the refusal writes nothing itself.
+///
+/// The harm it exists to stop is a write landing in the wrong tree -- the
+/// registry pointed at a copy's destination, every lane following it
+/// there -- so a refusal that saved the tree and still moved the registry,
+/// or still left a lane file at the origin, would have given the harm back
+/// under a different name. Nothing anywhere: the destination is never
+/// created, the registry comes back byte for byte, and both folders that
+/// hold a tree keep their logs exactly as they were.
+///
+/// The registry being byte-identical is a real assertion here and not a
+/// tautology: this process notes the registry before `relocate` runs at
+/// all, and that note is what *would* write, if the copy were not already
+/// recorded as one. It is, so the note has nothing to say and the file is
+/// never touched.
+///
+/// The one thing the origin can gain is an empty `.vivac/lock`: the
+/// refusal is raised under the write lock, deliberately, and taking a lock
+/// creates the file it is held on. That is not a write into the tree, and
+/// nothing reads it as one -- `already_planted` looks at `config` and
+/// `events`.
 #[test]
-fn relocate_from_a_copy_warns_on_stderr() {
+fn a_refused_relocate_from_a_copy_writes_nothing_anywhere() {
     let original = Sandbox::new_seeded("reloc-copy-orig");
     original.ok(&["push", "a goal", "--why", "so the log has a first event"]);
+    let copy = copy_of_tree(&original, "copy-src");
 
-    let copy_src = sibling_dir(&original, "copy-src");
-    std::fs::create_dir_all(copy_src.join(".vivac")).unwrap();
+    let registry_before = std::fs::read(original.global_home().join("projects")).unwrap();
+    let original_log_before = std::fs::read(original.0.join(".vivac").join("events")).unwrap();
+    let copy_log_before = std::fs::read(copy.0.join(".vivac").join("events")).unwrap();
+
+    let dest = Owned(sibling_dir(&original, "copy-dest"));
+    let (out, code) = run_in(
+        &copy.0,
+        original.global_home(),
+        &["relocate", dest.0.to_str().unwrap()],
+    );
+
+    assert_eq!(code, 1, "{out}");
+    assert_eq!(
+        std::fs::read(original.global_home().join("projects")).unwrap(),
+        registry_before,
+        "the refusal moved the registry, which is the harm it exists to stop"
+    );
+    assert!(
+        !dest.0.exists(),
+        "the refusal created the destination it refused to move to"
+    );
+    assert_eq!(
+        std::fs::read(copy.0.join(".vivac").join("events")).unwrap(),
+        copy_log_before,
+        "the refusal touched this folder's own log"
+    );
+    assert_eq!(
+        std::fs::read(original.0.join(".vivac").join("events")).unwrap(),
+        original_log_before,
+        "the refusal touched the log of the folder the project does live in"
+    );
+    for gone in ["lane", "events.relocated", "config.relocated"] {
+        assert!(
+            !copy.0.join(".vivac").join(gone).exists(),
+            "the refusal left {gone} behind"
+        );
+    }
+}
+
+/// A directory removed when this value is dropped, whether the test passed
+/// or panicked: the same promise `Sandbox` already makes for its own two
+/// folders, for the ones a test builds beside them. Every folder the tests
+/// below create outside a `Sandbox` is held in one of these.
+struct Owned(PathBuf);
+
+impl Drop for Owned {
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(&self.0).ok();
+    }
+}
+
+/// A byte copy of `original`'s log in a folder of its own, sighted once so
+/// the registry records it as a copy rather than as the project's own
+/// folder: the state two folders are in the moment somebody has worked in
+/// both of them.
+fn copy_of_tree(original: &Sandbox, name: &str) -> Owned {
+    let copy = sibling_dir(original, name);
+    std::fs::create_dir_all(copy.join(".vivac")).unwrap();
     std::fs::copy(
         original.0.join(".vivac").join("events"),
-        copy_src.join(".vivac").join("events"),
+        copy.join(".vivac").join("events"),
+    )
+    .unwrap();
+    run_in(&copy, original.global_home(), &["brief"]);
+    Owned(copy)
+}
+
+/// `t594` §4.7: `relocate` run from a copy used to point the registry at
+/// the copy's own destination and drop the folder that still held the
+/// tree, although that folder was alive and still started with the same
+/// first event. A lane that resolves through the registry then changed
+/// trees underfoot and appended to the destination instead, which is the
+/// "copies diverge in silence" failure §4.7 exists to prevent, reached
+/// through this command rather than around it.
+///
+/// The sentence and the exit code are this test's whole subject; what the
+/// refusal leaves on disk is the one above it, which is a different
+/// promise and fails for different reasons.
+#[test]
+fn relocate_from_a_copy_of_a_live_tree_is_refused() {
+    let original = Sandbox::new_seeded("reloc-copy-live-orig");
+    original.ok(&["push", "a goal", "--why", "so the log has a first event"]);
+    let copy = copy_of_tree(&original, "copy-live-src");
+    let original_name = original
+        .0
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+
+    let dest = Owned(sibling_dir(&original, "copy-live-dest"));
+    let (out, code) = run_in(
+        &copy.0,
+        original.global_home(),
+        &["relocate", dest.0.to_str().unwrap()],
+    );
+
+    assert_eq!(code, 1, "{out}");
+    assert!(says(&out, "so the project does not live here"), "{out}");
+    assert!(
+        says(
+            &out,
+            &format!("run relocate in \"{original_name}\" instead")
+        ),
+        "{out}"
+    );
+}
+
+/// `d600` for the refusal above: the folder that still holds the tree is
+/// named, and a name the redaction guard rejects is not written down at
+/// all -- the sentence survives without it, and nothing about the refusal
+/// weakens.
+#[test]
+fn the_copy_refusal_withholds_a_folder_name_the_guard_rejects() {
+    // An address, which the guard reads as personal data: the same name
+    // `registry`'s own tests prove it rejects.
+    let rejected = "someone@example.com";
+    let parent = Owned(std::env::temp_dir().join(format!(
+        "vivac-relocate-copy-withheld-{}-{}",
+        std::process::id(),
+        id_seed()
+    )));
+    std::fs::create_dir_all(&parent.0).unwrap();
+    let home = parent.0.join("home");
+    let original = Sandbox::new_seeded_in("reloc-copy-withheld", &home);
+    original.ok(&["push", "a goal", "--why", "so the log has a first event"]);
+
+    // The folder the registry points at has to carry the rejected name
+    // itself, so the tree is copied into one under that name and the
+    // registry is pointed there by a command run from it, the original
+    // gone by then so nothing else can claim the slot.
+    let named = parent.0.join(rejected);
+    std::fs::create_dir_all(named.join(".vivac")).unwrap();
+    std::fs::copy(
+        original.0.join(".vivac").join("events"),
+        named.join(".vivac").join("events"),
+    )
+    .unwrap();
+    std::fs::remove_dir_all(&original.0).unwrap();
+    run_in(&named, &home, &["brief"]);
+
+    // A second copy, made once the registry already points at the folder
+    // whose name cannot be written down.
+    let copy = parent.0.join("copy");
+    std::fs::create_dir_all(copy.join(".vivac")).unwrap();
+    std::fs::copy(
+        named.join(".vivac").join("events"),
+        copy.join(".vivac").join("events"),
     )
     .unwrap();
 
-    let dest = sibling_dir(&original, "copy-dest");
-    let (stdout, stderr, code) = run_in_split(
-        &copy_src,
-        original.global_home(),
-        &["relocate", dest.to_str().unwrap()],
-    );
-    assert_eq!(code, 0, "{stdout}{stderr}");
-    assert!(
-        stderr.contains("COPY OF ANOTHER TREE"),
-        "relocate from a copy never warned:\n{stderr}"
-    );
-    assert!(
-        !stdout.contains("COPY OF ANOTHER TREE"),
-        "the warning leaked into stdout:\n{stdout}"
-    );
+    let dest = parent.0.join("dest");
+    let (out, code) = run_in(&copy, &home, &["relocate", dest.to_str().unwrap()]);
 
-    std::fs::remove_dir_all(&copy_src).ok();
-    std::fs::remove_dir_all(&dest).ok();
+    assert_eq!(code, 1, "{out}");
+    assert!(says(&out, "so the project does not live here"), "{out}");
+    assert!(
+        says(&out, "run relocate in another folder instead"),
+        "{out}"
+    );
+    assert!(
+        !out.contains(rejected),
+        "a folder name the guard rejects reached the refusal: {out}"
+    );
+}
+
+/// The legitimate move the refusal above must never catch: the folder the
+/// registry points at is gone, so this copy is the only tree left and
+/// moving it loses nobody anything.
+#[test]
+fn relocate_from_the_only_surviving_copy_proceeds() {
+    let original = Sandbox::new_seeded("reloc-copy-survivor-orig");
+    original.ok(&["push", "a goal", "--why", "so the log has a first event"]);
+    let copy = copy_of_tree(&original, "copy-survivor-src");
+    let home = original.global_home().to_path_buf();
+
+    std::fs::remove_dir_all(&original.0).unwrap();
+
+    let dest = Owned(sibling_dir(&original, "copy-survivor-dest"));
+    let (out, code) = run_in(&copy.0, &home, &["relocate", dest.0.to_str().unwrap()]);
+
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        dest.0.join(".vivac").join("events").is_file(),
+        "the surviving copy must still be movable"
+    );
 }
 
 /// `t594` fix-3: the exact failure this module exists to close, reached
@@ -225,15 +385,15 @@ fn a_busy_destination_is_refused() {
     );
 }
 
-/// `run`'s own byte-mismatch branch (step 5) has no trigger a black-box
+/// `run`'s own byte-mismatch branch (step 6) has no trigger a black-box
 /// test can reach -- the copy and the read that verifies it run back to
 /// back with no window for anything else to land a write in between. What
 /// this proves instead is the property that actually matters: a move that
 /// cannot finish leaves the origin whole and the destination clean,
-/// whichever half of step 5 stopped it.
+/// whichever half of step 6 stopped it.
 ///
 /// The trigger: `.vivac/.gitignore` at the destination, already a
-/// directory before `relocate` ever runs. Step 3 never looks at that file,
+/// directory before `relocate` ever runs. Step 5 never looks at that file,
 /// so the order goes ahead, copies `events` and `config` cleanly, and then
 /// cannot write `.gitignore` where a directory already sits -- no
 /// operating system allows a file to land on top of one, so this is
@@ -334,7 +494,7 @@ fn second_spelling(_p: &Path) -> Option<PathBuf> {
 /// passing in silence.
 ///
 /// Names the sentence, not just the exit code: without `same_folder` in
-/// `run`'s own step 3, the raw existence check further down still refuses
+/// `run`'s own step 2, the raw existence check further down still refuses
 /// this (the second spelling really does already hold the tree), but with
 /// the wrong reason -- "already holds a tree", when what is actually true
 /// is that this *is* the tree. Removing `same_folder` and watching the

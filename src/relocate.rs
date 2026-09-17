@@ -23,7 +23,11 @@
 //!    below compares or touches it.
 //! 3. Take the tree's write lock. Everything after this runs with it held.
 //! 4. Refuse a tree with no events yet: it has no identity (`d201`) for
-//!    the registry or the origin's own lane file to be keyed by.
+//!    the registry or the origin's own lane file to be keyed by. Then,
+//!    with that identity in hand and before a byte is copied anywhere,
+//!    refuse a move made from a copy: the registry still points this
+//!    project at another folder, that folder is still there holding a tree
+//!    with this same first event, and so the project does not live here.
 //! 5. Refuse a destination that already holds a tree or a lane. Create it
 //!    if it does not exist yet.
 //! 6. Copy `events` and `config` to temporary names, compare each against
@@ -199,6 +203,21 @@ pub fn run(
         ));
     };
 
+    // Step 4's second half, and the reason it sits here rather than any
+    // later: with the identity in hand, and before a byte has been copied
+    // anywhere, whether this folder is the one the project lives in at
+    // all. Read under the lock step 3 already holds, through the registry
+    // itself rather than any reading of it this module keeps -- and read
+    // once here, spent again at step 7, so a folder with nowhere to record
+    // a move still fails there, exactly as it always has.
+    let store_dir = crate::store::store_dir();
+    if let Some(elsewhere) = store_dir
+        .as_deref()
+        .and_then(|d| crate::registry::path_elsewhere(d, &first_event_id, &located.root))
+    {
+        return Err(copy_refusal(elsewhere.name.as_deref()));
+    }
+
     let origin_vivac = located.root.join(crate::store::DIR);
 
     // Step 5. `destination_holds_a_tree_or_lane` is a plain existence check
@@ -264,7 +283,7 @@ pub fn run(
     // failure here undoes step 6 and stops, the origin never having lost
     // anything.
     let repos = union_repo_roots(&tree);
-    let Some(store_dir) = crate::store::store_dir() else {
+    let Some(store_dir) = store_dir else {
         written.undo(&destination_vivac);
         return Err(Failure::Io(std::io::Error::other(
             "no VIVAC_HOME to record the move in; the registry would lose the tree",
@@ -337,6 +356,30 @@ pub fn run(
         outln!("    vivac setup claude-code");
     }
     Ok(0)
+}
+
+/// The refusal step 4 raises for a move made from a copy: this folder
+/// holds a tree that starts with the same first event as the one the
+/// registry points at, and that other folder is still there holding it.
+///
+/// Refused outright rather than recorded on the way past. Adding the other
+/// folder to `copies` would fix the warning and leave the harm exactly
+/// where it was: `path` would still move to this copy's own destination,
+/// and every lane that finds its tree through the registry would follow it
+/// there and append to it -- the silent divergence `t594` §4.7 exists to
+/// prevent, reached through this command rather than around it. What lands
+/// in the wrong tree is a write, so the path is cut, not signposted.
+///
+/// The other folder is named, and a name the redaction guard rejects is
+/// not written down at all (`d600`): `label_for` is the same fallback
+/// `setup`'s own tree-below refusal reads through.
+fn copy_refusal(name: Option<&str>) -> Failure {
+    let label = crate::registry::label_for(name);
+    Failure::Model(format!(
+        "  This folder is a copy of the tree in {label}, so the project does not live\n  \
+         here. Moving this copy would point every lane at it and leave that tree\n  \
+         behind: run relocate in {label} instead."
+    ))
 }
 
 /// `destination` made absolute against `cwd`, by joining rather than

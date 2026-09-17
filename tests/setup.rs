@@ -2100,6 +2100,60 @@ fn join_to_a_folder_that_is_itself_a_copy_warns_on_stderr() {
     );
 }
 
+/// `t594` §4.7, form 5's other half: `setup` planting into a folder that
+/// is itself a copy of a tree elsewhere. It writes -- the lane file, and
+/// the lane's own declaration -- so it warns on `stderr` like every other
+/// write does, and it is `note_registry` that leaves the notice for
+/// `warn_if_wrote` to act on.
+///
+/// The `--join` half has had a test since it landed; this half had none,
+/// and `clippy` had nothing to say either, since `set_pending` keeps its
+/// other callers. The two halves warn for the same reason and neither is
+/// covered by the other's test.
+#[test]
+fn setup_planting_in_a_folder_that_is_a_copy_warns_on_stderr() {
+    let c = Sandbox::new_empty("setup-plant-copy");
+    let original = c.0.join("orig");
+    std::fs::create_dir_all(&original).unwrap();
+    // `init`, not `setup`: the tree has to reach the copy with no lane
+    // declared yet, so the `setup` below has something real to write to it
+    // -- the warning hangs off a write that happened and off nothing else
+    // (`t594` fix-1, Ruling 21), so a fixture where setup writes only the
+    // harness files would prove the opposite of what it looks like.
+    run_in(&original, c.global_home(), &["init"]);
+    run_in(
+        &original,
+        c.global_home(),
+        &["push", "a goal", "--why", "so the log has a first event"],
+    );
+
+    let copy = c.0.join("copy");
+    std::fs::create_dir_all(copy.join(".vivac")).unwrap();
+    std::fs::copy(
+        original.join(".vivac").join("events"),
+        copy.join(".vivac").join("events"),
+    )
+    .unwrap();
+    let before = read(&copy.join(".vivac").join("events")).lines().count();
+
+    let (stdout, stderr, code) =
+        run_in_split(&copy, c.global_home(), &["setup", "claude-code", "--yes"]);
+
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert!(
+        read(&copy.join(".vivac").join("events")).lines().count() > before,
+        "the write this warning reports on never happened:\n{stdout}"
+    );
+    assert!(
+        stderr.contains("COPY OF ANOTHER TREE"),
+        "planting into a copy never warned:\n{stderr}"
+    );
+    assert!(
+        !stdout.contains("COPY OF ANOTHER TREE"),
+        "the warning leaked into stdout:\n{stdout}"
+    );
+}
+
 /// Case 3: `--join` to a folder with no tree refuses, and nothing is
 /// written. Only the exit code used to be checked (`t594` fix-1, finding
 /// 13); the text is what tells this refusal apart from any other exit-1
@@ -2157,6 +2211,45 @@ fn join_from_a_folder_already_a_lane_of_another_tree_refuses() {
     );
 }
 
+/// `Failure::already_a_lane`'s own doc says it is for "a folder that
+/// already carries somebody else's `.vivac/lane`". A folder with no
+/// `.vivac/` at all, sitting under a tree and resolving up into it,
+/// carries none: the refusal is right, and the sentence it used to give
+/// was false. It gets its own, which says the thing that is actually
+/// true and where to look.
+#[test]
+fn a_folder_under_a_tree_is_refused_for_the_tree_above_not_a_lane_it_has_not_got() {
+    let c = Sandbox::new_empty("setup-join-under-a-tree");
+    let above = c.0.join("Above");
+    let sub = above.join("Sub");
+    std::fs::create_dir_all(&sub).unwrap();
+    run_in(&above, c.global_home(), &["setup", "claude-code", "--yes"]);
+
+    let target = c.0.join("T");
+    std::fs::create_dir_all(&target).unwrap();
+    run_in(&target, c.global_home(), &["setup", "claude-code", "--yes"]);
+
+    let (out, code) = run_in(
+        &sub,
+        c.global_home(),
+        &["setup", "claude-code", "--join", "T"],
+    );
+
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        out.contains("A tree sits above this folder, in \"Above\","),
+        "{out}"
+    );
+    assert!(
+        !out.contains("already a lane of another tree"),
+        "this folder carries no lane of anybody's: {out}"
+    );
+    assert!(
+        !sub.join(".vivac").exists(),
+        "a refused join must write nothing here"
+    );
+}
+
 /// `t594` fix-1, finding 9: `--join` from the folder that holds its own
 /// tree used to answer with the "already a lane of another tree" text --
 /// wrong, since this folder carries no lane at all, it carries the tree.
@@ -2211,6 +2304,45 @@ fn a_tree_below_refuses_even_when_there_is_one_above() {
     assert!(
         !f.join(".vivac").exists(),
         "F must not have joined Work despite the tree below"
+    );
+}
+
+/// The very same guard, reached by joining instead of planting. `--join`
+/// returns before `apply` ever runs and `refuse_second_map` -- which owned
+/// the tree-below check -- was only ever called from `apply`, so a folder
+/// with a tree inside it joined a tree elsewhere at exit 0 and said
+/// nothing: the split product §6.4 exists to catch, minted by the very
+/// flag §6.3 hands people as the remedy. The same structural mistake
+/// `refuse_home_or_global_store` already had, and the same fix -- the
+/// guard belongs in `run`, where both branches go through it.
+#[test]
+fn a_tree_below_refuses_a_join_too() {
+    let c = Sandbox::new_empty("setup-below-and-join");
+    let target = c.0.join("T");
+    let f = c.0.join("F");
+    let nested = f.join("Nested");
+    std::fs::create_dir_all(&target).unwrap();
+    std::fs::create_dir_all(&nested).unwrap();
+    // A real tree with a first event to point a lane back at, so the only
+    // thing left that can refuse this join is the tree below `F`.
+    run_in(&target, c.global_home(), &["setup", "claude-code", "--yes"]);
+    run_in(&nested, c.global_home(), &["init"]);
+
+    let target_str = target.to_string_lossy().into_owned();
+    let (out, code) = run_in(
+        &f,
+        c.global_home(),
+        &["setup", "claude-code", "--join", &target_str],
+    );
+
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        out.contains("There is already a tree inside this folder, in \"Nested\"."),
+        "{out}"
+    );
+    assert!(
+        !f.join(".vivac").exists(),
+        "F must not have become a lane of T despite the tree below"
     );
 }
 

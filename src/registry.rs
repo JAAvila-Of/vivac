@@ -535,6 +535,51 @@ fn path_disagrees(existing: &Project, project_id: &str, root: &Path) -> bool {
         && crate::store::first_event_id(other).as_deref() == Some(project_id)
 }
 
+/// The folder the registry still points `project_id` at, when that is not
+/// the folder asking.
+#[derive(Debug)]
+pub struct Elsewhere {
+    /// Its own name, or `None` once the redaction guard has withheld it
+    /// (`d600`). The path itself never crosses this boundary: where the
+    /// other folder sits is this machine's business, the same rule
+    /// `folder_name` already applies to a copy's folder.
+    pub name: Option<String>,
+}
+
+/// The folder on `path` for `project_id`, when `root` is not that folder
+/// and `path`'s own folder is still there holding a tree that starts with
+/// this same first event. `None` for every other shape: no entry for this
+/// project at all, `path` already naming this very folder, or a `path`
+/// whose folder is gone, holds no tree, or holds a different one.
+///
+/// `path_disagrees` -- `decide`'s own question on the write path -- asked
+/// by a caller outside this module. `relocate` needs exactly that answer
+/// before it moves anything: a move made from a folder the registry does
+/// not point at is a move made from a copy, and pointing `path` at its
+/// destination would leave the folder that still holds the tree out of the
+/// entry entirely, with every lane that resolves through the registry
+/// following the copy (`t594` §4.7). A second notion of "still there"
+/// would be one more place for the two to drift apart.
+///
+/// Read-only, like `copy_of` and for the same reason: nothing here may
+/// move the registry under whoever else is reading it, and the caller is
+/// still deciding whether to go ahead at all.
+///
+/// A registry written by a newer vivac reads as `None` rather than as a
+/// refusal: this cannot tell what it says, and the caller has a better
+/// answer waiting anyway -- `record_move` refuses that same file outright,
+/// before the origin has lost anything.
+pub fn path_elsewhere(store_dir: &Path, project_id: &str, root: &Path) -> Option<Elsewhere> {
+    let projects = read(&store_dir.join(FILE))?;
+    let existing = projects.get(project_id)?;
+    if !path_disagrees(existing, project_id, root) {
+        return None;
+    }
+    Some(Elsewhere {
+        name: folder_name(Path::new(&existing.path)),
+    })
+}
+
 /// Every folder this registry knows might hold `project_id`'s tree, other
 /// than `root` itself, verified alive right now: `path` is one candidate
 /// and every entry in `copies` is another, on equal footing. A dead one --
@@ -577,6 +622,20 @@ pub fn folder_name(p: &Path) -> Option<String> {
     match crate::redact::check_field("project name", &name) {
         Some(_) => None,
         None => Some(name),
+    }
+}
+
+/// A folder's name, quoted, or `"another folder"` once the guard has
+/// withheld it: the one placeholder every refusal that names a folder
+/// falls back to, rather than a copy of the same fallback prose per
+/// surface. It lived in `setup::claude_code` while that was the only
+/// module that named a folder it could not always name; `relocate`'s own
+/// refusal for a move made from a copy is the second, so it moved here,
+/// beside the guard it always reads through.
+pub(crate) fn label_for(name: Option<&str>) -> String {
+    match name {
+        Some(n) => format!("\"{n}\""),
+        None => "another folder".to_string(),
     }
 }
 
@@ -904,6 +963,129 @@ mod tests {
         let root = temp_dir(prefix);
         let id = seed_at(&root);
         (root, id)
+    }
+
+    /// A directory removed when this value is dropped, whether the test
+    /// passed or panicked: a trailing `remove_dir_all(...).ok()` only runs
+    /// on the way past an assertion that held, so a failing test used to
+    /// leave its folders in the system's temporary directory for good.
+    struct Owned(std::path::PathBuf);
+
+    impl Drop for Owned {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.0).ok();
+        }
+    }
+
+    /// `relocate`'s own guard for a move made from a copy: the folder the
+    /// registry still points at is named, so the refusal can say where the
+    /// project does live.
+    #[test]
+    fn path_elsewhere_names_the_folder_that_still_holds_the_tree() {
+        let store_dir = Owned(temp_dir("reg-elsewhere-live-store"));
+        let (root, id) = seeded_project("elsewhere-live");
+        let root = Owned(root);
+        let copy = Owned(temp_dir("reg-elsewhere-live-copy"));
+        std::fs::create_dir_all(copy.0.join(store::DIR)).unwrap();
+        std::fs::copy(
+            root.0.join(store::DIR).join(store::LOG),
+            copy.0.join(store::DIR).join(store::LOG),
+        )
+        .unwrap();
+        note(&store_dir.0, &id, sighting(&root.0));
+
+        let elsewhere =
+            path_elsewhere(&store_dir.0, &id, &copy.0).expect("the folder on path is still there");
+
+        assert_eq!(
+            elsewhere.name.as_deref(),
+            root.0.file_name().and_then(|n| n.to_str()),
+            "the folder still holding the tree was not named"
+        );
+    }
+
+    /// Nothing to disagree with: a project this registry has never heard
+    /// of cannot say some other folder owns it.
+    #[test]
+    fn path_elsewhere_answers_nothing_for_a_project_the_registry_never_heard_of() {
+        let store_dir = Owned(temp_dir("reg-elsewhere-unknown-store"));
+        let (root, id) = seeded_project("elsewhere-unknown");
+        let root = Owned(root);
+
+        assert!(
+            path_elsewhere(&store_dir.0, &id, &root.0).is_none(),
+            "a registry with no entry for this project must not claim one"
+        );
+    }
+
+    /// The legitimate move: the folder on `path` is gone, so the folder
+    /// asking is the only tree left and nothing is left behind by moving
+    /// it. The same aliveness question `live_others` already asks of a
+    /// copy, which is why both go through `first_event_id` rather than
+    /// through whether a path is still spelled the same way.
+    #[test]
+    fn path_elsewhere_answers_nothing_once_the_folder_on_path_holds_no_tree() {
+        let store_dir = Owned(temp_dir("reg-elsewhere-dead-store"));
+        let (root, id) = seeded_project("elsewhere-dead");
+        let survivor = Owned(temp_dir("reg-elsewhere-survivor"));
+        note(&store_dir.0, &id, sighting(&root));
+
+        std::fs::remove_dir_all(&root).unwrap();
+
+        assert!(
+            path_elsewhere(&store_dir.0, &id, &survivor.0).is_none(),
+            "a folder that no longer holds this tree must not block the one that does"
+        );
+    }
+
+    /// `f612` once more, at the door `relocate` now reads through: the
+    /// folder already on `path`, entered under a second spelling of its
+    /// own name, is not another folder.
+    #[test]
+    fn path_elsewhere_answers_nothing_for_the_folder_on_path_by_another_spelling() {
+        let store_dir = Owned(temp_dir("reg-elsewhere-spelling-store"));
+        let (root, id) = seeded_project("Elsewhere-Spelling");
+        let root = Owned(root);
+        note(&store_dir.0, &id, sighting(&root.0));
+
+        let Some(second) = second_spelling(&root.0) else {
+            eprintln!(
+                "skipped: this platform offers no second spelling of the same folder to test with"
+            );
+            return;
+        };
+
+        assert!(
+            path_elsewhere(&store_dir.0, &id, &second).is_none(),
+            "a second spelling of the folder already on path read as another folder"
+        );
+    }
+
+    /// `d600`: the name travels into an agent's context through
+    /// `relocate`'s own refusal, so a folder name the guard rejects is
+    /// withheld there exactly as it is for a copy.
+    #[test]
+    fn path_elsewhere_withholds_a_folder_name_the_guard_rejects() {
+        let rejected_name = "someone@example.com";
+        assert!(
+            crate::redact::check_field("project name", rejected_name).is_some(),
+            "the guard must actually reject this name, or the test proves nothing"
+        );
+        let parent = Owned(temp_dir("reg-elsewhere-redacted-parent"));
+        std::fs::create_dir_all(&parent.0).unwrap();
+        let named = parent.0.join(rejected_name);
+        let id = seed_at(&named);
+        let store_dir = Owned(temp_dir("reg-elsewhere-redacted-store"));
+        let asking = Owned(temp_dir("reg-elsewhere-redacted-asking"));
+        note(&store_dir.0, &id, sighting(&named));
+
+        let elsewhere = path_elsewhere(&store_dir.0, &id, &asking.0)
+            .expect("the folder on path is still there");
+
+        assert_eq!(
+            elsewhere.name, None,
+            "a folder name the guard rejects must not reach the caller"
+        );
     }
 
     #[test]

@@ -668,6 +668,7 @@ heading
 headings
 heads
 healthy
+heard
 heaviest
 heavy
 height
@@ -1136,6 +1137,7 @@ println
 prints
 problem
 proceed
+proceeds
 process
 product
 products
@@ -1530,6 +1532,8 @@ supersedes
 surface
 surplus
 survives
+surviving
+survivor
 suspect
 suspended
 suspicious

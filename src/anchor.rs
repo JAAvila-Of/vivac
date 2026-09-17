@@ -206,16 +206,30 @@ pub(crate) fn main_copy_of(worktree_root: &Path) -> Option<PathBuf> {
 }
 
 /// Resolves `.` and `..` components one at a time, without touching the
-/// filesystem the way `canonicalize` would. `pub(crate)` rather than
-/// private for one reason only: `relocate::is_inside` walks a path's own
-/// ancestors, and an unresolved `..` in the middle of it makes
-/// `Path::ancestors` treat that component as just another name to strip
-/// rather than an instruction to go up past the one before it -- exactly
-/// the bug `relocate ..` surfaced once `is_inside` compared raw
-/// ancestors. Every other caller outside this module still goes through
-/// `same_folder`, below, rather than reaching this pure string walk
-/// directly -- `same_folder` is the criterion those callers actually
-/// want, and this is one piece of how it is computed.
+/// filesystem the way `canonicalize` would.
+///
+/// `pub(crate)` rather than private for three callers outside this module,
+/// and none of them is comparing two folders -- that is `same_folder`'s
+/// job, below, and it is the criterion anybody asking whether two paths
+/// are the same folder actually wants. These three want the lexical walk
+/// itself, each for a reason of its own:
+///
+/// - `relocate::is_inside` walks a path's own ancestors, and an unresolved
+///   `..` in the middle of it makes `Path::ancestors` treat that component
+///   as just another name to strip rather than an instruction to go up
+///   past the one before it -- exactly the bug `relocate ..` surfaced once
+///   `is_inside` compared raw ancestors.
+/// - `relocate::to_absolute` joins a destination that usually does not
+///   exist yet, so `canonicalize` is not available to it at all; without
+///   this, `vivac relocate ..` wrote `…\clone\..` into the registry
+///   outright, and `Path::file_name` of a path ending in `..` is `None`.
+/// - `registry::absolute` does the same for `--project`'s own value, which
+///   is looser still: it may name no path on this disk at all, so asking
+///   the filesystem about it before anything has established that it
+///   exists would be asking the wrong question.
+///
+/// In all three the result is written down or walked, never compared
+/// against a second spelling of the same folder.
 pub(crate) fn normalize(p: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for c in p.components() {
