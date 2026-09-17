@@ -131,6 +131,12 @@ const USAGE: &str = r#"vivac - provenance of work
     vivac setup claude-code [--dry-run] [--yes] [--undo]
                                               write what Claude Code needs here:
                                               hooks, the MCP server, a skill
+    vivac setup claude-code --join <name|path> [--lane-name <name>]
+                                              join this folder to a tree that
+                                              lives somewhere else
+    vivac setup claude-code --new-tree        plant here even if this
+                                              folder's repositories already
+                                              belong to a tracked product
     vivac relocate <destination> [--lane-name <name>]
                                               move the tree there; this folder
                                               stays one of its lanes, with its
@@ -297,7 +303,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         "changes" => &["since", "json"],
         "web" => &["port", "no-open", "project"],
         "init" | "hooks" | "mcp" => &[],
-        "setup" => &["dry-run", "yes", "undo"],
+        "setup" => &["dry-run", "yes", "undo", "join", "new-tree", "lane-name"],
         "relocate" => &["lane-name"],
         // The reads that speak JSON, spelled out. No shorthand: a shorthand
         // is what let the brief claim it for two releases.

@@ -29,6 +29,9 @@ pub fn run(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     if a.has("undo") {
         return undo(&roots.here, a);
     }
+    if let Some(spec) = a.opt("join") {
+        return join(roots, spec, a.opt("lane-name"));
+    }
     apply(roots, a)
 }
 
@@ -763,7 +766,7 @@ fn existing_lane(tree: &Path, lane_id: &str, folded: &crate::model::Tree) -> Exi
 /// (`main_claimed`). Declaring `main` there again would be a lie about
 /// where `main` actually lives, so this mints `here` a lane of its own
 /// instead, the same as any other folder that never had one.
-fn plan_lane(roots: &super::Roots) -> LanePlan {
+fn plan_lane(roots: &super::Roots, lane_name: Option<&str>) -> LanePlan {
     let (repos, excluded) = filtered_repos(crate::repos::scan(&roots.here));
 
     let folder_name = roots
@@ -771,6 +774,12 @@ fn plan_lane(roots: &super::Roots) -> LanePlan {
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
+    // `--lane-name` (`t594` §4.5's own `--lane-name <name>`), or this
+    // folder's own name when nobody named it: the word `declared_name`
+    // guards below either way. `main` is never renamed by this -- it is
+    // as opaque as a ULID (`lane::MAIN`'s own doc), and `main_lane`
+    // never reads either of these.
+    let requested_name = lane_name.unwrap_or(&folder_name);
     let here_has_its_own_vivac = roots
         .located
         .as_ref()
@@ -789,17 +798,17 @@ fn plan_lane(roots: &super::Roots) -> LanePlan {
         }
         Some(l) if here_has_its_own_vivac && l.lane.is_none() => {
             let id = crate::lane::new_id();
-            let name = crate::lane::declared_name(&id, &folder_name);
+            let name = crate::lane::declared_name(&id, requested_name);
             (id, name, true)
         }
         Some(l) if here_has_its_own_vivac => {
             let id = l.lane.as_ref().unwrap().id.clone();
-            let name = crate::lane::declared_name(&id, &folder_name);
+            let name = crate::lane::declared_name(&id, requested_name);
             (id, name, false)
         }
         Some(_) => {
             let id = crate::lane::new_id();
-            let name = crate::lane::declared_name(&id, &folder_name);
+            let name = crate::lane::declared_name(&id, requested_name);
             (id, name, true)
         }
     };
@@ -1055,6 +1064,92 @@ fn wrapped_piece_line(label: &str, first: &str, second: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// `--join`: `t594` §4.5's own escape from §6.3, and the remedy `--new-tree`
+// or a fresh `setup` plants past instead. Narrower than `apply`, on
+// purpose: it resolves a tree that lives somewhere else, writes this
+// folder's own `.vivac/lane` and declares the lane there -- and nothing
+// about the hooks, the server or the skill, since a folder that already
+// ran setup somewhere else has no reason to run it a second time here.
+// ---------------------------------------------------------------------------
+
+/// `spec`, printed back exactly as typed when the tree it names cannot be
+/// joined: a person's own words, the same reasoning `relocate`'s own
+/// destination is printed under -- not a path this tool went looking for.
+fn join(roots: &super::Roots, spec: &str, lane_name: Option<&str>) -> Result<i32, Failure> {
+    let target = crate::registry::resolve(spec)?;
+    if !crate::store::already_planted(&target) {
+        return Err(Failure::Model(format!(
+            "  \"{spec}\" has no tree yet, so there is nothing to join.\n  \
+             Plant one there first:  vivac setup claude-code"
+        )));
+    }
+    // §4.5: refuses when this folder already is a lane of *another* tree --
+    // rejoining the very one it already resolves to is left alone, since
+    // that is only a redeclaration.
+    if let Some(l) = &roots.located {
+        if !crate::anchor::same_folder(&l.root, &target) {
+            return Err(Failure::already_a_lane());
+        }
+    }
+    let Some(project) = crate::store::first_event_id(&target) else {
+        return Err(Failure::Model(format!(
+            "  \"{spec}\" has a tree with no events yet, so there is nothing to \
+             join: it has no identity yet for a lane to point back at."
+        )));
+    };
+
+    let id = crate::lane::new_id();
+    let folder_name = roots
+        .here
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let name = crate::lane::declared_name(&id, lane_name.unwrap_or(&folder_name));
+    let (repos, _excluded) = filtered_repos(crate::repos::scan(&roots.here));
+
+    // The file first, unlocked, then the event under the target's own
+    // lock: the same order `write_lane` already follows and the same
+    // reason -- the one ordering that must never happen is the event
+    // landing first, which would leave this folder signing as `main`
+    // while the tree it just joined already says otherwise.
+    crate::lane::write(
+        &roots.here.join(crate::store::DIR),
+        &crate::lane::Lane {
+            version: 1,
+            id: id.clone(),
+            project,
+        },
+    )?;
+
+    let store = crate::store::Store::open(target.clone())?;
+    let mut ctx = crate::ops::Ctx::load_for_write(store, crate::ops::Whose::Declared(id.clone()))?;
+    ctx.lock_for_write()?;
+    crate::ops::declare_lane(&mut ctx, name, repos)?;
+
+    // The same registry bookkeeping `note_registry` does for `apply`, but
+    // keyed by `target` -- this folder's own tree, not `roots.tree`, which
+    // still names no tree of its own at all. Quiet on any failure, the
+    // same promise `note_registry` already makes.
+    if let Some(store_dir) = crate::store::store_dir() {
+        if let Some(project_id) = crate::store::first_event_id(&target) {
+            let target_repos = union_repo_roots(&fold_tree(&target));
+            let _ = crate::registry::note(
+                &store_dir,
+                &project_id,
+                crate::registry::Sighting {
+                    root: &target,
+                    lane: Some((&id, &roots.here)),
+                    repos: Some(&target_repos),
+                },
+            );
+        }
+    }
+
+    outln!("  This folder now writes as one of that tree's lanes.");
+    Ok(0)
+}
+
+// ---------------------------------------------------------------------------
 // Applying: plan, ask, write.
 // ---------------------------------------------------------------------------
 
@@ -1062,7 +1157,7 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     if let Some(refusal) = super::refuse_home_or_global_store(roots) {
         return Err(refusal);
     }
-    refuse_second_map(roots, false)?;
+    refuse_second_map(roots, a.has("new-tree"))?;
 
     let here = &roots.here;
     let tree = &roots.tree;
@@ -1137,7 +1232,7 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         SkillState::Missing | SkillState::Replaceable
     );
 
-    let lane = plan_lane(roots);
+    let lane = plan_lane(roots, a.opt("lane-name"));
 
     let nothing_to_write = !vivac_missing
         && !gitignore_missing
