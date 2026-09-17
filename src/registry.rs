@@ -607,6 +607,7 @@ pub fn roots(store_dir: &Path) -> Vec<PathBuf> {
 /// folder being set up. Named by its folder, never by its path: this text
 /// reaches an agent's context, and `d600` withholds a name the redaction
 /// guard rejects.
+#[derive(Debug)]
 pub struct Sharing {
     pub name: Option<String>,
     pub root: PathBuf,
@@ -622,6 +623,14 @@ pub struct Sharing {
 /// the same reason a fresh root that adds one more repository to a product
 /// is still that product.
 ///
+/// A project whose `path` no longer holds a tree with its own first event
+/// is dropped rather than named: the same aliveness check `live_others`
+/// already does for a copy, applied here because `refuse_second_map`'s own
+/// remedy names a project by walking this list and offering `--join` on
+/// whichever one it finds first -- pointing that remedy at a folder that
+/// no longer has a tree to join is worse than saying nothing (`t594`
+/// fix-1, finding 7).
+///
 /// Most shared repositories first, ties broken by name -- a withheld name
 /// sorts after every real one, since there is nothing to compare it
 /// against.
@@ -630,8 +639,12 @@ pub fn sharing_repos(store_dir: &Path, repos: &[String]) -> Vec<Sharing> {
         return Vec::new();
     };
     let mut found: Vec<Sharing> = projects
-        .values()
-        .filter_map(|p| {
+        .iter()
+        .filter_map(|(id, p)| {
+            let root = PathBuf::from(&p.path);
+            if crate::store::first_event_id(&root).as_deref() != Some(id.as_str()) {
+                return None;
+            }
             let shared: Vec<String> = p
                 .repos
                 .iter()
@@ -641,7 +654,6 @@ pub fn sharing_repos(store_dir: &Path, repos: &[String]) -> Vec<Sharing> {
             if shared.is_empty() {
                 return None;
             }
-            let root = PathBuf::from(&p.path);
             Some(Sharing {
                 name: folder_name(&root),
                 root,
@@ -674,6 +686,14 @@ pub fn sharing_repos(store_dir: &Path, repos: &[String]) -> Vec<Sharing> {
 /// name have no path-free way to tell apart, so the count is what it names.
 /// A name that matches no root falls through to being read as a path;
 /// `Store::open` is what answers whether that path holds a project at all.
+///
+/// That path is absolutized and normalized lexically first (`absolute`,
+/// below), never left relative to whichever folder this process happened
+/// to be started in: `--join ../T` used to write that literal string into
+/// `entry.path` (`apply_sighting`), and every other reader of `path` -- a
+/// lane, `--project`, `root_of`, `find --everywhere` -- resolves it from a
+/// folder of its own, not from the one that typed it (`t594` fix-1,
+/// finding 1).
 pub fn resolve(spec: &str) -> Result<PathBuf, Failure> {
     let known = crate::store::store_dir()
         .map(|d| roots(&d))
@@ -684,11 +704,28 @@ pub fn resolve(spec: &str) -> Result<PathBuf, Failure> {
         .collect();
     match matches.len() {
         1 => Ok(matches.remove(0)),
-        0 => Ok(PathBuf::from(spec)),
+        0 => Ok(absolute(Path::new(spec))),
         n => Err(Failure::usage(format!(
             "\"{spec}\" names {n} projects on this machine. Pass a path instead."
         ))),
     }
+}
+
+/// `p`, made absolute against the current directory when it is not
+/// already, then resolved lexically the same way `anchor::normalize`
+/// resolves `.` and `..` -- component by component, never touching disk
+/// and never `canonicalize`, which a relative `spec` this loose has no
+/// business asking of the filesystem before this call even knows the path
+/// exists.
+fn absolute(p: &Path) -> PathBuf {
+    let based = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(p))
+            .unwrap_or_else(|_| p.to_path_buf())
+    };
+    crate::anchor::normalize(&based)
 }
 
 /// Reads the registry. `None` when the file names a version newer than
@@ -1405,5 +1442,107 @@ mod tests {
 
         std::fs::remove_dir_all(&store_dir).ok();
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// `resolve`'s own no-match branch, isolated from `store_dir()`: a unit
+    /// test cannot set `VIVAC_HOME` without racing every other test in this
+    /// process, so this pins the pure half directly (`t594` fix-1, finding
+    /// 1).
+    #[test]
+    fn absolute_resolves_dot_dot_lexically_against_the_current_directory() {
+        let cwd = std::env::current_dir().unwrap();
+        let resolved = absolute(Path::new("../elsewhere"));
+        assert!(resolved.is_absolute(), "{resolved:?} is still relative");
+        assert_eq!(resolved, cwd.parent().unwrap().join("elsewhere"));
+    }
+
+    #[test]
+    fn absolute_normalizes_a_path_already_absolute() {
+        let messy = std::env::current_dir()
+            .unwrap()
+            .join("a")
+            .join("..")
+            .join("b");
+        assert_eq!(absolute(&messy), std::env::current_dir().unwrap().join("b"));
+    }
+
+    /// `sharing_repos`'s own order, pinned directly: `refuse_second_map`
+    /// takes the first entry this returns to build its remedy, so which
+    /// project comes first decides which name a person is told to
+    /// `--join` (`t594` fix-1, finding 7).
+    #[test]
+    fn sharing_repos_orders_most_shared_first_then_by_name() {
+        let store_dir = temp_dir("reg-sharing-order");
+        let parent = temp_dir("reg-sharing-order-parent");
+        std::fs::create_dir_all(&parent).unwrap();
+        let root_beta = parent.join("Beta");
+        let root_alpha = parent.join("Alpha");
+        let root_two = parent.join("TwoRepos");
+        let id_beta = seed_at(&root_beta);
+        let id_alpha = seed_at(&root_alpha);
+        let id_two = seed_at(&root_two);
+
+        note(
+            &store_dir,
+            &id_beta,
+            Sighting {
+                root: &root_beta,
+                lane: None,
+                repos: Some(&["r1".to_string()]),
+            },
+        );
+        note(
+            &store_dir,
+            &id_alpha,
+            Sighting {
+                root: &root_alpha,
+                lane: None,
+                repos: Some(&["r1".to_string()]),
+            },
+        );
+        note(
+            &store_dir,
+            &id_two,
+            Sighting {
+                root: &root_two,
+                lane: None,
+                repos: Some(&["r1".to_string(), "r2".to_string()]),
+            },
+        );
+
+        let found = sharing_repos(&store_dir, &["r1".to_string(), "r2".to_string()]);
+        let names: Vec<String> = found.into_iter().map(|s| s.name.unwrap()).collect();
+        assert_eq!(names, vec!["TwoRepos", "Alpha", "Beta"]);
+
+        std::fs::remove_dir_all(&store_dir).ok();
+        std::fs::remove_dir_all(&parent).ok();
+    }
+
+    /// A project whose folder no longer holds a tree with that project's own
+    /// first event must not be offered as a `--join` remedy: the folder is
+    /// gone, or holds something else now (`t594` fix-1, finding 7).
+    #[test]
+    fn sharing_repos_drops_a_project_whose_folder_no_longer_holds_that_tree() {
+        let store_dir = temp_dir("reg-sharing-dead");
+        let (root, id) = seeded_project("sharing-dead");
+        note(
+            &store_dir,
+            &id,
+            Sighting {
+                root: &root,
+                lane: None,
+                repos: Some(&["r1".to_string()]),
+            },
+        );
+
+        std::fs::remove_dir_all(&root).unwrap();
+
+        let found = sharing_repos(&store_dir, &["r1".to_string()]);
+        assert!(
+            found.is_empty(),
+            "a dead folder was still offered as a --join remedy: {found:?}"
+        );
+
+        std::fs::remove_dir_all(&store_dir).ok();
     }
 }
