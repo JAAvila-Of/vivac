@@ -325,6 +325,46 @@ pub fn copy_notice(first: Option<&str>, rest: &[Option<String>]) -> CopyNotice {
     }
 }
 
+/// Warns on `stderr` the moment a write this process made turns out to be a
+/// copy (`t594` §4.7) -- once per process, never once per event: a command
+/// that appends three events through `note` calls this three times and
+/// warns once. The `Once` lives here, the one place every caller already
+/// goes through, rather than one static per call site, so "once" actually
+/// means once across the whole process and not once per site that happens
+/// to remember to declare its own.
+///
+/// `stderr`, never `stdout`: the DX pillar says the agent's own output gets
+/// parsed, so this can never land inside a JSON payload or in the middle of
+/// a verb's own rendering. Takes the `Noted` `note` already worked out
+/// rather than asking `copy_of` again -- that would be a second way to
+/// decide whether something is a copy, and `live_others`'s own doc is
+/// explicit that there is only supposed to be one.
+///
+/// `Noted::Fine` is silently a no-op and never touches the `Once`: only an
+/// actual copy ever starts the countdown to "never again this process".
+///
+/// Flushes `stdout` first, the same discipline every other stderr write in
+/// this crate follows: a terminal that merges the two streams shows them out
+/// of order otherwise, and every call site would have to remember this one
+/// on its own if it were not done here instead.
+pub fn warn_once_if_copy(noted: &Noted) {
+    let Noted::Copy { first, rest } = noted else {
+        return;
+    };
+    static WARN_ONCE: std::sync::Once = std::sync::Once::new();
+    WARN_ONCE.call_once(|| {
+        crate::output::flush();
+        let notice = copy_notice(first.as_deref(), rest);
+        eprintln!();
+        eprintln!("{}", notice.heading);
+        eprintln!();
+        for line in notice.body.lines() {
+            eprintln!("  {line}");
+        }
+        eprintln!();
+    });
+}
+
 /// Whether `name` is safe to paste into a shell unquoted: only letters,
 /// digits, `-`, `_` and `.`. The short list is the safe one and the long
 /// list is the dangerous one, so this names what is allowed rather than

@@ -176,17 +176,15 @@ fn main() {
 /// The second and last attempt to register a project whose log was empty when
 /// the command started. An empty tree has no identity under `d201` and must not
 /// get one; a tree whose first node was planted a moment ago does, and this is
-/// where it exists. Still silent, and still unable to fail anything: the command
-/// has already produced its answer by the time this runs.
+/// where it exists. Still unable to fail anything: the command has already
+/// produced its answer by the time this runs, and the one thing this can still
+/// add is the copy warning on `stderr` (`t594` §4.7).
 fn note_late() {
     let (Some((root, lane)), Some(store_dir)) = (LATE_SIGHTING.get(), store::store_dir()) else {
         return;
     };
     if let Some(project_id) = store::first_event_id(root) {
-        // This call's own `Noted::Copy` reaches nobody: `check` learns of a
-        // copy through its own, separate read (`registry::copy_of`), and a
-        // stderr warning on every write like this one is `t594` §4.7.
-        let _ = registry::note(
+        let noted = registry::note(
             &store_dir,
             &project_id,
             registry::Sighting {
@@ -195,6 +193,7 @@ fn note_late() {
                 repos: None,
             },
         );
+        registry::warn_once_if_copy(&noted);
     }
 }
 
@@ -481,11 +480,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
             .map(|l| (l.id.clone(), located.lane_dir.clone()));
         match store::first_event_id(&root) {
             Some(project_id) => {
-                // This call's own `Noted::Copy` reaches nobody: `check`
-                // learns of a copy through its own, separate read
-                // (`registry::copy_of`), and a stderr warning on every
-                // write like this one is `t594` §4.7.
-                let _ = registry::note(
+                let noted = registry::note(
                     &store_dir,
                     &project_id,
                     registry::Sighting {
@@ -494,6 +489,15 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
                         repos: None,
                     },
                 );
+                // Only for a command shaped to write: `check` already says
+                // the same thing on `stdout` with an exit code, and `brief`
+                // opens with it (`t594` §4.7) -- echoing it again on
+                // `stderr` for either would be noise repeating what the
+                // command's own answer already carries, not a second place
+                // the agent needs to have looked.
+                if may_append(cmd) {
+                    registry::warn_once_if_copy(&noted);
+                }
             }
             None => {
                 let _ = LATE_SIGHTING.set((root.clone(), lane));
@@ -677,7 +681,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         "import" => import::import(&mut ctx, a),
         "brief" => {
             let project = project_name(&ctx);
-            brief::brief(&ctx.tree, ctx.anchor.as_ref(), a, &project)
+            brief::brief(&ctx.tree, &ctx.store.root, ctx.anchor.as_ref(), a, &project)
         }
         "vivacs" => render::vivacs(&ctx.tree, a),
         "session" => {

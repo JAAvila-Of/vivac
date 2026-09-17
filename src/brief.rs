@@ -21,6 +21,7 @@ use crate::event::{Kind, State};
 use crate::failure::R;
 use crate::model::{Node, Tree};
 use std::collections::HashSet;
+use std::path::Path;
 
 const BUDGET: usize = 1500;
 /// The whole brief is pure ASCII.
@@ -334,9 +335,36 @@ fn no_focus_block(a: &Tree) -> Vec<String> {
     v
 }
 
-pub fn brief(a: &Tree, anchor_of: &dyn Anchor, args: &Args, project: &str) -> R {
-    print!("{}", to_text(a, anchor_of, args, project)?);
+pub fn brief(a: &Tree, root: &Path, anchor_of: &dyn Anchor, args: &Args, project: &str) -> R {
+    print!("{}", to_text(a, root, anchor_of, args, project)?);
     Ok(())
+}
+
+/// Whether `root` is a copy of a tree living somewhere else on this
+/// machine, laid out for the brief's own shape (`t594` §4.7). Read only,
+/// through `copy_of`, never `note`: the brief is a read and must never
+/// write (`c319`).
+///
+/// `copy_notice`'s heading and body are the one thing shared with `check`'s
+/// own block -- indentation is each caller's own, the words are not, so
+/// nobody has to keep two paragraphs saying the same thing in agreement by
+/// hand.
+fn copy_block(root: &Path) -> Vec<String> {
+    let Some(project_id) = crate::store::first_event_id(root) else {
+        return vec![];
+    };
+    let Some(store_dir) = crate::store::store_dir() else {
+        return vec![];
+    };
+    let (first, rest) = match crate::registry::copy_of(&store_dir, &project_id, root) {
+        crate::registry::Noted::Copy { first, rest } => (first, rest),
+        crate::registry::Noted::Fine => return vec![],
+    };
+    let notice = crate::registry::copy_notice(first.as_deref(), &rest);
+    let mut v = vec![format!(" {}", notice.heading), String::new()];
+    v.extend(notice.body.lines().map(|l| format!("  {l}")));
+    v.push(String::new());
+    v
 }
 
 /// The brief as text. `session start --hook` prints it straight to stdout
@@ -345,6 +373,7 @@ pub fn brief(a: &Tree, anchor_of: &dyn Anchor, args: &Args, project: &str) -> R 
 /// wrap it in.
 pub fn to_text(
     a: &Tree,
+    root: &Path,
     anchor_of: &dyn Anchor,
     args: &Args,
     project: &str,
@@ -368,6 +397,17 @@ pub fn to_text(
     let focus: Option<&Node> = lineage.last().copied();
 
     let mut s: Vec<Section> = Vec::new();
+
+    // 0. The copy warning, ahead of everything else (`t594` §4.7): if this
+    // folder is a copy, the lineage below may have diverged from whatever
+    // this same first event looks like in the other folder, without either
+    // side knowing. Fixed, like the header it sits in front of -- this is
+    // the one section whose absence would make the rest of the brief a
+    // silent lie.
+    let block = copy_block(root);
+    if !block.is_empty() {
+        s.push(Section::fixed(block));
+    }
 
     // 1. Header. 2. Spine, or -- with no focus -- the fixed block that takes
     // its place (`t533` §3.6). Neither is ever truncated. `lane_name` reads
