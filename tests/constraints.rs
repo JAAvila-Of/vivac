@@ -127,6 +127,19 @@ fn git(dir: &std::path::Path, args: &[&str]) {
     );
 }
 
+/// Removes its path when dropped, whether the test that made it passed or
+/// panicked -- `relocate`'s own destination test needs one, since the
+/// destination it exercises sits outside every `VIVAC_HOME` on purpose and
+/// a failed assertion must not leave that tree behind on the machine that
+/// ran it.
+struct RemoveOnDrop(std::path::PathBuf);
+
+impl Drop for RemoveOnDrop {
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(&self.0).ok();
+    }
+}
+
 fn run_split(c: &Sandbox, args: &[&str]) -> (String, String, i32) {
     let o = std::process::Command::new(env!("CARGO_BIN_EXE_vivac"))
         .current_dir(&c.0)
@@ -139,6 +152,46 @@ fn run_split(c: &Sandbox, args: &[&str]) -> (String, String, i32) {
         String::from_utf8_lossy(&o.stderr).into_owned(),
         o.status.code().unwrap_or(-1),
     )
+}
+
+/// Every regular file under `dir`, walked recursively rather than named one
+/// by one: a file a later round of this task adds gets swept the same as
+/// the ones it shipped with, instead of quietly sitting outside a fixed
+/// list nobody remembers to grow.
+fn files_under(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&d) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else {
+                out.push(path);
+            }
+        }
+    }
+    out
+}
+
+/// Whether `text` carries `root` in any of the shapes it could actually
+/// take on disk: plain, with `/` standing in for `\`, escaped the way a
+/// JSON file writes a backslash, and -- since Windows never tells two
+/// spellings of one path apart by case -- compared without regard to case
+/// either.
+fn carries_absolute_path(text: &str, root: &std::path::Path) -> bool {
+    let text = text.to_lowercase();
+    let raw = root.to_string_lossy().to_lowercase();
+    [
+        raw.clone(),
+        raw.replace('\\', "\\\\"),
+        raw.replace('\\', "/"),
+    ]
+    .iter()
+    .any(|form| !form.is_empty() && text.contains(form.as_str()))
 }
 
 /// A copy of `original`'s log, at a folder of its own sharing `original`'s
@@ -186,33 +239,25 @@ fn every_vivac_directory_this_task_touches_carries_no_absolute_path_or_url() {
     ]);
     assert_eq!(join_code, 0, "{join_out}");
 
-    let files = [
-        origin.0.join(".vivac").join("events.relocated"),
-        origin.0.join(".vivac").join("config.relocated"),
-        origin.0.join(".vivac").join("lane"),
-        destination.0.join(".vivac").join("events"),
-        destination.0.join(".vivac").join("config"),
-        copy.0.join(".vivac").join("events"),
-        joined.0.join(".vivac").join("lane"),
-    ];
     let roots = [&origin.0, &destination.0, &copy.0, &joined.0];
-    for path in &files {
-        let Ok(text) = std::fs::read_to_string(path) else {
-            continue;
-        };
-        for root in roots {
-            let full = root.to_string_lossy();
+    for root in roots {
+        for path in files_under(&root.join(".vivac")) {
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            for candidate in roots {
+                assert!(
+                    !carries_absolute_path(&text, candidate),
+                    "an absolute path leaked into {}:\n{text}",
+                    path.display()
+                );
+            }
             assert!(
-                !text.contains(full.as_ref()),
-                "an absolute path leaked into {}:\n{text}",
+                !text.to_lowercase().contains("://"),
+                "a url leaked into {}:\n{text}",
                 path.display()
             );
         }
-        assert!(
-            !text.contains("://"),
-            "a url leaked into {}:\n{text}",
-            path.display()
-        );
     }
 }
 
@@ -256,17 +301,34 @@ fn no_printed_surface_this_task_added_names_an_absolute_path() {
         "the write from a copy never warned:\n{copy_stderr}"
     );
 
-    // `relocate`'s own output, given a destination one directory up rather
-    // than an absolute path.
+    // `relocate`'s own output, given an absolute destination -- exercised
+    // rather than evaded: the rule is not "never an absolute path" but
+    // "never one this process built". Handing back exactly what the
+    // caller typed is fine, and a relative destination could never tell
+    // the two apart, since nothing it prints back could be absolute
+    // either way.
     let reloc_origin = Sandbox::new_seeded("sec-print-reloc-origin");
     reloc_origin.ok(&["push", "a goal", "--why", "seed"]);
-    let dest_name = "sec-print-reloc-destination";
-    let dest_abs = reloc_origin.0.parent().unwrap().join(dest_name);
-    let (reloc_out, reloc_code) = reloc_origin.run(&["relocate", &format!("../{dest_name}")]);
+    let dest_name = format!(
+        "sec-print-reloc-destination-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    );
+    let dest_abs = reloc_origin.0.parent().unwrap().join(&dest_name);
+    let _cleanup = RemoveOnDrop(dest_abs.clone());
+    let dest_typed = dest_abs.to_str().unwrap().to_string();
+    let (reloc_out, reloc_code) = reloc_origin.run(&["relocate", &dest_typed]);
     assert_eq!(reloc_code, 0, "{reloc_out}");
+    assert!(
+        reloc_out.contains(&dest_typed),
+        "relocate did not hand back the destination byte for byte as typed:\n{reloc_out}"
+    );
 
-    let texts = [&refusal, &copy_stderr, &reloc_out];
-    let roots = [&a.0, &b.0, &orig.0, &copy.0, &reloc_origin.0, &dest_abs];
+    let texts = [&refusal, &copy_stderr];
+    let roots = [&a.0, &b.0, &orig.0, &copy.0];
     for text in texts {
         for root in roots {
             let full = root.to_string_lossy();
@@ -276,6 +338,4 @@ fn no_printed_surface_this_task_added_names_an_absolute_path() {
             );
         }
     }
-
-    std::fs::remove_dir_all(&dest_abs).ok();
 }

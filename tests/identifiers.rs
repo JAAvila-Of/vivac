@@ -57,7 +57,11 @@ const SPANISH: &str = "tests/data/spanish-vocabulary.txt";
 /// `base` is the base name of a path or a command line's first word, in
 /// `src/setup/claude_code.rs` -- ordinary English that happens to also spell
 /// the Spanish word for the same idea.
-const KNOWN_ENGLISH: &[&str] = &["era", "ser", "base"];
+///
+/// `todo` is `std`'s own macro name (`todo!()`), reached from
+/// `tests/iquorum.rs`'s ignored placeholders: not a word this crate chose,
+/// and not one it can rename.
+const KNOWN_ENGLISH: &[&str] = &["era", "ser", "base", "todo"];
 
 fn root() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
