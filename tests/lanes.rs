@@ -150,6 +150,35 @@ fn a_lane_whose_registry_entry_is_removed_refuses_with_exit_4() {
 
     assert_eq!(code, 4, "{s}");
     assert!(s.contains("registry does not know"), "{s}");
+    assert!(
+        s.contains("Join it again") && s.contains("--join"),
+        "the old advice sent a lost lane in circles, telling it to run \
+         something in the tree's own folder while already standing in it: {s}"
+    );
+
+    std::fs::remove_dir_all(&lane_dir).ok();
+}
+
+/// `t594` fix-4, finding N7a: `init` inside a folder that already carries
+/// somebody else's `.vivac/lane` -- exactly what `relocate` leaves the
+/// origin holding -- must refuse rather than plant a second, empty tree
+/// there and let `stack`/`push` go on writing to the one the lane names.
+#[test]
+fn init_refuses_a_folder_that_is_already_a_lane_of_another_tree() {
+    let (_tree, project) = seed_project("lanes-init-refuses");
+
+    let lane_dir = unique("init-foreign-lane");
+    std::fs::create_dir_all(&lane_dir).unwrap();
+    write_lane(&lane_dir, &project);
+
+    let (s, code) = run(&lane_dir, &unique("init-foreign-lane-home"), &["init"]);
+
+    assert_eq!(code, 1, "{s}");
+    assert!(says(&s, "already a lane of another tree"), "{s}");
+    assert!(
+        !lane_dir.join(".vivac").join("events").exists(),
+        "init must not have planted a second tree over the foreign lane"
+    );
 
     std::fs::remove_dir_all(&lane_dir).ok();
 }

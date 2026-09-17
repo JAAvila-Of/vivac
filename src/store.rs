@@ -49,9 +49,31 @@ pub const GITIGNORE: &str = ".gitignore";
 /// `VIVAC_HOME` names the directory itself, the same shape as `CARGO_HOME`:
 /// unset, it defaults to `$HOME/.cargo` and, set, *is* the directory. A Rust
 /// developer already knows the rule.
+///
+/// Under `cfg(test)`, an unset `VIVAC_HOME` is refused outright rather than
+/// answered with this machine's real home. `tests/` binaries are separate
+/// processes that always set `VIVAC_HOME` through `Sandbox` before spawning
+/// the compiled tool, so nothing there can reach this; a unit test inside
+/// `src/` shares this very process, and reading past a missing
+/// `VIVAC_HOME` here is exactly what let two of them write six entries
+/// into this machine's real `~/.vivac/projects`, in a version an installed
+/// release could not read, over two rounds of this same task before
+/// anyone noticed. A quiet fallback is what made that invisible; refusing
+/// loudly is what makes it impossible instead of merely unlikely.
 pub fn store_dir() -> Option<PathBuf> {
+    let vivac_home = std::env::var_os("VIVAC_HOME");
+    #[cfg(test)]
+    if non_blank(vivac_home.as_deref()).is_none() {
+        panic!(
+            "store::store_dir() called with no VIVAC_HOME set. A test that reaches \
+             this would read or write this machine's real registry. Set VIVAC_HOME to \
+             a fresh temporary directory before calling anything that resolves the \
+             store -- store::locate, registry::note and its own callers, relocate -- \
+             the same way every test under tests/ already does through Sandbox."
+        );
+    }
     resolve_store_dir(
-        std::env::var_os("VIVAC_HOME").as_deref(),
+        vivac_home.as_deref(),
         std::env::var_os("HOME").as_deref(),
         std::env::var_os("USERPROFILE").as_deref(),
     )
@@ -1231,11 +1253,18 @@ mod tests {
         .unwrap();
     }
 
+    // `locate_from(_, None)`, not `locate`, in every test below that has
+    // no real use for the registry: `locate` reads it from `VIVAC_HOME`,
+    // and this whole module's own unit tests run under `cfg(test)`, where
+    // `store_dir` now refuses to answer with this machine's real home at
+    // all -- `t594` fix-4, the same reason it refuses for a unit test
+    // anywhere in the crate. `None` says outright that these are testing
+    // the walk itself, not the fallback.
     #[test]
     fn the_tree_in_this_very_folder() {
         let tmp = locate_tmp("here");
         Store::create(&tmp).unwrap();
-        let located = locate(&tmp).unwrap().unwrap();
+        let located = locate_from(&tmp, None).unwrap().unwrap();
         assert_eq!(located.root, tmp);
         assert_eq!(located.lane_dir, tmp);
         assert!(located.lane.is_none());
@@ -1251,7 +1280,7 @@ mod tests {
         // tree above would quietly move somebody's work to another tree.
         let tmp = locate_tmp("empty-vivac");
         fs::create_dir_all(tmp.join(DIR)).unwrap();
-        let located = locate(&tmp).unwrap().unwrap();
+        let located = locate_from(&tmp, None).unwrap().unwrap();
         assert_eq!(located.root, tmp);
         assert_eq!(located.lane_dir, tmp);
         assert!(located.lane.is_none());
@@ -1284,7 +1313,7 @@ mod tests {
         };
         crate::lane::write(&lane_dir.join(DIR), &lane).unwrap();
 
-        let located = locate(&lane_dir).unwrap().unwrap();
+        let located = locate_from(&lane_dir, None).unwrap().unwrap();
         assert_eq!(located.root, tmp);
         assert_eq!(located.lane_dir, lane_dir);
         assert_eq!(located.lane.unwrap().project, project);
@@ -1490,7 +1519,7 @@ mod tests {
         write_git_file(&worktree_dir, &gitdir);
         fs::write(gitdir.join("commondir"), "../..\n").unwrap();
 
-        let located = locate(&worktree_dir).unwrap().unwrap();
+        let located = locate_from(&worktree_dir, None).unwrap().unwrap();
         assert_eq!(located.root, main_dir);
         assert_eq!(located.lane_dir, main_dir);
         assert!(located.lane.is_none());
@@ -1556,7 +1585,7 @@ mod tests {
         write_git_file(&sub_dir, &gitdir);
         // No `commondir` written: a submodule owns its own repository.
 
-        let located = locate(&sub_dir).unwrap().unwrap();
+        let located = locate_from(&sub_dir, None).unwrap().unwrap();
         assert_eq!(located.root, tmp);
         assert!(
             located.worktree.is_none(),
@@ -1581,7 +1610,7 @@ mod tests {
                 repos: None,
             },
         );
-        assert!(locate(&deep).unwrap().is_none());
+        assert!(locate_from(&deep, None).unwrap().is_none());
         fs::remove_dir_all(&tmp).ok();
     }
 
