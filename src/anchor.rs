@@ -206,11 +206,17 @@ pub(crate) fn main_copy_of(worktree_root: &Path) -> Option<PathBuf> {
 }
 
 /// Resolves `.` and `..` components one at a time, without touching the
-/// filesystem the way `canonicalize` would. Private: every caller outside
-/// this module goes through `same_folder`, below, rather than reaching
-/// this pure string walk directly -- `same_folder` is the criterion a
-/// caller actually wants, and this is one piece of how it is computed.
-fn normalize(p: &Path) -> PathBuf {
+/// filesystem the way `canonicalize` would. `pub(crate)` rather than
+/// private for one reason only: `relocate::is_inside` walks a path's own
+/// ancestors, and an unresolved `..` in the middle of it makes
+/// `Path::ancestors` treat that component as just another name to strip
+/// rather than an instruction to go up past the one before it -- exactly
+/// the bug `relocate ..` surfaced once `is_inside` compared raw
+/// ancestors. Every other caller outside this module still goes through
+/// `same_folder`, below, rather than reaching this pure string walk
+/// directly -- `same_folder` is the criterion those callers actually
+/// want, and this is one piece of how it is computed.
+pub(crate) fn normalize(p: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for c in p.components() {
         match c {

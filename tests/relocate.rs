@@ -97,9 +97,11 @@ fn a_busy_destination_is_refused() {
     let c = Sandbox::new_seeded("reloc-busy-src");
     c.ok(&["push", "a goal", "--why", "seed"]);
     let dest = Sandbox::new_seeded("reloc-busy-dest"); // already a tree of its own
+    let dest_before = std::fs::read(dest.0.join(".vivac").join("events")).unwrap();
 
     let (out, code) = c.run(&["relocate", dest.0.to_str().unwrap()]);
     assert_eq!(code, 1, "{out}");
+    assert!(says(&out, "already holds a tree or a lane"), "{out}");
     assert!(
         c.0.join(".vivac").join("events").is_file(),
         "a refused relocate must leave the origin's own log in place"
@@ -107,6 +109,11 @@ fn a_busy_destination_is_refused() {
     assert!(
         !c.0.join(".vivac").join("events.relocated").exists(),
         "a refused relocate must not have renamed anything at the origin"
+    );
+    assert_eq!(
+        std::fs::read(dest.0.join(".vivac").join("events")).unwrap(),
+        dest_before,
+        "a refused relocate must leave the destination's own tree exactly as it was"
     );
 }
 
@@ -153,6 +160,39 @@ fn a_move_that_cannot_finish_leaves_the_source_alone() {
         !dest.join(".vivac").join("events").exists(),
         "no events must be left at a destination whose move could not finish"
     );
+
+    std::fs::remove_dir_all(&dest).ok();
+}
+
+/// `t594` fix-2, finding M1: an earlier round of this task tore down the
+/// destination's whole `.vivac/` on any failure, taking files this run
+/// never wrote along with it -- measured by the reviewer as an unrelated
+/// `notes.txt` and an `events.relocated` from an earlier move, lost
+/// alongside the copy that was actually being cleaned up.
+#[test]
+fn a_failed_move_never_touches_files_the_destination_already_had() {
+    let c = Sandbox::new_seeded("reloc-preexisting");
+    c.ok(&["push", "a goal", "--why", "seed"]);
+    let dest = sibling_dir(&c, "preexisting");
+    std::fs::create_dir_all(dest.join(".vivac")).unwrap();
+    std::fs::write(dest.join(".vivac").join("notes.txt"), b"keep me").unwrap();
+    // Forces step 6 to fail after the destination's own `.vivac/` --
+    // already there before this run -- is reused rather than created.
+    std::fs::create_dir_all(dest.join(".vivac").join(".gitignore")).unwrap();
+
+    let (out, code) = c.run(&["relocate", dest.to_str().unwrap()]);
+    assert_ne!(code, 0, "{out}");
+
+    assert_eq!(
+        std::fs::read(dest.join(".vivac").join("notes.txt")).unwrap(),
+        b"keep me",
+        "a file the destination already had, and its content, must survive a failed move"
+    );
+    assert!(
+        dest.join(".vivac").is_dir(),
+        "a .vivac/ that already existed before this run must survive a failed move"
+    );
+    assert!(!dest.join(".vivac").join("events").exists());
 
     std::fs::remove_dir_all(&dest).ok();
 }
@@ -234,8 +274,9 @@ fn the_moved_tree_claims_main() {
 
     let log = std::fs::read_to_string(dest.join(".vivac").join("events")).unwrap();
     assert!(
-        log.contains(r#""type":"lane.claimed""#),
-        "the moved tree must carry a lane.claimed for main:\n{log}"
+        log.contains(r#""type":"lane.claimed","lane":"main""#),
+        "the moved tree must carry a lane.claimed naming main itself, not merely \
+         an event of that type:\n{log}"
     );
 
     let before = c.ok(&["stack"]);
@@ -335,4 +376,232 @@ fn relocate_with_lane_name_renames_the_lane_left_behind() {
     );
 
     std::fs::remove_dir_all(&dest).ok();
+}
+
+#[test]
+fn relocate_with_an_empty_destination_is_a_usage_error() {
+    let c = Sandbox::new_seeded("reloc-empty-arg");
+    let (out, code) = c.run(&["relocate", ""]);
+    assert_eq!(code, 2, "{out}");
+}
+
+/// `t594` fix-2, finding 6: a tree with nothing in it yet has no first
+/// event and so no identity (`d201`) for the registry or the origin's own
+/// lane file to be keyed by. Refusing is cheaper and honester than moving
+/// it and cementing a made-up one.
+#[test]
+fn relocate_refuses_a_tree_with_no_events_yet() {
+    let c = Sandbox::new_seeded("reloc-no-events");
+    let dest = sibling_dir(&c, "no-events-dest");
+
+    let (out, code) = c.run(&["relocate", dest.to_str().unwrap()]);
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        says(
+            &out,
+            "This tree has no events yet, so nothing points at it and nothing would \
+             break: move the folder yourself."
+        ),
+        "{out}"
+    );
+    assert!(
+        !dest.exists(),
+        "a refused relocate must not create the destination"
+    );
+    assert!(c.0.join(".vivac").join("config").is_file());
+}
+
+/// `t594` fix-2, finding 10: `relocate ..` is the very thing another text
+/// in this tramo recommends, so the destination sitting *above* the
+/// origin has to keep working. What is refused is the opposite direction.
+#[test]
+fn relocate_into_a_subfolder_of_the_origin_is_refused() {
+    let c = Sandbox::new_seeded("reloc-inside");
+    c.ok(&["push", "a goal", "--why", "seed"]);
+    let dest = c.0.join("nested-dest");
+
+    let (out, code) = c.run(&["relocate", dest.to_str().unwrap()]);
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        says(
+            &out,
+            "The destination is inside this folder. Moving the tree into itself \
+             would leave it with two."
+        ),
+        "{out}"
+    );
+    assert!(
+        !dest.exists(),
+        "a refused relocate must not create the destination"
+    );
+    assert!(c.0.join(".vivac").join("events").is_file());
+}
+
+/// `t594` fix-2, finding 4: the destination is the tree now, but it is not
+/// a lane yet, and the success text has to say so up front rather than
+/// leaving that for the first refused write to explain.
+#[test]
+fn the_success_text_says_the_new_folder_is_not_a_lane_yet() {
+    let c = Sandbox::new_seeded("reloc-print");
+    c.ok(&["push", "a goal", "--why", "seed"]);
+    let dest = sibling_dir(&c, "print");
+
+    let (out, code) = c.run(&["relocate", dest.to_str().unwrap()]);
+    assert_eq!(code, 0, "{out}");
+    assert!(says(
+        &out,
+        "The new folder holds the tree but is not a lane yet. To work there:"
+    ));
+    assert!(says(&out, "vivac setup claude-code"));
+
+    std::fs::remove_dir_all(&dest).ok();
+}
+
+/// `t594` fix-2, finding A1: `path_disagrees`-free or not, the registry
+/// still has to be keyed by an *absolute* root -- a relative one only
+/// ever resolves correctly against the `cwd` that typed it, and every
+/// other lane resolves it against its own.
+#[test]
+fn relocate_with_a_relative_destination_still_lets_another_lane_find_it() {
+    let c = Sandbox::new_seeded("reloc-relative");
+    c.ok(&["push", "a distinctive goal", "--why", "seed"]);
+    let project = first_event_id(&c);
+    let dest_name = format!(
+        "vivac-relocate-relative-dest-{}-{}",
+        std::process::id(),
+        id_seed()
+    );
+    let dest = c.0.parent().unwrap().join(&dest_name);
+    let relative = format!("../{dest_name}");
+
+    let (out, code) = c.run(&["relocate", &relative]);
+    assert_eq!(code, 0, "{out}");
+    assert!(dest.join(".vivac").join("events").is_file());
+
+    // A lane elsewhere resolves the registry's own `path` against *its*
+    // `cwd`, not the one relocate ran from. This one is deliberately at a
+    // different depth, not a sibling of the origin -- a sibling would
+    // still resolve "../<name>" to the same real folder by coincidence of
+    // sharing a parent, which is exactly the kind of accident that would
+    // let a raw relative string in the registry go unnoticed here.
+    let lane_container = unique_dir("relative-lane-container");
+    let lane_dir = lane_container.join("nested").join("deeper");
+    std::fs::create_dir_all(&lane_dir).unwrap();
+    write_lane(&lane_dir, "01LANEAAAAAAAAAAAAAAAAAAAA", &project);
+    let (find_out, find_code) = run_in(&lane_dir, c.global_home(), &["find", "distinctive"]);
+    assert_eq!(find_code, 0, "{find_out}");
+    assert!(says(&find_out, "a distinctive goal"), "{find_out}");
+
+    std::fs::remove_dir_all(&dest).ok();
+    std::fs::remove_dir_all(&lane_container).ok();
+}
+
+/// `t594` fix-2, finding 3: `relocate ..` by name, the exact command this
+/// tramo's own advice recommends, moving the tree from a nested clone up
+/// into the folder that holds the product.
+#[test]
+fn relocate_dot_dot_moves_the_tree_up_one_level() {
+    let home = unique_dir("dotdot-home");
+    let container = unique_dir("dotdot-container");
+    let clone = container.join("clone");
+    std::fs::create_dir_all(&clone).unwrap();
+
+    let (init_out, init_code) = run_in(&clone, &home, &["init"]);
+    assert_eq!(init_code, 0, "{init_out}");
+    let (push_out, push_code) = run_in(&clone, &home, &["push", "a goal", "--why", "seed"]);
+    assert_eq!(push_code, 0, "{push_out}");
+
+    let (out, code) = run_in(&clone, &home, &["relocate", ".."]);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        container.join(".vivac").join("events").is_file(),
+        "the tree must land at the parent, `..`, exactly what setup's own advice means"
+    );
+    assert!(clone.join(".vivac").join("lane").is_file());
+
+    std::fs::remove_dir_all(&container).ok();
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// `t594` fix-2, finding 1: step 7's own rollback. `record_move` -- unlike
+/// `note`, which never fails its caller -- fails the whole operation when
+/// the registry cannot be written, and the origin has to come back whole.
+#[test]
+fn a_registry_that_cannot_be_written_leaves_the_source_alone() {
+    let c = Sandbox::new_seeded("reloc-registry-blocked");
+    c.ok(&["push", "a goal", "--why", "seed"]);
+    // The seed push above already created `VIVAC_HOME` as a directory,
+    // writing the registry into it. Replaced with a plain file so
+    // `record_move`'s own `create_dir_all` cannot make a directory where
+    // a file already sits.
+    std::fs::remove_dir_all(c.global_home()).ok();
+    std::fs::write(c.global_home(), b"not a directory").unwrap();
+    let dest = sibling_dir(&c, "registry-blocked");
+
+    let (out, code) = c.run(&["relocate", dest.to_str().unwrap()]);
+    assert_ne!(code, 0, "{out}");
+
+    assert!(
+        c.0.join(".vivac").join("events").is_file(),
+        "a registry failure must leave the origin's own log in place"
+    );
+    assert!(!c.0.join(".vivac").join("events.relocated").exists());
+    assert!(
+        !c.0.join(".vivac").join("lane").exists(),
+        "the origin must not gain a lane file before the registry landed"
+    );
+    assert!(
+        !dest.join(".vivac").join("events").exists(),
+        "no events must be left at a destination whose registry write failed"
+    );
+
+    std::fs::remove_file(c.global_home()).ok();
+}
+
+/// `t594` fix-2, finding 2: a failure *inside* step 8 -- after the origin's
+/// own `.vivac/lane` already landed -- still leaves the origin a working
+/// tree, because that file is written before anything is renamed, not
+/// after.
+#[test]
+fn a_blocked_rename_at_the_origin_still_leaves_it_a_working_tree() {
+    let c = Sandbox::new_seeded("reloc-origin-blocked");
+    c.ok(&["push", "a distinctive goal", "--why", "seed"]);
+    let before = c.ok(&["find", "distinctive"]);
+    // `config.relocated` already exists as a directory: step 8's own
+    // rename of `config` onto that name cannot land, even though the
+    // copy, the registry and the origin's own lane file already have.
+    std::fs::create_dir_all(c.0.join(".vivac").join("config.relocated")).unwrap();
+    let dest = sibling_dir(&c, "origin-blocked");
+
+    let (out, code) = c.run(&["relocate", dest.to_str().unwrap()]);
+    assert_ne!(code, 0, "{out}");
+
+    assert!(
+        c.0.join(".vivac").join("lane").is_file(),
+        "the lane file is written before the rename that failed"
+    );
+    assert!(
+        c.0.join(".vivac").join("events").is_file(),
+        "the origin's own log must still be there: its own rename never ran"
+    );
+    assert!(
+        c.0.join(".vivac").join("config").is_file(),
+        "the origin's own config must still be there: its own rename is what failed"
+    );
+    // `already_planted` is still true here, so the folder still answers
+    // from its own real tree without ever having to ask the registry.
+    assert_eq!(c.ok(&["find", "distinctive"]), before);
+
+    std::fs::remove_dir_all(&dest).ok();
+}
+
+/// A directory nothing else in this file or its `Sandbox`s owns, for the
+/// tests that need a layout `Sandbox::new_seeded` cannot give them: a
+/// tree planted somewhere other than its own home's obvious sibling.
+fn unique_dir(name: &str) -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "vivac-relocate-{name}-{}-{}",
+        std::process::id(),
+        id_seed()
+    ))
 }

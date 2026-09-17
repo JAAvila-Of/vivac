@@ -491,10 +491,13 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
   that repeats is written out again:  --governs a --governs b"
             )));
         }
-        let Some(destination) = a.positional(0) else {
-            return Err(Failure::usage(
-                "relocate needs a destination: vivac relocate <destination>",
-            ));
+        let destination = match a.positional(0) {
+            Some(d) if !d.is_empty() => d,
+            _ => {
+                return Err(Failure::usage(
+                    "relocate needs a destination: vivac relocate <destination>",
+                ))
+            }
         };
         return relocate::run(
             &located,

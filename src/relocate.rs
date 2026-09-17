@@ -6,43 +6,88 @@
 //! working afterwards -- it is now a lane, not the tree's own folder -- and
 //! nothing about its stack, its focus or its counters changes underfoot.
 //!
-//! Eight steps, and the order is the guarantee:
+//! **The idea this whole module answers to:** no intermediate state may
+//! look like an empty tree. An empty tree accepts writes -- `Store::open`
+//! seeds one the moment `config` or `events` is missing where the other
+//! is not -- so a failure partway through never loses the history, it
+//! *replaces* it with a different one nobody asked for, in silence. Every
+//! step below is ordered, or made fallible, or both, so that no crash
+//! between any two of them leaves a folder `store::already_planted` would
+//! call a tree that is not the real one.
+//!
+//! Ten steps (`t594` fix-2 corrects the eight the original task named):
 //!
 //! 1. Refuse from anywhere but the folder that holds the tree.
-//! 2. Take the tree's write lock. Everything after this runs with it held.
-//! 3. Refuse a destination that is this folder itself, or that already
-//!    holds a tree or a lane.
-//! 4. Copy `events`, `config` and `.gitignore` there, and a fresh `lock`.
-//! 5. Compare the two copies byte for byte. Any failure along the way --
-//!    a copy that cannot land, or a mismatch once everything did -- rolls
-//!    the copy back and fails without having touched the origin. This is
-//!    what makes the move safe, not an explanation of it.
-//! 6. Point the registry at the destination.
-//! 7. In the origin: rename `events` and `config` out of the way, drop the
-//!    stale index, and write `.vivac/lane` so this folder keeps answering as
-//!    whichever lane it always was.
-//! 8. Print what moved, and where.
+//! 2. Refuse a destination that is this folder itself, or sits inside it.
+//!    Made absolute against the current directory here, before anything
+//!    below compares or touches it.
+//! 3. Take the tree's write lock. Everything after this runs with it held.
+//! 4. Refuse a tree with no events yet: it has no identity (`d201`) for
+//!    the registry or the origin's own lane file to be keyed by.
+//! 5. Refuse a destination that already holds a tree or a lane. Create it
+//!    if it does not exist yet.
+//! 6. Copy `events` and `config` to temporary names, compare each against
+//!    the origin byte for byte, then rename both onto their real names --
+//!    the one point where a truncated write could otherwise land under a
+//!    name `store::already_planted` trusts. `.gitignore` and a fresh
+//!    `lock` go straight to their real names; neither one is what that
+//!    function looks at. Any failure here undoes only what this run
+//!    itself created and leaves the origin untouched.
+//! 7. Point the registry at the destination, through the one entry that
+//!    is told rather than asked to guess (`registry::record_move`) and
+//!    that fails the caller when it cannot land. A failure here undoes
+//!    step 6 the same way step 6 undoes itself, and leaves the origin
+//!    untouched: past this step, the registry is the only durable record
+//!    of where the tree went, and `relocate` cannot claim success without
+//!    it.
+//! 8. In the origin: write `.vivac/lane` first, then rename `config` and
+//!    `events` out of the way (in that order -- see `run`'s own comment),
+//!    then drop the stale index. Every point in this sequence still reads
+//!    as a real folder: either the origin's own tree, still there, or a
+//!    lane whose tree the registry already relocated to in step 7.
+//! 9. In the tree now at the destination: `lane.claimed` for `main`, and
+//!    `lane.declared` when it is owed. Past step 7 there is nothing left
+//!    to roll back -- the move already happened -- so a failure here
+//!    still exits 0 and says what is missing, rather than reporting a
+//!    move that did not happen when it did.
+//! 10. Print what moved, and where.
 //!
-//! Steps 6 and 7 run in the reverse of that order below: `registry::note`
-//! believes a second root is a copy rather than a move for as long as the
-//! path already on file still shows a live tree (`registry.rs`), so noting
-//! the destination before the origin's own `events` is renamed away would
-//! record a copy and never move `path` at all. The origin is silent about
-//! this either way -- what changes is only which of the two steps a reader
-//! finds first below.
+//! **Step 6's own byte mismatch has no trigger a black-box test can
+//! reach.** The copy and the read that verifies it run back to back
+//! inside one synchronous call, with no point in between where anything
+//! else could land a write to the source -- not without adding an
+//! injection point to this very path, which is worse than the gap it
+//! would close. `same_bytes` itself is a plain enough function to probe
+//! on its own, though, and its own unit tests do that directly. What
+//! `tests/relocate.rs` exercises from outside is the rollback itself,
+//! shared by every failure step 6 can report: a copy that never lands at
+//! all, forced by a `.vivac/.gitignore` at the destination that is
+//! already a directory. No operating system lets a file land where a
+//! directory already sits, so that trigger is deterministic and needs
+//! nothing this crate does not already have. A hole named here is a
+//! hole; one left unsaid would be a lie.
 //!
-//! **Step 5's own byte mismatch has no trigger a black-box test can reach.**
-//! The copy and the read that verifies it run back to back inside one
-//! synchronous call, with no point in between where anything else could
-//! land a write to the source -- not without adding an injection point to
-//! this very path, which is worse than the gap it would close. What
-//! `tests/relocate.rs` exercises instead is the rollback itself, shared by
-//! both failures step 5 can report: a copy that never lands at all, forced
-//! by a `.vivac/.gitignore` at the destination that is already a
-//! directory. No operating system lets a file land where a directory
-//! already sits, so that trigger is deterministic and needs nothing this
-//! crate does not already have. A hole named here is a hole; one left
-//! unsaid would be a lie.
+//! **The temporary names' own specific benefit -- surviving a process
+//! killed outright mid-copy, not merely an error Rust propagates in the
+//! ordinary way -- has no black-box trigger either.** Every failure a
+//! test can provoke still runs this module's own cleanup code, which
+//! already removes a stray `.tmp` and a truncated final-named file alike;
+//! only a `SIGKILL` between two writes would show the difference, and
+//! nothing here asks a test to kill itself to prove a point. What the
+//! tests below do pin is the promise that actually matters: in every
+//! failure this code can report, no `events` or `config` ever appears
+//! under its real name before the byte comparison has already passed.
+//!
+//! **Step 9's own failure has no black-box trigger either, for a
+//! different reason.** By the time it runs, the move already happened
+//! and the registry already says so; making it fail on its own -- rather
+//! than as a side effect of steps 1 through 8 not having run at all --
+//! would need the destination's own fresh `.vivac/lock` already held by
+//! something else at the exact moment step 9 takes it, which is a race
+//! against this function's own internal timing, not a state a black-box
+//! test can simply ask for. `write_claim_and_declaration`'s own unit
+//! tests exercise its failure directly instead, which is the one thing
+//! `run`'s `.is_ok()` actually depends on.
 //!
 //! Not reachable over MCP (`t594` §4.6): it moves data and does not undo a
 //! step, the same reason `abandon` and `restore` stay CLI-only.
@@ -53,7 +98,7 @@ use crate::model::Tree;
 use crate::output::outln;
 use crate::registry::Sighting;
 use crate::store::{Located, Store};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// The origin's own copies, renamed out of the way rather than deleted:
 /// `t594` §4.6 leaves the history readable on disk, not just in the log
@@ -74,67 +119,79 @@ pub fn run(located: &Located, destination: &Path, lane_name: Option<&str>) -> Re
         ));
     }
 
-    // Step 2. Everything below runs with this held, and it is dropped -- and
-    // so released -- when `run` returns, success or failure alike.
-    let origin = Store::open(located.root.clone())?;
-    let lock = origin.lock_for_write()?;
-
-    // Read the tree now, under the lock, once for the whole operation: the
-    // repositories every lane declared (step 6) and this folder's own
-    // governance (step 7's append) both come from here, and nothing past
-    // this point changes what the log says until step 7 renames it away.
-    let (events, broken) = origin.read_all()?;
-    let tree = crate::model::fold(&events, broken);
-
-    // `d201`: the registry, and every `.vivac/lane` file, is keyed by the
-    // *first event's own id* -- never `Config::project_id`, which
-    // `Store::open` mints fresh any time `config` itself has to be
-    // regenerated, `registry.rs`'s own doc says so by name. `events.first`
-    // rather than a second read of the file this process already has open.
-    // `None` for a tree with nothing in it yet: there is no identity to
-    // give the folder this leaves behind, so the registry write below is
-    // skipped rather than keyed by a value nothing else will ever compare
-    // against, the same silence `main.rs` already answers an empty tree
-    // with.
-    let project_id: Option<String> = events.first().map(|e| e.id.clone());
-
-    let origin_vivac = located.root.join(crate::store::DIR);
-
-    // Step 3, first half: the destination is this very folder, reached by
-    // whatever spelling `same_folder` sees through. Its own sentence, and
-    // checked ahead of "already holds a tree" below -- that one is
-    // technically true here too, but it names the wrong problem: this is
-    // not another tree occupying the spot, it is the one being asked to
-    // move onto itself.
-    if crate::anchor::same_folder(destination, &located.root) {
+    // Step 2. Absolute first: the two checks right after it compare
+    // `destination` against `located.root` with `same_folder`, and both
+    // `Path::ancestors` and `canonicalize`'s own fallback need something
+    // rooted to walk, not a string that only means anything relative to
+    // wherever this process happens to be standing.
+    let destination_abs = to_absolute(destination)?;
+    if crate::anchor::same_folder(&destination_abs, &located.root) {
         return Err(Failure::Model(
             "  The destination is this folder, so there is nothing to move.".to_string(),
         ));
     }
-    // Step 3, second half: a destination that already holds a tree or a
-    // lane of its own.
-    if destination_holds_a_tree_or_lane(destination) {
+    if is_inside(&destination_abs, &located.root) {
+        return Err(Failure::Model(
+            "  The destination is inside this folder. Moving the tree into itself\n  \
+             would leave it with two."
+                .to_string(),
+        ));
+    }
+
+    // Step 3. Everything below runs with this held, and it is dropped --
+    // and so released -- when `run` returns, success or failure alike.
+    let origin = Store::open(located.root.clone())?;
+    let lock = origin.lock_for_write()?;
+
+    // Read the tree now, under the lock, once for the whole operation: the
+    // repositories every lane declared (step 7) and this folder's own
+    // governance (step 9's append) both come from here, and nothing past
+    // this point changes what the log says until step 8 renames it away.
+    let (events, broken) = origin.read_all()?;
+    let tree = crate::model::fold(&events, broken);
+
+    // Step 4. `d201`: a tree with no first event has no identity yet, so
+    // there is nothing for the registry or the origin's own lane file to
+    // be keyed by, and nothing anywhere else that could break by this
+    // folder simply being moved by hand instead.
+    let Some(first_event_id) = events.first().map(|e| e.id.clone()) else {
+        return Err(Failure::Model(
+            "  This tree has no events yet, so nothing points at it and nothing would\n  \
+             break: move the folder yourself."
+                .to_string(),
+        ));
+    };
+
+    let origin_vivac = located.root.join(crate::store::DIR);
+
+    // Step 5. `destination_holds_a_tree_or_lane` is a plain existence check
+    // at one path, not a comparison of two, so it needs nothing beyond
+    // what the filesystem already resolves through any spelling on its
+    // own -- unlike the two checks in step 2, above.
+    if destination_holds_a_tree_or_lane(&destination_abs) {
         return Err(Failure::Model(format!(
             "  {} already holds a tree or a lane. Choose a folder with neither.",
             destination.display()
         )));
     }
-    std::fs::create_dir_all(destination)?;
+    std::fs::create_dir_all(&destination_abs)?;
 
-    // Steps 4 and 5 share one rollback: whatever stops the copy from
-    // landing whole -- a file that cannot be written, or a byte mismatch
-    // once everything did get written -- tears down what step 4 put at
-    // the destination and leaves the origin exactly as it was, before
-    // either kind of failure ever reaches the caller.
-    let destination_vivac = destination.join(crate::store::DIR);
-    if let Err(e) = copy_and_verify(&origin_vivac, &destination_vivac) {
-        std::fs::remove_dir_all(&destination_vivac).ok();
+    // Step 6. `written` is filled in as it happens, so a rollback removes
+    // exactly what this run created and nothing that was already there
+    // (`t594` fix-2, finding M1).
+    let destination_vivac = destination_abs.join(crate::store::DIR);
+    let mut written = Written {
+        vivac_dir_created: !destination_vivac.is_dir(),
+        files: Vec::new(),
+    };
+    if let Err(e) = copy_and_verify(&origin_vivac, &destination_vivac, &mut written) {
+        written.undo(&destination_vivac);
         return Err(e);
     }
 
     // The lane that stays at the origin: its own id, or `lane::MAIN` for the
     // implicit founding lane every tree without a lane file of its own is.
-    // `was_implicit_main` is exactly the second case, and it is what step 7
+    // `was_implicit_main` is exactly the second case, and it is what step 9
     // needs to know whether `main` itself needs claiming.
     let was_implicit_main = located.lane.is_none();
     let stays_lane = located
@@ -143,60 +200,77 @@ pub fn run(located: &Located, destination: &Path, lane_name: Option<&str>) -> Re
         .map(|l| l.id.clone())
         .unwrap_or_else(|| crate::lane::MAIN.to_string());
 
-    // Step 7 runs before step 6, the reverse of how they read above, and
-    // that is deliberate rather than a slip: `registry::note`'s own
-    // `path_disagrees` asks whether the path already on file *still shows
-    // a live tree* before it believes a second root is a move rather than
-    // a copy (`registry.rs`, `d201`). Noting the destination while the
-    // origin's `events` was still sitting there under its own name would
-    // answer that question wrong -- both would look alive, so the write
-    // that should point the registry at the destination would instead
-    // record the destination as a copy and leave `path` exactly where it
-    // was. Renaming the origin's own files away first is what makes the
-    // note below a move.
+    // Step 7. `record_move`, not `note`: `relocate` already knows this is a
+    // move, so it tells the registry rather than asking it to guess from
+    // whether the origin still looks alive -- guessing is `note`'s own
+    // `path_disagrees`, and it is exactly why an earlier round of this task
+    // had to run this step after step 8 instead of before it, the order
+    // the specification actually wants. With a fallible, explicit write
+    // the order goes back to what it should always have been: the
+    // registry lands before the origin's own log is touched at all, and a
+    // failure here undoes step 6 and stops, the origin never having lost
+    // anything.
+    let repos = union_repo_roots(&tree);
+    let Some(store_dir) = crate::store::store_dir() else {
+        written.undo(&destination_vivac);
+        return Err(Failure::Io(std::io::Error::other(
+            "no VIVAC_HOME to record the move in; the registry would lose the tree",
+        )));
+    };
+    if let Err(e) = crate::registry::record_move(
+        &store_dir,
+        &first_event_id,
+        Sighting {
+            root: &destination_abs,
+            lane: Some((&stays_lane, &located.root)),
+            repos: Some(&repos),
+        },
+    ) {
+        written.undo(&destination_vivac);
+        return Err(Failure::Io(e));
+    }
+
+    // Step 8. The origin's own bookkeeping, in an order chosen so that
+    // every state in between still reads as a real folder:
     //
-    // Renamed, not deleted: the history stays readable at the origin under
-    // its old name, for whoever goes looking. The stale index is dropped
-    // outright -- it is derived and regenerates on the next read, and one
-    // built against a log that no longer lives here would just be wrong.
-    std::fs::rename(
-        origin_vivac.join(crate::store::LOG),
-        origin_vivac.join(RELOCATED_LOG),
-    )?;
-    std::fs::rename(
-        origin_vivac.join(crate::store::CONFIG),
-        origin_vivac.join(RELOCATED_CONFIG),
-    )?;
-    std::fs::remove_file(origin_vivac.join(crate::store::INDEX)).ok();
+    // - `.vivac/lane` is written *before* anything is renamed. With
+    //   `events` and `config` still both there, this folder is still
+    //   `already_planted` on its own terms, so it keeps resolving to
+    //   itself -- the same folder it always was, now also carrying a
+    //   lane file that happens to already say what it will answer once
+    //   the rename below lands.
+    // - `config` is renamed before `events`, not the order they are named
+    //   in prose. With `config` gone and `events` still there,
+    //   `Store::open` regenerates a config -- a real cost, a mismatched
+    //   `project_id` and `actor` on whatever writes next -- but reads and
+    //   writes alike still land on the one real, intact log. Renaming
+    //   `events` first instead would leave `config` momentarily alone:
+    //   `Store::open` would read it fine, but with no `events` file to
+    //   answer for, a write would open one fresh and empty right there,
+    //   which is exactly the failure this whole module exists to close.
+    //   Once `events` is renamed too, `already_planted` finally answers
+    //   `false`, and resolution falls through to the registry, which step
+    //   7 already pointed at the destination.
+    // - The stale index is dropped last and outright: it is derived and
+    //   regenerates on the next read, and one built against a log that no
+    //   longer lives here would just be wrong.
     crate::lane::write(
         &origin_vivac,
         &crate::lane::Lane {
             version: 1,
             id: stays_lane.clone(),
-            // Falls back to `Config::project_id` only for a tree with no
-            // events at all: there is no first event to be keyed by yet,
-            // and no lookup this folder could fail differently over.
-            project: project_id
-                .clone()
-                .unwrap_or_else(|| origin.config.project_id.clone()),
+            project: first_event_id,
         },
     )?;
-
-    // Step 6. `repos` is the union of every root commit any lane this tree
-    // ever declared, so a later `setup` anywhere finds this product mapped
-    // no matter which lane's repository it is asked about.
-    if let (Some(store_dir), Some(project_id)) = (crate::store::store_dir(), &project_id) {
-        let repos = union_repo_roots(&tree);
-        let _ = crate::registry::note(
-            &store_dir,
-            project_id,
-            Sighting {
-                root: destination,
-                lane: Some((&stays_lane, &located.root)),
-                repos: Some(&repos),
-            },
-        );
-    }
+    std::fs::rename(
+        origin_vivac.join(crate::store::CONFIG),
+        origin_vivac.join(RELOCATED_CONFIG),
+    )?;
+    std::fs::rename(
+        origin_vivac.join(crate::store::LOG),
+        origin_vivac.join(RELOCATED_LOG),
+    )?;
+    std::fs::remove_file(origin_vivac.join(crate::store::INDEX)).ok();
 
     // `origin`'s own `.vivac/lock` is left exactly where it is: it cannot be
     // deleted while `lock` still holds it -- that is the very lock this
@@ -207,30 +281,77 @@ pub fn run(located: &Located, destination: &Path, lane_name: Option<&str>) -> Re
     // any more. Nobody should "clean it up" later.
     let _ = &lock;
 
-    write_claim_and_declaration(
-        destination,
+    // Step 9. Past step 7 the move already happened and the registry
+    // already says so, so a failure marking the moved tree is not this
+    // operation's own failure to report -- it still exits 0, and step 10
+    // says what is missing instead.
+    let marked = write_claim_and_declaration(
+        &destination_abs,
         &tree,
         was_implicit_main,
         &stays_lane,
         lane_name,
-    )?;
+    )
+    .is_ok();
 
-    // Step 8. `destination` is printed exactly as the caller passed it: they
-    // just typed it, and the security pillar's ban on paths in the log has
-    // nothing to say about handing someone back their own words.
+    // Step 10. `destination` is printed exactly as the caller passed it:
+    // they just typed it, and the security pillar's ban on paths in the
+    // log has nothing to say about handing someone back their own words.
     outln!(
         "  Moved the tree to {} and checked it byte for byte.",
         destination.display()
     );
     outln!("  This folder stays one of its lanes, with its own thread.");
     outln!("  The old log is kept here as .vivac/{RELOCATED_LOG}.");
+    outln!("  The new folder holds the tree but is not a lane yet. To work there:");
+    outln!("    vivac setup claude-code");
     outln!("  Restart any session open on this tree.");
+    if !marked {
+        outln!("  The moved tree could not be marked from here. Run this in it:");
+        outln!("    vivac setup claude-code");
+    }
     Ok(0)
+}
+
+/// `destination` made absolute against the current directory, by joining
+/// rather than `canonicalize`: the destination usually does not exist yet,
+/// and canonicalizing a path that is not there fails. Nothing this touches
+/// is a promise about the destination's real, on-disk spelling -- only
+/// `same_folder`'s own fallback goes that far, and only for paths that
+/// exist -- it just gives every comparison and every filesystem call past
+/// this point something rooted to work with.
+fn to_absolute(destination: &Path) -> std::io::Result<PathBuf> {
+    if destination.is_absolute() {
+        Ok(destination.to_path_buf())
+    } else {
+        Ok(std::env::current_dir()?.join(destination))
+    }
+}
+
+/// Whether `destination` sits inside `origin`: every proper ancestor of
+/// `destination`, walked syntactically (`Path::ancestors`, no filesystem
+/// access -- `destination` may not exist yet) and compared against
+/// `origin` with `same_folder`, the same primitive every other path
+/// comparison in this module goes through, rather than a raw prefix
+/// check that a name merely starting with the same characters would
+/// satisfy by accident.
+///
+/// `destination` is normalized first, and that is not cosmetic:
+/// `Path::ancestors` treats every component as just another name to
+/// strip off the end, so an unresolved `..` in the middle -- `to_absolute`
+/// only joins, it never resolves one -- makes the ancestor right before
+/// it the very folder the `..` was meant to cancel out, and `relocate ..`
+/// would see its own destination as sitting inside itself.
+fn is_inside(destination: &Path, origin: &Path) -> bool {
+    crate::anchor::normalize(destination)
+        .ancestors()
+        .skip(1)
+        .any(|ancestor| crate::anchor::same_folder(ancestor, origin))
 }
 
 /// Whether `destination`'s own `.vivac/` already holds a tree (`events` or
 /// `config`) or a lane (`lane`). Checked before anything is created there,
-/// on top of the `same_folder` check in `run`: this is a plain existence
+/// on top of the `same_folder` checks in `run`: this is a plain existence
 /// check at one path, not a comparison of two, so it needs nothing beyond
 /// what the filesystem already resolves through any spelling on its own.
 fn destination_holds_a_tree_or_lane(destination: &Path) -> bool {
@@ -240,50 +361,95 @@ fn destination_holds_a_tree_or_lane(destination: &Path) -> bool {
         || vivac.join(crate::store::LANE).is_file()
 }
 
-/// Steps 4 and 5 together: copies `events`, `config` and `.gitignore` from
-/// `origin_vivac` into `destination_vivac`, creates a fresh `lock` there,
-/// and compares the two logs and the two configs byte for byte. `run` owns
-/// the rollback -- tearing down `destination_vivac` on any error this
-/// returns -- so every failure in here, a copy that never lands included,
-/// goes through the very same cleanup rather than each needing its own.
-fn copy_and_verify(origin_vivac: &Path, destination_vivac: &Path) -> Result<(), Failure> {
-    std::fs::create_dir_all(destination_vivac)?;
-    std::fs::copy(
-        origin_vivac.join(crate::store::LOG),
-        destination_vivac.join(crate::store::LOG),
-    )?;
-    std::fs::copy(
-        origin_vivac.join(crate::store::CONFIG),
-        destination_vivac.join(crate::store::CONFIG),
-    )?;
-    let origin_gitignore = origin_vivac.join(crate::store::GITIGNORE);
-    if origin_gitignore.is_file() {
-        std::fs::copy(
-            &origin_gitignore,
-            destination_vivac.join(crate::store::GITIGNORE),
-        )?;
-    } else {
-        crate::store::write_gitignore(destination_vivac)?;
-    }
-    std::fs::File::create(destination_vivac.join(crate::store::LOCK))?;
+/// What step 6 has created so far, so a rollback removes exactly that and
+/// nothing else. `t594` fix-2, finding M1: an earlier round of this task
+/// tore down the destination's whole `.vivac/` on any failure, which took
+/// a destination's own `notes.txt` and an unrelated `events.relocated`
+/// from an earlier move along with it.
+struct Written {
+    /// Whether this run is the one that created `destination`'s own
+    /// `.vivac/` directory. `undo` only ever removes that directory, and
+    /// only when this is `true`.
+    vivac_dir_created: bool,
+    files: Vec<PathBuf>,
+}
 
-    // Step 5. The one comparison this whole operation's safety rests on: if
-    // the destination did not end up with exactly what the origin has, the
-    // caller tears the copy down and nothing about the origin is touched --
-    // no rename, no lane file, no registry write.
-    let log_matches = same_bytes(
-        &origin_vivac.join(crate::store::LOG),
-        &destination_vivac.join(crate::store::LOG),
-    )?;
-    let config_matches = same_bytes(
-        &origin_vivac.join(crate::store::CONFIG),
-        &destination_vivac.join(crate::store::CONFIG),
-    )?;
-    if !log_matches || !config_matches {
+impl Written {
+    /// Removes every file this run wrote, then the `.vivac/` directory
+    /// itself -- but only when this run created it, and only
+    /// `remove_dir`, never `remove_dir_all`: it refuses on its own the
+    /// moment anything besides these files is still inside, which is
+    /// exactly the case this must leave alone.
+    fn undo(&self, destination_vivac: &Path) {
+        for f in &self.files {
+            std::fs::remove_file(f).ok();
+        }
+        if self.vivac_dir_created {
+            std::fs::remove_dir(destination_vivac).ok();
+        }
+    }
+}
+
+/// Step 6: copies `events` and `config` from `origin_vivac` into temporary
+/// names inside `destination_vivac`, compares each against the origin byte
+/// for byte, and only then renames both onto the names
+/// `store::already_planted` looks at. `.gitignore` and a fresh `lock` are
+/// written straight to their real names, since neither is a name that
+/// function reads: a process that dies while writing either one leaves a
+/// destination `already_planted` still correctly calls empty.
+///
+/// Every path this manages to create lands in `written.files`, in the
+/// order it happened, whether or not this call ends in `Ok`: a caller that
+/// has to undo a later failure -- its own, or step 7's -- knows exactly
+/// what to remove and nothing it did not create itself.
+fn copy_and_verify(
+    origin_vivac: &Path,
+    destination_vivac: &Path,
+    written: &mut Written,
+) -> Result<(), Failure> {
+    std::fs::create_dir_all(destination_vivac)?;
+
+    let log_tmp = destination_vivac.join(format!("events.{}.tmp", crate::id::ulid()));
+    std::fs::copy(origin_vivac.join(crate::store::LOG), &log_tmp)?;
+    written.files.push(log_tmp.clone());
+
+    let config_tmp = destination_vivac.join(format!("config.{}.tmp", crate::id::ulid()));
+    std::fs::copy(origin_vivac.join(crate::store::CONFIG), &config_tmp)?;
+    written.files.push(config_tmp.clone());
+
+    // The one comparison this whole operation's safety rests on: if the
+    // copy did not end up with exactly what the origin has, nothing past
+    // this point is trusted with either the tree's real name or the
+    // origin's own log.
+    if !same_bytes(&origin_vivac.join(crate::store::LOG), &log_tmp)?
+        || !same_bytes(&origin_vivac.join(crate::store::CONFIG), &config_tmp)?
+    {
         return Err(Failure::Io(std::io::Error::other(
             "the copy at the destination did not match the source byte for byte",
         )));
     }
+
+    let origin_gitignore = origin_vivac.join(crate::store::GITIGNORE);
+    let destination_gitignore = destination_vivac.join(crate::store::GITIGNORE);
+    if origin_gitignore.is_file() {
+        std::fs::copy(&origin_gitignore, &destination_gitignore)?;
+    } else {
+        crate::store::write_gitignore(destination_vivac)?;
+    }
+    written.files.push(destination_gitignore);
+
+    let lock_path = destination_vivac.join(crate::store::LOCK);
+    std::fs::File::create(&lock_path)?;
+    written.files.push(lock_path);
+
+    let log_final = destination_vivac.join(crate::store::LOG);
+    std::fs::rename(&log_tmp, &log_final)?;
+    written.files.push(log_final);
+
+    let config_final = destination_vivac.join(crate::store::CONFIG);
+    std::fs::rename(&config_tmp, &config_final)?;
+    written.files.push(config_final);
+
     Ok(())
 }
 
@@ -294,10 +460,10 @@ fn same_bytes(a: &Path, b: &Path) -> std::io::Result<bool> {
 }
 
 /// Every root commit any lane of `tree` ever declared, deduplicated and
-/// sorted for a deterministic write: `registry::note`'s own `Sighting.repos`
-/// wants the union across every lane, not just the one that stays at the
-/// origin, so a `setup` run from any of this product's repositories finds
-/// it already mapped.
+/// sorted for a deterministic write: `registry::record_move`'s own
+/// `Sighting.repos` wants the union across every lane, not just the one
+/// that stays at the origin, so a `setup` run from any of this product's
+/// repositories finds it already mapped.
 fn union_repo_roots(tree: &Tree) -> Vec<String> {
     let mut roots: Vec<String> = tree
         .lanes
@@ -310,7 +476,7 @@ fn union_repo_roots(tree: &Tree) -> Vec<String> {
     roots
 }
 
-/// The administrative events step 7 owes the tree now living at
+/// The administrative events step 9 owes the tree now living at
 /// `destination`, once the origin's own bookkeeping is already written:
 ///
 /// - `lane.claimed` for `main`, only when the origin was the implicit
@@ -327,7 +493,11 @@ fn union_repo_roots(tree: &Tree) -> Vec<String> {
 /// Appended through a fresh `Store` and its own lock on `destination`,
 /// never the origin's -- `run`'s own lock only ever covers `origin`'s file,
 /// and taking it a second time here would be exactly the mistake
-/// `Store::append` already refuses (`f602`).
+/// `Store::append` already refuses (`f602`). A failure here reaches the
+/// caller as an ordinary `Err`, but by the time `run` calls this the move
+/// itself has already happened and cannot be undone -- see `run`'s own
+/// step 9, which reports `Err` as a line of missing bookkeeping, not as
+/// the operation's own failure.
 fn write_claim_and_declaration(
     destination: &Path,
     tree: &Tree,
@@ -388,7 +558,19 @@ mod tests {
     }
 
     fn seeded_located(root: &Path) -> Located {
-        Store::create(root).unwrap();
+        let mut s = Store::create(root).unwrap();
+        let lock = s.lock_for_write().unwrap();
+        s.append(
+            &lock,
+            crate::lane::MAIN,
+            vec![crate::event::Body::NodeNoted {
+                node: "t1".into(),
+                note: "seed".into(),
+            }],
+            0,
+            false,
+        )
+        .unwrap();
         Located {
             root: root.to_path_buf(),
             lane_dir: root.to_path_buf(),
@@ -439,6 +621,93 @@ mod tests {
                 .join(crate::store::LOG)
                 .is_file(),
             "a new events file appeared at the origin after an old handle wrote to it"
+        );
+
+        std::fs::remove_dir_all(&origin).ok();
+        std::fs::remove_dir_all(&destination).ok();
+    }
+
+    #[test]
+    fn same_bytes_is_true_for_two_identical_files_and_false_for_two_that_differ() {
+        let dir = temp_dir("same-bytes");
+        std::fs::create_dir_all(&dir).unwrap();
+        let a = dir.join("a");
+        let b = dir.join("b");
+        let c = dir.join("c");
+        std::fs::write(&a, b"hello").unwrap();
+        std::fs::write(&b, b"hello").unwrap();
+        std::fs::write(&c, b"world").unwrap();
+
+        assert!(
+            same_bytes(&a, &b).unwrap(),
+            "two identical files must agree"
+        );
+        assert!(
+            !same_bytes(&a, &c).unwrap(),
+            "two files with different content must not agree"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `run`'s own step 9: past step 7 the move already happened, so a
+    /// failure marking the moved tree is not the operation's own failure
+    /// to report -- `run` only checks whether this succeeded.
+    ///
+    /// Reaching that state through a full `run` call, with steps 1
+    /// through 8 already succeeded, has no trigger a black-box test can
+    /// reach: it would need the destination's own fresh `.vivac/lock`
+    /// already held by something else at the exact moment step 9 takes
+    /// it, which is a race against `run`'s own internal timing rather
+    /// than a state a test can simply ask for. What this proves instead
+    /// is the one thing `run`'s own `.is_ok()` actually depends on: the
+    /// function fails honestly when it cannot write.
+    #[test]
+    fn write_claim_and_declaration_fails_when_the_destination_cannot_be_opened() {
+        let destination = temp_dir("claim-blocked");
+        // A file where `Store::open` needs a directory: writing
+        // `.vivac/config` underneath it cannot even create the path, so
+        // this fails before ever reaching a lock.
+        std::fs::write(&destination, b"not a directory").unwrap();
+        let tree = Tree::default();
+
+        let result =
+            write_claim_and_declaration(&destination, &tree, true, crate::lane::MAIN, None);
+
+        assert!(
+            result.is_err(),
+            "a destination that cannot be opened must fail write_claim_and_declaration"
+        );
+
+        std::fs::remove_file(&destination).ok();
+    }
+
+    /// `t594` fix-2, finding 11 (B3): `--lane-name` with a value the
+    /// redaction guard rejects must fall back rather than fail the move
+    /// -- `lane::declared_name` already promises exactly this for every
+    /// other caller that names a lane from a word a person typed, and
+    /// this pins it for `relocate`'s own.
+    #[test]
+    fn a_lane_name_the_guard_rejects_falls_back_without_failing() {
+        let secret = "ghp_16C7e42F292c6912E7710c838347Ae178B4a";
+        assert!(
+            crate::redact::check_field("lane name", secret).is_some(),
+            "the guard must actually reject this name, or the test proves nothing"
+        );
+
+        let origin = temp_dir("lane-name-guard-origin");
+        let located = seeded_located(&origin);
+        let destination = temp_dir("lane-name-guard-dest");
+
+        let code = run(&located, &destination, Some(secret)).unwrap();
+        assert_eq!(code, 0);
+
+        let log =
+            std::fs::read_to_string(destination.join(crate::store::DIR).join(crate::store::LOG))
+                .unwrap();
+        assert!(
+            !log.contains(secret),
+            "a name the guard rejects must never reach the log: {log}"
         );
 
         std::fs::remove_dir_all(&origin).ok();

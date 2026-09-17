@@ -150,6 +150,38 @@ pub fn note(store_dir: &Path, project_id: &str, s: Sighting<'_>) -> Noted {
     try_note(store_dir, project_id, &s).unwrap_or(Noted::Fine)
 }
 
+/// Points the registry at `s.root` outright, for a caller that already
+/// knows this is a move and has nothing to infer.
+///
+/// `note`'s own `decide` asks whether `path` still shows a live tree to
+/// tell a move from a copy, because an ordinary command never knows which
+/// one it is looking at -- it only has a folder and a sighting. `relocate`
+/// is not that caller: it just renamed the origin's own `events` out of
+/// the way itself, so calling `note` and hoping `path_disagrees` reads the
+/// silence correctly is asking one function to re-derive a fact its
+/// caller already holds. This skips the guess and writes `s.root` in
+/// directly, the way `apply_sighting` always has for an ordinary sighting.
+///
+/// **Fails the caller.** `note` never does, because for an ordinary write
+/// the registry is a comfort a command can do without. `relocate` cannot
+/// afford that: once the origin's own log is gone, the registry is the
+/// only durable record of where the tree went, and a caller that cannot
+/// tell this failed has no way to roll back and warn instead of leaving a
+/// tree nothing durable points at.
+pub fn record_move(store_dir: &Path, project_id: &str, s: Sighting<'_>) -> std::io::Result<()> {
+    std::fs::create_dir_all(store_dir)?;
+    let path = store_dir.join(FILE);
+    let _lock = crate::store::lock_with_deadline(&store_dir.join(LOCK), LOCK_WAIT)
+        .map_err(|e| std::io::Error::other(e.message()))?;
+    let Some(mut projects) = read(&path) else {
+        return Err(std::io::Error::other(
+            "the registry was written by a newer vivac and cannot be updated",
+        ));
+    };
+    apply_sighting(&mut projects, project_id, &s);
+    write(store_dir, &path, &projects)
+}
+
 /// Whether another folder on this machine still holds a tree that starts
 /// with this same event. Read-only: unlike `note`, it never writes, so a
 /// reading command can ask without the registry moving under it -- and,
@@ -737,6 +769,53 @@ mod tests {
         let (root, id) = seeded_project("proj");
 
         note(&blocked, &id, sighting(&root));
+
+        std::fs::remove_file(&blocked).ok();
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// The one thing `note` cannot do and `record_move` exists for: `path`
+    /// moves even while the folder already on file still shows a live
+    /// tree. `note`'s own `decide` would read that as a copy and leave
+    /// `path` exactly where it was -- `a_second_folder_with_the_same_first_event_is_a_copy`,
+    /// above, is that behaviour, pinned on purpose. `record_move` never
+    /// asks the question.
+    #[test]
+    fn record_move_points_path_at_the_destination_even_though_the_origin_still_shows_a_tree() {
+        let store_dir = temp_dir("reg-move");
+        let (origin, id) = seeded_project("move-origin");
+        let destination = temp_dir("move-destination");
+        note(&store_dir, &id, sighting(&origin));
+
+        record_move(&store_dir, &id, sighting(&destination)).unwrap();
+
+        let projects = read(&store_dir.join(FILE)).unwrap();
+        assert_eq!(
+            projects.get(&id).unwrap().path,
+            destination.to_string_lossy(),
+            "record_move must not read a live origin as reason to call this a copy"
+        );
+
+        std::fs::remove_dir_all(&store_dir).ok();
+        std::fs::remove_dir_all(&origin).ok();
+    }
+
+    /// `note`'s whole contract is that it never fails its caller. This is
+    /// the opposite contract, on purpose: `relocate` has nothing durable
+    /// left to point at the tree once its own log is gone, so a caller
+    /// that cannot tell this write failed has no way to roll back.
+    #[test]
+    fn record_move_fails_the_caller_when_the_store_directory_cannot_be_written() {
+        let blocked = temp_dir("move-blocked");
+        std::fs::write(&blocked, b"not a directory").unwrap();
+        let (root, id) = seeded_project("move-blocked-proj");
+
+        let result = record_move(&blocked, &id, sighting(&root));
+
+        assert!(
+            result.is_err(),
+            "a blocked store directory must fail record_move"
+        );
 
         std::fs::remove_file(&blocked).ok();
         std::fs::remove_dir_all(&root).ok();

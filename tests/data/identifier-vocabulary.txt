@@ -292,6 +292,7 @@ constraint
 constraints
 cont
 contained
+container
 containing
 contains
 content
@@ -391,6 +392,7 @@ determinism
 deterministic
 died
 diff
+differ
 difference
 different
 differently
@@ -508,6 +510,7 @@ f32
 f64
 facts
 failed
+failing
 fails
 failure
 fallback
@@ -527,6 +530,7 @@ files
 fill
 filter
 filtered
+final
 finalize
 find
 finding
@@ -688,6 +692,7 @@ id
 id2
 idempotent
 ident
+identical
 identifier
 ids
 idx
@@ -785,6 +790,7 @@ legend
 len
 length
 let
+lets
 letter
 level
 levels
@@ -1516,6 +1522,7 @@ there
 they
 third
 this
+though
 thread
 three
 threshold
