@@ -923,6 +923,28 @@ fn a_folder_whose_main_was_claimed_elsewhere_can_read_but_not_write() {
     );
 }
 
+/// (5b), §6.9's own exception: the refusal above is about a folder with
+/// **nothing on disk** answering `main` by default -- not about the word
+/// `main` itself. A folder whose own `.vivac/lane` file names `main`, which
+/// is exactly what `relocate` (`t594` §4.6) leaves at the folder a tree
+/// moves out of, is still one of the tree's lanes and keeps writing, even
+/// once `main_claimed` is true.
+#[test]
+fn a_folder_whose_own_lane_file_names_main_keeps_writing() {
+    let c = Sandbox::new_seeded("lane-file-names-main");
+    c.append_raw_line(
+        r#"{"seq":1,"id":"01SEEDCLAIMBAAAAAAAAAAAAAA","ts":"2026-01-01T00:00:00Z","actor":"a_test0000000","lane":"main","payload":{"type":"lane.claimed","lane":"main"}}"#,
+    );
+    std::fs::write(
+        c.0.join(".vivac").join("lane"),
+        r#"{"version":1,"id":"main","project":"01SEEDCLAIMBAAAAAAAAAAAAAA"}"#,
+    )
+    .unwrap();
+
+    let (out, code) = c.run(&["push", "x", "--why", "y"]);
+    assert_eq!(code, 0, "{out}");
+}
+
 /// (6): a worktree `main` already declared as one of its own repositories
 /// does not join a lane of its own -- it is that lane's repository at that
 /// path, and nothing more (paso 1, rule 2).
