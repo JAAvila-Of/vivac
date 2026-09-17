@@ -503,6 +503,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
             &located,
             std::path::Path::new(destination),
             a.opt("lane-name"),
+            &cwd,
         );
     }
     // The server outlives its calls and it is not the only writer, so it

@@ -351,9 +351,16 @@ fn quote_if_needed(name: &str) -> String {
 /// what keeps `note` off the write budget (`f603`).
 const LOCK: &str = "registry.lock";
 
-/// Nobody holds this lock longer than a rename takes, and `note` can never
-/// fail its caller, so giving up quickly and staying quiet beats hanging a
-/// command that already has its own answer.
+/// Nobody holds this lock longer than a rename takes, so a second is
+/// already generous for either of this file's two writers, not just the
+/// one that can afford to give up quietly. `note` can never fail its
+/// caller, so for it this is about not hanging a command that already has
+/// its own answer. `record_move` is the other one, and it cannot make
+/// that same trade: giving up here aborts a move already under way, out
+/// loud rather than in silence, which is the right failure for a lock
+/// that should only ever be held for a handoff measured in microseconds
+/// -- a full second stuck on it already means something else is wrong,
+/// not merely running.
 const LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// What a read of the registry says to do next.
