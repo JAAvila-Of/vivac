@@ -1495,3 +1495,307 @@ fn an_already_set_up_project_still_warns_about_a_tracked_log() {
         "{out}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// `t594` §4.5, case 3: `setup` refuses to give a product a second map, in a
+// folder with no tree above it at all.
+// ---------------------------------------------------------------------------
+
+fn real_git_repo(at: &Path) {
+    std::fs::create_dir_all(at).unwrap();
+    let run = |args: &[&str]| {
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(at)
+            .args(args)
+            .output()
+            .unwrap();
+    };
+    run(&["init", "-q"]);
+    run(&["config", "user.email", "t@example.com"]);
+    run(&["config", "user.name", "t"]);
+    std::fs::write(at.join("f.txt"), "x").unwrap();
+    run(&["add", "."]);
+    run(&["commit", "-q", "-m", "first"]);
+}
+
+/// A second working copy of `src` that shares its root commit -- the same
+/// clue `d597` reads to recognise two folders as the same product.
+fn clone_repo(src: &Path, destination: &Path) {
+    if let Some(parent) = destination.parent() {
+        std::fs::create_dir_all(parent).unwrap();
+    }
+    let status = std::process::Command::new("git")
+        .args(["clone", "-q"])
+        .arg(src)
+        .arg(destination)
+        .status()
+        .unwrap();
+    assert!(
+        status.success(),
+        "git clone of {src:?} into {destination:?} failed"
+    );
+}
+
+/// Case 1: A tree directly below refuses with the exact text, and writes
+/// nothing -- not a tree above, and not another event in the one below.
+#[test]
+fn a_tree_directly_below_refuses_and_writes_nothing() {
+    let c = Sandbox::new_empty("setup-below-one");
+    let below = c.0.join("Backend v2");
+    std::fs::create_dir_all(&below).unwrap();
+    run_in(&below, c.global_home(), &["init"]);
+    let events_before = std::fs::read_to_string(below.join(".vivac").join("events")).unwrap();
+
+    let (out, code) = c.run(&["setup", "claude-code", "--yes"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        out.contains("There is already a tree inside this folder, in \"Backend v2\"."),
+        "{out}"
+    );
+    assert!(
+        out.contains("Planting another one here would split this project: sessions opened in"),
+        "{out}"
+    );
+    assert!(
+        out.contains("\"Backend v2\" would use that one, and the rest this one."),
+        "{out}"
+    );
+    assert!(
+        out.contains("Move that tree up here, then run setup again. From inside \"Backend v2\":"),
+        "{out}"
+    );
+    assert!(out.contains("vivac relocate .."), "{out}");
+    assert!(!c.0.join(".vivac").exists(), "a tree was planted above");
+    assert_eq!(
+        events_before,
+        std::fs::read_to_string(below.join(".vivac").join("events")).unwrap(),
+        "the tree below gained another event"
+    );
+}
+
+/// Case 2: Two trees below refuse with the plural text, naming both.
+#[test]
+fn two_trees_below_refuse_with_the_plural_text() {
+    let c = Sandbox::new_empty("setup-below-two");
+    let a = c.0.join("Backend v2");
+    let b = c.0.join("Web Ova");
+    std::fs::create_dir_all(&a).unwrap();
+    std::fs::create_dir_all(&b).unwrap();
+    run_in(&a, c.global_home(), &["init"]);
+    run_in(&b, c.global_home(), &["init"]);
+
+    let (out, code) = c.run(&["setup", "claude-code", "--yes"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        out.contains("There are trees inside this folder, in \"Backend v2\" and \"Web Ova\"."),
+        "{out}"
+    );
+    assert!(
+        out.contains("vivac cannot merge trees: keep one per product, move it up here with"),
+        "{out}"
+    );
+    assert!(
+        out.contains("vivac relocate, and leave the others as they are."),
+        "{out}"
+    );
+    assert!(!c.0.join(".vivac").exists());
+}
+
+/// Case 3: A second root sharing a repository's root commit with an
+/// already-registered project refuses, naming this folder's *own*
+/// repositories -- not the other project's.
+#[test]
+fn a_shared_root_commit_refuses_naming_this_folders_own_repos() {
+    let c = Sandbox::new_empty("setup-registered-basic");
+    let first = c.0.join("IQuorum");
+    real_git_repo(&first.join("webapi"));
+    let (setup_out, setup_code) =
+        run_in(&first, c.global_home(), &["setup", "claude-code", "--yes"]);
+    assert_eq!(setup_code, 0, "{setup_out}");
+
+    let second = c.0.join("IQuorum-v2");
+    clone_repo(&first.join("webapi"), &second.join("webapi"));
+
+    let (out, code) = run_in(&second, c.global_home(), &["setup", "claude-code", "--yes"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        out.contains("Some repositories here are already tracked by project \"IQuorum\":"),
+        "{out}"
+    );
+    assert!(out.contains("webapi"), "{out}");
+    assert!(
+        out.contains("Planting another tree would give this product two maps."),
+        "{out}"
+    );
+    assert!(
+        out.contains("To work on IQuorum from this folder:"),
+        "{out}"
+    );
+    assert!(
+        out.contains("vivac setup claude-code --join IQuorum"),
+        "{out}"
+    );
+    assert!(out.contains("To plant a separate tree anyway:"), "{out}");
+    assert!(out.contains("vivac setup claude-code --new-tree"), "{out}");
+    assert!(!already_planted(&second));
+}
+
+/// Case 4: One shared repository is enough, even when the new root also has a
+/// repository the registered project never had.
+#[test]
+fn one_shared_repository_is_enough_even_with_an_extra_one() {
+    let c = Sandbox::new_empty("setup-registered-partial");
+    let first = c.0.join("Prod");
+    real_git_repo(&first.join("webapi"));
+    run_in(&first, c.global_home(), &["setup", "claude-code", "--yes"]);
+
+    let second = c.0.join("Prod-v2");
+    clone_repo(&first.join("webapi"), &second.join("webapi"));
+    real_git_repo(&second.join("infra"));
+
+    let (out, code) = run_in(&second, c.global_home(), &["setup", "claude-code", "--yes"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        out.contains("Some repositories here are already tracked by project \"Prod\":"),
+        "{out}"
+    );
+    assert!(!already_planted(&second));
+}
+
+/// Case 5: A registered project whose own folder name the redaction guard
+/// rejects is withheld -- the second form of the text -- and it points at
+/// the path remedy instead of a name. The same literal folder name
+/// (`someone@example.com`) is pinned by `registry.rs`'s own
+/// `a_copy_whose_folder_name_the_guard_rejects_is_not_named`, which
+/// affirms directly that the guard rejects it; this is that same guarantee
+/// reached through `setup` instead of `note`.
+#[test]
+fn a_registered_products_withheld_name_points_at_the_path_remedy() {
+    let secret_name = "someone@example.com";
+    let c = Sandbox::new_empty("setup-registered-withheld");
+    let first = c.0.join(secret_name);
+    real_git_repo(&first.join("webapi"));
+    run_in(&first, c.global_home(), &["setup", "claude-code", "--yes"]);
+
+    let second = c.0.join("Prod-v3");
+    clone_repo(&first.join("webapi"), &second.join("webapi"));
+
+    let (out, code) = run_in(&second, c.global_home(), &["setup", "claude-code", "--yes"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        !out.contains(secret_name),
+        "the withheld name leaked: {out}"
+    );
+    assert!(
+        out.contains("Some repositories here are already tracked by another project on this"),
+        "{out}"
+    );
+    assert!(out.contains("machine: webapi."), "{out}");
+    assert!(
+        out.contains("Planting another tree would give this product two maps."),
+        "{out}"
+    );
+    assert!(
+        out.contains("To work on it from this folder, give the path to its folder:"),
+        "{out}"
+    );
+    assert!(
+        out.contains("vivac setup claude-code --join <path to that folder>"),
+        "{out}"
+    );
+    assert!(out.contains("To plant a separate tree anyway:"), "{out}");
+    assert!(out.contains("vivac setup claude-code --new-tree"), "{out}");
+}
+
+/// Case 6: A tree that itself sits inside another one warns, but still
+/// completes -- exit 0, and this folder still joins the closer tree.
+#[test]
+fn a_tree_above_the_joined_one_warns_but_still_completes() {
+    let c = Sandbox::new_empty("setup-above-warning");
+    let work = c.0.join("Work");
+    let mid = work.join("T");
+    let f = mid.join("sub");
+    std::fs::create_dir_all(&f).unwrap();
+    run_in(&work, c.global_home(), &["init"]);
+    run_in(&mid, c.global_home(), &["init"]);
+
+    let (out, code) = run_in(&f, c.global_home(), &["setup", "claude-code", "--yes"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.contains("This tree sits inside another one, in folder \"Work\"."),
+        "{out}"
+    );
+    assert!(
+        out.contains("above this folder use that one: keep one tree per product."),
+        "{out}"
+    );
+    assert!(
+        f.join(".vivac").join("lane").exists(),
+        "the subfolder never joined the closer tree"
+    );
+}
+
+/// Case 7: A known limit, written down rather than left to be discovered: a
+/// product nobody ever ran `setup` on with this version left no trace in
+/// the registry, so a second root of it is not recognised and just plants.
+#[test]
+fn a_product_the_registry_never_learned_about_is_not_recognized() {
+    let c = Sandbox::new_empty("setup-registered-cold-start");
+    let first = c.0.join("Untouched");
+    real_git_repo(&first.join("webapi"));
+    // No `setup` ever ran at `first`: the registry knows nothing about it.
+
+    let second = c.0.join("Untouched-v2");
+    clone_repo(&first.join("webapi"), &second.join("webapi"));
+
+    let (out, code) = run_in(&second, c.global_home(), &["setup", "claude-code", "--yes"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        already_planted(&second),
+        "the known limitation: a fresh tree still gets planted"
+    );
+}
+
+/// Property: with a tree below *and* a registered product at the same
+/// time, the refusal about the tree below wins -- `t594` §4.5.1 describes
+/// a state of the disk that has to be fixed before the product question
+/// means anything.
+#[test]
+fn a_tree_below_wins_over_a_registered_product() {
+    let c = Sandbox::new_empty("setup-order");
+    // Outside `c.0` on purpose: this folder must not itself turn up as a
+    // tree below `c.0`, only as the already-registered project whose
+    // repository `c.0` also happens to hold.
+    let other_root = std::env::temp_dir().join(format!(
+        "vivac-setup-order-other-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    real_git_repo(&other_root.join("webapi"));
+    run_in(
+        &other_root,
+        c.global_home(),
+        &["setup", "claude-code", "--yes"],
+    );
+
+    clone_repo(&other_root.join("webapi"), &c.0.join("webapi"));
+    let below = c.0.join("Backend v2");
+    std::fs::create_dir_all(&below).unwrap();
+    run_in(&below, c.global_home(), &["init"]);
+
+    let (out, code) = c.run(&["setup", "claude-code", "--yes"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        out.contains("There is already a tree inside this folder, in \"Backend v2\"."),
+        "{out}"
+    );
+    assert!(
+        !out.contains("already tracked by project"),
+        "the product-registered refusal must not win here: {out}"
+    );
+    std::fs::remove_dir_all(&other_root).ok();
+}

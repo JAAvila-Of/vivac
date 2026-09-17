@@ -336,7 +336,11 @@ fn shell_safe(name: &str) -> bool {
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
 }
 
-fn quote_if_needed(name: &str) -> String {
+/// `pub(crate)`, not private: `setup` (`t594` §4.5) quotes a project name
+/// the same way when it prints `--join <name>`, the same command this
+/// file's own `copy_notice` already prints -- one rule for what a shell
+/// needs quoted, not two that could drift.
+pub(crate) fn quote_if_needed(name: &str) -> String {
     if shell_safe(name) {
         name.to_string()
     } else {
@@ -597,6 +601,63 @@ pub fn roots(store_dir: &Path) -> Vec<PathBuf> {
         .map(|p| PathBuf::from(p.path))
         .filter(|r| !marks_global_store(&r.join(crate::store::DIR)))
         .collect()
+}
+
+/// A project on this machine that shares at least one repository with the
+/// folder being set up. Named by its folder, never by its path: this text
+/// reaches an agent's context, and `d600` withholds a name the redaction
+/// guard rejects.
+pub struct Sharing {
+    pub name: Option<String>,
+    pub root: PathBuf,
+    /// The root commits both hold, so the caller can name its own copies
+    /// of them by the folder names it already has.
+    pub shared: Vec<String>,
+}
+
+/// Every project the registry knows that shares at least one of `repos` --
+/// root commits -- with the folder being set up: `t594` §4.5, the check
+/// that tells a folder `setup` has never seen apart from one that still
+/// holds a product already mapped. A single shared repository is enough,
+/// the same reason a fresh root that adds one more repository to a product
+/// is still that product.
+///
+/// Most shared repositories first, ties broken by name -- a withheld name
+/// sorts after every real one, since there is nothing to compare it
+/// against.
+pub fn sharing_repos(store_dir: &Path, repos: &[String]) -> Vec<Sharing> {
+    let Some(projects) = read(&store_dir.join(FILE)) else {
+        return Vec::new();
+    };
+    let mut found: Vec<Sharing> = projects
+        .values()
+        .filter_map(|p| {
+            let shared: Vec<String> = p
+                .repos
+                .iter()
+                .filter(|r| repos.contains(r))
+                .cloned()
+                .collect();
+            if shared.is_empty() {
+                return None;
+            }
+            let root = PathBuf::from(&p.path);
+            Some(Sharing {
+                name: folder_name(&root),
+                root,
+                shared,
+            })
+        })
+        .collect();
+    found.sort_by(|a, b| {
+        b.shared.len().cmp(&a.shared.len()).then_with(|| {
+            a.name
+                .as_deref()
+                .unwrap_or("\u{10FFFF}")
+                .cmp(b.name.as_deref().unwrap_or("\u{10FFFF}"))
+        })
+    });
+    found
 }
 
 /// Resolves `--project`'s value against the registry: a bare name -- the

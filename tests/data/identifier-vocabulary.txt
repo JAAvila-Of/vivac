@@ -183,6 +183,7 @@ busy
 but
 bv
 by
+bypass
 byte
 bytes
 cache
@@ -275,10 +276,12 @@ command
 commands
 comment
 commit
+commits
 committed
 common
 compare
 complete
+completes
 component
 components
 condition
@@ -401,6 +404,7 @@ differently
 digit
 dir
 direct
+directly
 directory
 disagrees
 disclosure
@@ -453,6 +457,7 @@ encoded
 end
 ends
 english
+enough
 ensure
 enter
 enters
@@ -786,6 +791,7 @@ le
 leaf
 leap
 learn
+learned
 leave
 leaves
 left
@@ -1109,6 +1115,8 @@ prints
 problem
 proceed
 process
+product
+products
 prog
 proj
 project
@@ -1164,6 +1172,7 @@ real
 reason
 rebuilt
 recognise
+recognized
 reconcile
 record
 recorded
@@ -1190,6 +1199,7 @@ refusing
 regardless
 regenerated
 regenerates
+registered
 registers
 registry
 rejected
@@ -1207,6 +1217,7 @@ relock
 relocks
 rem
 remaining
+remedy
 remembered
 remembers
 removal
@@ -1368,6 +1379,7 @@ shaped
 share
 shared
 shares
+sharing
 shell
 short
 should
