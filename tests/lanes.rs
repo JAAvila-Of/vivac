@@ -943,6 +943,18 @@ fn a_folder_whose_own_lane_file_names_main_keeps_writing() {
 
     let (out, code) = c.run(&["push", "x", "--why", "y"]);
     assert_eq!(code, 0, "{out}");
+    // More than exit 0: the push has to have actually landed on the log
+    // and on the stack, not merely returned success over a write that
+    // silently did nothing.
+    let log = std::fs::read_to_string(c.0.join(".vivac").join("events")).unwrap();
+    assert!(
+        log.contains(r#""type":"node.created""#) && log.contains(r#""title":"x""#),
+        "the push must have written the node it was given: {log}"
+    );
+    assert!(
+        says(&c.ok(&["stack"]), "x"),
+        "the pushed node must be on the stack afterwards"
+    );
 }
 
 /// (6): a worktree `main` already declared as one of its own repositories
