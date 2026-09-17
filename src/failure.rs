@@ -118,8 +118,8 @@ impl Failure {
     /// folder -- was circular for the case that reaches this most often: a
     /// tree whose log is missing but which still carries its own
     /// `.vivac/lane`, telling the person standing in that very folder to go
-    /// run something "in the tree's own folder" (`t594` fix-4, finding
-    /// N7b). `--join` names the actual remedy and is pulled forward here as
+    /// run something "in the tree's own folder" (`t594`).
+    /// `--join` names the actual remedy and is pulled forward here as
     /// text only; the flag itself is `t594` §4.5.4 and does not exist yet
     /// -- `setup` still refuses it with exit 2 until it lands.
     pub fn tree_not_found() -> Failure {
@@ -146,8 +146,8 @@ impl Failure {
     /// what `relocate` leaves the origin holding. `init` planting a fresh
     /// tree there would go unnoticed -- it exits 0 and prints success --
     /// while `stack` and `push` keep answering for the tree the lane names,
-    /// leaving the new, empty one to sit at zero bytes forever (`t594`
-    /// fix-4, finding N7a). Exit 1, the same as any other refusal the model
+    /// leaving the new, empty one to sit at zero bytes forever (`t594`).
+    /// Exit 1, the same as any other refusal the model
     /// itself makes.
     pub fn already_a_lane() -> Failure {
         Failure::Model(
@@ -159,8 +159,7 @@ impl Failure {
 
     /// A folder that holds a tree of its own, told to join a different one
     /// (`--join`). `already_a_lane`'s text would be a lie here: this folder
-    /// carries no lane to redirect, it carries the tree itself (`t594`
-    /// fix-1, finding 9).
+    /// carries no lane to redirect, it carries the tree itself (`t594`).
     pub fn already_has_a_tree() -> Failure {
         Failure::Model(
             "  This folder holds a tree of its own, so there is nothing to join.\n  \

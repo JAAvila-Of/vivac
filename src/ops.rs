@@ -33,8 +33,8 @@ pub enum Whose<'a> {
     Founding,
     /// The caller already decided which lane this is, and signs with it
     /// outright: `setup`, declaring a lane from its own `repos::scan`
-    /// rather than from what the log already says. `t594` fix-1, finding
-    /// G: without this, the only way to have `setup` sign as the lane it
+    /// rather than from what the log already says. `t594`:
+    /// without this, the only way to have `setup` sign as the lane it
     /// just planned was to build with `Founding` and overwrite `lane`,
     /// `tree` and `store` by hand afterwards -- an invariant that held
     /// only because someone remembered to keep the three assignments in
@@ -53,7 +53,7 @@ pub struct PendingLane {
     /// The worktree's own root, where its `.vivac/lane` goes.
     pub dir: PathBuf,
     /// The folder's name, **raw**: the redaction guard runs in `emit`
-    /// instead of here (`t594` fix-1, finding F), because only there does
+    /// instead of here (`t594`), because only there does
     /// the id that `lane::name_for` decorates the fallback with already
     /// exist. Never written to disk unguarded -- `emit` is the only
     /// reader, and it never forwards this without checking it first.
@@ -104,14 +104,14 @@ pub struct Ctx {
     /// earlier: `lock_for_write` runs before an operation knows whether
     /// it has anything to write at all, and joining there left a lane
     /// file and a `lane.declared` behind a command that changed nothing
-    /// (`t594` fix-1, finding B).
+    /// (`t594`).
     pending_lane: Option<PendingLane>,
     /// Whether the caller already decided this lane (`Whose::Declared`)
     /// rather than it being resolved from a folder. §6.9's refusal
     /// (`lock_for_write`) exists for a folder that resolved to `main` on
     /// its own; it does not apply here, because the one caller that ever
     /// sets this is `setup`, the command §6.9's own message names as the
-    /// way out (`t594` fix-1, finding D).
+    /// way out (`t594`).
     caller_declared: bool,
     /// Whether `lane` is only a fallback -- no `.vivac/lane` file backs it
     /// up -- rather than read off one that actually names it.
@@ -135,7 +135,7 @@ impl Ctx {
     /// `self.lane` is the folder's and does not move just because the tree
     /// underneath it did. Two call sites used to assign `self.tree`
     /// directly and disagreed about this, one of them only under lock
-    /// contention (`t594` task 6, review round 1): a reload nobody routed
+    /// contention (`t594`): a reload nobody routed
     /// through here answers from `main` while the store keeps signing as
     /// whatever lane this context actually is.
     fn adopt(&mut self, tree: Tree) {
@@ -202,7 +202,7 @@ impl Ctx {
         // `t594` §2.3: whose lane a folder is needs the tree already
         // folded -- it depends on the repositories a lane declared, and
         // that is in the log -- so it is decided here, and nowhere else.
-        // `t594` branch-fix-2 #1: read off the fold itself, not `config`'s
+        // `t594`: read off the fold itself, not `config`'s
         // own sentence, which can say either more or less than the log
         // actually backs up (`Tree::has_a_declared_lane`'s own doc).
         let tree_has_lanes = tree.has_a_declared_lane();
@@ -227,7 +227,7 @@ impl Ctx {
     }
 
     /// A `Ctx` over events already read, for a caller that keeps them --
-    /// `project.rs`'s resident tree among them. `t594` fix-1, finding A:
+    /// `project.rs`'s resident tree among them. `t594`:
     /// this used to keep its own `Option<String>`, "answer as the founding
     /// lane" spelled as `None` rather than as `Whose::Founding` -- the
     /// exact ambiguity the enum exists to rule out -- and a worktree
@@ -297,8 +297,7 @@ impl Ctx {
         // lane the caller already named outright (`Whose::Declared`):
         // `setup` is the only caller that ever sets it, and it is the
         // very command §6.9's own message sends you to -- refusing it too
-        // would be a message that answers itself (`t594` fix-1, finding
-        // D).
+        // would be a message that answers itself (`t594`).
         //
         // `lane_assumed`, not just the word `main`: the sentence above is
         // about a folder with nothing on disk to back up its answer, and
@@ -319,7 +318,7 @@ impl Ctx {
         let lock = self.store.lock_for_write()?;
         let now = crate::store::fingerprint(&self.store.log());
         if now != self.seen {
-            // `adopt`, not a direct assignment (`t594` task 6, review round 1):
+            // `adopt`, not a direct assignment (`t594`):
             // this is the reload a second writer's append forces, and it
             // used to leave this context reading `main` while its store
             // kept signing as whatever lane it actually is.
@@ -352,8 +351,8 @@ impl Ctx {
     /// fresh fold of the log would apply (`f590`).
     fn emit(&mut self, bodies: Vec<Body>) -> R {
         let mut bodies = bodies;
-        // `t594` §2.3 rule 3, step 3, moved here in fix-1 round 1
-        // (finding B): a worktree joins the moment something actually
+        // `t594` §2.3 rule 3, step 3, moved here from where it
+        // used to sit: a worktree joins the moment something actually
         // writes, never merely because the write lock was taken.
         // `lock_for_write` runs before an operation even knows whether it
         // has anything to write -- `pop` on an empty stack, a `note`
@@ -371,7 +370,7 @@ impl Ctx {
             let lock = self.lock.as_ref().ok_or_else(|| {
                 Failure::Io(std::io::Error::other("write without the tree's lock"))
             })?;
-            // `t594` branch-fix-1 #3: `pending_lane` was decided before
+            // `t594`: `pending_lane` was decided before
             // this lock was even taken, and `lock_for_write`'s own reload
             // re-plays the tree but never asks again whose folder this
             // is. Two processes that both resolve pending before either
@@ -391,7 +390,7 @@ impl Ctx {
                 self.pending_lane = None;
             } else {
                 self.store.lock_lanes_in_config(lock)?;
-                // `t594` branch-fix-1 #2: a worktree only ever gets this
+                // `t594`: a worktree only ever gets this
                 // far when the tree already has a lane declared
                 // somewhere, which means at least one event already
                 // exists -- so there is nothing left to seed here, and
@@ -400,8 +399,8 @@ impl Ctx {
                 //
                 // This should be unreachable now that `tree_has_lanes`
                 // reads `Tree::has_a_declared_lane`, the fold itself,
-                // rather than `config`'s own sentence (`t594`
-                // branch-fix-2 #1): a declared lane is an event, so a
+                // rather than `config`'s own sentence (`t594`):
+                // a declared lane is an event, so a
                 // pending worktree can only exist once there is a first
                 // one to read here. It was reachable when `config` was
                 // the question instead -- `config` outliving a log a
@@ -429,11 +428,11 @@ impl Ctx {
                 self.lane = Some(id.clone());
                 self.tree.for_lane(&id);
                 self.pending_lane = None;
-                // `t594` fix-1, finding F: redacted here, not when the
+                // `t594`: redacted here, not when the
                 // pending lane was first noticed, because only here does
                 // the id exist to decorate the fallback with. Goes
                 // through `lane::declared_name`, the one place this rule
-                // is written (`t594` branch-fix-1 #7), the same as
+                // is written (`t594`), the same as
                 // `setup` already does, so two redacted lanes on the
                 // same tree no longer share the bare word `lane`.
                 let name = crate::lane::declared_name(&id, &folder_name);
@@ -528,7 +527,7 @@ struct WhoseLane {
 /// 3. It is `Some(w)`, it is not, **and `tree_has_lanes`**: `w` is another
 ///    lane, pending until it writes.
 ///
-/// `tree_has_lanes` gates case 3 on purpose (`t594` branch-fix-1 #2): it
+/// `tree_has_lanes` gates case 3 on purpose (`t594`): it
 /// is the justification the task that built this already wrote down --
 /// "only happens when the repository already declared a lane" -- and
 /// never wired in. Without it, `session.started` alone -- a hook, not a
@@ -612,8 +611,8 @@ fn resolve_whose(whose: Whose, tree: &Tree, tree_has_lanes: bool) -> WhoseLane {
         lane: None,
         pending_lane: Some(PendingLane {
             dir: w.clone(),
-            // `d600`'s own guard runs in `emit`, not here (`t594` fix-1,
-            // finding F): see `PendingLane::name`.
+            // `d600`'s own guard runs in `emit`, not here (`t594`):
+            // see `PendingLane::name`.
             name: folder_name,
             repo: crate::event::Repo {
                 path: ".".to_string(),
@@ -2265,7 +2264,7 @@ mod tests {
         ctx.unlock();
     }
 
-    /// `t594` task 6, review round 1: `lock_for_write` used to reload the tree by
+    /// `t594`: `lock_for_write` used to reload the tree by
     /// assigning `self.tree` directly, the one call site `adopt` did not
     /// yet cover, so a context on a lane other than `main` that reloaded
     /// under the lock -- because a second writer appended while it

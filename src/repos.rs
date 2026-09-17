@@ -198,5 +198,5 @@ mod tests {
     // test that only calls it proves nothing about the guard itself --
     // `tests/lanes.rs`'s `a_worktree_named_a_secret_never_writes_it_to_the_log`
     // is the one that declares a real lane from a rejected name and reads
-    // the real log (`t594` branch-fix-1 #7).
+    // the real log (`t594`).
 }

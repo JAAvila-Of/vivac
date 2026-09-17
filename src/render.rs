@@ -179,8 +179,8 @@ impl Full {
 /// not of whoever is asking -- and a node born in a lane other than the
 /// reader's stays answered from that lane's own history. The answer can
 /// name a commit this checkout does not have; that is honest, since the
-/// node was born somewhere else, not a bug to filter away (`t594`
-/// branch-fix-1, "lo que NO se cambia").
+/// node was born somewhere else, not a bug to filter away (`t594`,
+/// deliberately left as it is).
 pub(crate) fn anchor_of(a: &Tree, full: &Full, n: &Node) -> AnchorRef {
     let Some(&seq) = full.created.get(&n.id) else {
         return AnchorRef::default();
@@ -1439,7 +1439,7 @@ pub fn vivacs(a: &Tree, args: &Args) -> R {
     // push a lane's own stops out of the last twenty before it gets here,
     // and no row says which lane a stop belongs to -- both are `t594` §5,
     // not fixed here, only written down so it is not forgotten by omission
-    // (`t594` task 6, review round 1).
+    // (`t594`).
     for v in a.vivacs.iter().rev().take(20) {
         let top = v
             .stack

@@ -106,7 +106,7 @@ fn registry_refusal(path: &Path) -> Failure {
 /// dangerous to write into, caught by `claude_code::run` before it decides
 /// between planting and joining (`t579` §4.1, `f583`, `d584`). It used to be
 /// caught by `apply` alone, which is exactly what let `--join` bypass it
-/// (`t594` fix-1, finding 2): a guard checked inside one branch is a guard
+/// (`t594`): a guard checked inside one branch is a guard
 /// the next branch does not have. Both were reachable under 0.10.0, and
 /// `--undo` never calls this: undoing whatever an earlier setup wrote there
 /// is always safe, and is the only way out for whoever already fell into

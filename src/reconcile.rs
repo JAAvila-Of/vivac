@@ -63,7 +63,7 @@ fn plural(n: usize, one: &str, many: &str) -> String {
 /// question from the default. With no name, the default is *this* lane's
 /// own last stop, not the log's: reconciling compares the git of **this**
 /// folder against a stop's anchor, and another lane's last stop can point
-/// at a commit this checkout does not even have (`t594` task 6, review round 1).
+/// at a commit this checkout does not even have (`t594`).
 fn reference<'a>(a: &'a Tree, args: &Args) -> Result<Option<&'a Vivac>, crate::failure::Failure> {
     match args.opt("since") {
         Some(s) => a

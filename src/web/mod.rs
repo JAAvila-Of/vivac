@@ -397,8 +397,8 @@ fn open_browser(url: &str) {
 /// is not a project, which is the case the whole decision exists for, and
 /// then `/` is the index. Handed to `Registry::open` whole, which is what
 /// lets it sign as that lane only for that one project, never for the
-/// others `roots` may also name (`t594` task 6, review round 1; and again
-/// in fix-1 round 1, before `Registry::open` reached this far).
+/// others `roots` may also name (`t594`, twice: the second time before
+/// `Registry::open` reached this far).
 pub fn serve(
     roots: Vec<PathBuf>,
     cwd_located: Option<Located>,

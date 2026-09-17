@@ -6,7 +6,7 @@
 //! whose own `main` has been claimed elsewhere (`d597`, §6.9): it still
 //! holds the tree, and it still is not `main` any more, so `setup` mints
 //! it a lane of its own too, right beside `config` and `events`
-//! (`t594` fix-1 round 2).
+//! (`t594`).
 //!
 //! **It holds no path.** Where the tree lives is the registry's job and the
 //! registry's alone (`f267`): a second home for that answer would need its
@@ -56,7 +56,7 @@ pub fn name_for(id: &str, _folder_name: &str) -> String {
 /// and `Ctx::emit`'s own join both name a lane from a folder, and a
 /// security rule copied into two places is a rule that can go on
 /// agreeing with itself only until someone edits one of them
-/// (`t594` branch-fix-1 #7).
+/// (`t594`).
 pub fn declared_name(id: &str, folder_name: &str) -> String {
     match crate::redact::check_field("lane name", folder_name) {
         Some(_) => name_for(id, folder_name),
@@ -77,7 +77,7 @@ pub fn declared_name(id: &str, folder_name: &str) -> String {
 /// a folder that belongs to another tree into a fresh, empty one,
 /// splitting the product in two without telling anybody. The one folder
 /// that holds the tree and still carries this file -- `main` claimed
-/// elsewhere, `t594` fix-1 round 2 -- already has its own config, so that
+/// elsewhere, `t594` -- already has its own config, so that
 /// particular disaster does not reach it; but reading its corrupt file as
 /// absent would just as quietly undo the very thing the file exists to
 /// say, and land the folder back in front of §6.9's own refusal. The same

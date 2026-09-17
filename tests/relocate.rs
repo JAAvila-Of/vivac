@@ -308,7 +308,7 @@ fn relocate_from_the_only_surviving_copy_proceeds() {
     );
 }
 
-/// `t594` fix-3: the exact failure this module exists to close, reached
+/// `t594`: the exact failure this module exists to close, reached
 /// with nobody dying at all. `relocate`'s own step 8 renames `config`
 /// away first and `events` second; a read landing in between finds
 /// `events` still there and `config` missing, and `Store::open` mints a
@@ -432,7 +432,7 @@ fn a_move_that_cannot_finish_leaves_the_source_alone() {
     std::fs::remove_dir_all(&dest).ok();
 }
 
-/// `t594` fix-2, finding M1: an earlier round of this task tore down the
+/// `t594`: an earlier round of this task tore down the
 /// destination's whole `.vivac/` on any failure, taking files this run
 /// never wrote along with it -- measured by the reviewer as an unrelated
 /// `notes.txt` and an `events.relocated` from an earlier move, lost
@@ -653,7 +653,7 @@ fn relocate_with_an_empty_destination_is_a_usage_error() {
     assert_eq!(code, 2, "{out}");
 }
 
-/// `t594` fix-2, finding 6: a tree with nothing in it yet has no first
+/// `t594`: a tree with nothing in it yet has no first
 /// event and so no identity (`d201`) for the registry or the origin's own
 /// lane file to be keyed by. Refusing is cheaper and honester than moving
 /// it and cementing a made-up one.
@@ -679,7 +679,7 @@ fn relocate_refuses_a_tree_with_no_events_yet() {
     assert!(c.0.join(".vivac").join("config").is_file());
 }
 
-/// `t594` fix-2, finding 10: `relocate ..` is the very thing another text
+/// `t594`: `relocate ..` is the very thing another text
 /// in `t594` §6.4 recommends, so the destination sitting *above* the
 /// origin has to keep working. What is refused is the opposite direction.
 #[test]
@@ -705,7 +705,7 @@ fn relocate_into_a_subfolder_of_the_origin_is_refused() {
     assert!(c.0.join(".vivac").join("events").is_file());
 }
 
-/// `t594` fix-2, finding 4: the destination is the tree now, but it is not
+/// `t594`: the destination is the tree now, but it is not
 /// a lane yet, and the success text has to say so up front rather than
 /// leaving that for the first refused write to explain.
 #[test]
@@ -725,7 +725,7 @@ fn the_success_text_says_the_new_folder_is_not_a_lane_yet() {
     std::fs::remove_dir_all(&dest).ok();
 }
 
-/// `t594` fix-2, finding A1: `path_disagrees`-free or not, the registry
+/// `t594`: `path_disagrees`-free or not, the registry
 /// still has to be keyed by an *absolute* root -- a relative one only
 /// ever resolves correctly against the `cwd` that typed it, and every
 /// other lane resolves it against its own.
@@ -764,7 +764,7 @@ fn relocate_with_a_relative_destination_still_lets_another_lane_find_it() {
     std::fs::remove_dir_all(&lane_container).ok();
 }
 
-/// `t594` fix-2, finding 3: `relocate ..` by name, the exact command this
+/// `t594`: `relocate ..` by name, the exact command this
 /// crate's own advice recommends in `t594` §6.4, moving the tree up out
 /// of a nested clone into the folder that holds the product.
 #[test]
@@ -791,7 +791,7 @@ fn relocate_dot_dot_moves_the_tree_up_one_level() {
     std::fs::remove_dir_all(&home).ok();
 }
 
-/// `t594` fix-3, finding N1: `to_absolute` only joined, and `relocate ..`
+/// `t594`: `to_absolute` only joined, and `relocate ..`
 /// left the registry holding the raw `…\clone\..`. `Path::file_name` of a
 /// path ending in `..` is `None`, so `render::project_name` read that back
 /// as the bare word `"-"`, and every project relocated this way would have
@@ -829,7 +829,7 @@ fn relocate_dot_dot_normalizes_the_path_the_registry_keeps() {
     std::fs::remove_dir_all(&home).ok();
 }
 
-/// `t594` fix-3, finding 4 (B1): `relocate` used to pass from any
+/// `t594` (B1): `relocate` used to pass from any
 /// subfolder of the tree, since `store::locate`'s own upward walk makes
 /// `located.root == located.lane_dir` true from there too, and then print
 /// a lane and a log neither one is actually in.
@@ -861,7 +861,7 @@ fn relocate_from_a_subfolder_of_the_tree_is_refused() {
     assert!(c.0.join(".vivac").join("events").is_file());
 }
 
-/// `t594` fix-3, finding N3: the rollback used to copy over a `.gitignore`
+/// `t594`: the rollback used to copy over a `.gitignore`
 /// the destination already had and then track the result as its own,
 /// losing whatever line someone had added to it. `M1`'s own test never
 /// saw this because it makes `.gitignore` a directory, the one case a
@@ -892,7 +892,7 @@ fn a_failed_move_never_overwrites_a_gitignore_the_destination_already_had() {
     std::fs::remove_dir_all(&dest).ok();
 }
 
-/// `t594` fix-4, finding N9: the same rule N3 gave `.gitignore` applies to
+/// `t594`: the same rule N3 gave `.gitignore` applies to
 /// `lock` -- `commit_copy` used to `File::create` the destination's `lock`
 /// unconditionally and track it for rollback regardless of whether one was
 /// already there, so a failed move could delete a `lock` the destination
@@ -927,7 +927,7 @@ fn a_failed_move_never_overwrites_a_lock_the_destination_already_had() {
     std::fs::remove_dir_all(&dest).ok();
 }
 
-/// `t594` fix-3, finding 6 (N4): a `.vivac/` this run created and left
+/// `t594` (N4): a `.vivac/` this run created and left
 /// empty must not survive its own rollback -- if it did, the folder would
 /// still read as busy the next time step 5 checked it, blocking the very
 /// retry a failed move should always allow.
@@ -959,7 +959,7 @@ fn a_destination_left_empty_by_a_failed_move_can_be_retried() {
     std::fs::remove_dir_all(&dest).ok();
 }
 
-/// `t594` fix-2, finding 1: step 7's own rollback. `record_move` -- unlike
+/// `t594`: step 7's own rollback. `record_move` -- unlike
 /// `note`, which never fails its caller -- fails the whole operation when
 /// the registry cannot be written, and the origin has to come back whole.
 #[test]
@@ -994,7 +994,7 @@ fn a_registry_that_cannot_be_written_leaves_the_source_alone() {
     std::fs::remove_file(c.global_home()).ok();
 }
 
-/// `t594` fix-2, finding 2: a failure *inside* step 8 -- after the origin's
+/// `t594`: a failure *inside* step 8 -- after the origin's
 /// own `.vivac/lane` already landed -- still leaves the origin a working
 /// tree, because that file is written before anything is renamed, not
 /// after.

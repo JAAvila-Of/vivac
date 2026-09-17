@@ -328,7 +328,7 @@ pub fn copy_notice(first: Option<&str>, rest: &[Option<String>]) -> CopyNotice {
 /// Where every caller that works out a `Noted` leaves it for `warn_if_wrote`
 /// to decide about, once whichever command produced it is done running.
 /// Never printed from here, and never printed from any of those callers
-/// either (`t594` fix-1, Ruling 21): at every one of those call sites the
+/// either (`t594`): at every one of those call sites the
 /// write the warning would be reporting on has not necessarily happened
 /// yet, so deciding there -- by which verb is running, `may_append`'s old
 /// mistake -- got the order backwards. Exactly one of `main.rs`'s two call
@@ -375,7 +375,7 @@ fn warn_once_if_copy(noted: &Noted) {
     eprintln!();
 }
 
-/// The single seat (`t594` fix-1, Ruling 21): called once, from `main`,
+/// The single seat (`t594`): called once, from `main`,
 /// after the command that might have written has already finished running
 /// -- never before, and never keyed by which verb ran. Warns only when
 /// this process actually wrote to a tree (`store::wrote`): a usage failure
@@ -765,8 +765,7 @@ pub struct Sharing {
 /// already does for a copy, applied here because `refuse_second_map`'s own
 /// remedy names a project by walking this list and offering `--join` on
 /// whichever one it finds first -- pointing that remedy at a folder that
-/// no longer has a tree to join is worse than saying nothing (`t594`
-/// fix-1, finding 7).
+/// no longer has a tree to join is worse than saying nothing (`t594`).
 ///
 /// Most shared repositories first, ties broken by name -- a withheld name
 /// sorts after every real one, since there is nothing to compare it
@@ -829,8 +828,7 @@ pub fn sharing_repos(store_dir: &Path, repos: &[String]) -> Vec<Sharing> {
 /// to be started in: `--join ../T` used to write that literal string into
 /// `entry.path` (`apply_sighting`), and every other reader of `path` -- a
 /// lane, `--project`, `root_of`, `find --everywhere` -- resolves it from a
-/// folder of its own, not from the one that typed it (`t594` fix-1,
-/// finding 1).
+/// folder of its own, not from the one that typed it (`t594`).
 pub fn resolve(spec: &str) -> Result<PathBuf, Failure> {
     let known = crate::store::store_dir()
         .map(|d| roots(&d))
@@ -1706,8 +1704,7 @@ mod tests {
 
     /// `resolve`'s own no-match branch, isolated from `store_dir()`: a unit
     /// test cannot set `VIVAC_HOME` without racing every other test in this
-    /// process, so this pins the pure half directly (`t594` fix-1, finding
-    /// 1).
+    /// process, so this pins the pure half directly (`t594`).
     #[test]
     fn absolute_resolves_dot_dot_lexically_against_the_current_directory() {
         let cwd = std::env::current_dir().unwrap();
@@ -1729,7 +1726,7 @@ mod tests {
     /// `sharing_repos`'s own order, pinned directly: `refuse_second_map`
     /// takes the first entry this returns to build its remedy, so which
     /// project comes first decides which name a person is told to
-    /// `--join` (`t594` fix-1, finding 7).
+    /// `--join` (`t594`).
     #[test]
     fn sharing_repos_orders_most_shared_first_then_by_name() {
         let store_dir = temp_dir("reg-sharing-order");
@@ -1780,7 +1777,7 @@ mod tests {
 
     /// A project whose folder no longer holds a tree with that project's own
     /// first event must not be offered as a `--join` remedy: the folder is
-    /// gone, or holds something else now (`t594` fix-1, finding 7).
+    /// gone, or holds something else now (`t594`).
     #[test]
     fn sharing_repos_drops_a_project_whose_folder_no_longer_holds_that_tree() {
         let store_dir = temp_dir("reg-sharing-dead");

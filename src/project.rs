@@ -24,7 +24,7 @@
 use crate::event::Event;
 use crate::failure::Failure;
 use crate::{ops, store};
-// `t594` fix-1, finding A: `web` (`src/web`) is not allowed to reach into
+// `t594`: `web` (`src/web`) is not allowed to reach into
 // `crate::store` directly (`tests/identifiers.rs`'s `web_never_touches_the_store`),
 // and it needs `Located` to build the `Whose` it hands `Registry::open`. This is
 // the one indirect path that guard already expects to survive: through the
@@ -315,9 +315,8 @@ impl Registry {
     /// `Project::write`, signs -- as `Whose::Founding`, the same as any
     /// tree nobody ran `setup` in. Getting this wrong made the resident
     /// server read `main` from a joined folder and, worse, write events
-    /// signed `main` from it (`t594` task 6, review round 1; and again in
-    /// fix-1 round 1, finding A, because `Ctx::from_events` had not caught
-    /// up to `Whose` yet).
+    /// signed `main` from it (`t594`, twice: the second time because
+    /// `Ctx::from_events` had not caught up to `Whose` yet).
     pub fn open(
         roots: Vec<PathBuf>,
         here: Option<(PathBuf, store::Located)>,
@@ -679,7 +678,7 @@ mod tests {
         std::fs::remove_dir_all(&tmp).ok();
     }
 
-    /// `t594` task 6, review round 1: the resident server used to sign every
+    /// `t594`: the resident server used to sign every
     /// project `main`, hard-coded, whether or not the folder it started in
     /// was actually that project's founding lane.
     #[test]
@@ -711,7 +710,7 @@ mod tests {
             .expect("project a is in the registry");
         assert_eq!(with_lane.ctx.lane.as_deref(), Some("01mLANE"));
 
-        // `t594` fix-1, finding E: `Whose::Founding` answers as the
+        // `t594`: `Whose::Founding` answers as the
         // founding lane outright now, `Some(lane::MAIN)`, rather than the
         // `None` `from_events` used to carry for "nobody said" -- the same
         // value `Whose::Resolved` reaches for a folder that resolved to

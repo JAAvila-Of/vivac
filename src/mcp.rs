@@ -797,8 +797,7 @@ fn call(project: &mut Project, params: &Value) -> Result<String, Failure> {
                     // foreign tree, so it reads that tree's founding
                     // lane, the same as any tree nobody ran `setup` in.
                     // Defensible and not a lie today; it stops being one
-                    // the day a foreign tree has a second lane (`t594`
-                    // task 6, review round 1).
+                    // the day a foreign tree has a second lane (`t594`).
                     let tree = index::load(&store::Store::open(foreign_root)?, false)?;
                     pretty(render::why_data(&tree, &id)?)
                 }
@@ -1003,8 +1002,7 @@ pub fn serve(root: PathBuf, located: Option<store::Located>) -> R {
     // once this process finally exits, whatever it wrote in between: this
     // server's seat for that warning is the brief, recomputed fresh on
     // every `vivac_brief` call for as long as it lives, not a one-shot
-    // echo made for a process that runs once and is gone (`t594` fix-1,
-    // Ruling 22).
+    // echo made for a process that runs once and is gone (`t594`).
     store::mark_resident();
     let mut registry = Registry::open(vec![root.clone()], located.map(|l| (root, l)))?;
     let project = registry.first();
@@ -1407,7 +1405,7 @@ mod resident_write_tests {
         cleanup(&root);
     }
 
-    /// `f608`, third time (`t594` branch-fix-1 #1): the lane used to live
+    /// `f608`, third time (`t594`): the lane used to live
     /// on the `Store` itself, and `Ctx::refold` opened a fresh one with
     /// `Store::open` -- which always started out signing `main` -- and
     /// never reapplied the lane the `Ctx` around it was actually running

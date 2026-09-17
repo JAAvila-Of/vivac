@@ -78,7 +78,7 @@ pub fn start(ctx: &mut crate::ops::Ctx, a: &Args, project: &str) -> R {
     // own resume line reads `last_vivac()` too): the tree-wide
     // `vivacs.last()` used to record a stop this session never saw,
     // whenever another lane's stop happened to sit last in the log
-    // (`t594` task 6, review round 1).
+    // (`t594`).
     let shown_vivac = ctx.tree.last_vivac().map(|v| v.id.clone());
     match ctx.lock_for_write() {
         Ok(mine) => {

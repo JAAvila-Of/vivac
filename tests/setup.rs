@@ -33,8 +33,8 @@ fn read_bytes(p: &Path) -> Vec<u8> {
 
 /// Whether `dir` holds a tree of its own: `store::already_planted`'s own
 /// definition, `config` **or** `events`, copied here rather than asked of
-/// the crate because an integration test has no `pub` path to it. `t594`
-/// fix-1, finding 4: three tests used to check `config` alone, which a
+/// the crate because an integration test has no `pub` path to it.
+/// `t594`: three tests used to check `config` alone, which a
 /// regression that planted only an `events` file would have slipped
 /// straight past.
 fn already_planted(dir: &Path) -> bool {
@@ -515,7 +515,7 @@ fn dry_run_never_regenerates_a_missing_config() {
     );
 }
 
-/// `t594` fix-2, finding 2: an already-set-up project runs into
+/// `t594`: an already-set-up project runs into
 /// `nothing_to_write` before it ever reaches `--dry-run`'s own check, and
 /// that branch notes the machine's registry (`note_registry`) -- a write
 /// `--dry-run` must never make, in the registry or anywhere else. The
@@ -740,7 +740,7 @@ fn setup_writes_the_gitignore_a_tree_from_before_lacks() {
     assert_eq!(g, "*\n");
 }
 
-/// `t594` fix-3, finding 1: a project already fully set up, and already
+/// `t594`: a project already fully set up, and already
 /// declared as a lane, whose tree still predates `t594` §4.9 -- so it
 /// never got its own `.vivac/.gitignore` -- creates that file on the very
 /// next `setup`, and the closing message has to say so, instead of
@@ -1019,7 +1019,7 @@ fn undo_in_a_subfolder_removes_only_that_folders_files() {
         "the tree above was touched by undo"
     );
     // `undo` never touches the log, checked rather than only claimed
-    // (`t594` fix-1, finding 8): both `config` and `events` stay exactly
+    // (`t594`): both `config` and `events` stay exactly
     // as the earlier `setup` left them.
     assert_eq!(
         config_after_setup,
@@ -1535,7 +1535,7 @@ fn real_git_repo(at: &Path) {
 /// leaves some files inside `.git/objects` read-only, and Windows refuses
 /// to delete a read-only file even through `remove_dir_all`. The one
 /// fixture in this file that lives outside any `Sandbox` needs this, since
-/// nothing else cleans it up if this does not (`t594` fix-1, finding 12).
+/// nothing else cleans it up if this does not (`t594`).
 ///
 /// Windows only: elsewhere `readonly` is the Unix write-permission bit
 /// clippy's `permissions_set_readonly_false` warns about clearing, but
@@ -1816,8 +1816,8 @@ fn a_product_the_registry_never_learned_about_is_not_recognized() {
 /// The negative assertion alone (`!out.contains("already tracked by
 /// project")`) does not tell "the tree-below refusal won" apart from "the
 /// registry had nothing to say regardless" -- it stayed green when the
-/// registry side of the setup below was disconnected entirely (`t594`
-/// fix-1, finding 5). The positive anchor at the end closes that: with the
+/// registry side of the setup below was disconnected entirely (`t594`).
+/// The positive anchor at the end closes that: with the
 /// tree below out of the way, this very root does get the registry's own
 /// refusal, so the first assertion is proven to distinguish the two.
 #[test]
@@ -1906,8 +1906,8 @@ fn shell_split(line: &str) -> Vec<String> {
 /// The tree already carries one `lane.declared` before this run, from the
 /// target's own `setup` declaring `main` -- so `log_before.contains(...)`
 /// alone proves nothing about *this* run's own call: replacing
-/// `declare_lane` with a no-op left this assertion green (`t594` fix-1,
-/// finding 3). The count and the joining folder's own name, neither of
+/// `declare_lane` with a no-op left this assertion green (`t594`).
+/// The count and the joining folder's own name, neither of
 /// which the pre-existing `main` declaration could satisfy, tie it to
 /// this run specifically.
 #[test]
@@ -1959,7 +1959,7 @@ fn join_by_name_declares_a_lane_and_signs_writes_with_it() {
     );
 }
 
-/// `t594` fix-1, finding 3's other half: `--lane-name` alongside `--join`
+/// `t594`'s other half: `--lane-name` alongside `--join`
 /// names the lane it declares in the *target* tree -- nothing exercised
 /// this path before, since the existing `--lane-name` test only ran
 /// against a plain plant, never against `join`.
@@ -1993,7 +1993,7 @@ fn lane_name_names_the_lane_over_join_too() {
 /// Case 2: `--join <path>` works the same way -- meaning what case 1
 /// proves for a name: the tree gains this folder's own `lane.declared`,
 /// and a write from here signs with it, never with `main`. Checking only
-/// the exit code and the lane file's existence (`t594` fix-1, finding 13)
+/// the exit code and the lane file's existence (`t594`)
 /// left "the same way" unproven: a path spec that resolved but never
 /// actually declared anything would have passed too.
 #[test]
@@ -2118,7 +2118,7 @@ fn setup_planting_in_a_folder_that_is_a_copy_warns_on_stderr() {
     // `init`, not `setup`: the tree has to reach the copy with no lane
     // declared yet, so the `setup` below has something real to write to it
     // -- the warning hangs off a write that happened and off nothing else
-    // (`t594` fix-1, Ruling 21), so a fixture where setup writes only the
+    // (`t594`), so a fixture where setup writes only the
     // harness files would prove the opposite of what it looks like.
     run_in(&original, c.global_home(), &["init"]);
     run_in(
@@ -2155,8 +2155,8 @@ fn setup_planting_in_a_folder_that_is_a_copy_warns_on_stderr() {
 }
 
 /// Case 3: `--join` to a folder with no tree refuses, and nothing is
-/// written. Only the exit code used to be checked (`t594` fix-1, finding
-/// 13); the text is what tells this refusal apart from any other exit-1
+/// written. Only the exit code used to be checked (`t594`);
+/// the text is what tells this refusal apart from any other exit-1
 /// `join` can reach.
 #[test]
 fn join_to_a_folder_with_no_tree_refuses() {
@@ -2250,7 +2250,7 @@ fn a_folder_under_a_tree_is_refused_for_the_tree_above_not_a_lane_it_has_not_got
     );
 }
 
-/// `t594` fix-1, finding 9: `--join` from the folder that holds its own
+/// `t594`: `--join` from the folder that holds its own
 /// tree used to answer with the "already a lane of another tree" text --
 /// wrong, since this folder carries no lane at all, it carries the tree.
 #[test]
@@ -2281,7 +2281,7 @@ fn join_from_the_folder_that_holds_its_own_tree_names_it_correctly() {
     );
 }
 
-/// `t594` fix-1, finding 6: with a tree above *and* a tree below, joining
+/// `t594`: with a tree above *and* a tree below, joining
 /// the one above used to skip the tree-below check entirely -- `setup` in
 /// `Work/F` joined `Work` and said nothing about `Work/F/Nested`, exactly
 /// the split product §6.4 exists to catch.
@@ -2346,7 +2346,7 @@ fn a_tree_below_refuses_a_join_too() {
     );
 }
 
-/// `t594` fix-1, finding 1 (critical): `registry::resolve` used to hand a
+/// `t594` (critical): `registry::resolve` used to hand a
 /// relative `--join` spec straight to `entry.path`, corrupting the
 /// machine registry for good -- every reader of that entry resolves it
 /// from a folder of its own, not from the one that typed `--join`.
@@ -2374,7 +2374,7 @@ fn a_relative_join_target_is_recorded_as_an_absolute_path() {
         "a relative path leaked into the machine registry: {registry}"
     );
 
-    // The corruption `t594` fix-1 finding 1 was reproduced with: `brief`
+    // The corruption `t594` was reproduced with: `brief`
     // from a subfolder of the joined folder dying on a path nobody but
     // the original `cd` could resolve.
     let nested = sub.join("deeper");
@@ -2383,7 +2383,7 @@ fn a_relative_join_target_is_recorded_as_an_absolute_path() {
     assert_eq!(brief_code, 0, "{brief_out}");
 }
 
-/// `t594` fix-1, finding 2: `--join` returned before `apply` ever ran
+/// `t594`: `--join` returned before `apply` ever ran
 /// `refuse_home_or_global_store`, so the home-folder guard lived in one
 /// branch and the other had none. Same fixture as
 /// `setup_refuses_in_the_home_folder`, with `--join` instead of a plain
@@ -2406,10 +2406,10 @@ fn join_refuses_in_the_home_folder_too() {
     assert!(!c.0.join(".vivac").join("lane").exists());
 }
 
-/// `t594` fix-1, finding 4: `--join --dry-run` used to write the lane
+/// `t594`: `--join --dry-run` used to write the lane
 /// file, declare the lane in the target tree and note the machine
 /// registry anyway -- `--dry-run` promises nothing is written by any
-/// path, and `apply`'s own promise (`t594` fix-2, finding 2) does not
+/// path, and `apply`'s own promise (`t594`) does not
 /// cover a path it never runs through.
 #[test]
 fn join_dry_run_writes_nothing() {
@@ -2441,7 +2441,7 @@ fn join_dry_run_writes_nothing() {
     );
 }
 
-/// `t594` fix-1, finding 10: a tree with no events yet used to answer on
+/// `t594`: a tree with no events yet used to answer on
 /// one long, unwrapped line, and echoed back a path this run resolved --
 /// neither is true any more.
 #[test]
@@ -2601,7 +2601,7 @@ fn a_second_join_of_the_same_tree_writes_nothing() {
 /// `--lane-name` over a second join. Asking for the name the lane already
 /// has changes nothing and says nothing extra; asking for a different one
 /// changes nothing either, and says so -- accepting a flag and quietly
-/// doing nothing with it is the mistake `t594` fix-1, finding 8 already
+/// doing nothing with it is the mistake `t594` already
 /// closed once, on the planting side.
 #[test]
 fn a_second_join_with_another_lane_name_changes_nothing_and_says_so() {
@@ -2731,7 +2731,7 @@ fn a_join_to_a_different_tree_is_still_refused_and_a_first_join_still_works() {
     );
 }
 
-/// `t594` fix-1, finding 8: `--lane-name` used to be accepted and
+/// `t594`: `--lane-name` used to be accepted and
 /// silently ignored when planting fresh -- worse than either using it or
 /// refusing it outright, since accepting a flag and doing nothing with it
 /// leaves no trace that it was ignored.
@@ -2780,7 +2780,7 @@ fn new_tree_plants_despite_a_shared_root_commit() {
 }
 
 /// Case 6: `--join` and `--new-tree` together is a usage error. Only the
-/// exit code used to be checked (`t594` fix-1, finding 13); the text is
+/// exit code used to be checked (`t594`); the text is
 /// what tells this usage error apart from any other exit-2 `setup` can
 /// give.
 #[test]
@@ -2824,7 +2824,7 @@ fn lane_name_names_the_lane() {
 /// `a_lane_name_the_guard_rejects_falls_back_without_failing`.
 ///
 /// "Falls back" was never checked -- only that the secret did not leak
-/// (`t594` fix-1, finding 13), which a run that failed outright would
+/// (`t594`), which a run that failed outright would
 /// also have satisfied. The reserve name `lane::name_for` actually writes
 /// is what proves a fallback happened rather than nothing at all.
 #[test]
