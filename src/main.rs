@@ -604,7 +604,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
     // `may_append` is checked here, once, rather than passed down: it is
     // exactly the set `write_op` below already dispatches, plus `session`
     // and `import`, which append through a path of their own. `LOADING.md`
-    // §4 "Cuándo se reescribe": a command that might write must never pay
+    // §4, on when the index is rewritten: a command that might write never pays
     // to rewrite the derived index, even though reading a warm or stale one
     // stays free either way.
     let mut ctx = if may_append(cmd) {
