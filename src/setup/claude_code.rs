@@ -447,6 +447,215 @@ fn paths(root: &Path) -> Paths {
 }
 
 // ---------------------------------------------------------------------------
+// Recognizing an existing product, before planting a second map of it:
+// `t594` §4.5, case 3 -- reached only when there is no tree above `here`
+// at all. Checked in this order because §4.5.1 describes a state of the
+// disk that has to be fixed before either of the other two questions
+// means anything: a tree below (`trees_below`), then a product this
+// machine's registry already tracks (`sharing_repos`).
+// ---------------------------------------------------------------------------
+
+/// The deepest a nested tree can sit beneath the folder being set up, the
+/// same two levels `repos::scan` fixes for a repository -- and for the
+/// same reason: it also keeps a symlink cycle from running away with the
+/// walk.
+const TREE_SCAN_DEPTH: u32 = 2;
+
+/// Every `.vivac/` holding a tree (`events` or `config`) strictly inside
+/// `folder`: the same walk `repos::scan` does over `.git` -- two levels
+/// down, never descending into a repository or into a `.vivac/` already
+/// found -- but looking for a tree instead of a repository.
+fn trees_below(folder: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    walk_for_trees(folder, 0, &mut found);
+    found.sort();
+    found
+}
+
+fn walk_for_trees(dir: &Path, depth: u32, found: &mut Vec<PathBuf>) {
+    if crate::store::already_planted(dir) {
+        found.push(dir.to_path_buf());
+        // Never descend into a tree already found: whatever sits inside
+        // it belongs to that tree, not to this walk.
+        return;
+    }
+    if dir.join(".git").exists() {
+        return;
+    }
+    if depth == TREE_SCAN_DEPTH {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut subdirs: Vec<PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .filter(|p| p.file_name().is_some_and(|n| n != crate::store::DIR))
+        .collect();
+    subdirs.sort();
+    for sub in subdirs {
+        walk_for_trees(&sub, depth + 1, found);
+    }
+}
+
+/// `path`'s own folder name, or `None` when the redaction guard rejects
+/// it: this text reaches an agent's context (`d600`), the same rule
+/// `registry::folder_name` already follows for a copy's folder.
+fn guarded_folder_name(path: &Path) -> Option<String> {
+    let name = path.file_name()?.to_string_lossy().into_owned();
+    match crate::redact::check_field("folder name", &name) {
+        Some(_) => None,
+        None => Some(name),
+    }
+}
+
+/// A folder's name, quoted, or `"another folder"` once the guard has
+/// withheld it: the one placeholder every text below falls back to,
+/// rather than three copies of the same fallback prose.
+fn label_for(name: Option<&str>) -> String {
+    match name {
+        Some(n) => format!("\"{n}\""),
+        None => "another folder".to_string(),
+    }
+}
+
+/// §6.4: a tree already sitting inside this folder. Named, unless the
+/// guard withholds a name; with two or more, the withheld ones are simply
+/// left out rather than replaced one by one.
+fn tree_below_refusal(paths: &[PathBuf]) -> Failure {
+    let names: Vec<Option<String>> = paths.iter().map(|p| guarded_folder_name(p)).collect();
+    if let [only] = names.as_slice() {
+        let label = label_for(only.as_deref());
+        return Failure::Model(format!(
+            "  There is already a tree inside this folder, in {label}.\n  \
+             Planting another one here would split this project: sessions opened in\n  \
+             {label} would use that one, and the rest this one.\n\n  \
+             Move that tree up here, then run setup again. From inside {label}:\n      \
+             vivac relocate .."
+        ));
+    }
+    let quoted: Vec<String> = names
+        .iter()
+        .filter_map(|n| n.as_deref())
+        .map(|n| format!("\"{n}\""))
+        .collect();
+    let quoted_refs: Vec<&str> = quoted.iter().map(String::as_str).collect();
+    let where_clause = if quoted_refs.is_empty() {
+        "under names this tool will not write down".to_string()
+    } else {
+        format!("in {}", join_with_and(&quoted_refs))
+    };
+    Failure::Model(format!(
+        "  There are trees inside this folder, {where_clause}.\n  \
+         vivac cannot merge trees: keep one per product, move it up here with\n  \
+         vivac relocate, and leave the others as they are."
+    ))
+}
+
+/// §6.3: this folder's own repositories already belong to a project the
+/// registry tracks. `here_repos` names the repositories printed --
+/// **this** folder's own, per `repos::scan`, never the other project's.
+fn product_registered_refusal(
+    sharing: &crate::registry::Sharing,
+    here_repos: &[crate::event::Repo],
+) -> Failure {
+    let mut repo_names: Vec<&str> = here_repos
+        .iter()
+        .filter(|r| {
+            r.root
+                .as_deref()
+                .is_some_and(|root| sharing.shared.iter().any(|s| s == root))
+        })
+        .map(|r| r.path.as_str())
+        .collect();
+    repo_names.sort_unstable();
+    let repo_list = repo_names.join(", ");
+    match &sharing.name {
+        Some(name) => Failure::Model(format!(
+            "  Some repositories here are already tracked by project \"{name}\":\n  \
+             {repo_list}.\n  \
+             Planting another tree would give this product two maps.\n\n  \
+             To work on {name} from this folder:\n      \
+             vivac setup claude-code --join {}\n  \
+             To plant a separate tree anyway:\n      \
+             vivac setup claude-code --new-tree",
+            crate::registry::quote_if_needed(name)
+        )),
+        None => Failure::Model(format!(
+            "  Some repositories here are already tracked by another project on this\n  \
+             machine: {repo_list}.\n  \
+             Planting another tree would give this product two maps.\n\n  \
+             To work on it from this folder, give the path to its folder:\n      \
+             vivac setup claude-code --join <path to that folder>\n  \
+             To plant a separate tree anyway:\n      \
+             vivac setup claude-code --new-tree"
+        )),
+    }
+}
+
+/// `t594` §4.5, case 3's own two refusals, in the order §4.5.1 fixes:
+/// trees below first, since they describe a state of the disk that has to
+/// be fixed before the product question means anything; a registered
+/// product second, unless `bypass_registered` -- `--new-tree` (`t594`
+/// §4.5's own escape for two forks that share a root commit). Only ever
+/// called when `roots.located.is_none()`: with a tree above, this is an
+/// ordinary join, and neither refusal applies.
+fn refuse_second_map(roots: &super::Roots, bypass_registered: bool) -> Result<(), Failure> {
+    if roots.located.is_some() {
+        return Ok(());
+    }
+    let below = trees_below(&roots.here);
+    if !below.is_empty() {
+        return Err(tree_below_refusal(&below));
+    }
+    if bypass_registered {
+        return Ok(());
+    }
+    let (here_repos, _excluded) = filtered_repos(crate::repos::scan(&roots.here));
+    let root_commits: Vec<String> = here_repos.iter().filter_map(|r| r.root.clone()).collect();
+    if root_commits.is_empty() {
+        return Ok(());
+    }
+    let Some(store_dir) = crate::store::store_dir() else {
+        return Ok(());
+    };
+    let best = crate::registry::sharing_repos(&store_dir, &root_commits)
+        .into_iter()
+        .find(|s| !crate::anchor::same_folder(&s.root, &roots.here));
+    match best {
+        Some(sharing) => Err(product_registered_refusal(&sharing, &here_repos)),
+        None => Ok(()),
+    }
+}
+
+/// §6.5: this folder's own tree -- freshly planted, or the closer one it
+/// just joined -- itself sits inside yet another one, found by continuing
+/// the very same upward walk past it. `t594` §4.5, case 2's own extra
+/// check: it never blocks anything, and it is checked for a fresh plant
+/// too, where it always reads `None` -- `store::locate` already walked
+/// every ancestor of `here` looking for exactly this, and found nothing,
+/// or there would be a tree above to join instead of planting.
+fn tree_root_above(tree_root: &Path) -> Option<PathBuf> {
+    let mut d = tree_root.to_path_buf();
+    while d.pop() {
+        if crate::store::already_planted(&d) {
+            return Some(d);
+        }
+    }
+    None
+}
+
+fn tree_above_warning(name: Option<&str>) -> String {
+    let label = label_for(name);
+    format!(
+        "\n  This tree sits inside another one, in folder {label}. Sessions opened\n  \
+         above this folder use that one: keep one tree per product.\n"
+    )
+}
+
+// ---------------------------------------------------------------------------
 // The lane: `t594` §4.5, joining the tree above rather than planting a
 // second one.
 // ---------------------------------------------------------------------------
@@ -768,6 +977,25 @@ fn lane_failure_with_rollback(clause: String, unrestored: &[PathBuf]) -> Failure
     Failure::Io(std::io::Error::other(message))
 }
 
+/// Every root commit any lane of `tree` has declared, deduplicated and
+/// sorted: the same union `relocate::union_repo_roots` computes, for the
+/// same reason -- `note_registry`'s own `Sighting.repos` wants every
+/// repository this tree's lanes declare, not just the one this run
+/// happens to be about, so a later `setup` elsewhere can tell that a
+/// folder it has never seen still holds this product (`t594` §4.8,
+/// `registry::Sighting.repos`'s own doc).
+fn union_repo_roots(tree: &crate::model::Tree) -> Vec<String> {
+    let mut roots: Vec<String> = tree
+        .lanes
+        .values()
+        .flat_map(|state| state.repos.iter())
+        .filter_map(|repo| repo.root.clone())
+        .collect();
+    roots.sort();
+    roots.dedup();
+    roots
+}
+
 /// Notes `tree` in this machine's registry, the same bookkeeping every
 /// ordinary command already does on its way out (`main.rs`). `setup`
 /// itself never used to reach that block -- it returns before it
@@ -789,6 +1017,12 @@ fn note_registry(roots: &super::Roots) {
                 .as_ref()
                 .map(|lane| (lane.id.as_str(), l.lane_dir.as_path()))
         });
+        // The tree is folded once more here, past whatever `plan_lane`
+        // already folded: this call always runs after every write this
+        // run makes, so it is the one place that can report the whole
+        // tree's repositories as they stand once this run is done, the
+        // same union `relocate` already writes on a move (`t594` §4.8).
+        let repos = union_repo_roots(&fold_tree(&roots.tree));
         // This call's own `Noted::Copy` reaches nobody: `check` learns of
         // a copy through its own, separate read (`registry::copy_of`), and
         // a stderr warning on every write like this one is `t594` §4.7.
@@ -798,7 +1032,7 @@ fn note_registry(roots: &super::Roots) {
             crate::registry::Sighting {
                 root: &roots.tree,
                 lane,
-                repos: None,
+                repos: Some(&repos),
             },
         );
     }
@@ -828,9 +1062,15 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     if let Some(refusal) = super::refuse_home_or_global_store(roots) {
         return Err(refusal);
     }
+    refuse_second_map(roots, false)?;
 
     let here = &roots.here;
     let tree = &roots.tree;
+    // `t594` §4.5, case 2's own extra check (§6.5): never blocks anything,
+    // so it is worked out once, up front, and printed alongside whichever
+    // of the three exits below this run actually reaches.
+    let above_warning =
+        tree_root_above(tree).map(|p| tree_above_warning(guarded_folder_name(&p).as_deref()));
     let paths = paths(here);
     let settings = read_json(&paths.settings);
     let mcp = read_json(&paths.mcp);
@@ -941,6 +1181,9 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         if log_tracked {
             print!("{TRACKED_WARNING}");
         }
+        if let Some(w) = &above_warning {
+            print!("{w}");
+        }
         return Ok(0);
     }
 
@@ -952,6 +1195,9 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         outln!("{piece_block}  Nothing to write: this project is already set up.");
         if log_tracked {
             print!("{TRACKED_WARNING}");
+        }
+        if let Some(w) = &above_warning {
+            print!("{w}");
         }
         return Ok(0);
     }
@@ -1101,6 +1347,9 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     print!("\n{}", written_text(&written));
     if log_tracked {
         print!("{TRACKED_WARNING}");
+    }
+    if let Some(w) = &above_warning {
+        print!("{w}");
     }
     Ok(0)
 }
