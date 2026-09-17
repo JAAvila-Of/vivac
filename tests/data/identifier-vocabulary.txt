@@ -41,6 +41,7 @@ allow
 allowed
 alone
 along
+alpha
 alphabet
 alphabetic
 alphanumeric
@@ -62,6 +63,7 @@ answered
 answering
 answers
 any
+anyone
 anything
 anywhere
 apart
@@ -118,6 +120,7 @@ backwards
 bad
 bare
 base
+based
 basis
 baskets
 be
@@ -133,6 +136,7 @@ being
 belongs
 below
 best
+beta
 between
 bigger
 biggest
@@ -805,6 +809,7 @@ lets
 letter
 level
 levels
+lexically
 lifts
 light
 like
@@ -884,6 +889,7 @@ measures
 mem
 merely
 message
+messy
 metadata
 method
 mid
@@ -902,6 +908,7 @@ model
 modified
 month
 more
+most
 move
 moved
 moves
@@ -927,6 +934,7 @@ needle
 needs
 negative
 neither
+nested
 net
 never
 new
@@ -1063,6 +1071,8 @@ pending
 per
 percent
 permanent
+permissions
+perms
 persist
 persists
 person
@@ -1084,6 +1094,7 @@ plain
 plan
 planned
 planted
+planting
 plants
 platform
 plural
@@ -1169,6 +1180,7 @@ read
 reader
 reading
 readme
+readonly
 reads
 real
 reason
@@ -1257,6 +1269,7 @@ required
 rescue
 rescued
 rescuing
+reserve
 resident
 resolve
 resolved

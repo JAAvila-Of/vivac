@@ -156,6 +156,18 @@ impl Failure {
                 .into(),
         )
     }
+
+    /// A folder that holds a tree of its own, told to join a different one
+    /// (`--join`). `already_a_lane`'s text would be a lie here: this folder
+    /// carries no lane to redirect, it carries the tree itself (`t594`
+    /// fix-1, finding 9).
+    pub fn already_has_a_tree() -> Failure {
+        Failure::Model(
+            "  This folder holds a tree of its own, so there is nothing to join.\n  \
+             See what it already has:  vivac brief"
+                .into(),
+        )
+    }
 }
 
 impl From<std::io::Error> for Failure {

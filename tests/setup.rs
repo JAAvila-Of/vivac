@@ -1531,6 +1531,45 @@ fn real_git_repo(at: &Path) {
     run(&["commit", "-q", "-m", "first"]);
 }
 
+/// `remove_dir_all`, but clears every file's read-only bit first: git
+/// leaves some files inside `.git/objects` read-only, and Windows refuses
+/// to delete a read-only file even through `remove_dir_all`. The one
+/// fixture in this file that lives outside any `Sandbox` needs this, since
+/// nothing else cleans it up if this does not (`t594` fix-1, finding 12).
+///
+/// Windows only: elsewhere `readonly` is the Unix write-permission bit
+/// clippy's `permissions_set_readonly_false` warns about clearing, but
+/// here it is the plain Windows attribute the same call clears for real,
+/// with no such risk.
+#[cfg(windows)]
+fn remove_git_fixture(dir: &Path) {
+    fn clear_read_only(dir: &Path) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                clear_read_only(&path);
+            } else if let Ok(metadata) = std::fs::metadata(&path) {
+                let mut perms = metadata.permissions();
+                if perms.readonly() {
+                    #[allow(clippy::permissions_set_readonly_false)]
+                    perms.set_readonly(false);
+                    let _ = std::fs::set_permissions(&path, perms);
+                }
+            }
+        }
+    }
+    clear_read_only(dir);
+    std::fs::remove_dir_all(dir).ok();
+}
+
+#[cfg(not(windows))]
+fn remove_git_fixture(dir: &Path) {
+    std::fs::remove_dir_all(dir).ok();
+}
+
 /// A second working copy of `src` that shares its root commit -- the same
 /// clue `d597` reads to recognise two folders as the same product.
 fn clone_repo(src: &Path, destination: &Path) {
@@ -1773,6 +1812,14 @@ fn a_product_the_registry_never_learned_about_is_not_recognized() {
 /// time, the refusal about the tree below wins -- `t594` §4.5.1 describes
 /// a state of the disk that has to be fixed before the product question
 /// means anything.
+///
+/// The negative assertion alone (`!out.contains("already tracked by
+/// project")`) does not tell "the tree-below refusal won" apart from "the
+/// registry had nothing to say regardless" -- it stayed green when the
+/// registry side of the setup below was disconnected entirely (`t594`
+/// fix-1, finding 5). The positive anchor at the end closes that: with the
+/// tree below out of the way, this very root does get the registry's own
+/// refusal, so the first assertion is proven to distinguish the two.
 #[test]
 fn a_tree_below_wins_over_a_registered_product() {
     let c = Sandbox::new_empty("setup-order");
@@ -1788,10 +1835,14 @@ fn a_tree_below_wins_over_a_registered_product() {
             .as_nanos()
     ));
     real_git_repo(&other_root.join("webapi"));
-    run_in(
+    let (other_out, other_code) = run_in(
         &other_root,
         c.global_home(),
         &["setup", "claude-code", "--yes"],
+    );
+    assert_eq!(
+        other_code, 0,
+        "the already-registered project never got set up: {other_out}"
     );
 
     clone_repo(&other_root.join("webapi"), &c.0.join("webapi"));
@@ -1809,7 +1860,15 @@ fn a_tree_below_wins_over_a_registered_product() {
         !out.contains("already tracked by project"),
         "the product-registered refusal must not win here: {out}"
     );
-    std::fs::remove_dir_all(&other_root).ok();
+
+    // Positive anchor: with the tree below removed, this same root does
+    // get the registry's own refusal instead of exiting 0.
+    std::fs::remove_dir_all(below.join(".vivac")).unwrap();
+    let (out2, code2) = c.run(&["setup", "claude-code", "--yes"]);
+    assert_eq!(code2, 1, "{out2}");
+    assert!(out2.contains("already tracked by project"), "{out2}");
+
+    remove_git_fixture(&other_root);
 }
 
 // ---------------------------------------------------------------------------
@@ -1843,12 +1902,22 @@ fn shell_split(line: &str) -> Vec<String> {
 /// Case 1: `--join <name>` over a registered project: the folder gains
 /// `.vivac/lane`, the tree gains a `lane.declared`, and a write from
 /// there signs with that lane -- never with `main`.
+///
+/// The tree already carries one `lane.declared` before this run, from the
+/// target's own `setup` declaring `main` -- so `log_before.contains(...)`
+/// alone proves nothing about *this* run's own call: replacing
+/// `declare_lane` with a no-op left this assertion green (`t594` fix-1,
+/// finding 3). The count and the joining folder's own name, neither of
+/// which the pre-existing `main` declaration could satisfy, tie it to
+/// this run specifically.
 #[test]
 fn join_by_name_declares_a_lane_and_signs_writes_with_it() {
     let c = Sandbox::new_empty("setup-join-name");
     let target = c.0.join("IQuorum");
     std::fs::create_dir_all(&target).unwrap();
     run_in(&target, c.global_home(), &["setup", "claude-code", "--yes"]);
+    let log_at_target = std::fs::read_to_string(target.join(".vivac").join("events")).unwrap();
+    let declared_before = log_at_target.matches("\"type\":\"lane.declared\"").count();
 
     let here = c.0.join("IQuorum-v2");
     std::fs::create_dir_all(&here).unwrap();
@@ -1864,9 +1933,14 @@ fn join_by_name_declares_a_lane_and_signs_writes_with_it() {
     );
 
     let log_before = std::fs::read_to_string(target.join(".vivac").join("events")).unwrap();
+    assert_eq!(
+        log_before.matches("\"type\":\"lane.declared\"").count(),
+        declared_before + 1,
+        "the join did not add a second lane.declared of its own: {log_before}"
+    );
     assert!(
-        log_before.contains("\"type\":\"lane.declared\""),
-        "{log_before}"
+        log_before.contains("\"name\":\"IQuorum-v2\""),
+        "the joining folder's own lane was never declared under its own name: {log_before}"
     );
 
     let (push_out, push_code) = run_in(
@@ -1885,7 +1959,43 @@ fn join_by_name_declares_a_lane_and_signs_writes_with_it() {
     );
 }
 
-/// Case 2: `--join <path>` works the same way.
+/// `t594` fix-1, finding 3's other half: `--lane-name` alongside `--join`
+/// names the lane it declares in the *target* tree -- nothing exercised
+/// this path before, since the existing `--lane-name` test only ran
+/// against a plain plant, never against `join`.
+#[test]
+fn lane_name_names_the_lane_over_join_too() {
+    let c = Sandbox::new_empty("setup-join-lane-name");
+    let target = c.0.join("IQuorum");
+    std::fs::create_dir_all(&target).unwrap();
+    run_in(&target, c.global_home(), &["setup", "claude-code", "--yes"]);
+
+    let here = c.0.join("IQuorum-v2");
+    std::fs::create_dir_all(&here).unwrap();
+    let (out, code) = run_in(
+        &here,
+        c.global_home(),
+        &[
+            "setup",
+            "claude-code",
+            "--join",
+            "IQuorum",
+            "--lane-name",
+            "custom-lane",
+        ],
+    );
+    assert_eq!(code, 0, "{out}");
+
+    let log = std::fs::read_to_string(target.join(".vivac").join("events")).unwrap();
+    assert!(log.contains("\"name\":\"custom-lane\""), "{log}");
+}
+
+/// Case 2: `--join <path>` works the same way -- meaning what case 1
+/// proves for a name: the tree gains this folder's own `lane.declared`,
+/// and a write from here signs with it, never with `main`. Checking only
+/// the exit code and the lane file's existence (`t594` fix-1, finding 13)
+/// left "the same way" unproven: a path spec that resolved but never
+/// actually declared anything would have passed too.
 #[test]
 fn join_by_path_works_the_same_way() {
     let c = Sandbox::new_empty("setup-join-path");
@@ -1903,10 +2013,27 @@ fn join_by_path_works_the_same_way() {
     );
     assert_eq!(code, 0, "{out}");
     assert!(here.join(".vivac").join("lane").exists());
+
+    let (push_out, push_code) = run_in(
+        &here,
+        c.global_home(),
+        &["push", "Work from the path-joined folder", "--why", "seed"],
+    );
+    assert_eq!(push_code, 0, "{push_out}");
+
+    let lane_id = lane_id_of(&here);
+    assert_ne!(lane_id, "main", "the joined folder signs as main itself");
+    let log_after = std::fs::read_to_string(target.join(".vivac").join("events")).unwrap();
+    assert!(
+        log_after.contains(&format!("\"lane\":\"{lane_id}\"")),
+        "the write did not sign with the joined lane:\n{log_after}"
+    );
 }
 
 /// Case 3: `--join` to a folder with no tree refuses, and nothing is
-/// written.
+/// written. Only the exit code used to be checked (`t594` fix-1, finding
+/// 13); the text is what tells this refusal apart from any other exit-1
+/// `join` can reach.
 #[test]
 fn join_to_a_folder_with_no_tree_refuses() {
     let c = Sandbox::new_empty("setup-join-no-tree");
@@ -1920,6 +2047,10 @@ fn join_to_a_folder_with_no_tree_refuses() {
         &["setup", "claude-code", "--join", &empty_target],
     );
     assert_eq!(code, 1, "{out}");
+    assert!(
+        out.contains("has no tree yet, so there is nothing to join."),
+        "{out}"
+    );
     assert!(!here.join(".vivac").exists());
 }
 
@@ -1956,6 +2087,208 @@ fn join_from_a_folder_already_a_lane_of_another_tree_refuses() {
     );
 }
 
+/// `t594` fix-1, finding 9: `--join` from the folder that holds its own
+/// tree used to answer with the "already a lane of another tree" text --
+/// wrong, since this folder carries no lane at all, it carries the tree.
+#[test]
+fn join_from_the_folder_that_holds_its_own_tree_names_it_correctly() {
+    // Two sibling folders, neither nested inside the other: `here` must
+    // hold a tree of its own, not be a lane `store::locate` resolves up
+    // into some other tree -- which is exactly what nesting it inside a
+    // seeded sandbox would have done.
+    let c = Sandbox::new_empty("setup-join-own-tree");
+    let here = c.0.join("HasATree");
+    std::fs::create_dir_all(&here).unwrap();
+    run_in(&here, c.global_home(), &["setup", "claude-code", "--yes"]);
+
+    let other = c.0.join("Other");
+    std::fs::create_dir_all(&other).unwrap();
+    run_in(&other, c.global_home(), &["setup", "claude-code", "--yes"]);
+
+    let (out, code) = run_in(
+        &here,
+        c.global_home(),
+        &["setup", "claude-code", "--join", "Other"],
+    );
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("This folder holds a tree of its own"), "{out}");
+    assert!(
+        !out.contains("already a lane of another tree"),
+        "the wrong text is still shown: {out}"
+    );
+}
+
+/// `t594` fix-1, finding 6: with a tree above *and* a tree below, joining
+/// the one above used to skip the tree-below check entirely -- `setup` in
+/// `Work/F` joined `Work` and said nothing about `Work/F/Nested`, exactly
+/// the split product §6.4 exists to catch.
+#[test]
+fn a_tree_below_refuses_even_when_there_is_one_above() {
+    let c = Sandbox::new_empty("setup-below-and-above");
+    let work = c.0.join("Work");
+    let f = work.join("F");
+    let nested = f.join("Nested");
+    std::fs::create_dir_all(&nested).unwrap();
+    run_in(&work, c.global_home(), &["init"]);
+    run_in(&nested, c.global_home(), &["init"]);
+
+    let (out, code) = run_in(&f, c.global_home(), &["setup", "claude-code", "--yes"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        out.contains("There is already a tree inside this folder, in \"Nested\"."),
+        "{out}"
+    );
+    assert!(
+        !f.join(".vivac").exists(),
+        "F must not have joined Work despite the tree below"
+    );
+}
+
+/// `t594` fix-1, finding 1 (critical): `registry::resolve` used to hand a
+/// relative `--join` spec straight to `entry.path`, corrupting the
+/// machine registry for good -- every reader of that entry resolves it
+/// from a folder of its own, not from the one that typed `--join`.
+#[test]
+fn a_relative_join_target_is_recorded_as_an_absolute_path() {
+    let c = Sandbox::new_empty("setup-join-relative-target");
+    let target = c.0.join("T");
+    std::fs::create_dir_all(&target).unwrap();
+    run_in(&target, c.global_home(), &["setup", "claude-code", "--yes"]);
+
+    let here = c.0.join("F");
+    let sub = here.join("sub");
+    std::fs::create_dir_all(&sub).unwrap();
+
+    let (out, code) = run_in(
+        &sub,
+        c.global_home(),
+        &["setup", "claude-code", "--join", "../../T"],
+    );
+    assert_eq!(code, 0, "{out}");
+
+    let registry = std::fs::read_to_string(c.global_home().join("projects")).unwrap();
+    assert!(
+        !registry.contains(".."),
+        "a relative path leaked into the machine registry: {registry}"
+    );
+
+    // The corruption `t594` fix-1 finding 1 was reproduced with: `brief`
+    // from a subfolder of the joined folder dying on a path nobody but
+    // the original `cd` could resolve.
+    let nested = sub.join("deeper");
+    std::fs::create_dir_all(&nested).unwrap();
+    let (brief_out, brief_code) = run_in(&nested, c.global_home(), &["brief"]);
+    assert_eq!(brief_code, 0, "{brief_out}");
+}
+
+/// `t594` fix-1, finding 2: `--join` returned before `apply` ever ran
+/// `refuse_home_or_global_store`, so the home-folder guard lived in one
+/// branch and the other had none. Same fixture as
+/// `setup_refuses_in_the_home_folder`, with `--join` instead of a plain
+/// setup.
+#[test]
+fn join_refuses_in_the_home_folder_too() {
+    let c = Sandbox::new_empty("setup-join-home");
+    let target = c.0.join("T");
+    std::fs::create_dir_all(&target).unwrap();
+    run_in(&target, c.global_home(), &["setup", "claude-code", "--yes"]);
+
+    let (out, code) = run_with_home(
+        &c.0,
+        &c.0,
+        c.global_home(),
+        &["setup", "claude-code", "--join", "T"],
+    );
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains(&home_folder_text(&printed(&c.0))), "{out}");
+    assert!(!c.0.join(".vivac").join("lane").exists());
+}
+
+/// `t594` fix-1, finding 4: `--join --dry-run` used to write the lane
+/// file, declare the lane in the target tree and note the machine
+/// registry anyway -- `--dry-run` promises nothing is written by any
+/// path, and `apply`'s own promise (`t594` fix-2, finding 2) does not
+/// cover a path it never runs through.
+#[test]
+fn join_dry_run_writes_nothing() {
+    let c = Sandbox::new_empty("setup-join-dry-run");
+    let target = c.0.join("T");
+    std::fs::create_dir_all(&target).unwrap();
+    run_in(&target, c.global_home(), &["setup", "claude-code", "--yes"]);
+    let log_before = std::fs::read_to_string(target.join(".vivac").join("events")).unwrap();
+    let registry_before = std::fs::read_to_string(c.global_home().join("projects")).unwrap();
+
+    let here = c.0.join("F");
+    std::fs::create_dir_all(&here).unwrap();
+
+    let (out, code) = run_in(
+        &here,
+        c.global_home(),
+        &["setup", "claude-code", "--join", "T", "--dry-run"],
+    );
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("Nothing written: --dry-run."), "{out}");
+    assert!(!here.join(".vivac").exists(), "the lane file was written");
+
+    let log_after = std::fs::read_to_string(target.join(".vivac").join("events")).unwrap();
+    assert_eq!(log_before, log_after, "the target tree's own log changed");
+    let registry_after = std::fs::read_to_string(c.global_home().join("projects")).unwrap();
+    assert_eq!(
+        registry_before, registry_after,
+        "the machine registry changed"
+    );
+}
+
+/// `t594` fix-1, finding 10: a tree with no events yet used to answer on
+/// one long, unwrapped line, and echoed back a path this run resolved --
+/// neither is true any more.
+#[test]
+fn join_to_a_tree_with_no_events_yet_wraps_and_names_nothing() {
+    let c = Sandbox::new_empty("setup-join-no-events");
+    let target = c.0.join("Empty");
+    std::fs::create_dir_all(target.join(".vivac")).unwrap();
+    std::fs::write(target.join(".vivac").join("events"), "").unwrap();
+
+    let here = c.0.join("F");
+    std::fs::create_dir_all(&here).unwrap();
+    let target_str = target.to_string_lossy().into_owned();
+
+    let (out, code) = run_in(
+        &here,
+        c.global_home(),
+        &["setup", "claude-code", "--join", &target_str],
+    );
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        out.contains("That tree has no events yet, so there is nothing to join:"),
+        "{out}"
+    );
+    assert!(
+        !out.contains(&target_str),
+        "the path was echoed back into the message: {out}"
+    );
+    assert!(!here.join(".vivac").exists());
+}
+
+/// `t594` fix-1, finding 8: `--lane-name` used to be accepted and
+/// silently ignored when planting fresh -- worse than either using it or
+/// refusing it outright, since accepting a flag and doing nothing with it
+/// leaves no trace that it was ignored.
+#[test]
+fn lane_name_names_main_when_planting_fresh_too() {
+    let c = Sandbox::new_empty("setup-lane-name-fresh-plant");
+    let (out, code) = c.run(&[
+        "setup",
+        "claude-code",
+        "--yes",
+        "--lane-name",
+        "custom-name",
+    ]);
+    assert_eq!(code, 0, "{out}");
+    let log = c.log();
+    assert!(log.contains("\"name\":\"custom-name\""), "{log}");
+}
+
 /// Case 5: `--new-tree` plants despite a shared root commit -- the
 /// negative of 1.3 shown first, without it.
 #[test]
@@ -1985,12 +2318,19 @@ fn new_tree_plants_despite_a_shared_root_commit() {
     assert!(already_planted(&second));
 }
 
-/// Case 6: `--join` and `--new-tree` together is a usage error.
+/// Case 6: `--join` and `--new-tree` together is a usage error. Only the
+/// exit code used to be checked (`t594` fix-1, finding 13); the text is
+/// what tells this usage error apart from any other exit-2 `setup` can
+/// give.
 #[test]
 fn join_and_new_tree_together_is_a_usage_error() {
     let c = Sandbox::new_empty("setup-join-new-tree-exclusive");
     let (out, code) = c.run(&["setup", "claude-code", "--join", "X", "--new-tree"]);
     assert_eq!(code, 2, "{out}");
+    assert!(
+        out.contains("--join joins a tree that already exists, and --new-tree plants a"),
+        "{out}"
+    );
 }
 
 /// Case 7, first half: `--lane-name` names the lane.
@@ -2021,6 +2361,11 @@ fn lane_name_names_the_lane() {
 /// reaches the log. The same literal secret is pinned directly against
 /// the guard by `relocate.rs`'s own
 /// `a_lane_name_the_guard_rejects_falls_back_without_failing`.
+///
+/// "Falls back" was never checked -- only that the secret did not leak
+/// (`t594` fix-1, finding 13), which a run that failed outright would
+/// also have satisfied. The reserve name `lane::name_for` actually writes
+/// is what proves a fallback happened rather than nothing at all.
 #[test]
 fn a_lane_name_the_guard_rejects_falls_back_without_failing() {
     let secret = "ghp_16C7e42F292c6912E7710c838347Ae178B4a";
@@ -2039,6 +2384,13 @@ fn a_lane_name_the_guard_rejects_falls_back_without_failing() {
     assert!(
         !log.contains("16C7e42F292c6912E7710c838347Ae178B4a"),
         "a fragment of the secret leaked: {log}"
+    );
+
+    let lane_id = lane_id_of(&second);
+    let reserve_name = format!("lane-{}", &lane_id[..lane_id.len().min(4)]);
+    assert!(
+        log.contains(&format!("\"name\":\"{reserve_name}\"")),
+        "the reserve name never appeared, so no fallback is proven: {log}"
     );
 }
 

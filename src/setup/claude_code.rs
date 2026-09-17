@@ -29,8 +29,16 @@ pub fn run(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     if a.has("undo") {
         return undo(&roots.here, a);
     }
+    // Checked here, before the branch below, rather than inside `apply`
+    // alone: a guard that lives in one branch is a guard the other branch
+    // does not have, and `--join` used to skip it entirely (`t594` fix-1,
+    // finding 2). `--undo` is still excluded, on purpose: undoing whatever
+    // an earlier setup wrote there is always safe.
+    if let Some(refusal) = super::refuse_home_or_global_store(roots) {
+        return Err(refusal);
+    }
     if let Some(spec) = a.opt("join") {
-        return join(roots, spec, a.opt("lane-name"));
+        return join(roots, spec, a.opt("lane-name"), a.has("dry-run"));
     }
     apply(roots, a)
 }
@@ -467,12 +475,37 @@ const TREE_SCAN_DEPTH: u32 = 2;
 /// Every `.vivac/` holding a tree (`events` or `config`) strictly inside
 /// `folder`: the same walk `repos::scan` does over `.git` -- two levels
 /// down, never descending into a repository or into a `.vivac/` already
-/// found -- but looking for a tree instead of a repository.
+/// found -- but looking for a tree instead of a repository, and never
+/// checking `folder` itself. That last part used to be unreachable rather
+/// than absent: the only caller skipped calling this at all once `folder`
+/// already had a tree of its own. `t594` fix-1, finding 6 made that call
+/// reachable, and it surfaced the gap -- calling this on a folder that
+/// already holds a tree used to report the folder itself as a tree
+/// sitting "below" it.
 fn trees_below(folder: &Path) -> Vec<PathBuf> {
     let mut found = Vec::new();
-    walk_for_trees(folder, 0, &mut found);
+    for sub in child_folders(folder) {
+        walk_for_trees(&sub, 1, &mut found);
+    }
     found.sort();
     found
+}
+
+/// `dir`'s own immediate subdirectories, `.vivac/` excluded, in a fixed
+/// order: the one piece `trees_below` and `walk_for_trees`'s own
+/// recursive step both need.
+fn child_folders(dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut subdirs: Vec<PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .filter(|p| p.file_name().is_some_and(|n| n != crate::store::DIR))
+        .collect();
+    subdirs.sort();
+    subdirs
 }
 
 fn walk_for_trees(dir: &Path, depth: u32, found: &mut Vec<PathBuf>) {
@@ -488,17 +521,7 @@ fn walk_for_trees(dir: &Path, depth: u32, found: &mut Vec<PathBuf>) {
     if depth == TREE_SCAN_DEPTH {
         return;
     }
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    let mut subdirs: Vec<PathBuf> = entries
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.is_dir())
-        .filter(|p| p.file_name().is_some_and(|n| n != crate::store::DIR))
-        .collect();
-    subdirs.sort();
-    for sub in subdirs {
+    for sub in child_folders(dir) {
         walk_for_trees(&sub, depth + 1, found);
     }
 }
@@ -598,20 +621,27 @@ fn product_registered_refusal(
     }
 }
 
-/// `t594` §4.5, case 3's own two refusals, in the order §4.5.1 fixes:
-/// trees below first, since they describe a state of the disk that has to
-/// be fixed before the product question means anything; a registered
-/// product second, unless `bypass_registered` -- `--new-tree` (`t594`
-/// §4.5's own escape for two forks that share a root commit). Only ever
-/// called when `roots.located.is_none()`: with a tree above, this is an
-/// ordinary join, and neither refusal applies.
+/// `t594` §4.5, case 3's own two refusals, in the order §4.5.1 fixes: trees
+/// below first, since they describe a state of the disk that has to be
+/// fixed before either the product question or "plant or join" means
+/// anything; a registered product second, unless `bypass_registered` --
+/// `--new-tree` (`t594` §4.5's own escape for two forks that share a root
+/// commit) -- and only when there is no tree above `here` at all, since
+/// with one this is an ordinary join and the product question does not
+/// arise.
+///
+/// Trees below run in both branches (`t594` fix-1, finding 6): a tree
+/// above `here` used to make this return before ever calling
+/// `trees_below`, so joining the closer tree above silently ignored a
+/// tree sitting below `here` too -- exactly the split product §6.4 exists
+/// to catch, just reached by joining instead of planting.
 fn refuse_second_map(roots: &super::Roots, bypass_registered: bool) -> Result<(), Failure> {
-    if roots.located.is_some() {
-        return Ok(());
-    }
     let below = trees_below(&roots.here);
     if !below.is_empty() {
         return Err(tree_below_refusal(&below));
+    }
+    if roots.located.is_some() {
+        return Ok(());
     }
     if bypass_registered {
         return Ok(());
@@ -776,9 +806,14 @@ fn plan_lane(roots: &super::Roots, lane_name: Option<&str>) -> LanePlan {
         .unwrap_or_default();
     // `--lane-name` (`t594` §4.5's own `--lane-name <name>`), or this
     // folder's own name when nobody named it: the word `declared_name`
-    // guards below either way. `main` is never renamed by this -- it is
-    // as opaque as a ULID (`lane::MAIN`'s own doc), and `main_lane`
-    // never reads either of these.
+    // guards below either way, for every lane but `main`. `main_lane`
+    // reads `lane_name` directly instead, below, never falling back to
+    // this folder's own name the way every other lane does: `main` stays
+    // as opaque as a ULID when nobody asks to rename it (`lane::MAIN`'s
+    // own doc), but accepting `--lane-name` and silently doing nothing
+    // with it -- §2.3 names both planting and joining -- would be worse
+    // than either using it or refusing it outright (`t594` fix-1, finding
+    // 8).
     let requested_name = lane_name.unwrap_or(&folder_name);
     let here_has_its_own_vivac = roots
         .located
@@ -792,9 +827,9 @@ fn plan_lane(roots: &super::Roots, lane_name: Option<&str>) -> LanePlan {
     let folded = fold_tree(&roots.tree);
 
     let (lane_id, name, is_new) = match &roots.located {
-        None => main_lane(),
+        None => main_lane(lane_name),
         Some(l) if here_has_its_own_vivac && l.lane.is_none() && !folded.main_claimed => {
-            main_lane()
+            main_lane(lane_name)
         }
         Some(l) if here_has_its_own_vivac && l.lane.is_none() => {
             let id = crate::lane::new_id();
@@ -830,12 +865,16 @@ fn plan_lane(roots: &super::Roots, lane_name: Option<&str>) -> LanePlan {
     }
 }
 
-fn main_lane() -> (String, String, bool) {
-    (
-        crate::lane::MAIN.to_string(),
-        crate::lane::MAIN.to_string(),
-        false,
-    )
+/// `main`'s id never changes, and neither does its name, unless
+/// `lane_name` explicitly asks for one -- never a fallback to this
+/// folder's own name, the way every other lane gets one (`t594` fix-1,
+/// finding 8).
+fn main_lane(lane_name: Option<&str>) -> (String, String, bool) {
+    let name = match lane_name {
+        Some(requested) => crate::lane::declared_name(crate::lane::MAIN, requested),
+        None => crate::lane::MAIN.to_string(),
+    };
+    (crate::lane::MAIN.to_string(), name, false)
 }
 
 /// The tree's own first event id, seeding one when there is none: a brand
@@ -1075,7 +1114,12 @@ fn wrapped_piece_line(label: &str, first: &str, second: &str) -> String {
 /// `spec`, printed back exactly as typed when the tree it names cannot be
 /// joined: a person's own words, the same reasoning `relocate`'s own
 /// destination is printed under -- not a path this tool went looking for.
-fn join(roots: &super::Roots, spec: &str, lane_name: Option<&str>) -> Result<i32, Failure> {
+fn join(
+    roots: &super::Roots,
+    spec: &str,
+    lane_name: Option<&str>,
+    dry_run: bool,
+) -> Result<i32, Failure> {
     let target = crate::registry::resolve(spec)?;
     if !crate::store::already_planted(&target) {
         return Err(Failure::Model(format!(
@@ -1085,17 +1129,28 @@ fn join(roots: &super::Roots, spec: &str, lane_name: Option<&str>) -> Result<i32
     }
     // §4.5: refuses when this folder already is a lane of *another* tree --
     // rejoining the very one it already resolves to is left alone, since
-    // that is only a redeclaration.
+    // that is only a redeclaration. A folder that holds a tree of its own
+    // gets a different text: it carries no lane to redirect, it carries
+    // the tree (`t594` fix-1, finding 9).
     if let Some(l) = &roots.located {
         if !crate::anchor::same_folder(&l.root, &target) {
+            if crate::anchor::same_folder(&roots.here, &l.root) {
+                return Err(Failure::already_has_a_tree());
+            }
             return Err(Failure::already_a_lane());
         }
     }
+    // Never `spec`, and never `target` either (`t594` fix-1, finding 10):
+    // unlike the "no tree yet" refusal above, this is the one place `join`
+    // would otherwise echo a path back that a person did not necessarily
+    // type themselves -- `spec` might have resolved through a project
+    // name, not a path at all.
     let Some(project) = crate::store::first_event_id(&target) else {
-        return Err(Failure::Model(format!(
-            "  \"{spec}\" has a tree with no events yet, so there is nothing to \
-             join: it has no identity yet for a lane to point back at."
-        )));
+        return Err(Failure::Model(
+            "  That tree has no events yet, so there is nothing to join: it has\n  \
+             no identity yet for a lane to point back at."
+                .to_string(),
+        ));
     };
 
     let id = crate::lane::new_id();
@@ -1106,6 +1161,20 @@ fn join(roots: &super::Roots, spec: &str, lane_name: Option<&str>) -> Result<i32
         .unwrap_or_default();
     let name = crate::lane::declared_name(&id, lane_name.unwrap_or(&folder_name));
     let (repos, _excluded) = filtered_repos(crate::repos::scan(&roots.here));
+
+    // `--dry-run` promises nothing is written by any path (`t594` fix-2,
+    // finding 2 restored that for `apply`; `--join` reopened it, `t594`
+    // fix-1, finding 4): nothing below this point runs.
+    if dry_run {
+        match crate::registry::folder_name(&target) {
+            Some(name) => outln!("  This folder would become a lane of the tree in \"{name}\"."),
+            None => {
+                outln!("  This folder would become a lane of a tree elsewhere on this machine.")
+            }
+        }
+        outln!("  Nothing written: --dry-run.");
+        return Ok(0);
+    }
 
     // The file first, unlocked, then the event under the target's own
     // lock: the same order `write_lane` already follows and the same
@@ -1164,9 +1233,9 @@ fn join(roots: &super::Roots, spec: &str, lane_name: Option<&str>) -> Result<i32
 // ---------------------------------------------------------------------------
 
 fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
-    if let Some(refusal) = super::refuse_home_or_global_store(roots) {
-        return Err(refusal);
-    }
+    // `run` already refused the home folder and the global store before
+    // reaching here (`t594` fix-1, finding 2): both guards used to live in
+    // this function alone, which is exactly what let `--join` skip them.
     refuse_second_map(roots, a.has("new-tree"))?;
 
     let here = &roots.here;
@@ -2031,6 +2100,35 @@ fn remove_if_empty(dir: Option<&Path>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `tree_below_refusal`'s own fallback for two or more trees below
+    /// whose names the redaction guard withholds entirely: unspecified by
+    /// `t594` §1.2, which only names the plural form's shape, not what it
+    /// says once nothing is nameable at all -- so it earns its keep by
+    /// having a test rather than by being removed (`t594` fix-1, finding
+    /// 11).
+    #[test]
+    fn tree_below_refusal_with_every_name_withheld_says_so_without_naming_anyone() {
+        let secret_a = "someone@example.com";
+        let secret_b = "other@example.com";
+        assert!(
+            crate::redact::check_field("folder name", secret_a).is_some(),
+            "the guard must actually reject this name, or the test proves nothing"
+        );
+        let paths = vec![
+            PathBuf::from("/tmp").join(secret_a),
+            PathBuf::from("/tmp").join(secret_b),
+        ];
+
+        let msg = tree_below_refusal(&paths).message();
+
+        assert!(
+            msg.contains("under names this tool will not write down"),
+            "{msg}"
+        );
+        assert!(!msg.contains(secret_a), "{msg}");
+        assert!(!msg.contains(secret_b), "{msg}");
+    }
 
     #[test]
     fn is_vivac_command_strips_quotes_path_and_extension() {

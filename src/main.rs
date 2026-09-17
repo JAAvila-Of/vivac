@@ -128,7 +128,7 @@ const USAGE: &str = r#"vivac - provenance of work
 
   Getting started
 
-    vivac setup claude-code [--dry-run] [--yes] [--undo]
+    vivac setup claude-code [--dry-run] [--yes] [--undo] [--lane-name <name>]
                                               write what Claude Code needs here:
                                               hooks, the MCP server, a skill
     vivac setup claude-code --join <name|path> [--lane-name <name>]
