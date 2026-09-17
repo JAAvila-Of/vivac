@@ -1506,14 +1506,17 @@ fn a_worktree_named_a_secret_never_writes_it_to_the_log() {
 // own doors rather than a worktree's.
 // ---------------------------------------------------------------------------
 
-/// The `id` of line 1 of `root/.vivac/events`, the same way `first_event_id`
-/// above reads it off a `Sandbox`, for a tree this test builds by hand
-/// instead.
-fn first_event_id_at(root: &Path) -> String {
-    let text = std::fs::read_to_string(root.join(".vivac").join("events")).unwrap();
-    let line = text.lines().next().expect("the log has a first line");
-    let v: serde_json::Value = serde_json::from_str(line).unwrap();
-    v["id"].as_str().expect("an event has an id").to_string()
+/// Removes its path when dropped, whether the test that made it passed or
+/// panicked. The folders below sit outside every `Sandbox`, so nothing else
+/// sweeps them up, and one of them is a junction or a symlink rather than a
+/// directory -- a failed assertion must leave neither behind on the machine
+/// that ran the suite.
+struct RemoveOnDrop(PathBuf);
+
+impl Drop for RemoveOnDrop {
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(&self.0).ok();
+    }
 }
 
 /// `f612`, closed once in `anchor::same_folder`'s own canonicalize fallback
@@ -1527,6 +1530,8 @@ fn first_event_id_at(root: &Path) -> String {
 fn relocate_and_join_treat_two_spellings_of_the_same_folder_as_one() {
     let home = unique("f612-home");
     let real = unique("f612-real");
+    let _home = RemoveOnDrop(home.clone());
+    let _real = RemoveOnDrop(real.clone());
     std::fs::create_dir_all(&real).unwrap();
     let (init_out, init_code) = run(&real, &home, &["init"]);
     assert_eq!(init_code, 0, "{init_out}");
@@ -1538,29 +1543,36 @@ fn relocate_and_join_treat_two_spellings_of_the_same_folder_as_one() {
     // hard failure is loud without a flag, on every platform this suite
     // actually runs on.
     let alias = unique("f612-alias");
+    let _alias = RemoveOnDrop(alias.clone());
     assert!(
         make_second_spelling(&alias, &real),
         "this platform offers no second spelling of the same folder here -- no \
          8.3 alias, and this account cannot create a junction or a symlink"
     );
 
-    // `--join`, reached through the alias: a lane already pointing at
-    // `real` has to be recognised as already pointing at the very tree
-    // the alias names too, not refused as though it named another one.
+    // Two real joins, the first by the plain spelling and the second
+    // through the alias: the lane the first one minted has to be
+    // recognised as already pointing at the very tree the alias names,
+    // not refused as though the alias named another tree and not
+    // re-declared under a fresh id either.
     //
-    // `write_lane` below fabricates `.vivac/lane` by hand rather than
-    // running `setup --join` twice against a folder that already
-    // joined once: a real second join is `t594`'s own next round,
-    // parked on purpose (already reproduced -- it mints a fresh lane
-    // id instead of recognising the folder as already joined). What
-    // this proves is narrower: that `--join`, reached through a second
-    // spelling of the target, does not refuse it as a *different*
-    // tree. It does not prove two joins of the very same folder
-    // collapse into one lane.
-    let project = first_event_id_at(&real);
+    // This used to fabricate `.vivac/lane` by hand instead, because a
+    // real second join minted a new id and left the first one orphaned
+    // whichever spelling it came through -- so the fixture could only
+    // prove the narrower half, that the alias is not read as a
+    // different tree. It proves both now.
     let lane_dir = unique("f612-lane");
+    let _lane_dir = RemoveOnDrop(lane_dir.clone());
     std::fs::create_dir_all(&lane_dir).unwrap();
-    write_lane(&lane_dir, &project);
+    let (first_out, first_code) = run(
+        &lane_dir,
+        &home,
+        &["setup", "claude-code", "--join", real.to_str().unwrap()],
+    );
+    assert_eq!(first_code, 0, "{first_out}");
+    let id_before = lane_id_of(&lane_dir);
+    let log_before = std::fs::read_to_string(real.join(".vivac").join("events")).unwrap();
+
     let (join_out, join_code) = run(
         &lane_dir,
         &home,
@@ -1570,6 +1582,23 @@ fn relocate_and_join_treat_two_spellings_of_the_same_folder_as_one() {
     assert!(
         !says(&join_out, "This folder is already a lane of another tree"),
         "the alias was read as a different tree from --join:\n{join_out}"
+    );
+    assert!(
+        says(
+            &join_out,
+            "This folder is already a lane of that tree, and setup changed nothing in it."
+        ),
+        "the alias was not recognised as the tree this folder already joined:\n{join_out}"
+    );
+    assert_eq!(
+        id_before,
+        lane_id_of(&lane_dir),
+        "joining through the alias minted a second lane id"
+    );
+    assert_eq!(
+        log_before,
+        std::fs::read_to_string(real.join(".vivac").join("events")).unwrap(),
+        "joining through the alias wrote to the tree's own log"
     );
 
     // `relocate`, given the alias as its own destination: the same
@@ -1585,11 +1614,6 @@ fn relocate_and_join_treat_two_spellings_of_the_same_folder_as_one() {
         ),
         "the alias was read as a different destination from relocate:\n{reloc_out}"
     );
-
-    std::fs::remove_dir_all(&real).ok();
-    std::fs::remove_dir_all(&alias).ok();
-    std::fs::remove_dir_all(&lane_dir).ok();
-    std::fs::remove_dir_all(&home).ok();
 }
 
 // ---------------------------------------------------------------------------

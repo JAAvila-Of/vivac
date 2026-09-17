@@ -1151,8 +1151,8 @@ fn join(
         )));
     }
     // §4.5: refuses when this folder already is a lane of *another* tree --
-    // rejoining the very one it already resolves to is left alone, since
-    // that is only a redeclaration. A folder that holds a tree of its own
+    // joining the very one it already resolves to does nothing at all, since
+    // there is nothing left to do. A folder that holds a tree of its own
     // gets a different text: it carries no lane to redirect, it carries
     // the tree (`t594` fix-1, finding 9).
     if let Some(l) = &roots.located {
@@ -1166,10 +1166,21 @@ fn join(
             // simply resolves up into the tree above it, which is a
             // different sentence -- `already_a_lane` names a file that
             // folder does not have.
-            if l.lane.is_some() && crate::anchor::same_folder(&l.lane_dir, &roots.here) {
+            if lane_carried_by(l, &roots.here).is_some() {
                 return Err(Failure::already_a_lane());
             }
             return Err(tree_above_refusal(&l.root));
+        }
+        // The same tree, and this folder already carries the lane file
+        // that says so: everything below would mint a second lane id for
+        // a folder that already has one, orphaning the stack, the focus
+        // and the counters the first one holds. Nothing is written and
+        // nothing is appended, so this returns ahead of `--dry-run` too:
+        // what that flag reports is what a run would do, and this run
+        // would do nothing either way.
+        if let Some(id) = lane_carried_by(l, &roots.here) {
+            say_nothing_was_done(&target, id, lane_name);
+            return Ok(0);
         }
     }
     // Never `spec`, and never `target` either (`t594` fix-1, finding 10):
@@ -1262,6 +1273,48 @@ fn join(
     outln!("  The nodes and their numbering are the product's; the stack, the focus");
     outln!("  and the last stop are this folder's.");
     Ok(0)
+}
+
+/// The id of the lane `here` itself is, or `None` for a folder that merely
+/// resolves up into a tree above it. The one criterion, asked in the two
+/// places `join` needs it: a lane file, carried by this folder rather than
+/// by some ancestor. `same_folder`, never a path compared as text -- a
+/// second spelling of the same folder is the same folder (`f612`).
+fn lane_carried_by<'a>(l: &'a crate::store::Located, here: &Path) -> Option<&'a str> {
+    let lane = l.lane.as_ref()?;
+    crate::anchor::same_folder(&l.lane_dir, here).then_some(lane.id.as_str())
+}
+
+/// What a person learns from a `--join` that had nothing left to do: that
+/// it is done already, and that this run left it alone. It reads as an
+/// answer rather than as a refusal because a re-run of the provisioning a
+/// team shares is the ordinary way to arrive here -- the same reason a
+/// plain `setup` run twice says the tree was already there.
+///
+/// The second sentence is for `--lane-name` asking for a name the lane
+/// does not have: the flag was read and not acted on, and a flag accepted
+/// in silence leaves nothing behind to say it was ignored (`t594` fix-1,
+/// finding 8). Asking for the name it already carries needs no sentence --
+/// nothing was left undone. The tree is folded only for that question, so
+/// a run without the flag reads no log at all.
+fn say_nothing_was_done(target: &Path, lane_id: &str, lane_name: Option<&str>) {
+    outln!("  This folder is already a lane of that tree, and setup changed nothing in it.");
+    let Some(requested) = lane_name else {
+        return;
+    };
+    // `declared_name` is what the name would have become had it been
+    // written, redaction guard and all (`d600`): comparing the raw request
+    // instead would report a difference the write itself would have
+    // collapsed.
+    let requested = crate::lane::declared_name(lane_id, requested);
+    let current = fold_tree(target)
+        .lanes
+        .get(lane_id)
+        .map(|s| s.name.clone())
+        .unwrap_or_default();
+    if current != requested {
+        outln!("  The lane name it already has was left as it is.");
+    }
 }
 
 // ---------------------------------------------------------------------------

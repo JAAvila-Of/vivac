@@ -2472,6 +2472,265 @@ fn join_to_a_tree_with_no_events_yet_wraps_and_names_nothing() {
     assert!(!here.join(".vivac").exists());
 }
 
+// ---------------------------------------------------------------------------
+// `--join` run a second time against the tree this folder already is a lane
+// of. It used to mint a fresh lane id and declare it, leaving the id the
+// folder had been signing with orphaned in the log: the stack, the focus and
+// the counters all hang off that id, and none of them resolve any more.
+// ---------------------------------------------------------------------------
+
+/// The whole of it, said once: nothing happened, and that is the answer.
+const ALREADY_THAT_TREE: &str =
+    "This folder is already a lane of that tree, and setup changed nothing in it.";
+
+/// The second line, for the one case where something was asked for and not
+/// done: a flag accepted in silence is what this product does not do.
+const LANE_NAME_LEFT: &str = "The lane name it already has was left as it is.";
+
+/// Everything a second join has to leave exactly as it found it, read off
+/// disk: the id this folder signs with, the target tree's whole log, and
+/// the machine registry.
+fn join_state(here: &Path, target: &Path, home: &Path) -> (String, String, String) {
+    (
+        lane_id_of(here),
+        read(&target.join(".vivac").join("events")),
+        read(&home.join("projects")),
+    )
+}
+
+/// The one that matters. A folder joins, pushes a node, and joins the very
+/// same tree again: the node used to vanish from its stack, silently and at
+/// exit 0, because the second join minted an id the stack knew nothing
+/// about. The stack is what makes an orphaned lane visible from outside --
+/// the lane file still parses, the tree still resolves, and only the work
+/// is gone.
+#[test]
+fn a_second_join_of_the_same_tree_leaves_the_stack_alone() {
+    let c = Sandbox::new_empty("setup-join-again-stack");
+    let target = c.0.join("T");
+    std::fs::create_dir_all(&target).unwrap();
+    run_in(&target, c.global_home(), &["setup", "claude-code", "--yes"]);
+
+    let here = c.0.join("F");
+    std::fs::create_dir_all(&here).unwrap();
+    let target_str = target.to_string_lossy().into_owned();
+    let (first_out, first_code) = run_in(
+        &here,
+        c.global_home(),
+        &["setup", "claude-code", "--join", &target_str],
+    );
+    assert_eq!(first_code, 0, "{first_out}");
+
+    let (push_out, push_code) = run_in(
+        &here,
+        c.global_home(),
+        &["push", "Work from the joined folder", "--why", "seed"],
+    );
+    assert_eq!(push_code, 0, "{push_out}");
+    let (stack_before, stack_code) = run_in(&here, c.global_home(), &["stack"]);
+    assert_eq!(stack_code, 0, "{stack_before}");
+    assert!(
+        stack_before.contains("Work from the joined folder"),
+        "the fixture never had a stack to lose:\n{stack_before}"
+    );
+
+    let (out, code) = run_in(
+        &here,
+        c.global_home(),
+        &["setup", "claude-code", "--join", &target_str],
+    );
+    assert_eq!(code, 0, "{out}");
+
+    let (stack_after, stack_code) = run_in(&here, c.global_home(), &["stack"]);
+    assert_eq!(stack_code, 0, "{stack_after}");
+    assert!(
+        stack_after.contains("Work from the joined folder"),
+        "the second join took this folder's stack with it:\n{stack_after}"
+    );
+}
+
+/// The same run, read off disk instead: the lane id is the one it already
+/// was, the target tree's log gains nothing at all -- no second
+/// `lane.declared` under a new id -- and the machine registry is untouched
+/// too. And it says so, rather than repeating the sentence it gives a
+/// folder that really did just become a lane.
+#[test]
+fn a_second_join_of_the_same_tree_writes_nothing() {
+    let c = Sandbox::new_empty("setup-join-again-writes");
+    let target = c.0.join("T");
+    std::fs::create_dir_all(&target).unwrap();
+    run_in(&target, c.global_home(), &["setup", "claude-code", "--yes"]);
+
+    let here = c.0.join("F");
+    std::fs::create_dir_all(&here).unwrap();
+    let target_str = target.to_string_lossy().into_owned();
+    let (first_out, first_code) = run_in(
+        &here,
+        c.global_home(),
+        &["setup", "claude-code", "--join", &target_str],
+    );
+    assert_eq!(first_code, 0, "{first_out}");
+    let before = join_state(&here, &target, c.global_home());
+
+    let (out, code) = run_in(
+        &here,
+        c.global_home(),
+        &["setup", "claude-code", "--join", &target_str],
+    );
+
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains(ALREADY_THAT_TREE), "{out}");
+    assert!(
+        !out.contains("This folder is now a lane"),
+        "a second join still claims it just joined:\n{out}"
+    );
+    assert!(
+        !out.contains(LANE_NAME_LEFT),
+        "nobody asked for a lane name, so there is nothing to report:\n{out}"
+    );
+
+    let after = join_state(&here, &target, c.global_home());
+    assert_eq!(before.0, after.0, "the lane id changed under the folder");
+    assert_eq!(
+        before.1, after.1,
+        "the target tree's own log gained an event"
+    );
+    assert_eq!(before.2, after.2, "the machine registry changed");
+}
+
+/// `--lane-name` over a second join. Asking for the name the lane already
+/// has changes nothing and says nothing extra; asking for a different one
+/// changes nothing either, and says so -- accepting a flag and quietly
+/// doing nothing with it is the mistake `t594` fix-1, finding 8 already
+/// closed once, on the planting side.
+#[test]
+fn a_second_join_with_another_lane_name_changes_nothing_and_says_so() {
+    let c = Sandbox::new_empty("setup-join-again-lane-name");
+    let target = c.0.join("T");
+    std::fs::create_dir_all(&target).unwrap();
+    run_in(&target, c.global_home(), &["setup", "claude-code", "--yes"]);
+
+    let here = c.0.join("F");
+    std::fs::create_dir_all(&here).unwrap();
+    let target_str = target.to_string_lossy().into_owned();
+    let (first_out, first_code) = run_in(
+        &here,
+        c.global_home(),
+        &[
+            "setup",
+            "claude-code",
+            "--join",
+            &target_str,
+            "--lane-name",
+            "first-name",
+        ],
+    );
+    assert_eq!(first_code, 0, "{first_out}");
+    let before = join_state(&here, &target, c.global_home());
+    assert!(
+        before.1.contains("\"name\":\"first-name\""),
+        "the fixture never got the name it joined under:\n{}",
+        before.1
+    );
+
+    let (same_out, same_code) = run_in(
+        &here,
+        c.global_home(),
+        &[
+            "setup",
+            "claude-code",
+            "--join",
+            &target_str,
+            "--lane-name",
+            "first-name",
+        ],
+    );
+    assert_eq!(same_code, 0, "{same_out}");
+    assert!(same_out.contains(ALREADY_THAT_TREE), "{same_out}");
+    assert!(
+        !same_out.contains(LANE_NAME_LEFT),
+        "the name asked for is the name it has, so nothing was left behind:\n{same_out}"
+    );
+
+    let (out, code) = run_in(
+        &here,
+        c.global_home(),
+        &[
+            "setup",
+            "claude-code",
+            "--join",
+            &target_str,
+            "--lane-name",
+            "other-name",
+        ],
+    );
+
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains(ALREADY_THAT_TREE), "{out}");
+    assert!(
+        out.contains(LANE_NAME_LEFT),
+        "a name was asked for and not taken, in silence:\n{out}"
+    );
+
+    let after = join_state(&here, &target, c.global_home());
+    assert_eq!(before.0, after.0, "the lane id changed under the folder");
+    assert_eq!(before.1, after.1, "the target tree's own log changed");
+    assert_eq!(before.2, after.2, "the machine registry changed");
+    assert!(
+        !after.1.contains("other-name"),
+        "the name it was told to leave alone reached the log anyway:\n{}",
+        after.1
+    );
+}
+
+/// The negative of all three: the folder that is already a lane still gets
+/// the refusal when the tree named is a *different* one, and a folder
+/// joining for the first time still joins. Neither may reach the new
+/// sentence -- it is for the one case where there really is nothing to do.
+#[test]
+fn a_join_to_a_different_tree_is_still_refused_and_a_first_join_still_works() {
+    let c = Sandbox::new_empty("setup-join-again-negative");
+    let a = c.0.join("A");
+    std::fs::create_dir_all(&a).unwrap();
+    run_in(&a, c.global_home(), &["setup", "claude-code", "--yes"]);
+    let b = c.0.join("B");
+    std::fs::create_dir_all(&b).unwrap();
+    run_in(&b, c.global_home(), &["setup", "claude-code", "--yes"]);
+
+    let here = c.0.join("F");
+    std::fs::create_dir_all(&here).unwrap();
+    let (first_out, first_code) = run_in(
+        &here,
+        c.global_home(),
+        &["setup", "claude-code", "--join", "A"],
+    );
+    assert_eq!(first_code, 0, "{first_out}");
+    assert!(
+        first_out.contains("This folder is now a lane of the tree in \"A\"."),
+        "a first join stopped saying what it did:\n{first_out}"
+    );
+    assert!(
+        !first_out.contains(ALREADY_THAT_TREE),
+        "a first join answered as though it had nothing to do:\n{first_out}"
+    );
+    assert!(here.join(".vivac").join("lane").exists());
+
+    let (out, code) = run_in(
+        &here,
+        c.global_home(),
+        &["setup", "claude-code", "--join", "B"],
+    );
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        out.contains("This folder is already a lane of another tree."),
+        "{out}"
+    );
+    assert!(
+        !out.contains(ALREADY_THAT_TREE),
+        "another tree was answered as though it were the same one:\n{out}"
+    );
+}
+
 /// `t594` fix-1, finding 8: `--lane-name` used to be accepted and
 /// silently ignored when planting fresh -- worse than either using it or
 /// refusing it outright, since accepting a flag and doing nothing with it
