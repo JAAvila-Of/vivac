@@ -101,28 +101,32 @@ pub enum Noted {
     /// Nothing worth telling anybody.
     Fine,
     /// One or more other folders hold a tree that starts with the same
-    /// event, so each of them -- together with this one -- is a copy of
-    /// the rest (`d201`). Which folder is "the" original is **not** what
-    /// this answers. The registry has room for one `path` per project, so
-    /// whichever folder used a `vivac` command first while the registry
-    /// already knew this project keeps that slot, and `path` never moves
-    /// off it; every other folder sighted since is recorded in `copies`
-    /// instead. That first folder can be the original or a copy in
-    /// reality -- nothing here knows which one came first, only which one
-    /// reached the registry first -- so both sides eventually learn: the
-    /// folder not on `path` learns the moment it is sighted (`detect_copy`,
-    /// always exactly one other: whatever is on `path`), and the folder on
-    /// `path` learns from its own `copies`, one entry per other folder
-    /// ever sighted, each re-verified on every read (`first_event_id`) so
-    /// a copy that gets deleted stops being reported without anyone having
-    /// to prune this by hand -- and, on the next write, actually is
-    /// pruned.
+    /// event, so each of them -- together with this one and whichever
+    /// folder is asking -- is a copy of the rest (`d201`). Which folder is
+    /// "the" original is **not** what this answers. The registry has room
+    /// for one `path` per project, so whichever folder used a `vivac`
+    /// command first while the registry already knew this project keeps
+    /// that slot, and `path` never moves off it; every other folder
+    /// sighted since is recorded in `copies` instead. That first folder
+    /// can be the original or a copy in reality -- nothing here knows
+    /// which one came first, only which one reached the registry first --
+    /// so every folder eventually learns the same membership, itself
+    /// excluded: `live_others` is the one function both `note` and
+    /// `copy_of` build this from, so a folder never learns a different
+    /// set of siblings depending on which of them is asking.
+    ///
+    /// `first` and `rest` rather than one list: a copy with nobody to name
+    /// is not representable, so `copy_notice` never has to guard against
+    /// an empty one that only a comment promised could not happen.
     ///
     /// Each folder is named, never its path, and a name is withheld when
     /// the redaction guard rejects it (`d600`) -- this text reaches the
     /// agent's context. Order matches `copies`: insertion order, never
     /// reshuffled.
-    Copy { others: Vec<Option<String>> },
+    Copy {
+        first: Option<String>,
+        rest: Vec<Option<String>>,
+    },
 }
 
 /// Records what `s` says about the project keyed by `project_id`.
@@ -148,38 +152,23 @@ pub fn note(store_dir: &Path, project_id: &str, s: Sighting<'_>) -> Noted {
 
 /// Whether another folder on this machine still holds a tree that starts
 /// with this same event. Read-only: unlike `note`, it never writes, so a
-/// reading command can ask without the registry moving under it.
+/// reading command can ask without the registry moving under it -- and,
+/// because it never writes, it can never lean on a write to have already
+/// cleaned anything up: `live_others` does its own filtering, every time,
+/// including filtering `root` itself out.
 ///
-/// Two folders can ask this, and neither is favored: `detect_copy` answers
-/// for the folder that is not `path` -- the same rule `note` uses, shared
-/// rather than repeated -- and when `root` **is** `path`, this instead
-/// reads that entry's own `copies`, verifying each one is still there with
-/// `first_event_id` rather than trusting a write that could be stale by
-/// now. Both paths answer through the very same `Noted::Copy`, so neither
-/// side of a copy is told anything the other could not also be told.
+/// No folder is favored: `path` and every entry in `copies` are all
+/// candidates alike, so whichever folder is asking sees every other live
+/// one, itself excluded -- the folder on `path` and the folder not on it
+/// go through the very same call.
 pub fn copy_of(store_dir: &Path, project_id: &str, root: &Path) -> Noted {
     let Some(projects) = read(&store_dir.join(FILE)) else {
         return Noted::Fine;
     };
-    if let Some(copy) = detect_copy(&projects, project_id, root) {
-        return copy;
-    }
     let Some(existing) = projects.get(project_id) else {
         return Noted::Fine;
     };
-    let others: Vec<Option<String>> = existing
-        .copies
-        .iter()
-        .map(String::as_str)
-        .map(Path::new)
-        .filter(|other| crate::store::first_event_id(other).as_deref() == Some(project_id))
-        .map(folder_name)
-        .collect();
-    if others.is_empty() {
-        Noted::Fine
-    } else {
-        Noted::Copy { others }
-    }
+    copy_or_fine(live_others(existing, project_id, root))
 }
 
 /// What every surface that reports one or more copies prints: the heading
@@ -191,7 +180,7 @@ pub fn copy_of(store_dir: &Path, project_id: &str, root: &Path) -> Noted {
 /// desync the moment only one of the two remembered to change.
 ///
 /// Kept in the one module that already owns what a copy is (`Noted::Copy`,
-/// `detect_copy`) rather than in whichever surface prints it first: `check`
+/// `live_others`) rather than in whichever surface prints it first: `check`
 /// today, and the brief and the per-write stderr notice that `t594` §4.7
 /// still owes. A security-relevant sentence copied into more than one call
 /// site only agrees with itself until somebody edits one of them, which is
@@ -206,66 +195,101 @@ pub struct CopyNotice {
     pub body: String,
 }
 
-/// `others` is never empty: both callers that build a `Noted::Copy` only
-/// ever do it with at least one name (retained or withheld) in hand.
-pub fn copy_notice(others: &[Option<String>]) -> CopyNotice {
-    match others {
-        [Some(name)] => CopyNotice {
-            heading: "COPY OF ANOTHER TREE",
-            body: format!(
-                "This tree starts with the same event as the one in folder \"{name}\",\n\
-                 so one of them is a copy, and copies diverge in silence. Keep one:\n\
-                 delete the other, or delete this one and join this folder to it with\n  \
-                 vivac setup claude-code --join {}",
-                quote_if_needed(name)
+/// The width every paragraph below wraps to, before the command line that
+/// follows it. A name list has as many names as there are copies, which
+/// is not bounded, so splitting it into lines by hand is wrong by
+/// construction and not by oversight; `render::wrap` is the same
+/// word-wrap `why` and `changes` already read through.
+const NOTICE_WIDTH: usize = 76;
+
+/// Wraps `prose`, then puts `command` on a line of its own after it, one
+/// indent deeper -- whole, never wrapped, since a command line broken
+/// across two lines is not one anybody can paste.
+fn wrapped_with_command(prose: &str, command: &str) -> String {
+    let mut lines = crate::render::wrap(prose, NOTICE_WIDTH, "");
+    lines.push(format!("  {command}"));
+    lines.join("\n")
+}
+
+/// `first` is the one other folder `Noted::Copy` is guaranteed to carry;
+/// `rest` is every one after it, empty for the ordinary case of exactly
+/// one copy.
+pub fn copy_notice(first: Option<&str>, rest: &[Option<String>]) -> CopyNotice {
+    if rest.is_empty() {
+        return match first {
+            Some(name) => CopyNotice {
+                heading: "COPY OF ANOTHER TREE",
+                body: wrapped_with_command(
+                    &format!(
+                        "This tree starts with the same event as the one in folder \"{name}\", \
+                         so one of them is a copy, and copies diverge in silence. Keep one: \
+                         delete the other, or delete this one and join this folder to it with"
+                    ),
+                    &format!("vivac setup claude-code --join {}", quote_if_needed(name)),
+                ),
+            },
+            // The command used to sit inline at the end of this
+            // paragraph rather than on its own line like its siblings --
+            // a mistake in the original prose, not a deliberate
+            // difference: form 1 is the same sentence with the name
+            // filled in, and its own command already stood on its own
+            // line. Fixed here so all five forms wrap the same way.
+            None => CopyNotice {
+                heading: "COPY OF ANOTHER TREE",
+                body: wrapped_with_command(
+                    "This tree starts with the same event as one in another folder on this \
+                     machine, so one of them is a copy, and copies diverge in silence. Keep \
+                     one: delete the other, or delete this one and join this folder to it \
+                     with",
+                    "vivac setup claude-code --join <path to that folder>",
+                ),
+            },
+        };
+    }
+    let total = 1 + rest.len();
+    let named: Vec<&str> = first
+        .into_iter()
+        .chain(rest.iter().filter_map(|o| o.as_deref()))
+        .collect();
+    let names = named
+        .iter()
+        .map(|n| format!("\"{n}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let command = "vivac setup claude-code --join <the folder you kept>";
+    let body = if named.len() == total {
+        wrapped_with_command(
+            &format!(
+                "These folders on this machine start with the same event as this one: \
+                 {names}. They are copies of each other, and copies diverge in silence. \
+                 Keep one, delete the rest, and join the folders you still work in to the \
+                 one you kept:"
             ),
-        },
-        [None] => CopyNotice {
-            heading: "COPY OF ANOTHER TREE",
-            body: "This tree starts with the same event as one in another folder on this\n\
-                 machine, so one of them is a copy, and copies diverge in silence.\n\
-                 Keep one: delete the other, or delete this one and join this folder\n\
-                 to it with  vivac setup claude-code --join <path to that folder>"
-                .to_string(),
-        },
-        many => {
-            let named: Vec<&str> = many.iter().filter_map(|o| o.as_deref()).collect();
-            let names = named
-                .iter()
-                .map(|n| format!("\"{n}\""))
-                .collect::<Vec<_>>()
-                .join(", ");
-            let body = if named.len() == many.len() {
-                format!(
-                    "These folders on this machine start with the same event as this one:\n\
-                     {names}. They are copies of each other, and copies diverge\n\
-                     in silence. Keep one, delete the rest, and join the folders you still\n\
-                     work in to the one you kept:\n  \
-                     vivac setup claude-code --join <the folder you kept>"
-                )
-            } else if named.is_empty() {
-                "Other folders on this machine hold a tree that starts with the same\n\
-                 event as this one, under names this tool will not write down. They\n\
-                 are copies of each other, and copies diverge in silence. Keep one,\n\
-                 delete the rest, and join the folders you still work in to the one\n\
-                 you kept:\n  \
-                 vivac setup claude-code --join <the folder you kept>"
-                    .to_string()
-            } else {
-                format!(
-                    "These folders on this machine start with the same event as this one:\n\
-                     {names}. More hold it too, under names this tool will not\n\
-                     write down. They are copies of each other, and copies diverge in\n\
-                     silence. Keep one, delete the rest, and join the folders you still\n\
-                     work in to the one you kept:\n  \
-                     vivac setup claude-code --join <the folder you kept>"
-                )
-            };
-            CopyNotice {
-                heading: "COPIES OF THIS TREE",
-                body,
-            }
-        }
+            command,
+        )
+    } else if named.is_empty() {
+        wrapped_with_command(
+            "Other folders on this machine hold a tree that starts with the same event as \
+             this one, under names this tool will not write down. They are copies of each \
+             other, and copies diverge in silence. Keep one, delete the rest, and join the \
+             folders you still work in to the one you kept:",
+            command,
+        )
+    } else {
+        wrapped_with_command(
+            &format!(
+                "These folders on this machine start with the same event as this one: \
+                 {names}. More hold it too, under names this tool will not write down. \
+                 They are copies of each other, and copies diverge in silence. Keep one, \
+                 delete the rest, and join the folders you still work in to the one you \
+                 kept:"
+            ),
+            command,
+        )
+    };
+    CopyNotice {
+        heading: "COPIES OF THIS TREE",
+        body,
     }
 }
 
@@ -305,8 +329,8 @@ enum Decision {
     /// Nothing to write; this is the whole answer.
     Done(Noted),
     /// A copy not recorded yet: add `s.root` to the entry's `copies`,
-    /// `path` untouched. Carries the `Noted::Copy` `detect_copy` already
-    /// worked out, so the write side never has to recompute it.
+    /// `path` untouched. Carries the `Noted::Copy` already worked out
+    /// from `live_others`, so the write side never has to recompute it.
     RecordCopy(Noted),
     /// An ordinary sighting with something new to say: fold `s` into the
     /// entry the way `apply_sighting` always has.
@@ -319,17 +343,19 @@ enum Decision {
 /// once again under it, on a fresh read, since another writer may have
 /// landed between the two.
 fn decide(projects: &BTreeMap<String, Project>, project_id: &str, s: &Sighting<'_>) -> Decision {
-    if let Some(copy) = detect_copy(projects, project_id, s.root) {
-        let known = projects.get(project_id).is_some_and(|p| {
-            p.copies
+    if let Some(existing) = projects.get(project_id) {
+        if path_disagrees(existing, project_id, s.root) {
+            let copy = copy_or_fine(live_others(existing, project_id, s.root));
+            let known = existing
+                .copies
                 .iter()
-                .any(|c| crate::anchor::same_folder(Path::new(c), s.root))
-        });
-        return if known {
-            Decision::Done(copy)
-        } else {
-            Decision::RecordCopy(copy)
-        };
+                .any(|c| crate::anchor::same_folder(Path::new(c), s.root));
+            return if known {
+                Decision::Done(copy)
+            } else {
+                Decision::RecordCopy(copy)
+            };
+        }
     }
     if unchanged(projects, project_id, s) {
         return Decision::Done(Noted::Fine);
@@ -370,32 +396,56 @@ fn try_note(store_dir: &Path, project_id: &str, s: &Sighting<'_>) -> std::io::Re
     }
 }
 
-/// The registry already points somewhere else for this project, and that
-/// somewhere else still holds a tree whose first event is this one. That
-/// is not a move: both exist, so one is a copy of the other. `path` does
-/// not change -- whoever reached the registry first for this project keeps
-/// it -- and the caller is told.
+/// Whether `root` disagrees with what is on `path`, and `path`'s own tree
+/// is still there to prove it: the boolean `decide` needs to tell a copy
+/// sighting from an ordinary one. That is not a move: both exist, so one
+/// is a copy of the other. Short-circuits before ever reading `path`'s own
+/// log when `root` already agrees with it -- the ordinary case, on every
+/// command -- so the common path costs nothing extra here.
 ///
-/// `same_folder`, not a raw comparison: `other` and `root` are two
+/// `same_folder`, not a raw comparison: `path` and `root` are two
 /// spellings of a folder built by genuinely independent means -- one read
 /// back from a previous sighting, the other from the `cd` in force right
 /// now -- and a case difference or an alias between them is `f612`, the
 /// same class `ops::repo_at` already had to answer for once.
-fn detect_copy(
-    projects: &BTreeMap<String, Project>,
-    project_id: &str,
-    root: &Path,
-) -> Option<Noted> {
-    let existing = projects.get(project_id)?;
+fn path_disagrees(existing: &Project, project_id: &str, root: &Path) -> bool {
     let other = Path::new(&existing.path);
-    if !crate::anchor::same_folder(other, root)
+    !crate::anchor::same_folder(other, root)
         && crate::store::first_event_id(other).as_deref() == Some(project_id)
-    {
-        return Some(Noted::Copy {
-            others: vec![folder_name(other)],
-        });
+}
+
+/// Every folder this registry knows might hold `project_id`'s tree, other
+/// than `root` itself, verified alive right now: `path` is one candidate
+/// and every entry in `copies` is another, on equal footing. A dead one --
+/// a folder that no longer has a tree to show for this event, `root`
+/// itself included when a write that would have said so never landed --
+/// is silently dropped rather than reported. `note` (a fresh copy, or one
+/// already known) and `copy_of` (`path` itself, or any other folder,
+/// asked either way) both build `Noted::Copy` from this one list, so no
+/// folder ever learns a different set of siblings than any other.
+fn live_others(existing: &Project, project_id: &str, root: &Path) -> Vec<Option<String>> {
+    std::iter::once(existing.path.as_str())
+        .chain(existing.copies.iter().map(String::as_str))
+        .map(Path::new)
+        .filter(|p| !crate::anchor::same_folder(p, root))
+        .filter(|p| crate::store::first_event_id(p).as_deref() == Some(project_id))
+        .map(folder_name)
+        .collect()
+}
+
+/// `Noted::Fine` for an empty list, `Noted::Copy` for anything else --
+/// the one place that split happens, so `Noted::Copy` itself never has to
+/// represent "a copy with nobody in it".
+fn copy_or_fine(mut others: Vec<Option<String>>) -> Noted {
+    if others.is_empty() {
+        Noted::Fine
+    } else {
+        let first = others.remove(0);
+        Noted::Copy {
+            first,
+            rest: others,
+        }
     }
-    None
 }
 
 /// The folder's own name, or nothing when the redaction guard rejects it.
@@ -897,6 +947,45 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
+    /// The write that would ordinarily clear a stale self-reference --
+    /// `apply_sighting` moving `path` onto this very folder, dropping it
+    /// from `copies` -- never has to happen for `copy_of` to answer
+    /// correctly: it promises to keep working when the registry cannot be
+    /// written at all, and a read must never lean on a write it cannot
+    /// see has happened.
+    #[test]
+    fn copy_of_never_names_the_folder_asking_about_itself() {
+        let store_dir = temp_dir("reg-self-copy");
+        let (original, id) = seeded_project("self-copy-original");
+        let copy_root = temp_dir("self-copy-copy");
+        std::fs::create_dir_all(copy_root.join(store::DIR)).unwrap();
+        std::fs::copy(
+            original.join(store::DIR).join(store::LOG),
+            copy_root.join(store::DIR).join(store::LOG),
+        )
+        .unwrap();
+
+        note(&store_dir, &id, sighting(&original));
+        // A genuine copy, sighted once: this is what writes `copy_root`
+        // into `copies` in the first place.
+        note(&store_dir, &id, sighting(&copy_root));
+
+        // The original's own tree is gone, so the write that would move
+        // `path` onto `copy_root` and drop it from `copies` never
+        // happens -- `copy_of` never writes, whether or not the registry
+        // even could.
+        std::fs::remove_dir_all(&original).unwrap();
+
+        let outcome = copy_of(&store_dir, &id, &copy_root);
+        assert!(
+            matches!(outcome, Noted::Fine),
+            "a stale self-reference in copies must never name the folder asking about itself"
+        );
+
+        std::fs::remove_dir_all(&store_dir).ok();
+        std::fs::remove_dir_all(&copy_root).ok();
+    }
+
     #[test]
     fn a_newer_registry_is_left_alone() {
         let store_dir = temp_dir("reg-newer");
@@ -937,7 +1026,10 @@ mod tests {
         let outcome = note(&store_dir, &id, sighting(&second));
 
         match outcome {
-            Noted::Copy { others } => assert_eq!(others, vec![Some(expected_name)]),
+            Noted::Copy { first, rest } => {
+                assert_eq!(first, Some(expected_name));
+                assert!(rest.is_empty());
+            }
             Noted::Fine => panic!("a second tree with the same first event is a copy, not a move"),
         }
         let projects = read(&store_dir.join(FILE)).unwrap();
@@ -996,7 +1088,7 @@ mod tests {
         let outcome = note(&store_dir, &id, sighting(&second));
 
         assert!(
-            matches!(outcome, Noted::Copy { others } if others == [None]),
+            matches!(outcome, Noted::Copy { first: None, rest } if rest.is_empty()),
             "a folder name the guard rejects must not reach the caller"
         );
 

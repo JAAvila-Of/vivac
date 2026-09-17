@@ -147,11 +147,11 @@ pub fn check(a: &Tree, root: &Path, args: &Args) -> Result<i32, crate::failure::
     // the next write once a copy is deleted), never the `--gates` fan-out
     // below over every root the registry knows, so it runs on every
     // `check` rather than only that one.
-    let copy: Option<Vec<Option<String>>> =
-        crate::store::first_event_id(root).and_then(|project_id| {
+    let copy: Option<(Option<String>, Vec<Option<String>>)> = crate::store::first_event_id(root)
+        .and_then(|project_id| {
             let store_dir = crate::store::store_dir()?;
             match crate::registry::copy_of(&store_dir, &project_id, root) {
-                crate::registry::Noted::Copy { others } => Some(others),
+                crate::registry::Noted::Copy { first, rest } => Some((first, rest)),
                 crate::registry::Noted::Fine => None,
             }
         });
@@ -206,7 +206,9 @@ pub fn check(a: &Tree, root: &Path, args: &Args) -> Result<i32, crate::failure::
             "ok": ok,
         });
         if let serde_json::Value::Object(fields) = &mut payload {
-            if let Some(others) = &copy {
+            if let Some((first, rest)) = &copy {
+                let mut others = vec![first.clone()];
+                others.extend(rest.clone());
                 fields.insert("copy".to_string(), serde_json::json!({ "others": others }));
             }
             if args.has("gates") {
@@ -223,8 +225,8 @@ pub fn check(a: &Tree, root: &Path, args: &Args) -> Result<i32, crate::failure::
             outln!("  No findings. {} nodes checked.", a.total());
             outln!();
         }
-        if let Some(others) = &copy {
-            let notice = crate::registry::copy_notice(others);
+        if let Some((first, rest)) = &copy {
+            let notice = crate::registry::copy_notice(first.as_deref(), rest);
             outln!("  {}", notice.heading);
             outln!();
             for line in notice.body.lines() {

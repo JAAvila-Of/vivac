@@ -340,6 +340,28 @@ fn check_exits_1_while_a_copy_exists() {
     assert!(copy_out.contains("COPY OF ANOTHER TREE"), "{copy_out}");
 }
 
+/// Whitespace normalized to single spaces, newlines included: the copy
+/// block's prose is wrapped by width now, not by hand, so a test that
+/// cares about the words has to stop caring which line they landed on.
+fn words(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// No printed line runs past `NOTICE_WIDTH` (76) plus `check`'s own
+/// 6-space indent, except the one line that carries the `--join` command,
+/// which is never wrapped no matter how long it gets.
+fn assert_no_wrapped_line_too_long(out: &str) {
+    for line in out.lines() {
+        if line.trim_start().starts_with("vivac setup claude-code") {
+            continue;
+        }
+        assert!(
+            line.chars().count() <= 82,
+            "a wrapped line ran past 76 columns: {line:?}\nfull output:\n{out}"
+        );
+    }
+}
+
 #[test]
 fn check_names_the_other_folder() {
     let original = Sandbox::new_seeded("copy-name-orig");
@@ -349,14 +371,16 @@ fn check_names_the_other_folder() {
 
     let (out, code) = copy.run(&["check"]);
     assert_eq!(code, 1, "{out}");
+    let flat = words(&out);
     assert!(
-        out.contains(&format!("the one in folder \"{name}\"")),
+        flat.contains(&format!("the one in folder \"{name}\"")),
         "{out}"
     );
     assert!(
-        out.contains(&format!("vivac setup claude-code --join {name}")),
+        flat.contains(&format!("vivac setup claude-code --join {name}")),
         "{out}"
     );
+    assert_no_wrapped_line_too_long(&out);
 }
 
 #[test]
@@ -408,7 +432,11 @@ fn check_withholds_a_name_the_guard_rejects() {
         "the rejected name leaked into check's output:\n{out}"
     );
     assert!(out.contains("as one in another folder on this"), "{out}");
-    assert!(out.contains("--join <path to that folder>"), "{out}");
+    assert!(
+        out.contains("vivac setup claude-code --join <path to that folder>"),
+        "{out}"
+    );
+    assert_no_wrapped_line_too_long(&out);
 
     std::fs::remove_dir_all(&parent).ok();
     std::fs::remove_dir_all(&copy_dir).ok();
@@ -683,6 +711,7 @@ fn copy_output_carries_no_absolute_path_when_the_guard_withholds_the_name() {
             "an absolute path leaked:\n{out}"
         );
     }
+    assert_no_wrapped_line_too_long(&out);
 
     std::fs::remove_dir_all(&parent).ok();
     std::fs::remove_dir_all(&copy_dir).ok();
@@ -788,6 +817,53 @@ fn two_live_copies_all_three_folders_warn_and_are_both_named() {
     assert!(out.contains("COPIES OF THIS TREE"), "{out}");
     assert!(out.contains(&project_name(&copy_a)), "{out}");
     assert!(out.contains(&project_name(&copy_b)), "{out}");
+    assert_no_wrapped_line_too_long(&out);
+}
+
+/// The other half of N4: the original sees both copies, but each copy
+/// used to see only the original, so following "delete the other" from
+/// either one would leave the third folder standing. Now every one of
+/// the three prints the same membership, minus itself.
+#[test]
+fn two_live_copies_each_folder_sees_the_other_two() {
+    let original = Sandbox::new_seeded("copy-see-all-orig");
+    original.ok(&["push", "a goal", "--why", "so the log has a first event"]);
+    let copy_a = a_copy_of(&original, "copy-see-all-a");
+    let copy_b = a_copy_of(&original, "copy-see-all-b");
+
+    let (a_out, a_code) = copy_a.run(&["check"]);
+    assert_eq!(a_code, 1, "{a_out}");
+    let (b_out, b_code) = copy_b.run(&["check"]);
+    assert_eq!(b_code, 1, "{b_out}");
+
+    let original_name = project_name(&original);
+    let a_name = project_name(&copy_a);
+    let b_name = project_name(&copy_b);
+
+    let (original_out, original_code) = original.run(&["check"]);
+    assert_eq!(original_code, 1, "{original_out}");
+    assert!(original_out.contains(&a_name), "{original_out}");
+    assert!(original_out.contains(&b_name), "{original_out}");
+    assert!(
+        !original_out.contains(&format!("\"{original_name}\"")),
+        "{original_out}"
+    );
+
+    let (a_out2, a_code2) = copy_a.run(&["check"]);
+    assert_eq!(a_code2, 1, "{a_out2}");
+    assert!(a_out2.contains(&original_name), "{a_out2}");
+    assert!(a_out2.contains(&b_name), "{a_out2}");
+    assert!(!a_out2.contains(&format!("\"{a_name}\"")), "{a_out2}");
+
+    let (b_out2, b_code2) = copy_b.run(&["check"]);
+    assert_eq!(b_code2, 1, "{b_out2}");
+    assert!(b_out2.contains(&original_name), "{b_out2}");
+    assert!(b_out2.contains(&a_name), "{b_out2}");
+    assert!(!b_out2.contains(&format!("\"{b_name}\"")), "{b_out2}");
+
+    for out in [&original_out, &a_out2, &b_out2] {
+        assert_no_wrapped_line_too_long(out);
+    }
 }
 
 /// One of two copies has a name the guard withholds: the block still
@@ -832,10 +908,11 @@ fn two_copies_one_name_withheld_says_more_hold_it_too() {
     assert!(out.contains("COPIES OF THIS TREE"), "{out}");
     assert!(out.contains("\"Named\""), "{out}");
     assert!(
-        out.contains("More hold it too, under names this tool will not"),
+        words(&out).contains(&words("More hold it too, under names this tool will not")),
         "{out}"
     );
     assert!(!out.contains("someone@example.com"), "{out}");
+    assert_no_wrapped_line_too_long(&out);
 
     std::fs::remove_dir_all(&parent).ok();
     std::fs::remove_dir_all(&home).ok();
@@ -882,10 +959,22 @@ fn two_copies_both_names_withheld_says_other_folders_with_no_list() {
 
     let (out, code) = run_bin(&original_dir, &home, &["check"]);
     assert_eq!(code, 1, "{out}");
-    let expected = "  COPIES OF THIS TREE\n\n      Other folders on this machine hold a tree that starts with the same\n      event as this one, under names this tool will not write down. They\n      are copies of each other, and copies diverge in silence. Keep one,\n      delete the rest, and join the folders you still work in to the one\n      you kept:\n        vivac setup claude-code --join <the folder you kept>\n";
-    assert!(out.contains(expected), "{out}");
+    let expected_prose = words(
+        "Other folders on this machine hold a tree that starts with the same \
+         event as this one, under names this tool will not write down. They \
+         are copies of each other, and copies diverge in silence. Keep one, \
+         delete the rest, and join the folders you still work in to the one \
+         you kept:",
+    );
+    assert!(out.contains("COPIES OF THIS TREE"), "{out}");
+    assert!(words(&out).contains(&expected_prose), "{out}");
+    assert!(
+        out.contains("vivac setup claude-code --join <the folder you kept>"),
+        "{out}"
+    );
     assert!(!out.contains("someone@example.com"), "{out}");
     assert!(!out.contains("another@example.com"), "{out}");
+    assert_no_wrapped_line_too_long(&out);
 
     std::fs::remove_dir_all(&parent).ok();
     std::fs::remove_dir_all(&home).ok();
