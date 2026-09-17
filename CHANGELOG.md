@@ -7,6 +7,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0](https://github.com/JAAvila-Of/vivac/compare/v0.11.3...v0.12.0) - 2026-09-17
+
+### Added
+
+- *(brief)* open with the warning when this tree is a copy
+- *(setup)* join a folder to a tree that lives somewhere else
+- *(setup)* refuse to plant a second map of a product
+- *(relocate)* move a tree and leave its folder as a lane
+- *(registry)* record a project's repos and lanes, and notice copies
+- *(ops)* let a linked worktree join the tree when it first writes
+- *(setup)* make a folder a lane of the tree above it
+- *(model)* [**breaking**] give every lane its own stack, focus and stop counters
+- *(event)* let a lane declare itself and sign what it writes
+- *(store)* resolve the working folder's lane, not just its tree
+- *(lane)* name the lane a working folder belongs to
+
+### Changed
+
+- *(check)* keep the copy heading where its sentence lives
+- *(store)* make the write lock an argument of every append
+- [**breaking**] raise the MSRV to 1.89 for the standard file lock
+
+### Documentation
+
+- cite the tree's node, not a review round that no longer exists
+- *(setup)* say what joining a folder actually changed
+- the last Spanish in the crate was a quoted section title
+- *(test)* two comments in relocate's tests were still in Spanish
+- three more comments that were still in Spanish
+- write the crate's comments in English, as the rule says
+
+### Fixed
+
+- *(setup)* stop a repeated --join from orphaning the folder's lane
+- *(t594)* refuse relocate from a copy and close the join bypass
+- *(registry)* trigger the copy warning by having written, not the verb
+- *(setup)* close the doors joining a folder was walking around
+- *(relocate)* refuse foreign lanes, wall off the real registry
+- *(relocate)* a concurrent reader can hit the empty-tree bug too
+- *(relocate)* never let a failed move look like an empty tree
+- *(relocate)* roll back copy failures, refuse moving onto self
+- *(ops)* refuse the folder with no lane, not the one named main
+- *(registry)* stop copy_of from naming itself, wrap all five forms
+- *(registry)* finish closing f612, and warn about every copy
+- *(registry)* close f612 in copy detection, and warn both folders
+- *(ops)* fall back to canonicalize when repo_at's paths disagree
+- *(lane)* ask the log, not config, whether a tree has lanes
+- *(lane)* move signing lane off store, gate auto-join on setup
+- *(setup)* mint a lane instead of redeclaring a claimed main
+- *(ops)* join a worktree on write, not on taking the lock
+- *(setup)* make the closing message say what a run wrote
+- *(store)* let a lane retry its worktree's main copy on its own
+- *(setup)* register the tree a lane joins and stop misreporting it
+- *(ops)* keep the working folder's lane when the tree is rebuilt
+- *(registry)* write the project registry atomically under a lock
+- *(session)* take the lock only when a stop has something to write
+- *(mcp)* hold the write lock around every server write
+- *(store)* serialize writers with an OS lock
+- *(setup)* keep .vivac out of version control
+- *(render)* say when a number names more than one node
+
+### Internal
+
+- *(t594)* stop the suite from leaking its own temp files
+- *(t594)* fix nine review-broken tests that stayed green
+- the IQuorum scenario, end to end
+- *(check)* cover the fifth copy-notice form, all names withheld
+
+### Performance
+
+- *(mcp)* apply only the tail another process appended
+
 ## [0.11.3](https://github.com/JAAvila-Of/vivac/compare/v0.11.2...v0.11.3) - 2026-09-15
 
 ### Upgrading
