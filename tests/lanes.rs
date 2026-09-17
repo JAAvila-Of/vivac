@@ -947,7 +947,7 @@ fn a_folder_whose_own_lane_file_names_main_keeps_writing() {
 
 /// (6): a worktree `main` already declared as one of its own repositories
 /// does not join a lane of its own -- it is that lane's repository at that
-/// path, and nothing more (paso 1, rule 2).
+/// path, and nothing more (step 1, rule 2).
 #[test]
 fn a_worktree_already_declared_as_a_repo_does_not_join_a_new_lane() {
     let (root, feature, home) = worktree_inside_fixture("already-declared");
