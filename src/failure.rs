@@ -114,18 +114,18 @@ impl Failure {
     /// no path for: it once did, or was joined from another machine, and
     /// nothing here can find where that tree lives now.
     ///
-    /// The remedy named here has to be one that works **today**. It used
-    /// to name `--join`, a flag no release of this crate has ever taken;
-    /// `setup` refused it with exit 2, and whoever was not standing in a
-    /// worktree -- the registry wiped, the machine reimaged, the folder
-    /// copied somewhere else -- had no way out this crate actually offers
-    /// (`t594` branch-fix-1 #5). Running `setup` in the tree's own folder
-    /// registers it again, which is exactly the gap. `--join` can replace
-    /// this once it exists, which is `t594` §4.5.4.
+    /// The remedy this used to name -- run `setup` in the tree's own
+    /// folder -- was circular for the case that reaches this most often: a
+    /// tree whose log is missing but which still carries its own
+    /// `.vivac/lane`, telling the person standing in that very folder to go
+    /// run something "in the tree's own folder" (`t594` fix-4, finding
+    /// N7b). `--join` names the actual remedy and is pulled forward here as
+    /// text only; the flag itself is `t594` §4.5.4 and does not exist yet
+    /// -- `setup` still refuses it with exit 2 until it lands.
     pub fn tree_not_found() -> Failure {
         Failure::TreeNotFound(
             "  This folder is a lane of a tree this machine's registry does not know.\n  \
-             Run this in the tree's own folder to put it back:  vivac setup claude-code"
+             Join it again:  vivac setup claude-code --join <path to the tree>"
                 .into(),
         )
     }
@@ -138,6 +138,21 @@ impl Failure {
         Failure::NotALane(
             "  This folder holds the tree but is not one of its lanes. To write from\n  \
              here, make it one:  vivac setup claude-code"
+                .into(),
+        )
+    }
+
+    /// A folder that already carries somebody else's `.vivac/lane`: exactly
+    /// what `relocate` leaves the origin holding. `init` planting a fresh
+    /// tree there would go unnoticed -- it exits 0 and prints success --
+    /// while `stack` and `push` keep answering for the tree the lane names,
+    /// leaving the new, empty one to sit at zero bytes forever (`t594`
+    /// fix-4, finding N7a). Exit 1, the same as any other refusal the model
+    /// itself makes.
+    pub fn already_a_lane() -> Failure {
+        Failure::Model(
+            "  This folder is already a lane of another tree. Planting a tree here\n  \
+             would split that product in two. To see where it belongs:  vivac brief"
                 .into(),
         )
     }

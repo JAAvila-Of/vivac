@@ -57,20 +57,28 @@
 //! inside one synchronous call, with no point in between where anything
 //! else could land a write to the source -- not without adding an
 //! injection point to this very path, which is worse than the gap it
-//! would close. `same_bytes` itself is a plain enough function to probe
-//! on its own, though, and its own unit tests do that directly.
+//! would close. `verified::compare` itself is a plain enough function to
+//! probe on its own, though, and its own unit test does that directly.
 //!
-//! **That the comparison runs at all is no longer only a promise a test
-//! can check -- it is now something the compiler checks too.** An earlier
-//! round of this task deleted the comparison outright and the whole suite
-//! stayed green, because nothing forced the temporary files' rename onto
-//! their real names to have a reason to run. `verify_copy` now returns a
-//! `Verified` -- a private, dataless type only it can build -- and
-//! `commit_copy`, the one place those renames happen, takes one as an
-//! argument. Deleting the comparison either leaves `Verified` built on
-//! nothing, which a reviewer reading the diff sees immediately, or it
-//! orphans `same_bytes`, which `cargo clippy -D warnings` -- already
-//! required to pass -- refuses to build at all. What `tests/relocate.rs`
+//! **That the comparison runs at all, and that it agreed, is not only a
+//! promise a test can check -- it is something the compiler checks too,
+//! and this needed two rounds of this task to actually be true.** The
+//! first round gave `verify_copy` a `Verified` return type and made
+//! `commit_copy` require one, and its own commit said deleting the
+//! comparison was now a build failure. That was wrong, and a re-review
+//! measured why: `Verified` was a private struct sitting beside
+//! `verify_copy` and `commit_copy` in this same module, so
+//! `let _ = same_bytes(a, b)?;` -- calling the comparison and throwing its
+//! verdict away -- still built one, passed `cargo clippy -D warnings`, and
+//! passed every test. What actually caught a deletion was the comparison
+//! function going unused, a `dead_code` lint any trivial call silences; it
+//! said nothing about what the call did with its answer. `Verified` now
+//! lives in its own module, [`verified`], with [`verified::compare`] the
+//! only function inside it that can see the private field its lone
+//! constructor needs. No code outside that module can write `Verified(())`
+//! or otherwise produce one -- not `verify_copy`, not `commit_copy`, not
+//! whatever gets written beside them next -- so both the old bypasses fail
+//! to compile now, not just to lint clean. What `tests/relocate.rs`
 //! exercises from outside is the rollback itself, shared by every failure
 //! step 6 can report: a copy that never lands at all, forced by a
 //! `.vivac/.gitignore` at the destination that is already a directory. No
@@ -213,7 +221,7 @@ pub fn run(
         vivac_dir_created: !destination_vivac.is_dir(),
         files: Vec::new(),
     };
-    let (log_tmp, config_tmp, verified) =
+    let (log_tmp, config_tmp, log_verified, config_verified) =
         match verify_copy(&origin_vivac, &destination_vivac, &mut written) {
             Ok(v) => v,
             Err(e) => {
@@ -222,7 +230,8 @@ pub fn run(
             }
         };
     if let Err(e) = commit_copy(
-        verified,
+        log_verified,
+        config_verified,
         &log_tmp,
         &config_tmp,
         &origin_vivac,
@@ -417,34 +426,48 @@ impl Written {
     }
 }
 
-/// Proof that the destination's own temporary copies of `events` and
-/// `config` already matched the origin byte for byte. The only way to
-/// build one is `verify_copy`, and the only thing it is good for is
-/// handing to `commit_copy`, the one place the temporary names are ever
-/// renamed onto the names `store::already_planted` looks at.
-///
-/// This exists because a unit test proved a plain `bool`, or a single
-/// function that copies and renames in a row, is not enough: deleting the
-/// comparison this type stands for left the rest of the module compiling
-/// and the whole suite green, because nothing forced the renames to prove
-/// they had a reason to run. Splitting the copy into two functions and
-/// putting this between them turns that same deletion into a compiler
-/// error -- `commit_copy` will not take a `bool`, or nothing at all, it
-/// takes a `Verified`, and the only place one of those comes from is a
-/// comparison that actually ran and actually agreed. No fields, no
-/// `Clone`: the type itself is the guarantee, and it is spent the moment
-/// it is used.
-struct Verified(());
+/// `Verified`'s own module. `t594` fix-4, finding N9: a unit test proved a
+/// plain `bool`, or a `Verified` sitting as a private struct beside
+/// `verify_copy` and `commit_copy` in `relocate` itself, is not enough --
+/// `let _ = same_bytes(a, b)?;` called the comparison, threw its verdict
+/// away, and still built a `Verified` right there, because Rust's privacy
+/// is per-module and all three lived in the same one. Giving `Verified` a
+/// module of its own, with [`compare`] as the only thing inside it that can
+/// see the private field, closes that: no code outside this module can
+/// write `Verified(())`, so the only way to hold one is to have called
+/// `compare` and gotten `Some` back.
+mod verified {
+    use std::path::Path;
+
+    /// Proof that two files were read back and compared byte for byte, and
+    /// agreed. The field is private to this module, so the only way to
+    /// hold one is to have done the comparison -- there is no black-box
+    /// trigger for a mismatch, so the guarantee cannot be a test and has
+    /// to be this.
+    pub struct Verified(());
+
+    /// `Ok(Some(Verified))` when `a` and `b` agree byte for byte,
+    /// `Ok(None)` when they do not. The only function in the crate that
+    /// can build a `Verified`.
+    pub fn compare(a: &Path, b: &Path) -> std::io::Result<Option<Verified>> {
+        if std::fs::read(a)? == std::fs::read(b)? {
+            Ok(Some(Verified(())))
+        } else {
+            Ok(None)
+        }
+    }
+}
+use verified::Verified;
 
 /// Step 6, first half: copies `events` and `config` from `origin_vivac`
 /// into temporary names inside `destination_vivac`, and compares each
 /// against the origin byte for byte. Returns the two temporary paths and a
-/// `Verified` on success, for `commit_copy` to spend.
+/// `Verified` per pair on success, for `commit_copy` to spend.
 fn verify_copy(
     origin_vivac: &Path,
     destination_vivac: &Path,
     written: &mut Written,
-) -> Result<(PathBuf, PathBuf, Verified), Failure> {
+) -> Result<(PathBuf, PathBuf, Verified, Verified), Failure> {
     std::fs::create_dir_all(destination_vivac)?;
 
     let log_tmp = destination_vivac.join(format!("events.{}.tmp", crate::id::ulid()));
@@ -458,31 +481,36 @@ fn verify_copy(
     // The one comparison this whole operation's safety rests on: if the
     // copy did not end up with exactly what the origin has, nothing past
     // this point is trusted with either the tree's real name or the
-    // origin's own log -- and with no `Verified` to hand `commit_copy`,
-    // nothing past this point can even compile a call to it.
-    if !same_bytes(&origin_vivac.join(crate::store::LOG), &log_tmp)?
-        || !same_bytes(&origin_vivac.join(crate::store::CONFIG), &config_tmp)?
-    {
+    // origin's own log -- and with no `Verified` pair to hand
+    // `commit_copy`, nothing past this point can even compile a call to
+    // it.
+    let log_verified = verified::compare(&origin_vivac.join(crate::store::LOG), &log_tmp)?;
+    let config_verified = verified::compare(&origin_vivac.join(crate::store::CONFIG), &config_tmp)?;
+    let (Some(log_verified), Some(config_verified)) = (log_verified, config_verified) else {
         return Err(Failure::Io(std::io::Error::other(
             "the copy at the destination did not match the source byte for byte",
         )));
-    }
+    };
 
-    Ok((log_tmp, config_tmp, Verified(())))
+    Ok((log_tmp, config_tmp, log_verified, config_verified))
 }
 
 /// Step 6, second half: writes `.gitignore` and a fresh `lock`, then
 /// renames the two temporary files `verify_copy` already checked onto the
-/// names `store::already_planted` looks at. Only reachable with a
-/// `Verified` in hand -- see its own doc.
+/// names `store::already_planted` looks at. Only reachable with both
+/// `Verified` values in hand -- see [`verified`]'s own doc.
 ///
 /// A `.gitignore` the destination already had is left exactly as it was,
 /// the same promise `store::write_gitignore` already makes for the branch
 /// that writes one from nothing: `t594` fix-3, finding N3, a rollback that
 /// deleted one the destination brought with it because this used to copy
-/// over it and track the result as its own regardless.
+/// over it and track the result as its own regardless. `t594` fix-4,
+/// finding N9 applies the same rule to `lock`: a destination that already
+/// had one keeps it, rather than a rollback deleting a lock this run never
+/// created.
 fn commit_copy(
-    _verified: Verified,
+    _log_verified: Verified,
+    _config_verified: Verified,
     log_tmp: &Path,
     config_tmp: &Path,
     origin_vivac: &Path,
@@ -501,8 +529,10 @@ fn commit_copy(
     }
 
     let lock_path = destination_vivac.join(crate::store::LOCK);
-    std::fs::File::create(&lock_path)?;
-    written.files.push(lock_path);
+    if !lock_path.is_file() {
+        std::fs::File::create(&lock_path)?;
+        written.files.push(lock_path);
+    }
 
     let log_final = destination_vivac.join(crate::store::LOG);
     std::fs::rename(log_tmp, &log_final)?;
@@ -513,12 +543,6 @@ fn commit_copy(
     written.files.push(config_final);
 
     Ok(())
-}
-
-/// Whether the two files are identical, byte for byte. Small enough files --
-/// a log, a config -- that reading each one whole is the plain way to ask.
-fn same_bytes(a: &Path, b: &Path) -> std::io::Result<bool> {
-    Ok(std::fs::read(a)? == std::fs::read(b)?)
 }
 
 /// Step 8: the origin's own bookkeeping, in an order chosen so that every
@@ -693,6 +717,53 @@ mod tests {
         }
     }
 
+    /// Gives `store::store_dir()` a private, real answer for as long as
+    /// this value lives: `run` calls it directly for step 7's registry
+    /// write, with no parameter to hand it a path instead, and under
+    /// `cfg(test)` it now refuses outright to answer with this machine's
+    /// real home (`t594` fix-4) -- the very thing this exists to avoid
+    /// needing in the first place.
+    ///
+    /// `std::env::set_var` is process-global and the test harness runs
+    /// threads in parallel, so two of these racing would be worse than no
+    /// test at all (`store::resolve_store_dir`'s own doc says the same);
+    /// this serializes every caller through one lock, and restores
+    /// whatever `VIVAC_HOME` said before on drop rather than leaving it
+    /// pointed at a directory this test is about to delete.
+    struct IsolatedVivacHome {
+        _guard: std::sync::MutexGuard<'static, ()>,
+        home: std::path::PathBuf,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl IsolatedVivacHome {
+        fn new(prefix: &str) -> IsolatedVivacHome {
+            static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+            let guard = LOCK
+                .get_or_init(Default::default)
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let home = temp_dir(prefix);
+            let previous = std::env::var_os("VIVAC_HOME");
+            std::env::set_var("VIVAC_HOME", &home);
+            IsolatedVivacHome {
+                _guard: guard,
+                home,
+                previous,
+            }
+        }
+    }
+
+    impl Drop for IsolatedVivacHome {
+        fn drop(&mut self) {
+            match self.previous.take() {
+                Some(v) => std::env::set_var("VIVAC_HOME", v),
+                None => std::env::remove_var("VIVAC_HOME"),
+            }
+            std::fs::remove_dir_all(&self.home).ok();
+        }
+    }
+
     /// The property `tests/relocate.rs` cannot exercise: a process that
     /// opened this tree's `Store` *before* `relocate` ran -- an MCP server
     /// resident on the folder it started in, most realistically -- still
@@ -704,6 +775,7 @@ mod tests {
     /// hand.
     #[test]
     fn an_old_process_writing_after_the_move_creates_no_log() {
+        let _home = IsolatedVivacHome::new("old-process-vivac-home");
         let origin = temp_dir("old-process-origin");
         let located = seeded_located(&origin);
         let mut old_process = Store::open(origin.clone()).unwrap();
@@ -742,8 +814,8 @@ mod tests {
     }
 
     #[test]
-    fn same_bytes_is_true_for_two_identical_files_and_false_for_two_that_differ() {
-        let dir = temp_dir("same-bytes");
+    fn compare_holds_a_verified_for_two_identical_files_and_none_for_two_that_differ() {
+        let dir = temp_dir("compare-verified");
         std::fs::create_dir_all(&dir).unwrap();
         let a = dir.join("a");
         let b = dir.join("b");
@@ -753,11 +825,11 @@ mod tests {
         std::fs::write(&c, b"world").unwrap();
 
         assert!(
-            same_bytes(&a, &b).unwrap(),
+            verified::compare(&a, &b).unwrap().is_some(),
             "two identical files must agree"
         );
         assert!(
-            !same_bytes(&a, &c).unwrap(),
+            verified::compare(&a, &c).unwrap().is_none(),
             "two files with different content must not agree"
         );
 
@@ -803,6 +875,7 @@ mod tests {
     /// this pins it for `relocate`'s own.
     #[test]
     fn a_lane_name_the_guard_rejects_falls_back_without_failing() {
+        let _home = IsolatedVivacHome::new("lane-name-guard-vivac-home");
         let secret = "ghp_16C7e42F292c6912E7710c838347Ae178B4a";
         assert!(
             crate::redact::check_field("lane name", secret).is_some(),

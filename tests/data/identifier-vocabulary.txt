@@ -277,6 +277,7 @@ comment
 commit
 committed
 common
+compare
 complete
 component
 components
@@ -743,6 +744,7 @@ io
 ip
 is
 ish
+isolated
 it
 item
 items

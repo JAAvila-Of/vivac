@@ -345,6 +345,23 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
     }
 
     if cmd == "init" {
+        // `t594` fix-4, finding N7a: a folder can carry a `.vivac/lane`
+        // naming another tree entirely -- exactly what `relocate` leaves
+        // the origin holding -- without itself being `already_planted`, the
+        // renamed-away log and config never counting as one. Planting a
+        // fresh tree there anyway would exit 0 and print success while
+        // `stack`/`push` kept answering for the tree the lane actually
+        // names, leaving the new one to sit at zero bytes forever with no
+        // sign anything was wrong. Checked first, so the ordinary
+        // already-planted message below never gets the chance to fire for a
+        // lane whose own first event does not match what it claims either.
+        if let Some(lane) = lane::read(&cwd.join(store::DIR))? {
+            let is_own_tree = store::already_planted(&cwd)
+                && store::first_event_id(&cwd).as_deref() == Some(lane.project.as_str());
+            if !is_own_tree {
+                return Err(Failure::already_a_lane());
+            }
+        }
         // `f566`: a tree already there is something to open, not something
         // to create over. `Store::open` reads its config as is when one
         // exists, and only writes when there is none to read --

@@ -676,6 +676,41 @@ fn a_failed_move_never_overwrites_a_gitignore_the_destination_already_had() {
     std::fs::remove_dir_all(&dest).ok();
 }
 
+/// `t594` fix-4, finding N9: the same rule N3 gave `.gitignore` applies to
+/// `lock` -- `commit_copy` used to `File::create` the destination's `lock`
+/// unconditionally and track it for rollback regardless of whether one was
+/// already there, so a failed move could delete a `lock` the destination
+/// brought with it.
+#[test]
+fn a_failed_move_never_overwrites_a_lock_the_destination_already_had() {
+    let c = Sandbox::new_seeded("reloc-lock-preexisting");
+    c.ok(&["push", "a goal", "--why", "seed"]);
+    let dest = sibling_dir(&c, "lock-preexisting");
+    std::fs::create_dir_all(dest.join(".vivac")).unwrap();
+    std::fs::write(
+        dest.join(".vivac").join("lock"),
+        b"pre-existing-lock-marker",
+    )
+    .unwrap();
+    // Forces step 7 to fail, well after step 6 would already have reused
+    // the destination's own `lock` rather than writing over it.
+    std::fs::remove_dir_all(c.global_home()).ok();
+    std::fs::write(c.global_home(), b"not a directory").unwrap();
+
+    let (out, code) = c.run(&["relocate", dest.to_str().unwrap()]);
+    assert_ne!(code, 0, "{out}");
+
+    assert_eq!(
+        std::fs::read(dest.join(".vivac").join("lock")).unwrap(),
+        b"pre-existing-lock-marker",
+        "a lock the destination already had, and its content, must survive a \
+         failed move"
+    );
+
+    std::fs::remove_file(c.global_home()).ok();
+    std::fs::remove_dir_all(&dest).ok();
+}
+
 /// `t594` fix-3, finding 6 (N4): a `.vivac/` this run created and left
 /// empty must not survive its own rollback -- if it did, the folder would
 /// still read as busy the next time step 5 checked it, blocking the very
