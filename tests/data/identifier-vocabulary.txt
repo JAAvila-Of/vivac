@@ -153,6 +153,7 @@ blocks
 bodies
 body
 bogus
+bookkeeping
 bool
 boot
 born
@@ -932,6 +933,7 @@ nonexistent
 nonzero
 normalize
 normalized
+normalizes
 not
 note
 noted
@@ -1252,6 +1254,8 @@ restore
 restored
 result
 retain
+retried
+retry
 return
 returns
 rev
@@ -1321,6 +1325,7 @@ secs
 section
 sections
 security
+see
 seed
 seeded
 seek
@@ -1666,6 +1671,7 @@ verbatim
 verdict
 verdicts
 verification
+verified
 verify
 version
 very

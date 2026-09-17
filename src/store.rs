@@ -314,18 +314,30 @@ fn locate_here(from_dir: &Path, registry_dir: Option<&Path>) -> Result<Option<Lo
     }
 }
 
-/// Where the tree is for a folder that carries `.vivac/lane`, once it is
-/// known this folder does not hold that tree itself: the nearest ancestor
-/// whose `.vivac/` holds `events` or `config` **and** whose first event is
-/// the lane's own project -- an ancestor that fails the second half is some
-/// other tree's and is walked past, not stopped at -- and only then the
-/// registry, keyed by that same project.
+/// Where the tree is for a folder that carries `.vivac/lane`: itself, when
+/// it holds `events` or `config` **and** its own first event is the lane's
+/// own project; otherwise the nearest ancestor with the same two things
+/// true of it -- a folder that fails the second half, itself included, is
+/// some other tree's and is walked past, not stopped at -- and only then
+/// the registry, keyed by that same project.
+///
+/// The revalidation on `lane_dir` itself is not optional the way it might
+/// look: a folder can carry both a lane file and a live `config` without
+/// the two agreeing. `Store::open` writes a fresh, empty `config` the
+/// moment one is missing, and a concurrent reader can land here in the
+/// narrow window `relocate` opens between renaming the origin's `config`
+/// away and its `events` -- no crash required, just a read. Trusting
+/// `already_planted` alone there would read that orphaned config as this
+/// folder's own tree and answer an empty one; checking its first event
+/// against what the lane file names is what tells the two apart.
 fn resolve_lane(
     lane_dir: &Path,
     lane: crate::lane::Lane,
     registry_dir: Option<&Path>,
 ) -> Result<Located, Failure> {
-    if already_planted(lane_dir) {
+    if already_planted(lane_dir)
+        && first_event_id(lane_dir).as_deref() == Some(lane.project.as_str())
+    {
         return Ok(Located {
             root: lane_dir.to_path_buf(),
             lane_dir: lane_dir.to_path_buf(),
@@ -1305,6 +1317,59 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(located.root, noted_root);
+        assert_eq!(located.lane_dir, lane_dir);
+
+        fs::remove_dir_all(&lane_dir).ok();
+        fs::remove_dir_all(&registry_dir).ok();
+    }
+
+    /// `t594` fix-3: a folder can carry both a lane file and a stray
+    /// `config` of its own without the two agreeing. `Store::open` writes
+    /// a fresh, empty config the moment `events` is missing where `config`
+    /// is not -- no crash needed, a plain read does it -- and this is
+    /// exactly the state `relocate` can leave a reader looking at between
+    /// renaming the origin's own `config` away and its `events`. The
+    /// orphaned config here carries no events at all, so its own first
+    /// event id is `None`, and `None` never equals the lane's `project`.
+    #[test]
+    fn a_lane_folder_with_an_orphaned_config_is_not_read_as_its_own_tree() {
+        let lane_dir = locate_tmp("orphan-config");
+        let lane = crate::lane::Lane {
+            version: 1,
+            id: crate::lane::new_id(),
+            project: "01ORPHANPROJECTAAAAAAAAAA".into(),
+        };
+        crate::lane::write(&lane_dir.join(DIR), &lane).unwrap();
+        // The orphaned config: `Store::open` regenerates one the moment it
+        // finds this folder's own `.vivac/` with no `config` in it, and
+        // the fresh one it mints carries a project id of its own, never
+        // `lane.project`.
+        Store::open(lane_dir.clone()).unwrap();
+        assert!(
+            lane_dir.join(DIR).join(CONFIG).is_file(),
+            "the setup itself must have regenerated a config here"
+        );
+        assert!(!lane_dir.join(DIR).join(LOG).is_file());
+
+        let registry_dir = locate_tmp("orphan-config-registry");
+        let noted_root = locate_tmp("orphan-config-fake-root");
+        crate::registry::note(
+            &registry_dir,
+            &lane.project,
+            crate::registry::Sighting {
+                root: &noted_root,
+                lane: None,
+                repos: None,
+            },
+        );
+
+        let located = locate_from(&lane_dir, Some(&registry_dir))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            located.root, noted_root,
+            "an orphaned config must not make this folder answer as its own tree"
+        );
         assert_eq!(located.lane_dir, lane_dir);
 
         fs::remove_dir_all(&lane_dir).ok();

@@ -92,6 +92,58 @@ fn the_tree_moves_and_the_old_folder_stays_a_lane() {
     std::fs::remove_dir_all(&dest).ok();
 }
 
+/// `t594` fix-3: the exact failure this module exists to close, reached
+/// with nobody dying at all. `relocate`'s own step 8 renames `config`
+/// away first and `events` second; a read landing in between finds
+/// `events` still there and `config` missing, and `Store::open` mints a
+/// fresh, empty config right there -- the one the folder was never
+/// supposed to have. That orphaned config outlives the second rename,
+/// left over once `events` is gone too, and a folder with a lane file and
+/// nothing else to check against it used to read as its own, empty tree.
+///
+/// Fabricated by hand rather than raced for: a genuine race against a
+/// window of two file renames is not something a black-box test can
+/// reliably win, and the state on disk answers the same question either
+/// way. Reconstructed in the order the real window actually opens it:
+/// `events` is put back so a read has something real to regenerate a
+/// config *against* (config alone, with `events` already gone, reads as
+/// no tree at all and never reaches the bug), and only then is `events`
+/// taken away again, the way the second rename would have -- leaving the
+/// orphaned config the first read minted as the only thing behind.
+#[test]
+fn a_reader_landing_between_the_two_renames_does_not_see_an_empty_tree() {
+    let c = Sandbox::new_seeded("reloc-orphan-window");
+    c.ok(&["push", "a distinctive goal", "--why", "seed"]);
+    let dest = sibling_dir(&c, "orphan-window-dest");
+
+    let (out, code) = c.run(&["relocate", dest.to_str().unwrap()]);
+    assert_eq!(code, 0, "{out}");
+
+    let vivac_dir = c.0.join(".vivac");
+    std::fs::rename(vivac_dir.join("events.relocated"), vivac_dir.join("events")).unwrap();
+    let (stack_out, stack_code) = c.run(&["stack"]);
+    assert_eq!(stack_code, 0, "{stack_out}");
+    assert!(
+        vivac_dir.join("config").is_file(),
+        "the read itself must have regenerated a config here, config missing and \
+         events present is exactly the window relocate's own step 8 opens"
+    );
+    std::fs::rename(vivac_dir.join("events"), vivac_dir.join("events.relocated")).unwrap();
+    // The folder is now exactly what a reader landing in the real window
+    // would see: a lane file, an orphaned config with no events behind
+    // it, and nothing else.
+
+    let (after_out, after_code) = c.run(&["find", "distinctive"]);
+    assert_eq!(after_code, 0, "{after_out}");
+    assert!(
+        says(&after_out, "a distinctive goal"),
+        "a reader here must still find the real tree at the destination, not an \
+         empty one seeded on top of an orphaned config: {after_out}"
+    );
+
+    std::fs::remove_dir_all(&dest).ok();
+}
+
 #[test]
 fn a_busy_destination_is_refused() {
     let c = Sandbox::new_seeded("reloc-busy-src");
@@ -523,6 +575,139 @@ fn relocate_dot_dot_moves_the_tree_up_one_level() {
     std::fs::remove_dir_all(&home).ok();
 }
 
+/// `t594` fix-3, finding N1: `to_absolute` only joined, and `relocate ..`
+/// left the registry holding the raw `…\clone\..`. `Path::file_name` of a
+/// path ending in `..` is `None`, so `render::project_name` read that back
+/// as the bare word `"-"`, and every project relocated this way would have
+/// collided on that one name in `find --everywhere` and refused
+/// `--project` outright.
+#[test]
+fn relocate_dot_dot_normalizes_the_path_the_registry_keeps() {
+    let home = unique_dir("dotdot-normalize-home");
+    let container = unique_dir("dotdot-normalize-container");
+    let clone = container.join("clone");
+    std::fs::create_dir_all(&clone).unwrap();
+
+    let (init_out, init_code) = run_in(&clone, &home, &["init"]);
+    assert_eq!(init_code, 0, "{init_out}");
+    let (push_out, push_code) = run_in(&clone, &home, &["push", "a goal", "--why", "seed"]);
+    assert_eq!(push_code, 0, "{push_out}");
+
+    let (out, code) = run_in(&clone, &home, &["relocate", ".."]);
+    assert_eq!(code, 0, "{out}");
+
+    let registry = std::fs::read_to_string(home.join("projects")).unwrap();
+    assert!(
+        !registry.contains(".."),
+        "the registry must never keep an unresolved .. in a path: {registry}"
+    );
+
+    let project_name = container.file_name().unwrap().to_str().unwrap();
+    let (why_out, why_code) = run_in(&clone, &home, &["why", "g1", "--project", project_name]);
+    assert_eq!(
+        why_code, 0,
+        "a project name built from the real folder must resolve: {why_out}"
+    );
+
+    std::fs::remove_dir_all(&container).ok();
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// `t594` fix-3, finding 4 (B1): `relocate` used to pass from any
+/// subfolder of the tree, since `store::locate`'s own upward walk makes
+/// `located.root == located.lane_dir` true from there too, and then print
+/// a lane and a log neither one is actually in.
+#[test]
+fn relocate_from_a_subfolder_of_the_tree_is_refused() {
+    let c = Sandbox::new_seeded("reloc-subfolder");
+    c.ok(&["push", "a goal", "--why", "seed"]);
+    let deep = c.0.join("src").join("deep");
+    std::fs::create_dir_all(&deep).unwrap();
+    let dest = sibling_dir(&c, "subfolder-dest");
+
+    let (out, code) = run_in(
+        &deep,
+        c.global_home(),
+        &["relocate", dest.to_str().unwrap()],
+    );
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        says(
+            &out,
+            "Run relocate in the folder that holds the tree, not in one of its lanes."
+        ),
+        "{out}"
+    );
+    assert!(
+        !dest.exists(),
+        "a refused relocate must not create the destination"
+    );
+    assert!(c.0.join(".vivac").join("events").is_file());
+}
+
+/// `t594` fix-3, finding N3: the rollback used to copy over a `.gitignore`
+/// the destination already had and then track the result as its own,
+/// losing whatever line someone had added to it. `M1`'s own test never
+/// saw this because it makes `.gitignore` a directory, the one case a
+/// copy cannot land on top of at all.
+#[test]
+fn a_failed_move_never_overwrites_a_gitignore_the_destination_already_had() {
+    let c = Sandbox::new_seeded("reloc-gitignore-preexisting");
+    c.ok(&["push", "a goal", "--why", "seed"]);
+    let dest = sibling_dir(&c, "gitignore-preexisting");
+    std::fs::create_dir_all(dest.join(".vivac")).unwrap();
+    std::fs::write(dest.join(".vivac").join(".gitignore"), b"*\n!keep-this\n").unwrap();
+    // Forces step 7 to fail, well after step 6 would already have reused
+    // the destination's own `.gitignore` rather than writing over it.
+    std::fs::remove_dir_all(c.global_home()).ok();
+    std::fs::write(c.global_home(), b"not a directory").unwrap();
+
+    let (out, code) = c.run(&["relocate", dest.to_str().unwrap()]);
+    assert_ne!(code, 0, "{out}");
+
+    assert_eq!(
+        std::fs::read(dest.join(".vivac").join(".gitignore")).unwrap(),
+        b"*\n!keep-this\n",
+        "a .gitignore the destination already had, and its content, must survive a \
+         failed move"
+    );
+
+    std::fs::remove_file(c.global_home()).ok();
+    std::fs::remove_dir_all(&dest).ok();
+}
+
+/// `t594` fix-3, finding 6 (N4): a `.vivac/` this run created and left
+/// empty must not survive its own rollback -- if it did, the folder would
+/// still read as busy the next time step 5 checked it, blocking the very
+/// retry a failed move should always allow.
+#[test]
+fn a_destination_left_empty_by_a_failed_move_can_be_retried() {
+    let c = Sandbox::new_seeded("reloc-retry-empty");
+    c.ok(&["push", "a goal", "--why", "seed"]);
+    let dest = sibling_dir(&c, "retry-empty-dest");
+    // The `.vivac/` this run creates in step 6 has nothing foreign inside
+    // it, so a step 7 failure has to roll it back outright.
+    std::fs::remove_dir_all(c.global_home()).ok();
+    std::fs::write(c.global_home(), b"not a directory").unwrap();
+
+    let (out, code) = c.run(&["relocate", dest.to_str().unwrap()]);
+    assert_ne!(code, 0, "{out}");
+    assert!(
+        !dest.join(".vivac").exists(),
+        "a .vivac/ this run created and left empty must not survive its own rollback"
+    );
+    std::fs::remove_file(c.global_home()).ok();
+
+    let (retry_out, retry_code) = c.run(&["relocate", dest.to_str().unwrap()]);
+    assert_eq!(
+        retry_code, 0,
+        "a retry must not be blocked by the failed attempt: {retry_out}"
+    );
+    assert!(dest.join(".vivac").join("events").is_file());
+
+    std::fs::remove_dir_all(&dest).ok();
+}
+
 /// `t594` fix-2, finding 1: step 7's own rollback. `record_move` -- unlike
 /// `note`, which never fails its caller -- fails the whole operation when
 /// the registry cannot be written, and the origin has to come back whole.
@@ -575,6 +760,13 @@ fn a_blocked_rename_at_the_origin_still_leaves_it_a_working_tree() {
 
     let (out, code) = c.run(&["relocate", dest.to_str().unwrap()]);
     assert_ne!(code, 0, "{out}");
+    assert!(
+        says(
+            &out,
+            "Something failed while updating this folder's own bookkeeping."
+        ),
+        "a step 8 failure must say what to check, not just the bare IO error: {out}"
+    );
 
     assert!(
         c.0.join(".vivac").join("lane").is_file(),
