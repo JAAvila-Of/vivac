@@ -337,9 +337,16 @@ fn setup_on_an_existing_trees_own_folder_declares_main_and_changes_nothing_else(
     // match, down to the byte.
     let last_before = before_lines[before_lines.len() - 1];
     let last_after = after_lines[after_lines.len() - 1];
+    let before_rest = last_before
+        .split_once("tokens")
+        .unwrap_or_else(|| panic!("the footer lost its token count: {last_before}"))
+        .1;
+    let after_rest = last_after
+        .split_once("tokens")
+        .unwrap_or_else(|| panic!("the footer lost its token count: {last_after}"))
+        .1;
     assert_eq!(
-        last_before.split_once("tokens").map(|(_, rest)| rest),
-        last_after.split_once("tokens").map(|(_, rest)| rest),
+        before_rest, after_rest,
         "the footer changed in more than its own token count"
     );
 }

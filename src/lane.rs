@@ -25,7 +25,10 @@ pub const FILE: &str = crate::store::LANE;
 
 /// The founding lane of every tree. As opaque as a ULID, and kept as a
 /// word only because every event written before lanes existed already
-/// says it.
+/// says it. It is the id and nothing else: what a reader sees is the
+/// lane's name, which `setup` takes from the folder it is, exactly like
+/// every other lane's (`d624`). Reading this word off a brief was how
+/// people took it for a git branch.
 pub const MAIN: &str = "main";
 
 const VERSION: u32 = 1;
