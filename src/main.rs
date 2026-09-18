@@ -313,7 +313,11 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         // `open` also takes `--all`, the same escape hatch `tree` gives the
         // list it caps (`d383`): the cap must never cost access to the rest.
         "open" => &["json", "all"],
-        "stack" | "parked" | "triage" | "stats" | "vivacs" | "rules" => &["json"],
+        // `--lanes` is `stack`'s own, `t594` §5.5: every lane's own
+        // stack, not only this folder's, is nothing the other reads in
+        // this arm take.
+        "stack" => &["json", "lanes"],
+        "parked" | "triage" | "stats" | "vivacs" | "rules" => &["json"],
         // `--gates` is its own on top of `--json`: the machine-wide scan
         // `d351` adds is nothing the other reads in this arm take.
         "check" => &["json", "gates"],
@@ -667,7 +671,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         // reachable from either call site; the call just moves here, right
         // after the `Outcome` each one now returns is printed.
         if matches!(cmd, "focus" | "restore") {
-            render::stack(&ctx.tree, a)?;
+            render::stack(&ctx.tree, &ctx.store.root, a)?;
         }
         return Ok(0);
     }
@@ -694,7 +698,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         "open" => render::open(&ctx.tree, a),
         "rules" => render::rules(&ctx.tree, a),
         "find" => render::find(&ctx.tree, a),
-        "stack" => render::stack(&ctx.tree, a),
+        "stack" => render::stack(&ctx.tree, &ctx.store.root, a),
         "parked" => render::parked(&ctx.tree, a),
         "triage" => render::triage(&ctx.tree, a),
         "reconcile" => reconcile::reconcile(&ctx.tree, &ctx.lane_dir, a),
