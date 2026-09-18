@@ -703,6 +703,59 @@ fn a_pending_worktree_inherits_the_declared_root_commit_without_git() {
     std::fs::remove_dir_all(&home).ok();
 }
 
+/// `f609`: a worktree that joins before `main` ever carried a root commit
+/// for its own repository copies that absence forward
+/// (`ops::resolve_whose`) and keeps it -- nothing revisits the worktree's
+/// own declaration once `main` later gains one of its own. `setup` run
+/// again in `root`, for real this time, has to notice and redeclare it.
+#[test]
+fn a_worktrees_own_lane_is_declared_with_the_root_commit_it_shares() {
+    let (root, feature, home) = worktree_inside_fixture("gains-root");
+    append_raw_line(
+        &root,
+        r#"{"seq":1,"id":"01SEEDMAINAAAAAAAAAAAAAAAA","ts":"2026-01-01T00:00:00Z","actor":"a_test0000000","lane":"main","payload":{"type":"lane.declared","lane":"main","name":"main","repos":[{"path":"."}]}}"#,
+    );
+    seed_lanes_config(&root);
+
+    let (out, code) = run(&feature, &home, &["push", "Feature work", "--why", "seed"]);
+    assert_eq!(code, 0, "{out}");
+    let lane_id = lane_id_of(&feature);
+    let joined = std::fs::read_to_string(root.join(".vivac").join("events"))
+        .unwrap()
+        .lines()
+        .nth(1)
+        .expect("the worktree's own join wrote a second line")
+        .to_string();
+    assert!(
+        joined.contains(&lane_id) && !joined.contains("\"root\""),
+        "the worktree should have joined with no root to inherit yet:\n{joined}"
+    );
+
+    let rev_list = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .args(["rev-list", "--max-parents=0", "HEAD"])
+        .output()
+        .unwrap();
+    let real_root = String::from_utf8_lossy(&rev_list.stdout).trim().to_string();
+
+    setup_ok(&root, &home);
+
+    let log = std::fs::read_to_string(root.join(".vivac").join("events")).unwrap();
+    let declared_again = log
+        .lines()
+        .rfind(|l| l.contains(&lane_id) && l.contains("\"type\":\"lane.declared\""))
+        .expect("the worktree's lane never appears again after main gained a root");
+    assert!(
+        declared_again.contains(&format!("\"root\":\"{real_root}\"")),
+        "the worktree's own lane still names no root commit -- or the wrong \
+         one -- after main gained the real one:\n{declared_again}"
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+    std::fs::remove_dir_all(&home).ok();
+}
+
 /// `t594`: a worktree that has not joined yet reads from
 /// `ops::PENDING_VIEW`, an empty lane name, and the header used to print
 /// that empty string verbatim -- `lane: ` with nothing after the colon,
@@ -971,6 +1024,53 @@ fn a_submodule_inside_a_worktree_does_not_join_a_lane_of_its_own() {
     assert!(
         !log.contains("\"type\":\"lane.declared\""),
         "a lane.declared reached the log for a folder that never asked to join:\n{log}"
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// `f606`: a submodule inside a linked worktree does not come out as one
+/// (`store::Located::worktree`'s own doc) -- the walk that finds it stops
+/// at the submodule's own `.git`, never reaching the worktree's. Unlike
+/// the test above, `main` already has a lane declared here, so the write
+/// from inside `sub` actually reaches the step that asks whether it sits
+/// inside a worktree of its own (`t594` §2.3): it should join `feature`,
+/// the worktree that actually contains it, not sign silently as `main`.
+///
+/// `#[ignore]`: closing it means changing the walk `anchor::locate` does --
+/// cached by starting folder, and shared by `in_working_tree` and
+/// `main_copy_of` besides `linked_worktree` itself -- so it looks past a
+/// submodule's own `.git` instead of stopping there. That is the anchor's
+/// one shared walk, not a fix local to this call, and `Located::worktree`'s
+/// own doc (`store.rs:335-339`) already named the same trade before this
+/// test did (`f606`).
+#[test]
+#[ignore = "f606: needs anchor::locate's shared walk to look past a \
+            submodule's own .git rather than stopping there -- touches the \
+            anchor, not a local fix"]
+fn a_submodule_inside_a_linked_worktree_is_seen_as_one() {
+    let (root, feature, home) = worktree_inside_fixture("submodule-seen");
+    append_raw_line(
+        &root,
+        r#"{"seq":1,"id":"01SEEDMAINAAAAAAAAAAAAAAAA","ts":"2026-01-01T00:00:00Z","actor":"a_test0000000","lane":"main","payload":{"type":"lane.declared","lane":"main","name":"main","repos":[{"path":"."}]}}"#,
+    );
+    seed_lanes_config(&root);
+
+    let sub = feature.join("sub");
+    write_submodule_git_file(&sub, &feature.join("sub-gitdir"));
+
+    let (out, code) = run(
+        &sub,
+        &home,
+        &["push", "From the submodule", "--why", "seed"],
+    );
+    assert_eq!(code, 0, "{out}");
+
+    assert!(
+        feature.join(".vivac").join("lane").exists(),
+        "a write from inside the submodule should have joined the worktree \
+         that contains it, not signed as main with no lane file at all"
     );
 
     std::fs::remove_dir_all(&root).ok();

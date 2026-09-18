@@ -844,6 +844,12 @@ struct LanePlan {
     /// declaration, and that is said rather than left silent, without
     /// repeating which repository it was.
     excluded: Option<(usize, &'static str)>,
+    /// Other lanes in this tree that joined as a worktree of one of these
+    /// repositories while it still had no root commit recorded, and are
+    /// still declared with none (`f609`): each one's id, its name kept as
+    /// it was, and the repository it shares with this folder's own, now
+    /// carrying the root commit this run just found for it.
+    stale_worktrees: Vec<(String, String, crate::event::Repo)>,
 }
 
 /// `scanned`, filtered through the redaction guard (`d600`): what is left
@@ -977,6 +983,7 @@ fn plan_lane(roots: &super::Roots, lane_name: Option<&str>) -> LanePlan {
     let unchanged = existing
         .declared
         .is_some_and(|(n, r)| n == name && r == repos);
+    let stale_worktrees = stale_worktree_roots(&roots.here, &repos, &lane_id, &folded);
 
     LanePlan {
         lane_id,
@@ -986,7 +993,74 @@ fn plan_lane(roots: &super::Roots, lane_name: Option<&str>) -> LanePlan {
         needs_lock,
         unchanged,
         excluded,
+        stale_worktrees,
     }
+}
+
+/// The already-declared worktree lanes one of `here`'s own repositories
+/// explains but never told: each one joined while its matching repository
+/// here still had no root commit recorded, copied that absence forward
+/// (`ops::resolve_whose`), and nothing has revisited it since -- the
+/// tree's own fold has no way to tell a worktree lane's folder apart from
+/// any other lane's, so this reads it straight off git's own worktree
+/// bookkeeping instead of guessing at it from the fold alone (`f609`).
+///
+/// Skips `lane_id`: a repository whose own root just changed already gets
+/// declared by the caller through the ordinary path, and finding it here
+/// too would only redeclare it a second time under the same identity.
+fn stale_worktree_roots(
+    here: &Path,
+    repos: &[crate::event::Repo],
+    lane_id: &str,
+    folded: &crate::model::Tree,
+) -> Vec<(String, String, crate::event::Repo)> {
+    let mut out = Vec::new();
+    for repo in repos {
+        let Some(root) = &repo.root else { continue };
+        for worktree in linked_worktrees_of(&here.join(&repo.path)) {
+            let Ok(Some(lane)) = crate::lane::read(&worktree.join(crate::store::DIR)) else {
+                continue;
+            };
+            if lane.id == lane_id {
+                continue;
+            }
+            let Some(state) = folded.lanes.get(&lane.id) else {
+                continue;
+            };
+            let pending_shape = [crate::event::Repo {
+                path: ".".to_string(),
+                root: None,
+            }];
+            if state.repos == pending_shape {
+                out.push((
+                    lane.id,
+                    state.name.clone(),
+                    crate::event::Repo {
+                        path: ".".to_string(),
+                        root: Some(root.clone()),
+                    },
+                ));
+            }
+        }
+    }
+    out
+}
+
+/// Every worktree git still links to the repository at `repo_root`, read
+/// off `.git/worktrees/*/gitdir` rather than spawning `git worktree list`:
+/// one file read costs nothing beside the `git rev-list` `repos::scan`
+/// already pays for this same folder, and a worktree git has pruned
+/// leaves no `gitdir` file behind for this to find in the first place
+/// (`f609`).
+fn linked_worktrees_of(repo_root: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(repo_root.join(".git").join("worktrees")) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|e| std::fs::read_to_string(e.path().join("gitdir")).ok())
+        .filter_map(|raw| PathBuf::from(raw.trim()).parent().map(Path::to_path_buf))
+        .collect()
 }
 
 /// `main`'s id never changes. Its name falls back to this folder's own
@@ -1085,7 +1159,47 @@ fn write_lane(roots: &super::Roots, plan: &LanePlan) -> Result<(), Failure> {
         crate::ops::Whose::Declared(plan.lane_id.clone(), roots.here.clone()),
     )?;
     ctx.lock_for_write()?;
-    crate::ops::declare_lane(&mut ctx, plan.name.clone(), plan.repos.clone())
+    crate::ops::declare_lane(&mut ctx, plan.name.clone(), plan.repos.clone())?;
+    for (lane, name, repo) in plan.stale_worktrees.clone() {
+        redeclare_worktree_root(&mut ctx, lane, name, repo)?;
+    }
+    Ok(())
+}
+
+/// Redeclares a stale worktree lane's own repository with the root commit
+/// its founding lane just learned, straight through `Store::append`
+/// rather than `Ctx::emit` (`f609`). `emit` would run `where_to_write`
+/// against `ctx.lane_dir`, which is wherever this run is standing --
+/// `roots.here`, never the worktree's own folder this call never visited
+/// -- and hand that lane a location that is not its own. Writing only
+/// `lane.declared` says the one thing this run actually knows: the
+/// repository's root commit, and nothing about where that lane is right
+/// now.
+fn redeclare_worktree_root(
+    ctx: &mut crate::ops::Ctx,
+    lane: String,
+    name: String,
+    repo: crate::event::Repo,
+) -> Result<(), Failure> {
+    let lock = ctx
+        .lock
+        .as_ref()
+        .ok_or_else(|| Failure::Io(std::io::Error::other("write without the tree's lock")))?;
+    let appended = ctx.store.append(
+        lock,
+        &lane,
+        vec![crate::event::Body::LaneDeclared {
+            lane: lane.clone(),
+            name,
+            repos: vec![repo],
+        }],
+        ctx.tree.seq,
+        ctx.tree.has_governance,
+    )?;
+    for e in &appended.events {
+        ctx.tree.apply(e.seq, &e.ts, &e.lane, &e.payload);
+    }
+    Ok(())
 }
 
 /// Locks the tree's config to `t594`'s own sentence without touching the
