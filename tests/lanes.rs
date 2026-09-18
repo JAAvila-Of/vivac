@@ -297,7 +297,9 @@ fn running_setup_again_unchanged_does_not_write_a_second_event() {
 /// (5): a tree of today, where `setup` had never run, gets `main`
 /// declared when `setup` runs in its own folder (`t594` §4.5.2, case
 /// (b)) -- and every other command answers exactly as it did before,
-/// down to the byte.
+/// down to the byte. `d624`: the one exception is the header's own lane
+/// name, which moves from the fallback `main` to this folder's own name,
+/// the same as declaring any other lane already does.
 #[test]
 fn setup_on_an_existing_trees_own_folder_declares_main_and_changes_nothing_else() {
     let c = Sandbox::new_seeded("declare-existing-main");
@@ -309,7 +311,37 @@ fn setup_on_an_existing_trees_own_folder_declares_main_and_changes_nothing_else(
 
     let (after, code2) = run(&c.0, c.global_home(), &["brief"]);
     assert_eq!(code2, 0, "{after}");
-    assert_eq!(before, after, "declaring main changed what brief answers");
+
+    let before_lines: Vec<&str> = before.lines().collect();
+    let after_lines: Vec<&str> = after.lines().collect();
+    assert_eq!(
+        before_lines.len(),
+        after_lines.len(),
+        "declaring main changed the line count:\nbefore:\n{before}\nafter:\n{after}"
+    );
+
+    let folder_name = c.0.file_name().unwrap().to_string_lossy().into_owned();
+    assert_eq!(
+        before_lines[0].replace("lane: main", &format!("lane: {folder_name}")),
+        after_lines[0],
+        "the header changed in more than its own lane name"
+    );
+    assert_eq!(
+        &before_lines[1..before_lines.len() - 1],
+        &after_lines[1..after_lines.len() - 1],
+        "declaring main changed something besides its own header name"
+    );
+
+    // The header line grew longer, so the footer's own token count grows
+    // with it (`brief.rs:875`); everything past that count still has to
+    // match, down to the byte.
+    let last_before = before_lines[before_lines.len() - 1];
+    let last_after = after_lines[after_lines.len() - 1];
+    assert_eq!(
+        last_before.split_once("tokens").map(|(_, rest)| rest),
+        last_after.split_once("tokens").map(|(_, rest)| rest),
+        "the footer changed in more than its own token count"
+    );
 }
 
 // ---------------------------------------------------------------------------

@@ -2914,3 +2914,37 @@ fn the_join_command_printed_by_the_refusal_actually_works() {
     assert_eq!(join_code, 0, "{join_out}");
     assert!(second.join(".vivac").join("lane").exists());
 }
+
+// ---------------------------------------------------------------------------
+// 9. The founding lane names itself after its own folder too (`d624`).
+// ---------------------------------------------------------------------------
+
+/// Every other lane is already named after the folder it is
+/// (`claude_code.rs:837`); the founding one was the exception, and the
+/// exception read as a git branch (`f611`, `d624`).
+#[test]
+fn setup_names_the_founding_lane_after_its_own_folder() {
+    let c = Sandbox::new_empty("setup-founding-lane-folder-name");
+    let here = c.0.join("webapi");
+    std::fs::create_dir_all(&here).unwrap();
+    let (out, code) = run_in(&here, c.global_home(), &["setup", "claude-code", "--yes"]);
+    assert_eq!(code, 0, "{out}");
+    let log = std::fs::read_to_string(here.join(".vivac").join("events")).unwrap();
+    assert!(
+        log.contains("\"type\":\"lane.declared\",\"lane\":\"main\",\"name\":\"webapi\""),
+        "{log}"
+    );
+}
+
+/// §2.6, once more: the name changes when `setup` runs and never
+/// before, so a tree from 0.11 prints the header it always printed.
+#[test]
+fn a_tree_nobody_has_run_setup_in_still_says_main() {
+    let c = Sandbox::new_seeded("setup-founding-lane-untouched");
+    let b = c.ok(&["brief", "--now", "2026-09-18T10:00:00Z"]);
+    let header = b.lines().next().unwrap_or("");
+    assert!(
+        header.contains(" · lane: main · 2026-09-18"),
+        "a tree nobody ran setup in should still say main:\n{header}"
+    );
+}

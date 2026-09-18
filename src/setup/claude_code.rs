@@ -827,13 +827,12 @@ fn plan_lane(roots: &super::Roots, lane_name: Option<&str>) -> LanePlan {
         .unwrap_or_default();
     // `--lane-name` (`t594` §4.5's own `--lane-name <name>`), or this
     // folder's own name when nobody named it: the word `declared_name`
-    // guards below either way, for every lane but `main`. `main_lane`
-    // reads `lane_name` directly instead, below, never falling back to
-    // this folder's own name the way every other lane does: `main` stays
-    // as opaque as a ULID when nobody asks to rename it (`lane::MAIN`'s
-    // own doc), but accepting `--lane-name` and silently doing nothing
-    // with it -- §2.3 names both planting and joining -- would be worse
-    // than either using it or refusing it outright (`t594`).
+    // guards below either way, for every lane -- `main` included since
+    // `d624`, which made `main_lane` (`:891-897`) fall back to this same
+    // folder name instead of staying literally `main` when nobody names
+    // it. Accepting `--lane-name` and silently doing nothing with it --
+    // §2.3 names both planting and joining -- would be worse than either
+    // using it or refusing it outright (`t594`).
     let requested_name = lane_name.unwrap_or(&folder_name);
     let here_has_its_own_vivac = roots
         .located
@@ -847,9 +846,9 @@ fn plan_lane(roots: &super::Roots, lane_name: Option<&str>) -> LanePlan {
     let folded = fold_tree(&roots.tree);
 
     let (lane_id, name, is_new) = match &roots.located {
-        None => main_lane(lane_name),
+        None => main_lane(lane_name, &folder_name),
         Some(l) if here_has_its_own_vivac && l.lane.is_none() && !folded.main_claimed => {
-            main_lane(lane_name)
+            main_lane(lane_name, &folder_name)
         }
         Some(l) if here_has_its_own_vivac && l.lane.is_none() => {
             let id = crate::lane::new_id();
@@ -885,14 +884,12 @@ fn plan_lane(roots: &super::Roots, lane_name: Option<&str>) -> LanePlan {
     }
 }
 
-/// `main`'s id never changes, and neither does its name, unless
-/// `lane_name` explicitly asks for one -- never a fallback to this
-/// folder's own name, the way every other lane gets one (`t594`).
-fn main_lane(lane_name: Option<&str>) -> (String, String, bool) {
-    let name = match lane_name {
-        Some(requested) => crate::lane::declared_name(crate::lane::MAIN, requested),
-        None => crate::lane::MAIN.to_string(),
-    };
+/// `main`'s id never changes. Its name falls back to this folder's own
+/// name exactly like every other lane's (`:837`), unless `lane_name`
+/// asks for a different one (`d624`).
+fn main_lane(lane_name: Option<&str>, folder_name: &str) -> (String, String, bool) {
+    let requested_name = lane_name.unwrap_or(folder_name);
+    let name = crate::lane::declared_name(crate::lane::MAIN, requested_name);
     (crate::lane::MAIN.to_string(), name, false)
 }
 
