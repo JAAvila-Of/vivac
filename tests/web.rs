@@ -1616,3 +1616,85 @@ fn the_map_points_at_the_lane_of_the_folder_the_web_was_opened_from() {
     let b_stop = stop_of_title(&map.body, "Backend webapi cleanup");
     assert_eq!(here, b_stop, "{}", map.body);
 }
+
+/// When the folder the web was opened from does not belong to this tree at
+/// all, the control has no position of its own to answer for and stops
+/// asking: it points at the lane that wrote most recently and says that is
+/// not where you are.
+#[test]
+fn the_map_falls_back_to_the_last_writer_and_says_so() {
+    // `main`'s own stack has to stay empty, or `Whose::Founding` -- what
+    // every project the server was not started in resolves to -- would land
+    // on a real stack of its own and never reach the fallback this test is
+    // about. `--join` needs the tree to already have an identity, so this
+    // gives it one and immediately closes it back off the stack.
+    let a = Sandbox::new_seeded("web-lanes-fallback-a");
+    a.ok(&["push", "Seed the tree's own identity", "--why", "seed"]);
+    a.ok(&["done", "g1", "not main's own thread"]);
+    let b = join_lane(&a, "web-lanes-fallback-b", "sonar");
+    b.ok(&["push", "Backend webapi cleanup", "--why", "seed"]);
+    let c = join_lane(&a, "web-lanes-fallback-c", "hotfix");
+    // Written after `b`'s, so `hotfix` is the lane that wrote most
+    // recently, and the one the fallback has to point at.
+    c.ok(&["push", "Hotfix triage", "--why", "seed"]);
+
+    let server = Server::start_serving(&std::env::temp_dir(), a.global_home(), &[a.0.as_path()]);
+    let boot = call(server.port, &server.boot_path(), &[("Host", server.host())]);
+    let token = token_from(&boot);
+    let id = a.0.file_name().unwrap().to_string_lossy().into_owned();
+    let map = call(
+        server.port,
+        &format!("/p/{id}/tree"),
+        &[("Host", server.host()), ("X-Vivac-Token", token)],
+    );
+    assert_eq!(map.status, 200, "{}", map.body);
+    assert!(!map.body.contains("Where am I?"), "{}", map.body);
+    assert!(
+        map.body
+            .contains("Where the last write is (not where you are)"),
+        "{}",
+        map.body
+    );
+    let here = here_stop(&map.body).unwrap_or_else(|| panic!("no fallback control:\n{}", map.body));
+    let c_stop = stop_of_title(&map.body, "Hotfix triage");
+    assert_eq!(here, c_stop, "{}", map.body);
+}
+
+/// `d200`'s own index follows the same rule for its focus field, and not
+/// only the Today page it shares the underlying function with: a shared
+/// function says where the data comes from, not that this surface prints
+/// it.
+#[test]
+fn the_index_names_whose_focus_it_is_too() {
+    let a = Sandbox::new_seeded("web-lanes-index-a");
+    a.ok(&["push", "Main line work", "--why", "seed"]);
+    let b = join_lane(&a, "web-lanes-index-b", "hotfix");
+    b.ok(&["push", "Hotfix triage", "--why", "seed"]);
+    let c = join_lane(&a, "web-lanes-index-c", "sonar");
+    c.ok(&["push", "Backend webapi cleanup", "--why", "seed"]);
+    let other = Sandbox::new_seeded_in("web-lanes-index-other", a.global_home());
+
+    let server = Server::start_serving(
+        &std::env::temp_dir(),
+        a.global_home(),
+        &[a.0.as_path(), other.0.as_path()],
+    );
+    let boot = call(server.port, &server.boot_path(), &[("Host", server.host())]);
+    let token = token_from(&boot);
+    let index = call(
+        server.port,
+        "/",
+        &[("Host", server.host()), ("X-Vivac-Token", token)],
+    );
+    assert_eq!(index.status, 200, "{}", index.body);
+    assert!(
+        index.body.contains("Backend webapi cleanup"),
+        "{}",
+        index.body
+    );
+    assert!(
+        index.body.contains("in lane sonar, 1 of 3 lanes"),
+        "{}",
+        index.body
+    );
+}

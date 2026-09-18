@@ -1139,8 +1139,18 @@ pub(super) fn map_page(project: &str, name: &str, tree: &Tree, query: &str) -> S
     }
 
     // Where "where am I" goes. The focus is a node, and a node is a stop;
-    // if the stack is empty there is nowhere to go and the button is not
-    // drawn at all rather than drawn dead.
+    // if the stack is empty there is nowhere to go, which happens for a
+    // real reason once a tree holds more than one lane: `tree.lane()` is
+    // the guess `Whose::Founding` falls back to for every project the web
+    // was not started in (`project::Registry::open`'s own doc), and that
+    // guess has no stack of its own to point at. "Where am I" has no
+    // answer for a folder that is not a lane of this tree at all, so
+    // rather than draw the button dead, it stops asking and says what it
+    // is doing instead: it points at the lane that wrote most recently and
+    // says that is not where you are, the same turn `render.rs`'s own
+    // "(not the branch you are on)" already takes (`t594` §5.4). With one
+    // lane, or with none of them holding a stack, there is nothing to fall
+    // back to either, and the button stays undrawn exactly as before.
     let focus = tree
         .focus()
         .and_then(|f| map.stops.iter().position(|s| s.node.num == f.num));
@@ -1149,7 +1159,15 @@ pub(super) fn map_page(project: &str, name: &str, tree: &Tree, query: &str) -> S
             "<button class=\"tool\" id=\"here\" type=\"button\" data-stop=\"{i}\">\
              Where am I?</button>\n"
         ),
-        None => String::new(),
+        None => match crate::brief::last_writer(tree)
+            .and_then(|w| map.stops.iter().position(|s| s.node.num == w.focus.num))
+        {
+            Some(i) => format!(
+                "<button class=\"tool\" id=\"here\" type=\"button\" data-stop=\"{i}\">\
+                 Where the last write is (not where you are)</button>\n"
+            ),
+            None => String::new(),
+        },
     };
 
     let body = format!(
