@@ -151,13 +151,26 @@ fn log_lines(root: &Path) -> Vec<String> {
         .collect()
 }
 
-/// The whole scenario, in the order `t594`'s own spec names its five parts:
+/// Whether `text` names something that reads as an absolute path: a drive
+/// letter on Windows (`C:\`), a UNC prefix (`\\`), or a leading `/` on
+/// POSIX. Checked as both, because this suite runs on every platform of
+/// the CI and not only the one that built it -- a lane's name is always a
+/// folder's own name, never the path to it (`t594` §9.2.18).
+fn names_an_absolute_path(text: &str) -> bool {
+    text.contains(":\\")
+        || text.contains("\\\\")
+        || text.split_whitespace().any(|w| w.starts_with('/'))
+}
+
+/// The whole scenario, in the order `t594`'s own spec names its six parts:
 /// `relocate` moving a tree into the folder that holds a product's other
 /// checkouts, `setup` making a nested clone a lane through the ordinary
 /// upward walk, `setup`/`--join` recognising two more clones elsewhere by
 /// the repositories they share, two lanes writing at once without a
-/// number repeating, and `find` reaching across lanes with no
-/// `--everywhere`.
+/// number repeating, `find` reaching across lanes with no `--everywhere`,
+/// and -- the rest of §9.2.8, left to this tramo -- each lane's own
+/// `HERE`, `OTHER LANES` naming only a lane that wrote later, and
+/// `stack --lanes` naming every lane with a front of its own.
 #[test]
 fn the_iquorum_scenario_moves_joins_and_shares_one_tree_across_five_roots() {
     let home = TempDir::new("home");
@@ -348,6 +361,126 @@ fn the_iquorum_scenario_moves_joins_and_shares_one_tree_across_five_roots() {
         "find from C1 did not see what C2 wrote:\n{found}"
     );
 
+    // -----------------------------------------------------------------
+    // 6: `t594` §9.2.8's own tail, left to this tramo -- each lane's own
+    // `HERE`, `OTHER LANES` naming only a lane that wrote after this one
+    // did, and `stack --lanes` naming every lane with a front of its
+    // own. Sequential from here: part 4 already proved no `seq` repeats
+    // under a race, and what is left needs a known order, not another
+    // one. `--budget` is generous throughout, so the deep stacks part 4
+    // left behind never trim the section being asserted on.
+    // -----------------------------------------------------------------
+    ok(
+        &c1,
+        &home,
+        &[
+            "push",
+            "Confirm the concurrent writers landed",
+            "--why",
+            "seed",
+        ],
+    );
+    let brief_c1 = ok(&c1, &home, &["brief", "--budget", "50000"]);
+    let c1_front = brief_c1
+        .lines()
+        .find(|l| l.contains("Confirm the concurrent writers landed"))
+        .unwrap_or_else(|| panic!("C1's own front is missing from its brief:\n{brief_c1}"));
+    assert!(c1_front.contains("<== HERE"), "{brief_c1}");
+    assert!(
+        !brief_c1.contains("OTHER LANES"),
+        "nothing wrote after C1's own last write yet:\n{brief_c1}"
+    );
+
+    let brief_c2_before = ok(&c2, &home, &["brief", "--budget", "50000"]);
+    assert!(
+        brief_c2_before.contains("OTHER LANES"),
+        "C1 just wrote after C2's own last write did:\n{brief_c2_before}"
+    );
+    assert!(
+        brief_c2_before.contains("Confirm the concurrent writers landed"),
+        "{brief_c2_before}"
+    );
+
+    ok(
+        &c2,
+        &home,
+        &["push", "Note the sonar lane caught up", "--why", "seed"],
+    );
+    let brief_c2_after = ok(&c2, &home, &["brief", "--budget", "50000"]);
+    let c2_front = brief_c2_after
+        .lines()
+        .find(|l| l.contains("Note the sonar lane caught up"))
+        .unwrap_or_else(|| panic!("C2's own front is missing from its brief:\n{brief_c2_after}"));
+    assert!(c2_front.contains("<== HERE"), "{brief_c2_after}");
+    assert!(
+        !brief_c2_after.contains("OTHER LANES"),
+        "C2 just wrote again, after every other lane:\n{brief_c2_after}"
+    );
+
+    // C3 joined in part 3 above but never wrote: an empty stack carries
+    // no front to name, so it stays out of `stack --lanes` until it does.
+    let before_json = ok(&c1, &home, &["stack", "--lanes", "--json"]);
+    let before: serde_json::Value = serde_json::from_str(&before_json).unwrap_or_else(|e| {
+        panic!("stack --lanes --json did not print an object: {e}\n{before_json}")
+    });
+    assert_eq!(
+        before["lanes"].as_array().expect("lanes is an array").len(),
+        2,
+        "{before_json}"
+    );
+
+    ok(
+        &c3,
+        &home,
+        &["push", "File the emisores follow-up", "--why", "seed"],
+    );
+    let brief_c3 = ok(&c3, &home, &["brief", "--budget", "50000"]);
+    let c3_front = brief_c3
+        .lines()
+        .find(|l| l.contains("File the emisores follow-up"))
+        .unwrap_or_else(|| panic!("C3's own front is missing from its brief:\n{brief_c3}"));
+    assert!(c3_front.contains("<== HERE"), "{brief_c3}");
+
+    let after_text = ok(&c1, &home, &["stack", "--lanes"]);
+    let after_json = ok(&c1, &home, &["stack", "--lanes", "--json"]);
+    let after: serde_json::Value = serde_json::from_str(&after_json).unwrap_or_else(|e| {
+        panic!("stack --lanes --json did not print an object: {e}\n{after_json}")
+    });
+    let rows = after["lanes"].as_array().expect("lanes is an array");
+    assert_eq!(
+        rows.len(),
+        3,
+        "`stack --lanes` should now name every lane with a front of its own:\n{after_json}"
+    );
+    let titles: Vec<&str> = rows
+        .iter()
+        .map(|r| r["focus"]["title"].as_str().unwrap())
+        .collect();
+    for title in [
+        "Confirm the concurrent writers landed",
+        "Note the sonar lane caught up",
+        "File the emisores follow-up",
+    ] {
+        assert!(titles.contains(&title), "{after_json}");
+    }
+
+    // §9.2.18: none of the above ever names a path, only a lane's own
+    // folder name.
+    for out in [
+        &brief_c1,
+        &brief_c2_before,
+        &brief_c2_after,
+        &brief_c3,
+        &before_json,
+        &after_text,
+        &after_json,
+    ] {
+        assert!(
+            !names_an_absolute_path(out),
+            "a brief or `stack --lanes` named an absolute path instead of a lane's own folder name:\n{out}"
+        );
+    }
+
     // No cleanup here: every root above is a `TempDir`, and its own
     // `Drop` removes it whether this line is ever reached or not.
 }
@@ -362,10 +495,71 @@ fn the_iquorum_scenario_moves_joins_and_shares_one_tree_across_five_roots() {
 /// `t594`, the next stretch: `brief`'s `<== HERE` marker, shown once per
 /// lane's own stack rather than only the one this process is standing in.
 /// No section of `t594`'s own plan names this one on its own.
-#[ignore = "t594, next stretch: HERE per lane in `brief`"]
 #[test]
 fn brief_marks_here_on_every_lanes_own_front_not_only_this_ones() {
-    todo!("t594, next stretch: HERE per lane in `brief`")
+    let home = TempDir::new("home");
+    let p = TempDir::new("p");
+    std::fs::create_dir_all(&p).unwrap();
+    ok(&p, &home, &["init"]);
+    ok(
+        &p,
+        &home,
+        &["push", "Track the sonar release", "--why", "seed"],
+    );
+
+    let b = TempDir::new("b");
+    std::fs::create_dir_all(&b).unwrap();
+    ok(
+        &b,
+        &home,
+        &[
+            "setup",
+            "claude-code",
+            "--join",
+            p.to_str().unwrap(),
+            "--lane-name",
+            "sonar",
+        ],
+    );
+    ok(
+        &b,
+        &home,
+        &["push", "Ship the sonar dashboard", "--why", "seed"],
+    );
+
+    // P's own front carries `HERE`. B wrote after P did, so B's own
+    // front shows up in OTHER LANES too -- but never marked `HERE`
+    // there, since that mark belongs to a lane's own stack, not to a
+    // row naming somebody else's.
+    let brief_p = ok(&p, &home, &["brief"]);
+    let p_own_line = brief_p
+        .lines()
+        .find(|l| l.contains("Track the sonar release"))
+        .unwrap_or_else(|| panic!("P's own front is missing from its brief:\n{brief_p}"));
+    assert!(p_own_line.contains("<== HERE"), "{brief_p}");
+    if let Some(b_row) = brief_p
+        .lines()
+        .find(|l| l.contains("Ship the sonar dashboard"))
+    {
+        assert!(
+            !b_row.contains("<== HERE"),
+            "B's own front showed up marked HERE in P's brief:\n{brief_p}"
+        );
+    }
+
+    // B's own brief marks its own front, and never carries P's at all:
+    // P wrote before B ever joined, so P's row has nothing to show for
+    // in OTHER LANES either.
+    let brief_b = ok(&b, &home, &["brief"]);
+    let b_own_line = brief_b
+        .lines()
+        .find(|l| l.contains("Ship the sonar dashboard"))
+        .unwrap_or_else(|| panic!("B's own front is missing from its brief:\n{brief_b}"));
+    assert!(b_own_line.contains("<== HERE"), "{brief_b}");
+    assert!(
+        !brief_b.contains("Track the sonar release"),
+        "B's brief carried P's own front, and B is not standing there:\n{brief_b}"
+    );
 }
 
 /// An `OTHER LANES` block in `brief`, naming what the tree's other lanes
