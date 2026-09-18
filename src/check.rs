@@ -140,11 +140,7 @@ pub fn check(a: &Tree, root: &Path, args: &Args) -> Result<i32, crate::failure::
             );
         }
         match crate::anchor::tracks(root, ".vivac/events") {
-            Some(true) => project.push(
-                ".vivac/events is tracked by git here: every clone gets its own copy of the \
-                 log, and the copies diverge. git rm -r --cached .vivac"
-                    .to_string(),
-            ),
+            Some(true) => project.push(crate::anchor::EVENTS_TRACKED_WARNING.to_string()),
             Some(false) => {}
             None => project.push(
                 "git could not tell whether .vivac/events is tracked here: it is not on \

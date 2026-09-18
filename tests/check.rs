@@ -234,6 +234,50 @@ fn check_says_when_the_log_is_tracked_by_git() {
     );
 }
 
+/// `f619`: `check` and `setup` used to warn about a tracked log in two
+/// different sentences, and `check`'s did not even name a worktree. The
+/// two are compared against each other, not against a literal either
+/// one could still drift toward alone.
+#[test]
+fn check_and_setup_warn_about_vivac_in_git_the_same_way() {
+    let c = Sandbox::new_seeded("tracked-check-side");
+    c.ok(&["push", "Something", "--why", "so the log is not empty"]);
+    git(&c.0, &["init", "-q"]);
+    git(&c.0, &["add", "-f", ".vivac/events"]);
+    git(&c.0, &["commit", "-q", "-m", "track the log by mistake"]);
+    let (check_out, code) = c.run(&["check"]);
+    assert_eq!(code, 1, "{check_out}");
+
+    let s = Sandbox::new_seeded("tracked-setup-side");
+    git(&s.0, &["init", "-q"]);
+    git(&s.0, &["add", "-f", ".vivac/events"]);
+    git(&s.0, &["commit", "-q", "-m", "track the log by mistake"]);
+    let (setup_out, setup_code) = s.run(&["setup", "claude-code", "--dry-run"]);
+    assert_eq!(setup_code, 0, "{setup_out}");
+
+    assert_eq!(
+        tracked_warning_words(&check_out),
+        tracked_warning_words(&setup_out),
+        "check said:\n{check_out}\n\nsetup said:\n{setup_out}"
+    );
+}
+
+/// The tracked-by-git warning, reduced to its words: whitespace collapsed
+/// so a hand-wrapped paragraph and a single unwrapped line compare equal
+/// when the wording is the same, which is all this test cares about --
+/// each surface still lays the words out to its own shape.
+fn tracked_warning_words(out: &str) -> String {
+    let start = out
+        .find(".vivac/events is tracked by git here")
+        .unwrap_or_else(|| panic!("no tracked-by-git warning in:\n{out}"));
+    let rest = &out[start..];
+    let end = rest
+        .find("keep it out.")
+        .unwrap_or_else(|| panic!("warning does not end where expected:\n{out}"))
+        + "keep it out.".len();
+    rest[..end].split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 #[test]
 fn check_says_when_the_gitignore_is_missing_inside_a_repo() {
     let c = Sandbox::new_seeded("no-gitignore");
