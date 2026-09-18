@@ -190,3 +190,96 @@ fn restore_reports_closed_nodes_still_on_the_path_apart_from_what_left() {
     );
     assert_eq!(stack_aliases(&c), vec!["g1", "t2", "t3"]);
 }
+
+// ---------------------------------------------------------------------------
+// `stack --lanes` (`t594` §5.5): every lane's own stack, this folder's
+// included, marked `(folder gone)` rather than dropped when the registry
+// no longer finds that folder on disk.
+// ---------------------------------------------------------------------------
+
+/// A second folder, joined to `on`'s own tree as a lane named `name`,
+/// with nothing pushed yet -- the same shape `brief`'s own OTHER LANES
+/// gone-folder test already uses.
+fn join_lane(on: &Sandbox, folder: &str, name: &str) -> Sandbox {
+    let joined = Sandbox::new_empty_in(folder, on.global_home());
+    joined.ok(&[
+        "setup",
+        "claude-code",
+        "--join",
+        on.0.to_str().unwrap(),
+        "--lane-name",
+        name,
+    ]);
+    joined
+}
+
+/// `t594` §5.5, decision 2: a lane's folder the registry no longer finds
+/// on disk is marked, never dropped -- unlike OTHER LANES, `stack
+/// --lanes` exists to name every lane, not only the ones still
+/// reachable.
+#[test]
+fn stack_lanes_marks_a_lane_whose_folder_is_gone() {
+    let a = Sandbox::new_seeded("stack-lanes-gone");
+    a.ok(&["push", "Track the sonar release", "--why", "seed"]);
+    let b = join_lane(&a, "stack-lanes-gone-b", "sonar");
+    b.ok(&["push", "Ship the sonar dashboard", "--why", "seed"]);
+
+    // With the folder still there, `sonar` shows with no mark.
+    let before = a.ok(&["stack", "--lanes", "--json"]);
+    let v: Value = serde_json::from_str(&before)
+        .unwrap_or_else(|e| panic!("stack --lanes --json did not print an object: {e}\n{before}"));
+    let joined = v["lanes"]
+        .as_array()
+        .expect("lanes is an array")
+        .iter()
+        .find(|l| l["name"] == "sonar")
+        .unwrap_or_else(|| panic!("the joined lane is missing:\n{before}"));
+    assert_eq!(joined["folder_gone"], false, "{before}");
+    let text = a.ok(&["stack", "--lanes"]);
+    assert!(!text.contains("(folder gone)"), "{text}");
+
+    // Gone, and it stays listed but marked -- never dropped, unlike
+    // OTHER LANES (`d33`).
+    std::fs::remove_dir_all(&b.0).unwrap();
+    let after = a.ok(&["stack", "--lanes", "--json"]);
+    let v: Value = serde_json::from_str(&after)
+        .unwrap_or_else(|e| panic!("stack --lanes --json did not print an object: {e}\n{after}"));
+    let joined = v["lanes"]
+        .as_array()
+        .expect("lanes is an array")
+        .iter()
+        .find(|l| l["name"] == "sonar")
+        .unwrap_or_else(|| panic!("the joined lane should still be listed once gone:\n{after}"));
+    assert_eq!(joined["folder_gone"], true, "{after}");
+
+    let text = a.ok(&["stack", "--lanes"]);
+    assert!(text.contains("Ship the sonar dashboard"), "{text}");
+    assert!(text.contains("(folder gone)"), "{text}");
+}
+
+/// `t594` §5.5: a tree with one lane must not notice this tranche
+/// happened. `stack` without `--lanes` prints exactly what it printed
+/// before this task, byte for byte, and `--json` carries exactly the
+/// same fields.
+#[test]
+fn stack_without_the_flag_prints_exactly_what_it_did() {
+    let c = Sandbox::new_seeded("stack-no-lanes-flag");
+    c.ok(&["push", "Base goal", "--why", "it anchors the branch"]);
+    c.ok(&["push", "Task two", "--why", "the goal needs it"]);
+
+    let out = c.ok(&["stack"]);
+    assert_eq!(
+        out, "\n  g1     Base goal\n    t2     Task two   <- focus\n\n",
+        "a single-lane tree's stack must read exactly as it did before this tranche"
+    );
+
+    let json = c.ok(&["stack", "--json"]);
+    let v: Value = serde_json::from_str(&json)
+        .unwrap_or_else(|e| panic!("stack --json did not print an object: {e}\n{json}"));
+    assert_eq!(
+        v.as_object().unwrap().keys().collect::<Vec<_>>(),
+        vec!["depth", "stack"],
+        "stack --json gained a field without --lanes:\n{json}"
+    );
+    assert_eq!(v["depth"], 2, "{json}");
+}

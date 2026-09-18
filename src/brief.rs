@@ -564,44 +564,33 @@ fn branch_moved_block(a: &Tree, lane_dir: &Path) -> Vec<String> {
     lines
 }
 
-/// One other lane's own thread, as OTHER LANES names it (`t594` §5.3):
-/// which lane, what it is focused on, and the `seq` its last write sits
-/// at, kept only to sort the newest write first.
-struct OtherLane<'t> {
-    id: &'t str,
-    name: &'t str,
-    focus: &'t Node,
-    seq: u64,
+/// One lane's own thread: which lane, what it is focused on, and the
+/// `seq` its last write sits at. The shared starting point of OTHER
+/// LANES (`t594` §5.3) and `stack --lanes` (§5.5): the first keeps only
+/// the lanes that wrote after this one's own last write and are not this
+/// one; the second keeps every one of them, this lane included.
+pub(crate) struct LaneFocus<'t> {
+    pub(crate) id: &'t str,
+    pub(crate) name: &'t str,
+    pub(crate) focus: &'t Node,
+    pub(crate) seq: u64,
 }
 
-/// Every lane but this one that wrote after this lane's own last write,
-/// has something on its own stack to name, and whose folder the registry
-/// still finds on disk (`t594` §5.3, decisions 1, 2 and 4 of this task).
+/// Every lane with something on its own stack to name (`t594` §5.3 and
+/// §5.5 alike).
 ///
-/// `[]` covers a tree with one lane, a lane that has never written here
-/// itself, and every other lane whose only events were declaring itself
-/// or moving a branch: `Tree::apply` gives *every* event a `lanes` entry,
-/// context events included, so an empty `stack` is what tells a lane
-/// that actually worked apart from one of those defaults (`t594` tramo
-/// 5, task 2's own warning).
-///
-/// `exists()` runs at most once per lane the registry knows of, and only
-/// this far: nothing reaches the registry until there is at least one
-/// lane with a stack and a `seq_wrote` newer than this one's own
-/// (`f623`).
-fn other_lanes<'t>(a: &'t Tree, root: &Path) -> Vec<OtherLane<'t>> {
-    let here = a.lane();
-    let own_seq = a.lanes.get(here).map(|s| s.seq_wrote).unwrap_or(0);
-    let mut rows: Vec<OtherLane> = a
-        .lanes
+/// `[]` covers a tree with one lane that has never written here itself,
+/// and every lane whose only events were declaring itself or moving a
+/// branch: `Tree::apply` gives *every* event a `lanes` entry, context
+/// events included, so an empty `stack` is what tells a lane that
+/// actually worked apart from one of those defaults (`t594` tramo 5,
+/// task 2's own warning).
+pub(crate) fn lanes_with_a_stack(a: &Tree) -> Vec<LaneFocus<'_>> {
+    a.lanes
         .iter()
-        .filter(|(id, _)| id.as_str() != here)
         .filter_map(|(id, s)| {
-            if s.seq_wrote <= own_seq {
-                return None;
-            }
             let focus = a.node_by_num(*s.stack.last()?)?;
-            Some(OtherLane {
+            Some(LaneFocus {
                 id: id.as_str(),
                 name: if s.name.is_empty() {
                     id.as_str()
@@ -612,19 +601,53 @@ fn other_lanes<'t>(a: &'t Tree, root: &Path) -> Vec<OtherLane<'t>> {
                 seq: s.seq_wrote,
             })
         })
+        .collect()
+}
+
+/// Which of this tree's lanes have a folder the registry no longer finds
+/// on disk, checked with `exists()` right now and never written down
+/// (`t594` §5.3/§5.5, decision 2 of this task): a disk that disconnects
+/// and comes back changes the answer both ways, so this is read at the
+/// moment of showing the list, never cached.
+///
+/// `None` when this tree's project id or the registry's own store
+/// directory cannot be resolved -- nothing to check a folder against.
+/// What that means to a caller differs by feature, so it is left to
+/// decide: OTHER LANES treats it as "vouch for none of them", and
+/// `stack --lanes` treats it as "mark none of them", because unlike
+/// OTHER LANES, that list exists to be shown regardless.
+pub(crate) fn gone_lane_ids(root: &Path) -> Option<Vec<String>> {
+    let project_id = crate::store::first_event_id(root)?;
+    let store_dir = crate::store::store_dir()?;
+    Some(crate::registry::lanes_with_missing_folder(
+        &store_dir,
+        &project_id,
+    ))
+}
+
+/// Every lane but this one that wrote after this lane's own last write,
+/// has something on its own stack to name, and whose folder the registry
+/// still finds on disk (`t594` §5.3, decisions 1, 2 and 4 of this task).
+///
+/// `exists()` runs at most once per lane the registry knows of, and only
+/// this far: nothing reaches the registry until there is at least one
+/// lane with a stack and a `seq_wrote` newer than this one's own
+/// (`f623`).
+fn other_lanes<'t>(a: &'t Tree, root: &Path) -> Vec<LaneFocus<'t>> {
+    let here = a.lane();
+    let own_seq = a.lanes.get(here).map(|s| s.seq_wrote).unwrap_or(0);
+    let mut rows: Vec<LaneFocus> = lanes_with_a_stack(a)
+        .into_iter()
+        .filter(|r| r.id != here && r.seq > own_seq)
         .collect();
     if rows.is_empty() {
         return rows;
     }
-    let (Some(project_id), Some(store_dir)) = (
-        crate::store::first_event_id(root),
-        crate::store::store_dir(),
-    ) else {
+    let Some(gone) = gone_lane_ids(root) else {
         // Nothing to check a folder against: a lane this cannot vouch for
         // as still there does not get shown as one that is.
         return Vec::new();
     };
-    let gone = crate::registry::lanes_with_missing_folder(&store_dir, &project_id);
     rows.retain(|r| !gone.iter().any(|g| g == r.id));
     rows.sort_by(|x, y| y.seq.cmp(&x.seq).then_with(|| x.id.cmp(y.id)));
     rows
@@ -636,7 +659,7 @@ const OTHER_LANES_TITLE: &str = "OTHER LANES since you last wrote here";
 /// focus's alias and title, three spaces, the date that focus was opened
 /// -- the same three-space separator BRANCH MOVED already writes with,
 /// rather than a fixed-width table nothing in the spec asks for.
-fn other_lanes_rows(a: &Tree, rows: &[OtherLane]) -> Vec<String> {
+fn other_lanes_rows(a: &Tree, rows: &[LaneFocus]) -> Vec<String> {
     rows.iter()
         .map(|r| {
             format!(

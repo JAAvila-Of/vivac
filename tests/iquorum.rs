@@ -410,10 +410,76 @@ fn brief_carries_an_other_lanes_block() {
     assert!(out.contains("Ship the sonar dashboard"), "{out}");
 }
 
-/// `t594`, the next stretch: `vivac stack --lanes`, listing every lane's
-/// own stack rather than only the one this folder is. `t594` §5.5.
-#[ignore = "t594 §5.5, next stretch: `stack --lanes`"]
+/// `vivac stack --lanes`, `t594` §5.5: every lane's own stack, this
+/// folder's included, rather than only the one this folder is standing
+/// in. Two folders, one tree, no repository needed at all -- the same
+/// shape `brief_carries_an_other_lanes_block` already carries.
 #[test]
 fn stack_lanes_lists_every_lanes_own_stack() {
-    todo!("t594 §5.5, next stretch: `stack --lanes`")
+    let home = TempDir::new("home");
+    let p = TempDir::new("p");
+    std::fs::create_dir_all(&p).unwrap();
+    ok(&p, &home, &["init"]);
+    ok(
+        &p,
+        &home,
+        &["push", "Track the sonar release", "--why", "seed"],
+    );
+
+    let b = TempDir::new("b");
+    std::fs::create_dir_all(&b).unwrap();
+    ok(
+        &b,
+        &home,
+        &[
+            "setup",
+            "claude-code",
+            "--join",
+            p.to_str().unwrap(),
+            "--lane-name",
+            "sonar",
+        ],
+    );
+    ok(
+        &b,
+        &home,
+        &["push", "Ship the sonar dashboard", "--why", "seed"],
+    );
+
+    let json = ok(&p, &home, &["stack", "--lanes", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&json)
+        .unwrap_or_else(|e| panic!("stack --lanes --json did not print an object: {e}\n{json}"));
+    let lanes = v["lanes"].as_array().expect("lanes is an array");
+    assert_eq!(lanes.len(), 2, "{json}");
+    for row in lanes {
+        assert_eq!(row["folder_gone"], false, "{json}");
+    }
+    let joined = lanes
+        .iter()
+        .find(|l| l["name"] == "sonar")
+        .unwrap_or_else(|| panic!("the joined lane is missing:\n{json}"));
+    assert_eq!(joined["focus"]["title"], "Ship the sonar dashboard");
+    let main = lanes
+        .iter()
+        .find(|l| l["name"] == "main")
+        .unwrap_or_else(|| panic!("this folder's own lane is missing:\n{json}"));
+    assert_eq!(main["focus"]["title"], "Track the sonar release");
+
+    // Text mode carries the same rows, in the exact table `t594` §5.5's
+    // own spec draws: name, alias, title and the date the focus was
+    // opened, each padded to the column the next one starts at.
+    let text = ok(&p, &home, &["stack", "--lanes"]);
+    for row in lanes {
+        let expected = format!(
+            "  {:<11} {:<6} {:<45} {}",
+            row["name"].as_str().unwrap(),
+            row["focus"]["alias"].as_str().unwrap(),
+            row["focus"]["title"].as_str().unwrap(),
+            row["focus"]["opened"].as_str().unwrap(),
+        );
+        assert!(
+            text.lines().any(|l| l == expected),
+            "missing row {expected:?} in:\n{text}"
+        );
+    }
 }

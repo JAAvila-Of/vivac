@@ -18,6 +18,7 @@ use crate::model::{Aggregates, Node, Tree, Where};
 use crate::output::outln;
 use serde_json::json;
 use std::collections::HashMap;
+use std::path::Path;
 
 pub(crate) const WIDTH: usize = 62;
 
@@ -1487,9 +1488,14 @@ pub fn parked(a: &Tree, args: &Args) -> R {
     Ok(())
 }
 
-/// `stack` — where you are right now, from the root to the focus.
-pub fn stack(a: &Tree, args: &Args) -> R {
+/// `stack` — where you are right now, from the root to the focus. With
+/// `--lanes` (`t594` §5.5), every lane's own stack instead of only this
+/// folder's.
+pub fn stack(a: &Tree, root: &Path, args: &Args) -> R {
     let ag = &a.aggregates();
+    if args.has("lanes") {
+        return stack_lanes(a, root, args, ag);
+    }
     let stack: Vec<&Node> = a
         .stack()
         .iter()
@@ -1523,6 +1529,61 @@ pub fn stack(a: &Tree, args: &Args) -> R {
         outln!("  the root goal moved and nobody re-rooted.  vivac promote");
         outln!();
     }
+    Ok(())
+}
+
+/// `stack --lanes`'s own rows: every lane with a non-empty stack, this
+/// folder's included, sorted the same way OTHER LANES orders its own --
+/// the most recent write first, `id` breaking a tie (`t594` §5.5, shares
+/// `brief::lanes_with_a_stack`). Marked `(folder gone)` rather than
+/// dropped: unlike OTHER LANES, this list exists to name every lane, not
+/// only the ones still reachable (decision 2 of this task).
+///
+/// `exists()` runs at most once per lane the registry knows of for this
+/// project, and only when there is at least one row to check it against
+/// (`f623`); without `--lanes`, `stack` never reaches this function at
+/// all.
+fn stack_lanes(a: &Tree, root: &Path, args: &Args, ag: &Aggregates) -> R {
+    let mut rows = crate::brief::lanes_with_a_stack(a);
+    rows.sort_by(|x, y| y.seq.cmp(&x.seq).then_with(|| x.id.cmp(y.id)));
+    let gone = if rows.is_empty() {
+        Vec::new()
+    } else {
+        crate::brief::gone_lane_ids(root).unwrap_or_default()
+    };
+    if args.has("json") {
+        return print_json(json!({
+            "lanes": rows
+                .iter()
+                .map(|r| json!({
+                    "id": r.id,
+                    "name": r.name,
+                    "focus": json_node(a, ag, r.focus),
+                    "folder_gone": gone.iter().any(|g| g == r.id),
+                }))
+                .collect::<Vec<_>>(),
+        }));
+    }
+    if rows.is_empty() {
+        outln!("  Empty stack.  vivac push \"<title>\" --why \"<reason>\"");
+        return Ok(());
+    }
+    outln!();
+    for r in &rows {
+        let tail = if gone.iter().any(|g| g == r.id) {
+            "  (folder gone)"
+        } else {
+            ""
+        };
+        outln!(
+            "  {:<11} {:<6} {:<45} {}{tail}",
+            r.name,
+            r.focus.alias(),
+            r.focus.title(a),
+            r.focus.opened(a)
+        );
+    }
+    outln!();
     Ok(())
 }
 
