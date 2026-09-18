@@ -687,6 +687,34 @@ fn prune_dead_copies(entry: &mut Project, project_id: &str) {
         .retain(|c| crate::store::first_event_id(Path::new(c)).as_deref() == Some(project_id));
 }
 
+/// Which of `project_id`'s lanes have a folder that is no longer there,
+/// checked with `exists()` right now and never written down: a disk that
+/// disconnects and comes back changes the answer both ways, and the
+/// registry has no second state to keep in sync with the filesystem's own
+/// (`d33`, decision 2 of this task). Unlike `prune_dead_copies`, which
+/// drops a dead `copies` entry the moment there is a write to fold it
+/// into, this never removes anything from `lanes`: a lane's history stays
+/// whether its folder answers or not.
+///
+/// No caller in this crate yet outside its own test: `t594` tramo 5's
+/// OTHER LANES, `stack --lanes` and the web read this next.
+#[allow(dead_code)]
+pub fn lanes_with_missing_folder(store_dir: &Path, project_id: &str) -> Vec<String> {
+    let Some(projects) = read(&store_dir.join(FILE)) else {
+        return Vec::new();
+    };
+    let Some(entry) = projects.get(project_id) else {
+        return Vec::new();
+    };
+    let mut missing = Vec::new();
+    for (id, dir) in &entry.lanes {
+        if !Path::new(dir).exists() {
+            missing.push(id.clone());
+        }
+    }
+    missing
+}
+
 /// Folds `s` into `projects`, minting the entry when `project_id` is new.
 /// `s.repos` and `s.lane` only ever add: `None` leaves what is already
 /// there.
@@ -1578,6 +1606,57 @@ mod tests {
 
         std::fs::remove_dir_all(&store_dir).ok();
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// It is checked when read, never stored, and the lane is never
+    /// removed: its history stays (`d33`).
+    #[test]
+    fn a_lane_whose_folder_is_gone_is_known_to_be_gone_and_is_not_removed() {
+        let store_dir = temp_dir("reg-missing-folder");
+        let (root, id) = seeded_project("missing-folder");
+        let live_dir = temp_dir("lane-live");
+        std::fs::create_dir_all(&live_dir).unwrap();
+        let gone_dir = temp_dir("lane-gone");
+
+        note(
+            &store_dir,
+            &id,
+            Sighting {
+                root: &root,
+                lane: Some(("live", &live_dir)),
+                repos: None,
+            },
+        );
+        note(
+            &store_dir,
+            &id,
+            Sighting {
+                root: &root,
+                lane: Some(("gone", &gone_dir)),
+                repos: None,
+            },
+        );
+
+        assert_eq!(
+            lanes_with_missing_folder(&store_dir, &id),
+            vec!["gone".to_string()],
+            "only the lane whose folder does not exist should come back"
+        );
+
+        let projects = read(&store_dir.join(FILE)).unwrap();
+        let project = projects.get(&id).unwrap();
+        assert!(
+            project.lanes.contains_key("gone"),
+            "a folder that is gone must not erase the lane's own history"
+        );
+        assert!(
+            project.lanes.contains_key("live"),
+            "a live lane is unaffected by another one's missing folder"
+        );
+
+        std::fs::remove_dir_all(&store_dir).ok();
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::remove_dir_all(&live_dir).ok();
     }
 
     /// A second, independent spelling of `p`'s own folder name -- every

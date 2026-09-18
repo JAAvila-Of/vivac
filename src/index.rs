@@ -66,13 +66,15 @@ const MAGIC: u64 = u64::from_le_bytes(*b"vivacIDX");
 // `where.changed` folded. Version 9 widens each vivac record with its own
 // `anchors`, one entry per repository the lane had declared when it wrote
 // (`t594` task 4). Version 10 adds the two BRANCH MOVED candidate tables,
-// `Tree.own_focus` and `Tree.other_focus` (`t594` task 6, §2.7): a record
-// this shape read under an earlier version would misparse silently, which
-// is exactly what a version bump exists to refuse instead. `Header::parse`
-// refuses any version but this one and `try_load_index` falls back to
-// folding the log, which is what the index is derived from -- so bumping
-// this needs no migration and no command.
-const FORMAT_VERSION: u32 = 10;
+// `Tree.own_focus` and `Tree.other_focus` (`t594` task 6, §2.7). Version 11
+// widens each lane record with `seq_wrote`, the seq of the last event that
+// lane wrote of any kind (`t594` tramo 5 task 2): a record this shape read
+// under an earlier version would misparse silently, which is exactly what
+// a version bump exists to refuse instead. `Header::parse` refuses any
+// version but this one and `try_load_index` falls back to folding the log,
+// which is what the index is derived from -- so bumping this needs no
+// migration and no command.
+const FORMAT_VERSION: u32 = 11;
 const ULID_LEN: usize = 26;
 const SPAN_LEN: usize = 8;
 const FLAG_RECORD_LEN: usize = 1 + SPAN_LEN;
@@ -1336,6 +1338,7 @@ fn write_lane(buf: &mut Vec<u8>, key: &str, s: &LaneState) {
     }
     write_u64(buf, s.seq_change);
     write_u64(buf, s.seq_vivac);
+    write_u64(buf, s.seq_wrote);
     write_u64(buf, s.seg_new);
     write_u64(buf, s.seg_closed);
     write_u64(buf, s.seg_notes);
@@ -1372,6 +1375,7 @@ fn parse_lanes(bytes: &[u8], header: &Header) -> Option<BTreeMap<String, LaneSta
                 stack,
                 seq_change: c.u64()?,
                 seq_vivac: c.u64()?,
+                seq_wrote: c.u64()?,
                 seg_new: c.u64()?,
                 seg_closed: c.u64()?,
                 seg_notes: c.u64()?,
@@ -2768,6 +2772,51 @@ mod tests {
         let loaded = build_tree(&bytes, &header).expect("the body this test just wrote parses");
 
         assert_eq!(snapshot(&tree), snapshot(&loaded));
+    }
+
+    /// `t594` tramo 5 task 2: `seq_wrote` moves on every event, context
+    /// events included, so a fixture whose last write is a `lane.declared`
+    /// rather than a node is what tells `seq_wrote` and `seq_change` apart
+    /// -- reading one back into the other's slot would still pass every
+    /// other lane fixture in this file, since none of them separates the
+    /// two. Goes straight at `encode`/`build_tree`, not through `snapshot`,
+    /// which does not print this field.
+    #[test]
+    fn a_lanes_seq_wrote_survives_the_round_trip_even_when_it_differs_from_seq_change() {
+        let b_node = fixed_id(1);
+        let events = vec![
+            on_lane(
+                created(1, &b_node, 1, Kind::Task, None, "B's root", vec![], vec![]),
+                "b",
+            ),
+            Event {
+                seq: 2,
+                id: fixed_id(2),
+                ts: "2026-09-18T00:00:00Z".to_string(),
+                actor: "a_test".to_string(),
+                lane: "b".to_string(),
+                payload: Body::LaneDeclared {
+                    lane: "b".to_string(),
+                    name: "feature".to_string(),
+                    repos: vec![],
+                },
+            },
+        ];
+        let tree = fold(&events, 0);
+        let before = tree.lanes.get("b").expect("lane b wrote");
+        assert_eq!(before.seq_change, 1, "the node write, not the declaration");
+        assert_eq!(before.seq_wrote, 2, "the declaration moves it too");
+
+        let bytes = encode(&tree, 0, 0, 0, None);
+        let header = Header::parse(&bytes).expect("the header this test just wrote parses");
+        let loaded = build_tree(&bytes, &header).expect("the body this test just wrote parses");
+
+        let after = loaded
+            .lanes
+            .get("b")
+            .expect("lane b survived the round trip");
+        assert_eq!(after.seq_change, before.seq_change);
+        assert_eq!(after.seq_wrote, before.seq_wrote);
     }
 
     /// A version-6 index -- the shape this crate wrote before lanes existed
