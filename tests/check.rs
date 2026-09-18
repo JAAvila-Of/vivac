@@ -1016,3 +1016,99 @@ fn the_join_command_quotes_a_name_that_is_not_just_safe_characters() {
     std::fs::remove_dir_all(&copy_dir).ok();
     std::fs::remove_dir_all(&home).ok();
 }
+
+// ---------------------------------------------------------------------------
+// `f610`/`f604`: the two log corruptions `check` did not name before now.
+// ---------------------------------------------------------------------------
+
+/// A hand-merged log, the shape two writers who both thought they were the
+/// only one leave behind: two lines, each claiming `seq` 1. `repeated_nums`
+/// already names the same shape for `num`; nothing named it for `seq`.
+#[test]
+fn check_names_a_repeated_seq_and_says_where() {
+    let c = Sandbox::new_seeded("check-repeated-seq");
+    c.append_raw_line(
+        r#"{"seq":1,"id":"01REPEATEDSEQAAAAAAAAAAAAA","ts":"2026-09-18T00:00:00Z","actor":"a_test0000000","lane":"main","payload":{"type":"node.created","node":"01REPEATEDSEQBBBBBBBBBBBBB","num":1,"kind":"goal","title":"The first writer's claim on seq 1"}}"#,
+    );
+    c.append_raw_line(
+        r#"{"seq":1,"id":"01REPEATEDSEQCCCCCCCCCCCCC","ts":"2026-09-18T00:00:01Z","actor":"a_test0000000","lane":"main","payload":{"type":"node.created","node":"01REPEATEDSEQDDDDDDDDDDDDD","num":2,"kind":"goal","title":"The second writer's claim on seq 1"}}"#,
+    );
+
+    let (out, code) = c.run(&["check"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        out.contains("seq 1 appears twice, at line 1 and line 2"),
+        "{out}"
+    );
+}
+
+/// A log whose last line has no newline eats whatever is appended
+/// behind it. `check` has to name it: it is not recoverable, so the
+/// least it can do is stop it being silent.
+#[test]
+fn check_names_the_event_a_torn_tail_swallowed() {
+    let c = Sandbox::new_seeded("check-torn-tail");
+    c.append_raw_line(
+        r#"{"seq":1,"id":"01TORNTAILAAAAAAAAAAAAAAAA","ts":"2026-09-18T00:00:00Z","actor":"a_test0000000","lane":"main","payload":{"type":"node.created","node":"01TORNTAILBBBBBBBBBBBBBBBB","num":1,"kind":"goal","title":"The line that survived"}}"#,
+    );
+    {
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(c.0.join(".vivac").join("events"))
+            .unwrap();
+        // No trailing newline, and the object itself is cut off mid-field --
+        // exactly what a crash mid-write leaves behind.
+        write!(f, "{{\"seq\":2,\"id\":\"chopped").unwrap();
+    }
+
+    let (out, code) = c.run(&["check"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        out.contains(
+            "line 2 does not end with a newline: whatever was appended after it was \
+             swallowed and cannot be recovered from this log"
+        ),
+        "{out}"
+    );
+}
+
+/// The other half of `f604`: a torn tail cannot be repaired, but the next
+/// write must not compound it. Before the fix, `append` opens in `append`
+/// mode and writes straight behind the torn bytes, gluing its own first
+/// line onto them; the merged line fails to parse and that write is gone
+/// too, the same way the one behind it already was.
+#[test]
+fn appending_behind_a_torn_tail_does_not_swallow_the_new_event() {
+    let c = Sandbox::new_seeded("check-torn-tail-append");
+    c.ok(&["push", "Before the tear", "--why", "seed a node to note"]);
+    {
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(c.0.join(".vivac").join("events"))
+            .unwrap();
+        write!(f, "{{\"seq\":99,\"id\":\"chopped").unwrap();
+    }
+
+    c.ok(&["note", "g1", "This note must survive the tear behind it"]);
+
+    let raw = c.log();
+    let last_line = raw
+        .lines()
+        .last()
+        .expect("the log must hold at least one line");
+    let v: serde_json::Value = serde_json::from_str(last_line).expect(
+        "the event written behind the torn tail must be its own readable line, not glued onto it",
+    );
+    assert_eq!(
+        v["payload"]["note"], "This note must survive the tear behind it",
+        "{raw}"
+    );
+
+    let out = c.ok(&["why", "g1"]);
+    assert!(
+        out.contains("This note must survive the tear behind it"),
+        "{out}"
+    );
+}
