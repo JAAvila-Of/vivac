@@ -291,6 +291,7 @@ commit
 commits
 committed
 common
+commondir
 compare
 complete
 completes
@@ -1785,6 +1786,7 @@ working
 works
 workspace
 worktree
+worktrees
 world
 would
 wrap
@@ -1800,6 +1802,7 @@ writing
 written
 wrong
 wrote
+wt
 yes
 yet
 yield
