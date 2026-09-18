@@ -847,8 +847,10 @@ pub fn sharing_repos(store_dir: &Path, repos: &[String]) -> Vec<Sharing> {
 /// never names the candidates by path -- the security pillar allows nothing
 /// but a project's name across this boundary, and two candidates sharing a
 /// name have no path-free way to tell apart, so the count is what it names.
-/// A name that matches no root falls through to being read as a path;
-/// `Store::open` is what answers whether that path holds a project at all.
+/// A name that matches no root is read as a path only when it looks like
+/// one, or when it is really a folder sitting there (`resolve_no_match`,
+/// `f616`); `Store::open` is what answers whether that path holds a
+/// project at all. Anything else is an unknown name, said as one.
 ///
 /// That path is absolutized and normalized lexically first (`absolute`,
 /// below), never left relative to whichever folder this process happened
@@ -866,11 +868,49 @@ pub fn resolve(spec: &str) -> Result<PathBuf, Failure> {
         .collect();
     match matches.len() {
         1 => Ok(matches.remove(0)),
-        0 => Ok(absolute(Path::new(spec))),
+        0 => resolve_no_match(spec),
         n => Err(Failure::usage(format!(
             "\"{spec}\" names {n} projects on this machine. Pass a path instead."
         ))),
     }
+}
+
+/// `f616`: no known root's name matches `spec`, and this used to fall
+/// straight through to being read as a path -- so a typo in a project's
+/// name answered as "that folder has no tree yet", pointing the fix at a
+/// folder nobody typed. A folder that is really there, at this spelling,
+/// right now, is evidence a path was meant; nothing else is, so anything
+/// else reads as a name the registry does not know.
+///
+/// The ambiguous case is a name that also happens to be a folder here:
+/// `resolve` has no way to tell that apart from a path on the evidence it
+/// has, and a folder that is actually on disk outweighs a spelling that
+/// might be a typo, so it is read as the folder -- `join`'s own "has no
+/// tree yet" then names the fix that is really in front of whoever typed
+/// it.
+fn resolve_no_match(spec: &str) -> Result<PathBuf, Failure> {
+    let candidate = absolute(Path::new(spec));
+    if looks_like_a_path(spec) || candidate.is_dir() {
+        return Ok(candidate);
+    }
+    Err(Failure::Model(format!(
+        "  No project named {spec} in the registry.\n\n  \
+         These do:  vivac vivacs\n  \
+         If {spec} was meant as a folder, it has no tree: vivac setup claude-code"
+    )))
+}
+
+/// Whether `spec` was written as a path rather than a bare name: it
+/// carries a separator, or is `.` or `..`, or is already absolute. A
+/// project's own name is a folder's base name (`render::project_name`)
+/// and never contains any of those, so this only ever misreads a name
+/// nobody would have typed as one.
+fn looks_like_a_path(spec: &str) -> bool {
+    spec == "."
+        || spec == ".."
+        || spec.contains('/')
+        || spec.contains('\\')
+        || Path::new(spec).is_absolute()
 }
 
 /// `p`, made absolute against the current directory when it is not
