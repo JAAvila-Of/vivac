@@ -20,7 +20,7 @@ use crate::{clock, id};
 use serde::{Deserialize, Serialize};
 use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 pub const DIR: &str = ".vivac";
@@ -800,6 +800,24 @@ pub struct Appended {
     pub end_offset: u64,
 }
 
+/// Whether `path`'s log already ends with `\n`, so `append` knows whether
+/// it can write straight behind it or has to close the torn line first
+/// (`f604`). One open plus one seek to the log's own end and one byte read
+/// back -- never a read of what came before it, so this stays flat no
+/// matter how long the log has grown. An empty log has no line to tear, so
+/// it answers `true`.
+fn log_ends_with_newline(path: &Path) -> std::io::Result<bool> {
+    let mut f = File::open(path)?;
+    let len = f.metadata()?.len();
+    if len == 0 {
+        return Ok(true);
+    }
+    f.seek(SeekFrom::End(-1))?;
+    let mut last = [0u8; 1];
+    f.read_exact(&mut last)?;
+    Ok(last[0] == b'\n')
+}
+
 impl Store {
     /// Reads the whole log. An unreadable line **does not abort**: it is
     /// counted and skipped. A half-written log has to stay readable, or the
@@ -873,11 +891,26 @@ impl Store {
             buf.push('\n');
             written.push(e);
         }
+        // `f604`: a crash mid-write can leave the log's last line with no
+        // closing `\n`. Opening in `append` mode writes straight behind
+        // whatever is already there, so without this the next write glues
+        // its own first line onto the torn one -- and the merged line
+        // fails to parse, taking that first line down with the one
+        // already lost. Checked with one seek and one byte read from the
+        // log's own end, never a read of what came before it, so the cost
+        // stays flat as the log grows: `append`'s budget is p99 < 5 ms.
+        let needs_newline_first = self.log_present && !log_ends_with_newline(&self.log())?;
         let mut f = OpenOptions::new()
             .create(!self.log_present)
             .append(true)
             .open(self.log())?;
         let previous_len = f.metadata()?.len();
+        let prefix_len: u64 = if needs_newline_first {
+            f.write_all(b"\n")?;
+            1
+        } else {
+            0
+        };
         f.write_all(buf.as_bytes())?;
         self.log_present = true;
         if !written.is_empty() {
@@ -885,8 +918,8 @@ impl Store {
         }
         Ok(Appended {
             previous_len,
-            last_line_offset: previous_len + last_line_start as u64,
-            end_offset: previous_len + buf.len() as u64,
+            last_line_offset: previous_len + prefix_len + last_line_start as u64,
+            end_offset: previous_len + prefix_len + buf.len() as u64,
             events: written,
         })
     }
@@ -1012,6 +1045,89 @@ pub(crate) fn read_all_from(path: &Path) -> Result<(Vec<crate::event::Event>, us
         }
     }
     Ok((events, broken))
+}
+
+/// One `seq` two different writes both believed was theirs (`f610`): unlike
+/// `num`, whose repeat the fold already tracks with one entry per second
+/// claimant, nothing walks the raw log with a line number in hand, and
+/// `check` is the only caller that needs one.
+pub(crate) struct RepeatedSeq {
+    pub(crate) seq: u64,
+    pub(crate) first_line: usize,
+    pub(crate) second_line: usize,
+}
+
+/// What `scan_log` finds: the two log corruptions `check`'s own fold never
+/// named before `f604`/`f610`, each with the line number a text editor
+/// would show.
+pub(crate) struct LogScan {
+    pub(crate) repeated_seqs: Vec<RepeatedSeq>,
+    /// The log's own last line, when it never got its closing `\n`: a
+    /// crash mid-write, or a write that landed behind one and is gone for
+    /// good (`f604`). `None` on a log that ends cleanly, or has none.
+    pub(crate) torn_tail: Option<usize>,
+}
+
+/// A full read of the log for `check` alone, in the shape `read_all_from`
+/// already takes: `check` carries no budget of its own, so one pass that
+/// finds both of `f604`/`f610`'s corruptions costs less than two separate
+/// ones would. A line neither valid JSON nor a readable event is already
+/// named by `broken_lines`, so this pass skips it rather than naming it
+/// again.
+pub(crate) fn scan_log(path: &Path) -> Result<LogScan, Failure> {
+    let f = match File::open(path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(LogScan {
+                repeated_seqs: Vec::new(),
+                torn_tail: None,
+            })
+        }
+        Err(e) => return Err(e.into()),
+    };
+    let mut reader = BufReader::new(f);
+    let mut seen: std::collections::HashMap<u64, usize> = std::collections::HashMap::new();
+    let mut repeated_seqs = Vec::new();
+    let mut torn_tail = None;
+    let mut line_no = 0usize;
+    let mut raw = Vec::new();
+    loop {
+        raw.clear();
+        let n = reader.read_until(b'\n', &mut raw)?;
+        if n == 0 {
+            break;
+        }
+        line_no += 1;
+        if raw.last() != Some(&b'\n') {
+            if !String::from_utf8_lossy(&raw).trim().is_empty() {
+                torn_tail = Some(line_no);
+            }
+            break;
+        }
+        let Ok(line) = std::str::from_utf8(&raw) else {
+            continue;
+        };
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(e) = serde_json::from_str::<crate::event::Event>(line) else {
+            continue;
+        };
+        if let Some(&first_line) = seen.get(&e.seq) {
+            repeated_seqs.push(RepeatedSeq {
+                seq: e.seq,
+                first_line,
+                second_line: line_no,
+            });
+        } else {
+            seen.insert(e.seq, line_no);
+        }
+    }
+    Ok(LogScan {
+        repeated_seqs,
+        torn_tail,
+    })
 }
 
 /// The exact wording of `t411` §13's refusal, for the one line that earned

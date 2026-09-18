@@ -55,6 +55,24 @@ pub fn check(a: &Tree, root: &Path, args: &Args) -> Result<i32, crate::failure::
         ));
     }
 
+    // `f610`/`f604`: two corruptions the fold above never named, found by
+    // one full pass over the raw log rather than the derived `Tree` --
+    // `check` carries no budget of its own, unlike the write path this
+    // pass never touches.
+    let scan = crate::store::scan_log(&root.join(crate::store::DIR).join(crate::store::LOG))?;
+    for r in &scan.repeated_seqs {
+        store.push(format!(
+            "seq {} appears twice, at line {} and line {}",
+            r.seq, r.first_line, r.second_line
+        ));
+    }
+    if let Some(line) = scan.torn_tail {
+        store.push(format!(
+            "line {line} does not end with a newline: whatever was appended after it was \
+             swallowed and cannot be recovered from this log"
+        ));
+    }
+
     for n in a.nodes_iter() {
         // Invariant 11: provenance is a tree. The schema already rules out two
         // parents --`spawns` travels inside the node-- so the only thing that
