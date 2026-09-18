@@ -198,7 +198,7 @@ impl VivacKind {
 /// No `#[serde(default)]` on either field: a line missing `dir` was written
 /// by a format this version does not fully know, and `t411` §13 bis refuses
 /// it rather than guessing which folder was meant.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Arm {
     pub dir: String,
     pub command: String,
@@ -208,7 +208,7 @@ pub struct Arm {
 /// against and the sentence saying how it holds. `t426` §1.1. `node` is a
 /// ULID, resolved at write time the same way `parent` is; `why` is the
 /// sentence, and vivac never judges it.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Against {
     pub node: String,
     pub why: String,
@@ -264,6 +264,41 @@ impl Repo {
     }
 }
 
+/// `serde` wants a predicate over a reference, and `Not::not` takes its
+/// bool by value. The smallest thing that fits, so a flag that is false
+/// costs nothing on disk.
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+/// Where one of a lane's repositories was when the lane wrote. A complete
+/// photograph, never a delta: `where.changed` carries one per declared
+/// repository, so any one of them can be read on its own.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct WhereRepo {
+    /// Relative to the lane's folder, with forward slashes, and `.` when
+    /// the folder is the repository -- the same spelling `Repo` uses.
+    pub path: String,
+    /// Absent with a detached `HEAD`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// Absent when `HEAD` could not be read at all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha: Option<String>,
+    /// The branch is the one a rebase is replaying, so the sha moves once
+    /// per commit and is not worth an event of its own (§2.5).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub rebasing: bool,
+    /// The lane declared this repository and its folder is gone.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub missing: bool,
+    /// The branch name tripped the redaction guard and was kept out. The
+    /// sha stays: it is a hash, and withholding it would lose the only
+    /// thing left that says where the work was (`d600`).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub withheld: bool,
+}
+
 /// One event from the log. `MODEL.md` §3.2.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Event {
@@ -297,7 +332,7 @@ pub struct Event {
 /// stayed beside its tree as `events.pre-english`. The log is the source of
 /// truth and it is append-only, so a rename that could not read what is
 /// already written would not be a rename, it would be a data loss.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum Body {
     /// The `spawns` edge travels **inside** the node, not as a separate event.
@@ -452,6 +487,12 @@ pub enum Body {
     /// from answering as `main` too.
     #[serde(rename = "lane.claimed")]
     LaneClaimed { lane: String },
+    /// Where the lane's repositories are, written only when it differs
+    /// from the last one this lane wrote (§2.5). A lane with no declared
+    /// repositories never writes it, which is every tree where nobody has
+    /// run `setup`: that is what keeps 0.11 able to read them (§2.6).
+    #[serde(rename = "where.changed")]
+    WhereChanged { repos: Vec<WhereRepo> },
 }
 
 impl Body {
@@ -481,6 +522,7 @@ impl Body {
         "session.started",
         "lane.declared",
         "lane.claimed",
+        "where.changed",
     ];
 }
 
@@ -555,6 +597,7 @@ mod tests {
             Body::SessionStarted { .. } => "session.started",
             Body::LaneDeclared { .. } => "lane.declared",
             Body::LaneClaimed { .. } => "lane.claimed",
+            Body::WhereChanged { .. } => "where.changed",
         }
     }
 
@@ -643,6 +686,13 @@ mod tests {
             },
             Body::LaneClaimed {
                 lane: "main".into(),
+            },
+            Body::WhereChanged {
+                repos: vec![WhereRepo {
+                    path: "webapi".into(),
+                    branch: Some("develop".into()),
+                    ..Default::default()
+                }],
             },
         ]
     }
@@ -790,6 +840,36 @@ mod tests {
         let base = Path::new(r"C:\work\lane");
         let path = Path::new(r"D:\other\place");
         assert!(Repo::relative(base, path, None).is_none());
+    }
+
+    #[test]
+    fn a_where_survives_the_round_trip_and_omits_what_it_does_not_know() {
+        let w = Body::WhereChanged {
+            repos: vec![
+                WhereRepo {
+                    path: "webapi".into(),
+                    branch: Some("feature/net10".into()),
+                    sha: Some("0123456789abcdef0123456789abcdef01234567".into()),
+                    rebasing: false,
+                    missing: false,
+                    withheld: false,
+                },
+                WhereRepo {
+                    path: "gone".into(),
+                    missing: true,
+                    ..Default::default()
+                },
+            ],
+        };
+        let s = serde_json::to_string(&w).unwrap();
+
+        assert!(s.contains(r#""type":"where.changed""#));
+        assert!(!s.contains("rebasing"), "a false flag is not written down");
+        assert!(
+            !s.contains(r#""branch":null"#),
+            "an absent branch is absent, not null"
+        );
+        assert_eq!(serde_json::from_str::<Body>(&s).unwrap(), w);
     }
 
     #[test]

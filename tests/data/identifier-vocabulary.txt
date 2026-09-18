@@ -994,6 +994,7 @@ ok
 old
 older
 oldest
+omits
 on
 once
 one
@@ -1539,6 +1540,7 @@ superseded
 supersedes
 surface
 surplus
+survive
 survives
 surviving
 survivor
@@ -1766,6 +1768,7 @@ what
 whatever
 when
 where
+wheres
 wherever
 which
 while

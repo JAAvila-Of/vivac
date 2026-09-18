@@ -194,8 +194,10 @@ pub fn collect<'a>(tree: &'a Tree, log: &[Event], since_seq: u64) -> Changed<'a>
             Body::VivacCreated { .. } => result.tail.stops += 1,
             // Neither names a node, and `Tree::apply` already keeps either
             // one from counting as work: joining or being claimed is not a
-            // change, so there is nothing here for it to add.
-            Body::LaneDeclared { .. } | Body::LaneClaimed { .. } => {}
+            // change, so there is nothing here for it to add. `where.changed`
+            // is the same family: it says where the work happens, not that
+            // it happened (§4.3).
+            Body::LaneDeclared { .. } | Body::LaneClaimed { .. } | Body::WhereChanged { .. } => {}
         }
     }
 
