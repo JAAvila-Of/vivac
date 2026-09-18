@@ -15,7 +15,6 @@
 //!   wrong and it says so, but it comes out whole: it is the answer to
 //!   question 1, and without it the brief has no reason to exist.
 
-use crate::anchor::Anchor;
 use crate::args::Args;
 use crate::event::{Kind, State, WhereRepo};
 use crate::failure::R;
@@ -335,15 +334,8 @@ fn no_focus_block(a: &Tree) -> Vec<String> {
     v
 }
 
-pub fn brief(
-    a: &Tree,
-    root: &Path,
-    lane_dir: &Path,
-    anchor_of: &dyn Anchor,
-    args: &Args,
-    project: &str,
-) -> R {
-    print!("{}", to_text(a, root, lane_dir, anchor_of, args, project)?);
+pub fn brief(a: &Tree, root: &Path, lane_dir: &Path, args: &Args, project: &str) -> R {
+    print!("{}", to_text(a, root, lane_dir, args, project)?);
     Ok(())
 }
 
@@ -711,7 +703,6 @@ pub fn to_text(
     a: &Tree,
     root: &Path,
     lane_dir: &Path,
-    anchor_of: &dyn Anchor,
     args: &Args,
     project: &str,
 ) -> Result<String, crate::failure::Failure> {
@@ -923,8 +914,12 @@ pub fn to_text(
         trim_list(decisions, 3, "tree"),
     )));
 
-    // 9. Last vivac. Restoring is always restore + diff: a vivac is never
-    // presented without saying what changed since.
+    // 9. Last vivac. What changed since it used to be answered here too, but
+    // that cost two git processes -- 43 ms and 46 ms in a one-file
+    // repository -- against a 50 ms ceiling for the whole brief: git alone
+    // doubled the budget (`t594` task 1, `d625`, closes `f623`). `vivac
+    // changes` and `vivac restore` answer it on demand, when someone
+    // actually asks; the brief only names the vivac and its age.
     let vv: Vec<String> = match a.last_vivac() {
         None => vec![],
         Some(v) => {
@@ -949,25 +944,6 @@ pub fn to_text(
                     "         you were about to: {}",
                     clip(&v.next_intent, 52)
                 ));
-            }
-            // With no anchor no diff lines are invented: they are omitted, and
-            // the date above stands in, which is the plain age there really is.
-            if !v.anchor.is_empty_tree() {
-                let changes = anchor_of.changed_since(&v.anchor);
-                if !changes.is_empty() {
-                    let touching = changes
-                        .iter()
-                        .filter(|c| {
-                            v.working_set
-                                .iter()
-                                .any(|g| crate::glob::covers(g, &c.file_path))
-                        })
-                        .count();
-                    l.push(format!(
-                        "         {} changes since, {touching} touching what it governs",
-                        changes.len()
-                    ));
-                }
             }
             l
         }

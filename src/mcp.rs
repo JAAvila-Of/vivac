@@ -772,14 +772,7 @@ fn call(project: &mut Project, params: &Value) -> Result<String, Failure> {
             let empty = Args::default();
             let name = project.name.clone();
             let ctx = project.current()?;
-            brief::to_text(
-                &ctx.tree,
-                &ctx.store.root,
-                &ctx.lane_dir,
-                ctx.anchor.as_ref(),
-                &empty,
-                &name,
-            )
+            brief::to_text(&ctx.tree, &ctx.store.root, &ctx.lane_dir, &empty, &name)
         }
         "vivac_find" => {
             let query = a.str("query").ok_or_else(|| missing("query"))?.to_string();

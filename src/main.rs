@@ -682,14 +682,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         "import" => import::import(&mut ctx, a),
         "brief" => {
             let project = project_name(&ctx);
-            brief::brief(
-                &ctx.tree,
-                &ctx.store.root,
-                &ctx.lane_dir,
-                ctx.anchor.as_ref(),
-                a,
-                &project,
-            )
+            brief::brief(&ctx.tree, &ctx.store.root, &ctx.lane_dir, a, &project)
         }
         "vivacs" => render::vivacs(&ctx.tree, a),
         "session" => {

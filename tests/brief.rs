@@ -681,6 +681,28 @@ fn the_last_stop_shows_one_short_sha_and_counts_the_rest() {
     assert!(last_vivac_line(&out).contains(" · 2 repos"), "{out}");
 }
 
+/// `t594` task 1 (`d625`, closes `f623`): two git processes cost 43 ms and
+/// 46 ms in a one-file repository, and the whole read ceiling for `brief` is
+/// 50 ms -- git alone doubled the budget. `vivac changes` and `vivac
+/// restore` answer "what changed since" on demand; `brief` never asks.
+#[test]
+fn the_brief_does_not_spawn_a_process() {
+    // The cheapest honest test is that the line the process paid for is
+    // gone. A genuine uncommitted change against the stop's own anchor is
+    // what used to make the old block print it, so this fails against that
+    // block still being there, not merely against the words having moved.
+    let c = Sandbox::new_empty("brief-no-process");
+    commit_a_repo(&c.0);
+    c.ok(&["init"]);
+    c.ok(&["push", "Something", "--why", "seed"]);
+    c.ok(&["save", "checkpoint"]);
+    std::fs::write(c.0.join("f.txt"), "changed after the stop").unwrap();
+
+    let out = c.ok(&["brief"]);
+    assert!(!out.contains("changes since"), "{out}");
+    assert!(!out.contains("touching what it governs"), "{out}");
+}
+
 // ---------------------------------------------------------------------------
 // `t594` task 6: BRANCH MOVED (§5.2), the brief's own reader of `Tree.wheres`
 // and the BRANCH MOVED candidate tables the previous tasks of this tranche
