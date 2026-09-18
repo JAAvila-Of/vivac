@@ -54,9 +54,26 @@ fn line(p: &mut crate::project::Project) -> Line {
     };
     let href = log.first().map(|e| e.id.clone()).unwrap_or(href);
     let tree = &ctx.tree;
-    let focus = tree
-        .focus()
-        .map(|n| format!("{}  {}", n.alias(), n.title(tree)));
+    let lanes = crate::brief::lanes_with_a_stack(tree);
+    // `t594` §5.6: the same substitution `stack_section` makes, for the
+    // same reason -- this project's own `tree.lane()` is a guess for every
+    // caller `Registry::open` did not start in, so once a second lane has
+    // something to name, the lane that wrote most recently is worth more
+    // than whichever one the guess landed on.
+    let focus = if lanes.len() > 1 {
+        crate::brief::last_writer(tree).map(|w| {
+            format!(
+                "{}  {}  in lane {}, 1 of {} lanes",
+                w.focus.alias(),
+                w.focus.title(tree),
+                w.name,
+                lanes.len()
+            )
+        })
+    } else {
+        tree.focus()
+            .map(|n| format!("{}  {}", n.alias(), n.title(tree)))
+    };
     let blocked = tree
         .nodes_iter()
         .filter(|n| n.kind == Kind::Question && n.state.is_open() && n.blocks)
@@ -317,9 +334,33 @@ fn moved_section(project: &str, tree: &Tree, changed: &Changed) -> String {
 /// The stack, top to bottom, with the focus marked by a word and not only by
 /// a rule beside it: the DX pillar does not allow a meaning that only a
 /// colour or a border carries.
+///
+/// With more than one lane, `tree.stack()` only ever reads `tree.lane()`'s
+/// own -- the one this page happened to be resolved for, which the web asks
+/// for far less often than it serves a project it was not started in
+/// (`project::Registry::open`'s own doc). Showing that lane's stack as "the"
+/// stack would say something false the moment it is not the one anybody
+/// wrote to last, so once a second lane has something to name at all, this
+/// shows the one that wrote most recently instead and says whose it is
+/// (`t594` §5.6).
 fn stack_section(project: &str, tree: &Tree) -> String {
-    let stack: Vec<&Node> = tree
-        .stack()
+    let lanes = crate::brief::lanes_with_a_stack(tree);
+    let elsewhere = if lanes.len() > 1 {
+        crate::brief::last_writer(tree)
+    } else {
+        None
+    };
+    let (raw_stack, here_mark): (&[u64], String) = match &elsewhere {
+        Some(w) => (
+            tree.lanes
+                .get(w.id)
+                .map(|s| s.stack.as_slice())
+                .unwrap_or(&[]),
+            format!("in lane {}, 1 of {} lanes", w.name, lanes.len()),
+        ),
+        None => (tree.stack(), "you are here".to_string()),
+    };
+    let stack: Vec<&Node> = raw_stack
         .iter()
         .filter_map(|&num| tree.node_by_num(num))
         .collect();
@@ -334,9 +375,9 @@ fn stack_section(project: &str, tree: &Tree) -> String {
         .enumerate()
         .map(|(i, n)| {
             let here = if i == last {
-                "<span class=\"here-mark\">you are here</span>"
+                format!("<span class=\"here-mark\">{}</span>", escape(&here_mark))
             } else {
-                ""
+                String::new()
             };
             format!(
                 "<li{}><span class=\"alias\">{}</span><p class=\"title\">{}{here}</p></li>\n",

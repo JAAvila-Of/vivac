@@ -1463,3 +1463,156 @@ fn the_choice_tells_them_apart_without_naming_a_path() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// `t594` §5.6: three surfaces used to read `tree.lane()` -- one lane out of
+// however many the tree holds -- and show it as if it were the whole
+// product's own focus: the Today page's own stack, the project index's, and
+// the map's "where am I" control. A tree with one lane must not notice any
+// of this; with several, the one that wrote most recently is what they show,
+// named.
+// ---------------------------------------------------------------------------
+
+/// A second folder, joined to `on`'s own tree as a lane named `name`, with
+/// nothing pushed yet -- the same shape `stack --lanes`'s own tests already
+/// build one with.
+fn join_lane(on: &Sandbox, folder: &str, name: &str) -> Sandbox {
+    let joined = Sandbox::new_empty_in(folder, on.global_home());
+    joined.ok(&[
+        "setup",
+        "claude-code",
+        "--join",
+        on.0.to_str().unwrap(),
+        "--lane-name",
+        name,
+    ]);
+    joined
+}
+
+/// The `data-stop` on the row whose visible title is `title`, read by
+/// walking back from the text to the attribute the same `<li>` carries --
+/// `the_map_is_one_flat_list_with_a_row_for_every_node` already reads a row
+/// this way, just forward from the alias rather than back from the title.
+fn stop_of_title(body: &str, title: &str) -> String {
+    let marker = format!("<span class=\"title\">{title}</span>");
+    let at = body
+        .find(&marker)
+        .unwrap_or_else(|| panic!("no row titled {title}:\n{body}"));
+    let before = &body[..at];
+    let data_stop = "data-stop=\"";
+    let start = before
+        .rfind(data_stop)
+        .unwrap_or_else(|| panic!("no data-stop before {title}:\n{body}"))
+        + data_stop.len();
+    let rest = &before[start..];
+    rest[..rest.find('"').unwrap()].to_string()
+}
+
+/// The `data-stop` the "where am I" control points at, or `None` when the
+/// map drew no such control at all.
+fn here_stop(body: &str) -> Option<String> {
+    let marker = "id=\"here\" type=\"button\" data-stop=\"";
+    let start = body.find(marker)? + marker.len();
+    let rest = &body[start..];
+    Some(rest[..rest.find('"')?].to_string())
+}
+
+/// Golden: a tree with one lane must not notice this task happened, on the
+/// Today page or on the map.
+#[test]
+fn with_one_lane_the_web_says_exactly_what_it_did() {
+    let s = up("web-lanes-one");
+    s._sandbox
+        .ok(&["push", "Fix the cache adapter", "--why", "the bug needs it"]);
+    let boot = call(s.port(), &s.boot_path(), &[("Host", s.host())]);
+    let token = token_from(&boot);
+    let id = s
+        ._sandbox
+        .0
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let today = call(
+        s.port(),
+        &format!("/p/{id}/"),
+        &[("Host", s.host()), ("X-Vivac-Token", token.clone())],
+    );
+    assert_eq!(today.status, 200, "{}", today.body);
+    assert!(today.body.contains("you are here"), "{}", today.body);
+    assert!(!today.body.contains("in lane"), "{}", today.body);
+
+    let map = call(
+        s.port(),
+        &format!("/p/{id}/tree"),
+        &[("Host", s.host()), ("X-Vivac-Token", token)],
+    );
+    assert_eq!(map.status, 200, "{}", map.body);
+    assert!(map.body.contains("Where am I?"), "{}", map.body);
+}
+
+/// With several lanes, the Today page's own stack shows the one that wrote
+/// most recently -- not whichever lane this project happened to resolve to
+/// -- and names whose it is.
+#[test]
+fn with_several_lanes_the_front_page_names_whose_focus_it_is() {
+    let a = Sandbox::new_seeded("web-lanes-front-a");
+    a.ok(&["push", "Main line work", "--why", "seed"]);
+    let b = join_lane(&a, "web-lanes-front-b", "hotfix");
+    b.ok(&["push", "Hotfix triage", "--why", "seed"]);
+    let c = join_lane(&a, "web-lanes-front-c", "sonar");
+    c.ok(&["push", "Backend webapi cleanup", "--why", "seed"]);
+
+    let server = Server::start(&a);
+    let boot = call(server.port, &server.boot_path(), &[("Host", server.host())]);
+    let token = token_from(&boot);
+    let id = a.0.file_name().unwrap().to_string_lossy().into_owned();
+    let today = call(
+        server.port,
+        &format!("/p/{id}/"),
+        &[("Host", server.host()), ("X-Vivac-Token", token)],
+    );
+    assert_eq!(today.status, 200, "{}", today.body);
+    assert!(
+        today.body.contains("Backend webapi cleanup"),
+        "{}",
+        today.body
+    );
+    assert!(
+        today.body.contains("in lane sonar, 1 of 3 lanes"),
+        "{}",
+        today.body
+    );
+    assert!(!today.body.contains("you are here"), "{}", today.body);
+}
+
+/// The map's "where am I" control points at the lane of the folder the web
+/// was opened from, not at whichever lane wrote most recently -- that is
+/// only what it falls back to once the opening folder has nothing of its
+/// own to point at.
+#[test]
+fn the_map_points_at_the_lane_of_the_folder_the_web_was_opened_from() {
+    let a = Sandbox::new_seeded("web-lanes-here-a");
+    a.ok(&["push", "Main line work", "--why", "seed"]);
+    let b = join_lane(&a, "web-lanes-here-b", "sonar");
+    b.ok(&["push", "Backend webapi cleanup", "--why", "seed"]);
+    let c = join_lane(&a, "web-lanes-here-c", "hotfix");
+    // Written after `b`'s, so `hotfix` -- not `sonar` -- is the lane that
+    // wrote most recently; the control still has to point at `sonar`,
+    // because that is the folder the server was started in.
+    c.ok(&["push", "Hotfix triage", "--why", "seed"]);
+
+    let server = Server::start_serving(&b.0, a.global_home(), &[]);
+    let boot = call(server.port, &server.boot_path(), &[("Host", server.host())]);
+    let token = token_from(&boot);
+    let id = a.0.file_name().unwrap().to_string_lossy().into_owned();
+    let map = call(
+        server.port,
+        &format!("/p/{id}/tree"),
+        &[("Host", server.host()), ("X-Vivac-Token", token)],
+    );
+    assert_eq!(map.status, 200, "{}", map.body);
+    let here = here_stop(&map.body).unwrap_or_else(|| panic!("no here control:\n{}", map.body));
+    let b_stop = stop_of_title(&map.body, "Backend webapi cleanup");
+    assert_eq!(here, b_stop, "{}", map.body);
+}
