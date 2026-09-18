@@ -2508,6 +2508,127 @@ fn a_join_with_a_withheld_tree_below_names_neither_the_folder_nor_a_count() {
     assert!(!f.join(".vivac").exists());
 }
 
+/// The plural of `a_join_with_a_withheld_tree_below_names_neither_the_folder_nor_a_count`:
+/// two trees below, both under names the redaction guard rejects, refuse a
+/// join without naming either one -- checked in code and not by hand, on
+/// purpose. This branch answers to the security pillar, which is the one
+/// pillar with veto, and "I looked at the output" leaves nothing behind
+/// that would catch somebody breaking it later without noticing.
+#[test]
+fn several_withheld_trees_below_refuse_a_join_naming_none_of_them() {
+    let first_name = "first@example.com";
+    let second_name = "second@example.com";
+    let c = Sandbox::new_empty("setup-below-several-withheld-and-join");
+    let target = c.0.join("T");
+    let f = c.0.join("F");
+    let first = f.join(first_name);
+    let second = f.join(second_name);
+    std::fs::create_dir_all(&target).unwrap();
+    std::fs::create_dir_all(&first).unwrap();
+    std::fs::create_dir_all(&second).unwrap();
+    run_in(&target, c.global_home(), &["setup", "claude-code", "--yes"]);
+    run_in(&first, c.global_home(), &["init"]);
+    run_in(&second, c.global_home(), &["init"]);
+
+    let target_str = target.to_string_lossy().into_owned();
+    let (out, code) = run_in(
+        &f,
+        c.global_home(),
+        &["setup", "claude-code", "--join", &target_str],
+    );
+
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        !out.contains(first_name) && !out.contains(second_name),
+        "a withheld folder name leaked: {out}"
+    );
+    assert!(
+        out.contains("There are other products' trees below this folder, under names this tool"),
+        "{out}"
+    );
+    assert!(out.contains("will not write down."), "{out}");
+    assert!(
+        out.contains(&format!(
+            "cannot be a lane of \"{target_str}\" while any of them is there"
+        )),
+        "{out}"
+    );
+    assert!(
+        out.contains("Join from a folder that does not contain them, or move them up from"),
+        "{out}"
+    );
+    assert!(
+        out.contains("inside each one:   vivac relocate .."),
+        "{out}"
+    );
+    assert!(!f.join(".vivac").exists());
+}
+
+/// The case nobody would have looked at by hand: one tree below is under a
+/// name the guard rejects, the other is not. The one that can be shown is
+/// shown whole -- this is not the plant-only refusal's "in \"X\" and
+/// \"Y\"" prose, it is `d626`'s own one-route-per-line list -- and the
+/// withheld one is not replaced by a placeholder or a count: saying "1 more"
+/// would still be handing over information the guard exists to keep back.
+#[test]
+fn a_join_with_some_trees_below_withheld_lists_only_the_ones_it_can_show() {
+    let secret_name = "someone@example.com";
+    let c = Sandbox::new_empty("setup-below-mixed-withheld-and-join");
+    let target = c.0.join("T");
+    let f = c.0.join("F");
+    let hidden = f.join(secret_name);
+    let visible = f.join("Visible");
+    std::fs::create_dir_all(&target).unwrap();
+    std::fs::create_dir_all(&hidden).unwrap();
+    std::fs::create_dir_all(&visible).unwrap();
+    run_in(&target, c.global_home(), &["setup", "claude-code", "--yes"]);
+    run_in(&hidden, c.global_home(), &["init"]);
+    run_in(&visible, c.global_home(), &["init"]);
+
+    let target_str = target.to_string_lossy().into_owned();
+    let (out, code) = run_in(
+        &f,
+        c.global_home(),
+        &["setup", "claude-code", "--join", &target_str],
+    );
+
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        !out.contains(secret_name),
+        "the withheld folder name leaked: {out}"
+    );
+    assert!(
+        !out.contains("under names this tool will not write down"),
+        "one route is visible, so this is not the all-withheld text:\n{out}"
+    );
+    assert!(
+        out.contains(&format!(
+            "cannot be a lane of \"{target_str}\" while any of them is there"
+        )),
+        "{out}"
+    );
+
+    // The list between the header and the blank line that ends it has to be
+    // exactly the one route the guard let through -- no placeholder and no
+    // count standing in for the one it withheld, since either would still
+    // be handing over information the guard exists to keep back.
+    let header = "There are other products' trees below this folder:\n";
+    let after_header = out
+        .split_once(header)
+        .map(|(_, rest)| rest)
+        .unwrap_or_else(|| panic!("the plural, visible-routes header is missing:\n{out}"));
+    let listing = after_header
+        .split_once("\n\n")
+        .map(|(list, _)| list)
+        .unwrap_or_else(|| panic!("no blank line after the route list:\n{out}"));
+    assert_eq!(
+        listing, "    Visible",
+        "the list must name only the visible route, nothing else and no count:\n{out}"
+    );
+
+    assert!(!f.join(".vivac").exists());
+}
+
 /// The defect `d626` exists to close: the remedy used to read
 /// `vivac relocate <tree below>`, which is backwards twice over --
 /// `relocate` takes a destination, not a source, and it has to be run
