@@ -150,6 +150,50 @@ pub fn detect(root: &Path) -> Box<dyn Anchor> {
     }
 }
 
+/// Where one repository is right now, read off files and spawning
+/// nothing: this runs inside the write lock, on the write path.
+///
+/// `where_of` and the pieces under it have no caller outside this module's
+/// own tests yet: `t594` tramo 4's task 1 is the reader alone, and tasks 2
+/// through 4 are what write and read `where.changed` through it. Until one
+/// of them lands, nothing outside `#[cfg(test)]` calls in, and rustc's own
+/// dead-code detection -- the one `t594`'s plan already leans on for the
+/// write-only fields of §2.7 -- catches a whole unreachable function just
+/// as well as an unread field, hence the `allow` here and below.
+#[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
+pub(crate) struct Head {
+    /// The branch `HEAD` points at. Absent with a detached `HEAD`.
+    pub branch: Option<String>,
+    /// The commit `HEAD` resolves to. Absent when nothing could be read --
+    /// an unborn branch, or a `HEAD` this process cannot make sense of.
+    pub sha: Option<String>,
+    /// A rebase is under way, so `branch` is the branch being rebased and
+    /// the sha moves once per commit replayed. Written so that a rebase
+    /// does not produce one event per commit (§2.4).
+    pub rebasing: bool,
+}
+
+/// What a lane's declared repository answers when asked where it is.
+#[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
+pub(crate) enum Where {
+    Head(Head),
+    /// The folder a lane declared holds no repository any more.
+    Missing,
+}
+
+/// Where the repository at `repo_root` is. `Missing` when the folder is
+/// not a working tree at all -- the lane declared it and it is gone --
+/// which is a different answer from a `HEAD` that could not be read.
+#[allow(dead_code)]
+pub(crate) fn where_of(repo_root: &Path) -> Where {
+    let Some(g) = Git::new(repo_root) else {
+        return Where::Missing;
+    };
+    Where::Head(g.where_now())
+}
+
 /// Whether `root` sits inside a git working tree: the same upward walk the
 /// anchor already does, cached the same way.
 pub(crate) fn in_working_tree(root: &Path) -> bool {
@@ -355,6 +399,52 @@ impl Git {
         })
     }
 
+    /// The branch, the sha and whether a rebase is under way. The branch
+    /// comes from `HEAD` unless git is replaying commits, in which case
+    /// `HEAD` is detached and the branch being rebased is in
+    /// `rebase-merge/head-name` (an interactive or merge rebase) or
+    /// `rebase-apply/head-name` (`git am`, and `--apply`).
+    #[allow(dead_code)] // called through `where_of`, whose own doc explains the gap.
+    fn where_now(&self) -> Head {
+        let sha = self.head();
+        if let Some(branch) = self.rebasing_onto() {
+            return Head {
+                branch: Some(branch),
+                sha,
+                rebasing: true,
+            };
+        }
+        Head {
+            branch: self.head_branch(),
+            sha,
+            rebasing: false,
+        }
+    }
+
+    /// The branch `HEAD` names, without its `refs/heads/` prefix. `None`
+    /// with a detached `HEAD`, which is a value and not a failure.
+    #[allow(dead_code)] // called through `where_of`, whose own doc explains the gap.
+    fn head_branch(&self) -> Option<String> {
+        let h = std::fs::read_to_string(self.gitdir.join("HEAD")).ok()?;
+        let refname = h.trim().strip_prefix("ref:")?.trim().to_string();
+        Some(short_branch(&refname))
+    }
+
+    /// The branch a rebase in progress is replaying onto its own tip.
+    #[allow(dead_code)] // called through `where_of`, whose own doc explains the gap.
+    fn rebasing_onto(&self) -> Option<String> {
+        for dir in ["rebase-merge", "rebase-apply"] {
+            let f = self.gitdir.join(dir).join("head-name");
+            if let Ok(name) = std::fs::read_to_string(f) {
+                let name = name.trim();
+                if !name.is_empty() {
+                    return Some(short_branch(name));
+                }
+            }
+        }
+        None
+    }
+
     fn git(&self, args: &[&str]) -> Option<String> {
         let s = std::process::Command::new("git")
             .arg("-C")
@@ -370,6 +460,18 @@ impl Git {
 
 fn is_sha(s: &str) -> bool {
     s.len() >= 7 && s.len() <= 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// `refs/heads/feature/net10` -> `feature/net10`. A name that does not
+/// start that way is kept whole: it is still what the checkout says it is
+/// on, and inventing a shorter one would name a branch that does not
+/// exist.
+#[allow(dead_code)] // called through `where_of`, whose own doc explains the gap.
+fn short_branch(refname: &str) -> String {
+    refname
+        .strip_prefix("refs/heads/")
+        .unwrap_or(refname)
+        .to_string()
 }
 
 impl Anchor for Git {
@@ -471,18 +573,188 @@ mod tests {
         // and it is why a worktree on a branch used to anchor nothing.
         let t = tmp("commondir-head");
         let main = t.join("main");
-        let wt = t.join("wt");
+        let worktree = t.join("side");
         git_repo_with_one_commit(&main);
         git(
             &main,
-            &["worktree", "add", wt.to_str().unwrap(), "-b", "side"],
+            &["worktree", "add", worktree.to_str().unwrap(), "-b", "side"],
         );
 
-        let g = Git::new(&wt).expect("the worktree is a working tree");
+        let g = Git::new(&worktree).expect("the worktree is a working tree");
 
         assert!(
             g.head().is_some(),
             "a worktree on a branch has a HEAD like any other checkout"
+        );
+    }
+
+    #[test]
+    fn a_rebase_in_progress_names_the_branch_being_rebased() {
+        // Git detaches HEAD while it replays commits, so a rebase would look
+        // like a new detached sha on every commit and write one event each
+        // (§2.4). The branch name is in `rebase-merge/head-name`, and that is
+        // what the lane is on.
+        let t = tmp("rebase-merge");
+        git_repo_with_one_commit(&t);
+        let gitdir = t.join(".git");
+        std::fs::create_dir_all(gitdir.join("rebase-merge")).unwrap();
+        std::fs::write(
+            gitdir.join("rebase-merge").join("head-name"),
+            "refs/heads/side\n",
+        )
+        .unwrap();
+
+        let w = where_of(&t);
+        let Where::Head(h) = w else {
+            panic!("the repository is there")
+        };
+
+        assert_eq!(h.branch.as_deref(), Some("side"));
+        assert!(h.rebasing, "a rebase is under way");
+    }
+
+    #[test]
+    fn a_loose_reference_gives_its_branch_and_sha() {
+        let t = tmp("loose-ref");
+        git_repo_with_one_commit(&t);
+        git(&t, &["checkout", "-q", "-b", "develop"]);
+
+        let h = Git::new(&t).unwrap().where_now();
+
+        assert_eq!(h.branch.as_deref(), Some("develop"));
+        assert!(h.sha.as_deref().is_some_and(is_sha));
+        assert!(!h.rebasing);
+    }
+
+    #[test]
+    fn a_packed_reference_gives_its_branch_and_sha() {
+        let t = tmp("packed-ref");
+        git_repo_with_one_commit(&t);
+        git(&t, &["checkout", "-q", "-b", "develop"]);
+        git(&t, &["pack-refs", "--all"]);
+        // `pack-refs` already removes the loose file it packed on every git
+        // version this crate supports, but the removal is what actually
+        // routes this test through `packed-refs`, so it is done by hand too.
+        std::fs::remove_file(t.join(".git").join("refs").join("heads").join("develop")).ok();
+
+        let h = Git::new(&t).unwrap().where_now();
+
+        assert_eq!(h.branch.as_deref(), Some("develop"));
+        assert!(h.sha.as_deref().is_some_and(is_sha));
+        assert!(!h.rebasing);
+    }
+
+    #[test]
+    fn a_detached_head_gives_a_sha_and_no_branch() {
+        let t = tmp("detached-head");
+        git_repo_with_one_commit(&t);
+        let sha = Git::new(&t)
+            .unwrap()
+            .head()
+            .expect("a fresh commit resolves");
+        git(&t, &["checkout", "-q", &sha]);
+
+        let h = Git::new(&t).unwrap().where_now();
+
+        assert_eq!(h.branch, None);
+        assert_eq!(h.sha.as_deref(), Some(sha.as_str()));
+        assert!(!h.rebasing);
+    }
+
+    #[test]
+    fn a_rebase_apply_names_the_branch_too() {
+        // `git am` and a plain `git rebase --apply` leave the branch being
+        // rebased in `rebase-apply/head-name`, the older backend's version
+        // of the file `rebase-merge` writes.
+        let t = tmp("rebase-apply");
+        git_repo_with_one_commit(&t);
+        let gitdir = t.join(".git");
+        std::fs::create_dir_all(gitdir.join("rebase-apply")).unwrap();
+        std::fs::write(
+            gitdir.join("rebase-apply").join("head-name"),
+            "refs/heads/side\n",
+        )
+        .unwrap();
+
+        let w = where_of(&t);
+        let Where::Head(h) = w else {
+            panic!("the repository is there")
+        };
+
+        assert_eq!(h.branch.as_deref(), Some("side"));
+        assert!(h.rebasing, "a rebase is under way");
+    }
+
+    #[test]
+    fn a_worktree_with_a_detached_head_gives_no_branch() {
+        let t = tmp("worktree-detached");
+        let main = t.join("main");
+        let worktree = t.join("side");
+        git_repo_with_one_commit(&main);
+        git(
+            &main,
+            &["worktree", "add", "--detach", worktree.to_str().unwrap()],
+        );
+
+        let h = Git::new(&worktree)
+            .expect("the worktree is a working tree")
+            .where_now();
+
+        assert_eq!(h.branch, None);
+        assert!(h.sha.as_deref().is_some_and(is_sha));
+    }
+
+    #[test]
+    fn a_submodule_is_not_a_worktree_and_answers_for_itself() {
+        // A submodule's `.git` is a file too, but it carries no `commondir`:
+        // it owns its repository, so its references are its own.
+        let t = tmp("submodule");
+        let sub_gitdir = t.join("modules").join("sub");
+        std::fs::create_dir_all(sub_gitdir.join("refs").join("heads")).unwrap();
+        let sha = "c".repeat(40);
+        std::fs::write(
+            sub_gitdir.join("refs").join("heads").join("feature"),
+            format!("{sha}\n"),
+        )
+        .unwrap();
+        std::fs::write(sub_gitdir.join("HEAD"), "ref: refs/heads/feature\n").unwrap();
+        let sub_dir = t.join("sub");
+        std::fs::create_dir_all(&sub_dir).unwrap();
+        std::fs::write(
+            sub_dir.join(".git"),
+            format!("gitdir: {}\n", sub_gitdir.display()),
+        )
+        .unwrap();
+
+        let h = Git::new(&sub_dir)
+            .expect("the submodule is its own working tree")
+            .where_now();
+
+        assert_eq!(h.branch.as_deref(), Some("feature"));
+        assert_eq!(h.sha.as_deref(), Some(sha.as_str()));
+    }
+
+    #[test]
+    fn a_repository_that_is_gone_is_missing_not_unreadable() {
+        let t = tmp("gone");
+        assert_eq!(where_of(&t.join("nothing-here")), Where::Missing);
+    }
+
+    #[test]
+    fn an_unreadable_head_is_a_head_that_knows_neither_branch_nor_sha() {
+        // The folder is a working tree, so the lane's repository is there;
+        // what failed is reading it. `Missing` would say the folder is gone,
+        // which is a different and worse claim.
+        let t = tmp("unreadable-head");
+        std::fs::create_dir_all(t.join(".git")).unwrap();
+
+        assert_eq!(
+            where_of(&t),
+            Where::Head(Head {
+                branch: None,
+                sha: None,
+                rebasing: false,
+            })
         );
     }
 
