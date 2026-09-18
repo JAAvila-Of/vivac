@@ -46,11 +46,22 @@ pub fn run(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     // describes a state of the disk that has to be fixed before the
     // product question, or "plant or join", means anything at all, and
     // moving it up here only makes that truer.
+    //
+    // `d626`: fixed being asked before either branch runs, this still
+    // answered every caller with the plant branch's own sentence, since
+    // nothing here had looked at `--join` yet to know which door it was
+    // answering. The state itself does not wait on the flag; only which
+    // sentence names it does, so the flag is read here too, before the
+    // branch it would have picked.
     let below = trees_below(&roots.here);
+    let join_spec = a.opt("join");
     if !below.is_empty() {
-        return Err(tree_below_refusal(&below));
+        return Err(match join_spec {
+            Some(spec) => tree_below_join_refusal(&roots.here, &below, spec),
+            None => tree_below_refusal(&below),
+        });
     }
-    if let Some(spec) = a.opt("join") {
+    if let Some(spec) = join_spec {
         return join(roots, spec, a.opt("lane-name"), a.has("dry-run"));
     }
     apply(roots, a)
@@ -581,6 +592,49 @@ fn tree_below_refusal(paths: &[PathBuf]) -> Failure {
          vivac cannot merge trees: keep one per product, move it up here with\n  \
          vivac relocate, and leave the others as they are."
     ))
+}
+
+/// `d626`: the same disk state `tree_below_refusal` names for a plant,
+/// met by `--join` instead. The remedy is not the same door -- nothing
+/// here was about to be planted, so "move that tree up, then run setup
+/// again" would have pointed at a choice nobody was making. `spec` is
+/// printed back exactly as typed, the reasoning `join`'s own refusal
+/// below already follows: it names the choice being made, not a tree
+/// this call went looking for and resolved.
+///
+/// Only the first tree found is named when there is more than one: the
+/// sentence answers "can this join happen at all", and that answer is
+/// the same regardless of how many foreign trees sit below.
+fn tree_below_join_refusal(here: &Path, below: &[PathBuf], spec: &str) -> Failure {
+    let rel = relative_to(here, &below[0]);
+    Failure::Model(format!(
+        "  There is another product's tree below this folder:\n    \
+         {rel}\n\n  \
+         This folder cannot be a lane of {spec} while that tree is there: one\n  \
+         folder answers for one product, and a lane that contains another\n  \
+         product's tree would answer for two.\n\n  \
+         If the tree below is part of {spec}, move it up:   vivac relocate {rel}\n  \
+         If it is a different product, join from a folder that does not contain it."
+    ))
+}
+
+/// `path`'s own route down from `base`, forward slashes on every
+/// platform, the same convention `event::Repo::relative` already prints
+/// a repository under: the only path this refusal ever shows, and it is
+/// always a child of the folder the command ran in, never an absolute
+/// one.
+fn relative_to(base: &Path, path: &Path) -> String {
+    match path.strip_prefix(base) {
+        Ok(rel) => rel
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join("/"),
+        Err(_) => path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+    }
 }
 
 /// §6.4's mirror image, upward: a folder with no `.vivac/` of its own,

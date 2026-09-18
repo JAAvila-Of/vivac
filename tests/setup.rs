@@ -2178,6 +2178,36 @@ fn join_to_a_folder_with_no_tree_refuses() {
     assert!(!here.join(".vivac").exists());
 }
 
+/// `f616`: a name the registry does not know used to fall through to
+/// `Case 3`'s own text -- "that folder has no tree yet" -- which sends the
+/// fix at a folder nobody typed. Nobody typed a folder here at all: the
+/// spec has no separator in it, and nothing on disk answers to it either,
+/// so the only honest reading is that the name itself is unknown.
+#[test]
+fn a_project_name_the_registry_does_not_know_is_said_to_be_unknown() {
+    let c = Sandbox::new_empty("setup-join-unknown-name");
+    let here = c.0.join("F");
+    std::fs::create_dir_all(&here).unwrap();
+
+    let (out, code) = run_in(
+        &here,
+        c.global_home(),
+        &["setup", "claude-code", "--join", "no-such-project"],
+    );
+
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        out.contains("No project named no-such-project in the registry."),
+        "{out}"
+    );
+    assert!(out.contains("vivac vivacs"), "{out}");
+    assert!(
+        !out.contains("has no tree yet, so there is nothing to join."),
+        "the folder-shaped text is still shown to an unknown name:\n{out}"
+    );
+    assert!(!here.join(".vivac").exists());
+}
+
 /// Case 4: `--join` from a folder that is already a lane of another tree
 /// refuses.
 #[test]
@@ -2315,8 +2345,14 @@ fn a_tree_below_refuses_even_when_there_is_one_above() {
 /// flag §6.3 hands people as the remedy. The same structural mistake
 /// `refuse_home_or_global_store` already had, and the same fix -- the
 /// guard belongs in `run`, where both branches go through it.
+///
+/// `d626`: the guard moving to `run` fixed *that* nothing was said, but
+/// what it said next was still the plant-only text -- "move that tree up
+/// here, then run setup again" names a door nobody was standing in front
+/// of, since a join was never going to plant one here at all. This checks
+/// the sentence, not just the exit code and the write.
 #[test]
-fn a_tree_below_refuses_a_join_too() {
+fn a_join_with_another_tree_below_names_the_choice_not_the_other_remedy() {
     let c = Sandbox::new_empty("setup-below-and-join");
     let target = c.0.join("T");
     let f = c.0.join("F");
@@ -2337,9 +2373,19 @@ fn a_tree_below_refuses_a_join_too() {
 
     assert_eq!(code, 1, "{out}");
     assert!(
-        out.contains("There is already a tree inside this folder, in \"Nested\"."),
+        out.contains("There is another product's tree below this folder:"),
         "{out}"
     );
+    assert!(out.contains("Nested"), "{out}");
+    assert!(
+        !out.contains("There is already a tree inside this folder"),
+        "the plant-only text is still shown to a join:\n{out}"
+    );
+    assert!(
+        out.contains(&format!("cannot be a lane of {target_str}")),
+        "{out}"
+    );
+    assert!(out.contains("vivac relocate Nested"), "{out}");
     assert!(
         !f.join(".vivac").exists(),
         "F must not have become a lane of T despite the tree below"
