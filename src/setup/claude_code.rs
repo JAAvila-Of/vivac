@@ -1691,7 +1691,7 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     if a.has("dry-run") {
         outln!("{piece_block}{TRAILING_PARAGRAPH}\n  Nothing written: --dry-run.");
         if log_tracked {
-            print!("{TRACKED_WARNING}");
+            print!("{}", tracked_git_warning());
         }
         if let Some(w) = &above_warning {
             print!("{w}");
@@ -1706,7 +1706,7 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         note_registry(roots);
         outln!("{piece_block}  Nothing to write: this project is already set up.");
         if log_tracked {
-            print!("{TRACKED_WARNING}");
+            print!("{}", tracked_git_warning());
         }
         if let Some(w) = &above_warning {
             print!("{w}");
@@ -1873,7 +1873,7 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     note_registry(roots);
     print!("\n{}", written_text(&written));
     if log_tracked {
-        print!("{TRACKED_WARNING}");
+        print!("{}", tracked_git_warning());
     }
     if let Some(w) = &above_warning {
         print!("{w}");
@@ -2197,7 +2197,13 @@ const FILES_PARAGRAPH: &str = "\n  The hooks, the server and the skill are plain
 
 const UNDO_LINE: &str = "\n  Undo:  vivac setup claude-code --undo\n";
 
-const TRACKED_WARNING: &str = "\n  .vivac/events is tracked by git here. Every clone and worktree gets its\n  own copy of the log, and the copies diverge. Remove it from the index\n  (git rm -r --cached .vivac) and let .vivac/.gitignore keep it out.\n";
+/// The words come from `anchor::EVENTS_TRACKED_WARNING` (`f619`), wrapped
+/// to this file's own paragraph width: `check` reads that very same
+/// constant, so the two can no longer drift the way they once did, and
+/// `check`'s copy never named a worktree at all.
+fn tracked_git_warning() -> String {
+    format!("\n{}", wrapped(crate::anchor::EVENTS_TRACKED_WARNING))
+}
 
 fn unreadable_conflict(label: &str, line: usize, column: usize) -> String {
     format!(

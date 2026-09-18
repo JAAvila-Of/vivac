@@ -396,6 +396,21 @@ pub(crate) fn tracks(root: &Path, rel: &str) -> Option<bool> {
     }
 }
 
+/// The sentence both `check` and `setup` warn with when `tracks` above
+/// answers `Some(true)`: `.vivac/events` sitting inside the working tree's
+/// index, one `git add .` away from travelling to every clone and every
+/// worktree.
+///
+/// One constant, not two (`f619`): the two callers used to word this
+/// separately, and the second one had drifted -- it never named a
+/// worktree the way this one does. Each caller still lays the words out
+/// to its own shape: `check` folds it into one line among its other
+/// findings, `setup` wraps it into its own paragraph.
+pub(crate) const EVENTS_TRACKED_WARNING: &str =
+    ".vivac/events is tracked by git here. Every clone and worktree gets its \
+     own copy of the log, and the copies diverge. Remove it from the index \
+     (git rm -r --cached .vivac) and let .vivac/.gitignore keep it out.";
+
 impl Git {
     fn new(root: &Path) -> Option<Git> {
         locate_cached(root).map(|l| Git {

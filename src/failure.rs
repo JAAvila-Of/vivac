@@ -119,9 +119,8 @@ impl Failure {
     /// tree whose log is missing but which still carries its own
     /// `.vivac/lane`, telling the person standing in that very folder to go
     /// run something "in the tree's own folder" (`t594`).
-    /// `--join` names the actual remedy and is pulled forward here as
-    /// text only; the flag itself is `t594` §4.5.4 and does not exist yet
-    /// -- `setup` still refuses it with exit 2 until it lands.
+    /// `--join` names the actual remedy: the flag is `t594` §4.5.4, and
+    /// `setup` accepts it.
     pub fn tree_not_found() -> Failure {
         Failure::TreeNotFound(
             "  This folder is a lane of a tree this machine's registry does not know.\n  \

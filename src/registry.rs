@@ -212,12 +212,12 @@ pub fn copy_of(store_dir: &Path, project_id: &str, root: &Path) -> Noted {
 /// desync the moment only one of the two remembered to change.
 ///
 /// Kept in the one module that already owns what a copy is (`Noted::Copy`,
-/// `live_others`) rather than in whichever surface prints it first: `check`
-/// today, and the brief and the per-write stderr notice that `t594` §4.7
-/// still owes. A security-relevant sentence copied into more than one call
-/// site only agrees with itself until somebody edits one of them, which is
-/// exactly what happened elsewhere in this work two days before it was
-/// written the first time.
+/// `live_others`) rather than in whichever surface prints it first:
+/// `check`, the brief and the per-write stderr notice (`warn_if_wrote`)
+/// all read it from here. A security-relevant sentence copied into more
+/// than one call site only agrees with itself until somebody edits one of
+/// them, which is exactly what happened elsewhere in this work two days
+/// before it was written the first time.
 ///
 /// Each surface lays the result out to its own shape -- `check` indents its
 /// blocks differently from the brief -- so only the heading and the words

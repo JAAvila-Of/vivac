@@ -420,11 +420,11 @@ pub struct Tree {
     pub lanes: BTreeMap<String, LaneState>,
     /// Whether some lane other than the founding one has ever claimed
     /// `main` (`lane.claimed`, `d597`). Only `relocate` writes it, and only
-    /// for `main` -- `relocate` itself is still `t594` §4.6, so nothing
-    /// writes it yet outside a test. `ops::lock_for_write` (§6.9) and
-    /// `setup::plan_lane` both read it now, ahead of `relocate` existing:
-    /// the refusal and the folder it sends you to both need to know
-    /// before the write that finally sets it up.
+    /// for `main`, when the folder it moves away from was the implicit
+    /// founding lane. `ops::lock_for_write` (§6.9) and `setup::plan_lane`
+    /// both read it: the refusal and the folder it sends you to both need
+    /// to know before the write that would otherwise reclaim a name that
+    /// already belongs elsewhere.
     pub main_claimed: bool,
     /// `(lane, repository path, branch) -> (seq, node)`: the last focus this
     /// lane had while that repository sat on that branch. BRANCH MOVED's own
