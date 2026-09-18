@@ -65,12 +65,14 @@ const MAGIC: u64 = u64::from_le_bytes(*b"vivacIDX");
 // Version 8 adds the wheres table -- `Tree.wheres`, one photograph per
 // `where.changed` folded. Version 9 widens each vivac record with its own
 // `anchors`, one entry per repository the lane had declared when it wrote
-// (`t594` task 4): a record this shape read under version 8 would misparse
-// silently, which is exactly what a version bump exists to refuse instead.
-// `Header::parse` refuses any version but this one and `try_load_index`
-// falls back to folding the log, which is what the index is derived from
-// -- so bumping this needs no migration and no command.
-const FORMAT_VERSION: u32 = 9;
+// (`t594` task 4). Version 10 adds the two BRANCH MOVED candidate tables,
+// `Tree.own_focus` and `Tree.other_focus` (`t594` task 6, §2.7): a record
+// this shape read under an earlier version would misparse silently, which
+// is exactly what a version bump exists to refuse instead. `Header::parse`
+// refuses any version but this one and `try_load_index` falls back to
+// folding the log, which is what the index is derived from -- so bumping
+// this needs no migration and no command.
+const FORMAT_VERSION: u32 = 10;
 const ULID_LEN: usize = 26;
 const SPAN_LEN: usize = 8;
 const FLAG_RECORD_LEN: usize = 1 + SPAN_LEN;
@@ -538,6 +540,8 @@ struct Header {
     lanes_count: u64,
     wheres_count: u64,
     vivac_count: u64,
+    own_focus_count: u64,
+    other_focus_count: u64,
     nodes_offset: u64,
     spans_offset: u64,
     flags_offset: u64,
@@ -548,6 +552,8 @@ struct Header {
     lanes_offset: u64,
     wheres_offset: u64,
     vivacs_offset: u64,
+    own_focus_offset: u64,
+    other_focus_offset: u64,
     text_offset: u64,
     text_len: u64,
     file_len: u64,
@@ -586,6 +592,8 @@ impl Header {
             lanes_count: c.u64()?,
             wheres_count: c.u64()?,
             vivac_count: c.u64()?,
+            own_focus_count: c.u64()?,
+            other_focus_count: c.u64()?,
             nodes_offset: c.u64()?,
             spans_offset: c.u64()?,
             flags_offset: c.u64()?,
@@ -596,6 +604,8 @@ impl Header {
             lanes_offset: c.u64()?,
             wheres_offset: c.u64()?,
             vivacs_offset: c.u64()?,
+            own_focus_offset: c.u64()?,
+            other_focus_offset: c.u64()?,
             text_offset: c.u64()?,
             text_len: c.u64()?,
             file_len: c.u64()?,
@@ -645,12 +655,13 @@ impl Header {
         if text_end as usize > len {
             return None;
         }
-        // The lanes, wheres and vivacs tables are self-delimiting, like the
-        // flat ones above are not: a lane's own `name` and its repositories,
-        // a `where.changed` photograph's own repositories, and a vivac's
-        // `stack` and `working_set`, are all variable-length. All this can
-        // check up front is that the table starts inside the file; a
-        // truncated record past that fails to parse on its own.
+        // The lanes, wheres, vivacs and BRANCH MOVED candidate tables are
+        // self-delimiting, like the flat ones above are not: a lane's own
+        // `name` and its repositories, a `where.changed` photograph's own
+        // repositories, a vivac's `stack` and `working_set`, and every
+        // candidate's own path and branch, are all variable-length. All
+        // this can check up front is that the table starts inside the
+        // file; a truncated record past that fails to parse on its own.
         if self.lanes_offset as usize > len {
             return None;
         }
@@ -658,6 +669,12 @@ impl Header {
             return None;
         }
         if self.vivacs_offset as usize > len {
+            return None;
+        }
+        if self.own_focus_offset as usize > len {
+            return None;
+        }
+        if self.other_focus_offset as usize > len {
             return None;
         }
         Some(())
@@ -691,6 +708,8 @@ fn write_header(buf: &mut Vec<u8>, h: &Header) {
     write_u64(buf, h.lanes_count);
     write_u64(buf, h.wheres_count);
     write_u64(buf, h.vivac_count);
+    write_u64(buf, h.own_focus_count);
+    write_u64(buf, h.other_focus_count);
     write_u64(buf, h.nodes_offset);
     write_u64(buf, h.spans_offset);
     write_u64(buf, h.flags_offset);
@@ -701,6 +720,8 @@ fn write_header(buf: &mut Vec<u8>, h: &Header) {
     write_u64(buf, h.lanes_offset);
     write_u64(buf, h.wheres_offset);
     write_u64(buf, h.vivacs_offset);
+    write_u64(buf, h.own_focus_offset);
+    write_u64(buf, h.other_focus_offset);
     write_u64(buf, h.text_offset);
     write_u64(buf, h.text_len);
     write_u64(buf, h.file_len);
@@ -731,6 +752,8 @@ fn header_len() -> usize {
         lanes_count: 0,
         wheres_count: 0,
         vivac_count: 0,
+        own_focus_count: 0,
+        other_focus_count: 0,
         nodes_offset: 0,
         spans_offset: 0,
         flags_offset: 0,
@@ -741,6 +764,8 @@ fn header_len() -> usize {
         lanes_offset: 0,
         wheres_offset: 0,
         vivacs_offset: 0,
+        own_focus_offset: 0,
+        other_focus_offset: 0,
         text_offset: 0,
         text_len: 0,
         file_len: 0,
@@ -1435,6 +1460,61 @@ fn parse_wheres(bytes: &[u8], header: &Header) -> Option<Vec<Where>> {
 }
 
 // ---------------------------------------------------------------------------
+// The two BRANCH MOVED candidate tables (`t594` task 6, §2.7): one
+// variable-length record per entry, self-delimiting the same way the
+// tables above are -- a lane's id, a repository's path and a branch name
+// have no fixed width either.
+// ---------------------------------------------------------------------------
+
+fn write_own_focus(buf: &mut Vec<u8>, key: &(String, String, String), value: &(u64, u64)) {
+    let (lane, path, branch) = key;
+    let (seq, node) = value;
+    write_str(buf, lane);
+    write_str(buf, path);
+    write_str(buf, branch);
+    write_u64(buf, *seq);
+    write_u64(buf, *node);
+}
+
+fn parse_own_focus(bytes: &[u8], header: &Header) -> Option<crate::model::OwnFocus> {
+    let mut c = Cursor::new(bytes.get(header.own_focus_offset as usize..)?);
+    let mut out = BTreeMap::new();
+    for _ in 0..header.own_focus_count {
+        let lane = c.str()?;
+        let path = c.str()?;
+        let branch = c.str()?;
+        let seq = c.u64()?;
+        let node = c.u64()?;
+        out.insert((lane, path, branch), (seq, node));
+    }
+    Some(out)
+}
+
+fn write_other_focus(buf: &mut Vec<u8>, key: &(String, String), value: &(u64, String, u64)) {
+    let (root, branch) = key;
+    let (seq, lane, node) = value;
+    write_str(buf, root);
+    write_str(buf, branch);
+    write_u64(buf, *seq);
+    write_str(buf, lane);
+    write_u64(buf, *node);
+}
+
+fn parse_other_focus(bytes: &[u8], header: &Header) -> Option<crate::model::OtherFocus> {
+    let mut c = Cursor::new(bytes.get(header.other_focus_offset as usize..)?);
+    let mut out = BTreeMap::new();
+    for _ in 0..header.other_focus_count {
+        let root = c.str()?;
+        let branch = c.str()?;
+        let seq = c.u64()?;
+        let lane = c.str()?;
+        let node = c.u64()?;
+        out.insert((root, branch), (seq, lane, node));
+    }
+    Some(out)
+}
+
+// ---------------------------------------------------------------------------
 // The remaining fixed-width sections, and putting it all together.
 // ---------------------------------------------------------------------------
 
@@ -1547,6 +1627,8 @@ fn build_tree(bytes: &[u8], header: &Header) -> Option<Tree> {
     let lanes = parse_lanes(bytes, header)?;
     let wheres = parse_wheres(bytes, header)?;
     let vivacs = parse_vivacs(bytes, header)?;
+    let own_focus = parse_own_focus(bytes, header)?;
+    let other_focus = parse_other_focus(bytes, header)?;
     let text = parse_text(bytes, header)?;
     Some(Tree::from_parts(RawParts {
         text,
@@ -1556,6 +1638,8 @@ fn build_tree(bytes: &[u8], header: &Header) -> Option<Tree> {
         lanes,
         vivacs,
         wheres,
+        own_focus,
+        other_focus,
         next_vivac_num: header.next_vivac_num,
         seq: header.seq,
         next_num: header.next_num,
@@ -1618,6 +1702,14 @@ fn encode(
     for v in &tree.vivacs {
         write_vivac(&mut vivacs_buf, v);
     }
+    let mut own_focus_buf = Vec::new();
+    for (key, value) in &tree.own_focus {
+        write_own_focus(&mut own_focus_buf, key, value);
+    }
+    let mut other_focus_buf = Vec::new();
+    for (key, value) in &tree.other_focus {
+        write_other_focus(&mut other_focus_buf, key, value);
+    }
     let text = tree.raw_text();
     let text_bytes = text.as_bytes();
 
@@ -1632,7 +1724,9 @@ fn encode(
     let lanes_offset = roots_offset + roots_buf.len() as u64;
     let wheres_offset = lanes_offset + lanes_buf.len() as u64;
     let vivacs_offset = wheres_offset + wheres_buf.len() as u64;
-    let text_offset = vivacs_offset + vivacs_buf.len() as u64;
+    let own_focus_offset = vivacs_offset + vivacs_buf.len() as u64;
+    let other_focus_offset = own_focus_offset + own_focus_buf.len() as u64;
+    let text_offset = other_focus_offset + other_focus_buf.len() as u64;
     let file_len = text_offset + text_bytes.len() as u64;
 
     let (has_last, last_line_offset, last_ulid, last_seq) = match last {
@@ -1667,6 +1761,8 @@ fn encode(
         lanes_count: tree.lanes.len() as u64,
         wheres_count: tree.wheres.len() as u64,
         vivac_count: tree.vivacs.len() as u64,
+        own_focus_count: tree.own_focus.len() as u64,
+        other_focus_count: tree.other_focus.len() as u64,
         nodes_offset,
         spans_offset,
         flags_offset,
@@ -1677,6 +1773,8 @@ fn encode(
         lanes_offset,
         wheres_offset,
         vivacs_offset,
+        own_focus_offset,
+        other_focus_offset,
         text_offset,
         text_len: text_bytes.len() as u64,
         file_len,
@@ -1695,6 +1793,8 @@ fn encode(
     out.extend_from_slice(&lanes_buf);
     out.extend_from_slice(&wheres_buf);
     out.extend_from_slice(&vivacs_buf);
+    out.extend_from_slice(&own_focus_buf);
+    out.extend_from_slice(&other_focus_buf);
     out.extend_from_slice(text_bytes);
     out
 }
@@ -1931,6 +2031,15 @@ mod tests {
                 "where seq={} lane={:?} repos={:?}\n",
                 w.seq, w.lane, w.repos,
             ));
+        }
+        // `t594` task 6: both BRANCH MOVED candidate tables, in key order --
+        // a round trip that only compared `wheres` above would pass even if
+        // `write_own_focus`/`write_other_focus` had swallowed either whole.
+        for (key, value) in &tree.own_focus {
+            out.push_str(&format!("own_focus key={key:?} value={value:?}\n"));
+        }
+        for (key, value) in &tree.other_focus {
+            out.push_str(&format!("other_focus key={key:?} value={value:?}\n"));
         }
         out.push_str(&format!("repeated_nums={}\n", tree.repeated_nums.len()));
         for n in tree.nodes_sorted() {
@@ -2286,6 +2395,140 @@ mod tests {
         assert_eq!(fresh.wheres.len(), 1, "the fixture itself has to write one");
 
         let store = tmp_store("wheres-roundtrip");
+        write_raw_locked(&store, &events);
+
+        let loaded = load(&store, true).expect("load should succeed");
+        assert_eq!(snapshot(&fresh), snapshot(&loaded));
+        assert!(
+            store.index_path().is_file(),
+            "a clean fold should be indexed"
+        );
+
+        // Purely from the index this time, with no tail to apply.
+        let loaded_again = load(&store, false).expect("load should succeed");
+        assert_eq!(snapshot(&fresh), snapshot(&loaded_again));
+
+        std::fs::remove_dir_all(&store.root).ok();
+    }
+
+    /// `t594` task 6: BRANCH MOVED's own two candidate tables. `own_focus`
+    /// and `other_focus` are never printed by anything `snapshot` already
+    /// walks, so a round trip that only compared the string above would
+    /// pass even if `write_own_focus`/`write_other_focus` had swallowed
+    /// either table entirely.
+    #[test]
+    fn the_branch_moved_candidate_tables_survive_the_round_trip() {
+        let n1 = fixed_id(1);
+        let n2 = fixed_id(7);
+        let events = vec![
+            created(1, &n1, 1, Kind::Goal, None, "Root", vec![], vec![]),
+            Event {
+                seq: 2,
+                id: fixed_id(2),
+                ts: "2026-09-17T10:00:00Z".to_string(),
+                actor: "a_test".to_string(),
+                lane: "main".to_string(),
+                payload: Body::LaneDeclared {
+                    lane: "main".to_string(),
+                    name: "main".to_string(),
+                    repos: vec![crate::event::Repo {
+                        path: "webapi".to_string(),
+                        root: Some("root-abc".to_string()),
+                    }],
+                },
+            },
+            Event {
+                seq: 3,
+                id: fixed_id(3),
+                ts: "2026-09-17T10:00:01Z".to_string(),
+                actor: "a_test".to_string(),
+                lane: "main".to_string(),
+                payload: Body::WhereChanged {
+                    repos: vec![crate::event::WhereRepo {
+                        path: "webapi".to_string(),
+                        branch: Some("develop".to_string()),
+                        ..Default::default()
+                    }],
+                },
+            },
+            Event {
+                seq: 4,
+                id: fixed_id(4),
+                ts: "2026-09-17T10:00:02Z".to_string(),
+                actor: "a_test".to_string(),
+                lane: "main".to_string(),
+                payload: Body::Pushed { node: n1.clone() },
+            },
+            Event {
+                seq: 5,
+                id: fixed_id(5),
+                ts: "2026-09-17T10:00:03Z".to_string(),
+                actor: "a_test".to_string(),
+                lane: "sonar".to_string(),
+                payload: Body::LaneDeclared {
+                    lane: "sonar".to_string(),
+                    name: "sonar".to_string(),
+                    repos: vec![crate::event::Repo {
+                        path: "service".to_string(),
+                        root: Some("root-abc".to_string()),
+                    }],
+                },
+            },
+            Event {
+                seq: 6,
+                id: fixed_id(6),
+                ts: "2026-09-17T10:00:04Z".to_string(),
+                actor: "a_test".to_string(),
+                lane: "sonar".to_string(),
+                payload: Body::WhereChanged {
+                    repos: vec![crate::event::WhereRepo {
+                        path: "service".to_string(),
+                        branch: Some("perf/sp".to_string()),
+                        ..Default::default()
+                    }],
+                },
+            },
+            Event {
+                seq: 7,
+                id: n2.clone(),
+                ts: "2026-09-17T10:00:05Z".to_string(),
+                actor: "a_test".to_string(),
+                lane: "sonar".to_string(),
+                payload: Body::NodeCreated {
+                    node: n2.clone(),
+                    num: 2,
+                    kind: Kind::Task,
+                    title: "Optimize the SP".to_string(),
+                    why: "because it is needed".to_string(),
+                    parent: None,
+                    blocks: false,
+                    refs: vec![],
+                    governs: vec![],
+                    arms: vec![],
+                    against: None,
+                },
+            },
+            Event {
+                seq: 8,
+                id: fixed_id(8),
+                ts: "2026-09-17T10:00:06Z".to_string(),
+                actor: "a_test".to_string(),
+                lane: "sonar".to_string(),
+                payload: Body::Pushed { node: n2.clone() },
+            },
+        ];
+        let fresh = fold(&events, 0);
+        // Every push writes both of its own tables: one entry in `own_focus`
+        // per lane that pushed, and one in `other_focus` per repository root
+        // commit and branch either lane was on when it did.
+        assert_eq!(fresh.own_focus.len(), 2, "main's and sonar's own candidate");
+        assert_eq!(
+            fresh.other_focus.len(),
+            2,
+            "root-abc on develop, and on perf/sp"
+        );
+
+        let store = tmp_store("branch-moved-candidates-roundtrip");
         write_raw_locked(&store, &events);
 
         let loaded = load(&store, true).expect("load should succeed");
