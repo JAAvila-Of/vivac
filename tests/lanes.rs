@@ -1832,3 +1832,105 @@ fn a_joined_lanes_redeclare_resolves_repositories_from_its_own_folder() {
     std::fs::remove_dir_all(&lane_dir).ok();
     std::fs::remove_dir_all(&home).ok();
 }
+
+/// The last `vivac.created` line in the log at `root`, parsed.
+fn last_vivac_created(root: &Path) -> serde_json::Value {
+    let text =
+        std::fs::read_to_string(root.join(".vivac").join("events")).expect("the log is there");
+    let line = text
+        .lines()
+        .rev()
+        .find(|l| l.contains(r#""type":"vivac.created""#))
+        .expect("a stop wrote a vivac.created event");
+    serde_json::from_str(line).expect("the vivac.created line parses")
+}
+
+/// `t594` task 4, paso 1 (`f613`): the shape Emisores and IQuorum both have,
+/// where the folder holding the tree is not a repository and the
+/// repositories are one level down. `save` used to answer "no anchor: there
+/// is no version control here" while the lane had already declared all of
+/// them, because `Ctx.anchor` only ever asked "is *this* folder a
+/// repository?" instead of reading what the lane declared underneath it.
+#[test]
+fn a_stop_in_a_root_without_git_anchors_every_repository_below_it() {
+    let root = unique("no-git-root");
+    std::fs::create_dir_all(&root).unwrap();
+    commit_a_repo(&root.join("webapi"));
+    commit_a_repo(&root.join("infra"));
+
+    let home = unique("no-git-home");
+    let (init_out, init_code) = run(&root, &home, &["init"]);
+    assert_eq!(init_code, 0, "{init_out}");
+    setup_ok(&root, &home);
+
+    let (out, code) = run(&root, &home, &["save", "checkpoint"]);
+    assert_eq!(code, 0, "{out}");
+
+    let v = last_vivac_created(&root);
+    let anchors = v["payload"]["anchors"]
+        .as_array()
+        .expect("the stop's anchors is an array");
+    let mut paths: Vec<&str> = anchors
+        .iter()
+        .map(|a| {
+            a["path"]
+                .as_str()
+                .expect("each anchor names its repository")
+        })
+        .collect();
+    paths.sort();
+    assert_eq!(
+        paths,
+        vec!["infra", "webapi"],
+        "a root with no git of its own must still anchor every declared repository below it: {v}"
+    );
+    for a in anchors {
+        assert!(
+            a["sha"].as_str().is_some_and(|s| !s.is_empty()),
+            "every repository anchored a real commit: {v}"
+        );
+    }
+    assert!(
+        !out.contains("no anchor"),
+        "the stop says what it anchored to, and two repositories collapse \
+         to a count rather than one sha standing for both: {out}"
+    );
+    assert!(out.contains("anchored to 2 repos"), "{out}");
+
+    std::fs::remove_dir_all(&root).ok();
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// The same root with a single repository below it. This is the case a
+/// count would read worse than a sha, and the one `anchor` alone used to
+/// answer "there is no version control here" (`f613`): the folder holds no
+/// git, so the old question found none, while the lane had the repository
+/// declared all along.
+#[test]
+fn a_stop_in_a_root_without_git_shows_the_sha_of_a_lone_repository() {
+    let root = unique("one-repo-root");
+    std::fs::create_dir_all(&root).unwrap();
+    commit_a_repo(&root.join("webapi"));
+
+    let home = unique("one-repo-home");
+    let (init_out, init_code) = run(&root, &home, &["init"]);
+    assert_eq!(init_code, 0, "{init_out}");
+    setup_ok(&root, &home);
+
+    let (out, code) = run(&root, &home, &["save", "checkpoint"]);
+    assert_eq!(code, 0, "{out}");
+
+    let v = last_vivac_created(&root);
+    let sha = v["payload"]["anchors"][0]["sha"]
+        .as_str()
+        .expect("the lone repository anchored a commit")
+        .to_string();
+    assert!(
+        out.contains(&format!("anchored to {}", &sha[..7])),
+        "one repository reads exactly as a repository at the root always \
+         did, a short sha and nothing else: {out}"
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+    std::fs::remove_dir_all(&home).ok();
+}

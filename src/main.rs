@@ -695,7 +695,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         "stack" => render::stack(&ctx.tree, a),
         "parked" => render::parked(&ctx.tree, a),
         "triage" => render::triage(&ctx.tree, a),
-        "reconcile" => reconcile::reconcile(&ctx.tree, ctx.anchor.as_ref(), a),
+        "reconcile" => reconcile::reconcile(&ctx.tree, &ctx.lane_dir, a),
         "stats" => render::stats(&ctx.tree, a),
         other => {
             print!("{USAGE}");

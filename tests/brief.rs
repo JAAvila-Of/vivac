@@ -610,3 +610,73 @@ fn the_brief_of_a_copy_opens_with_the_warning() {
         "the original's own brief did not open with the warning either:\n{original_brief}"
     );
 }
+
+fn git(dir: &std::path::Path, args: &[&str]) {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// A repository with one commit, at `dir`.
+fn commit_a_repo(dir: &std::path::Path) {
+    std::fs::create_dir_all(dir).unwrap();
+    git(dir, &["init", "-q"]);
+    git(dir, &["config", "user.email", "t@example.com"]);
+    git(dir, &["config", "user.name", "t"]);
+    std::fs::write(dir.join("f.txt"), "x").unwrap();
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-q", "-m", "first"]);
+}
+
+/// The line right after the `LAST VIVAC` heading.
+fn last_vivac_line(out: &str) -> &str {
+    let mut lines = out.lines();
+    while let Some(l) = lines.next() {
+        if l.trim() == "LAST VIVAC" {
+            return lines.next().unwrap_or("");
+        }
+    }
+    panic!("no LAST VIVAC section:\n{out}")
+}
+
+/// `t594` task 4, paso 5 (§4.4): a lone repository keeps the short sha it
+/// always showed, and only two or more collapse the line to a count.
+#[test]
+fn the_last_stop_shows_one_short_sha_and_counts_the_rest() {
+    // One repository reads exactly as it did before: a tree with a single
+    // repository must not notice this tranche happened.
+    let one = Sandbox::new_empty("brief-repos-one");
+    commit_a_repo(&one.0);
+    one.ok(&["init"]);
+    one.ok(&["setup", "claude-code", "--yes"]);
+    // A clean working tree, so the stop's anchor is the repository's own
+    // `HEAD` and nothing setup itself wrote shows up as a change since.
+    git(&one.0, &["add", "-A"]);
+    git(&one.0, &["commit", "-q", "-m", "setup"]);
+    one.ok(&["push", "Something", "--why", "seed"]);
+    one.ok(&["save", "checkpoint"]);
+    let line = last_vivac_line(&one.ok(&["brief"])).to_string();
+    assert!(!line.contains("repos"), "{line}");
+    let sha = line.rsplit(" · ").next().unwrap_or("");
+    assert_eq!(sha.len(), 7, "{line}");
+    assert!(sha.chars().all(|c| c.is_ascii_hexdigit()), "{line}");
+
+    // Two or more repositories: the sha collapses to a count.
+    let two = Sandbox::new_empty("brief-repos-two");
+    commit_a_repo(&two.0.join("webapi"));
+    commit_a_repo(&two.0.join("infra"));
+    two.ok(&["init"]);
+    two.ok(&["push", "Something", "--why", "seed"]);
+    two.ok(&["setup", "claude-code", "--yes"]);
+    two.ok(&["save", "checkpoint"]);
+    let out = two.ok(&["brief"]);
+    assert!(last_vivac_line(&out).contains(" · 2 repos"), "{out}");
+}

@@ -40,6 +40,27 @@ fn write(c: &Sandbox, path: &str, body: &str) {
     std::fs::write(p, body).unwrap();
 }
 
+fn git_at(dir: &std::path::Path, args: &[&str]) {
+    let ok = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .expect("git is not on PATH");
+    assert!(ok.status.success(), "git {args:?}: {ok:?}");
+}
+
+/// A repository with one commit, at `dir`.
+fn commit_a_repo(dir: &std::path::Path) {
+    std::fs::create_dir_all(dir).unwrap();
+    git_at(dir, &["init", "-q"]);
+    git_at(dir, &["config", "user.email", "t@example.invalid"]);
+    git_at(dir, &["config", "user.name", "t"]);
+    std::fs::write(dir.join("f.txt"), "start\n").unwrap();
+    git_at(dir, &["add", "-A"]);
+    git_at(dir, &["commit", "-qm", "init"]);
+}
+
 /// Nothing to measure from. It is the first thing a fresh tree hits, and the
 /// answer has to carry the command that fixes it.
 #[test]
@@ -214,4 +235,62 @@ fn the_json_carries_the_three_baskets() {
     assert!(s.contains("src/util/retry.rs"), "{s}");
     // The whole file list, never the truncated view.
     assert!(!s.contains("more   --json"), "the json got trimmed:\n{s}");
+}
+
+/// `t594` task 4, paso 6 (§4.4): once a lane has more than one declared
+/// repository, every changed file is prefixed by the one it belongs to.
+#[test]
+fn reconcile_prefixes_each_change_with_its_repository() {
+    let c = Sandbox::new_empty("recon-prefix");
+    commit_a_repo(&c.0.join("webapi"));
+    commit_a_repo(&c.0.join("infra"));
+    c.ok(&["init"]);
+    c.ok(&[
+        "push",
+        "A goal",
+        "--why",
+        "it is needed",
+        "--governs",
+        "unrelated/**",
+    ]);
+    c.ok(&["setup", "claude-code", "--yes"]);
+    c.ok(&["save", "a stop"]);
+    write(&c, "webapi/src/one.rs", "a\n");
+    write(&c, "infra/main.tf", "b\n");
+
+    let s = c.ok(&["reconcile"]);
+    assert!(s.contains("webapi/src/one.rs"), "{s}");
+    assert!(s.contains("infra/main.tf"), "{s}");
+}
+
+/// `t594` task 4, paso 6 (§4.4): a repository whose branch moved since the
+/// stop is named and not diffed -- comparing across branches would be
+/// inferring whether something merged, which `d596` puts out of scope.
+#[test]
+fn reconcile_says_a_repository_is_on_another_branch_instead_of_diffing_it() {
+    let c = Sandbox::new_empty("recon-branch-moved");
+    commit_a_repo(&c.0.join("webapi"));
+    git_at(&c.0.join("webapi"), &["branch", "-m", "feature/net10"]);
+    c.ok(&["init"]);
+    c.ok(&["push", "A goal", "--why", "it is needed"]);
+    c.ok(&["setup", "claude-code", "--yes"]);
+    c.ok(&["save", "a stop"]);
+
+    git_at(&c.0.join("webapi"), &["checkout", "-qb", "perf/sp"]);
+    write(&c, "webapi/src/one.rs", "changed\n");
+
+    let s = c.ok(&["reconcile"]);
+    assert!(s.contains("webapi   feature/net10 -> perf/sp"), "{s}");
+    assert!(
+        s.contains("The stop anchored feature/net10, so what changed here belongs to"),
+        "{s}"
+    );
+    assert!(
+        s.contains("another branch and not to this stop. Nothing compared."),
+        "{s}"
+    );
+    assert!(
+        !s.contains("webapi/src/one.rs"),
+        "the moved repository was diffed anyway:\n{s}"
+    );
 }

@@ -56,6 +56,8 @@ an
 ancestor
 ancestors
 anchor
+anchoring
+anchors
 and
 announces
 another
@@ -416,6 +418,8 @@ differ
 difference
 different
 differently
+differs
+diffing
 digit
 dir
 direct
