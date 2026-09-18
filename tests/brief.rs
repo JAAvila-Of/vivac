@@ -836,3 +836,128 @@ fn a_tree_with_a_single_lane_and_no_repositories_prints_exactly_what_it_did() {
     let b = c.ok(&["brief", "--now", "2026-09-17T10:00:00Z"]);
     assert_eq!(a, b, "same log, same bytes (`MODEL.md` §2 principle 5)");
 }
+
+// ---------------------------------------------------------------------------
+// OTHER LANES (`t594` §5.3): a second folder joined to the very same tree,
+// with nothing beyond `setup --join` and `push` -- no repository needed,
+// since the section only ever reads the lane's own thread.
+// ---------------------------------------------------------------------------
+
+/// The number right before " tokens" in `emit`'s own trailer line, the
+/// total the brief actually spent once every section that fit is in.
+fn spent_tokens(out: &str) -> usize {
+    out.lines()
+        .find_map(|l| {
+            let t = l.trim();
+            if !t.contains("tokens") || !t.ends_with("parked") {
+                return None;
+            }
+            t.split_whitespace().next()?.parse().ok()
+        })
+        .unwrap_or_else(|| panic!("no token count line in the brief:\n{out}"))
+}
+
+/// A second folder, joined to `on`'s own tree as a lane named `name`,
+/// with nothing pushed yet.
+fn join_lane(on: &Sandbox, folder: &str, name: &str) -> Sandbox {
+    let joined = Sandbox::new_empty_in(folder, on.global_home());
+    joined.ok(&[
+        "setup",
+        "claude-code",
+        "--join",
+        on.0.to_str().unwrap(),
+        "--lane-name",
+        name,
+    ]);
+    joined
+}
+
+/// §5.3: only lanes that wrote *after* this one's last write. With
+/// nothing new, the block does not appear at all (`d595`).
+#[test]
+fn a_lane_that_wrote_before_you_did_does_not_show() {
+    let a = populated("other-before");
+    let b = join_lane(&a, "other-before-b", "sonar");
+    b.ok(&["push", "Ship the sonar dashboard", "--why", "seed"]);
+    // `a` writes again after `b` did: `b`'s own last write is now behind
+    // this lane's.
+    a.ok(&["push", "Back on the main lane", "--why", "seed"]);
+
+    let out = a.ok(&["brief"]);
+    assert!(
+        !out.contains("OTHER LANES"),
+        "a lane that wrote before this one did should not show:\n{out}"
+    );
+    assert!(!out.contains("Ship the sonar dashboard"), "{out}");
+}
+
+#[test]
+fn a_lane_with_no_stack_has_no_focus_to_show_and_stays_out() {
+    let a = populated("other-no-stack");
+    let _b = join_lane(&a, "other-no-stack-b", "sonar");
+    // `_b` only ever declared itself through the join: nothing pushed,
+    // so its stack stays empty.
+    let out = a.ok(&["brief"]);
+    assert!(!out.contains("OTHER LANES"), "{out}");
+}
+
+#[test]
+fn a_lane_whose_folder_is_gone_stays_out_of_the_brief() {
+    let a = populated("other-gone");
+    let b = join_lane(&a, "other-gone-b", "sonar");
+    b.ok(&["push", "Ship the sonar dashboard", "--why", "seed"]);
+
+    // With the folder still there, the lane shows.
+    let out = a.ok(&["brief"]);
+    assert!(out.contains("Ship the sonar dashboard"), "{out}");
+
+    // Gone, and it drops out -- never marked dead in the registry
+    // itself, just absent from the folder `exists()` sees right now
+    // (`d33`).
+    std::fs::remove_dir_all(&b.0).unwrap();
+    let out = a.ok(&["brief"]);
+    assert!(!out.contains("OTHER LANES"), "{out}");
+    assert!(!out.contains("Ship the sonar dashboard"), "{out}");
+}
+
+/// It is the last section, so it is the first to fall. Falling in
+/// silence would be worse than not being there: it leaves the line that
+/// says how many there were and where to read them.
+#[test]
+fn the_block_says_so_when_trimmed_by_the_budget() {
+    let a = populated("other-budget");
+    let b = join_lane(&a, "other-budget-b", "sonar");
+    b.ok(&[
+        "push",
+        "Ship the sonar backend dashboard rewrite for the release",
+        "--why",
+        "seed",
+    ]);
+
+    let full = a.ok(&["brief", "--budget", "5000", "--now", "2026-09-15T10:00:00Z"]);
+    assert!(
+        full.contains("Ship the sonar backend dashboard rewrite"),
+        "{full}"
+    );
+    let spent = spent_tokens(&full);
+
+    let tight = a.ok(&[
+        "brief",
+        "--budget",
+        &(spent - 1).to_string(),
+        "--now",
+        "2026-09-15T10:00:00Z",
+    ]);
+    assert!(
+        !tight.contains("Ship the sonar backend dashboard rewrite"),
+        "the full row should have fallen:\n{tight}"
+    );
+    assert!(
+        tight.contains("1 lanes wrote here since you did (vivac stack --lanes)"),
+        "no trace left behind:\n{tight}"
+    );
+    assert!(
+        section(&tight, "LAST VIVAC"),
+        "an earlier section fell first:\n{tight}"
+    );
+}

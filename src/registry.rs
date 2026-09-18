@@ -696,9 +696,8 @@ fn prune_dead_copies(entry: &mut Project, project_id: &str) {
 /// into, this never removes anything from `lanes`: a lane's history stays
 /// whether its folder answers or not.
 ///
-/// No caller in this crate yet outside its own test: `t594` tramo 5's
-/// OTHER LANES, `stack --lanes` and the web read this next.
-#[allow(dead_code)]
+/// `t594` tramo 5's OTHER LANES is the first reader; `stack --lanes` and
+/// the web are next.
 pub fn lanes_with_missing_folder(store_dir: &Path, project_id: &str) -> Vec<String> {
     let Some(projects) = read(&store_dir.join(FILE)) else {
         return Vec::new();
