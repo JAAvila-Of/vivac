@@ -354,6 +354,11 @@ pub struct LaneState {
     pub stack: Vec<u64>,
     pub seq_change: u64,
     pub seq_vivac: u64,
+    /// The `seq` of the last event this lane wrote, whatever kind. Not
+    /// `seq_change`, which skips context events on purpose (§4.3), and not
+    /// `seq_vivac`: "has that lane written since I last did?" counts a
+    /// lane declaring itself and a branch moving just as much as a node.
+    pub seq_wrote: u64,
     pub seg_new: u64,
     pub seg_closed: u64,
     pub seg_notes: u64,
@@ -469,6 +474,12 @@ impl Tree {
     /// into whichever one the caller is looking from.
     pub fn apply(&mut self, seq: u64, ts: &str, lane: &str, body: &Body) {
         self.seq = self.seq.max(seq);
+        // No exclusion here, unlike every arm below: "did that lane write
+        // after I did?" counts a lane declaring itself and a branch moving
+        // just as much as a node, so this runs ahead of the dispatch that
+        // decides what counts as a change or a stop.
+        let s = self.lanes.entry(lane.to_string()).or_default();
+        s.seq_wrote = s.seq_wrote.max(seq);
         if matches!(body, Body::VivacCreated { .. }) {
             // The event's own lane, not the context's: a stop closes the
             // segment of the lane that made it, never another one's
@@ -1620,6 +1631,75 @@ mod tests {
                 ..Default::default()
             }],
         }
+    }
+
+    /// Declaring a lane and moving a branch are writes. The automatic stop
+    /// deliberately ignores them (§4.3) and that exclusion is right for the
+    /// stop and wrong for this: "did that lane write after I did?" counts
+    /// any event at all.
+    #[test]
+    fn every_event_moves_its_lanes_last_write() {
+        let mut t = Tree::default();
+        t.apply(
+            1,
+            TS,
+            "main",
+            &Body::LaneDeclared {
+                lane: "main".to_string(),
+                name: "v2".to_string(),
+                repos: vec![],
+            },
+        );
+        assert_eq!(
+            t.lanes.get("main").unwrap().seq_wrote,
+            1,
+            "declaring a lane is a write"
+        );
+
+        t.apply(
+            2,
+            TS,
+            "main",
+            &Body::LaneClaimed {
+                lane: "main".to_string(),
+            },
+        );
+        assert_eq!(
+            t.lanes.get("main").unwrap().seq_wrote,
+            2,
+            "claiming main is a write"
+        );
+
+        t.apply(3, TS, "main", &where_at("webapi", "develop"));
+        assert_eq!(
+            t.lanes.get("main").unwrap().seq_wrote,
+            3,
+            "moving a branch is a write"
+        );
+
+        t.apply(
+            4,
+            TS,
+            "main",
+            &Body::SessionStarted {
+                source: "test".to_string(),
+                focus: None,
+                vivac: None,
+                session: None,
+            },
+        );
+        assert_eq!(
+            t.lanes.get("main").unwrap().seq_wrote,
+            4,
+            "opening a session is a write too, even though it is neither a change nor a stop"
+        );
+
+        t.apply(5, TS, "main", &created(5).payload);
+        assert_eq!(
+            t.lanes.get("main").unwrap().seq_wrote,
+            5,
+            "an ordinary node write moves it the same as every event above"
+        );
     }
 
     #[test]
