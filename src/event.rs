@@ -299,6 +299,15 @@ pub struct WhereRepo {
     pub withheld: bool,
 }
 
+/// One repository's commit at the moment of a stop.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct RepoAnchor {
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    pub sha: String,
+}
+
 /// One event from the log. `MODEL.md` §3.2.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Event {
@@ -440,6 +449,13 @@ pub enum Body {
         next_intent: String,
         #[serde(default)]
         anchor: crate::anchor::AnchorRef,
+        /// Where every declared repository of the lane was. Written by a
+        /// lane that has them; a lane without them writes `anchor` alone,
+        /// exactly as before. A reader takes `anchors` when it carries
+        /// something and falls back to `anchor`, so every stop written
+        /// until today is read without migrating anything (`f25`).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        anchors: Vec<RepoAnchor>,
         #[serde(default)]
         node_ref: Option<String>,
         #[serde(default)]
@@ -667,6 +683,7 @@ mod tests {
                 working_set: vec![],
                 next_intent: String::new(),
                 anchor: crate::anchor::AnchorRef::default(),
+                anchors: vec![],
                 node_ref: None,
                 label: String::new(),
             },

@@ -22,15 +22,17 @@
 //! the tool does not have it: it can say *nobody claims `src/util/retry.rs`*,
 //! and it cannot say which thread that file belongs to.
 
-use crate::anchor::Anchor;
+use crate::anchor::{self, AnchorRef, Change};
 use crate::args::Args;
 use crate::brief::clip;
+use crate::event::{Repo, RepoAnchor};
 use crate::failure::R;
 use crate::glob;
 use crate::model::{Node, Tree, Vivac};
 use crate::output::outln;
 use crate::render::print_json;
 use serde_json::json;
+use std::path::Path;
 
 /// How many files a section prints before it stops and says how many are left.
 /// `--json` is never truncated.
@@ -48,6 +50,66 @@ impl Verdict<'_> {
     fn claimed_and_open(&self) -> bool {
         self.claimed_by.iter().any(|n| n.state.is_open())
     }
+}
+
+/// A declared repository whose branch is not the one the stop anchored:
+/// comparing it to that stop would be a diff across branches, which is
+/// inferring whether something merged and is out of scope by `d596`
+/// (§4.4). Named, not diffed.
+struct Moved {
+    path: String,
+    from: String,
+    to: String,
+}
+
+/// Every declared repository's changes, one path-prefixed batch per
+/// repository still on the branch the stop anchored, and the
+/// repositories that are not (§4.4). A repository the stop never
+/// anchored -- declared since, or written by a version before this
+/// tranche -- has nothing to compare against and contributes neither.
+fn repo_changes(
+    declared: &[Repo],
+    since_anchors: &[RepoAnchor],
+    lane_dir: &Path,
+) -> (Vec<Change>, Vec<Moved>) {
+    let mut changes = Vec::new();
+    let mut moved = Vec::new();
+    for repo in declared {
+        let Some(entry) = since_anchors.iter().find(|r| r.path == repo.path) else {
+            continue;
+        };
+        let anchor::Where::Head(h) = anchor::where_of(&lane_dir.join(&repo.path)) else {
+            continue;
+        };
+        let differs = match (&entry.branch, &h.branch) {
+            (Some(a), Some(b)) => a != b,
+            _ => false,
+        };
+        if differs {
+            moved.push(Moved {
+                path: repo.path.clone(),
+                from: entry.branch.clone().unwrap_or_default(),
+                to: h.branch.clone().unwrap_or_default(),
+            });
+            continue;
+        }
+        let prefix = if repo.path == "." {
+            String::new()
+        } else {
+            format!("{}/", repo.path)
+        };
+        let reference = AnchorRef {
+            kind: "git".to_string(),
+            id: entry.sha.clone(),
+        };
+        for c in anchor::detect(&lane_dir.join(&repo.path)).changed_since(&reference) {
+            changes.push(Change {
+                file_path: format!("{prefix}{}", c.file_path),
+                times: c.times,
+            });
+        }
+    }
+    (changes, moved)
 }
 
 fn plural(n: usize, one: &str, many: &str) -> String {
@@ -74,7 +136,7 @@ fn reference<'a>(a: &'a Tree, args: &Args) -> Result<Option<&'a Vivac>, crate::f
     }
 }
 
-pub fn reconcile(a: &Tree, anchor: &dyn Anchor, args: &Args) -> R {
+pub fn reconcile(a: &Tree, lane_dir: &Path, args: &Args) -> R {
     let Some(since) = reference(a, args)? else {
         outln!();
         outln!("  No stop to measure from: this tree has no vivacs yet.");
@@ -84,22 +146,37 @@ pub fn reconcile(a: &Tree, anchor: &dyn Anchor, args: &Args) -> R {
         return Ok(());
     };
 
-    if since.anchor.is_empty_tree() {
-        outln!();
-        outln!(
-            "  {} has no anchor, so there is no history to read.",
-            since.alias()
-        );
-        outln!("  Without version control the tree cannot be contradicted; that is");
-        outln!("  the floor of the product and not a failure.");
-        outln!();
-        return Ok(());
-    }
+    // A lane with declared repositories reconciles each of them (§4.4). A
+    // lane with none -- every tree nobody has run `setup` in -- keeps
+    // reading the single anchor this folder itself is, exactly as before
+    // this tranche (`f25`).
+    let declared: &[Repo] = a
+        .lanes
+        .get(a.lane())
+        .map(|s| s.repos.as_slice())
+        .unwrap_or(&[]);
+
+    let (changes, moved) = if declared.is_empty() {
+        if since.anchor.is_empty_tree() {
+            outln!();
+            outln!(
+                "  {} has no anchor, so there is no history to read.",
+                since.alias()
+            );
+            outln!("  Without version control the tree cannot be contradicted; that is");
+            outln!("  the floor of the product and not a failure.");
+            outln!();
+            return Ok(());
+        }
+        let root = anchor::detect(lane_dir);
+        (root.changed_since(&since.anchor), Vec::new())
+    } else {
+        repo_changes(declared, &since.anchors, lane_dir)
+    };
 
     // The tool's own store is not work. Without this, every reconcile reports
     // the log it just wrote to.
-    let changes: Vec<crate::anchor::Change> = anchor
-        .changed_since(&since.anchor)
+    let changes: Vec<Change> = changes
         .into_iter()
         .filter(|c| !c.file_path.replace('\\', "/").starts_with(".vivac/"))
         .collect();
@@ -169,9 +246,21 @@ pub fn reconcile(a: &Tree, anchor: &dyn Anchor, args: &Args) -> R {
         plural(verdicts.len(), "file changed", "files changed")
     );
 
+    for m in &moved {
+        outln!();
+        outln!("  {}   {} -> {}", m.path, m.from, m.to);
+        outln!(
+            "    The stop anchored {}, so what changed here belongs to",
+            m.from
+        );
+        outln!("    another branch and not to this stop. Nothing compared.");
+    }
+
     if verdicts.is_empty() {
         outln!();
-        outln!("  Nothing changed. The tree and the work agree.");
+        if moved.is_empty() {
+            outln!("  Nothing changed. The tree and the work agree.");
+        }
         outln!();
         return Ok(());
     }

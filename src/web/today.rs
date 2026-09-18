@@ -499,6 +499,7 @@ mod tests {
                 working_set: vec![],
                 next_intent: String::new(),
                 anchor: crate::anchor::AnchorRef::default(),
+                anchors: vec![],
                 node_ref: None,
                 label: String::new(),
             },

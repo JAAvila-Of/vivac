@@ -218,9 +218,37 @@ pub struct Vivac {
     pub working_set: Vec<String>,
     pub next_intent: String,
     pub anchor: AnchorRef,
+    /// Where every declared repository of the lane was, one entry per
+    /// repository. Empty for a lane with none declared, which is every
+    /// stop written before this tranche (`f613`): `anchor` alone is what
+    /// those keep reading as (`f25`).
+    pub anchors: Vec<crate::event::RepoAnchor>,
     pub node_ref: Option<String>,
     pub label: String,
     pub ts: String,
+}
+
+/// How a stop's anchoring reads. One repository shows a short sha -- the
+/// same seven characters it always showed -- and two or more collapse to a
+/// count, rather than picking one sha to stand for all of them (§4.4).
+/// `anchors` wins over `anchor` whenever it carries anything, so a stop
+/// written at a root that holds no git of its own still says what it
+/// anchored to: that root is exactly where `f613` was found, and reading
+/// `anchor` alone there answers "there is no version control here" while
+/// the lane has every repository declared underneath it. `None` only when
+/// there is genuinely nothing to point at.
+pub fn anchoring(anchor: &AnchorRef, anchors: &[crate::event::RepoAnchor]) -> Option<String> {
+    match anchors {
+        [] => (!anchor.is_empty_tree()).then(|| anchor.short().to_string()),
+        [one] => Some(short_sha(&one.sha).to_string()),
+        many => Some(format!("{} repos", many.len())),
+    }
+}
+
+/// The seven characters `AnchorRef::short` gives, for a sha that arrives
+/// on its own rather than inside one.
+fn short_sha(sha: &str) -> &str {
+    &sha[..sha.len().min(7)]
 }
 
 impl Vivac {
@@ -676,6 +704,7 @@ impl Tree {
                 working_set,
                 next_intent,
                 anchor,
+                anchors,
                 node_ref,
                 label,
             } => {
@@ -690,6 +719,7 @@ impl Tree {
                     working_set: working_set.clone(),
                     next_intent: next_intent.clone(),
                     anchor: anchor.clone(),
+                    anchors: anchors.clone(),
                     node_ref: node_ref.clone(),
                     label: label.clone(),
                     ts: ts.to_string(),
@@ -1435,6 +1465,7 @@ mod tests {
                 working_set: vec![],
                 next_intent: String::new(),
                 anchor: AnchorRef::default(),
+                anchors: vec![],
                 node_ref: None,
                 label: String::new(),
             },
@@ -1557,6 +1588,7 @@ mod tests {
                 working_set: vec![],
                 next_intent: String::new(),
                 anchor: AnchorRef::default(),
+                anchors: vec![],
                 node_ref: None,
                 label: String::new(),
             },

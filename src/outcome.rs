@@ -269,6 +269,9 @@ pub enum Outcome {
         num: u64,
         label: String,
         anchor: AnchorRef,
+        /// What the lane's own repositories anchored this stop to. Empty
+        /// for a lane that declared none, where `anchor` still answers.
+        anchors: Vec<crate::event::RepoAnchor>,
         next: String,
     },
     Restored {
@@ -520,12 +523,13 @@ pub fn to_text(o: &Outcome) -> String {
             num,
             label,
             anchor,
+            anchors,
             next,
         } => {
             let shown = if label.is_empty() { "no label" } else { label };
             lines.push(format!("  v{num}  {shown}"));
-            if !anchor.is_empty_tree() {
-                lines.push(format!("        anchored to {}", anchor.short()));
+            if let Some(a) = crate::model::anchoring(anchor, anchors) {
+                lines.push(format!("        anchored to {a}"));
             } else {
                 lines.push("        no anchor: there is no version control here".to_string());
             }

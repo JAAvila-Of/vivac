@@ -63,11 +63,14 @@ const MAGIC: u64 = u64::from_le_bytes(*b"vivacIDX");
 // for the whole tree; version 7 carries a lane table instead, one stack
 // and six counters per lane, plus whether `main` has ever been claimed.
 // Version 8 adds the wheres table -- `Tree.wheres`, one photograph per
-// `where.changed` folded. `Header::parse` refuses any version but this
-// one and `try_load_index` falls back to folding the log, which is what
-// the index is derived from -- so bumping this needs no migration and no
-// command.
-const FORMAT_VERSION: u32 = 8;
+// `where.changed` folded. Version 9 widens each vivac record with its own
+// `anchors`, one entry per repository the lane had declared when it wrote
+// (`t594` task 4): a record this shape read under version 8 would misparse
+// silently, which is exactly what a version bump exists to refuse instead.
+// `Header::parse` refuses any version but this one and `try_load_index`
+// falls back to folding the log, which is what the index is derived from
+// -- so bumping this needs no migration and no command.
+const FORMAT_VERSION: u32 = 9;
 const ULID_LEN: usize = 26;
 const SPAN_LEN: usize = 8;
 const FLAG_RECORD_LEN: usize = 1 + SPAN_LEN;
@@ -1159,6 +1162,33 @@ fn assemble_nodes(
 // nothing to intern here, only to write down.
 // ---------------------------------------------------------------------------
 
+fn write_repo_anchor(buf: &mut Vec<u8>, r: &crate::event::RepoAnchor) {
+    write_str(buf, &r.path);
+    match &r.branch {
+        Some(branch) => {
+            write_bool(buf, true);
+            write_str(buf, branch);
+        }
+        None => {
+            write_bool(buf, false);
+            write_str(buf, "");
+        }
+    }
+    write_str(buf, &r.sha);
+}
+
+fn parse_repo_anchor(c: &mut Cursor) -> Option<crate::event::RepoAnchor> {
+    let path = c.str()?;
+    let branch_present = c.bool_()?;
+    let branch_raw = c.str()?;
+    let sha = c.str()?;
+    Some(crate::event::RepoAnchor {
+        path,
+        branch: branch_present.then_some(branch_raw),
+        sha,
+    })
+}
+
 fn write_vivac(buf: &mut Vec<u8>, v: &Vivac) {
     write_ulid(buf, &v.id);
     write_u64(buf, v.num);
@@ -1168,6 +1198,10 @@ fn write_vivac(buf: &mut Vec<u8>, v: &Vivac) {
     write_str(buf, &v.next_intent);
     write_str(buf, &v.anchor.kind);
     write_str(buf, &v.anchor.id);
+    write_u32(buf, v.anchors.len() as u32);
+    for r in &v.anchors {
+        write_repo_anchor(buf, r);
+    }
     match &v.node_ref {
         Some(s) => {
             write_bool(buf, true);
@@ -1203,6 +1237,11 @@ fn parse_vivacs(bytes: &[u8], header: &Header) -> Option<Vec<Vivac>> {
         let next_intent = c.str()?;
         let anchor_kind = c.str()?;
         let anchor_id = c.str()?;
+        let anchors_count = c.u32()?;
+        let mut anchors = Vec::with_capacity(anchors_count as usize);
+        for _ in 0..anchors_count {
+            anchors.push(parse_repo_anchor(&mut c)?);
+        }
         let node_ref_present = c.bool_()?;
         let node_ref_raw = c.str()?;
         let node_ref = node_ref_present.then_some(node_ref_raw);
@@ -1233,6 +1272,7 @@ fn parse_vivacs(bytes: &[u8], header: &Header) -> Option<Vec<Vivac>> {
                 kind: anchor_kind,
                 id: anchor_id,
             },
+            anchors,
             node_ref,
             label,
             ts,
@@ -1846,6 +1886,7 @@ mod tests {
                     kind: "git".to_string(),
                     id: "abc123".to_string(),
                 },
+                anchors: vec![],
                 node_ref: Some(root_id.to_string()),
                 label: "a stop".to_string(),
             },
@@ -1925,7 +1966,7 @@ mod tests {
         for v in &tree.vivacs {
             out.push_str(&format!(
                 "vivac num={} id={} seq={} lane={:?} kind={:?} stack={:?} working_set={:?} \
-                 next_intent={:?} anchor={:?} node_ref={:?} label={:?} ts={:?}\n",
+                 next_intent={:?} anchor={:?} anchors={:?} node_ref={:?} label={:?} ts={:?}\n",
                 v.num,
                 v.id,
                 v.seq,
@@ -1935,6 +1976,7 @@ mod tests {
                 v.working_set,
                 v.next_intent,
                 v.anchor,
+                v.anchors,
                 v.node_ref,
                 v.label,
                 v.ts,
@@ -2244,6 +2286,58 @@ mod tests {
         assert_eq!(fresh.wheres.len(), 1, "the fixture itself has to write one");
 
         let store = tmp_store("wheres-roundtrip");
+        write_raw_locked(&store, &events);
+
+        let loaded = load(&store, true).expect("load should succeed");
+        assert_eq!(snapshot(&fresh), snapshot(&loaded));
+        assert!(
+            store.index_path().is_file(),
+            "a clean fold should be indexed"
+        );
+
+        // Purely from the index this time, with no tail to apply.
+        let loaded_again = load(&store, false).expect("load should succeed");
+        assert_eq!(snapshot(&fresh), snapshot(&loaded_again));
+
+        std::fs::remove_dir_all(&store.root).ok();
+    }
+
+    /// `t594` task 4: a vivac's own `anchors` -- one entry per repository
+    /// the lane had declared when it wrote -- is a table `snapshot` never
+    /// used to print, so a round trip that only compared the string above
+    /// would pass even if `write_vivac`/`parse_vivacs` had swallowed the
+    /// field entirely.
+    #[test]
+    fn a_vivacs_anchors_survive_the_round_trip_with_their_branch_and_sha() {
+        let a_node = fixed_id(1);
+        let mut vivac = a_vivac(2, 1, &a_node);
+        let Body::VivacCreated { anchors, .. } = &mut vivac.payload else {
+            panic!("a_vivac always writes a vivac.created");
+        };
+        *anchors = vec![
+            crate::event::RepoAnchor {
+                path: "webapi".to_string(),
+                branch: Some("develop".to_string()),
+                sha: "abc123".to_string(),
+            },
+            crate::event::RepoAnchor {
+                path: "infra".to_string(),
+                branch: None,
+                sha: "def456".to_string(),
+            },
+        ];
+        let events = vec![
+            created(1, &a_node, 1, Kind::Goal, None, "Root", vec![], vec![]),
+            vivac,
+        ];
+        let fresh = fold(&events, 0);
+        assert_eq!(
+            fresh.vivacs[0].anchors.len(),
+            2,
+            "the fixture itself has to write two"
+        );
+
+        let store = tmp_store("vivac-anchors-roundtrip");
         write_raw_locked(&store, &events);
 
         let loaded = load(&store, true).expect("load should succeed");

@@ -750,6 +750,47 @@ fn snapshot_of(lane_dir: &Path, r: &crate::event::Repo) -> crate::event::WhereRe
     out
 }
 
+/// One `RepoAnchor` per repository the lane has declared and that has a
+/// commit to anchor to: this is `f613`'s own fix, replacing "is this
+/// folder a repository?" -- `Ctx.anchor`'s own question, still `Null` at a
+/// root that holds no git of its own -- with "what has the lane declared
+/// underneath it?" A repository with no commit yet, or whose folder is
+/// gone, contributes nothing: there is no commit to point at. A lane with
+/// no declared repositories -- a tree nobody ran `setup` in, or a
+/// worktree still pending -- gets the empty list, and the vivac keeps
+/// reading as `anchor` alone (§4.4, `f25`).
+fn anchors_of(ctx: &Ctx) -> Vec<crate::event::RepoAnchor> {
+    let Some(lane) = ctx.lane.as_deref() else {
+        return vec![];
+    };
+    let Some(state) = ctx.tree.lanes.get(lane) else {
+        return vec![];
+    };
+    state
+        .repos
+        .iter()
+        .filter_map(|r| {
+            let anchor::Where::Head(h) = anchor::where_of(&ctx.lane_dir.join(&r.path)) else {
+                return None;
+            };
+            let sha = h.sha?;
+            // A branch name the redaction guard refuses is left out rather
+            // than kept under a flag `RepoAnchor` has no room for (§4.4):
+            // the sha alone still anchors the vivac, and the write is
+            // never blocked over a name that was never ours to reword.
+            let branch = match h.branch {
+                Some(b) if redact::check_field("branch", &b).is_some() => None,
+                b => b,
+            };
+            Some(crate::event::RepoAnchor {
+                path: r.path.clone(),
+                branch,
+                sha,
+            })
+        })
+        .collect()
+}
+
 /// Builds a vivac out of the stack as it stands right now.
 ///
 /// The `working_set` is **not measured**: measuring which files the pitch
@@ -787,6 +828,7 @@ fn vivac(
         working_set,
         next_intent: next_intent.to_string(),
         anchor: ctx.anchor.snapshot(),
+        anchors: anchors_of(ctx),
         node_ref,
         label: label.to_string(),
     }
@@ -1971,6 +2013,14 @@ pub fn save(ctx: &mut Ctx, p: params::Save) -> Result<Outcome, Failure> {
     guard_text(&[("label", &p.label), ("next", &p.next)])?;
     let v = vivac(ctx, VivacKind::Manual, &p.next, None, &p.label);
     let num = ctx.tree.next_vivac_num.max(1);
+    // Read off the event rather than resolved a second time: `vivac` has
+    // already been to every repository's `HEAD`, and asking again would
+    // pay those reads twice for an answer that cannot have changed inside
+    // the lock.
+    let anchors = match &v {
+        Body::VivacCreated { anchors, .. } => anchors.clone(),
+        _ => vec![],
+    };
     ctx.emit(vec![v])?;
     // With no VCS no precision is faked: the vivac is worth the same, but
     // restoring it will only give plain age, not a diff.
@@ -1979,6 +2029,7 @@ pub fn save(ctx: &mut Ctx, p: params::Save) -> Result<Outcome, Failure> {
         num,
         label: p.label,
         anchor,
+        anchors,
         next: p.next,
     })
 }

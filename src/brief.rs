@@ -594,10 +594,15 @@ pub fn to_text(
                 v.alias(),
                 v.kind.word(),
                 crate::clock::date_of(&v.ts),
-                if v.anchor.is_empty_tree() {
-                    String::new()
-                } else {
-                    format!(" · {}", v.anchor.short())
+                // A single repository reads exactly as it always has --
+                // the short sha of `anchor`, root or lone declared
+                // repository alike. Only two or more declared repositories
+                // change the line at all, and they collapse to a count
+                // rather than picking one sha to stand for all of them
+                // (`t594` task 4, §4.4).
+                match crate::model::anchoring(&v.anchor, &v.anchors) {
+                    Some(a) => format!(" · {a}"),
+                    None => String::new(),
                 }
             )];
             if !v.next_intent.is_empty() {
