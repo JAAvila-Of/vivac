@@ -959,6 +959,7 @@ non
 none
 nonexistent
 nonzero
+nor
 normalize
 normalized
 normalizes
@@ -998,6 +999,7 @@ once
 one
 ones
 only
+onto
 onward
 op
 open
@@ -1143,6 +1145,7 @@ process
 product
 products
 prog
+progress
 proj
 project
 projects
@@ -1196,6 +1199,9 @@ readonly
 reads
 real
 reason
+rebase
+rebased
+rebasing
 rebuilt
 recognise
 recognized
@@ -1802,7 +1808,6 @@ writing
 written
 wrong
 wrote
-wt
 yes
 yet
 yield
