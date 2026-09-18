@@ -69,6 +69,7 @@ anything
 anywhere
 apart
 appear
+appeared
 appears
 append
 appended
@@ -922,6 +923,7 @@ most
 move
 moved
 moves
+moving
 mp
 ms
 msg
@@ -1032,6 +1034,7 @@ our
 ours
 out
 out2
+out3
 outcome
 outer
 outln
@@ -1284,6 +1287,7 @@ report
 reported
 reports
 repos
+repositories
 repository
 request
 requested

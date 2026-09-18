@@ -1710,3 +1710,69 @@ fn an_unjoined_worktree_still_writes_nothing_with_another_project_in_the_registr
     std::fs::remove_dir_all(&home).ok();
     std::fs::remove_dir_all(&elsewhere).ok();
 }
+
+// ---------------------------------------------------------------------------
+// `t594` tramo 4, task 3: `where.changed` (§2.5), written inside `emit`.
+// ---------------------------------------------------------------------------
+
+fn where_changed_count(root: &Path) -> usize {
+    let log = std::fs::read_to_string(root.join(".vivac").join("events")).unwrap_or_default();
+    log.lines()
+        .filter(|l| l.contains(r#""type":"where.changed""#))
+        .count()
+}
+
+/// Two writes on the same branch leave one where, not two: the trap of
+/// §1 says vivac used to notice nothing at all, and the cure must not
+/// be an event per write.
+#[test]
+fn moving_a_branch_writes_one_where_and_moving_back_writes_another() {
+    let root = unique("where-moves-root");
+    std::fs::create_dir_all(&root).unwrap();
+    git(&root, &["init", "-q"]);
+    git(&root, &["checkout", "-q", "-b", "start"]);
+    git(&root, &["config", "user.email", "t@example.com"]);
+    git(&root, &["config", "user.name", "t"]);
+    std::fs::write(root.join("f.txt"), "x").unwrap();
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "-q", "-m", "first"]);
+
+    let home = unique("where-moves-home");
+    let (init_out, init_code) = run(&root, &home, &["init"]);
+    assert_eq!(init_code, 0, "{init_out}");
+    setup_ok(&root, &home);
+    assert_eq!(
+        where_changed_count(&root),
+        0,
+        "declaring the lane alone does not move any branch"
+    );
+
+    git(&root, &["checkout", "-q", "-b", "feature"]);
+    let (out, code) = run(&root, &home, &["push", "First", "--why", "seed"]);
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(
+        where_changed_count(&root),
+        1,
+        "the first write after a branch change carries the lane's where"
+    );
+
+    let (out2, code2) = run(&root, &home, &["push", "Second", "--why", "again"]);
+    assert_eq!(code2, 0, "{out2}");
+    assert_eq!(
+        where_changed_count(&root),
+        1,
+        "a second write on the same branch must not repeat the where"
+    );
+
+    git(&root, &["checkout", "-q", "start"]);
+    let (out3, code3) = run(&root, &home, &["push", "Third", "--why", "back"]);
+    assert_eq!(code3, 0, "{out3}");
+    assert_eq!(
+        where_changed_count(&root),
+        2,
+        "moving back to the original branch writes another where"
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+    std::fs::remove_dir_all(&home).ok();
+}

@@ -152,16 +152,7 @@ pub fn detect(root: &Path) -> Box<dyn Anchor> {
 
 /// Where one repository is right now, read off files and spawning
 /// nothing: this runs inside the write lock, on the write path.
-///
-/// `where_of` and the pieces under it have no caller outside this module's
-/// own tests yet: `t594` tramo 4's task 1 is the reader alone, and tasks 2
-/// through 4 are what write and read `where.changed` through it. Until one
-/// of them lands, nothing outside `#[cfg(test)]` calls in, and rustc's own
-/// dead-code detection -- the one `t594`'s plan already leans on for the
-/// write-only fields of §2.7 -- catches a whole unreachable function just
-/// as well as an unread field, hence the `allow` here and below.
 #[derive(Debug, Clone, PartialEq)]
-#[allow(dead_code)]
 pub(crate) struct Head {
     /// The branch `HEAD` points at. Absent with a detached `HEAD`.
     pub branch: Option<String>,
@@ -176,7 +167,6 @@ pub(crate) struct Head {
 
 /// What a lane's declared repository answers when asked where it is.
 #[derive(Debug, Clone, PartialEq)]
-#[allow(dead_code)]
 pub(crate) enum Where {
     Head(Head),
     /// The folder a lane declared holds no repository any more.
@@ -186,7 +176,6 @@ pub(crate) enum Where {
 /// Where the repository at `repo_root` is. `Missing` when the folder is
 /// not a working tree at all -- the lane declared it and it is gone --
 /// which is a different answer from a `HEAD` that could not be read.
-#[allow(dead_code)]
 pub(crate) fn where_of(repo_root: &Path) -> Where {
     let Some(g) = Git::new(repo_root) else {
         return Where::Missing;
@@ -404,7 +393,6 @@ impl Git {
     /// `HEAD` is detached and the branch being rebased is in
     /// `rebase-merge/head-name` (an interactive or merge rebase) or
     /// `rebase-apply/head-name` (`git am`, and `--apply`).
-    #[allow(dead_code)] // called through `where_of`, whose own doc explains the gap.
     fn where_now(&self) -> Head {
         let sha = self.head();
         if let Some(branch) = self.rebasing_onto() {
@@ -423,7 +411,6 @@ impl Git {
 
     /// The branch `HEAD` names, without its `refs/heads/` prefix. `None`
     /// with a detached `HEAD`, which is a value and not a failure.
-    #[allow(dead_code)] // called through `where_of`, whose own doc explains the gap.
     fn head_branch(&self) -> Option<String> {
         let h = std::fs::read_to_string(self.gitdir.join("HEAD")).ok()?;
         let refname = h.trim().strip_prefix("ref:")?.trim().to_string();
@@ -431,7 +418,6 @@ impl Git {
     }
 
     /// The branch a rebase in progress is replaying onto its own tip.
-    #[allow(dead_code)] // called through `where_of`, whose own doc explains the gap.
     fn rebasing_onto(&self) -> Option<String> {
         for dir in ["rebase-merge", "rebase-apply"] {
             let f = self.gitdir.join(dir).join("head-name");
@@ -466,7 +452,6 @@ fn is_sha(s: &str) -> bool {
 /// start that way is kept whole: it is still what the checkout says it is
 /// on, and inventing a shorter one would name a branch that does not
 /// exist.
-#[allow(dead_code)] // called through `where_of`, whose own doc explains the gap.
 fn short_branch(refname: &str) -> String {
     refname
         .strip_prefix("refs/heads/")
