@@ -541,7 +541,7 @@ fn branch_moved_block(a: &Tree, lane_dir: &Path) -> Vec<String> {
             )
         })
         .collect();
-    candidates.sort_by(|x, y| y.seq.cmp(&x.seq));
+    candidates.sort_by_key(|x| std::cmp::Reverse(x.seq));
     candidates.truncate(3);
     for c in &candidates {
         lines.push(c.line.clone());
