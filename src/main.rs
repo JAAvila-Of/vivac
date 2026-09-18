@@ -105,7 +105,9 @@ const USAGE: &str = r#"vivac - provenance of work
     vivac find "<text>" [--everywhere]        every node whose words match
                                               --everywhere: every project
                                               the registry knows
-    vivac stack                               where you are right now
+    vivac stack [--lanes]                     where you are right now
+                                              --lanes: every folder of this
+                                              product, and what it is on
     vivac parked                              DO NOT TOUCH NOW
     vivac rules                               the pillars, rules and invariants
                                               that govern this project
