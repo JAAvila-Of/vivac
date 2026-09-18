@@ -2382,14 +2382,172 @@ fn a_join_with_another_tree_below_names_the_choice_not_the_other_remedy() {
         "the plant-only text is still shown to a join:\n{out}"
     );
     assert!(
-        out.contains(&format!("cannot be a lane of {target_str}")),
+        out.contains(&format!("cannot be a lane of \"{target_str}\"")),
         "{out}"
     );
-    assert!(out.contains("vivac relocate Nested"), "{out}");
+    assert!(
+        out.contains("move it up. From inside Nested:"),
+        "the remedy does not name the folder to run it from:\n{out}"
+    );
+    assert!(
+        !out.contains("vivac relocate Nested"),
+        "relocate's own argument is a destination, not the tree that moves:\n{out}"
+    );
+    assert!(out.contains("vivac relocate .."), "{out}");
     assert!(
         !f.join(".vivac").exists(),
         "F must not have become a lane of T despite the tree below"
     );
+}
+
+/// `d626`: with more than one foreign tree below, every one of them is
+/// named -- the same shape `two_trees_below_refuse_with_the_plural_text`
+/// already settled for a plant, and for the same reason: whoever fixes
+/// the first one and reaches this refusal again would only be learning
+/// the same thing twice.
+#[test]
+fn several_trees_below_refuse_a_join_by_naming_all_of_them() {
+    let c = Sandbox::new_empty("setup-below-several-and-join");
+    let target = c.0.join("T");
+    let f = c.0.join("F");
+    let alpha = f.join("Alpha");
+    let beta = f.join("Beta");
+    std::fs::create_dir_all(&target).unwrap();
+    std::fs::create_dir_all(&alpha).unwrap();
+    std::fs::create_dir_all(&beta).unwrap();
+    run_in(&target, c.global_home(), &["setup", "claude-code", "--yes"]);
+    run_in(&alpha, c.global_home(), &["init"]);
+    run_in(&beta, c.global_home(), &["init"]);
+
+    let target_str = target.to_string_lossy().into_owned();
+    let (out, code) = run_in(
+        &f,
+        c.global_home(),
+        &["setup", "claude-code", "--join", &target_str],
+    );
+
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        out.contains("There are other products' trees below this folder:"),
+        "{out}"
+    );
+    assert!(out.contains("    Alpha"), "{out}");
+    assert!(out.contains("    Beta"), "{out}");
+    assert!(
+        out.contains(&format!(
+            "cannot be a lane of \"{target_str}\" while any of them is there"
+        )),
+        "{out}"
+    );
+    assert!(
+        out.contains(&format!(
+            "Any of them that belongs to \"{target_str}\" can move up, from inside it:"
+        )),
+        "{out}"
+    );
+    assert!(out.contains("vivac relocate .."), "{out}");
+    assert!(
+        out.contains("For the rest, join from a folder that does not contain them."),
+        "{out}"
+    );
+    assert!(
+        !out.contains("vivac cannot merge trees"),
+        "the plant-only plural text is still shown to a join:\n{out}"
+    );
+    assert!(!f.join(".vivac").exists());
+}
+
+/// `d626`: a tree below whose own folder name the redaction guard
+/// rejects refuses a join without ever printing that name, the same
+/// guarantee `a_registered_products_withheld_name_points_at_the_path_remedy`
+/// already holds for a plant.
+#[test]
+fn a_join_with_a_withheld_tree_below_names_neither_the_folder_nor_a_count() {
+    let secret_name = "someone@example.com";
+    let c = Sandbox::new_empty("setup-below-withheld-and-join");
+    let target = c.0.join("T");
+    let f = c.0.join("F");
+    let hidden = f.join(secret_name);
+    std::fs::create_dir_all(&target).unwrap();
+    std::fs::create_dir_all(&hidden).unwrap();
+    run_in(&target, c.global_home(), &["setup", "claude-code", "--yes"]);
+    run_in(&hidden, c.global_home(), &["init"]);
+
+    let target_str = target.to_string_lossy().into_owned();
+    let (out, code) = run_in(
+        &f,
+        c.global_home(),
+        &["setup", "claude-code", "--join", &target_str],
+    );
+
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        !out.contains(secret_name),
+        "the withheld folder name leaked: {out}"
+    );
+    assert!(
+        out.contains("There is another product's tree below this folder, under a name this tool"),
+        "{out}"
+    );
+    assert!(out.contains("will not write down."), "{out}");
+    assert!(
+        out.contains(&format!(
+            "cannot be a lane of \"{target_str}\" while that tree is there"
+        )),
+        "{out}"
+    );
+    assert!(
+        out.contains("Join from a folder that does not contain it, or move that tree up from"),
+        "{out}"
+    );
+    assert!(out.contains("inside it:   vivac relocate .."), "{out}");
+    assert!(
+        !out.contains("From inside"),
+        "a folder this tool will not name cannot be pointed at: {out}"
+    );
+    assert!(!f.join(".vivac").exists());
+}
+
+/// The defect `d626` exists to close: the remedy used to read
+/// `vivac relocate <tree below>`, which is backwards twice over --
+/// `relocate` takes a destination, not a source, and it has to be run
+/// from inside the tree that moves, never from above it
+/// (`src/relocate.rs`). With the tree below two folders deep, the same
+/// route has to show up twice: once as where the tree is, and once as
+/// where to stand before typing the fix.
+#[test]
+fn the_join_remedy_names_the_folder_to_run_it_from_not_a_destination() {
+    let c = Sandbox::new_empty("setup-below-remedy-direction");
+    let target = c.0.join("T");
+    let f = c.0.join("F");
+    let deep = f.join("Group").join("Sub");
+    std::fs::create_dir_all(&target).unwrap();
+    std::fs::create_dir_all(&deep).unwrap();
+    run_in(&target, c.global_home(), &["setup", "claude-code", "--yes"]);
+    run_in(&deep, c.global_home(), &["init"]);
+
+    let target_str = target.to_string_lossy().into_owned();
+    let (out, code) = run_in(
+        &f,
+        c.global_home(),
+        &["setup", "claude-code", "--join", &target_str],
+    );
+
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("    Group/Sub"), "{out}");
+    assert!(
+        out.contains("move it up. From inside Group/Sub:"),
+        "the remedy does not say where to stand:\n{out}"
+    );
+    assert!(
+        out.contains("vivac relocate .."),
+        "relocate's own argument has to be the destination, not the tree below:\n{out}"
+    );
+    assert!(
+        !out.contains("vivac relocate Group/Sub"),
+        "the old remedy pointed relocate at the tree below as if it were a destination:\n{out}"
+    );
+    assert!(!f.join(".vivac").exists());
 }
 
 /// `t594` (critical): `registry::resolve` used to hand a
