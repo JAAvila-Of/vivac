@@ -925,7 +925,7 @@ fn ensure_first_event(tree: &Path) -> Result<String, Failure> {
     let store = crate::store::Store::open(tree.to_path_buf())?;
     let mut ctx = crate::ops::Ctx::load_for_write(
         store,
-        crate::ops::Whose::Declared(crate::lane::MAIN.to_string()),
+        crate::ops::Whose::Declared(crate::lane::MAIN.to_string(), tree.to_path_buf()),
     )?;
     ctx.lock_for_write()?;
     crate::ops::declare_lane(&mut ctx, crate::lane::MAIN.to_string(), repos)?;
@@ -974,9 +974,14 @@ fn write_lane(roots: &super::Roots, plan: &LanePlan) -> Result<(), Failure> {
     // said which lane it is yet -- would ask a question this call already
     // answered, and could answer it differently for a worktree `setup`
     // is declaring by hand rather than leaving to join on its own
-    // (`t594`).
-    let mut ctx =
-        crate::ops::Ctx::load_for_write(store, crate::ops::Whose::Declared(plan.lane_id.clone()))?;
+    // (`t594`). `roots.here`, not `roots.tree`: `plan.repos` was scanned
+    // from `roots.here` too, and a redeclaration reads this folder back
+    // through `where_to_write` -- a lane joined from elsewhere is not
+    // sitting at the tree's own root.
+    let mut ctx = crate::ops::Ctx::load_for_write(
+        store,
+        crate::ops::Whose::Declared(plan.lane_id.clone(), roots.here.clone()),
+    )?;
     ctx.lock_for_write()?;
     crate::ops::declare_lane(&mut ctx, plan.name.clone(), plan.repos.clone())
 }
@@ -1232,7 +1237,10 @@ fn join(
     )?;
 
     let store = crate::store::Store::open(target.clone())?;
-    let mut ctx = crate::ops::Ctx::load_for_write(store, crate::ops::Whose::Declared(id.clone()))?;
+    let mut ctx = crate::ops::Ctx::load_for_write(
+        store,
+        crate::ops::Whose::Declared(id.clone(), target.clone()),
+    )?;
     ctx.lock_for_write()?;
     crate::ops::declare_lane(&mut ctx, name, repos)?;
 

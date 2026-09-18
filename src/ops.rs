@@ -42,7 +42,15 @@ pub enum Whose<'a> {
     /// (`lock_for_write`): a folder the caller already named outright has
     /// nothing left for that refusal to protect, and `setup` is precisely
     /// the command §6.9's own message sends you to.
-    Declared(String),
+    ///
+    /// Carries the lane's own folder alongside its id: a lane `setup`
+    /// declares outright is not always the tree's own root -- a lane
+    /// joined from elsewhere keeps its repositories relative to where it
+    /// was joined from, not to the tree it joined. A first declaration
+    /// never reads this back (`resolve_whose`'s own doc), but a
+    /// redeclaration does, once the lane already has repositories in
+    /// `tree.lanes` for `where_to_write` to look up.
+    Declared(String, PathBuf),
 }
 
 /// A linked worktree that is nobody's lane yet. It becomes one the first
@@ -85,12 +93,14 @@ pub struct Ctx {
     /// writes never disagree about whose thread they are.
     pub lane: Option<String>,
     /// The folder this lane's declared repositories are relative to:
-    /// `Located.lane_dir` for a lane resolved from a folder, and the
-    /// store's own root for the founding lane and for a lane the caller
-    /// already named outright (`setup`, `--join`). Set once at
-    /// construction, and updated only where a pending lane joins inside
-    /// `emit` -- never re-resolved from a folder, and never asked of git.
-    /// `where_to_write` is the only reader (`t594` tramo 4, task 3).
+    /// `Located.lane_dir` for a lane resolved from a folder, the store's
+    /// own root for the founding lane, and whatever folder the caller
+    /// named alongside it for a lane it already named outright (`setup`,
+    /// `--join`) -- its own folder when that is not the tree's root
+    /// either. Set once at construction, and updated only where a
+    /// pending lane joins inside `emit` -- never re-resolved from a
+    /// folder, and never asked of git. `where_to_write` is the only
+    /// reader (`t594` tramo 4, task 3).
     pub lane_dir: PathBuf,
     pub tree: Tree,
     pub anchor: Box<dyn Anchor>,
@@ -562,31 +572,34 @@ struct WhoseLane {
 /// a lane file, only what a worktree underneath it is doing.
 fn resolve_whose(whose: Whose, tree: &Tree, tree_has_lanes: bool, store_root: &Path) -> WhoseLane {
     let located = match whose {
-        // Neither has a `Located` to read a lane's own folder off. The
-        // founding lane's folder is the tree's own root by definition
-        // (`Located::lane_dir`'s own doc), and a lane `setup` or `--join`
-        // is declaring outright writes its first event before it has any
-        // repository in `tree.lanes` for `where_to_write` to look up
-        // through this value at all, so `store_root` is never read back
-        // for it: every later, ordinary write resolves it through
-        // `Located` like any other lane.
+        // Neither has a `Located` to read a lane's own folder off.
         Whose::Founding => {
+            // The founding lane's folder is the tree's own root by
+            // definition (`Located::lane_dir`'s own doc): there is no
+            // other folder it could ever be.
             return WhoseLane {
                 lane: Some(crate::lane::MAIN.to_string()),
                 pending_lane: None,
                 caller_declared: false,
                 lane_assumed: true,
                 lane_dir: store_root.to_path_buf(),
-            }
+            };
         }
-        Whose::Declared(id) => {
+        Whose::Declared(id, lane_dir) => {
+            // A redeclaration -- the lane already has repositories in
+            // `tree.lanes` -- reads this back through `where_to_write`,
+            // so it has to be the lane's own folder, not `store_root`:
+            // for a lane joined from elsewhere the two are not the same,
+            // and resolving its repositories against the tree root
+            // instead of its own finds nothing there and reports every
+            // one of them missing.
             return WhoseLane {
                 lane: Some(id),
                 pending_lane: None,
                 caller_declared: true,
                 lane_assumed: false,
-                lane_dir: store_root.to_path_buf(),
-            }
+                lane_dir,
+            };
         }
         Whose::Resolved(l) => l,
     };

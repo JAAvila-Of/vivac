@@ -1776,3 +1776,59 @@ fn moving_a_branch_writes_one_where_and_moving_back_writes_another() {
     std::fs::remove_dir_all(&root).ok();
     std::fs::remove_dir_all(&home).ok();
 }
+
+/// A repository with one commit, at `repo_dir`.
+fn commit_a_repo(repo_dir: &Path) {
+    std::fs::create_dir_all(repo_dir).unwrap();
+    git(repo_dir, &["init", "-q"]);
+    git(repo_dir, &["config", "user.email", "t@example.com"]);
+    git(repo_dir, &["config", "user.name", "t"]);
+    std::fs::write(repo_dir.join("f.txt"), "x").unwrap();
+    git(repo_dir, &["add", "."]);
+    git(repo_dir, &["commit", "-q", "-m", "first"]);
+}
+
+/// A lane joined from a folder other than the tree's own root, redeclared
+/// once its repositories change, must resolve those repositories against
+/// its own folder -- not against the tree root `setup` opens the store
+/// through. Before the fix, `write_lane` handed `resolve_whose` the tree
+/// root as the lane's folder, so the redeclare's own `where_to_write`
+/// resolved the lane's already-declared repository against the wrong
+/// folder, found nothing there, and wrote a `where.changed` claiming it
+/// had vanished.
+#[test]
+fn a_joined_lanes_redeclare_resolves_repositories_from_its_own_folder() {
+    let tree_root = unique("redeclare-tree");
+    std::fs::create_dir_all(&tree_root).unwrap();
+    let home = unique("redeclare-home");
+    let (setup_out, setup_code) = run(&tree_root, &home, &["setup", "claude-code", "--yes"]);
+    assert_eq!(setup_code, 0, "{setup_out}");
+
+    let lane_dir = unique("redeclare-lane");
+    commit_a_repo(&lane_dir.join("repoA"));
+
+    let tree_root_str = tree_root.to_string_lossy().into_owned();
+    let (join_out, join_code) = run(
+        &lane_dir,
+        &home,
+        &["setup", "claude-code", "--join", &tree_root_str],
+    );
+    assert_eq!(join_code, 0, "{join_out}");
+
+    // A second repository, so the folder's declared list has actually
+    // changed and `setup` has something to redeclare.
+    commit_a_repo(&lane_dir.join("repoB"));
+
+    let (redeclare_out, redeclare_code) = run(&lane_dir, &home, &["setup", "claude-code", "--yes"]);
+    assert_eq!(redeclare_code, 0, "{redeclare_out}");
+
+    let log = std::fs::read_to_string(tree_root.join(".vivac").join("events")).unwrap();
+    assert!(
+        !log.contains(r#""missing":true"#),
+        "the redeclared lane's own repositories read as missing:\n{log}"
+    );
+
+    std::fs::remove_dir_all(&tree_root).ok();
+    std::fs::remove_dir_all(&lane_dir).ok();
+    std::fs::remove_dir_all(&home).ok();
+}
