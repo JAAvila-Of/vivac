@@ -798,10 +798,20 @@ fn call(project: &mut Project, params: &Value) -> Result<String, Failure> {
                     // lane, the same as any tree nobody ran `setup` in.
                     // Defensible and not a lie today; it stops being one
                     // the day a foreign tree has a second lane (`t594`).
+                    // No log either, for the same reason `--project` never
+                    // reads one on the CLI: `lane` and `where` (`t594`
+                    // §5.4) simply have nothing to answer from here.
                     let tree = index::load(&store::Store::open(foreign_root)?, false)?;
-                    pretty(render::why_data(&tree, &id)?)
+                    pretty(render::why_data(&tree, &[], &id)?)
                 }
-                None => pretty(render::why_data(&project.current()?.tree, &id)?),
+                // The resident log, kept for exactly this (`Project::log`'s
+                // own doc): `lane` and `where` answer here the same way
+                // they do for the CLI's local `why`, without folding the
+                // log a second time.
+                None => {
+                    let (ctx, log) = project.current_with_log()?;
+                    pretty(render::why_data(&ctx.tree, log, &id)?)
+                }
             }
         }
         "vivac_open" => pretty(render::open_data(&project.current()?.tree)),

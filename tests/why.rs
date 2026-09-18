@@ -172,6 +172,118 @@ fn anchor_is_the_one_in_force_when_the_node_was_born_not_now() {
     );
 }
 
+/// `t594` §5.4: the last `where.changed` of a node's own lane, at or before
+/// the `seq` it was born at, names the lane and the repository's branch. The
+/// tree is built from raw log lines rather than a real git checkout, since
+/// `where.changed` only ever exists once a lane has declared repositories
+/// (§2.6), and a hand-written log is the direct way to put one in force.
+fn seed_where(c: &Sandbox, lane_name: &str, first_branch: &str) {
+    c.append_raw_line(&format!(
+        r#"{{"seq":1,"id":"01BORNLANEDECLAREDAAAAAAA","ts":"2026-01-01T00:00:00Z","actor":"a_test0000000","lane":"main","payload":{{"type":"lane.declared","lane":"main","name":"{lane_name}","repos":[{{"path":"webapi"}}]}}}}"#
+    ));
+    c.append_raw_line(&format!(
+        r#"{{"seq":2,"id":"01BORNLANEWHEREAAAAAAAAAA","ts":"2026-01-01T00:00:01Z","actor":"a_test0000000","lane":"main","payload":{{"type":"where.changed","repos":[{{"path":"webapi","branch":"{first_branch}"}}]}}}}"#
+    ));
+    c.append_raw_line(
+        r#"{"seq":3,"id":"01BORNLANENODEAAAAAAAAAAA","ts":"2026-01-01T00:00:02Z","actor":"a_test0000000","lane":"main","payload":{"type":"node.created","node":"01BORNLANENODEAAAAAAAAAAA","num":1,"kind":"task","title":"The target node","why":"seed"}}"#,
+    );
+}
+
+#[test]
+fn why_says_which_lane_and_branch_a_node_was_born_in() {
+    let c = Sandbox::new_seeded("born-in-lane");
+    seed_where(&c, "sonar", "fix/sonar");
+
+    let v = full_json(&c, "1");
+    // `lane` is the same opaque id every other JSON field uses (`changes.rs`
+    // keeps the same split: raw id in JSON, the declared name in prose).
+    assert_eq!(v["node"]["lane"], "main", "{v}");
+    assert_eq!(v["node"]["where"][0]["path"], "webapi", "{v}");
+    assert_eq!(v["node"]["where"][0]["branch"], "fix/sonar", "{v}");
+
+    let (s, code) = c.run(&["why", "1", "--full"]);
+    assert_eq!(code, 0, "{s}");
+    assert!(s.contains("born in lane sonar · webapi@fix/sonar"), "{s}");
+}
+
+/// `t594` §5.4's first two sentences are about `why` plain, not `--full`:
+/// the line answers for the node in view either way, and `--full` only
+/// extends the same mechanism to every step of the path.
+#[test]
+fn why_without_full_still_says_which_lane_and_branch_a_node_was_born_in() {
+    let c = Sandbox::new_seeded("born-in-lane-plain");
+    seed_where(&c, "sonar", "fix/sonar");
+
+    let (s, code) = c.run(&["why", "1"]);
+    assert_eq!(code, 0, "{s}");
+    assert!(s.contains("born in lane sonar · webapi@fix/sonar"), "{s}");
+}
+
+/// The same split on the `--json` side: `lane` and `where` are not one of
+/// `--full`'s three fields, so they show up without it too, and `anchor`
+/// -- which is one of the three -- still does not.
+#[test]
+fn why_json_without_full_still_carries_lane_and_where() {
+    let c = Sandbox::new_seeded("born-in-lane-plain-json");
+    seed_where(&c, "sonar", "fix/sonar");
+
+    let s = c.ok(&["why", "1", "--json"]);
+    let v: Value = serde_json::from_str(&s).unwrap();
+    assert_eq!(v["node"]["lane"], "main", "{v}");
+    assert_eq!(v["node"]["where"][0]["path"], "webapi", "{v}");
+    assert_eq!(v["node"]["where"][0]["branch"], "fix/sonar", "{v}");
+    assert!(
+        v["node"].get("anchor").is_none(),
+        "--full's own field leaked without --full:\n{v}"
+    );
+}
+
+/// The label of `d596`: "(not the branch you are on)". It is a label and
+/// not a warning -- what was decided on a branch this same lane has since
+/// left behind is not hidden, only marked.
+#[test]
+fn a_node_born_on_another_branch_of_a_repository_you_share_says_so() {
+    let c = Sandbox::new_seeded("born-elsewhere");
+    seed_where(&c, "sonar", "fix/sonar");
+    c.append_raw_line(
+        r#"{"seq":4,"id":"01BORNLANEMOVEDAAAAAAAAAA","ts":"2026-01-01T00:00:03Z","actor":"a_test0000000","lane":"main","payload":{"type":"where.changed","repos":[{"path":"webapi","branch":"main"}]}}"#,
+    );
+
+    let (s, code) = c.run(&["why", "1", "--full"]);
+    assert_eq!(code, 0, "{s}");
+    assert!(
+        s.contains("born in lane sonar · webapi@fix/sonar (not the branch you are on)"),
+        "{s}"
+    );
+}
+
+/// Every tree written before this tranche is this case, and it has to read
+/// exactly as it did: with no `where.changed` at all, `why --full` falls
+/// back to `anchor_of` alone, and gains neither a "born in lane" line nor a
+/// `lane`/`where` field in its JSON.
+#[test]
+fn a_node_with_no_where_falls_back_to_the_anchor_of_the_last_stop() {
+    let c = Sandbox::new_seeded("no-where-fallback");
+    let sha = "c".repeat(40);
+    set_head(&c, &sha);
+    c.ok(&["push", "Node A", "--why", "a"]);
+
+    let v = full_json(&c, "1");
+    assert_eq!(v["node"]["anchor"]["id"], sha, "{v}");
+    assert!(
+        v["node"].get("lane").is_none(),
+        "a tree with no where gained a lane field:\n{v}"
+    );
+    assert!(
+        v["node"].get("where").is_none(),
+        "a tree with no where gained a where field:\n{v}"
+    );
+
+    let (s, code) = c.run(&["why", "1", "--full"]);
+    assert_eq!(code, 0, "{s}");
+    assert!(!s.contains("born in lane"), "{s}");
+}
+
 /// `why` without `--full` is untouched: none of the three fields appear,
 /// on `node` or anywhere in `path`. This is what keeps the default read from
 /// growing heavier for a payload most callers never asked for.
