@@ -1160,8 +1160,34 @@ fn write_lane(roots: &super::Roots, plan: &LanePlan) -> Result<(), Failure> {
     )?;
     ctx.lock_for_write()?;
     crate::ops::declare_lane(&mut ctx, plan.name.clone(), plan.repos.clone())?;
+    redeclare_stale_worktrees(&mut ctx, plan)
+}
+
+/// Just `plan`'s stale-worktree redeclarations (`f609`), for a run whose
+/// own lane has nothing new to declare -- `write_lane` above is not
+/// reached at all in that case, and a worktree stuck with no root commit
+/// from before this folder's own ever had one would otherwise stay stuck
+/// on every such run, forever, once this folder's own declaration has
+/// settled. Opens the tree's write lock on its own, the same way
+/// `relock_lanes` does, since there is no other write in this run to
+/// share it with.
+fn redeclare_only_stale_worktrees(roots: &super::Roots, plan: &LanePlan) -> Result<(), Failure> {
+    let store = crate::store::Store::open(roots.tree.clone())?;
+    let mut ctx = crate::ops::Ctx::load_for_write(
+        store,
+        crate::ops::Whose::Declared(plan.lane_id.clone(), roots.here.clone()),
+    )?;
+    ctx.lock_for_write()?;
+    redeclare_stale_worktrees(&mut ctx, plan)
+}
+
+/// `plan.stale_worktrees`, applied one at a time under `ctx`'s already-held
+/// lock. Shared by `write_lane`, which reaches it right after declaring
+/// this folder's own lane, and by `redeclare_only_stale_worktrees`, which
+/// has no declaration of its own to declare first.
+fn redeclare_stale_worktrees(ctx: &mut crate::ops::Ctx, plan: &LanePlan) -> Result<(), Failure> {
     for (lane, name, repo) in plan.stale_worktrees.clone() {
-        redeclare_worktree_root(&mut ctx, lane, name, repo)?;
+        redeclare_worktree_root(ctx, lane, name, repo)?;
     }
     Ok(())
 }
@@ -1631,7 +1657,8 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         && !mcp_missing
         && !skill_missing_or_replaceable
         && lane.unchanged
-        && !lane.needs_lock;
+        && !lane.needs_lock
+        && lane.stale_worktrees.is_empty();
 
     let piece_block = render_piece_block(
         here,
@@ -1792,21 +1819,36 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
                 &unrestored,
             ));
         }
-    } else if lane.needs_lock {
-        // Nothing new to declare, but the config still needs the lock
-        // `unchanged` must never decide on its own (`t594`):
-        // here the only write is the lock itself, so a failure has
-        // nothing irreversible to own up to and the ordinary wording is
-        // accurate as it stands.
-        if let Err(e) = relock_lanes(tree) {
-            let unrestored = super::rollback(&writes);
-            return Err(super::failure_with_rollback(
-                format!(
-                    "the tree's config could not be relocked ({})",
-                    detail_of(&e)
-                ),
-                &unrestored,
-            ));
+    } else {
+        // Nothing new about this lane's own declaration, but a worktree
+        // from before this fix existed can still be stuck with no root
+        // commit, and `write_lane` above is only ever reached when this
+        // lane itself has something new to say (`f609`).
+        if !lane.stale_worktrees.is_empty() {
+            if let Err(e) = redeclare_only_stale_worktrees(roots, &lane) {
+                let unrestored = super::rollback(&writes);
+                return Err(lane_failure_with_rollback(
+                    format!("the lane could not be declared ({})", detail_of(&e)),
+                    &unrestored,
+                ));
+            }
+        }
+        if lane.needs_lock {
+            // Nothing new to declare, but the config still needs the lock
+            // `unchanged` must never decide on its own (`t594`):
+            // here the only write is the lock itself, so a failure has
+            // nothing irreversible to own up to and the ordinary wording
+            // is accurate as it stands.
+            if let Err(e) = relock_lanes(tree) {
+                let unrestored = super::rollback(&writes);
+                return Err(super::failure_with_rollback(
+                    format!(
+                        "the tree's config could not be relocked ({})",
+                        detail_of(&e)
+                    ),
+                    &unrestored,
+                ));
+            }
         }
     }
 
@@ -1821,7 +1863,7 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         skill: skill_missing_or_replaceable,
         planted: vivac_missing,
         gitignore_created: gitignore_missing,
-        lane_declared: !lane.unchanged,
+        lane_declared: !lane.unchanged || !lane.stale_worktrees.is_empty(),
         config_locked: lane.needs_lock,
         undoable: start_missing
             && stop_missing
@@ -1968,6 +2010,18 @@ fn render_piece_block(
             ));
         }
     }
+    // Independent of `unchanged` too: a worktree can be stuck with no root
+    // commit from before this folder's own repositories ever had one,
+    // which a run that finds nothing new of its own to declare still
+    // repairs (`f609`).
+    if !lane.stale_worktrees.is_empty() {
+        let count = lane.stale_worktrees.len();
+        let noun = if count == 1 { "lane" } else { "lanes" };
+        s.push_str(&piece_line(
+            ".vivac/events",
+            &format!("redeclare {count} worktree {noun} with the repositories this run found"),
+        ));
+    }
     // What the redaction guard kept out is the folder's own state, not a
     // change: it is still true on a run that declares nothing new, so it
     // is said every time rather than only on the run that first found it
@@ -2017,8 +2071,9 @@ struct Written {
     /// everything else here: a tree can be missing this and have its
     /// lanes fully settled, or the other way round.
     gitignore_created: bool,
-    /// This run declared this folder's lane, or redeclared an existing
-    /// one: a real thread recorded in the tree's own log.
+    /// This run declared this folder's lane, redeclared an existing one,
+    /// or redeclared a worktree lane stuck with no root commit (`f609`):
+    /// a real change to the tree's own log, either way.
     lane_declared: bool,
     /// This run closed the lanes lock, whether that happened on its own
     /// (nothing else changed) or alongside declaring the lane above
