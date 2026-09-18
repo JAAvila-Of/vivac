@@ -1116,6 +1116,7 @@ pii
 pile
 pillar
 pillars
+pinned
 piped
 place
 placed

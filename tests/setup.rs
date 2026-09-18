@@ -1509,6 +1509,44 @@ fn an_already_set_up_project_still_warns_about_a_tracked_log() {
 }
 
 // ---------------------------------------------------------------------------
+// A planted tree never shows up in `git status`: `.vivac/.gitignore` is the
+// whole promise, checked against real git rather than assumed.
+// ---------------------------------------------------------------------------
+
+/// A repository that already has something to report keeps reporting it,
+/// and nothing about the tree planted beside it joins that report.
+#[test]
+fn git_status_shows_nothing_of_a_planted_tree() {
+    let c = Sandbox::new_empty("git-status-hides-vivac");
+    git(&c.0, &["init", "-q"]);
+    std::fs::write(c.0.join("tracked.txt"), "kept").unwrap();
+    git(&c.0, &["add", "tracked.txt"]);
+    git(
+        &c.0,
+        &["commit", "-q", "-m", "a file the repository already has"],
+    );
+    std::fs::write(c.0.join("untracked.txt"), "new").unwrap();
+
+    c.ok(&["init"]);
+
+    let out = std::process::Command::new("git")
+        .current_dir(&c.0)
+        .args(["status", "--porcelain"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "git status failed to run");
+    let status = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        status.contains("untracked.txt"),
+        "git status stopped reporting a real change: {status}"
+    );
+    assert!(
+        !status.contains(".vivac"),
+        "git status mentioned the planted tree: {status}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // `t594` §4.5, case 3: `setup` refuses to give a product a second map, in a
 // folder with no tree above it at all.
 // ---------------------------------------------------------------------------
