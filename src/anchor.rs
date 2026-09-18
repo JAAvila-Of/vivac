@@ -177,23 +177,10 @@ pub(crate) fn linked_worktree(from: &Path) -> Option<PathBuf> {
 }
 
 /// The root of the main copy a linked worktree's history lives in, read off
-/// `commondir` inside its gitdir. That path can be relative to the gitdir
-/// that holds it, so it is resolved against it and its `..` walked off by
-/// hand -- never through `canonicalize`, which on Windows returns a
-/// `\\?\`-prefixed path that would break every comparison made against one
-/// that was never canonicalized.
+/// `commondir` inside its gitdir.
 pub(crate) fn main_copy_of(worktree_root: &Path) -> Option<PathBuf> {
     let location = locate_cached(worktree_root)?;
-    let raw = std::fs::read_to_string(location.gitdir.join("commondir")).ok()?;
-    let rel = raw.trim();
-    if rel.is_empty() {
-        return None;
-    }
-    let common_gitdir = if Path::new(rel).is_absolute() {
-        PathBuf::from(rel)
-    } else {
-        normalize(&location.gitdir.join(rel))
-    };
+    let common_gitdir = common_gitdir(&location.gitdir)?;
     // A bare repository's common gitdir is the repository itself, not a
     // working copy's `.git`, so its parent is whatever directory happens to
     // hold it. Walking up from there could find a tree that has nothing to
@@ -203,6 +190,37 @@ pub(crate) fn main_copy_of(worktree_root: &Path) -> Option<PathBuf> {
         return None;
     }
     common_gitdir.parent().map(Path::to_path_buf)
+}
+
+/// The gitdir a reference has to be read from. A linked worktree keeps
+/// `HEAD` in its own gitdir and every branch in the repository
+/// `commondir` names, so `refs/heads/<branch>` is never under the
+/// worktree's own gitdir and neither is `packed-refs` (`f439`). With no
+/// `commondir` -- an ordinary checkout, or a submodule, which owns its
+/// repository outright -- the gitdir is its own.
+fn ref_gitdir(gitdir: &Path) -> PathBuf {
+    match common_gitdir(gitdir) {
+        Some(common) => common,
+        None => gitdir.to_path_buf(),
+    }
+}
+
+/// The common gitdir `commondir` names, resolved against the gitdir that
+/// holds it. The path can be relative, and its `..` are walked off by hand
+/// rather than through `canonicalize`, which on Windows returns a
+/// `\\?\`-prefixed path that would break every comparison made against one
+/// that was never canonicalized.
+fn common_gitdir(gitdir: &Path) -> Option<PathBuf> {
+    let raw = std::fs::read_to_string(gitdir.join("commondir")).ok()?;
+    let rel = raw.trim();
+    if rel.is_empty() {
+        return None;
+    }
+    Some(if Path::new(rel).is_absolute() {
+        PathBuf::from(rel)
+    } else {
+        normalize(&gitdir.join(rel))
+    })
 }
 
 /// Resolves `.` and `..` components one at a time, without touching the
@@ -323,13 +341,14 @@ impl Git {
         let Some(refname) = h.strip_prefix("ref:").map(str::trim) else {
             return is_sha(h).then(|| h.to_string());
         };
-        if let Ok(s) = std::fs::read_to_string(self.gitdir.join(refname)) {
+        let refs = ref_gitdir(&self.gitdir);
+        if let Ok(s) = std::fs::read_to_string(refs.join(refname)) {
             let s = s.trim().to_string();
             if is_sha(&s) {
                 return Some(s);
             }
         }
-        let packed = std::fs::read_to_string(self.gitdir.join("packed-refs")).ok()?;
+        let packed = std::fs::read_to_string(refs.join("packed-refs")).ok()?;
         packed.lines().find_map(|l| {
             let (sha, name) = l.split_once(' ')?;
             (name.trim() == refname && is_sha(sha)).then(|| sha.to_string())
@@ -415,6 +434,57 @@ impl Anchor for Git {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tmp(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("vivac-anchor-{name}-{}", crate::id::ulid()))
+    }
+
+    fn git(dir: &Path, args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    fn git_repo_with_one_commit(at: &Path) {
+        std::fs::create_dir_all(at).unwrap();
+        git(at, &["init", "-q"]);
+        git(at, &["config", "user.email", "t@example.com"]);
+        git(at, &["config", "user.name", "t"]);
+        std::fs::write(at.join("f.txt"), "x").unwrap();
+        git(at, &["add", "."]);
+        git(at, &["commit", "-q", "-m", "first"]);
+    }
+
+    #[test]
+    fn head_resolves_a_linked_worktrees_branch_through_commondir() {
+        // A linked worktree keeps its own `HEAD` in its own gitdir and shares
+        // every branch with the repository `commondir` names. Reading the
+        // reference from the worktree's gitdir finds nothing: that is `f439`,
+        // and it is why a worktree on a branch used to anchor nothing.
+        let t = tmp("commondir-head");
+        let main = t.join("main");
+        let wt = t.join("wt");
+        git_repo_with_one_commit(&main);
+        git(
+            &main,
+            &["worktree", "add", wt.to_str().unwrap(), "-b", "side"],
+        );
+
+        let g = Git::new(&wt).expect("the worktree is a working tree");
+
+        assert!(
+            g.head().is_some(),
+            "a worktree on a branch has a HEAD like any other checkout"
+        );
+    }
 
     #[test]
     fn null_invents_no_precision() {
