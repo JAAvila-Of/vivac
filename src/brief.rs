@@ -604,6 +604,19 @@ pub(crate) fn lanes_with_a_stack(a: &Tree) -> Vec<LaneFocus<'_>> {
         .collect()
 }
 
+/// Which lane wrote to this tree most recently, among the ones with
+/// something on their own stack to name: the lane the web treats as
+/// "the" focus once there is more than one to pick from (`t594` §5.6).
+/// Sorted the same way `other_lanes` already sorts its own rows -- `seq`
+/// descending, the lane id breaking a tie -- so the two agree on what
+/// "most recent" means even though the log's own counter never actually
+/// hands two different lanes the same `seq` to disagree over.
+pub(crate) fn last_writer(a: &Tree) -> Option<LaneFocus<'_>> {
+    let mut rows = lanes_with_a_stack(a);
+    rows.sort_by(|x, y| y.seq.cmp(&x.seq).then_with(|| x.id.cmp(y.id)));
+    rows.into_iter().next()
+}
+
 /// Which of this tree's lanes have a folder the registry no longer finds
 /// on disk, checked with `exists()` right now and never written down
 /// (`t594` §5.3/§5.5, decision 2 of this task): a disk that disconnects
