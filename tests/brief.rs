@@ -680,3 +680,159 @@ fn the_last_stop_shows_one_short_sha_and_counts_the_rest() {
     let out = two.ok(&["brief"]);
     assert!(last_vivac_line(&out).contains(" · 2 repos"), "{out}");
 }
+
+// ---------------------------------------------------------------------------
+// `t594` task 6: BRANCH MOVED (§5.2), the brief's own reader of `Tree.wheres`
+// and the BRANCH MOVED candidate tables the previous tasks of this tranche
+// built and left unread.
+// ---------------------------------------------------------------------------
+
+/// A repository with one commit, on `branch` rather than whatever the
+/// local `git` calls its default.
+fn commit_a_repo_on_branch(dir: &std::path::Path, branch: &str) {
+    commit_a_repo(dir);
+    git(dir, &["checkout", "-q", "-b", branch]);
+}
+
+/// The BRANCH MOVED block, header through the blank line that ends it,
+/// header included. Panics if the section is absent -- every test that
+/// calls this expects to find it.
+fn branch_moved_block(out: &str) -> Vec<&str> {
+    let mut lines = out.lines();
+    for l in lines.by_ref() {
+        if l == " BRANCH MOVED since this lane last wrote" {
+            let mut block = vec![l];
+            for rest in lines.by_ref() {
+                if rest.is_empty() {
+                    break;
+                }
+                block.push(rest);
+            }
+            return block;
+        }
+    }
+    panic!("no BRANCH MOVED section:\n{out}")
+}
+
+/// The literal shape of §6.11: one line for the repository that moved, its
+/// own last focus on the branch it reads now, and `to resume` because that
+/// candidate is the only one.
+#[test]
+fn the_brief_says_the_branch_moved_and_where_that_branch_last_stopped() {
+    let c = Sandbox::new_empty("branch-moved-shape");
+    let backend = c.0.join("backend");
+    commit_a_repo_on_branch(&backend, "feature/net10");
+    c.ok(&["init"]);
+    c.ok(&["setup", "claude-code", "--yes"]);
+    c.ok(&["push", "First task", "--why", "seed"]);
+
+    git(&backend, &["checkout", "-q", "-b", "perf/sp"]);
+    c.ok(&["push", "Optimize the SP", "--why", "seed"]);
+
+    // Back on the branch the lane worked on first: the lane's own last
+    // `where.changed` is still `perf/sp`, the branch the second push recorded.
+    git(&backend, &["checkout", "-q", "feature/net10"]);
+
+    let out = c.ok(&["brief"]);
+    assert_eq!(
+        branch_moved_block(&out),
+        vec![
+            " BRANCH MOVED since this lane last wrote",
+            "   backend   perf/sp -> feature/net10",
+            "   last focus on feature/net10:   g1   First task",
+            "   to resume:  vivac focus g1",
+        ],
+        "{out}"
+    );
+}
+
+/// Once the lane's own `where.changed` matches the branch again, the notice
+/// is gone -- it compares against the last thing the lane wrote, not
+/// against history in general.
+#[test]
+fn going_back_to_the_branch_makes_the_notice_disappear() {
+    let c = Sandbox::new_empty("branch-moved-disappear");
+    let backend = c.0.join("backend");
+    commit_a_repo_on_branch(&backend, "feature/net10");
+    c.ok(&["init"]);
+    c.ok(&["setup", "claude-code", "--yes"]);
+    c.ok(&["push", "First task", "--why", "seed"]);
+
+    git(&backend, &["checkout", "-q", "-b", "perf/sp"]);
+    let moved = c.ok(&["brief"]);
+    assert!(moved.contains("BRANCH MOVED"), "{moved}");
+
+    git(&backend, &["checkout", "-q", "feature/net10"]);
+    let back = c.ok(&["brief"]);
+    assert!(
+        !back.contains("BRANCH MOVED"),
+        "back on the branch the lane last wrote, the notice should be gone:\n{back}"
+    );
+}
+
+/// No candidate at all: the branch reads `no earlier work on <branch>`
+/// rather than inventing one, and `to resume` never appears with nothing
+/// to resume to.
+#[test]
+fn a_branch_nobody_worked_on_says_so_instead_of_offering_a_candidate() {
+    let c = Sandbox::new_empty("branch-moved-no-candidate");
+    let backend = c.0.join("backend");
+    commit_a_repo_on_branch(&backend, "feature/net10");
+    c.ok(&["init"]);
+    c.ok(&["setup", "claude-code", "--yes"]);
+    c.ok(&["push", "First task", "--why", "seed"]);
+
+    git(&backend, &["checkout", "-q", "-b", "perf/sp"]);
+    let out = c.ok(&["brief"]);
+    assert_eq!(
+        branch_moved_block(&out),
+        vec![
+            " BRANCH MOVED since this lane last wrote",
+            "   backend   feature/net10 -> perf/sp",
+            "   no earlier work on perf/sp",
+        ],
+        "{out}"
+    );
+    assert!(!out.contains("to resume"), "{out}");
+}
+
+/// `Section::fixed`: the notice sits right behind the header and is bounded
+/// by construction, so a budget that trims every truncable section away
+/// must not touch it.
+#[test]
+fn the_notice_is_bounded_and_never_truncated() {
+    let c = Sandbox::new_empty("branch-moved-bounded");
+    let backend = c.0.join("backend");
+    commit_a_repo_on_branch(&backend, "feature/net10");
+    c.ok(&["init"]);
+    c.ok(&["setup", "claude-code", "--yes"]);
+    c.ok(&["push", "First task", "--why", "seed"]);
+    git(&backend, &["checkout", "-q", "-b", "perf/sp"]);
+
+    let out = c.ok(&["brief", "--budget", "1"]);
+    assert_eq!(
+        branch_moved_block(&out),
+        vec![
+            " BRANCH MOVED since this lane last wrote",
+            "   backend   feature/net10 -> perf/sp",
+            "   no earlier work on perf/sp",
+        ],
+        "a fixed section must never be trimmed:\n{out}"
+    );
+}
+
+/// Golden: `t594` §2.6 again, and `MODEL.md` §2 principle 5. A tree where
+/// nobody ran `setup` has no repositories declared, so BRANCH MOVED has
+/// nothing to compare against and must not appear -- the brief reads byte
+/// for byte what it read before this section existed.
+#[test]
+fn a_tree_with_a_single_lane_and_no_repositories_prints_exactly_what_it_did() {
+    let c = populated("branch-moved-golden");
+    let a = c.ok(&["brief", "--now", "2026-09-17T10:00:00Z"]);
+    assert!(
+        !a.contains("BRANCH MOVED"),
+        "a tree with no declared repositories must not gain this section:\n{a}"
+    );
+    let b = c.ok(&["brief", "--now", "2026-09-17T10:00:00Z"]);
+    assert_eq!(a, b, "same log, same bytes (`MODEL.md` §2 principle 5)");
+}

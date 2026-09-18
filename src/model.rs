@@ -270,6 +270,15 @@ pub struct Where {
     pub repos: Vec<crate::event::WhereRepo>,
 }
 
+/// `(lane, repository path, branch) -> (seq, node)`: `Tree::own_focus`'s own
+/// shape, named once so neither it nor `index.rs`'s reader and writer have
+/// to spell the tuple out again.
+pub type OwnFocus = BTreeMap<(String, String, String), (u64, u64)>;
+
+/// `(repository root commit, branch) -> (seq, lane, node)`:
+/// `Tree::other_focus`'s own shape.
+pub type OtherFocus = BTreeMap<(String, String), (u64, String, u64)>;
+
 impl Node {
     pub fn alias(&self) -> String {
         format!("{}{}", self.kind.prefix(), self.num)
@@ -412,6 +421,18 @@ pub struct Tree {
     /// the refusal and the folder it sends you to both need to know
     /// before the write that finally sets it up.
     pub main_claimed: bool,
+    /// `(lane, repository path, branch) -> (seq, node)`: the last focus this
+    /// lane had while that repository sat on that branch. BRANCH MOVED's own
+    /// candidate, before it ever looks at another lane (`t594` §2.7, §5.2).
+    /// Filled by `record_focus_candidates`, called wherever the lane's stack
+    /// changes -- `stack.pushed`, `stack.popped`, `stack.promoted`.
+    pub own_focus: OwnFocus,
+    /// `(repository root commit, branch) -> (seq, lane, node)`: the last
+    /// focus any lane had while a repository with that root commit sat on
+    /// that branch. Crossed by root commit and never by path: a
+    /// repository's path moves from one folder to another, its root commit
+    /// does not.
+    pub other_focus: OtherFocus,
     /// The lane this tree is looked at from. Private: there is no invalid
     /// state to construct, so nothing outside `Tree` should be able to set
     /// this to anything but a real lane (`for_lane`) or leave it at `None`,
@@ -629,6 +650,7 @@ impl Tree {
                 if !s.stack.contains(&num) {
                     s.stack.push(num);
                 }
+                self.record_focus_candidates(seq, lane);
             }
             Body::Popped { node } => {
                 let num = self.resolve_ulid(node);
@@ -637,6 +659,7 @@ impl Tree {
                     .or_default()
                     .stack
                     .retain(|&x| x != num);
+                self.record_focus_candidates(seq, lane);
             }
             Body::FlagRaised { node, flag, reason } => {
                 let reason_span = self.intern(reason);
@@ -737,6 +760,7 @@ impl Tree {
                 if let Some(i) = s.stack.iter().position(|&x| x == num) {
                     s.stack.drain(..i);
                 }
+                self.record_focus_candidates(seq, lane);
             }
             // An opening moves nothing in the tree. What it does to the
             // counters is decided above, and it is deliberate.
@@ -765,6 +789,44 @@ impl Tree {
                     lane: lane.to_string(),
                     repos: repos.clone(),
                 });
+            }
+        }
+    }
+
+    /// Fills §2.7's two BRANCH MOVED candidate tables after `lane`'s stack
+    /// changed. Both read off the repositories `wheres` last recorded for
+    /// `lane` -- the same snapshot `ops::where_to_write` compares against on
+    /// the write path -- so a lane with no repositories declared, or none
+    /// written yet, leaves both tables untouched: that is every tree before
+    /// `setup` ran, and every write before the first branch is known.
+    fn record_focus_candidates(&mut self, seq: u64, lane: &str) {
+        let Some(&focus) = self.lanes.get(lane).and_then(|s| s.stack.last()) else {
+            return;
+        };
+        let Some(w) = self.wheres.iter().rev().find(|w| w.lane == lane) else {
+            return;
+        };
+        let repos = w.repos.clone();
+        let declared = self
+            .lanes
+            .get(lane)
+            .map(|s| s.repos.clone())
+            .unwrap_or_default();
+        for r in &repos {
+            let Some(branch) = r.branch.clone() else {
+                continue;
+            };
+            self.own_focus.insert(
+                (lane.to_string(), r.path.clone(), branch.clone()),
+                (seq, focus),
+            );
+            if let Some(root) = declared
+                .iter()
+                .find(|d| d.path == r.path)
+                .and_then(|d| d.root.clone())
+            {
+                self.other_focus
+                    .insert((root, branch), (seq, lane.to_string(), focus));
             }
         }
     }
@@ -1205,6 +1267,46 @@ impl Tree {
     pub fn stack_depth(&self) -> usize {
         self.stack().len()
     }
+
+    /// What BRANCH MOVED can offer for `path`, one of `lane`'s repositories,
+    /// now that it reads as `branch`: `lane`'s own last focus there first
+    /// (`own_focus`), and -- only when that repository's root commit is
+    /// known -- the last focus any other lane had, from `other_focus`.
+    /// `None` from both is "no earlier work on `branch`" (§2.7, §5.2).
+    pub fn branch_candidate(
+        &self,
+        lane: &str,
+        path: &str,
+        root: Option<&str>,
+        branch: &str,
+    ) -> Option<BranchCandidate> {
+        let own_key = (lane.to_string(), path.to_string(), branch.to_string());
+        if let Some(&(seq, node)) = self.own_focus.get(&own_key) {
+            return Some(BranchCandidate {
+                lane: None,
+                node,
+                seq,
+            });
+        }
+        let root = root?;
+        let other_key = (root.to_string(), branch.to_string());
+        let (seq, other_lane, node) = self.other_focus.get(&other_key)?;
+        Some(BranchCandidate {
+            lane: Some(other_lane.clone()),
+            node: *node,
+            seq: *seq,
+        })
+    }
+}
+
+/// One candidate BRANCH MOVED can offer for a repository whose branch
+/// moved: `lane` is `None` for this lane's own last focus there, and holds
+/// the other lane's name when the candidate crossed by root commit instead
+/// (`t594` §2.7).
+pub struct BranchCandidate {
+    pub lane: Option<String>,
+    pub node: u64,
+    pub seq: u64,
 }
 
 /// Everything a fresh `Tree` needs that is not already public on it -- the
@@ -1219,6 +1321,8 @@ pub(crate) struct RawParts {
     pub lanes: BTreeMap<String, LaneState>,
     pub vivacs: Vec<Vivac>,
     pub wheres: Vec<Where>,
+    pub own_focus: OwnFocus,
+    pub other_focus: OtherFocus,
     pub next_vivac_num: u64,
     pub seq: u64,
     pub next_num: u64,
@@ -1265,6 +1369,8 @@ impl Tree {
             roots: p.roots,
             vivacs: p.vivacs,
             wheres: p.wheres,
+            own_focus: p.own_focus,
+            other_focus: p.other_focus,
             next_vivac_num: p.next_vivac_num,
             seq: p.seq,
             next_num: p.next_num,
@@ -1600,6 +1706,99 @@ mod tests {
     /// uses.
     fn a_varied_event_set() -> Vec<Event> {
         vec![node(1, 1, Kind::Goal, None), pushed(2, "n1"), stop(3)]
+    }
+
+    /// A `lane.declared` naming one repository at `path`, with `root` as
+    /// its root commit.
+    fn lane_declares_repo(seq: u64, lane: &str, path: &str, root: Option<&str>) -> Event {
+        lane_event(
+            seq,
+            lane,
+            Body::LaneDeclared {
+                lane: lane.to_string(),
+                name: lane.to_string(),
+                repos: vec![crate::event::Repo {
+                    path: path.to_string(),
+                    root: root.map(str::to_string),
+                }],
+            },
+        )
+    }
+
+    /// A `where.changed` naming one repository at `path`, on `branch`, for
+    /// `lane`.
+    fn lane_where_at(seq: u64, lane: &str, path: &str, branch: &str) -> Event {
+        lane_event(seq, lane, where_at(path, branch))
+    }
+
+    /// §2.7's own candidate: a push records the lane's last focus for every
+    /// declared repository still on the branch `wheres` last saw it on, and
+    /// a later push on a different branch does not overwrite the earlier
+    /// entry -- BRANCH MOVED needs both, one per branch ever visited.
+    #[test]
+    fn pushing_records_this_lanes_own_last_focus_on_the_branch_it_was_on() {
+        let events = vec![
+            lane_declares_repo(1, "main", "webapi", None),
+            lane_where_at(2, "main", "webapi", "develop"),
+            lane_node_created(3, "main", "n1", 1),
+            pushed(4, "n1"),
+            lane_where_at(5, "main", "webapi", "feature"),
+            lane_node_created(6, "main", "n2", 2),
+            pushed(7, "n2"),
+        ];
+        let t = fold(&events, 0);
+
+        let c = t
+            .branch_candidate("main", "webapi", None, "develop")
+            .expect("the lane's own focus on develop was recorded");
+        assert!(c.lane.is_none(), "this lane's own candidate names no lane");
+        assert_eq!(c.node, 1);
+        assert_eq!(c.seq, 4);
+
+        assert!(
+            t.branch_candidate("main", "webapi", None, "nowhere")
+                .is_none(),
+            "a branch nobody worked on offers no candidate"
+        );
+    }
+
+    /// Two different lanes, two different folders, the very same repository
+    /// -- recognised by its root commit, never by the path it happens to
+    /// sit under in either lane.
+    #[test]
+    fn another_lanes_focus_crosses_by_root_commit_not_by_path() {
+        let events = vec![
+            lane_declares_repo(1, "main", "webapi", Some("root-abc")),
+            lane_where_at(2, "main", "webapi", "develop"),
+            lane_node_created(3, "main", "n1", 1),
+            pushed(4, "n1"),
+            lane_declares_repo(5, "sonar", "service", Some("root-abc")),
+            lane_where_at(6, "sonar", "service", "perf/sp"),
+            lane_node_created(7, "sonar", "n2", 2),
+            lane_event(
+                8,
+                "sonar",
+                Body::Pushed {
+                    node: "n2".to_string(),
+                },
+            ),
+        ];
+        let t = fold(&events, 0);
+
+        assert!(
+            !t.own_focus.contains_key(&(
+                "main".to_string(),
+                "webapi".to_string(),
+                "perf/sp".to_string()
+            )),
+            "main never worked on perf/sp itself"
+        );
+
+        let c = t
+            .branch_candidate("main", "webapi", Some("root-abc"), "perf/sp")
+            .expect("sonar's focus crosses by root commit");
+        assert_eq!(c.lane.as_deref(), Some("sonar"));
+        assert_eq!(c.node, 2);
     }
 
     /// A empuja, B empuja, A empuja, C empuja, B saca -- deliberately

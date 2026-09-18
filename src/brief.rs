@@ -17,7 +17,7 @@
 
 use crate::anchor::Anchor;
 use crate::args::Args;
-use crate::event::{Kind, State};
+use crate::event::{Kind, State, WhereRepo};
 use crate::failure::R;
 use crate::model::{Node, Tree};
 use std::collections::HashSet;
@@ -335,8 +335,15 @@ fn no_focus_block(a: &Tree) -> Vec<String> {
     v
 }
 
-pub fn brief(a: &Tree, root: &Path, anchor_of: &dyn Anchor, args: &Args, project: &str) -> R {
-    print!("{}", to_text(a, root, anchor_of, args, project)?);
+pub fn brief(
+    a: &Tree,
+    root: &Path,
+    lane_dir: &Path,
+    anchor_of: &dyn Anchor,
+    args: &Args,
+    project: &str,
+) -> R {
+    print!("{}", to_text(a, root, lane_dir, anchor_of, args, project)?);
     Ok(())
 }
 
@@ -373,6 +380,190 @@ fn copy_block(root: &Path) -> Vec<String> {
     v
 }
 
+/// How one repository's checkout reads on a BRANCH MOVED line: a branch by
+/// its bare name, a detached `HEAD` as `@<short sha>`, and a rebase in
+/// progress as `@<branch> (rebasing)` -- the branch git is replaying onto,
+/// not the tip it detached from (§5.2, the four forms). `None` when there
+/// is nothing knowable at all, which BRANCH MOVED has nothing to say about.
+fn head_repr(branch: Option<&str>, sha: Option<&str>, rebasing: bool) -> Option<String> {
+    match branch {
+        Some(b) if rebasing => Some(format!("@{b} (rebasing)")),
+        Some(b) => Some(b.to_string()),
+        None => sha.map(|s| format!("@{}", &s[..s.len().min(7)])),
+    }
+}
+
+/// The redaction guard's own phrase for a branch name it kept out (`d600`,
+/// §2.4), reused here rather than invented again: a withheld branch reads
+/// the same way whether it is `why` naming where a node was born or
+/// BRANCH MOVED naming where a repository moved to.
+const BRANCH_WITHHELD: &str = "branch name withheld: it looked like a secret";
+
+/// A declared repository's last known checkout, as `where.changed` wrote
+/// it. A withheld branch (§2.4) reads with the guard's own phrase, since
+/// what reached the log was already redacted; a repository the lane last
+/// saw as gone has nothing to compare with.
+fn last_known_repr(r: &WhereRepo) -> Option<String> {
+    if r.missing {
+        return None;
+    }
+    if r.withheld {
+        return Some(BRANCH_WITHHELD.to_string());
+    }
+    head_repr(r.branch.as_deref(), r.sha.as_deref(), r.rebasing)
+}
+
+/// A repository's checkout right now, read straight off the working tree
+/// and never through the log: the redaction guard has not seen this name
+/// yet, so it is run past it here -- the same check `ops::snapshot_of` runs
+/// before anything reaches the log at all.
+fn now_repr(w: &crate::anchor::Where) -> Option<String> {
+    let crate::anchor::Where::Head(h) = w else {
+        return None;
+    };
+    if let Some(b) = &h.branch {
+        if crate::redact::check_field("branch", b).is_some() {
+            return Some(BRANCH_WITHHELD.to_string());
+        }
+    }
+    head_repr(h.branch.as_deref(), h.sha.as_deref(), h.rebasing)
+}
+
+/// The branch to look a candidate up for: the checkout's own branch, only
+/// when it is not withheld and no rebase is under way -- a rebase's own
+/// branch is what it is replaying onto, not a place work was last focused.
+fn candidate_branch(w: &crate::anchor::Where) -> Option<String> {
+    let crate::anchor::Where::Head(h) = w else {
+        return None;
+    };
+    if h.rebasing {
+        return None;
+    }
+    let b = h.branch.as_ref()?;
+    (crate::redact::check_field("branch", b).is_none()).then(|| b.clone())
+}
+
+/// One of the lane's declared repositories whose checkout no longer reads
+/// the way the lane's own last `where.changed` said it did.
+struct Moved {
+    path: String,
+    before: String,
+    now: String,
+    /// The branch to offer a candidate for, when there is one to look up.
+    candidate_branch: Option<String>,
+    root: Option<String>,
+}
+
+/// BRANCH MOVED (`t594` §5.2): shows only when today's `HEAD` of some
+/// repository of the lane differs from the lane's own last `where.changed`.
+/// `[]` covers every tree this never applies to -- no lane, no
+/// repositories declared, or no `where.changed` yet to compare against --
+/// which is every tree before `setup` ran (§2.6) and reads byte for byte
+/// as it always has.
+fn branch_moved_block(a: &Tree, lane_dir: &Path) -> Vec<String> {
+    let lane = a.lane();
+    let Some(state) = a.lanes.get(lane) else {
+        return vec![];
+    };
+    if state.repos.is_empty() {
+        return vec![];
+    }
+    let Some(last) = a.wheres.iter().rev().find(|w| w.lane == lane) else {
+        return vec![];
+    };
+
+    let mut moved: Vec<Moved> = state
+        .repos
+        .iter()
+        .filter_map(|r| {
+            let before_repo = last.repos.iter().find(|w| w.path == r.path)?;
+            let before = last_known_repr(before_repo)?;
+            let now = crate::anchor::where_of(&lane_dir.join(&r.path));
+            let now_line = now_repr(&now)?;
+            if before == now_line {
+                return None;
+            }
+            Some(Moved {
+                path: r.path.clone(),
+                before,
+                now: now_line,
+                candidate_branch: candidate_branch(&now),
+                root: r.root.clone(),
+            })
+        })
+        .collect();
+    if moved.is_empty() {
+        return vec![];
+    }
+    moved.sort_by(|x, y| x.path.cmp(&y.path));
+
+    let mut lines = vec![" BRANCH MOVED since this lane last wrote".to_string()];
+    for m in &moved {
+        lines.push(format!("   {}   {} -> {}", m.path, m.before, m.now));
+    }
+
+    // Candidates: this lane's own last focus on the new branch, else
+    // another lane's crossed by root commit, else "no earlier work" --
+    // capped at three and ordered by `seq` descending (§5.2).
+    struct Candidate {
+        seq: u64,
+        line: String,
+        target: Option<String>,
+    }
+    let mut candidates: Vec<Candidate> = moved
+        .iter()
+        .filter_map(|m| {
+            let branch = m.candidate_branch.as_deref()?;
+            Some(
+                match a.branch_candidate(lane, &m.path, m.root.as_deref(), branch) {
+                    Some(c) => {
+                        let node = a.node_by_num(c.node)?;
+                        let who = match &c.lane {
+                            Some(other) => format!(" (lane {other})"),
+                            None => String::new(),
+                        };
+                        Candidate {
+                            seq: c.seq,
+                            line: format!(
+                                "   last focus on {branch}{who}:   {}   {}",
+                                node.alias(),
+                                node.title(a)
+                            ),
+                            target: Some(node.alias()),
+                        }
+                    }
+                    None => Candidate {
+                        seq: 0,
+                        line: format!("   no earlier work on {branch}"),
+                        target: None,
+                    },
+                },
+            )
+        })
+        .collect();
+    candidates.sort_by(|x, y| y.seq.cmp(&x.seq));
+    candidates.truncate(3);
+    for c in &candidates {
+        lines.push(c.line.clone());
+    }
+
+    let mut targets: Vec<&str> = candidates
+        .iter()
+        .filter_map(|c| c.target.as_deref())
+        .collect();
+    targets.sort_unstable();
+    targets.dedup();
+    if let [only] = targets[..] {
+        lines.push(format!("   to resume:  vivac focus {only}"));
+    }
+    // A trailing blank, the same spacer `REPEATED NUMBERS` ends its own
+    // block with: this section sits right after the header and relies on
+    // nothing after it to open with one of its own.
+    lines.push(String::new());
+
+    lines
+}
+
 /// The brief as text. `session start --hook` prints it straight to stdout
 /// (`f403`, `f404`): Claude Code turns plain-text stdout on `SessionStart`
 /// into context the agent can see and act on, so there is nothing further to
@@ -380,6 +571,7 @@ fn copy_block(root: &Path) -> Vec<String> {
 pub fn to_text(
     a: &Tree,
     root: &Path,
+    lane_dir: &Path,
     anchor_of: &dyn Anchor,
     args: &Args,
     project: &str,
@@ -428,6 +620,14 @@ pub fn to_text(
         RULE.to_string(),
         String::new(),
     ]));
+    // BRANCH MOVED (`t594` §5.2): right behind the header, so it is the
+    // last thing the budget would ever reach. `Section::fixed` and never
+    // truncated -- it is bounded by construction, one line per repository
+    // moved, three candidates at most, one `to resume` (`t427`).
+    let branch_moved = branch_moved_block(a, lane_dir);
+    if !branch_moved.is_empty() {
+        s.push(Section::fixed(branch_moved));
+    }
     // `t429`'s second fix: repeated numbers are named, never hidden. One
     // line, bounded, and only when there are any.
     //

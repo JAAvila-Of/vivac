@@ -775,6 +775,7 @@ fn call(project: &mut Project, params: &Value) -> Result<String, Failure> {
             brief::to_text(
                 &ctx.tree,
                 &ctx.store.root,
+                &ctx.lane_dir,
                 ctx.anchor.as_ref(),
                 &empty,
                 &name,
