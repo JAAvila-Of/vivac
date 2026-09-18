@@ -195,18 +195,56 @@ pub(crate) fn in_working_tree(root: &Path) -> bool {
 /// the same shape a linked worktree has. What tells them apart is
 /// `commondir`, a file git writes into a worktree's gitdir and nowhere
 /// else: it names the repository the worktree shares. A submodule owns its
-/// repository outright and carries no such file, so it is not another
-/// working folder of anything -- it belongs to the lane that contains it.
+/// repository outright and carries no such file, so it is not a worktree
+/// itself -- but it can still sit inside one, and this is the one question
+/// that has to keep looking above a submodule's own `.git` to find that
+/// (`f606`).
+///
+/// This walks on its own rather than calling `locate_cached`: that shared
+/// walk stops at the first `.git` it meets, of either shape, because every
+/// one of its other three callers -- `Git::new`, `in_working_tree`,
+/// `main_copy_of` -- wants exactly the identity found there, and a
+/// submodule answers for itself
+/// (`a_submodule_is_not_a_worktree_and_answers_for_itself`). Making the
+/// shared walk look past a submodule's own `.git` would fix this one
+/// question and break all three of the others, so this question gets its
+/// own loop instead of a change to theirs.
+///
+/// Bounded the same way the shared walk is: `d.pop()` removes one
+/// component of a path that is already in hand, so the number of times it
+/// can run is fixed by how many components `from` has, not by what
+/// anything on disk resolves to. A symlink cycle cannot turn that into an
+/// infinite loop -- `pop` never re-descends into a link, it only shortens
+/// the text -- and it costs at most three filesystem reads per level:
+/// `.git` as a directory, `.git` as a file, and, only when it is a file,
+/// `commondir` inside the gitdir it names.
 pub(crate) fn linked_worktree(from: &Path) -> Option<PathBuf> {
-    let location = locate_cached(from)?;
-    if !location.root.join(".git").is_file() {
-        return None;
+    let mut d = from.to_path_buf();
+    loop {
+        let g = d.join(".git");
+        if g.is_dir() {
+            // An ordinary repository's own `.git`: never a worktree, and
+            // nothing further up could make it one.
+            return None;
+        }
+        if g.is_file() {
+            let t = std::fs::read_to_string(&g).ok()?;
+            let p = t.trim().strip_prefix("gitdir:")?.trim();
+            let gitdir = if Path::new(p).is_absolute() {
+                PathBuf::from(p)
+            } else {
+                d.join(p)
+            };
+            if gitdir.join("commondir").is_file() {
+                return Some(d);
+            }
+            // A submodule: owns its repository outright, so the worktree
+            // this call is looking for, if there is one, is further up.
+        }
+        if !d.pop() {
+            return None;
+        }
     }
-    location
-        .gitdir
-        .join("commondir")
-        .is_file()
-        .then_some(location.root)
 }
 
 /// The root of the main copy a linked worktree's history lives in, read off
