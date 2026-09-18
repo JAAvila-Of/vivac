@@ -339,3 +339,133 @@ fn no_printed_surface_this_task_added_names_an_absolute_path() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// `t594` tramo 4, task 7 (§9.2.18): the same class of check, stretched
+// across the Emisores shape `tests/emisores.rs` exercises -- a root with no
+// git of its own, several repositories below it, a branch that moves, and
+// a linked worktree that joins its own lane.
+// ---------------------------------------------------------------------------
+
+/// A repository with one commit at `dir`, checked out onto `branch`.
+fn commit_a_repo_on_branch(dir: &std::path::Path, branch: &str) {
+    std::fs::create_dir_all(dir).unwrap();
+    git(dir, &["init", "-q"]);
+    std::fs::write(dir.join("f.txt"), "x").unwrap();
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-q", "-m", "first"]);
+    git(dir, &["checkout", "-q", "-b", branch]);
+}
+
+/// Runs the binary in `dir` with `home` as `VIVAC_HOME`, combining stdout
+/// and stderr -- for the linked worktree below, which sits outside the
+/// `Sandbox` root `run_split` always answers from.
+fn run_in(dir: &std::path::Path, home: &std::path::Path, args: &[&str]) -> (String, i32) {
+    let o = std::process::Command::new(env!("CARGO_BIN_EXE_vivac"))
+        .current_dir(dir)
+        .env("VIVAC_HOME", home)
+        .args(args)
+        .output()
+        .unwrap();
+    (
+        String::from_utf8_lossy(&o.stdout).into_owned() + &String::from_utf8_lossy(&o.stderr),
+        o.status.code().unwrap_or(-1),
+    )
+}
+
+fn ok_in(dir: &std::path::Path, home: &std::path::Path, args: &[&str]) -> String {
+    let (s, code) = run_in(dir, home, args);
+    assert_eq!(
+        code,
+        0,
+        "`vivac {}` failed with {code}:\n{s}",
+        args.join(" ")
+    );
+    s
+}
+
+/// A root with no git of its own, two repositories below it on different
+/// branches, a branch that moves and comes back, and a linked worktree
+/// that joins its own lane -- the Emisores shape, leaned down to what this
+/// check needs: every surface this tranche added, at least once each.
+#[test]
+fn emisores_leaves_no_absolute_path_or_url_anywhere() {
+    let c = Sandbox::new_empty("sec-emisores");
+    let backend = c.0.join("backend");
+    let web = c.0.join("web");
+    commit_a_repo_on_branch(&backend, "feature/net10");
+    commit_a_repo_on_branch(&web, "feature/ng22");
+
+    // `init`'s "vivac planted in <path>" and `setup`'s own "vivac setup
+    // claude-code, in <path>" header are both pre-existing and already
+    // accepted (`tests/init.rs`, `tests/setup.rs`): each confirms the
+    // folder the caller just ran it from, not something this tranche's own
+    // surfaces leak. Left out of the scan below on purpose, the same way
+    // `relocate`'s own destination is
+    // (`no_printed_surface_this_task_added_names_an_absolute_path`, above).
+    // §9.2.18 itself only asks this of the brief.
+    c.ok(&["init"]);
+    c.ok(&["setup", "claude-code", "--yes"]);
+    let migrate_out = c.ok(&["push", "Migrate the backend", "--why", "seed"]);
+
+    git(&backend, &["checkout", "-q", "-b", "perf/sp"]);
+    let query_out = c.ok(&["push", "Optimize a query", "--why", "seed", "--root"]);
+
+    git(&backend, &["checkout", "-q", "feature/net10"]);
+    let brief_moved = c.ok(&["brief"]);
+    assert!(
+        brief_moved.contains("BRANCH MOVED"),
+        "the scenario never reached the state this check means to cover:\n{brief_moved}"
+    );
+
+    let backend_worktree = c.0.join("backend-wt");
+    git(
+        &backend,
+        &[
+            "worktree",
+            "add",
+            backend_worktree.to_str().unwrap(),
+            "--detach",
+        ],
+    );
+    let worktree_push_out = ok_in(
+        &backend_worktree,
+        c.global_home(),
+        &["push", "Spike on the worktree", "--why", "seed"],
+    );
+
+    let printed = [&migrate_out, &query_out, &brief_moved, &worktree_push_out];
+    let roots = [&c.0, &backend, &web, &backend_worktree];
+    for text in printed {
+        for root in roots {
+            assert!(
+                !carries_absolute_path(text, root),
+                "an absolute path leaked into printed output:\n{text}"
+            );
+        }
+        assert!(
+            !text.to_lowercase().contains("://"),
+            "a url leaked into printed output:\n{text}"
+        );
+    }
+
+    for vivac_dir in [c.0.join(".vivac"), backend_worktree.join(".vivac")] {
+        for path in files_under(&vivac_dir) {
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            for root in roots {
+                assert!(
+                    !carries_absolute_path(&text, root),
+                    "an absolute path leaked into {}:\n{text}",
+                    path.display()
+                );
+            }
+            assert!(
+                !text.to_lowercase().contains("://"),
+                "a url leaked into {}:\n{text}",
+                path.display()
+            );
+        }
+    }
+}
