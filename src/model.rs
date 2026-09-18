@@ -229,6 +229,19 @@ impl Vivac {
     }
 }
 
+/// One photograph of where a lane's repositories were, kept whole and in
+/// log order -- the same shape `vivacs` has, and for the same reason: two
+/// questions need it, and both are historical. The brief asks for the last
+/// one of a lane (§5.2); `why` asks for the one in force at a node's own
+/// `seq` (§5.4). A field holding only the last would answer one and send
+/// the other back to the log.
+#[derive(Debug, Clone)]
+pub struct Where {
+    pub seq: u64,
+    pub lane: String,
+    pub repos: Vec<crate::event::WhereRepo>,
+}
+
 impl Node {
     pub fn alias(&self) -> String {
         format!("{}{}", self.kind.prefix(), self.num)
@@ -340,6 +353,9 @@ pub struct Tree {
     pending: HashMap<String, u64>,
     pub roots: Vec<u64>,
     pub vivacs: Vec<Vivac>,
+    /// Every `where.changed` this tree has ever folded, in log order.
+    /// `Tree::apply`'s own `Body::WhereChanged` arm is the only writer.
+    pub wheres: Vec<Where>,
     pub next_vivac_num: u64,
     pub seq: u64,
     pub next_num: u64,
@@ -420,7 +436,10 @@ impl Tree {
             // change it would arm an automatic stop for a session that did
             // nothing, and counted as a stop it would swallow the next real
             // one.
-        } else if matches!(body, Body::LaneDeclared { .. } | Body::LaneClaimed { .. }) {
+        } else if matches!(
+            body,
+            Body::LaneDeclared { .. } | Body::LaneClaimed { .. } | Body::WhereChanged { .. }
+        ) {
             // Context events: they say where work happens, not that it did.
             // Counted as a change, joining a tree would look like work done
             // and close a segment nobody opened -- one lane arming another
@@ -704,6 +723,18 @@ impl Tree {
             // thing that sets it.
             Body::LaneClaimed { .. } => {
                 self.main_claimed = true;
+            }
+            Body::WhereChanged { repos } => {
+                // Touches the lane the same way `LaneDeclared` does, purely
+                // so it exists: the counters this creates it with are left
+                // at their default zero, since the exclusion above already
+                // kept this from counting as work.
+                self.lanes.entry(lane.to_string()).or_default();
+                self.wheres.push(Where {
+                    seq,
+                    lane: lane.to_string(),
+                    repos: repos.clone(),
+                });
             }
         }
     }
@@ -1157,6 +1188,7 @@ pub(crate) struct RawParts {
     pub roots: Vec<u64>,
     pub lanes: BTreeMap<String, LaneState>,
     pub vivacs: Vec<Vivac>,
+    pub wheres: Vec<Where>,
     pub next_vivac_num: u64,
     pub seq: u64,
     pub next_num: u64,
@@ -1202,6 +1234,7 @@ impl Tree {
             pending: HashMap::new(),
             roots: p.roots,
             vivacs: p.vivacs,
+            wheres: p.wheres,
             next_vivac_num: p.next_vivac_num,
             seq: p.seq,
             next_num: p.next_num,
@@ -1335,6 +1368,8 @@ impl Tree {
 mod tests {
     use super::*;
 
+    const TS: &str = "2026-09-16T00:00:00Z";
+
     fn created(seq: u64) -> Event {
         Event {
             seq,
@@ -1437,6 +1472,45 @@ mod tests {
         assert_eq!(t.state().seg_new, 0);
         assert_eq!(t.state().seg_closed, 0);
         assert_eq!(t.state().seg_notes, 0);
+    }
+
+    /// A `where.changed` naming one repository at `path`, on `branch`.
+    fn where_at(path: &str, branch: &str) -> Body {
+        Body::WhereChanged {
+            repos: vec![crate::event::WhereRepo {
+                path: path.to_string(),
+                branch: Some(branch.to_string()),
+                ..Default::default()
+            }],
+        }
+    }
+
+    #[test]
+    fn the_fold_keeps_every_where_in_order_with_its_lane() {
+        let mut t = Tree::default();
+        t.apply(1, TS, "main", &where_at("webapi", "develop"));
+        t.apply(2, TS, "hotfix", &where_at("webapi", "fix/sonar"));
+        t.apply(3, TS, "main", &where_at("webapi", "feat/permisos"));
+
+        assert_eq!(t.wheres.len(), 3, "a photograph is kept, never merged");
+        let last_of_main = t.wheres.iter().rfind(|w| w.lane == "main").unwrap();
+        assert_eq!(last_of_main.seq, 3);
+        assert_eq!(
+            last_of_main.repos[0].branch.as_deref(),
+            Some("feat/permisos")
+        );
+    }
+
+    #[test]
+    fn a_where_arms_no_automatic_stop() {
+        // §4.3: it says where the work happens, not that it happened. Counted
+        // as a change, moving a branch would close a segment nobody opened.
+        let mut t = Tree::default();
+        t.apply(1, TS, "main", &where_at("webapi", "develop"));
+
+        let s = t.lanes.get("main").expect("the lane wrote");
+        assert_eq!(s.seg_events, 0);
+        assert_eq!(s.seq_change, 0);
     }
 
     /// A signed event, for a lane the fixed-lane helpers above cannot name.

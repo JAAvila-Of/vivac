@@ -50,7 +50,7 @@ use crate::anchor::AnchorRef;
 use crate::event::{Event, Flag, Kind, State, VivacKind};
 use crate::failure::Failure;
 use crate::model::{
-    fold, AgainstSpan, ArmSpan, LaneState, Node, Note, RawParts, Span, Tree, Vivac,
+    fold, AgainstSpan, ArmSpan, LaneState, Node, Note, RawParts, Span, Tree, Vivac, Where,
 };
 use crate::store::Store;
 use std::collections::BTreeMap;
@@ -62,10 +62,12 @@ const MAGIC: u64 = u64::from_le_bytes(*b"vivacIDX");
 // `t594`: version 6's header carried one stack and four segment counters
 // for the whole tree; version 7 carries a lane table instead, one stack
 // and six counters per lane, plus whether `main` has ever been claimed.
-// `Header::parse` refuses any version but this one and `try_load_index`
-// falls back to folding the log, which is what the index is derived from
-// -- so bumping this needs no migration and no command.
-const FORMAT_VERSION: u32 = 7;
+// Version 8 adds the wheres table -- `Tree.wheres`, one photograph per
+// `where.changed` folded. `Header::parse` refuses any version but this
+// one and `try_load_index` falls back to folding the log, which is what
+// the index is derived from -- so bumping this needs no migration and no
+// command.
+const FORMAT_VERSION: u32 = 8;
 const ULID_LEN: usize = 26;
 const SPAN_LEN: usize = 8;
 const FLAG_RECORD_LEN: usize = 1 + SPAN_LEN;
@@ -531,6 +533,7 @@ struct Header {
     against_count: u64,
     roots_count: u64,
     lanes_count: u64,
+    wheres_count: u64,
     vivac_count: u64,
     nodes_offset: u64,
     spans_offset: u64,
@@ -540,6 +543,7 @@ struct Header {
     against_offset: u64,
     roots_offset: u64,
     lanes_offset: u64,
+    wheres_offset: u64,
     vivacs_offset: u64,
     text_offset: u64,
     text_len: u64,
@@ -577,6 +581,7 @@ impl Header {
             against_count: c.u64()?,
             roots_count: c.u64()?,
             lanes_count: c.u64()?,
+            wheres_count: c.u64()?,
             vivac_count: c.u64()?,
             nodes_offset: c.u64()?,
             spans_offset: c.u64()?,
@@ -586,6 +591,7 @@ impl Header {
             against_offset: c.u64()?,
             roots_offset: c.u64()?,
             lanes_offset: c.u64()?,
+            wheres_offset: c.u64()?,
             vivacs_offset: c.u64()?,
             text_offset: c.u64()?,
             text_len: c.u64()?,
@@ -636,12 +642,16 @@ impl Header {
         if text_end as usize > len {
             return None;
         }
-        // The lanes and vivacs tables are self-delimiting, like the flat
-        // ones above are not: a lane's own `name` and its repositories, and
-        // a vivac's `stack` and `working_set`, are all variable-length. All
-        // this can check up front is that the table starts inside the
-        // file; a truncated record past that fails to parse on its own.
+        // The lanes, wheres and vivacs tables are self-delimiting, like the
+        // flat ones above are not: a lane's own `name` and its repositories,
+        // a `where.changed` photograph's own repositories, and a vivac's
+        // `stack` and `working_set`, are all variable-length. All this can
+        // check up front is that the table starts inside the file; a
+        // truncated record past that fails to parse on its own.
         if self.lanes_offset as usize > len {
+            return None;
+        }
+        if self.wheres_offset as usize > len {
             return None;
         }
         if self.vivacs_offset as usize > len {
@@ -676,6 +686,7 @@ fn write_header(buf: &mut Vec<u8>, h: &Header) {
     write_u64(buf, h.against_count);
     write_u64(buf, h.roots_count);
     write_u64(buf, h.lanes_count);
+    write_u64(buf, h.wheres_count);
     write_u64(buf, h.vivac_count);
     write_u64(buf, h.nodes_offset);
     write_u64(buf, h.spans_offset);
@@ -685,6 +696,7 @@ fn write_header(buf: &mut Vec<u8>, h: &Header) {
     write_u64(buf, h.against_offset);
     write_u64(buf, h.roots_offset);
     write_u64(buf, h.lanes_offset);
+    write_u64(buf, h.wheres_offset);
     write_u64(buf, h.vivacs_offset);
     write_u64(buf, h.text_offset);
     write_u64(buf, h.text_len);
@@ -714,6 +726,7 @@ fn header_len() -> usize {
         against_count: 0,
         roots_count: 0,
         lanes_count: 0,
+        wheres_count: 0,
         vivac_count: 0,
         nodes_offset: 0,
         spans_offset: 0,
@@ -723,6 +736,7 @@ fn header_len() -> usize {
         against_offset: 0,
         roots_offset: 0,
         lanes_offset: 0,
+        wheres_offset: 0,
         vivacs_offset: 0,
         text_offset: 0,
         text_len: 0,
@@ -1304,6 +1318,83 @@ fn parse_lanes(bytes: &[u8], header: &Header) -> Option<BTreeMap<String, LaneSta
 }
 
 // ---------------------------------------------------------------------------
+// The wheres table: one variable-length record per `where.changed` folded,
+// self-delimiting the same way the lanes and vivacs tables above are -- a
+// photograph's own repositories have no fixed width either. `t594`: this is
+// `Tree.wheres`, kept whole and in log order rather than collapsed to the
+// last one, since `why` (§5.4) needs the one in force at a node's own `seq`
+// and not only the lane's most recent.
+// ---------------------------------------------------------------------------
+
+fn write_where_repo(buf: &mut Vec<u8>, r: &crate::event::WhereRepo) {
+    write_str(buf, &r.path);
+    match &r.branch {
+        Some(branch) => {
+            write_bool(buf, true);
+            write_str(buf, branch);
+        }
+        None => {
+            write_bool(buf, false);
+            write_str(buf, "");
+        }
+    }
+    match &r.sha {
+        Some(sha) => {
+            write_bool(buf, true);
+            write_str(buf, sha);
+        }
+        None => {
+            write_bool(buf, false);
+            write_str(buf, "");
+        }
+    }
+    write_bool(buf, r.rebasing);
+    write_bool(buf, r.missing);
+    write_bool(buf, r.withheld);
+}
+
+fn parse_where_repo(c: &mut Cursor) -> Option<crate::event::WhereRepo> {
+    let path = c.str()?;
+    let branch_present = c.bool_()?;
+    let branch_raw = c.str()?;
+    let sha_present = c.bool_()?;
+    let sha_raw = c.str()?;
+    Some(crate::event::WhereRepo {
+        path,
+        branch: branch_present.then_some(branch_raw),
+        sha: sha_present.then_some(sha_raw),
+        rebasing: c.bool_()?,
+        missing: c.bool_()?,
+        withheld: c.bool_()?,
+    })
+}
+
+fn write_where(buf: &mut Vec<u8>, w: &Where) {
+    write_u64(buf, w.seq);
+    write_str(buf, &w.lane);
+    write_u32(buf, w.repos.len() as u32);
+    for r in &w.repos {
+        write_where_repo(buf, r);
+    }
+}
+
+fn parse_wheres(bytes: &[u8], header: &Header) -> Option<Vec<Where>> {
+    let mut c = Cursor::new(bytes.get(header.wheres_offset as usize..)?);
+    let mut out = Vec::with_capacity(header.wheres_count as usize);
+    for _ in 0..header.wheres_count {
+        let seq = c.u64()?;
+        let lane = c.str()?;
+        let repos_count = c.u32()?;
+        let mut repos = Vec::with_capacity(repos_count as usize);
+        for _ in 0..repos_count {
+            repos.push(parse_where_repo(&mut c)?);
+        }
+        out.push(Where { seq, lane, repos });
+    }
+    Some(out)
+}
+
+// ---------------------------------------------------------------------------
 // The remaining fixed-width sections, and putting it all together.
 // ---------------------------------------------------------------------------
 
@@ -1414,6 +1505,7 @@ fn build_tree(bytes: &[u8], header: &Header) -> Option<Tree> {
     let spans = parse_spans(bytes, header)?;
     let roots = parse_u64_list(bytes, header.roots_offset, header.roots_count)?;
     let lanes = parse_lanes(bytes, header)?;
+    let wheres = parse_wheres(bytes, header)?;
     let vivacs = parse_vivacs(bytes, header)?;
     let text = parse_text(bytes, header)?;
     Some(Tree::from_parts(RawParts {
@@ -1423,6 +1515,7 @@ fn build_tree(bytes: &[u8], header: &Header) -> Option<Tree> {
         roots,
         lanes,
         vivacs,
+        wheres,
         next_vivac_num: header.next_vivac_num,
         seq: header.seq,
         next_num: header.next_num,
@@ -1477,6 +1570,10 @@ fn encode(
     for (key, s) in &tree.lanes {
         write_lane(&mut lanes_buf, key, s);
     }
+    let mut wheres_buf = Vec::new();
+    for w in &tree.wheres {
+        write_where(&mut wheres_buf, w);
+    }
     let mut vivacs_buf = Vec::new();
     for v in &tree.vivacs {
         write_vivac(&mut vivacs_buf, v);
@@ -1493,7 +1590,8 @@ fn encode(
     let against_offset = arms_offset + arms_buf.len() as u64;
     let roots_offset = against_offset + against_buf.len() as u64;
     let lanes_offset = roots_offset + roots_buf.len() as u64;
-    let vivacs_offset = lanes_offset + lanes_buf.len() as u64;
+    let wheres_offset = lanes_offset + lanes_buf.len() as u64;
+    let vivacs_offset = wheres_offset + wheres_buf.len() as u64;
     let text_offset = vivacs_offset + vivacs_buf.len() as u64;
     let file_len = text_offset + text_bytes.len() as u64;
 
@@ -1527,6 +1625,7 @@ fn encode(
         against_count: (against_buf.len() / AGAINST_RECORD_LEN) as u64,
         roots_count: tree.roots.len() as u64,
         lanes_count: tree.lanes.len() as u64,
+        wheres_count: tree.wheres.len() as u64,
         vivac_count: tree.vivacs.len() as u64,
         nodes_offset,
         spans_offset,
@@ -1536,6 +1635,7 @@ fn encode(
         against_offset,
         roots_offset,
         lanes_offset,
+        wheres_offset,
         vivacs_offset,
         text_offset,
         text_len: text_bytes.len() as u64,
@@ -1553,6 +1653,7 @@ fn encode(
     out.extend_from_slice(&against_buf);
     out.extend_from_slice(&roots_buf);
     out.extend_from_slice(&lanes_buf);
+    out.extend_from_slice(&wheres_buf);
     out.extend_from_slice(&vivacs_buf);
     out.extend_from_slice(text_bytes);
     out
@@ -1782,6 +1883,12 @@ mod tests {
                 s.seg_closed,
                 s.seg_notes,
                 s.seg_events,
+            ));
+        }
+        for w in &tree.wheres {
+            out.push_str(&format!(
+                "where seq={} lane={:?} repos={:?}\n",
+                w.seq, w.lane, w.repos,
             ));
         }
         out.push_str(&format!("repeated_nums={}\n", tree.repeated_nums.len()));
@@ -2103,6 +2210,50 @@ mod tests {
         // Purely from the index this time, with no tail to apply -- the
         // check that this really came off disk and not off the fallback
         // fold, `LOADING.md` §4.
+        let loaded_again = load(&store, false).expect("load should succeed");
+        assert_eq!(snapshot(&fresh), snapshot(&loaded_again));
+
+        std::fs::remove_dir_all(&store.root).ok();
+    }
+
+    /// The index is a derived cache, so what this really checks is that
+    /// reading it back gives the same answers a fresh fold would: the
+    /// brief and `why` both read `wheres` and neither refolds the log.
+    #[test]
+    fn the_wheres_survive_the_round_trip_with_their_lane_and_seq() {
+        let a_node = fixed_id(1);
+        let events = vec![
+            created(1, &a_node, 1, Kind::Goal, None, "Root", vec![], vec![]),
+            Event {
+                seq: 2,
+                id: fixed_id(2),
+                ts: "2026-09-17T10:00:00Z".to_string(),
+                actor: "a_test".to_string(),
+                lane: "main".to_string(),
+                payload: Body::WhereChanged {
+                    repos: vec![crate::event::WhereRepo {
+                        path: "webapi".to_string(),
+                        branch: Some("develop".to_string()),
+                        sha: Some("abc123".to_string()),
+                        ..Default::default()
+                    }],
+                },
+            },
+        ];
+        let fresh = fold(&events, 0);
+        assert_eq!(fresh.wheres.len(), 1, "the fixture itself has to write one");
+
+        let store = tmp_store("wheres-roundtrip");
+        write_raw_locked(&store, &events);
+
+        let loaded = load(&store, true).expect("load should succeed");
+        assert_eq!(snapshot(&fresh), snapshot(&loaded));
+        assert!(
+            store.index_path().is_file(),
+            "a clean fold should be indexed"
+        );
+
+        // Purely from the index this time, with no tail to apply.
         let loaded_again = load(&store, false).expect("load should succeed");
         assert_eq!(snapshot(&fresh), snapshot(&loaded_again));
 
