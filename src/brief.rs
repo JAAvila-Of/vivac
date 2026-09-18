@@ -564,6 +564,105 @@ fn branch_moved_block(a: &Tree, lane_dir: &Path) -> Vec<String> {
     lines
 }
 
+/// One other lane's own thread, as OTHER LANES names it (`t594` §5.3):
+/// which lane, what it is focused on, and the `seq` its last write sits
+/// at, kept only to sort the newest write first.
+struct OtherLane<'t> {
+    id: &'t str,
+    name: &'t str,
+    focus: &'t Node,
+    seq: u64,
+}
+
+/// Every lane but this one that wrote after this lane's own last write,
+/// has something on its own stack to name, and whose folder the registry
+/// still finds on disk (`t594` §5.3, decisions 1, 2 and 4 of this task).
+///
+/// `[]` covers a tree with one lane, a lane that has never written here
+/// itself, and every other lane whose only events were declaring itself
+/// or moving a branch: `Tree::apply` gives *every* event a `lanes` entry,
+/// context events included, so an empty `stack` is what tells a lane
+/// that actually worked apart from one of those defaults (`t594` tramo
+/// 5, task 2's own warning).
+///
+/// `exists()` runs at most once per lane the registry knows of, and only
+/// this far: nothing reaches the registry until there is at least one
+/// lane with a stack and a `seq_wrote` newer than this one's own
+/// (`f623`).
+fn other_lanes<'t>(a: &'t Tree, root: &Path) -> Vec<OtherLane<'t>> {
+    let here = a.lane();
+    let own_seq = a.lanes.get(here).map(|s| s.seq_wrote).unwrap_or(0);
+    let mut rows: Vec<OtherLane> = a
+        .lanes
+        .iter()
+        .filter(|(id, _)| id.as_str() != here)
+        .filter_map(|(id, s)| {
+            if s.seq_wrote <= own_seq {
+                return None;
+            }
+            let focus = a.node_by_num(*s.stack.last()?)?;
+            Some(OtherLane {
+                id: id.as_str(),
+                name: if s.name.is_empty() {
+                    id.as_str()
+                } else {
+                    s.name.as_str()
+                },
+                focus,
+                seq: s.seq_wrote,
+            })
+        })
+        .collect();
+    if rows.is_empty() {
+        return rows;
+    }
+    let (Some(project_id), Some(store_dir)) = (
+        crate::store::first_event_id(root),
+        crate::store::store_dir(),
+    ) else {
+        // Nothing to check a folder against: a lane this cannot vouch for
+        // as still there does not get shown as one that is.
+        return Vec::new();
+    };
+    let gone = crate::registry::lanes_with_missing_folder(&store_dir, &project_id);
+    rows.retain(|r| !gone.iter().any(|g| g == r.id));
+    rows.sort_by(|x, y| y.seq.cmp(&x.seq).then_with(|| x.id.cmp(y.id)));
+    rows
+}
+
+const OTHER_LANES_TITLE: &str = "OTHER LANES since you last wrote here";
+
+/// OTHER LANES's own rows: three spaces, the lane, three spaces, its
+/// focus's alias and title, three spaces, the date that focus was opened
+/// -- the same three-space separator BRANCH MOVED already writes with,
+/// rather than a fixed-width table nothing in the spec asks for.
+fn other_lanes_rows(a: &Tree, rows: &[OtherLane]) -> Vec<String> {
+    rows.iter()
+        .map(|r| {
+            format!(
+                "   {}   {}   {}   {}",
+                r.name,
+                r.focus.alias(),
+                r.focus.title(a),
+                r.focus.opened(a)
+            )
+        })
+        .collect()
+}
+
+/// The trace OTHER LANES leaves when the budget trims its rows away
+/// (`t594` §5.3): the heading stays, and one line says how many lanes
+/// there were and where to read them in full. Falling silent would say
+/// nothing happened here, and something did.
+fn other_lanes_fallback(n: usize) -> Vec<String> {
+    heading(
+        OTHER_LANES_TITLE,
+        vec![format!(
+            "   {n} lanes wrote here since you did (vivac stack --lanes)"
+        )],
+    )
+}
+
 /// The brief as text. `session start --hook` prints it straight to stdout
 /// (`f403`, `f404`): Claude Code turns plain-text stdout on `SessionStart`
 /// into context the agent can see and act on, so there is nothing further to
@@ -842,6 +941,27 @@ pub fn to_text(
         .map(|n| format!("  {:<6} {}", n.alias(), n.title(a)))
         .collect();
     s.push(Section::loose(heading("UNTOUCHED FOR A WHILE", stale_ones)));
+
+    // 11. OTHER LANES (`t594` §5.3): the last section of the brief, so the
+    // budget trims it first (`emit`'s own search runs from the bottom).
+    // Decided here, ahead of `emit`, rather than by that same generic
+    // clearing: every other truncable section vanishes whole when the
+    // budget will not have it, and this one is not allowed to -- falling
+    // in silence would be worse than not being there at all.
+    let other = other_lanes(a, root);
+    if !other.is_empty() {
+        let full = heading(OTHER_LANES_TITLE, other_lanes_rows(a, &other));
+        let full_tokens: usize = full.iter().map(|l| tokens(l) + 1).sum();
+        if tokens_of(&s) + full_tokens <= budget {
+            s.push(Section::loose(full));
+        } else {
+            let short = other_lanes_fallback(other.len());
+            let short_tokens: usize = short.iter().map(|l| tokens(l) + 1).sum();
+            if tokens_of(&s) + short_tokens <= budget {
+                s.push(Section::loose(short));
+            }
+        }
+    }
 
     emit(s, budget, a)
 }

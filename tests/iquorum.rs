@@ -368,12 +368,46 @@ fn brief_marks_here_on_every_lanes_own_front_not_only_this_ones() {
     todo!("t594, next stretch: HERE per lane in `brief`")
 }
 
-/// `t594`, the next stretch: an `OTHER LANES` block in `brief`, naming what
-/// the tree's other lanes have open. `t594` §5.3.
-#[ignore = "t594 §5.3, next stretch: the OTHER LANES block in `brief`"]
+/// An `OTHER LANES` block in `brief`, naming what the tree's other lanes
+/// have open. `t594` §5.3. `P` reads `brief` after `B` joins its tree and
+/// writes -- across two folders on this machine, the same shape the rest
+/// of this scenario carries, and no repository needed at all: the section
+/// only ever reads a lane's own thread, never a checkout.
 #[test]
 fn brief_carries_an_other_lanes_block() {
-    todo!("t594 §5.3, next stretch: the OTHER LANES block in `brief`")
+    let home = TempDir::new("home");
+    let p = TempDir::new("p");
+    std::fs::create_dir_all(&p).unwrap();
+    ok(&p, &home, &["init"]);
+    ok(
+        &p,
+        &home,
+        &["push", "Track the sonar release", "--why", "seed"],
+    );
+
+    let b = TempDir::new("b");
+    std::fs::create_dir_all(&b).unwrap();
+    ok(
+        &b,
+        &home,
+        &[
+            "setup",
+            "claude-code",
+            "--join",
+            p.to_str().unwrap(),
+            "--lane-name",
+            "sonar",
+        ],
+    );
+    ok(
+        &b,
+        &home,
+        &["push", "Ship the sonar dashboard", "--why", "seed"],
+    );
+
+    let out = ok(&p, &home, &["brief"]);
+    assert!(out.contains("OTHER LANES"), "{out}");
+    assert!(out.contains("Ship the sonar dashboard"), "{out}");
 }
 
 /// `t594`, the next stretch: `vivac stack --lanes`, listing every lane's
