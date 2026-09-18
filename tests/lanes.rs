@@ -731,13 +731,7 @@ fn a_worktrees_own_lane_is_declared_with_the_root_commit_it_shares() {
         "the worktree should have joined with no root to inherit yet:\n{joined}"
     );
 
-    let rev_list = std::process::Command::new("git")
-        .arg("-C")
-        .arg(&root)
-        .args(["rev-list", "--max-parents=0", "HEAD"])
-        .output()
-        .unwrap();
-    let real_root = String::from_utf8_lossy(&rev_list.stdout).trim().to_string();
+    let real_root = real_root_commit(&root);
 
     setup_ok(&root, &home);
 
@@ -750,6 +744,121 @@ fn a_worktrees_own_lane_is_declared_with_the_root_commit_it_shares() {
         declared_again.contains(&format!("\"root\":\"{real_root}\"")),
         "the worktree's own lane still names no root commit -- or the wrong \
          one -- after main gained the real one:\n{declared_again}"
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// `git rev-list --max-parents=0 HEAD` in `repo`, the way `repos::scan`
+/// itself finds a root commit -- read here so a test can check the log
+/// names the very same value setup would have found, rather than merely
+/// that it names something.
+fn real_root_commit(repo: &Path) -> String {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["rev-list", "--max-parents=0", "HEAD"])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+/// `--dry-run` has to preview the very write `f609`'s own fix performs:
+/// otherwise a run that promises "this is what would happen" stays quiet
+/// about a whole class of write, which is worse than not previewing it at
+/// all -- whoever reads the plan walks away not knowing this exists.
+#[test]
+fn dry_run_names_a_stale_worktree_it_would_redeclare() {
+    let (root, feature, home) = worktree_inside_fixture("dry-run-stale");
+    append_raw_line(
+        &root,
+        r#"{"seq":1,"id":"01SEEDMAINAAAAAAAAAAAAAAAA","ts":"2026-01-01T00:00:00Z","actor":"a_test0000000","lane":"main","payload":{"type":"lane.declared","lane":"main","name":"main","repos":[{"path":"."}]}}"#,
+    );
+    seed_lanes_config(&root);
+
+    let (out, code) = run(&feature, &home, &["push", "Feature work", "--why", "seed"]);
+    assert_eq!(code, 0, "{out}");
+    let before = std::fs::read_to_string(root.join(".vivac").join("events")).unwrap();
+
+    let (out, code) = run(&root, &home, &["setup", "claude-code", "--dry-run"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        says(
+            &out,
+            "redeclare 1 worktree lane with the repositories this run found"
+        ),
+        "the dry-run plan never named the stale worktree lane it would fix:\n{out}"
+    );
+
+    let after = std::fs::read_to_string(root.join(".vivac").join("events")).unwrap();
+    assert_eq!(before, after, "--dry-run must not have written anything");
+
+    std::fs::remove_dir_all(&root).ok();
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// The other half of the same promise: a tree with no stale worktree lane
+/// to redeclare has to stay silent about it. A worktree that exists but
+/// never joined -- `feature` here never wrote anything -- must not be
+/// mistaken for one that needs fixing either.
+#[test]
+fn dry_run_says_nothing_about_worktree_lanes_when_none_are_stale() {
+    let (root, _feature, home) = worktree_inside_fixture("dry-run-no-stale");
+
+    let (out, code) = run(&root, &home, &["setup", "claude-code", "--dry-run"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        !out.contains("worktree lane"),
+        "the dry-run plan mentions a worktree lane with none to redeclare:\n{out}"
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// `f609`'s own gate, once fixed, still had a hole: a run whose own lane
+/// has nothing new to declare never reached `write_lane` at all, so a
+/// worktree stuck with no root commit from before this fix existed would
+/// stay stuck on every such run forever, the moment this folder's own
+/// declaration had settled -- which, for a tree that already ran a
+/// version with root-tracking at least once, is the ordinary case, not
+/// the rare one. Seeded by hand to look exactly like that history: `main`
+/// already carries the real root commit, and the worktree's own
+/// `.vivac/lane` already exists from an earlier join that copied `None`
+/// forward and was never revisited.
+#[test]
+fn setup_still_fixes_a_stale_worktree_when_its_own_lane_is_unchanged() {
+    let (root, feature, home) = worktree_inside_fixture("gate-unchanged");
+    let real_root = real_root_commit(&root);
+    let folder_name = root.file_name().unwrap().to_string_lossy().into_owned();
+
+    append_raw_line(
+        &root,
+        &format!(
+            r#"{{"seq":1,"id":"01SEEDMAINAAAAAAAAAAAAAAAA","ts":"2026-01-01T00:00:00Z","actor":"a_test0000000","lane":"main","payload":{{"type":"lane.declared","lane":"main","name":"{folder_name}","repos":[{{"path":".","root":"{real_root}"}}]}}}}"#
+        ),
+    );
+    append_raw_line(
+        &root,
+        r#"{"seq":2,"id":"01SEEDJOINAAAAAAAAAAAAAAAA","ts":"2026-01-01T00:00:01Z","actor":"a_test0000000","lane":"01LANEIDAAAAAAAAAAAAAAAAAAA","payload":{"type":"lane.declared","lane":"01LANEIDAAAAAAAAAAAAAAAAAAA","name":"feature","repos":[{"path":"."}]}}"#,
+    );
+    seed_lanes_config(&root);
+    write_lane(&feature, "01SEEDMAINAAAAAAAAAAAAAAAA");
+
+    setup_ok(&root, &home);
+
+    let log = std::fs::read_to_string(root.join(".vivac").join("events")).unwrap();
+    let declared_again = log
+        .lines()
+        .rfind(|l| {
+            l.contains("01LANEIDAAAAAAAAAAAAAAAAAAA") && l.contains("\"type\":\"lane.declared\"")
+        })
+        .expect("the worktree's lane never appears again");
+    assert!(
+        declared_again.contains(&format!("\"root\":\"{real_root}\"")),
+        "the stale worktree lane was never redeclared once main's own \
+         declaration had already settled:\n{declared_again}"
     );
 
     std::fs::remove_dir_all(&root).ok();
