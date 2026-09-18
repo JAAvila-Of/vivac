@@ -655,10 +655,14 @@ fn other_lanes_rows(a: &Tree, rows: &[OtherLane]) -> Vec<String> {
 /// there were and where to read them in full. Falling silent would say
 /// nothing happened here, and something did.
 fn other_lanes_fallback(n: usize) -> Vec<String> {
+    // One lane reaches this line as easily as several: the trace is only
+    // shorter than the rows it replaces when a row is long, and a single
+    // long row is the cheapest way to get here.
+    let lanes = if n == 1 { "lane" } else { "lanes" };
     heading(
         OTHER_LANES_TITLE,
         vec![format!(
-            "   {n} lanes wrote here since you did (vivac stack --lanes)"
+            "   {n} {lanes} wrote here since you did (vivac stack --lanes)"
         )],
     )
 }
@@ -1018,6 +1022,19 @@ fn emit(mut s: Vec<Section>, budget: usize, a: &Tree) -> Result<String, crate::f
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The trace OTHER LANES leaves behind is public prose, and one lane
+    /// reaches it as easily as several (`tests/brief.rs`'s own budget test
+    /// gets there with exactly one).
+    #[test]
+    fn the_trace_says_one_lane_and_never_one_lanes() {
+        assert!(other_lanes_fallback(1)
+            .iter()
+            .any(|l| l.contains("1 lane wrote here since you did")));
+        assert!(other_lanes_fallback(2)
+            .iter()
+            .any(|l| l.contains("2 lanes wrote here since you did")));
+    }
 
     #[test]
     fn the_estimator_is_deterministic() {

@@ -953,7 +953,7 @@ fn the_block_says_so_when_trimmed_by_the_budget() {
         "the full row should have fallen:\n{tight}"
     );
     assert!(
-        tight.contains("1 lanes wrote here since you did (vivac stack --lanes)"),
+        tight.contains("1 lane wrote here since you did (vivac stack --lanes)"),
         "no trace left behind:\n{tight}"
     );
     assert!(
