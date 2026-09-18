@@ -58,10 +58,11 @@ const SPANISH: &str = "tests/data/spanish-vocabulary.txt";
 /// `src/setup/claude_code.rs` -- ordinary English that happens to also spell
 /// the Spanish word for the same idea.
 ///
-/// `todo` is `std`'s own macro name (`todo!()`), reached from
-/// `tests/iquorum.rs`'s ignored placeholders: not a word this crate chose,
-/// and not one it can rename.
-const KNOWN_ENGLISH: &[&str] = &["era", "ser", "base", "todo"];
+/// `todo` was here for `std`'s own `todo!()`, reached from the placeholders
+/// `t594` left behind in `tests/iquorum.rs`. The last of those got a body
+/// in tranche 5, so the crate no longer reaches that macro at all and the
+/// exception went with it.
+const KNOWN_ENGLISH: &[&str] = &["era", "ser", "base"];
 
 fn root() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
