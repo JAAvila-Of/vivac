@@ -597,44 +597,95 @@ fn tree_below_refusal(paths: &[PathBuf]) -> Failure {
 /// `d626`: the same disk state `tree_below_refusal` names for a plant,
 /// met by `--join` instead. The remedy is not the same door -- nothing
 /// here was about to be planted, so "move that tree up, then run setup
-/// again" would have pointed at a choice nobody was making. `spec` is
-/// printed back exactly as typed, the reasoning `join`'s own refusal
-/// below already follows: it names the choice being made, not a tree
-/// this call went looking for and resolved.
+/// again" would have pointed at a choice nobody was making, and naming
+/// the folder to run `relocate` from, rather than a destination for it,
+/// is what actually matches how `relocate` works: it runs from inside
+/// the tree it moves, not from above it. `spec` is printed back exactly
+/// as typed and quoted, the same as every other refusal in this module
+/// names something -- it is the choice being made, not a tree this call
+/// went looking for and resolved.
 ///
-/// Only the first tree found is named when there is more than one: the
-/// sentence answers "can this join happen at all", and that answer is
-/// the same regardless of how many foreign trees sit below.
+/// Every tree found is named, following `tree_below_refusal`'s own
+/// shape for the same disk state: whoever fixes the first and hits this
+/// refusal again would only be learning the same thing twice.
+///
+/// A route is withheld whole when any segment of it trips the redaction
+/// guard (`guarded_relative`, `d600`) -- the guard covers the folder
+/// name it was built to cover, and a route this refusal prints can be
+/// several of those deep. With a mix of withheld and shown routes, only
+/// the shown ones are listed, and how many are missing is never said:
+/// the count is also something the guard would be handing over.
 fn tree_below_join_refusal(here: &Path, below: &[PathBuf], spec: &str) -> Failure {
-    let rel = relative_to(here, &below[0]);
+    let routes: Vec<Option<String>> = below.iter().map(|p| guarded_relative(here, p)).collect();
+    let shown: Vec<&str> = routes.iter().filter_map(|r| r.as_deref()).collect();
+
+    if let [only] = routes.as_slice() {
+        return match only {
+            Some(rel) => Failure::Model(format!(
+                "  There is another product's tree below this folder:\n    \
+                 {rel}\n\n  \
+                 This folder cannot be a lane of \"{spec}\" while that tree is there: one\n  \
+                 folder answers for one product, and a lane that contains another\n  \
+                 product's tree would answer for two.\n\n  \
+                 If the tree below is part of \"{spec}\", move it up. From inside {rel}:\n      \
+                 vivac relocate ..\n  \
+                 If it is a different product, join from a folder that does not contain it."
+            )),
+            None => Failure::Model(format!(
+                "  There is another product's tree below this folder, under a name this tool\n  \
+                 will not write down.\n\n  \
+                 This folder cannot be a lane of \"{spec}\" while that tree is there: one\n  \
+                 folder answers for one product, and a lane that contains another\n  \
+                 product's tree would answer for two.\n\n  \
+                 Join from a folder that does not contain it, or move that tree up from\n  \
+                 inside it:   vivac relocate .."
+            )),
+        };
+    }
+
+    if shown.is_empty() {
+        return Failure::Model(format!(
+            "  There are other products' trees below this folder, under names this tool\n  \
+             will not write down.\n\n  \
+             This folder cannot be a lane of \"{spec}\" while any of them is there: one\n  \
+             folder answers for one product, and a lane that contains another\n  \
+             product's tree would answer for two.\n\n  \
+             Join from a folder that does not contain them, or move them up from\n  \
+             inside each one:   vivac relocate .."
+        ));
+    }
+
+    let listed: String = shown.iter().map(|r| format!("    {r}\n")).collect();
     Failure::Model(format!(
-        "  There is another product's tree below this folder:\n    \
-         {rel}\n\n  \
-         This folder cannot be a lane of {spec} while that tree is there: one\n  \
+        "  There are other products' trees below this folder:\n\
+         {listed}\n  \
+         This folder cannot be a lane of \"{spec}\" while any of them is there: one\n  \
          folder answers for one product, and a lane that contains another\n  \
          product's tree would answer for two.\n\n  \
-         If the tree below is part of {spec}, move it up:   vivac relocate {rel}\n  \
-         If it is a different product, join from a folder that does not contain it."
+         Any of them that belongs to \"{spec}\" can move up, from inside it:\n      \
+         vivac relocate ..\n  \
+         For the rest, join from a folder that does not contain them."
     ))
 }
 
 /// `path`'s own route down from `base`, forward slashes on every
 /// platform, the same convention `event::Repo::relative` already prints
-/// a repository under: the only path this refusal ever shows, and it is
-/// always a child of the folder the command ran in, never an absolute
-/// one.
-fn relative_to(base: &Path, path: &Path) -> String {
-    match path.strip_prefix(base) {
-        Ok(rel) => rel
-            .components()
-            .map(|c| c.as_os_str().to_string_lossy().into_owned())
-            .collect::<Vec<_>>()
-            .join("/"),
-        Err(_) => path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default(),
+/// a repository under -- or `None` when any segment of that route trips
+/// the redaction guard: `guarded_folder_name` only ever checked the last
+/// one, and a route `tree_below_join_refusal` prints can run several
+/// folders deep, any of which might be the one that should not travel
+/// (`d600`).
+fn guarded_relative(base: &Path, path: &Path) -> Option<String> {
+    let rel = path.strip_prefix(base).unwrap_or(path);
+    let mut parts = Vec::new();
+    for c in rel.components() {
+        let part = c.as_os_str().to_string_lossy().into_owned();
+        match crate::redact::check_field("folder name", &part) {
+            Some(_) => return None,
+            None => parts.push(part),
+        }
     }
+    Some(parts.join("/"))
 }
 
 /// §6.4's mirror image, upward: a folder with no `.vivac/` of its own,
