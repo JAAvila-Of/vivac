@@ -216,11 +216,12 @@ fn the_emisores_scenario_end_to_end() {
     // it was born under is a complete photograph of all four repositories
     // (§2.4), so the line names the first three and counts the rest.
     let why_after = c.ok(&["why", "d3", "--full"]);
+    let founding_lane_name = c.0.file_name().unwrap().to_string_lossy().into_owned();
     assert!(
-        why_after.contains(
-            "born in lane main · backend@perf/sp, web1@feature/ng22, web2@feature/ng22, \
-             and 1 more (not the branch you are on)"
-        ),
+        why_after.contains(&format!(
+            "born in lane {founding_lane_name} · backend@perf/sp, web1@feature/ng22, \
+             web2@feature/ng22, and 1 more (not the branch you are on)"
+        )),
         "{why_after}"
     );
 
