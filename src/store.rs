@@ -332,10 +332,12 @@ pub struct Located {
     /// filesystem can answer -- it depends on the repositories the lane
     /// declared, which are in the log -- so it is answered elsewhere.
     ///
-    /// A submodule inside a linked worktree does not come out as one: the
-    /// upward walk that finds it stops at the submodule's own `.git`, never
-    /// reaching the worktree's, so this reads `None` there. Whoever decides
-    /// the lane has to account for that.
+    /// A submodule inside a linked worktree comes out as that worktree, not
+    /// as `None`: `anchor::linked_worktree` keeps looking above a
+    /// submodule's own `.git` -- a file with no `commondir` -- for the
+    /// worktree that contains it, rather than stopping at the submodule's
+    /// own identity the way the anchor's other questions correctly do
+    /// (`f606`).
     pub worktree: Option<PathBuf>,
 }
 

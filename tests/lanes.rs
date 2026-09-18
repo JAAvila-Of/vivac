@@ -1139,25 +1139,15 @@ fn a_submodule_inside_a_worktree_does_not_join_a_lane_of_its_own() {
     std::fs::remove_dir_all(&home).ok();
 }
 
-/// `f606`: a submodule inside a linked worktree does not come out as one
-/// (`store::Located::worktree`'s own doc) -- the walk that finds it stops
-/// at the submodule's own `.git`, never reaching the worktree's. Unlike
-/// the test above, `main` already has a lane declared here, so the write
-/// from inside `sub` actually reaches the step that asks whether it sits
-/// inside a worktree of its own (`t594` §2.3): it should join `feature`,
-/// the worktree that actually contains it, not sign silently as `main`.
-///
-/// `#[ignore]`: closing it means changing the walk `anchor::locate` does --
-/// cached by starting folder, and shared by `in_working_tree` and
-/// `main_copy_of` besides `linked_worktree` itself -- so it looks past a
-/// submodule's own `.git` instead of stopping there. That is the anchor's
-/// one shared walk, not a fix local to this call, and `Located::worktree`'s
-/// own doc (`store.rs:335-339`) already named the same trade before this
-/// test did (`f606`).
+/// `f606`: a submodule inside a linked worktree comes out as that worktree
+/// (`store::Located::worktree`'s own doc) -- `anchor::linked_worktree` has
+/// its own walk that keeps looking above the submodule's own `.git` rather
+/// than stopping there. Unlike the test above, `main` already has a lane
+/// declared here, so the write from inside `sub` actually reaches the step
+/// that asks whether it sits inside a worktree of its own (`t594` §2.3): it
+/// joins `feature`, the worktree that actually contains it, rather than
+/// signing silently as `main`.
 #[test]
-#[ignore = "f606: needs anchor::locate's shared walk to look past a \
-            submodule's own .git rather than stopping there -- touches the \
-            anchor, not a local fix"]
 fn a_submodule_inside_a_linked_worktree_is_seen_as_one() {
     let (root, feature, home) = worktree_inside_fixture("submodule-seen");
     append_raw_line(
