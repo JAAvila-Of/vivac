@@ -84,6 +84,14 @@ pub struct Ctx {
     /// the store is what signs every event, so a `Ctx` and the events it
     /// writes never disagree about whose thread they are.
     pub lane: Option<String>,
+    /// The folder this lane's declared repositories are relative to:
+    /// `Located.lane_dir` for a lane resolved from a folder, and the
+    /// store's own root for the founding lane and for a lane the caller
+    /// already named outright (`setup`, `--join`). Set once at
+    /// construction, and updated only where a pending lane joins inside
+    /// `emit` -- never re-resolved from a folder, and never asked of git.
+    /// `where_to_write` is the only reader (`t594` tramo 4, task 3).
+    pub lane_dir: PathBuf,
     pub tree: Tree,
     pub anchor: Box<dyn Anchor>,
     /// The log's fingerprint taken **before** it was read: a write that
@@ -168,6 +176,7 @@ impl Ctx {
         let mut ctx = Ctx {
             store,
             lane: whose_lane.lane,
+            lane_dir: whose_lane.lane_dir,
             tree: Tree::default(),
             anchor,
             seen,
@@ -206,7 +215,7 @@ impl Ctx {
         // own sentence, which can say either more or less than the log
         // actually backs up (`Tree::has_a_declared_lane`'s own doc).
         let tree_has_lanes = tree.has_a_declared_lane();
-        let whose_lane = resolve_whose(whose, &tree, tree_has_lanes);
+        let whose_lane = resolve_whose(whose, &tree, tree_has_lanes, &store.root);
         Ok(Ctx::finish(store, tree, seen, whose_lane))
     }
 
@@ -221,7 +230,7 @@ impl Ctx {
         let (events, broken) = store.read_all()?;
         let tree = fold(&events, broken);
         let tree_has_lanes = tree.has_a_declared_lane();
-        let whose_lane = resolve_whose(whose, &tree, tree_has_lanes);
+        let whose_lane = resolve_whose(whose, &tree, tree_has_lanes, &store.root);
         let ctx = Ctx::finish(store, tree, seen, whose_lane);
         Ok((ctx, events))
     }
@@ -244,7 +253,7 @@ impl Ctx {
     ) -> Ctx {
         let tree = fold(events, broken);
         let tree_has_lanes = tree.has_a_declared_lane();
-        let whose_lane = resolve_whose(whose, &tree, tree_has_lanes);
+        let whose_lane = resolve_whose(whose, &tree, tree_has_lanes, &store.root);
         Ctx::finish(store, tree, seen, whose_lane)
     }
 
@@ -386,6 +395,7 @@ impl Ctx {
             // second lane for the same folder.
             if let Some(joined) = crate::lane::read(&dir.join(crate::store::DIR))? {
                 self.lane = Some(joined.id.clone());
+                self.lane_dir = dir.clone();
                 self.tree.for_lane(&joined.id);
                 self.pending_lane = None;
             } else {
@@ -426,6 +436,7 @@ impl Ctx {
                 };
                 crate::lane::write(&dir.join(crate::store::DIR), &lane_file)?;
                 self.lane = Some(id.clone());
+                self.lane_dir = dir.clone();
                 self.tree.for_lane(&id);
                 self.pending_lane = None;
                 // `t594`: redacted here, not when the
@@ -455,6 +466,12 @@ impl Ctx {
             .as_ref()
             .ok_or_else(|| Failure::Io(std::io::Error::other("write without the tree's lock")))?;
         let lane = self.lane.as_deref().unwrap_or(crate::lane::MAIN);
+        // Inside the lock and ahead of the operation's own events, so the
+        // log reads in the order the work happened: the lane is declared,
+        // then it says where it is, then it writes (§2.5).
+        if let Some(w) = where_to_write(&self.tree, lane, &self.lane_dir) {
+            bodies.insert(0, w);
+        }
         let appended = self
             .store
             .append(lock, lane, bodies, self.tree.seq, already_governed)?;
@@ -500,6 +517,8 @@ struct WhoseLane {
     caller_declared: bool,
     /// See `Ctx::lane_assumed`.
     lane_assumed: bool,
+    /// See `Ctx::lane_dir`.
+    lane_dir: PathBuf,
 }
 
 /// `t594` §2.3, step 1: decides whose lane a folder is, once its tree is
@@ -541,14 +560,23 @@ struct WhoseLane {
 /// `lane_assumed` is fixed once, from `located.lane.is_none()`, ahead of
 /// all three cases: none of them touches whether `Located` itself carried
 /// a lane file, only what a worktree underneath it is doing.
-fn resolve_whose(whose: Whose, tree: &Tree, tree_has_lanes: bool) -> WhoseLane {
+fn resolve_whose(whose: Whose, tree: &Tree, tree_has_lanes: bool, store_root: &Path) -> WhoseLane {
     let located = match whose {
+        // Neither has a `Located` to read a lane's own folder off. The
+        // founding lane's folder is the tree's own root by definition
+        // (`Located::lane_dir`'s own doc), and a lane `setup` or `--join`
+        // is declaring outright writes its first event before it has any
+        // repository in `tree.lanes` for `where_to_write` to look up
+        // through this value at all, so `store_root` is never read back
+        // for it: every later, ordinary write resolves it through
+        // `Located` like any other lane.
         Whose::Founding => {
             return WhoseLane {
                 lane: Some(crate::lane::MAIN.to_string()),
                 pending_lane: None,
                 caller_declared: false,
                 lane_assumed: true,
+                lane_dir: store_root.to_path_buf(),
             }
         }
         Whose::Declared(id) => {
@@ -557,11 +585,13 @@ fn resolve_whose(whose: Whose, tree: &Tree, tree_has_lanes: bool) -> WhoseLane {
                 pending_lane: None,
                 caller_declared: true,
                 lane_assumed: false,
+                lane_dir: store_root.to_path_buf(),
             }
         }
         Whose::Resolved(l) => l,
     };
     let lane_assumed = located.lane.is_none();
+    let lane_dir = located.lane_dir.clone();
     let found_lane = located
         .lane
         .as_ref()
@@ -573,6 +603,7 @@ fn resolve_whose(whose: Whose, tree: &Tree, tree_has_lanes: bool) -> WhoseLane {
             pending_lane: None,
             caller_declared: false,
             lane_assumed,
+            lane_dir,
         };
     };
     let declared: &[crate::event::Repo] = tree
@@ -586,6 +617,7 @@ fn resolve_whose(whose: Whose, tree: &Tree, tree_has_lanes: bool) -> WhoseLane {
             pending_lane: None,
             caller_declared: false,
             lane_assumed,
+            lane_dir,
         };
     }
     if !tree_has_lanes {
@@ -594,6 +626,7 @@ fn resolve_whose(whose: Whose, tree: &Tree, tree_has_lanes: bool) -> WhoseLane {
             pending_lane: None,
             caller_declared: false,
             lane_assumed,
+            lane_dir,
         };
     }
     // Step 4: the root commit is whatever the lane already declared for
@@ -621,6 +654,7 @@ fn resolve_whose(whose: Whose, tree: &Tree, tree_has_lanes: bool) -> WhoseLane {
         }),
         caller_declared: false,
         lane_assumed,
+        lane_dir,
     }
 }
 
@@ -640,6 +674,67 @@ fn repo_at<'a>(
     declared
         .iter()
         .find(|r| anchor::same_folder(&lane_dir.join(&r.path), target))
+}
+
+/// The `where.changed` this write has to carry, if any. A complete
+/// photograph of the lane's declared repositories, compared against the
+/// last one the lane wrote: a branch that differs, a detached sha that
+/// differs with no rebase under way, or a repository that appeared or
+/// vanished (§2.5). A new commit on the same branch is not a difference --
+/// the sha inside a branch is what the stops anchor (§4.4).
+fn where_to_write(tree: &Tree, lane: &str, lane_dir: &Path) -> Option<Body> {
+    let declared = &tree.lanes.get(lane)?.repos;
+    if declared.is_empty() {
+        return None;
+    }
+    let now: Vec<crate::event::WhereRepo> =
+        declared.iter().map(|r| snapshot_of(lane_dir, r)).collect();
+    let last = tree.wheres.iter().rfind(|w| w.lane == lane);
+    match last {
+        Some(w) if !moved(&w.repos, &now) => None,
+        _ => Some(Body::WhereChanged { repos: now }),
+    }
+}
+
+/// Whether two photographs say the lane is somewhere else. Compares what
+/// the lane is *on* -- the branch, the repository's presence, and the sha
+/// only where there is no branch to name and no rebase moving it.
+fn moved(before: &[crate::event::WhereRepo], now: &[crate::event::WhereRepo]) -> bool {
+    if before.len() != now.len() {
+        return true;
+    }
+    before.iter().zip(now).any(|(b, n)| {
+        b.path != n.path
+            || b.branch != n.branch
+            || b.missing != n.missing
+            || b.withheld != n.withheld
+            || (b.branch.is_none() && !n.rebasing && b.sha != n.sha)
+    })
+}
+
+/// One repository's line in the photograph, with the branch name run past
+/// the redaction guard. A name the guard refuses is withheld rather than
+/// refused: the pillar's "in doubt, refuse the write" was written for
+/// prose somebody can rephrase, and a branch name is not ours to rewrite.
+/// Withholding keeps both halves of it -- the secret stays out and the
+/// write goes through (`d600`).
+fn snapshot_of(lane_dir: &Path, r: &crate::event::Repo) -> crate::event::WhereRepo {
+    let mut out = crate::event::WhereRepo {
+        path: r.path.clone(),
+        ..Default::default()
+    };
+    match anchor::where_of(&lane_dir.join(&r.path)) {
+        anchor::Where::Missing => out.missing = true,
+        anchor::Where::Head(h) => {
+            out.sha = h.sha;
+            out.rebasing = h.rebasing;
+            match h.branch {
+                Some(b) if redact::check_field("branch", &b).is_some() => out.withheld = true,
+                b => out.branch = b,
+            }
+        }
+    }
+    out
 }
 
 /// Builds a vivac out of the stack as it stands right now.
@@ -2325,5 +2420,252 @@ mod tests {
         );
         ctx.unlock();
         std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    // -----------------------------------------------------------------
+    // `t594` tramo 4, task 3: when `where.changed` gets written (§9.1.4).
+    // -----------------------------------------------------------------
+
+    fn where_tmp(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("vivac-ops-where-{name}-{}", id::ulid()))
+    }
+
+    fn where_git(dir: &Path, args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    fn where_git_repo_with_one_commit(at: &Path) {
+        std::fs::create_dir_all(at).unwrap();
+        where_git(at, &["init", "-q"]);
+        where_git(at, &["config", "user.email", "t@example.com"]);
+        where_git(at, &["config", "user.name", "t"]);
+        std::fs::write(at.join("f.txt"), "x").unwrap();
+        where_git(at, &["add", "."]);
+        where_git(at, &["commit", "-q", "-m", "first"]);
+    }
+
+    fn where_head_sha(dir: &Path) -> String {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    /// A tree whose only lane declares one repository at `path`.
+    fn tree_with_repo(lane: &str, path: &str) -> Tree {
+        let mut tree = Tree::default();
+        tree.lanes.insert(
+            lane.to_string(),
+            crate::model::LaneState {
+                repos: vec![crate::event::Repo {
+                    path: path.to_string(),
+                    root: None,
+                }],
+                ..Default::default()
+            },
+        );
+        tree
+    }
+
+    fn push_where(tree: &mut Tree, seq: u64, lane: &str, repos: Vec<crate::event::WhereRepo>) {
+        tree.wheres.push(crate::model::Where {
+            seq,
+            lane: lane.to_string(),
+            repos,
+        });
+    }
+
+    #[test]
+    fn the_first_write_of_a_lane_with_repositories_always_carries_its_where() {
+        let t = where_tmp("first-write");
+        where_git_repo_with_one_commit(&t);
+        where_git(&t, &["checkout", "-q", "-b", "develop"]);
+        let tree = tree_with_repo("main", ".");
+
+        let Some(Body::WhereChanged { repos }) = where_to_write(&tree, "main", &t) else {
+            panic!("the first write of a lane with repositories must carry a where")
+        };
+
+        assert_eq!(repos[0].branch.as_deref(), Some("develop"));
+        std::fs::remove_dir_all(&t).ok();
+    }
+
+    #[test]
+    fn another_branch_writes_a_where() {
+        let t = where_tmp("another-branch");
+        where_git_repo_with_one_commit(&t);
+        where_git(&t, &["checkout", "-q", "-b", "feature"]);
+        let mut tree = tree_with_repo("main", ".");
+        push_where(
+            &mut tree,
+            1,
+            "main",
+            vec![crate::event::WhereRepo {
+                path: ".".into(),
+                branch: Some("develop".into()),
+                ..Default::default()
+            }],
+        );
+
+        assert!(matches!(
+            where_to_write(&tree, "main", &t),
+            Some(Body::WhereChanged { .. })
+        ));
+        std::fs::remove_dir_all(&t).ok();
+    }
+
+    #[test]
+    fn a_new_commit_on_the_same_branch_writes_nothing() {
+        // The sha inside a branch is what the stops anchor (§4.4). Writing a
+        // where per commit would put one event per commit in the log.
+        let t = where_tmp("same-branch");
+        where_git_repo_with_one_commit(&t);
+        where_git(&t, &["checkout", "-q", "-b", "develop"]);
+        let mut tree = tree_with_repo("main", ".");
+        push_where(
+            &mut tree,
+            1,
+            "main",
+            vec![crate::event::WhereRepo {
+                path: ".".into(),
+                branch: Some("develop".into()),
+                ..Default::default()
+            }],
+        );
+        std::fs::write(t.join("g.txt"), "y").unwrap();
+        where_git(&t, &["add", "."]);
+        where_git(&t, &["commit", "-q", "-m", "second"]);
+
+        assert!(where_to_write(&tree, "main", &t).is_none());
+        std::fs::remove_dir_all(&t).ok();
+    }
+
+    #[test]
+    fn a_rebase_in_progress_does_not_write_one_per_commit() {
+        let t = where_tmp("rebase-progress");
+        where_git_repo_with_one_commit(&t);
+        let gitdir = t.join(".git");
+        std::fs::create_dir_all(gitdir.join("rebase-merge")).unwrap();
+        std::fs::write(
+            gitdir.join("rebase-merge").join("head-name"),
+            "refs/heads/side\n",
+        )
+        .unwrap();
+        let mut tree = tree_with_repo("main", ".");
+        push_where(
+            &mut tree,
+            1,
+            "main",
+            vec![crate::event::WhereRepo {
+                path: ".".into(),
+                branch: Some("side".into()),
+                rebasing: true,
+                ..Default::default()
+            }],
+        );
+
+        assert!(where_to_write(&tree, "main", &t).is_none());
+        std::fs::remove_dir_all(&t).ok();
+    }
+
+    #[test]
+    fn a_different_detached_sha_writes_a_where() {
+        let t = where_tmp("detached-sha");
+        where_git_repo_with_one_commit(&t);
+        let head = where_head_sha(&t);
+        where_git(&t, &["checkout", "-q", &head]);
+        let mut tree = tree_with_repo("main", ".");
+        push_where(
+            &mut tree,
+            1,
+            "main",
+            vec![crate::event::WhereRepo {
+                path: ".".into(),
+                sha: Some("a".repeat(40)),
+                ..Default::default()
+            }],
+        );
+
+        let Some(Body::WhereChanged { repos }) = where_to_write(&tree, "main", &t) else {
+            panic!("a different detached sha must carry a where")
+        };
+
+        assert_eq!(repos[0].sha.as_deref(), Some(head.as_str()));
+        std::fs::remove_dir_all(&t).ok();
+    }
+
+    #[test]
+    fn a_repository_that_appeared_or_vanished_writes_a_where() {
+        let t = where_tmp("vanished");
+        std::fs::create_dir_all(&t).unwrap();
+        let mut tree = tree_with_repo("main", ".");
+        push_where(
+            &mut tree,
+            1,
+            "main",
+            vec![crate::event::WhereRepo {
+                path: ".".into(),
+                branch: Some("develop".into()),
+                ..Default::default()
+            }],
+        );
+
+        let Some(Body::WhereChanged { repos }) = where_to_write(&tree, "main", &t) else {
+            panic!("a repository that vanished must carry a where")
+        };
+
+        assert!(repos[0].missing);
+        std::fs::remove_dir_all(&t).ok();
+    }
+
+    #[test]
+    fn a_lane_with_no_declared_repositories_never_writes_one() {
+        // This is §2.6 itself: a tree where nobody ran `setup` has no
+        // declared repositories, so it keeps receiving exactly what 0.11
+        // wrote.
+        let t = where_tmp("no-repos");
+        where_git_repo_with_one_commit(&t);
+        let tree = Tree::default();
+
+        assert!(where_to_write(&tree, "main", &t).is_none());
+        std::fs::remove_dir_all(&t).ok();
+    }
+
+    #[test]
+    fn a_branch_name_the_guard_refuses_is_withheld_and_its_sha_kept() {
+        let t = where_tmp("withheld-branch");
+        where_git_repo_with_one_commit(&t);
+        let secret_branch = format!("ghp_{}", "a".repeat(30));
+        where_git(&t, &["checkout", "-q", "-b", &secret_branch]);
+        let tree = tree_with_repo("main", ".");
+
+        let Some(Body::WhereChanged { repos }) = where_to_write(&tree, "main", &t) else {
+            panic!("a branch the guard refuses still has to carry its sha")
+        };
+
+        assert!(
+            repos[0].withheld,
+            "a secret-looking branch name must be withheld"
+        );
+        assert!(
+            repos[0].branch.is_none(),
+            "a withheld name is not written down"
+        );
+        assert!(repos[0].sha.is_some(), "the sha survives (d600)");
+        std::fs::remove_dir_all(&t).ok();
     }
 }
