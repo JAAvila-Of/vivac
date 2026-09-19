@@ -397,6 +397,24 @@
     folded[a] = true;
   });
 
+  /* `dueno` has to find `dueño`, the same as the CLI's `find` (`f577`): a
+     tree written with two keyboards is one tree, and the two searches are
+     the same product wearing two faces. Same recipe as `fold` in
+     `render.rs` -- lower case first, then `.normalize("NFD")`, then strip
+     every mark in these five blocks. `web_script.rs` parses this line and
+     `is_diacritic` apart and refuses to let the two sets of ranges drift. */
+  var diacritics = /[\u0300-\u036f\u1ab0-\u1aff\u1dc0-\u1dff\u20d0-\u20ff\ufe20-\ufe2f]/g;
+  function unaccented(s) {
+    return s.toLowerCase().normalize("NFD").replace(diacritics, "");
+  }
+
+  /* Folded once per node rather than on every keystroke: the box reads one
+     of these per character typed, and the tree does not get smaller while
+     someone types. */
+  var haystacks = D.map(function (n) {
+    return unaccented(n.a + " " + n.t + " " + n.w);
+  });
+
   var find = document.getElementById("find");
   var hits = document.getElementById("hits");
   var found = [];
@@ -404,7 +422,7 @@
   var cursor = -1;
   if (find) {
     find.addEventListener("input", function () {
-      var v = find.value.trim().toLowerCase();
+      var v = unaccented(find.value.trim());
       eachRow(function (e) {
         e.classList.remove("hit");
       });
@@ -415,7 +433,7 @@
            looking; it is not a claim that the rest stopped existing, and a
            search that quietly skipped two hundred nodes said otherwise. */
         D.forEach(function (n, i) {
-          if ((n.a + " " + n.t + " " + n.w).toLowerCase().indexOf(v) >= 0) {
+          if (haystacks[i].indexOf(v) >= 0) {
             found.push(i);
             if (rows[i]) rows[i].classList.add("hit");
           }

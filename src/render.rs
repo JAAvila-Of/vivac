@@ -19,6 +19,8 @@ use crate::output::outln;
 use serde_json::json;
 use std::collections::HashMap;
 use std::path::Path;
+use unicode_normalization::char::canonical_combining_class;
+use unicode_normalization::UnicodeNormalization;
 
 pub(crate) const WIDTH: usize = 62;
 
@@ -1702,28 +1704,108 @@ fn searchable<'t>(a: &'t Tree, n: &Node) -> Vec<(&'static str, &'t str)> {
     fields
 }
 
+/// The five Unicode blocks of combining diacritical marks: what [`fold`]
+/// drops once `.nfd()` has split every precomposed letter into its base and
+/// its marks. `ñ` folds to `n` and `ç` folds to `c` this way. A mark from a
+/// script where it is not a diacritic -- a Hebrew point, a Devanagari matra
+/// -- carries meaning of its own rather than decorating a Latin letter, sits
+/// outside all five blocks, and stays.
+fn is_diacritic(c: char) -> bool {
+    matches!(c as u32,
+        0x0300..=0x036F
+            | 0x1AB0..=0x1AFF
+            | 0x1DC0..=0x1DFF
+            | 0x20D0..=0x20FF
+            | 0xFE20..=0xFE2F
+    )
+}
+
+/// Folds text so search stops caring about case or accent: `dueno` finds
+/// `dueño`, `arbol` finds `árbol`, and a decomposed `e` + acute finds a
+/// precomposed `é`.
+///
+/// Lower cases first -- `İ` (U+0130) lower cases to `i` followed by a
+/// combining dot above, and that dot has to fall out with the rest of the
+/// marks, not survive as a leftover -- then decomposes canonically and drops
+/// every [`is_diacritic`] mark. `terms_of` and `hits_for` fold the query and
+/// the fields it searches through this one function, so the two sides of a
+/// `contains` check can never fold differently.
+///
+/// [`fold_with_origin`] is the same recipe with a map back to the original
+/// text alongside it, for `snippet`, which needs to point at a byte of this
+/// output and say which character of the source it came from.
+pub(crate) fn fold(text: &str) -> String {
+    text.chars()
+        .flat_map(char::to_lowercase)
+        .collect::<String>()
+        .nfd()
+        .filter(|c| !is_diacritic(*c))
+        .collect()
+}
+
+/// [`fold`], plus a map from each byte of the folded string to the char
+/// index of `text` it descends from.
+///
+/// Not built by decomposing one character at a time: NFD's canonical
+/// reordering can move a mark past another mark, but only within the run it
+/// belongs to, and that run is anchored by the nearest starter before it (a
+/// character of combining class zero) -- never further back and never past
+/// the next one. Decomposing a character in isolation cannot reorder it
+/// against its neighbours at all, so the two can disagree the moment a
+/// source already carries two marks in a non-canonical order. Segmenting the
+/// lower-cased text at each starter first, and folding one segment at a
+/// time, reorders exactly the characters whole-string NFD would have
+/// reordered, because canonical reordering never crosses a starter either.
+/// A leading run of marks with no starter before it -- text that opens on a
+/// combining character -- is a run with nothing to anchor it and is folded
+/// as its own segment, the same as `.nfd()` on the whole string would treat
+/// it.
+pub(crate) fn fold_with_origin(text: &str) -> (String, Vec<usize>) {
+    // `text`, lower cased, each output char paired with the index of the
+    // `text` char it came from. Lower casing one char can produce more than
+    // one output char -- `İ` becomes two -- and both share that char's index.
+    let lowered: Vec<(char, usize)> = text
+        .chars()
+        .enumerate()
+        .flat_map(|(i, c)| c.to_lowercase().map(move |lc| (lc, i)))
+        .collect();
+
+    let mut folded = String::with_capacity(text.len());
+    let mut origin: Vec<usize> = Vec::with_capacity(text.len());
+    let mut start = 0;
+    while start < lowered.len() {
+        let mut end = start + 1;
+        while end < lowered.len() && canonical_combining_class(lowered[end].0) != 0 {
+            end += 1;
+        }
+        let segment: String = lowered[start..end].iter().map(|(c, _)| *c).collect();
+        let segment_origin = lowered[start].1;
+        for c in segment.nfd() {
+            if !is_diacritic(c) {
+                for _ in 0..c.len_utf8() {
+                    origin.push(segment_origin);
+                }
+                folded.push(c);
+            }
+        }
+        start = end;
+    }
+    (folded, origin)
+}
+
 /// A window of `width` characters around the first term that hit.
 ///
-/// The offsets come out of the lowercased copy, and lowercasing can change
-/// how many bytes --and even how many characters-- a string takes, so the
-/// map back to the original is built while lowercasing rather than assumed.
-/// A snippet that lands two characters off is not a defect worth a wrong
-/// answer.
+/// The offsets come out of the folded copy `fold_with_origin` builds, and
+/// folding can change how many bytes --and even how many characters-- a
+/// string takes, so the map back to the original travels with it rather
+/// than being assumed. A snippet that lands two characters off is not a
+/// defect worth a wrong answer.
 fn snippet(text: &str, terms: &[String], width: usize) -> String {
     let chars: Vec<char> = text.chars().collect();
     if chars.len() <= width {
         return text.split_whitespace().collect::<Vec<_>>().join(" ");
     }
-    let mut lower = String::with_capacity(text.len());
-    let mut origin: Vec<usize> = Vec::with_capacity(text.len());
-    for (i, c) in chars.iter().enumerate() {
-        for lowered_char in c.to_lowercase() {
-            for _ in 0..lowered_char.len_utf8() {
-                origin.push(i);
-            }
-            lower.push(lowered_char);
-        }
-    }
+    let (lower, origin) = fold_with_origin(text);
     let at = terms
         .iter()
         .filter_map(|t| lower.find(t.as_str()))
@@ -1761,7 +1843,7 @@ fn snippet(text: &str, terms: &[String], width: usize) -> String {
 /// `d362` orders by what a hit is about first, by how much tree it holds up
 /// second, and by recency only as the last tiebreak.
 fn terms_of(query: &str) -> Result<Vec<String>, Failure> {
-    let terms: Vec<String> = query.split_whitespace().map(|t| t.to_lowercase()).collect();
+    let terms: Vec<String> = query.split_whitespace().map(fold).collect();
     if terms.is_empty() {
         return Err(Failure::usage("usage: vivac find \"<text>\"".to_string()));
     }
@@ -1817,7 +1899,7 @@ fn hits_for<'t>(
         let lowered: Vec<(&'static str, String)> = searchable(a, n)
             .iter()
             .filter(|(_, v)| !v.is_empty())
-            .map(|(k, v)| (*k, v.to_lowercase()))
+            .map(|(k, v)| (*k, fold(v)))
             .collect();
         if !terms
             .iter()
@@ -2106,4 +2188,63 @@ pub fn find_everywhere(a: &Args) -> R {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod fold_tests {
+    use super::{fold, fold_with_origin};
+
+    #[test]
+    fn folds_spanish_diacritics_away() {
+        assert_eq!(fold("dueño"), fold("dueno"));
+        assert_eq!(fold("árbol"), fold("arbol"));
+        assert_eq!(fold("ÁRBOL"), fold("arbol"));
+    }
+
+    #[test]
+    fn folds_decomposed_and_precomposed_the_same_way() {
+        let decomposed = "e\u{0301}"; // e + combining acute accent
+        assert_eq!(fold(decomposed), fold("é"));
+    }
+
+    #[test]
+    fn a_lower_cased_combining_mark_still_drops() {
+        // U+0130, LATIN CAPITAL LETTER I WITH DOT ABOVE, lower cases to
+        // `i` followed by U+0307, COMBINING DOT ABOVE.
+        assert_eq!(fold("\u{0130}"), fold("i"));
+    }
+
+    /// A fixed, varied corpus: Spanish and French accents, Vietnamese with
+    /// stacked marks, Hebrew points, Devanagari, a string with its marks in
+    /// non-canonical order, a string that opens on a combining mark, an
+    /// emoji and CJK. For each one, [`fold_with_origin`]'s folded half has
+    /// to equal [`fold`] on the same text, and every entry in its map has to
+    /// name a real char index of the source.
+    #[test]
+    fn the_mapped_fold_agrees_with_the_plain_one() {
+        let cases = [
+            "dueño",
+            "café",
+            "garçon",
+            "\u{1ec7}", // Vietnamese ệ, e with circumflex and dot below
+            "Vi\u{1ec7}t Nam",
+            "\u{5e9}\u{5b8}\u{5dc}\u{5d5}\u{5b9}\u{5dd}", // Hebrew, with points
+            "\u{928}\u{940}\u{932}",                      // Devanagari
+            "e\u{0323}\u{0301}", // e, dot below, then acute: reversed order
+            "\u{0301}bc",        // opens on a combining acute
+            "🌳 tree",
+            "\u{6a39}\u{6728}", // CJK: tree, wood
+        ];
+        for text in cases {
+            let (mapped, origin) = fold_with_origin(text);
+            assert_eq!(mapped, fold(text), "mismatch folding {text:?}");
+            let char_count = text.chars().count();
+            for (byte, idx) in origin.iter().enumerate() {
+                assert!(
+                    *idx < char_count,
+                    "byte {byte} of {text:?} maps to char index {idx}, past its {char_count} chars"
+                );
+            }
+        }
+    }
 }

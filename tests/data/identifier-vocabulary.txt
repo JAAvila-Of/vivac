@@ -6,6 +6,9 @@ above
 abs
 absent
 absolute
+accent
+accented
+accents
 accepts
 access
 accessor
@@ -212,6 +215,7 @@ candidate
 candidates
 cannot
 canon
+canonical
 canonicalize
 cap
 capacity
@@ -224,10 +228,13 @@ carrying
 cascade
 cascaded
 case
+cased
+cases
 categories
 cause
 ceil
 cell
+centres
 cfg
 chain
 chains
@@ -287,6 +294,7 @@ collections
 colon
 colour
 column
+combining
 come
 comes
 command
@@ -383,6 +391,7 @@ declare
 declared
 declares
 decoded
+decomposed
 dedup
 deep
 deepest
@@ -415,6 +424,8 @@ detect
 detected
 determinism
 deterministic
+diacritic
+diacritics
 did
 died
 diff
@@ -425,6 +436,7 @@ differently
 differs
 diffing
 digit
+digits
 dir
 direct
 directly
@@ -815,7 +827,9 @@ late
 later
 latest
 launched
+lc
 le
+lead
 leaf
 leap
 learn
@@ -874,6 +888,7 @@ loose
 lose
 lossy
 lost
+low
 lower
 lowercase
 lowered
@@ -889,6 +904,7 @@ mandatory
 manual
 many
 map
+mapped
 mark
 marked
 marker
@@ -966,6 +982,7 @@ new
 newer
 newline
 next
+nfd
 no
 nobody
 node
@@ -975,6 +992,7 @@ none
 nonexistent
 nonzero
 nor
+normalization
 normalize
 normalized
 normalizes
@@ -1142,6 +1160,7 @@ positional
 positionals
 power
 precision
+precomposed
 prefix
 prefixes
 present
@@ -1202,6 +1221,7 @@ raised
 ralias
 rand
 random
+ranges
 rank
 rather
 raw
@@ -1355,6 +1375,7 @@ row
 rows
 rpc
 rposition
+rs
 rsplit
 rule
 ruler
@@ -1362,6 +1383,7 @@ rules
 run
 running
 runs
+rust
 sa
 safe
 said
@@ -1649,6 +1671,7 @@ trace
 track
 tracked
 tracks
+trail
 trailing
 trait
 transcript
@@ -1698,6 +1721,7 @@ undoable
 undone
 unfold
 ungoverned
+unicode
 union
 unique
 unit
