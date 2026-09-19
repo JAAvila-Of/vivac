@@ -68,13 +68,16 @@ const MAGIC: u64 = u64::from_le_bytes(*b"vivacIDX");
 // (`t594` task 4). Version 10 adds the two BRANCH MOVED candidate tables,
 // `Tree.own_focus` and `Tree.other_focus` (`t594` task 6, §2.7). Version 11
 // widens each lane record with `seq_wrote`, the seq of the last event that
-// lane wrote of any kind (`t594` tramo 5 task 2): a record this shape read
-// under an earlier version would misparse silently, which is exactly what
-// a version bump exists to refuse instead. `Header::parse` refuses any
-// version but this one and `try_load_index` falls back to folding the log,
-// which is what the index is derived from -- so bumping this needs no
-// migration and no command.
-const FORMAT_VERSION: u32 = 11;
+// lane wrote of any kind (`t594` tramo 5 task 2). Version 12 widens each
+// node record with `born_seq` and `born_lane`, the `seq` and the lane of
+// its own `node.created` -- what `why`'s "born in lane" line used to get by
+// folding the whole log on every call, `--full` or not (`t594` tramo 7): a
+// record this shape read under an earlier version would misparse silently,
+// which is exactly what a version bump exists to refuse instead.
+// `Header::parse` refuses any version but this one and `try_load_index`
+// falls back to folding the log, which is what the index is derived from --
+// so bumping this needs no migration and no command.
+const FORMAT_VERSION: u32 = 12;
 const ULID_LEN: usize = 26;
 const SPAN_LEN: usize = 8;
 const FLAG_RECORD_LEN: usize = 1 + SPAN_LEN;
@@ -95,6 +98,8 @@ const NODE_RECORD_LEN: usize = ULID_LEN
     + 8
     + 1
     + 1
+    + 8 // born_seq
+    + SPAN_LEN // born_lane
     + SPAN_LEN * 4
     + 1
     + SPAN_LEN
@@ -974,6 +979,8 @@ struct NodeRaw {
     parent: Option<u64>,
     blocks: bool,
     forced_close: bool,
+    born_seq: u64,
+    born_lane: Span,
     title: Span,
     why: Span,
     outcome: Span,
@@ -1013,6 +1020,8 @@ fn write_node_record(
     write_u64(buf, n.parent.unwrap_or(u64::MAX));
     write_bool(buf, n.blocks);
     write_bool(buf, n.forced_close);
+    write_u64(buf, n.born_seq);
+    write_span(buf, n.born_lane);
     write_span(buf, n.title);
     write_span(buf, n.why);
     write_span(buf, n.outcome);
@@ -1088,6 +1097,8 @@ fn read_node_record(c: &mut Cursor) -> Option<NodeRaw> {
     let parent = (parent_raw != u64::MAX).then_some(parent_raw);
     let blocks = c.bool_()?;
     let forced_close = c.bool_()?;
+    let born_seq = c.u64()?;
+    let born_lane = c.span()?;
     let title = c.span()?;
     let why = c.span()?;
     let outcome = c.span()?;
@@ -1114,6 +1125,8 @@ fn read_node_record(c: &mut Cursor) -> Option<NodeRaw> {
         parent,
         blocks,
         forced_close,
+        born_seq,
+        born_lane,
         title,
         why,
         outcome,
@@ -1178,6 +1191,8 @@ fn assemble_nodes(
             arms,
             against,
             against_recorded: r.against_recorded,
+            born_seq: r.born_seq,
+            born_lane: r.born_lane,
         });
     }
     Some(out)
@@ -2049,6 +2064,7 @@ mod tests {
         for n in tree.nodes_sorted() {
             out.push_str(&format!(
                 "node num={} id={} kind={:?} state={:?} parent={:?} blocks={} forced={} \
+                 born_seq={} born_lane={:?} \
                  title={:?} why={:?} note={:?} outcome={:?} opened={:?} closed={:?} \
                  refs={:?} governs={:?} flags={:?} arms={:?} against={:?} \
                  against_recorded={}\n",
@@ -2059,6 +2075,8 @@ mod tests {
                 n.parent,
                 n.blocks,
                 n.forced_close,
+                n.born_seq,
+                n.born_lane(tree),
                 n.title(tree),
                 n.why(tree),
                 n.note(tree),
@@ -2365,6 +2383,44 @@ mod tests {
         // Purely from the index this time, with no tail to apply -- the
         // check that this really came off disk and not off the fallback
         // fold, `LOADING.md` §4.
+        let loaded_again = load(&store, false).expect("load should succeed");
+        assert_eq!(snapshot(&fresh), snapshot(&loaded_again));
+
+        std::fs::remove_dir_all(&store.root).ok();
+    }
+
+    /// `t594` tramo 7: `born_seq` and `born_lane` are new to the node
+    /// record, and a round trip that only compared the fields that already
+    /// existed would pass even if `write_node_record`/`read_node_record`
+    /// dropped both -- `f278`'s own shape.
+    #[test]
+    fn a_nodes_birth_seq_and_lane_survive_the_round_trip() {
+        let a_node = fixed_id(1);
+        let b_node = fixed_id(2);
+        let events = vec![
+            created(1, &a_node, 1, Kind::Goal, None, "A's root", vec![], vec![]),
+            on_lane(
+                created(2, &b_node, 2, Kind::Task, None, "B's own", vec![], vec![]),
+                "b",
+            ),
+        ];
+        let fresh = fold(&events, 0);
+        assert_eq!(fresh.node(&a_node).unwrap().born_seq, 1);
+        assert_eq!(fresh.node(&a_node).unwrap().born_lane(&fresh), "main");
+        assert_eq!(fresh.node(&b_node).unwrap().born_seq, 2);
+        assert_eq!(fresh.node(&b_node).unwrap().born_lane(&fresh), "b");
+
+        let store = tmp_store("birth-seq-lane-roundtrip");
+        write_raw_locked(&store, &events);
+
+        let loaded = load(&store, true).expect("load should succeed");
+        assert_eq!(loaded.node(&a_node).unwrap().born_seq, 1);
+        assert_eq!(loaded.node(&a_node).unwrap().born_lane(&loaded), "main");
+        assert_eq!(loaded.node(&b_node).unwrap().born_seq, 2);
+        assert_eq!(loaded.node(&b_node).unwrap().born_lane(&loaded), "b");
+        assert_eq!(snapshot(&fresh), snapshot(&loaded));
+
+        // Purely from the index this time, with no tail to apply.
         let loaded_again = load(&store, false).expect("load should succeed");
         assert_eq!(snapshot(&fresh), snapshot(&loaded_again));
 
