@@ -348,7 +348,9 @@ file, and it cannot say which thread that file belongs to.
 `find` is the other half of reading. It returns every node whose title, reason,
 note or outcome holds all of the words, best first, each with the lineage it
 hangs from. Closed nodes are included on purpose: what you go looking for
-months later is usually finished.
+months later is usually finished. Neither case nor accents count: `arbol`
+finds `árbol` and `dueño` finds `dueno`, because a tree written from two
+keyboards holds both, and a search that split them would answer with half.
 
 **Ranking is not recency**, and the difference is the whole point. Newest-first
 answers "what was I just doing"; a search answers "where was this decided", and
