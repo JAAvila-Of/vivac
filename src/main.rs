@@ -140,9 +140,10 @@ const USAGE: &str = r#"vivac - provenance of work
                                               folder's repositories already
                                               belong to a tracked product
     vivac relocate <destination> [--lane-name <name>]
-                                              move the tree there; this folder
-                                              stays one of its lanes, with its
-                                              own thread
+                                              move the tree there, run from the
+                                              folder that holds it; this one
+                                              stays a lane of it, with its own
+                                              thread
     vivac init                                plant .vivac/ here
     vivac import <tree.json>                  bring in a tree from the spike
 
