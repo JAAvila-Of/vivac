@@ -42,9 +42,9 @@ pub fn dispatch(cwd: &Path, a: &Args) -> Result<i32, Failure> {
     // plant branch and gave a second tree to someone who asked to join one.
     if a.has("join") && a.opt("join").is_none() {
         return Err(Failure::usage(
-            "--join needs the project to join, and nothing followed it -- with \
-             nothing after it, setup would have planted a second tree instead of \
-             joining the one you meant.\n\n  \
+            "--join needs the project to join, and nothing followed it. Without \
+             that word setup plants instead of joining, which is a second tree \
+             for a product that already has one.\n\n  \
              vivac setup claude-code --join <project>",
         ));
     }

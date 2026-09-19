@@ -43,6 +43,7 @@ pub(crate) const SWITCHES: &[&str] = &[
     "dry-run",
     "undo",
     "new-tree",
+    "lanes",
 ];
 
 #[derive(Debug, Default)]
@@ -251,6 +252,20 @@ mod tests {
         assert!(a.has("new-tree"));
         assert_eq!(a.opt("new-tree"), None);
         assert_eq!(a.positional(0), Some("claude-code"));
+    }
+
+    /// `--lanes` is the third of the same family, and the only one of the
+    /// three that could be got wrong without a second word on the line:
+    /// `stack` takes no positional for it to eat, but off the list it
+    /// accepted `--lanes=anything` in silence instead of saying the flag
+    /// takes no value.
+    #[test]
+    fn lanes_takes_no_value_and_says_so() {
+        let a = p("--lanes");
+        assert!(a.has("lanes"));
+        assert_eq!(a.opt("lanes"), None);
+        let refused = Args::parse("--lanes=1".split(' ').map(str::to_string));
+        assert!(refused.is_err(), "--lanes=1 has to be a usage error");
     }
 
     /// The same word cannot be a switch for one command and a value-carrying
