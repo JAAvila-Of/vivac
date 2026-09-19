@@ -1733,18 +1733,24 @@ fn is_diacritic(c: char) -> bool {
 ///
 /// [`fold_with_origin`] is the same recipe with a map back to the original
 /// text alongside it, for `snippet`, which needs to point at a byte of this
-/// output and say which character of the source it came from.
+/// output and say which character of the source it came from. Both are
+/// [`fold_into`], so they cannot disagree either.
 pub(crate) fn fold(text: &str) -> String {
-    text.chars()
-        .flat_map(char::to_lowercase)
-        .collect::<String>()
-        .nfd()
-        .filter(|c| !is_diacritic(*c))
-        .collect()
+    let mut folded = String::with_capacity(text.len());
+    fold_into(text, &mut folded, None);
+    folded
 }
 
 /// [`fold`], plus a map from each byte of the folded string to the char
 /// index of `text` it descends from.
+pub(crate) fn fold_with_origin(text: &str) -> (String, Vec<usize>) {
+    let mut folded = String::with_capacity(text.len());
+    let mut origin = Vec::with_capacity(text.len());
+    fold_into(text, &mut folded, Some(&mut origin));
+    (folded, origin)
+}
+
+/// The one implementation of [`fold`], one segment at a time.
 ///
 /// Not built by decomposing one character at a time: NFD's canonical
 /// reordering can move a mark past another mark, but only within the run it
@@ -1760,37 +1766,87 @@ pub(crate) fn fold(text: &str) -> String {
 /// combining character -- is a run with nothing to anchor it and is folded
 /// as its own segment, the same as `.nfd()` on the whole string would treat
 /// it.
-pub(crate) fn fold_with_origin(text: &str) -> (String, Vec<usize>) {
-    // `text`, lower cased, each output char paired with the index of the
-    // `text` char it came from. Lower casing one char can produce more than
-    // one output char -- `İ` becomes two -- and both share that char's index.
-    let lowered: Vec<(char, usize)> = text
-        .chars()
-        .enumerate()
-        .flat_map(|(i, c)| c.to_lowercase().map(move |lc| (lc, i)))
-        .collect();
-
-    let mut folded = String::with_capacity(text.len());
-    let mut origin: Vec<usize> = Vec::with_capacity(text.len());
-    let mut start = 0;
-    while start < lowered.len() {
-        let mut end = start + 1;
-        while end < lowered.len() && canonical_combining_class(lowered[end].0) != 0 {
-            end += 1;
-        }
-        let segment: String = lowered[start..end].iter().map(|(c, _)| *c).collect();
-        let segment_origin = lowered[start].1;
-        for c in segment.nfd() {
-            if !is_diacritic(c) {
-                for _ in 0..c.len_utf8() {
-                    origin.push(segment_origin);
-                }
-                folded.push(c);
+///
+/// Segments are also what makes this cheap, because most of what a tree
+/// holds is ASCII. An ASCII character is a starter that decomposes to
+/// itself, so a run of them is copied and lower cased in one go, the way
+/// `str::to_lowercase` treats it, and only what is not ASCII is segmented
+/// and pays for the tables. A mark that follows a run of ASCII opens a
+/// segment of its own: the letter before it is never reordered, so the
+/// marks after it reorder among themselves exactly as they would with it.
+/// Measured on 10 000 nodes, sending every character through the tables
+/// made `find` over MCP five times slower than lower casing had been, and
+/// a loop that still went one character at a time left it twice as slow.
+fn fold_into(text: &str, folded: &mut String, mut origin: Option<&mut Vec<usize>>) {
+    let mut segment = String::new();
+    let mut segment_at = 0;
+    // The char index of `rest`'s first char in `text`.
+    let mut at = 0;
+    let mut rest = text;
+    while !rest.is_empty() {
+        let ascii = rest
+            .bytes()
+            .position(|b| !b.is_ascii())
+            .unwrap_or(rest.len());
+        if ascii > 0 {
+            if !segment.is_empty() {
+                fold_segment(&segment, segment_at, folded, origin.as_deref_mut());
+                segment.clear();
             }
+            let (run, tail) = rest.split_at(ascii);
+            let start = folded.len();
+            folded.push_str(run);
+            folded[start..].make_ascii_lowercase();
+            if let Some(origin) = origin.as_deref_mut() {
+                origin.extend(at..at + ascii);
+            }
+            at += ascii;
+            rest = tail;
+            continue;
         }
-        start = end;
+        let c = rest.chars().next().expect("rest is not empty");
+        // Lower casing one char can produce more than one -- `İ` becomes
+        // two -- and both descend from that char's index.
+        for lc in c.to_lowercase() {
+            if canonical_combining_class(lc) == 0 && !segment.is_empty() {
+                fold_segment(&segment, segment_at, folded, origin.as_deref_mut());
+                segment.clear();
+            }
+            if segment.is_empty() {
+                segment_at = at;
+            }
+            segment.push(lc);
+        }
+        at += 1;
+        rest = &rest[c.len_utf8()..];
     }
-    (folded, origin)
+    if !segment.is_empty() {
+        fold_segment(&segment, segment_at, folded, origin);
+    }
+}
+
+/// One segment of [`fold_into`], every byte it emits mapped to `at`.
+fn fold_segment(
+    segment: &str,
+    at: usize,
+    folded: &mut String,
+    mut origin: Option<&mut Vec<usize>>,
+) {
+    // One byte is one ASCII character, already lower cased, and NFD leaves
+    // it as it is: the KELVIN SIGN, say, which lower cases to `k`.
+    if segment.len() == 1 {
+        folded.push_str(segment);
+        if let Some(origin) = origin {
+            origin.push(at);
+        }
+        return;
+    }
+    for c in segment.nfd().filter(|c| !is_diacritic(*c)) {
+        if let Some(origin) = origin.as_deref_mut() {
+            origin.extend(std::iter::repeat_n(at, c.len_utf8()));
+        }
+        folded.push(c);
+    }
 }
 
 /// A window of `width` characters around the first term that hit.
@@ -2193,6 +2249,7 @@ pub fn find_everywhere(a: &Args) -> R {
 #[cfg(test)]
 mod fold_tests {
     use super::{fold, fold_with_origin};
+    use unicode_normalization::UnicodeNormalization;
 
     #[test]
     fn folds_spanish_diacritics_away() {
@@ -2214,14 +2271,29 @@ mod fold_tests {
         assert_eq!(fold("\u{0130}"), fold("i"));
     }
 
+    /// What [`fold`] has to equal, written the plain way: lower case the
+    /// whole text, run the whole of it through NFD, drop the marks. Slower,
+    /// and independent of the segmenting [`super::fold_into`] does, which is
+    /// the point: a test that compared the two public functions would be
+    /// comparing one implementation with itself.
+    fn reference(text: &str) -> String {
+        text.chars()
+            .flat_map(char::to_lowercase)
+            .collect::<String>()
+            .nfd()
+            .filter(|c| !super::is_diacritic(*c))
+            .collect()
+    }
+
     /// A fixed, varied corpus: Spanish and French accents, Vietnamese with
-    /// stacked marks, Hebrew points, Devanagari, a string with its marks in
-    /// non-canonical order, a string that opens on a combining mark, an
-    /// emoji and CJK. For each one, [`fold_with_origin`]'s folded half has
-    /// to equal [`fold`] on the same text, and every entry in its map has to
-    /// name a real char index of the source.
+    /// stacked marks, Hebrew points, Devanagari, marks in non-canonical
+    /// order, a string that opens on a combining mark, an emoji and CJK.
+    /// For each one, both [`fold`] and the folded half of
+    /// [`fold_with_origin`] have to equal [`reference`], the map has to hold
+    /// one entry per byte, and every entry has to name a real char index of
+    /// the source.
     #[test]
-    fn the_mapped_fold_agrees_with_the_plain_one() {
+    fn the_fold_agrees_with_whole_string_nfd() {
         let cases = [
             "dueño",
             "café",
@@ -2230,14 +2302,29 @@ mod fold_tests {
             "Vi\u{1ec7}t Nam",
             "\u{5e9}\u{5b8}\u{5dc}\u{5d5}\u{5b9}\u{5dd}", // Hebrew, with points
             "\u{928}\u{940}\u{932}",                      // Devanagari
-            "e\u{0323}\u{0301}", // e, dot below, then acute: reversed order
-            "\u{0301}bc",        // opens on a combining acute
+            "e\u{0301}\u{0323}", // acute (230) before dot below (220): not canonical
+            // Shin, dagesh (21), qamats (18): marks that stay, in an order
+            // NFD has to swap.
+            "\u{5e9}\u{5bc}\u{5b8}",
+            "\u{0301}bc", // opens on a combining acute
+            // ASCII, then marks that stay, out of canonical order: the run
+            // of ASCII is copied whole and the marks open their own segment.
+            "sha\u{5bc}\u{5b8}lom",
+            "Ab\u{0301}\u{0323}C \u{212a}elvin", // stacked marks after ASCII; KELVIN SIGN
+            "ÁRBOL \u{0130}stanbul",
             "🌳 tree",
             "\u{6a39}\u{6728}", // CJK: tree, wood
         ];
         for text in cases {
+            let expected = reference(text);
+            assert_eq!(fold(text), expected, "fold disagrees on {text:?}");
             let (mapped, origin) = fold_with_origin(text);
-            assert_eq!(mapped, fold(text), "mismatch folding {text:?}");
+            assert_eq!(mapped, expected, "fold_with_origin disagrees on {text:?}");
+            assert_eq!(
+                origin.len(),
+                mapped.len(),
+                "one origin per byte of {text:?}"
+            );
             let char_count = text.chars().count();
             for (byte, idx) in origin.iter().enumerate() {
                 assert!(
