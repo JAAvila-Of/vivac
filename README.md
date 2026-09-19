@@ -392,68 +392,86 @@ carries what does not depend on one: the invariants, the standing decisions,
 what is parked and the last stop, with a real node to pick up rather than a
 placeholder.
 
-Measured at ten thousand nodes, 200 calls per cell, p50 / p99 in milliseconds,
-on a tree with its derived index in place — which is what a tree has after the
-first read of it. The CLI columns start a fresh process every time and include
-what that costs; the MCP columns are a resident server, which is how an agent
-calls.
+Measured on 18 September 2026 at ten thousand nodes, 200 calls per cell, p50 /
+p99 in milliseconds, on a tree with its derived index in place — which is what
+a tree has after the first read of it. The CLI columns start a fresh process
+every time and include what that costs; the MCP columns are a resident server,
+which is how an agent calls. Each run is kept beside the numbers it produced,
+with the machine it came off.
 
-**And it is measured twice, because a number was hiding a variable.** What
-`brief`, `open` and `tree` cost is governed less by how many nodes a tree holds
-than by how many of them are still open, and the shape of the tree is the one
-parameter these numbers never named. Both shapes are the same ten thousand
-nodes; what separates them is 170 open fronts against 3,570, and it is that
-count, not a share of the tree, that these three pay for:
+**It is measured four times over, because two things were each hiding behind
+one number.** The first is the shape of the tree: what `brief`, `open` and
+`tree` cost is governed less by how many nodes a tree holds than by how many
+are still open, so each table below is the same ten thousand nodes with 134
+open fronts against 3,023. The second is the machine, which the table this
+replaces never named at all.
 
-| | CLI, 170 open | CLI, 3570 open | MCP, 170 open | MCP, 3570 open |
+**Linux**, a container built on `rust:1.89-bookworm`, twelve cores, kernel
+5.15 under WSL2 — not bare metal, and slower than the runner CI uses:
+
+| | CLI, 134 open | CLI, 3023 open | MCP, 134 open | MCP, 3023 open |
 |---|---|---|---|---|
-| `brief` | 18.1 / 28.3 | 18.9 / 29.3 | 0.2 / 0.3 | 1.8 / 2.8 |
-| `why` | 20.7 / 30.0 | 20.0 / 30.5 | 2.9 / 4.2 | 2.9 / 4.2 |
-| `open` | 20.1 / 30.5 | 20.6 / 31.2 | 4.4 / 6.0 | 27.4 / 38.4 |
-| `find` | 23.2 / 35.1 | 22.6 / 33.7 | 6.6 / 13.8 | 6.6 / 8.3 |
-| `tree` | 21.0 / 40.1 | 25.6 / 36.3 | not a tool | not a tool |
+| `brief` | 11.7 / 15.5 | 14.6 / 19.0 | 0.3 / 0.5 | 3.6 / 5.3 |
+| `why` | 15.2 / 18.8 | 14.3 / 17.3 | 6.0 / 7.1 | 3.9 / 5.2 |
+| `open` | 15.7 / 20.4 | 14.9 / 20.1 | 3.2 / 4.2 | 20.3 / 23.1 |
+| `find` | 17.5 / 19.9 | 16.8 / 18.9 | 6.2 / 8.8 | 5.8 / 7.0 |
+| `tree` | 15.7 / 22.9 | 18.9 / 22.1 | not a tool | not a tool |
 
-Read `why` against `open` on the MCP columns and the variable stands on its
-own: `why` costs 2.9 ms in either shape, because a lineage is bounded by depth,
-while `open` goes from 4.4 to 27.4 out of the same ten thousand nodes.
+**Windows 11**, same trees, same sources, a working machine with a browser on
+it that would not close:
 
-**Nothing here misses the 50 ms the performance pillar gives a read, and the
-table this replaces said two of them did.** Those numbers came off a fixture
-whose generator exists nowhere any more, so the miss cannot be re-run,
-compared, or checked — which is the charge that table was already published
-under, one level down: it named the shape it was taken on and could not hand
-anybody the tree. This bench is kept, and one of the things it now refuses to
-do is measure a binary that finished linking moments ago, because the run that
-claimed the miss was taken seconds after two compilations and every row of it
-came out high, including the rows whose code had not moved.
+| | CLI, 134 open | CLI, 3023 open | MCP, 134 open | MCP, 3023 open |
+|---|---|---|---|---|
+| `brief` | 17.9 / 46.7 | 20.9 / 52.7 | 0.5 / 0.7 | 3.1 / 4.6 |
+| `why` | 19.9 / 48.5 | 20.4 / 49.8 | 6.3 / 7.7 | 4.6 / 5.8 |
+| `open` | 20.1 / 49.2 | 22.1 / 52.3 | 3.3 / 4.2 | 22.1 / 27.1 |
+| `find` | 23.9 / 52.8 | 24.3 / 55.9 | 7.0 / 9.6 | 6.9 / 8.1 |
+| `tree` | 20.8 / 49.7 | 26.0 / 57.0 | not a tool | not a tool |
+
+Read `why` against `open` on the MCP columns and the first variable stands on
+its own: `why` barely moves between the two shapes, because a lineage is
+bounded by depth, while `open` goes from 3.2 to 20.3 ms out of the same ten
+thousand nodes.
+
+**Linux meets the 50 ms a read is given, tail included. Windows does not, and
+what misses is worth naming.** Every CLI row there has about the same p99, near
+50, while the medians sit between 18 and 26. A tail that is the same across
+five commands whose medians differ is not the tree's — it is what starting a
+process costs on that machine, and it measured 44 to 48 ms there before any of
+this work. An agent does not pay it: the MCP column is the same tree read
+through a server that is already running.
 
 The tree this project keeps of itself is 38% open. Whether a tree stays that
 open on the way to ten thousand nodes is still not measured, and saying so
 costs less than assuming it either way.
 
-A write is p99 0.6 ms at that size over MCP, and it does not grow with the
-tree: the server appends against the tree it is already holding. That figure is
-from the run this table replaces, and it stands because the write path never
-touches the count above.
+**A write does not grow with the tree** — the server appends against the tree
+it is already holding — but it does grow with how many repositories a lane
+declares, because each write reads one `HEAD` per repository inside the lock.
+The same day and the same two machines, two writers arriving at a realistic
+rate, p99 in milliseconds for zero, one, five and ten repositories:
 
-**The CLI column used to read worse, and the tool was not.** The fixture those
-numbers came from could never keep a derived index. The index is only written
-when every id in the log has the shape a real one has, and the generator that
-built the fixture emitted short ones, so the write declined every time and said
-nothing about declining. Every call folded the whole log -- the cold path, which
-a real tree takes once and then stops taking.
+| | 0 | 1 | 5 | 10 |
+|---|---|---|---|---|
+| Linux | 3.9 | 4.0 | 5.2 | 4.3 |
+| Windows | 9.2 | 9.4 | 11.4 | 14.6 |
 
-Side by side on one machine, one tree, one size, with nothing different but
-whether the index could be kept: `tree` came back 50.7 / 62.8 without it and
-22.4 / 29.4 with it. `why` came back 50.5 / 95.3 against 17.5 / 23.5.
+**The 5 ms a write is given is met on Linux and missed on Windows**, and the
+shape of the miss says where it comes from: the tail is already there with no
+repositories declared at all, where the work itself takes 1.4 ms. It belongs to
+the filesystem rather than to this program, which is a reason to publish it
+rather than to leave it out.
 
-That chase concluded the reading budget was never being missed, and it was the
-right answer to a smaller question than the one worth asking. The 51.3 ms tail
-it set out to explain really did come from a tree that could not cache. The
-ceiling is missed anyway once half the tree is open, which nothing was looking
-for, because the shape was never a number anybody wrote down. What did come out
-of the chase is real and stayed: most of the cost was one write syscall per line
-of output, and the crate now buffers and flushes once.
+**The first read after an upgrade is slower, once.** The index is derived, and
+a version that does not recognise the format it finds folds the log and writes
+a new one. Nothing to run, and the read after it is back to the table above.
+
+**These numbers do not reconcile with the ones they replace, and cannot.** That
+table named no machine, and the fixture behind it came from a generator that
+exists nowhere any more — so its shape, which is the thing that governs three
+of the five rows, cannot be recovered to compare against. What replaced it is
+kept: the script, the fixtures it builds from a fixed seed, and one file per
+run recording what it measured and where.
 
 Not there yet: team mode.
 
