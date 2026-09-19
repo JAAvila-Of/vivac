@@ -1860,6 +1860,10 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     // still open beforehand.
     let written = Written {
         connection: start_missing || stop_missing || mcp_missing,
+        // `f638`, `d641`: the tree existed before this run (this run did
+        // not plant it) and this run is the one adding the "vivac" server
+        // -- `mcp_missing` decided the write above, at `:1753`.
+        hand_registered_risk: !vivac_missing && mcp_missing,
         skill: skill_missing_or_replaceable,
         planted: vivac_missing,
         gitignore_created: gitignore_missing,
@@ -2062,6 +2066,13 @@ const NO_TERMINAL_TEXT: &str = "  setup asks before writing, and there is no ter
 struct Written {
     /// A hook or the server, which only a new session picks up.
     connection: bool,
+    /// This run added the "vivac" server to a tree that was already here
+    /// before it (`f638`, `d641`): a hand-registered local-scope server
+    /// from before `setup` existed can shadow the one this run just added,
+    /// and nothing on screen says so. Always `false`
+    /// when `connection` is, since this is never true without the server
+    /// being part of what made `connection` true.
+    hand_registered_risk: bool,
     /// The skill, where it was missing or an earlier release's copy.
     skill: bool,
     /// The tree, planted by this run rather than found.
@@ -2091,6 +2102,9 @@ fn written_text(w: &Written) -> String {
     let mut s = String::from("  Written.\n");
     if w.connection {
         s.push_str(SESSION_PARAGRAPH);
+        if w.hand_registered_risk {
+            s.push_str(HAND_REGISTERED_PARAGRAPH);
+        }
     } else if w.skill {
         s.push_str(SKILL_PARAGRAPH);
     }
@@ -2185,6 +2199,24 @@ fn join_with_and(items: &[&str]) -> String {
 }
 
 const SESSION_PARAGRAPH: &str = "\n  Open a new Claude Code session in this folder. The brief arrives on its\n  own when it starts. If Claude Code asks whether to use the \"vivac\" server\n  from .mcp.json, say yes: it is what lets the agent write to the tree.\n";
+
+/// `f638`: before `setup` existed, the README told people to run
+/// `claude mcp add vivac -- vivac mcp`, which registers the server in
+/// Claude Code's local scope. Claude Code connects to a same-named server
+/// once, preferring local scope over the project scope `.mcp.json` holds,
+/// so an entry this run adds there can go silently unused.
+///
+/// setup never reads a harness's personal configuration to check for a
+/// hand-made registration directly: for Claude Code that file
+/// (`~/.claude.json`) also holds the sign-in session, and the security
+/// pillar vetoes opening it (`d641`). So the condition below is inferred
+/// from the project instead -- the tree was here before this run, and
+/// this run is the one adding the "vivac" server to `.mcp.json` -- rather
+/// than read from the harness itself.
+///
+/// Each harness `setup` covers later says this in its own words and with
+/// its own command, at this same point in its closing message.
+const HAND_REGISTERED_PARAGRAPH: &str = "\n  The tree was here before this server was. If you once registered vivac\n  by hand with claude mcp add, Claude Code keeps using that registration\n  and not this one. To keep only this one, run from this folder:\n\n      claude mcp remove vivac -s local\n";
 
 const SKILL_PARAGRAPH: &str = "\n  The vivac-migrate skill is now the one this version of vivac ships.\n  Sessions opened from now on use it.\n";
 

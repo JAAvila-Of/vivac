@@ -1408,14 +1408,23 @@ fn a_fresh_setup_prints_the_written_message_verbatim() {
 /// the tree in two ways at once, unlike a folder that merely gains the
 /// missing Claude Code pieces over an unrelated part of it
 /// (`SKILL_REPLACED_MESSAGE`, `SERVER_ADDED_MESSAGE`, below), which do not.
-const NEW_FOLDER_MESSAGE: &str = "  Written.\n\n  Open a new Claude Code session in this folder. The brief arrives on its\n  own when it starts. If Claude Code asks whether to use the \"vivac\" server\n  from .mcp.json, say yes: it is what lets the agent write to the tree.\n\n  The tree was already there, and setup wrote in it: this folder's own\n  thread and the sentence that stops an older vivac from reading it.\n\n  The hooks, the server and the skill are plain files in this project:\n  commit them if everyone who works here uses vivac, and keep them out of\n  version control if only you do. .vivac/ is never committed: it is this\n  machine's record, and a copy of it in every clone would diverge from the\n  others. Its own .gitignore keeps it out.\n\n  Undo:  vivac setup claude-code --undo\n";
+/// `f638`, `d641`: `workdir` carries no `.mcp.json` of its own, so this run
+/// adds the "vivac" server to a tree that was already there before it, and
+/// `HAND_REGISTERED_PARAGRAPH` is now expected right after the session
+/// paragraph.
+const NEW_FOLDER_MESSAGE: &str = "  Written.\n\n  Open a new Claude Code session in this folder. The brief arrives on its\n  own when it starts. If Claude Code asks whether to use the \"vivac\" server\n  from .mcp.json, say yes: it is what lets the agent write to the tree.\n\n  The tree was here before this server was. If you once registered vivac\n  by hand with claude mcp add, Claude Code keeps using that registration\n  and not this one. To keep only this one, run from this folder:\n\n      claude mcp remove vivac -s local\n\n  The tree was already there, and setup wrote in it: this folder's own\n  thread and the sentence that stops an older vivac from reading it.\n\n  The hooks, the server and the skill are plain files in this project:\n  commit them if everyone who works here uses vivac, and keep them out of\n  version control if only you do. .vivac/ is never committed: it is this\n  machine's record, and a copy of it in every clone would diverge from the\n  others. Its own .gitignore keeps it out.\n\n  Undo:  vivac setup claude-code --undo\n";
 
 /// §15.5 (c): only the skill, which is what an upgrade writes.
 const SKILL_REPLACED_MESSAGE: &str = "  Written.\n\n  The vivac-migrate skill is now the one this version of vivac ships.\n  Sessions opened from now on use it.\n\n  The tree was already there, and setup changed nothing in it.\n\n  The hooks, the server and the skill are plain files in this project:\n  commit them if everyone who works here uses vivac, and keep them out of\n  version control if only you do. .vivac/ is never committed: it is this\n  machine's record, and a copy of it in every clone would diverge from the\n  others. Its own .gitignore keeps it out.\n";
 
 /// §15.5 (d): only the server. `--undo` would take the hooks and the skill
 /// as well, so it is not offered.
-const SERVER_ADDED_MESSAGE: &str = "  Written.\n\n  Open a new Claude Code session in this folder. The brief arrives on its\n  own when it starts. If Claude Code asks whether to use the \"vivac\" server\n  from .mcp.json, say yes: it is what lets the agent write to the tree.\n\n  The tree was already there, and setup changed nothing in it.\n\n  The hooks, the server and the skill are plain files in this project:\n  commit them if everyone who works here uses vivac, and keep them out of\n  version control if only you do. .vivac/ is never committed: it is this\n  machine's record, and a copy of it in every clone would diverge from the\n  others. Its own .gitignore keeps it out.\n";
+///
+/// `f638`, `d641`: the tree was already there before this run, and this run
+/// is the one that adds the missing "vivac" server, so
+/// `HAND_REGISTERED_PARAGRAPH` is expected right after the session
+/// paragraph.
+const SERVER_ADDED_MESSAGE: &str = "  Written.\n\n  Open a new Claude Code session in this folder. The brief arrives on its\n  own when it starts. If Claude Code asks whether to use the \"vivac\" server\n  from .mcp.json, say yes: it is what lets the agent write to the tree.\n\n  The tree was here before this server was. If you once registered vivac\n  by hand with claude mcp add, Claude Code keeps using that registration\n  and not this one. To keep only this one, run from this folder:\n\n      claude mcp remove vivac -s local\n\n  The tree was already there, and setup changed nothing in it.\n\n  The hooks, the server and the skill are plain files in this project:\n  commit them if everyone who works here uses vivac, and keep them out of\n  version control if only you do. .vivac/ is never committed: it is this\n  machine's record, and a copy of it in every clone would diverge from the\n  others. Its own .gitignore keeps it out.\n";
 
 /// §15.5 (e): only the tree. Nothing the harness reads changed, so there is
 /// no session to open and nothing to undo.
@@ -1447,6 +1456,98 @@ fn a_run_that_plants_only_the_tree_invites_a_migration() {
     std::fs::remove_dir_all(c.0.join(".vivac")).unwrap();
     let out = c.ok(&["setup", "claude-code", "--yes"]);
     assert_eq!(written_part(&out), TREE_PLANTED_MESSAGE);
+}
+
+// ---------------------------------------------------------------------------
+// `f638`, `d641`: the hand-registered-server paragraph.
+//
+// Before `setup` existed, the README told people to run
+// `claude mcp add vivac -- vivac mcp`, which registers the server in Claude
+// Code's local scope. `setup claude-code` only ever looks at the project's
+// own `.mcp.json`, so for someone who did that, a later `setup` run adds a
+// second, unused entry there -- and Claude Code never asks to approve it,
+// contradicting the session paragraph's own "say yes" just above it.
+//
+// `setup` never opens a harness's personal configuration to check for a
+// hand-made registration directly: for Claude Code that file also holds the
+// sign-in session, and the security pillar vetoes opening it. So this is
+// inferred from the project instead, and only when both hold: the tree was
+// already here before this run, and this run is the one adding the "vivac"
+// server to `.mcp.json`.
+// ---------------------------------------------------------------------------
+
+const HAND_REGISTERED_MARKER: &str = "The tree was here before this server was.";
+
+/// The session paragraph's own last line, unique to it: the one text this
+/// paragraph is required to follow immediately.
+const SESSION_PARAGRAPH_END: &str =
+    "from .mcp.json, say yes: it is what lets the agent write to the tree.\n";
+
+/// Whether `out` carries the hand-registered paragraph exactly once, right
+/// after the session paragraph and nowhere else.
+fn hand_registered_paragraph_is_right_after_session(out: &str) -> bool {
+    if out.matches(HAND_REGISTERED_MARKER).count() != 1 {
+        return false;
+    }
+    let Some(session_end) = out.find(SESSION_PARAGRAPH_END) else {
+        return false;
+    };
+    out[session_end + SESSION_PARAGRAPH_END.len()..]
+        .starts_with(&format!("\n  {HAND_REGISTERED_MARKER}"))
+}
+
+#[test]
+fn a_tree_planted_before_this_run_with_no_mcp_json_gets_the_hand_registered_paragraph() {
+    let c = Sandbox::new_seeded("setup-hand-registered-fresh-mcp");
+    let out = c.ok(&["setup", "claude-code", "--yes"]);
+    assert!(
+        hand_registered_paragraph_is_right_after_session(&out),
+        "{out}"
+    );
+}
+
+#[test]
+fn a_tree_planted_before_this_run_with_a_different_mcp_server_gets_the_hand_registered_paragraph() {
+    let c = Sandbox::new_seeded("setup-hand-registered-other-server");
+    std::fs::write(
+        mcp_path(&c),
+        "{\n  \"mcpServers\": {\n    \"other\": {\n      \"type\": \"stdio\",\n      \
+         \"command\": \"other-tool\"\n    }\n  }\n}\n",
+    )
+    .unwrap();
+    let out = c.ok(&["setup", "claude-code", "--yes"]);
+    assert!(
+        hand_registered_paragraph_is_right_after_session(&out),
+        "{out}"
+    );
+}
+
+#[test]
+fn a_folder_with_no_tree_never_gets_the_hand_registered_paragraph() {
+    let c = Sandbox::new_empty("setup-hand-registered-fresh-plant");
+    let out = c.ok(&["setup", "claude-code", "--yes"]);
+    assert!(!out.contains(HAND_REGISTERED_MARKER), "{out}");
+}
+
+#[test]
+fn a_tree_that_already_has_the_vivac_server_never_gets_the_hand_registered_paragraph() {
+    let c = Sandbox::new_seeded("setup-hand-registered-server-present");
+    std::fs::write(
+        mcp_path(&c),
+        "{\n  \"mcpServers\": {\n    \"vivac\": {\n      \"type\": \"stdio\",\n      \
+         \"command\": \"vivac\",\n      \"args\": [\"mcp\"]\n    }\n  }\n}\n",
+    )
+    .unwrap();
+    let out = c.ok(&["setup", "claude-code", "--yes"]);
+    assert!(!out.contains(HAND_REGISTERED_MARKER), "{out}");
+}
+
+#[test]
+fn dry_run_never_prints_the_hand_registered_paragraph() {
+    let c = Sandbox::new_seeded("setup-hand-registered-dry-run");
+    let (out, code) = c.run(&["setup", "claude-code", "--dry-run"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(!out.contains(HAND_REGISTERED_MARKER), "{out}");
 }
 
 // ---------------------------------------------------------------------------
