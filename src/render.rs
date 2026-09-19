@@ -1639,6 +1639,7 @@ pub fn vivacs(a: &Tree, args: &Args) -> R {
                 "label": v.label,
                 "next_intent": v.next_intent,
                 "anchor": v.anchor,
+                "anchors": v.anchors,
                 "stack": v.stack.iter().map(|(al, t)| json!({"alias": al, "title": t}))
                     .collect::<Vec<_>>(),
                 "working_set": v.working_set,

@@ -300,3 +300,148 @@ fn the_emisores_scenario_end_to_end() {
         "a second commit replayed during the same rebase wrote another where.changed"
     );
 }
+
+/// The commit `dir`'s `HEAD` points at, read straight from `git` rather than
+/// from anything `vivac` itself wrote: what a test compares `vivacs --json`
+/// against has to come from a source the code under test never touched.
+fn git_head(dir: &Path) -> String {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "git rev-parse HEAD failed");
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+/// `f639`: `vivacs --json` used to serialize only `anchor`, so a stop
+/// anchored to several declared repositories read as unanchored to a
+/// script -- the same root-without-git shape [`the_emisores_scenario_end_to_end`]
+/// already builds, with nothing above it changed.
+#[test]
+fn two_declared_repositories_each_carry_their_own_anchor_in_vivacs_json() {
+    let c = Sandbox::new_empty("vivacs-anchors");
+    let repo_one = c.0.join("repo-one");
+    let repo_two = c.0.join("repo-two");
+    commit_a_repo_on_branch(&repo_one, "feature/one");
+    commit_a_repo_on_branch(&repo_two, "feature/two");
+
+    c.ok(&["init"]);
+    c.ok(&["setup", "claude-code", "--yes"]);
+    c.ok(&["save", "a checkpoint"]);
+
+    let out = c.ok(&["vivacs", "--json"]);
+    let stops: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let latest = &stops[0];
+
+    assert_eq!(
+        latest["anchor"]["kind"], "null",
+        "the root itself holds no git, by design since f613: {latest}"
+    );
+
+    let anchors = latest["anchors"]
+        .as_array()
+        .expect("anchors is always an array");
+    assert_eq!(
+        anchors.len(),
+        2,
+        "one entry per declared repository: {latest}"
+    );
+
+    let mut by_path: std::collections::BTreeMap<&str, &str> = anchors
+        .iter()
+        .map(|a| (a["path"].as_str().unwrap(), a["sha"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        by_path.keys().copied().collect::<Vec<_>>(),
+        vec!["repo-one", "repo-two"],
+        "{latest}"
+    );
+    assert_eq!(by_path.remove("repo-one").unwrap(), git_head(&repo_one));
+    assert_eq!(by_path.remove("repo-two").unwrap(), git_head(&repo_two));
+}
+
+/// A tree nobody ran `setup` in declares no repositories, and `f639`'s fix
+/// keeps that a schema-stable empty array rather than a field that only
+/// shows up once something is declared underneath.
+#[test]
+fn a_lane_with_no_declared_repositories_still_shows_empty_anchors_in_vivacs_json() {
+    let c = Sandbox::new_seeded("no-declared-repos");
+    c.ok(&["push", "A goal", "--why", "it is needed"]);
+    c.ok(&["save", "a checkpoint"]);
+
+    let out = c.ok(&["vivacs", "--json"]);
+    let stops: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let latest = &stops[0];
+
+    assert_eq!(
+        latest["anchors"],
+        serde_json::json!([]),
+        "a lane with nothing declared still gets the field: {latest}"
+    );
+}
+
+/// `f639` follow-up: `reconcile --json` had the same omission `vivacs --json`
+/// did, serializing only `since.anchor.short()` -- an empty string at a root
+/// without git -- and dropping the per-repository list the stop it reads
+/// from actually carries.
+#[test]
+fn reconcile_json_carries_the_anchors_of_the_stop_it_reads_from() {
+    let c = Sandbox::new_empty("reconcile-anchors");
+    let repo_one = c.0.join("repo-one");
+    let repo_two = c.0.join("repo-two");
+    commit_a_repo_on_branch(&repo_one, "feature/one");
+    commit_a_repo_on_branch(&repo_two, "feature/two");
+
+    c.ok(&["init"]);
+    c.ok(&["setup", "claude-code", "--yes"]);
+    c.ok(&["save", "a checkpoint"]);
+
+    let sha_one = git_head(&repo_one);
+    let sha_two = git_head(&repo_two);
+
+    // Something for `reconcile` to actually read, after the stop it measures
+    // from -- otherwise there is no history to contradict the tree with.
+    std::fs::write(repo_one.join("f.txt"), "y").unwrap();
+    git(&repo_one, &["add", "."]);
+    git(&repo_one, &["commit", "-q", "-m", "second"]);
+
+    let out = c.ok(&["reconcile", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+
+    let anchors = v["anchors"].as_array().expect("anchors is always an array");
+    let mut by_path: std::collections::BTreeMap<&str, &str> = anchors
+        .iter()
+        .map(|a| (a["path"].as_str().unwrap(), a["sha"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        by_path.keys().copied().collect::<Vec<_>>(),
+        vec!["repo-one", "repo-two"],
+        "{v}"
+    );
+    assert_eq!(by_path.remove("repo-one").unwrap(), sha_one);
+    assert_eq!(by_path.remove("repo-two").unwrap(), sha_two);
+}
+
+/// The same schema-stability `f639` asked of `vivacs --json`, here for
+/// `reconcile --json`: a lane with nothing declared still gets `anchors`,
+/// empty rather than absent.
+#[test]
+fn a_lane_with_no_declared_repositories_still_shows_empty_anchors_in_reconcile_json() {
+    let c = Sandbox::new_empty("no-declared-repos-reconcile");
+    commit_a_repo_on_branch(&c.0, "feature/solo");
+
+    c.ok(&["init"]);
+    c.ok(&["push", "A goal", "--why", "it is needed"]);
+    c.ok(&["save", "a checkpoint"]);
+
+    let out = c.ok(&["reconcile", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+
+    assert_eq!(
+        v["anchors"],
+        serde_json::json!([]),
+        "a lane with nothing declared still gets the field: {v}"
+    );
+}
