@@ -143,7 +143,7 @@ fn weight(
 /// because none of the three directories is under version control; a row
 /// reading `anchor: --` on every step of every page would say nothing about
 /// the path, only about how the directory is set up.
-fn facts(tree: &Tree, ag: &Aggregates, full: &Full, n: &Node) -> String {
+fn facts(tree: &Tree, ag: &Aggregates, n: &Node) -> String {
     let mut parts = vec![
         format!("<span class=\"word\">{}</span>", n.kind.word()),
         format!("<span class=\"word\">{}</span>", n.state.word(n.kind)),
@@ -152,7 +152,7 @@ fn facts(tree: &Tree, ag: &Aggregates, full: &Full, n: &Node) -> String {
             escape(n.opened(tree))
         ),
     ];
-    let anchor = anchor_of(tree, full, n);
+    let anchor = anchor_of(tree, n);
     if !anchor.is_empty_tree() {
         parts.push(format!(
             "<span class=\"anchor\">{} {}</span>",
@@ -190,7 +190,7 @@ fn step(project: &str, tree: &Tree, ag: &Aggregates, full: &Full, n: &Node, here
          <p class=\"title\">{title}{mark}</p>\n{facts}{weight}</div>\n</li>\n",
         cls = if here { " class=\"here\"" } else { "" },
         title = escape(n.title(tree)),
-        facts = facts(tree, ag, full, n),
+        facts = facts(tree, ag, n),
         weight = weight(
             project,
             tree,
