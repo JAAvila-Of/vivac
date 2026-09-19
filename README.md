@@ -519,7 +519,12 @@ The commands are a bare `vivac`, never a path to the executable, because these
 files can end up in a repository and such a path carries the name of the
 account that installed it. So `vivac` has to be on the `PATH` the harness sees.
 These are plain files in your project. Commit them if everyone who works on it
-uses vivac, and keep them out of version control if only you do.
+uses vivac, and keep them out of version control if only you do. `.vivac/`
+never goes in: the tree is this machine's, and one copy per clone would be
+several trees pretending to be one. setup says so before it writes, and leaves
+a `.gitignore` inside the tree that keeps it out. `vivac check` names a tree
+missing that file, and gives the command that takes an already-committed
+`.vivac` back out of git.
 
 `Stop` runs on every turn rather than once at the end, so the last stop does
 not depend on the session closing cleanly. The stop is only saved if the tree
@@ -533,6 +538,27 @@ read from what the harness passes in. So the pair can be run by hand to see
 what a hook would do. setup writes Claude Code's configuration today. Any
 harness that can run a command when a session opens and put its output in the
 agent's context can call the same one, and any MCP client can run `vivac mcp`.
+
+## Lanes
+
+One tree records one product. The folders you work on that product in are its
+**lanes** — one today, three by Thursday, and rarely the same three next month.
+
+Two ordinary situations need this. You move between branches in one checkout
+all day, and the record must not fork every time you do. Or the same product is
+checked out in several folders, and the record must not become three trees that
+each answer *what was this born from?* differently.
+
+So the tree belongs to the product, and the branch is a fact about each write
+rather than something the tree is kept in. `vivac setup claude-code` in a folder
+under a tree makes that folder a lane, `--join` names a tree that lives
+somewhere else entirely, and `vivac relocate` moves a tree without leaving any
+lane pointing at where it used to be. The brief says when a branch moved under
+you and what the other lanes have done since you last wrote here, and
+`vivac stack --lanes` shows all of them at once.
+
+[`docs/LANES.md`](docs/LANES.md) is the whole of it: the two shapes, what a lane
+is and is not, and the four ways to get it wrong.
 
 ## Migrating to vivac
 
@@ -718,6 +744,11 @@ cargo install vivac
 vivac setup claude-code
 ```
 
+**Coming from 0.11?** Every release opens with what it changes on disk and what
+to run: see [the changelog](CHANGELOG.md). For `0.12.0` the short of it is that
+nothing in a tree changes until `vivac setup` runs in it, and that once a tree
+holds lanes it needs 0.12 or newer.
+
 **`cargo install` is not the fallback.** It builds from the source published to
 crates.io, so it stays the auditable path for anyone who cares about the supply
 chain of a tool that reads their work. The binaries are for everyone who has no
@@ -773,14 +804,17 @@ able to move.
 
 The project is in `0.x`, and while it is, **the minor is the position that
 breaks**: `0.3.x` to `0.4.0` may change a public surface, and a patch never
-does. The rule has been spent eight times — `0.3.0` stopped reading the logs
+does. The rule has been spent ten times — `0.3.0` stopped reading the logs
 `0.1.x` and `0.2.x` wrote, `0.4.0` made `find` hand back handles rather than
 whole nodes, `0.5.0` began refusing a write that opens a fenced code block,
 `0.6.0` made `open` hand back fronts rather than whole nodes, `0.7.0` did the
 same to `why` for everything but the node asked about, `0.8.0` wrote an event
 `0.7.0` stops at, `0.9.0` stopped taking a closed node off the stack when it
-is not the top, and `0.10.0` retired `vivac hooks` for `vivac setup` and gave
-the hook its brief as plain text. Each went out as a minor for that reason,
+is not the top, `0.10.0` retired `vivac hooks` for `vivac setup` and gave the
+hook its brief as plain text, `0.11.0` made setup write Claude Code's files in
+the folder it is run in and refuse to run in your home folder, and `0.12.0`
+stops a version older than itself reading a tree once that tree holds lanes.
+Each went out as a minor for that reason,
 and counting them here is cheaper than counting them once and letting the
 sentence go stale.
 
