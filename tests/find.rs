@@ -133,6 +133,126 @@ fn case_does_not_matter() {
     assert!(s.contains("The sandbox named its directory"), "{s}");
 }
 
+// `f577`/`f442`/`f543` — the same defect, found three times: search folded
+// case but not diacritics, so `dueno` and `dueño` searched near-disjoint
+// halves of a real tree. `fold` (`src/render.rs`) is the single recipe all
+// three call sites share; these prove it end to end, through the CLI.
+
+/// A word typed without its accent finds text written with one. Real trees
+/// mix both spellings of the same word depending on the keyboard that typed
+/// it, and neither can leave the other unreachable.
+#[test]
+fn a_query_without_the_accent_finds_text_written_with_one() {
+    let c = seeded("fold-no-accent");
+    c.ok(&[
+        "add",
+        "Contact the repository dueño",
+        "--why",
+        "an unrelated reason",
+        "--type",
+        "task",
+    ]);
+    let s = c.ok(&["find", "dueno"]);
+    assert!(s.contains("Contact the repository dueño"), "{s}");
+}
+
+/// The other direction: a query typed with the accent finds text written
+/// without one.
+#[test]
+fn a_query_with_the_accent_finds_text_written_without_one() {
+    let c = seeded("fold-with-accent");
+    c.ok(&[
+        "add",
+        "The process with no dueno assigned",
+        "--why",
+        "an unrelated reason",
+        "--type",
+        "task",
+    ]);
+    let s = c.ok(&["find", "due\u{00f1}o"]); // dueño
+    assert!(s.contains("The process with no dueno assigned"), "{s}");
+}
+
+/// Case and accent fold together: an upper-cased, accented query still finds
+/// lower-cased, unaccented text.
+#[test]
+fn an_upper_cased_accented_query_still_folds() {
+    let c = seeded("fold-case-and-accent");
+    c.ok(&[
+        "add",
+        "El \u{e1}rbol del proyecto", // árbol
+        "--why",
+        "an unrelated reason",
+        "--type",
+        "task",
+    ]);
+    let s = c.ok(&["find", "arbol"]);
+    assert!(s.contains("rbol del proyecto"), "{s}");
+    let s = c.ok(&["find", "\u{c1}RBOL"]); // ÁRBOL
+    assert!(s.contains("rbol del proyecto"), "{s}");
+}
+
+/// A precomposed `é` (U+00E9) and a decomposed `e` followed by a combining
+/// acute accent (U+0301) look identical and are not: a search that told them
+/// apart would silently split a tree between two keyboards. Both directions
+/// hold.
+#[test]
+fn decomposed_and_precomposed_accents_find_each_other() {
+    let c = seeded("fold-nfd");
+    c.ok(&[
+        "add",
+        "Buy caf\u{e9} beans", // precomposed é
+        "--why",
+        "an unrelated reason",
+        "--type",
+        "task",
+    ]);
+    let s = c.ok(&["find", "cafe\u{301}"]); // decomposed e + acute
+    assert!(s.contains("Buy caf\u{e9} beans"), "{s}");
+
+    c.ok(&[
+        "add",
+        "Buy cafe\u{301} beans", // decomposed e + acute
+        "--why",
+        "another unrelated reason",
+        "--type",
+        "task",
+    ]);
+    let s = c.ok(&["find", "caf\u{e9}"]); // precomposed query
+    assert!(s.contains("Buy cafe\u{301} beans"), "{s}");
+}
+
+/// `snippet` centres the window on the hit, not on the start of the field --
+/// this held before folding and still has to hold with multibyte accented
+/// characters ahead of the hit, where a byte offset and a char offset first
+/// start to disagree. A landmark word at each end, far outside the window,
+/// proves the snippet reaches neither: it found the hit in the middle.
+#[test]
+fn the_snippet_centres_on_the_hit_past_multibyte_accents() {
+    let c = seeded("fold-snippet");
+    let lead = "\u{f1}\u{e9}\u{e1}\u{fc}\u{e7} filler word ".repeat(10); // ñéáüç...
+    let trail = " filler word".repeat(10);
+    let long_why = format!("zzzfrontword {lead}zzzneedle{trail} zzzendword");
+    c.ok(&[
+        "add",
+        "Something with a long accented reason",
+        "--why",
+        &long_why,
+        "--type",
+        "task",
+    ]);
+    let s = c.ok(&["find", "zzzneedle", "--json"]);
+    assert!(s.contains("zzzneedle"), "{s}");
+    assert!(
+        !s.contains("zzzfrontword"),
+        "the snippet reached back to the start of the field:\n{s}"
+    );
+    assert!(
+        !s.contains("zzzendword"),
+        "the snippet reached the end of the field:\n{s}"
+    );
+}
+
 /// A hit with no lineage is a line of text. The whole product is the edge.
 #[test]
 fn the_lineage_travels_with_the_hit() {

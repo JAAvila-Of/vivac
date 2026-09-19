@@ -20,6 +20,12 @@ getrandom = "0.2"
 # that is not code to write twice.
 tiny_http = "0.12"
 
+# `f577`: search folds diacritics, so `dueno` finds `dueño`. Folding needs
+# canonical decomposition, which std does not have, and hand-writing
+# Unicode's decomposition tables is the kind of code `d138` refused to write
+# twice. +2 crates: this one and `tinyvec`.
+unicode-normalization = "0.1"
+
 # The same `serde_json` the crate already links, so the tree gains nothing.
 # The MCP tests read JSON-RPC replies, and asserting on substrings of a
 # protocol is how a suite ends up green over malformed output.
