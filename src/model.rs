@@ -131,6 +131,17 @@ pub struct Node {
     /// late declaration has been folded in beside a birth that never had
     /// the key.
     pub against_recorded: bool,
+    /// The `seq` of this node's own `node.created`. `why`'s "born in lane"
+    /// line used to get this by walking the whole log through
+    /// `Full::from_log` on every call (`t164`): that was free while only
+    /// `--full` paid for the walk, and stopped being free once `why` began
+    /// folding the log either way to answer the same line (`t594` tramo 7),
+    /// so the datum moved here.
+    pub born_seq: u64,
+    /// The lane this node's `node.created` was signed with, interned in the
+    /// span arena like every other repeated text: a lane id repeats across
+    /// thousands of nodes and cannot cost a `String` each.
+    pub born_lane: Span,
 }
 
 impl Node {
@@ -160,6 +171,10 @@ impl Node {
     }
     pub fn outcome<'t>(&self, tree: &'t Tree) -> &'t str {
         tree.text(self.outcome)
+    }
+    /// The lane this node was born in, resolved to text.
+    pub fn born_lane<'t>(&self, tree: &'t Tree) -> &'t str {
+        tree.text(self.born_lane)
     }
     pub fn opened<'t>(&self, tree: &'t Tree) -> &'t str {
         tree.text(self.opened)
@@ -575,6 +590,11 @@ impl Tree {
                     })
                     .collect();
                 let opened_span = self.intern(crate::clock::date_of(ts));
+                // Interned once here rather than read back off the event
+                // later: `why`'s "born in lane" line used to get this by
+                // walking the whole log, and it needs nothing this node does
+                // not already carry now (`t594` tramo 7).
+                let born_lane_span = self.intern(lane);
                 let parent_num = parent.as_deref().map(|p| self.resolve_pending(p));
                 self.nodes.insert(
                     *num,
@@ -598,6 +618,8 @@ impl Tree {
                         arms: arm_spans,
                         against: against_spans,
                         against_recorded,
+                        born_seq: seq,
+                        born_lane: born_lane_span,
                     },
                 );
                 self.ulid_index.insert(node.clone(), *num);
@@ -1994,6 +2016,36 @@ mod tests {
         );
         t.for_lane("c");
         assert_eq!(t.focus().unwrap().num, 4);
+    }
+
+    /// `t594` tramo 7: the two facts `why`'s "born in lane" line needs used
+    /// to come from walking the whole log (`Full::from_log`); now they are
+    /// the node's own, set once at birth and never touched again.
+    #[test]
+    fn a_node_remembers_the_seq_and_lane_it_was_born_with() {
+        let events = vec![
+            lane_node_created(1, "main", "n1", 1),
+            lane_node_created(2, "b", "n2", 2),
+        ];
+        let t = fold(&events, 0);
+        let n1 = t.node("n1").unwrap();
+        assert_eq!(n1.born_seq, 1);
+        assert_eq!(n1.born_lane(&t), "main");
+        let n2 = t.node("n2").unwrap();
+        assert_eq!(n2.born_seq, 2);
+        assert_eq!(n2.born_lane(&t), "b");
+    }
+
+    /// A node born before any lane was declared still carries one: every
+    /// event ever written is signed with a lane, `main` for everything
+    /// before this tranche, so this is the same field as above and not a
+    /// special case.
+    #[test]
+    fn a_node_born_before_any_lane_was_declared_still_carries_main() {
+        let t = fold(&a_varied_event_set(), 0);
+        let n1 = t.node("n1").unwrap();
+        assert_eq!(n1.born_seq, 1);
+        assert_eq!(n1.born_lane(&t), crate::lane::MAIN);
     }
 
     #[test]
