@@ -42,6 +42,7 @@ pub(crate) const SWITCHES: &[&str] = &[
     "yes",
     "dry-run",
     "undo",
+    "new-tree",
 ];
 
 #[derive(Debug, Default)]
@@ -238,6 +239,17 @@ mod tests {
         let a = p("--yes claude-code");
         assert!(a.has("yes"));
         assert_eq!(a.opt("yes"), None);
+        assert_eq!(a.positional(0), Some("claude-code"));
+    }
+
+    /// `f632`, the same shape as `f556` above: `--new-tree` never takes a
+    /// value, so `setup --new-tree claude-code` must leave `claude-code` as
+    /// a positional rather than swallow it as `--new-tree`'s own value.
+    #[test]
+    fn new_tree_never_eats_the_word_after_it() {
+        let a = p("--new-tree claude-code");
+        assert!(a.has("new-tree"));
+        assert_eq!(a.opt("new-tree"), None);
         assert_eq!(a.positional(0), Some("claude-code"));
     }
 
