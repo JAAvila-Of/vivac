@@ -3185,6 +3185,22 @@ fn join_and_new_tree_together_is_a_usage_error() {
     );
 }
 
+/// `f632`: `--join` with nothing after it must refuse, not silently plant a
+/// second tree where the caller meant to join one. `has("join")` was true
+/// and `opt("join")` was `None`, and `run` only ever asked for the value, so
+/// this used to fall straight through to `apply` and plant.
+#[test]
+fn join_with_no_value_refuses_instead_of_planting() {
+    let c = Sandbox::new_empty("setup-join-no-value");
+    let (out, code) = c.run(&["setup", "claude-code", "--join"]);
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("--join"), "{out}");
+    assert!(
+        !already_planted(&c.0),
+        "it planted a tree instead of refusing:\n{out}"
+    );
+}
+
 /// Case 7, first half: `--lane-name` names the lane.
 #[test]
 fn lane_name_names_the_lane() {
