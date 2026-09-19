@@ -230,6 +230,7 @@ pub fn reconcile(a: &Tree, lane_dir: &Path, args: &Args) -> R {
             "since": since.alias(),
             "since_ts": since.ts,
             "anchor": since.anchor.short(),
+            "anchors": since.anchors,
             "governing_nodes": governing.len(),
             "changed": verdicts.len(),
             "unclaimed": unclaimed.iter().map(|v| one(v)).collect::<Vec<_>>(),
