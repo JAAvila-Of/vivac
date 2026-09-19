@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.12.1](https://github.com/JAAvila-Of/vivac/compare/v0.12.0...v0.12.1) - 2026-09-19
 
+### Upgrading
+
+- **If you once registered the server by hand, `setup` may have added one
+  Claude Code does not use.** Before `setup` existed the README said to run
+  `claude mcp add vivac -- vivac mcp`, which puts the server in Claude Code's
+  local scope, and that registration wins over the `.mcp.json` `setup`
+  writes. Nothing stops working. To keep only the project's, run
+  `claude mcp remove vivac -s local` from that folder. From this version on,
+  `setup` says so itself when a tree that was already there gets the server
+  for the first time.
+- **`find` ignores accents now, as it already ignored case**, in the CLI,
+  over MCP and in the map page's find box. A search returns what it did
+  before plus every node spelled the other way, so anything that counts hits
+  will count more.
+- **`vivacs --json` and `reconcile --json` gain `anchors`**, beside `anchor`
+  and always present. In a folder that is not itself a repository `anchor`
+  stays null, and `anchors` is where its repositories are.
+- **Building from source pulls two more crates**, `unicode-normalization` and
+  `tinyvec`. The release binaries need none.
+- **On Windows, close every session and any `vivac web` before installing.**
+  A running `vivac mcp` or `vivac web` holds the executable open, and
+  `cargo install` fails with `os error 5` until it is closed.
+
 ### Documentation
 
 - *(readme)* say that find ignores case and accents
