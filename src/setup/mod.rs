@@ -35,6 +35,19 @@ pub fn dispatch(cwd: &Path, a: &Args) -> Result<i32, Failure> {
              separate one, so they contradict each other.\n\n  Give one or the other.",
         ));
     }
+    // `f632`: `--join` takes a value, so with nothing after it the parser
+    // records the flag as present and its value as absent, and every reader
+    // downstream only ever asks for the value -- `opt("join")`, never
+    // `has("join")`. Left unchecked, that fell straight through to the
+    // plant branch and gave a second tree to someone who asked to join one.
+    if a.has("join") && a.opt("join").is_none() {
+        return Err(Failure::usage(
+            "--join needs the project to join, and nothing followed it -- with \
+             nothing after it, setup would have planted a second tree instead of \
+             joining the one you meant.\n\n  \
+             vivac setup claude-code --join <project>",
+        ));
+    }
     if let [first, ..] = a.extra(1) {
         return Err(Failure::usage(format!(
             "setup does not take \"{first}\".\n\n  It takes one word of its own: the harness to set up."
