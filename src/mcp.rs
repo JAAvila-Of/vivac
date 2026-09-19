@@ -65,6 +65,15 @@ impl ArgKind {
     /// The word a mismatch message names it by. Not the JSON type `schema`
     /// writes into `inputSchema` -- `List` is `array` there -- because this
     /// reads as a sentence, not as a wire format.
+    ///
+    /// Its only caller is `Reader::checked`, which exists only under
+    /// `debug_assertions`, so this carries the same condition rather than
+    /// staying behind and being reported dead by every release build
+    /// (`f635`). A field cannot take this treatment as cheaply -- see
+    /// `Reader::tool` -- but a free function can, and where it fits it is
+    /// better than silencing the warning, because the item really does not
+    /// need to exist there.
+    #[cfg(debug_assertions)]
     fn word(self) -> &'static str {
         match self {
             ArgKind::Str => "string",
@@ -661,6 +670,13 @@ fn pretty(v: Value) -> Result<String, Failure> {
 /// `f452`): a `Reader` is built for one tool, and every read it does is
 /// checked against that tool's own `args`.
 struct Reader<'a> {
+    /// Read only by `checked`, which is a `debug_assertions` build only, so
+    /// a release build is right to call this unread (`f635`). Unlike
+    /// `ArgKind::word` this is not given that condition: `new` sets it
+    /// unconditionally, so the field would take a second constructor with
+    /// it, and two ways to build a `Reader` is a worse thing to own than one
+    /// silenced warning.
+    #[allow(dead_code)]
     tool: &'static Tool,
     arguments: &'a Value,
 }
