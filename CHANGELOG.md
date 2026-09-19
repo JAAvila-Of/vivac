@@ -7,6 +7,161 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0](https://github.com/JAAvila-Of/vivac/compare/v0.11.3...v0.12.0) - 2026-09-19
+
+### Upgrading
+
+- **Nothing in a tree changes until `setup` runs in it.** Until then this
+  version writes what 0.11 wrote, and 0.11 keeps reading it. The one
+  exception is a linked worktree: the first time anything writes from one,
+  it declares itself a lane of the tree it belongs to.
+- **The brief's header names the lane, and takes that name from the folder.**
+  A tree with one lane prints the same bytes it always did. Anywhere else the
+  name arrives when `setup` runs and is recalculated every time it runs
+  again, so renaming a folder shows up at the next `setup` and never
+  repoints anything on its own.
+- **Once a tree holds lanes it needs 0.12 or newer.** `setup`, `relocate`,
+  or a linked worktree writing for the first time rewrites the config's
+  `version` field to `this tree holds lanes, and this vivac is too old to
+  read them: update vivac`. Versions 0.7 to 0.11 refuse a version they do
+  not know and print that sentence.
+- **Three events are new**, and none of them appears before the tree holds
+  lanes: `lane.declared`, `lane.claimed` and `where.changed`. The last one
+  is a photograph of the branches this lane's repositories were on, written
+  only when they differ from the last one this lane wrote.
+- **Every tree gains `.vivac/lock`, and `setup` also writes
+  `.vivac/.gitignore`.** If `.vivac` was committed to git, `vivac check`
+  points at the missing `.gitignore` and gives the command that takes it
+  back out.
+- **The first read of each tree after upgrading is slower, once.** The
+  derived index changed shape, so this version declines the one it finds,
+  folds the log, and writes a new one. Nothing to run: the next read is back
+  to normal. An older vivac does the same in reverse, and also keeps working.
+- **The brief no longer says how many files changed since your last stop.**
+  It was costing two git processes on every read to print one line. Ask for
+  it when you want it: `vivac changes`, or `vivac reconcile` to see it
+  against the tree.
+- **`vivac setup claude-code --join` with nothing after it used to plant a
+  tree** instead of joining one, silently. It now refuses and says what it
+  needs. If you ran it that way, look for a `.vivac/` you did not mean to
+  create.
+- **Building from source now needs Rust 1.89**, up from 1.75. `cargo install
+  vivac` compiles, so this is your toolchain, not your project's. The
+  release binaries need none.
+- **On Windows, close every session and any `vivac web` before installing.**
+  A running `vivac mcp` or `vivac web` holds the executable open, and
+  `cargo install` fails with `os error 5` until it is closed.
+
+### Added
+
+- *(model)* give each node the lane and seq it was born with
+- *(web)* say when the map's here control is not where you are
+- *(web)* show whose focus is on screen once lanes are several
+- *(stack)* list every lane's own thread
+- *(brief)* say when another folder of this product wrote
+- *(model)* record when each lane last wrote
+- *(setup)* name the founding lane after its own folder
+- *(brief)* say when the branch moved and where that work stopped
+- *(why)* say which lane and branch a node was born in
+- *(anchor)* anchor a stop to every repository of the lane
+- *(store)* write where the lane is when it moves
+- *(store)* record where a lane's repositories are
+- *(anchor)* read a repository's branch, sha and rebase state
+- *(brief)* open with the warning when this tree is a copy
+- *(setup)* join a folder to a tree that lives somewhere else
+- *(setup)* refuse to plant a second map of a product
+- *(relocate)* move a tree and leave its folder as a lane
+- *(registry)* record a project's repos and lanes, and notice copies
+- *(ops)* let a linked worktree join the tree when it first writes
+- *(setup)* make a folder a lane of the tree above it
+- *(model)* [**breaking**] give every lane its own stack, focus and stop counters
+- *(event)* let a lane declare itself and sign what it writes
+- *(store)* resolve the working folder's lane, not just its tree
+- *(lane)* name the lane a working folder belongs to
+
+### Changed
+
+- *(brief)* sort the candidates by key instead of by comparator
+- *(check)* keep the copy heading where its sentence lives
+- *(store)* make the write lock an argument of every append
+- [**breaking**] raise the MSRV to 1.89 for the standard file lock
+
+### Documentation
+
+- *(readme)* publish what was measured, and on which machine
+- *(help)* say which folder relocate is run from
+- *(readme)* point at what setup already says, and count 0.11 and 0.12
+- *(lanes)* the public guide, and the README section pointing at it
+- *(src)* retire two comments that describe a past that ended
+- *(cli)* name --lanes in the help that lists stack
+- cite the tree's node, not a review round that no longer exists
+- *(setup)* say what joining a folder actually changed
+- the last Spanish in the crate was a quoted section title
+- *(test)* two comments in relocate's tests were still in Spanish
+- three more comments that were still in Spanish
+- write the crate's comments in English, as the rule says
+
+### Fixed
+
+- *(args)* --lanes takes no value, and now says so
+- *(args)* refuse --join with no value, and make --new-tree a switch
+- *(anchor)* see a linked worktree past a submodule's own .git
+- *(setup)* preview and apply a stale worktree's redeclaration always
+- *(setup)* declare a worktree's lane with the root commit it shares
+- *(setup)* name every tree below a join, and guard the route shown
+- *(setup)* answer the door the reader knocked on
+- *(check)* name a repeated seq and a tail that swallowed a write
+- *(brief)* count one other lane in words, not as 1 lanes
+- *(store)* resolve a redeclared lane's repositories from its own folder
+- *(anchor)* resolve a linked worktree's branch through commondir
+- *(setup)* stop a repeated --join from orphaning the folder's lane
+- *(t594)* refuse relocate from a copy and close the join bypass
+- *(registry)* trigger the copy warning by having written, not the verb
+- *(setup)* close the doors joining a folder was walking around
+- *(relocate)* refuse foreign lanes, wall off the real registry
+- *(relocate)* a concurrent reader can hit the empty-tree bug too
+- *(relocate)* never let a failed move look like an empty tree
+- *(relocate)* roll back copy failures, refuse moving onto self
+- *(ops)* refuse the folder with no lane, not the one named main
+- *(registry)* stop copy_of from naming itself, wrap all five forms
+- *(registry)* finish closing f612, and warn about every copy
+- *(registry)* close f612 in copy detection, and warn both folders
+- *(ops)* fall back to canonicalize when repo_at's paths disagree
+- *(lane)* ask the log, not config, whether a tree has lanes
+- *(lane)* move signing lane off store, gate auto-join on setup
+- *(setup)* mint a lane instead of redeclaring a claimed main
+- *(ops)* join a worktree on write, not on taking the lock
+- *(setup)* make the closing message say what a run wrote
+- *(store)* let a lane retry its worktree's main copy on its own
+- *(setup)* register the tree a lane joins and stop misreporting it
+- *(ops)* keep the working folder's lane when the tree is rebuilt
+- *(registry)* write the project registry atomically under a lock
+- *(session)* take the lock only when a stop has something to write
+- *(mcp)* hold the write lock around every server write
+- *(store)* serialize writers with an OS lock
+- *(setup)* keep .vivac out of version control
+- *(render)* say when a number names more than one node
+
+### Internal
+
+- lint the release profile, which nothing here ever built
+- pin a 0.11.3 log and check git status ignores .vivac
+- *(setup)* cover the withheld-route branch, plural and mixed
+- *(tests)* drop the `todo` exception now that nothing reaches it
+- the other lanes, end to end
+- *(lanes)* fail loudly if the brief footer loses its token count
+- the branch that moved, end to end
+- *(t594)* stop the suite from leaking its own temp files
+- *(t594)* fix nine review-broken tests that stayed green
+- the IQuorum scenario, end to end
+- *(check)* cover the fifth copy-notice form, all names withheld
+
+### Performance
+
+- *(why)* read the index again instead of folding the whole log
+- *(brief)* stop diffing against git on the read path
+- *(mcp)* apply only the tail another process appended
+
 ## [0.11.3](https://github.com/JAAvila-Of/vivac/compare/v0.11.2...v0.11.3) - 2026-09-15
 
 ### Upgrading
