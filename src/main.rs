@@ -557,16 +557,19 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         return changes::changes(&ctx.tree, &log, a);
     }
 
-    // `why` always folds the whole log now, `--full` or not: `t594` §5.4's
-    // "born in lane" line answers for the node in view either way, and that
-    // needs `Full::from_log`. `--full` still gates its own three fields --
-    // `anchor`, `standing`, `open_then` -- which is the only reason it used
-    // to be the one paying for this read; `changes` above already pays it
-    // unconditionally for the same kind of question. The "one word of its
-    // own" limit is checked here rather than left to the generic path
-    // below, so `vivac why t1 extra` still refuses it exactly as it always
-    // has -- after the load, so a store that cannot be opened is still
-    // reported before a usage error that was already true beforehand.
+    // `why`'s plain read goes through the derived index again, the same as
+    // every other read: `t594` §5.4's "born in lane" line reads straight off
+    // the node it is asked about now (`Node::born_seq`, `Node::born_lane`),
+    // and only `--full`'s own three fields -- `anchor`, `standing`,
+    // `open_then` -- still need the whole log folded (`Full::from_log`), for
+    // `open_then`'s question about a moment in the past that closing has
+    // already folded away. `changes` above is unrelated: it asks about the
+    // events themselves, not about the tree they fold into, so it always
+    // reads the log regardless. The "one word of its own" limit is checked
+    // here rather than left to the generic path below, so `vivac why t1
+    // extra` still refuses it exactly as it always has -- after the load, so
+    // a store that cannot be opened is still reported before a usage error
+    // that was already true beforehand.
     if cmd == "why" {
         let extra_word = |a: &Args| -> Result<(), Failure> {
             if let [first, ..] = a.extra(1) {
@@ -607,10 +610,15 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
             }
             return render::why(&tree, &[], a).map(|_| 0);
         }
-        let (ctx, log) =
-            ops::Ctx::load_with_log(store::Store::open(root)?, ops::Whose::Resolved(&located))?;
+        if a.has("full") {
+            let (ctx, log) =
+                ops::Ctx::load_with_log(store::Store::open(root)?, ops::Whose::Resolved(&located))?;
+            extra_word(a)?;
+            return render::why(&ctx.tree, &log, a).map(|_| 0);
+        }
+        let ctx = ops::Ctx::load(store::Store::open(root)?, ops::Whose::Resolved(&located))?;
         extra_word(a)?;
-        return render::why(&ctx.tree, &log, a).map(|_| 0);
+        return render::why(&ctx.tree, &[], a).map(|_| 0);
     }
 
     // `may_append` is checked here, once, rather than passed down: it is

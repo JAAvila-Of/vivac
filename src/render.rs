@@ -118,52 +118,33 @@ pub(crate) fn print_json(v: serde_json::Value) -> R {
 /// `--full` adds three more, per step of the path and on `node` itself: the
 /// anchor in force when that step was born, the decisions born there that
 /// still stand, and the siblings that were still open at that moment. The
-/// first two answer from the folded `Tree`; the third cannot, because
-/// closing is folded away to the final state, and this is a question about
-/// a moment in the past. `Full` answers it from the log directly.
+/// first two answer from `node`'s own birth (`Node::born_seq`,
+/// `Node::born_lane`); the third cannot, because closing is folded away to
+/// the final state, and this is a question about a moment in the past.
+/// `Full` answers it from the log directly.
 ///
 /// Only the log gives a moment a `seq`: `ts` alone ties within the same day,
 /// and this project has had days with 23 stops on it, so a comparison by
 /// date would be wrong on exactly the days it matters.
 pub(crate) struct Full {
-    /// Node id -> the `seq` it was created at. The first `node.created` for
-    /// an id wins, matching `Tree::apply`'s own rule for a repeated one.
-    created: HashMap<String, u64>,
     /// Node id -> every `state.changed` it ever had, in log order. A node can
     /// be reopened, so this is not "the one time it closed": it is the whole
-    /// history, searched for whatever it was at a given `seq`.
+    /// history, searched for whatever it was at a given `seq`. This is the
+    /// one thing a folded `Tree` cannot answer on its own -- closing folds
+    /// away to the final state -- so it is the only thing left here
+    /// (`t594` tramo 7: `created` and `born_lane` moved onto `Node` itself).
     state: HashMap<String, Vec<(u64, State)>>,
-    /// Node id -> the lane its `node.created` was signed with. `Node` gains
-    /// no field for this (`t164`): the datum is in the event, and `Full`
-    /// already walks the whole log, so it costs nothing here and would cost
-    /// a field on every node anywhere else.
-    born_lane: HashMap<String, String>,
 }
 
 impl Full {
     pub(crate) fn from_log(log: &[Event]) -> Full {
-        let mut created = HashMap::new();
         let mut state: HashMap<String, Vec<(u64, State)>> = HashMap::new();
-        let mut born_lane = HashMap::new();
         for e in log {
-            match &e.payload {
-                Body::NodeCreated { node, .. } => {
-                    created.entry(node.clone()).or_insert(e.seq);
-                    born_lane
-                        .entry(node.clone())
-                        .or_insert_with(|| e.lane.clone());
-                }
-                Body::StateChanged { node, state: s, .. } => {
-                    state.entry(node.clone()).or_default().push((e.seq, *s));
-                }
-                _ => {}
+            if let Body::StateChanged { node, state: s, .. } = &e.payload {
+                state.entry(node.clone()).or_default().push((e.seq, *s));
             }
         }
-        Full {
-            created,
-            state,
-            born_lane,
-        }
+        Full { state }
     }
 
     /// What a node's state was at `seq`, inclusive. With no `state.changed`
@@ -199,13 +180,10 @@ impl Full {
 /// back to this answer for a tree with no `where.changed` of its own
 /// (`t594` §5.4): that is what keeps every stop written before this tranche
 /// reading exactly as it did.
-pub(crate) fn anchor_of(a: &Tree, full: &Full, n: &Node) -> AnchorRef {
-    let Some(&seq) = full.created.get(&n.id) else {
-        return AnchorRef::default();
-    };
+pub(crate) fn anchor_of(a: &Tree, n: &Node) -> AnchorRef {
     a.vivacs
         .iter()
-        .rfind(|v| v.seq <= seq)
+        .rfind(|v| v.seq <= n.born_seq)
         .map(|v| v.anchor.clone())
         .unwrap_or_default()
 }
@@ -215,10 +193,11 @@ pub(crate) fn anchor_of(a: &Tree, full: &Full, n: &Node) -> AnchorRef {
 /// lanes, or a lane with no repositories -- the answer falls back to the
 /// anchor of the last stop, which is what [`anchor_of`] has always given.
 /// Same mechanism, one question deeper.
-pub(crate) fn born_where<'a>(a: &'a Tree, full: &Full, n: &Node) -> Option<&'a Where> {
-    let seq = *full.created.get(&n.id)?;
-    let lane = full.born_lane.get(&n.id)?;
-    a.wheres.iter().rfind(|w| &w.lane == lane && w.seq <= seq)
+pub(crate) fn born_where<'a>(a: &'a Tree, n: &Node) -> Option<&'a Where> {
+    let lane = n.born_lane(a);
+    a.wheres
+        .iter()
+        .rfind(|w| w.lane == lane && w.seq <= n.born_seq)
 }
 
 /// The decisions born from `n` that still stand: a filter over what
@@ -253,13 +232,13 @@ pub(crate) fn blocking_of<'a>(a: &'a Tree, n: &Node) -> Vec<&'a Node> {
 /// and close on the day `n` was born, in an order the date cannot tell
 /// apart.
 pub(crate) fn open_then_of<'a>(a: &'a Tree, full: &Full, n: &Node) -> Vec<&'a Node> {
-    let (Some(&seq), Some(parent)) = (full.created.get(&n.id), n.parent) else {
+    let Some(parent) = n.parent else {
         return vec![];
     };
     a.children(parent)
         .into_iter()
         .filter(|c| c.id != n.id && c.num < n.num)
-        .filter(|c| full.state_at(&c.id, seq).is_open())
+        .filter(|c| full.state_at(&c.id, n.born_seq).is_open())
         .collect()
 }
 
@@ -285,8 +264,8 @@ fn handle_json(a: &Tree, n: &Node) -> serde_json::Value {
 /// the same way (`t594` §5.4). Absent, not `null`, with none: a tree with no
 /// `where.changed` gains neither field, which is what keeps its JSON byte
 /// for byte what it already was.
-fn add_born_where(a: &Tree, full: &Full, n: &Node, v: &mut serde_json::Value) {
-    if let Some(w) = born_where(a, full, n) {
+fn add_born_where(a: &Tree, n: &Node, v: &mut serde_json::Value) {
+    if let Some(w) = born_where(a, n) {
         v["lane"] = json!(w.lane);
         v["where"] = json!(w.repos);
     }
@@ -298,7 +277,7 @@ fn add_born_where(a: &Tree, full: &Full, n: &Node, v: &mut serde_json::Value) {
 /// rest of each one for nothing.
 fn json_node_full(a: &Tree, ag: &Aggregates, full: &Full, n: &Node) -> serde_json::Value {
     let mut v = json_node(a, ag, n);
-    v["anchor"] = json!(anchor_of(a, full, n));
+    v["anchor"] = json!(anchor_of(a, n));
     v["standing"] = json!(standing_of(a, n)
         .iter()
         .map(|c| handle_json(a, c))
@@ -307,7 +286,7 @@ fn json_node_full(a: &Tree, ag: &Aggregates, full: &Full, n: &Node) -> serde_jso
         .iter()
         .map(|c| handle_json(a, c))
         .collect::<Vec<_>>());
-    add_born_where(a, full, n, &mut v);
+    add_born_where(a, n, &mut v);
     v
 }
 
@@ -336,10 +315,11 @@ fn json_node_full(a: &Tree, ag: &Aggregates, full: &Full, n: &Node) -> serde_jso
 /// the same functions [`json_node`] uses, so a step and a node cannot read
 /// either one differently.
 ///
-/// `full` is always the whole log folded (`t594` §5.4: `lane` and `where`
-/// answer with or without `--full`), and `full_extra` is `--full` itself,
-/// gating only its own three fields -- `anchor`, `standing`, `open_then` --
-/// and whether a body prints whole or clipped.
+/// `lane` and `where` answer from `p`'s own birth with or without `--full`
+/// (`t594` §5.4); `full` only ever backs `open_then`, the one question a
+/// folded `Tree` cannot answer on its own. `full_extra` is `--full` itself,
+/// gating its own three fields -- `anchor`, `standing`, `open_then` -- and
+/// whether a body prints whole or clipped.
 fn path_step_json(
     a: &Tree,
     ag: &Aggregates,
@@ -378,9 +358,9 @@ fn path_step_json(
     if full_extra && p.kind == Kind::Decision && (p.against_recorded || !p.against.is_empty()) {
         v["against"] = against_json(a, p);
     }
-    add_born_where(a, full, p, &mut v);
+    add_born_where(a, p, &mut v);
     if full_extra {
-        v["anchor"] = json!(anchor_of(a, full, p));
+        v["anchor"] = json!(anchor_of(a, p));
         v["standing"] = json!(standing_of(a, p)
             .iter()
             .map(|c| handle_json(a, c))
@@ -433,7 +413,7 @@ fn why_data_impl(
         json_node_full(a, ag, full, n)
     } else {
         let mut v = json_node(a, ag, n);
-        add_born_where(a, full, n, &mut v);
+        add_born_where(a, n, &mut v);
         v
     };
     // `t429`'s second fix: the JSON names the hidden claimants too, and
@@ -625,8 +605,8 @@ fn branch_moved_since_birth(a: &Tree, born: &Where) -> bool {
 /// The "born in lane" line §5.4 adds ahead of `anchor:` below, or nothing at
 /// all for a tree with no `where.changed` -- `anchor_of` alone answers
 /// those, exactly as it always has.
-fn born_line(a: &Tree, full: &Full, n: &Node) -> Option<String> {
-    let w = born_where(a, full, n)?;
+fn born_line(a: &Tree, n: &Node) -> Option<String> {
+    let w = born_where(a, n)?;
     let mut line = format!(
         "born in lane {} · {}",
         lane_display(a, &w.lane),
@@ -644,7 +624,7 @@ fn born_line(a: &Tree, full: &Full, n: &Node) -> Option<String> {
 /// line is not one of them: `t594` §5.4 has it print with or without
 /// `--full`, so the caller prints it on its own, ahead of these.
 fn print_full_of(a: &Tree, full: &Full, n: &Node) {
-    let anchor = anchor_of(a, full, n);
+    let anchor = anchor_of(a, n);
     if anchor.is_empty_tree() {
         outln!("        anchor: none");
     } else {
@@ -685,9 +665,12 @@ pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
         .resolve(s)
         .ok_or_else(|| Failure::usage(format!("No such node: {s}.")))?;
     let lineage = a.ancestors(n.num);
-    // `t594` §5.4: the whole log is folded whether or not `--full` was
-    // given -- that is what lets "born in lane" answer for the node in
-    // view either way. `full_extra` is `--full` itself, gating only its
+    // `t594` §5.4: "born in lane" answers for the node in view whether or
+    // not `--full` was given, straight off its own birth -- `log` is only
+    // for `Full`'s own `state`, which nothing here touches unless
+    // `full_extra` asks `open_then_of` for it, so `log` is empty exactly
+    // when the caller had no reason to read past the derived index
+    // (`t594` tramo 7). `full_extra` is `--full` itself, gating only its
     // own three fields per step.
     let full_data = Full::from_log(log);
     let full_extra = args.has("full");
@@ -778,7 +761,7 @@ pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
         }
         // `t594` §5.4: prints with or without `--full`, unlike the rest of
         // `print_full_of` below it.
-        if let Some(line) = born_line(a, &full_data, p) {
+        if let Some(line) = born_line(a, p) {
             outln!("        {line}");
         }
         if full_extra {
