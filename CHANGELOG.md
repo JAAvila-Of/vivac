@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.1](https://github.com/JAAvila-Of/vivac/compare/v0.12.0...v0.12.1) - 2026-09-19
+
+### Documentation
+
+- *(readme)* say that find ignores case and accents
+
+### Fixed
+
+- *(find)* stop telling accented and unaccented spellings apart
+- *(setup)* warn that a hand-made registration can shadow the server
+- *(json)* carry every repository a stop is anchored to
+
+### Performance
+
+- *(find)* lower case runs of ASCII whole and fold only the rest
+
 ## [0.12.0](https://github.com/JAAvila-Of/vivac/compare/v0.11.3...v0.12.0) - 2026-09-19
 
 ### Upgrading
