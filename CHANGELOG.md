@@ -9,6 +9,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.12.0](https://github.com/JAAvila-Of/vivac/compare/v0.11.3...v0.12.0) - 2026-09-19
 
+### Upgrading
+
+- **Nothing in a tree changes until `setup` runs in it.** Until then this
+  version writes what 0.11 wrote, and 0.11 keeps reading it. The one
+  exception is a linked worktree: the first time anything writes from one,
+  it declares itself a lane of the tree it belongs to.
+- **The brief's header names the lane, and takes that name from the folder.**
+  A tree with one lane prints the same bytes it always did. Anywhere else the
+  name arrives when `setup` runs and is recalculated every time it runs
+  again, so renaming a folder shows up at the next `setup` and never
+  repoints anything on its own.
+- **Once a tree holds lanes it needs 0.12 or newer.** `setup`, `relocate`,
+  or a linked worktree writing for the first time rewrites the config's
+  `version` field to `this tree holds lanes, and this vivac is too old to
+  read them: update vivac`. Versions 0.7 to 0.11 refuse a version they do
+  not know and print that sentence.
+- **Three events are new**, and none of them appears before the tree holds
+  lanes: `lane.declared`, `lane.claimed` and `where.changed`. The last one
+  is a photograph of the branches this lane's repositories were on, written
+  only when they differ from the last one this lane wrote.
+- **Every tree gains `.vivac/lock`, and `setup` also writes
+  `.vivac/.gitignore`.** If `.vivac` was committed to git, `vivac check`
+  points at the missing `.gitignore` and gives the command that takes it
+  back out.
+- **The first read of each tree after upgrading is slower, once.** The
+  derived index changed shape, so this version declines the one it finds,
+  folds the log, and writes a new one. Nothing to run: the next read is back
+  to normal. An older vivac does the same in reverse, and also keeps working.
+- **The brief no longer says how many files changed since your last stop.**
+  It was costing two git processes on every read to print one line. Ask for
+  it when you want it: `vivac changes`, or `vivac reconcile` to see it
+  against the tree.
+- **`vivac setup claude-code --join` with nothing after it used to plant a
+  tree** instead of joining one, silently. It now refuses and says what it
+  needs. If you ran it that way, look for a `.vivac/` you did not mean to
+  create.
+- **Building from source now needs Rust 1.89**, up from 1.75. `cargo install
+  vivac` compiles, so this is your toolchain, not your project's. The
+  release binaries need none.
+- **On Windows, close every session and any `vivac web` before installing.**
+  A running `vivac mcp` or `vivac web` holds the executable open, and
+  `cargo install` fails with `os error 5` until it is closed.
+
 ### Added
 
 - *(model)* give each node the lane and seq it was born with
