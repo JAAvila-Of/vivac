@@ -421,6 +421,30 @@ fn why_comes_back_as_the_json_the_cli_would_print() {
     assert_eq!(v, cli, "the MCP tool and `why --json` disagree:\n{t}");
 }
 
+/// `f547`, `d651`: `why` also opens a stop's own alias, not only a node's,
+/// and it has to answer that the same way on both doors. `seeded`'s own
+/// first `push` already froze one stop, `v1`.
+#[test]
+fn why_on_a_stops_alias_matches_the_cli_over_mcp_too() {
+    let c = seeded("why-vivac-json");
+    let cli_text = c.ok(&["why", "v1", "--json"]);
+    let cli: Value = serde_json::from_str(&cli_text).expect("the CLI payload is not JSON");
+    assert_eq!(
+        cli["kind"], "push",
+        "the fixture's first stop moved:\n{cli}"
+    );
+    let mut s = hello(&c);
+    let r = s.ask(
+        r#"{"jsonrpc":"2.0","id":26,"method":"tools/call","params":{"name":"vivac_why","arguments":{"id":"v1"}}}"#,
+    );
+    let t = text_of(&r);
+    let v: Value = serde_json::from_str(&t).expect("the payload is not JSON");
+    assert_eq!(
+        v, cli,
+        "the MCP tool and `why --json` disagree on a stop:\n{t}"
+    );
+}
+
 /// `d273`'s second half, on `vivac_why`: `project` opens a node that lives
 /// in another tree, and it has to answer exactly what `why --project --json`
 /// does on the CLI.
