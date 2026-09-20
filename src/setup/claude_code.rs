@@ -403,7 +403,9 @@ fn skill_fingerprint() -> u64 {
     super::fnv1a64(skill_content_without_marker().as_bytes())
 }
 
-fn skill_text() -> String {
+/// `pub(super)`: `codex.rs` writes this same file at its own path, byte for
+/// byte, rather than keeping a second copy of the skill (`d653`).
+pub(super) fn skill_text() -> String {
     format!("{FRONTMATTER}{}{BODY}", marker_line(skill_fingerprint()))
 }
 
@@ -1358,15 +1360,17 @@ fn note_registry(roots: &super::Roots) {
 // Formatting: the two-column plan lines `t565` §7.8 fixes the width of.
 // ---------------------------------------------------------------------------
 
-fn piece_line(label: &str, status: &str) -> String {
+// `pub(super)`: `codex.rs` renders its own plan in the same two columns,
+// rather than fixing the same widths a second time (`d653`).
+pub(super) fn piece_line(label: &str, status: &str) -> String {
     format!("    {label:<41}{status}\n")
 }
 
-fn sub_line(label: &str, value: &str) -> String {
+pub(super) fn sub_line(label: &str, value: &str) -> String {
     format!("        {label:<15}{value}\n")
 }
 
-fn wrapped_piece_line(label: &str, first: &str, second: &str) -> String {
+pub(super) fn wrapped_piece_line(label: &str, first: &str, second: &str) -> String {
     format!("    {label:<41}{first}\n{:45}{second}\n", "")
 }
 
@@ -2054,7 +2058,9 @@ fn render_piece_block(
     s
 }
 
-const TRAILING_PARAGRAPH: &str = "  The hooks run a command in every session, and the server is how the\n  agent writes to the tree. Nothing outside this directory is touched,\n  and no file is copied.\n";
+// `pub(super)`: true of `codex.rs`'s own hooks and server too, and neither
+// names Claude Code (`d653`).
+pub(super) const TRAILING_PARAGRAPH: &str = "  The hooks run a command in every session, and the server is how the\n  agent writes to the tree. Nothing outside this directory is touched,\n  and no file is copied.\n";
 
 const NO_TERMINAL_TEXT: &str = "  setup asks before writing, and there is no terminal here to ask.\n  See what it would write:  vivac setup claude-code --dry-run\n  Then write it:            vivac setup claude-code --yes";
 
@@ -2166,7 +2172,10 @@ fn tree_paragraph(gitignore_created: bool, lane_declared: bool, config_locked: b
 /// already wraps to by hand, each line indented by two spaces. A plain
 /// greedy word wrap is all this needs: nothing it ever wraps runs past a
 /// short sentence naming one to three clauses.
-fn wrapped(text: &str) -> String {
+///
+/// `pub(super)`: `codex.rs` wraps its own one-sentence refusals the same
+/// way, rather than hand-wrapping each one to the same width again.
+pub(super) fn wrapped(text: &str) -> String {
     const WIDTH: usize = 76;
     let mut out = String::new();
     let mut line = String::from("  ");

@@ -129,6 +129,7 @@ bad
 bare
 base
 based
+basic
 basis
 baskets
 be
@@ -288,6 +289,7 @@ code2
 code3
 code4
 codes
+codex
 col
 collect
 collections
@@ -455,8 +457,10 @@ doe
 does
 domain
 done
+doors
 dot
 dotdot
+double
 down
 downwards
 doy
@@ -670,6 +674,7 @@ guard
 guarded
 guess
 guessed
+guessing
 gutter
 had
 half
@@ -927,6 +932,7 @@ measured
 measures
 mem
 merely
+merge
 message
 messy
 metadata
@@ -1581,6 +1587,7 @@ successor
 such
 suffix
 sum
+summary
 super
 superseded
 supersedes
@@ -1743,6 +1750,7 @@ unrestorable
 unrestored
 unstable
 unstack
+unsupported
 untagged
 unterminated
 until
