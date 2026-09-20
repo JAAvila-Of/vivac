@@ -13,6 +13,7 @@
 //! `abandon` and `restore` stay off that server.
 
 mod claude_code;
+mod codex;
 pub mod json;
 
 use crate::args::Args;
@@ -20,7 +21,7 @@ use crate::failure::Failure;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
-const HARNESSES: &[&str] = &["claude-code"];
+const HARNESSES: &[&str] = &["claude-code", "codex"];
 
 pub fn dispatch(cwd: &Path, a: &Args) -> Result<i32, Failure> {
     if a.has("dry-run") && a.has("yes") {
@@ -56,11 +57,12 @@ pub fn dispatch(cwd: &Path, a: &Args) -> Result<i32, Failure> {
     let Some(harness) = a.positional(0) else {
         return Err(Failure::usage(
             "vivac setup needs the harness to set up:  vivac setup claude-code\n  \
-             It knows claude-code today.",
+             It knows claude-code and codex today.",
         ));
     };
     match harness {
         "claude-code" => claude_code::run(&resolve_roots(cwd)?, a),
+        "codex" => codex::run(&resolve_roots(cwd)?, a),
         other => Err(Failure::usage(format!(
             "vivac setup does not know \"{other}\" yet. It knows: {}",
             HARNESSES.join(", ")

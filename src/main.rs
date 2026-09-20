@@ -139,6 +139,8 @@ const USAGE: &str = r#"vivac - provenance of work
     vivac setup claude-code --new-tree        plant here even if this
                                               folder's repositories already
                                               belong to a tracked product
+    vivac setup codex [--dry-run] [--yes]     write what Codex needs here:
+                                              hooks, the MCP server, a skill
     vivac relocate <destination> [--lane-name <name>]
                                               move the tree there, run from the
                                               folder that holds it; this one

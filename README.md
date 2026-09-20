@@ -548,6 +548,27 @@ a `.gitignore` inside the tree that keeps it out. `vivac check` names a tree
 missing that file, and gives the command that takes an already-committed
 `.vivac` back out of git.
 
+### Codex
+
+```sh
+vivac setup codex
+```
+
+The same three pieces, in the three places Codex reads inside a project:
+`.codex/config.toml` gets the server, `.codex/hooks.json` gets `SessionStart`
+and `Stop` running the same two commands, and `.agents/skills/vivac-migrate/`
+gets the same skill file. Nothing goes in your own configuration directory.
+
+Two things setup cannot do for you, and it says both when it finishes. Codex
+reads nothing under a project's `.codex/` until you mark that project trusted,
+and that lives in your own `~/.codex/config.toml`, not in the project. And
+every hook is approved on its own, against its hash, with `/hooks` inside
+Codex: the first time, and whenever a hook changes.
+
+Today it writes on a clean project only: if one of the three is already there
+it says which and writes nothing, and `--undo` is refused by name rather than
+ignored. Merging with a file already there comes next.
+
 `Stop` runs on every turn rather than once at the end, so the last stop does
 not depend on the session closing cleanly. The stop is only saved if the tree
 changed since the previous one: a stop that repeats identically is not a stop,
@@ -557,9 +578,10 @@ What they call is `vivac session start` and `vivac session end`, which are
 commands like any other. `--hook` makes them speak to a harness instead of a
 person: the brief goes out as plain text, and what kind of start it was is
 read from what the harness passes in. So the pair can be run by hand to see
-what a hook would do. setup writes Claude Code's configuration today. Any
-harness that can run a command when a session opens and put its output in the
-agent's context can call the same one, and any MCP client can run `vivac mcp`.
+what a hook would do. setup writes Claude Code's and Codex's configuration
+today. Any harness that can run a command when a session opens and put its
+output in the agent's context can call the same one, and any MCP client can
+run `vivac mcp`.
 
 ## Lanes
 
