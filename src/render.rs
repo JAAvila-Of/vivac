@@ -1592,20 +1592,34 @@ pub fn stack(a: &Tree, root: &Path, args: &Args) -> R {
     Ok(())
 }
 
-/// `stack --lanes`'s own rows: every lane with a non-empty stack, this
-/// folder's included, sorted the same way OTHER LANES orders its own --
-/// the most recent write first, `id` breaking a tie (`t594` §5.5, shares
-/// `brief::lanes_with_a_stack`). Marked `(folder gone)` rather than
-/// dropped: unlike OTHER LANES, this list exists to name every lane, not
-/// only the ones still reachable (decision 2 of this task).
+/// `stack --lanes`'s own rows: every lane the tree knows of, this
+/// folder's included, whether it has a front of its own or not (`f668`,
+/// `brief::all_lanes`). The ones with a front sort first, the same way
+/// OTHER LANES orders its own -- the most recent write first, `id`
+/// breaking a tie -- and the ones without follow, sorted by name; a lane
+/// that has never pushed has no `seq` of its own to sort by. Marked
+/// `(folder gone)` rather than dropped: unlike OTHER LANES, this list
+/// exists to name every lane, not only the ones still reachable
+/// (decision 2 of `t594` §5.5).
 ///
 /// `exists()` runs at most once per lane the registry knows of for this
 /// project, and only when there is at least one row to check it against
 /// (`f623`); without `--lanes`, `stack` never reaches this function at
 /// all.
 fn stack_lanes(a: &Tree, root: &Path, args: &Args, ag: &Aggregates) -> R {
-    let mut rows = crate::brief::lanes_with_a_stack(a);
-    rows.sort_by(|x, y| y.seq.cmp(&x.seq).then_with(|| x.id.cmp(y.id)));
+    let mut rows = crate::brief::all_lanes(a);
+    rows.sort_by(|x, y| {
+        // A lane with a front sorts before one without, regardless of
+        // `seq` or name: `bool`'s own order puts `false` (has a front)
+        // ahead of `true` (does not).
+        x.focus
+            .is_none()
+            .cmp(&y.focus.is_none())
+            .then_with(|| match (x.focus, y.focus) {
+                (Some(_), Some(_)) => y.seq.cmp(&x.seq).then_with(|| x.id.cmp(y.id)),
+                _ => x.name.cmp(y.name),
+            })
+    });
     let gone = if rows.is_empty() {
         Vec::new()
     } else {
@@ -1618,14 +1632,17 @@ fn stack_lanes(a: &Tree, root: &Path, args: &Args, ag: &Aggregates) -> R {
                 .map(|r| json!({
                     "id": r.id,
                     "name": r.name,
-                    "focus": json_node(a, ag, r.focus),
+                    "focus": match r.focus {
+                        Some(focus) => json_node(a, ag, focus),
+                        None => serde_json::Value::Null,
+                    },
                     "folder_gone": gone.iter().any(|g| g == r.id),
                 }))
                 .collect::<Vec<_>>(),
         }));
     }
     if rows.is_empty() {
-        outln!("  Empty stack.  vivac push \"<title>\" --why \"<reason>\"");
+        outln!("  No lanes yet.  vivac setup claude-code plants one.");
         return Ok(());
     }
     outln!();
@@ -1635,13 +1652,16 @@ fn stack_lanes(a: &Tree, root: &Path, args: &Args, ag: &Aggregates) -> R {
         } else {
             ""
         };
-        outln!(
-            "  {:<11} {:<6} {:<45} {}{tail}",
-            r.name,
-            r.focus.alias(),
-            r.focus.title(a),
-            r.focus.opened(a)
-        );
+        match r.focus {
+            Some(focus) => outln!(
+                "  {:<11} {:<6} {:<45} {}{tail}",
+                r.name,
+                focus.alias(),
+                focus.title(a),
+                focus.opened(a)
+            ),
+            None => outln!("  {:<11} (nothing pushed yet){tail}", r.name),
+        }
     }
     outln!();
     Ok(())
