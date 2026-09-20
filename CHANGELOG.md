@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.3](https://github.com/JAAvila-Of/vivac/compare/v0.12.2...v0.12.3) - 2026-09-20
+
+### Added
+
+- *(setup)* --join finishes the setup, and --name names the product
+
+### Fixed
+
+- *(stack)* --lanes lists every lane, not only the ones with a stack
+
 ## [0.12.2](https://github.com/JAAvila-Of/vivac/compare/v0.12.1...v0.12.2) - 2026-09-20
 
 ### Added
