@@ -14,7 +14,7 @@ use crate::args::Args;
 use crate::brief::clip;
 use crate::event::{Body, Event, Kind, State, WhereRepo};
 use crate::failure::{Failure, R};
-use crate::model::{Aggregates, Node, Tree, Where};
+use crate::model::{Aggregates, Node, Tree, Vivac, Where};
 use crate::output::outln;
 use serde_json::json;
 use std::collections::HashMap;
@@ -407,9 +407,20 @@ fn why_data_impl(
     id: &str,
 ) -> Result<serde_json::Value, Failure> {
     let ag = &a.aggregates();
-    let n = a
-        .resolve(id)
-        .ok_or_else(|| Failure::usage(format!("No such node: {id}.")))?;
+    // `id` can also name a stop, not only a node: `why` is the verb that
+    // opens whatever an alias names, and the brief prints a stop's alias in
+    // the same shape as a node's (`f547`). A stop that resolves stands on
+    // its own, so it short-circuits here rather than falling through the
+    // node-shaped body below.
+    let n = match a.resolve(id) {
+        Some(n) => n,
+        None => {
+            return a
+                .vivac(id)
+                .map(|v| vivac_json(a, v))
+                .ok_or_else(|| Failure::usage(format!("No such node: {id}.")));
+        }
+    };
     let lineage = a.ancestors(n.num);
     let mut node_json = if full_extra {
         json_node_full(a, ag, full, n)
@@ -658,14 +669,78 @@ fn print_full_of(a: &Tree, full: &Full, n: &Node) {
     }
 }
 
+/// `why` on a stop's own alias: the whole stop, prose-shaped the way `why`
+/// shapes a node -- same header, same rule below it, `Safe stop` where a
+/// node says `Why we are here` (`f547`, `d651`). Unlike the brief's own
+/// `next_intent`, nothing here is clipped: the clip is exactly what sends a
+/// reader here to begin with.
+fn safe_stop(a: &Tree, v: &Vivac, args: &Args) -> R {
+    if args.has("json") {
+        return print_json(vivac_json(a, v));
+    }
+    outln!();
+    outln!("  Safe stop  ->  {}", v.alias());
+    outln!("  {}", "-".repeat(66));
+    outln!();
+    let mut header = format!(
+        "  {} · {} · {}",
+        v.alias(),
+        v.kind.word(),
+        crate::clock::date_of(&v.ts)
+    );
+    if let Some(anchor) = crate::model::anchoring(&v.anchor, &v.anchors) {
+        header.push_str(&format!(" · {anchor}"));
+    }
+    outln!("{header}");
+    if let Some(node) = v.node_ref.as_deref().and_then(|r| a.node(r)) {
+        outln!("         written at {:<6}{}", node.alias(), node.title(a));
+    }
+    if !v.label.is_empty() {
+        outln!("         \"{}\"", v.label);
+    }
+    if !v.next_intent.is_empty() {
+        outln!("         you were about to: {}", v.next_intent);
+    }
+    outln!();
+    outln!("  The stack it carried");
+    if v.stack.is_empty() {
+        outln!("    empty stack");
+    } else {
+        for (alias, title) in &v.stack {
+            outln!("    {:<6} {}", alias, title);
+        }
+    }
+    if !v.working_set.is_empty() {
+        outln!();
+        outln!("  Working set");
+        for w in &v.working_set {
+            outln!("    {w}");
+        }
+    }
+    outln!();
+    outln!("  vivac restore {}  rebuilds this stack", v.alias());
+    outln!();
+    Ok(())
+}
+
 pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
     let ag = &a.aggregates();
     let s = args
         .positional(0)
         .ok_or_else(|| Failure::usage("usage: vivac why <id>"))?;
-    let n = a
-        .resolve(s)
-        .ok_or_else(|| Failure::usage(format!("No such node: {s}.")))?;
+    // `id` can also name a stop the brief printed (`f547`): `why` is the
+    // verb that opens whatever an alias names, and a stop's alias reads the
+    // same shape as a node's. A stop wins whenever a node does not resolve;
+    // it never shares a prefix with any `Kind`, so the two cannot collide.
+    let n = match a.resolve(s) {
+        Some(n) => n,
+        None => {
+            return match a.vivac(s) {
+                Some(v) => safe_stop(a, v, args),
+                None => Err(Failure::usage(format!("No such node: {s}."))),
+            };
+        }
+    };
     let lineage = a.ancestors(n.num);
     // `t594` §5.4: "born in lane" answers for the node in view whether or
     // not `--full` was given, straight off its own birth -- `log` is only
@@ -1625,6 +1700,27 @@ pub fn stats(a: &Tree, args: &Args) -> R {
     Ok(())
 }
 
+/// One stop's own JSON shape: what `vivacs --json` gives per entry, and what
+/// `why` on a stop's own alias gives loose, since the two answer the same
+/// question about the same stop and cannot be let drift apart from one
+/// another.
+fn vivac_json(a: &Tree, v: &Vivac) -> serde_json::Value {
+    json!({
+        "id": v.id,
+        "alias": v.alias(),
+        "node_ref": v.node_ref.as_ref().and_then(|r| a.node(r).map(|n| n.alias())),
+        "kind": v.kind.word(),
+        "ts": v.ts,
+        "label": v.label,
+        "next_intent": v.next_intent,
+        "anchor": v.anchor,
+        "anchors": v.anchors,
+        "stack": v.stack.iter().map(|(al, t)| json!({"alias": al, "title": t}))
+            .collect::<Vec<_>>(),
+        "working_set": v.working_set,
+    })
+}
+
 /// `vivacs` — the safe stops, latest first.
 pub fn vivacs(a: &Tree, args: &Args) -> R {
     if args.has("json") {
@@ -1632,20 +1728,7 @@ pub fn vivacs(a: &Tree, args: &Args) -> R {
             .vivacs
             .iter()
             .rev()
-            .map(|v| json!({
-                "id": v.id,
-                "alias": v.alias(),
-                "node_ref": v.node_ref.as_ref().and_then(|r| a.node(r).map(|n| n.alias())),
-                "kind": v.kind.word(),
-                "ts": v.ts,
-                "label": v.label,
-                "next_intent": v.next_intent,
-                "anchor": v.anchor,
-                "anchors": v.anchors,
-                "stack": v.stack.iter().map(|(al, t)| json!({"alias": al, "title": t}))
-                    .collect::<Vec<_>>(),
-                "working_set": v.working_set,
-            }))
+            .map(|v| vivac_json(a, v))
             .collect::<Vec<_>>()));
     }
     if a.vivacs.is_empty() {

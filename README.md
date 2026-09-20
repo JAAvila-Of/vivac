@@ -217,6 +217,8 @@ moment. `push`, `pop` and `park` leave one without anybody asking.
 vivac save "before touching the adapter" --next "extract the validator"
 vivac restore v14   rebuilds the stack and says what changed since
 vivac vivacs        the stops, latest first
+vivac why v14       that one stop, whole: its label, what you were about to
+                    do, and the stack it carried
 ```
 
 `restore` **never touches the working tree**. Mixing context navigation with
