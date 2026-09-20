@@ -170,7 +170,8 @@ fn names_an_absolute_path(text: &str) -> bool {
 /// number repeating, `find` reaching across lanes with no `--everywhere`,
 /// and -- the rest of §9.2.8, left to this tramo -- each lane's own
 /// `HERE`, `OTHER LANES` naming only a lane that wrote later, and
-/// `stack --lanes` naming every lane with a front of its own.
+/// `stack --lanes` naming every lane the tree knows of, front or not
+/// (`f668`).
 #[test]
 fn the_iquorum_scenario_moves_joins_and_shares_one_tree_across_five_roots() {
     let home = TempDir::new("home");
@@ -262,7 +263,13 @@ fn the_iquorum_scenario_moves_joins_and_shares_one_tree_across_five_roots() {
     ok(
         &c3,
         &home,
-        &["setup", "claude-code", "--join", p.to_str().unwrap()],
+        &[
+            "setup",
+            "claude-code",
+            "--yes",
+            "--join",
+            p.to_str().unwrap(),
+        ],
     );
     assert!(c3.join(".vivac").join("lane").is_file());
 
@@ -276,7 +283,13 @@ fn the_iquorum_scenario_moves_joins_and_shares_one_tree_across_five_roots() {
     ok(
         &c4,
         &home,
-        &["setup", "claude-code", "--join", p.to_str().unwrap()],
+        &[
+            "setup",
+            "claude-code",
+            "--yes",
+            "--join",
+            p.to_str().unwrap(),
+        ],
     );
     assert!(c4.join(".vivac").join("lane").is_file());
 
@@ -417,15 +430,16 @@ fn the_iquorum_scenario_moves_joins_and_shares_one_tree_across_five_roots() {
         "C2 just wrote again, after every other lane:\n{brief_c2_after}"
     );
 
-    // C3 joined in part 3 above but never wrote: an empty stack carries
-    // no front to name, so it stays out of `stack --lanes` until it does.
+    // C3 and C4 joined in part 3 above but never wrote: `stack --lanes`
+    // names both anyway (`f668`), with nothing pushed yet where a front
+    // would sit.
     let before_json = ok(&c1, &home, &["stack", "--lanes", "--json"]);
     let before: serde_json::Value = serde_json::from_str(&before_json).unwrap_or_else(|e| {
         panic!("stack --lanes --json did not print an object: {e}\n{before_json}")
     });
     assert_eq!(
         before["lanes"].as_array().expect("lanes is an array").len(),
-        2,
+        4,
         "{before_json}"
     );
 
@@ -449,12 +463,13 @@ fn the_iquorum_scenario_moves_joins_and_shares_one_tree_across_five_roots() {
     let rows = after["lanes"].as_array().expect("lanes is an array");
     assert_eq!(
         rows.len(),
-        3,
-        "`stack --lanes` should now name every lane with a front of its own:\n{after_json}"
+        4,
+        "`stack --lanes` should still name every lane, C4's own front-less \
+         one included:\n{after_json}"
     );
     let titles: Vec<&str> = rows
         .iter()
-        .map(|r| r["focus"]["title"].as_str().unwrap())
+        .filter_map(|r| r["focus"]["title"].as_str())
         .collect();
     for title in [
         "Confirm the concurrent writers landed",
@@ -515,6 +530,7 @@ fn brief_marks_here_on_every_lanes_own_front_not_only_this_ones() {
         &[
             "setup",
             "claude-code",
+            "--yes",
             "--join",
             p.to_str().unwrap(),
             "--lane-name",
@@ -587,6 +603,7 @@ fn brief_carries_an_other_lanes_block() {
         &[
             "setup",
             "claude-code",
+            "--yes",
             "--join",
             p.to_str().unwrap(),
             "--lane-name",
@@ -628,6 +645,7 @@ fn stack_lanes_lists_every_lanes_own_stack() {
         &[
             "setup",
             "claude-code",
+            "--yes",
             "--join",
             p.to_str().unwrap(),
             "--lane-name",

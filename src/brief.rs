@@ -612,6 +612,39 @@ pub(crate) fn lanes_with_a_stack(a: &Tree) -> Vec<LaneFocus<'_>> {
         .collect()
 }
 
+/// One row of `stack --lanes` (`f668`): every lane the tree knows of,
+/// focus optional. `LaneFocus` cannot grow an optional focus without
+/// touching every reader that already assumes one -- `other_lanes` and
+/// `last_writer` among them -- so this is its own, narrower struct
+/// instead.
+pub(crate) struct LaneRow<'t> {
+    pub(crate) id: &'t str,
+    pub(crate) name: &'t str,
+    pub(crate) focus: Option<&'t Node>,
+    pub(crate) seq: u64,
+}
+
+/// Every lane the tree knows of, whether it has ever pushed or not
+/// (`f668`): `stack --lanes` exists to name every folder of the product,
+/// and `lanes_with_a_stack` -- kept exactly as it was for OTHER LANES,
+/// which still only wants the ones with a front of their own -- filters
+/// out precisely the ones a brand new lane still is.
+pub(crate) fn all_lanes(a: &Tree) -> Vec<LaneRow<'_>> {
+    a.lanes
+        .iter()
+        .map(|(id, s)| LaneRow {
+            id: id.as_str(),
+            name: if s.name.is_empty() {
+                id.as_str()
+            } else {
+                s.name.as_str()
+            },
+            focus: s.stack.last().and_then(|&num| a.node_by_num(num)),
+            seq: s.seq_wrote,
+        })
+        .collect()
+}
+
 /// Which lane wrote to this tree most recently, among the ones with
 /// something on their own stack to name: the lane the web treats as
 /// "the" focus once there is more than one to pick from (`t594` §5.6).

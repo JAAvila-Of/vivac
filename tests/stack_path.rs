@@ -205,6 +205,7 @@ fn join_lane(on: &Sandbox, folder: &str, name: &str) -> Sandbox {
     joined.ok(&[
         "setup",
         "claude-code",
+        "--yes",
         "--join",
         on.0.to_str().unwrap(),
         "--lane-name",
@@ -282,4 +283,95 @@ fn stack_without_the_flag_prints_exactly_what_it_did() {
         "stack --json gained a field without --lanes:\n{json}"
     );
     assert_eq!(v["depth"], 2, "{json}");
+}
+
+// ---------------------------------------------------------------------------
+// `stack --lanes` names every lane the tree knows, focus or not (`f668`):
+// `lanes_with_a_stack` -- and OTHER LANES, which is built on it -- keeps
+// filtering out the ones with nothing on their own stack; this list stops
+// doing that.
+// ---------------------------------------------------------------------------
+
+/// Plants the tree in `on` itself (`--yes`, no terminal needed) without
+/// pushing anything, so `on`'s own lane is declared with an empty stack --
+/// the plan `stack --lanes` needs a lane with no front of its own to name.
+fn setup_with_no_front(on: &Sandbox) {
+    on.ok(&["setup", "claude-code", "--yes"]);
+}
+
+/// Two lanes, neither with anything pushed: both still have to be named.
+#[test]
+fn stack_lanes_names_a_lane_with_nothing_pushed() {
+    let a = Sandbox::new_seeded("stack-lanes-no-front-both");
+    setup_with_no_front(&a);
+    join_lane(&a, "stack-lanes-no-front-both-b", "sonar");
+
+    let json = a.ok(&["stack", "--lanes", "--json"]);
+    let v: Value = serde_json::from_str(&json)
+        .unwrap_or_else(|e| panic!("stack --lanes --json did not print an object: {e}\n{json}"));
+    let lanes = v["lanes"].as_array().expect("lanes is an array");
+    assert_eq!(lanes.len(), 2, "{json}");
+    for row in lanes {
+        assert!(row["focus"].is_null(), "{json}");
+    }
+
+    let text = a.ok(&["stack", "--lanes"]);
+    assert!(
+        !text.contains("Empty stack"),
+        "a tree with lanes must not fall back to the empty-stack text:\n{text}"
+    );
+    for row in lanes {
+        assert!(
+            text.contains(row["name"].as_str().unwrap()),
+            "missing lane {row} in:\n{text}"
+        );
+    }
+}
+
+/// One lane with a front, one without: both are listed, and the one with a
+/// front sorts first -- the same order `lanes_with_a_stack`'s own rows
+/// already use among themselves.
+#[test]
+fn stack_lanes_orders_a_lane_with_a_front_before_one_without() {
+    let a = Sandbox::new_seeded("stack-lanes-mixed-front");
+    setup_with_no_front(&a);
+    let b = join_lane(&a, "stack-lanes-mixed-front-b", "sonar");
+    b.ok(&["push", "Ship the sonar dashboard", "--why", "seed"]);
+
+    let json = a.ok(&["stack", "--lanes", "--json"]);
+    let v: Value = serde_json::from_str(&json)
+        .unwrap_or_else(|e| panic!("stack --lanes --json did not print an object: {e}\n{json}"));
+    let lanes = v["lanes"].as_array().expect("lanes is an array");
+    assert_eq!(lanes.len(), 2, "{json}");
+    assert_eq!(lanes[0]["name"], "sonar", "{json}");
+    assert!(!lanes[0]["focus"].is_null(), "{json}");
+    assert!(lanes[1]["focus"].is_null(), "{json}");
+
+    let text = a.ok(&["stack", "--lanes"]);
+    let front_name = lanes[0]["name"].as_str().unwrap();
+    let front_at = text
+        .find(front_name)
+        .unwrap_or_else(|| panic!("missing {front_name} in:\n{text}"));
+    let other_name = lanes[1]["name"].as_str().unwrap();
+    let other_at = text
+        .find(other_name)
+        .unwrap_or_else(|| panic!("missing {other_name} in:\n{text}"));
+    assert!(
+        front_at < other_at,
+        "the lane with a front should sort before the one without:\n{text}"
+    );
+}
+
+/// A tree with no lane at all -- `vivac init`, and nothing else -- names
+/// `vivac setup claude-code` instead of the empty-stack text, which answers
+/// a different question (`f668`).
+#[test]
+fn stack_lanes_on_a_tree_with_no_lane_names_setup() {
+    let c = Sandbox::new_seeded("stack-lanes-no-lane-at-all");
+    let text = c.ok(&["stack", "--lanes"]);
+    assert!(text.contains("vivac setup claude-code"), "{text}");
+    assert!(
+        !text.contains("Empty stack"),
+        "a tree with no lane answers a different question than an empty stack:\n{text}"
+    );
 }
