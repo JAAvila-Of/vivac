@@ -437,11 +437,14 @@ fn the_plan_for_a_new_lane_shows_the_three_lines_the_spec_gives() {
     let (out, code) = run_in(&second, c.global_home(), &["setup", "claude-code", "--yes"]);
     assert_eq!(code, 0, "{out}");
 
+    // `t640`, point 9: the plan names the product on this line too,
+    // derived here since nobody fixed one with `--name`.
+    let product = c.0.file_name().unwrap().to_string_lossy().into_owned();
     assert!(
         lane_line_containing(
             &out,
             ".vivac/lane",
-            "create: this folder becomes lane \"v2\" of the tree above",
+            &format!("create: this folder becomes lane \"v2\" of \"{product}\""),
         ),
         "{out}"
     );
@@ -2063,7 +2066,7 @@ fn join_by_name_declares_a_lane_and_signs_writes_with_it() {
     let (out, code) = run_in(
         &here,
         c.global_home(),
-        &["setup", "claude-code", "--join", "IQuorum"],
+        &["setup", "claude-code", "--yes", "--join", "IQuorum"],
     );
     assert_eq!(code, 0, "{out}");
     assert!(
@@ -2117,6 +2120,7 @@ fn lane_name_names_the_lane_over_join_too() {
         &[
             "setup",
             "claude-code",
+            "--yes",
             "--join",
             "IQuorum",
             "--lane-name",
@@ -2148,7 +2152,7 @@ fn join_by_path_works_the_same_way() {
     let (out, code) = run_in(
         &here,
         c.global_home(),
-        &["setup", "claude-code", "--join", &target_str],
+        &["setup", "claude-code", "--yes", "--join", &target_str],
     );
     assert_eq!(code, 0, "{out}");
     assert!(here.join(".vivac").join("lane").exists());
@@ -2226,7 +2230,7 @@ fn join_to_a_folder_that_is_itself_a_copy_warns_on_stderr() {
     let (stdout, stderr, code) = run_in_split(
         &here,
         c.global_home(),
-        &["setup", "claude-code", "--join", &copy_str],
+        &["setup", "claude-code", "--yes", "--join", &copy_str],
     );
     assert_eq!(code, 0, "{stdout}{stderr}");
     assert!(
@@ -2364,7 +2368,7 @@ fn join_from_a_folder_already_a_lane_of_another_tree_refuses() {
     let (join_out, join_code) = run_in(
         &here,
         c.global_home(),
-        &["setup", "claude-code", "--join", "A"],
+        &["setup", "claude-code", "--yes", "--join", "A"],
     );
     assert_eq!(join_code, 0, "{join_out}");
 
@@ -2828,7 +2832,7 @@ fn a_relative_join_target_is_recorded_as_an_absolute_path() {
     let (out, code) = run_in(
         &sub,
         c.global_home(),
-        &["setup", "claude-code", "--join", "../../T"],
+        &["setup", "claude-code", "--yes", "--join", "../../T"],
     );
     assert_eq!(code, 0, "{out}");
 
@@ -2895,6 +2899,20 @@ fn join_dry_run_writes_nothing() {
     assert_eq!(code, 0, "{out}");
     assert!(out.contains("Nothing written: --dry-run."), "{out}");
     assert!(!here.join(".vivac").exists(), "the lane file was written");
+
+    // `t640`, point 14: `--join --dry-run` shows the whole plan, not just
+    // its own two lines -- the lane, and the three harness pieces this
+    // run used to leave for a later, unasked session to discover.
+    assert!(
+        lane_line_containing(&out, ".vivac/lane", "create: this folder becomes lane"),
+        "{out}"
+    );
+    assert!(out.contains(".claude/settings.json"), "{out}");
+    assert!(out.contains(".mcp.json"), "{out}");
+    assert!(
+        out.contains(".claude/skills/vivac-migrate/SKILL.md"),
+        "{out}"
+    );
 
     let log_after = std::fs::read_to_string(target.join(".vivac").join("events")).unwrap();
     assert_eq!(log_before, log_after, "the target tree's own log changed");
@@ -2981,7 +2999,7 @@ fn a_second_join_of_the_same_tree_leaves_the_stack_alone() {
     let (first_out, first_code) = run_in(
         &here,
         c.global_home(),
-        &["setup", "claude-code", "--join", &target_str],
+        &["setup", "claude-code", "--yes", "--join", &target_str],
     );
     assert_eq!(first_code, 0, "{first_out}");
 
@@ -3031,7 +3049,7 @@ fn a_second_join_of_the_same_tree_writes_nothing() {
     let (first_out, first_code) = run_in(
         &here,
         c.global_home(),
-        &["setup", "claude-code", "--join", &target_str],
+        &["setup", "claude-code", "--yes", "--join", &target_str],
     );
     assert_eq!(first_code, 0, "{first_out}");
     let before = join_state(&here, &target, c.global_home());
@@ -3083,6 +3101,7 @@ fn a_second_join_with_another_lane_name_changes_nothing_and_says_so() {
         &[
             "setup",
             "claude-code",
+            "--yes",
             "--join",
             &target_str,
             "--lane-name",
@@ -3166,11 +3185,11 @@ fn a_join_to_a_different_tree_is_still_refused_and_a_first_join_still_works() {
     let (first_out, first_code) = run_in(
         &here,
         c.global_home(),
-        &["setup", "claude-code", "--join", "A"],
+        &["setup", "claude-code", "--yes", "--join", "A"],
     );
     assert_eq!(first_code, 0, "{first_out}");
     assert!(
-        first_out.contains("This folder is now a lane of the tree in \"A\"."),
+        first_out.contains("Written."),
         "a first join stopped saying what it did:\n{first_out}"
     );
     assert!(
@@ -3388,7 +3407,8 @@ fn the_join_command_printed_by_the_refusal_actually_works() {
         "the printed command did not quote the name with a space: {join_line}"
     );
     let words = shell_split(join_line.trim());
-    let cli_args: Vec<&str> = words[1..].iter().map(String::as_str).collect();
+    let mut cli_args: Vec<&str> = words[1..].iter().map(String::as_str).collect();
+    cli_args.push("--yes");
 
     let (join_out, join_code) = run_in(&second, c.global_home(), &cli_args);
     assert_eq!(join_code, 0, "{join_out}");
@@ -3426,5 +3446,433 @@ fn a_tree_nobody_has_run_setup_in_still_says_main() {
     assert!(
         header.contains(" · lane: main · 2026-09-18"),
         "a tree nobody ran setup in should still say main:\n{header}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// `t640`: `--name` fixes the product's own name on purpose, rather than
+// always deriving it from whichever folder holds the tree.
+// ---------------------------------------------------------------------------
+
+/// Point 6 and the header both at once: `--name` while planting saves the
+/// name to the registry, and the brief it plants leads with it.
+#[test]
+fn name_plants_the_product_and_the_brief_shows_it() {
+    let c = Sandbox::new_empty("setup-name-plants");
+    let (out, code) = c.run(&["setup", "claude-code", "--yes", "--name", "IQuorum"]);
+    assert_eq!(code, 0, "{out}");
+
+    let registry = std::fs::read_to_string(c.global_home().join("projects")).unwrap();
+    assert!(registry.contains("\"name\": \"IQuorum\""), "{registry}");
+
+    let brief = c.ok(&["brief"]);
+    let header = brief.lines().next().unwrap_or("");
+    assert!(header.contains("project: IQuorum"), "{header}");
+}
+
+/// Point 7: a name fixed on purpose keeps naming the product once the
+/// folder it once came from no longer says the same thing.
+#[test]
+fn a_saved_name_wins_over_a_moved_folder() {
+    let c = Sandbox::new_empty("setup-name-precedence");
+    c.ok(&["setup", "claude-code", "--yes", "--name", "IQuorum"]);
+
+    let moved = c.0.parent().unwrap().join("setup-name-precedence-moved");
+    std::fs::rename(&c.0, &moved).unwrap();
+
+    let (out, code) = run_in(&moved, c.global_home(), &["brief"]);
+    assert_eq!(code, 0, "{out}");
+    let header = out.lines().next().unwrap_or("");
+    assert!(header.contains("project: IQuorum"), "{header}");
+    assert!(
+        !header.contains("setup-name-precedence-moved"),
+        "the folder's new name overrode the name fixed on purpose: {header}"
+    );
+
+    std::fs::remove_dir_all(&moved).ok();
+}
+
+/// Without `--name`, nothing about the registry or the brief's header
+/// changes: no `name` field is written, and the header still leads with
+/// the folder's own name, exactly as it did before this tranche.
+#[test]
+fn no_name_leaves_the_registry_and_the_header_exactly_as_before() {
+    let c = Sandbox::new_empty("setup-no-name-regression");
+    c.ok(&["setup", "claude-code", "--yes"]);
+
+    let registry = std::fs::read_to_string(c.global_home().join("projects")).unwrap();
+    assert!(!registry.contains("\"name\""), "{registry}");
+
+    let from_folder = c.0.file_name().unwrap().to_string_lossy().into_owned();
+    let brief = c.ok(&["brief"]);
+    let header = brief.lines().next().unwrap_or("");
+    assert!(
+        header.contains(&format!("project: {from_folder}")),
+        "{header}"
+    );
+}
+
+/// Point 2, first half: `--name` beside `--join` refuses by name, before
+/// touching the disk.
+#[test]
+fn name_with_join_refuses_before_writing_anything() {
+    let c = Sandbox::new_empty("setup-name-with-join");
+    let before = list(&c.0);
+    let (out, code) = c.run(&[
+        "setup",
+        "claude-code",
+        "--yes",
+        "--join",
+        "somewhere",
+        "--name",
+        "X",
+    ]);
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("--join"), "{out}");
+    assert!(out.contains("--name"), "{out}");
+    assert_eq!(list(&c.0), before, "the disk changed");
+    assert!(!c.0.join(".vivac").exists());
+}
+
+/// Point 2, second half: `--name` beside `--undo` refuses the same way.
+#[test]
+fn name_with_undo_refuses_before_writing_anything() {
+    let c = Sandbox::new_empty("setup-name-with-undo");
+    let before = list(&c.0);
+    let (out, code) = c.run(&["setup", "claude-code", "--undo", "--name", "X"]);
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("--undo"), "{out}");
+    assert!(out.contains("--name"), "{out}");
+    assert_eq!(list(&c.0), before, "the disk changed");
+}
+
+/// Point 1: `--name` given while this folder is only becoming an
+/// ordinary new lane of a tree that already exists -- not planting one,
+/// and not `--new-tree` either -- has no product left to fix a name on
+/// for the first time.
+#[test]
+fn name_is_rejected_when_not_planting() {
+    let c = Sandbox::new_empty("setup-name-not-planting");
+    let root = c.0.join("root");
+    std::fs::create_dir_all(&root).unwrap();
+    run_in(&root, c.global_home(), &["setup", "claude-code", "--yes"]);
+
+    let sub = root.join("sub");
+    std::fs::create_dir_all(&sub).unwrap();
+    let (out, code) = run_in(
+        &sub,
+        c.global_home(),
+        &["setup", "claude-code", "--yes", "--name", "X"],
+    );
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("--name"), "{out}");
+    assert!(!sub.join(".vivac").exists());
+}
+
+/// Point 3: `--name` with nothing after it is a usage error, the same
+/// gap `f632` already closed for `--join`.
+#[test]
+fn name_with_no_value_refuses() {
+    let c = Sandbox::new_empty("setup-name-no-value");
+    let (out, code) = c.run(&["setup", "claude-code", "--yes", "--name"]);
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("--name"), "{out}");
+    assert!(!c.0.join(".vivac").exists());
+}
+
+/// Point 4: a name the redaction guard refuses exits 3 with its own
+/// message, and nothing reaches the disk.
+#[test]
+fn name_the_guard_rejects_refuses_and_writes_nothing() {
+    let c = Sandbox::new_empty("setup-name-guard-rejects");
+    let (out, code) = c.run(&[
+        "setup",
+        "claude-code",
+        "--yes",
+        "--name",
+        "sk-ant-api03-abcdefghijklmnopqrstuvwxyz012345",
+    ]);
+    assert_eq!(code, 3, "{out}");
+    assert!(out.contains("Refused"), "{out}");
+    assert!(!c.0.join(".vivac").exists());
+}
+
+/// Point 5: the minimal shape a name has to have before it ever reaches
+/// the redaction guard.
+#[test]
+fn name_shape_is_checked_before_the_guard() {
+    let c = Sandbox::new_empty("setup-name-shape");
+    let (out, code) = c.run(&["setup", "claude-code", "--yes", "--name", "   "]);
+    assert_eq!(code, 2, "{out}");
+    assert!(!c.0.join(".vivac").exists());
+
+    let too_long = "x".repeat(101);
+    let d = Sandbox::new_empty("setup-name-shape-long");
+    let (out, code) = d.run(&["setup", "claude-code", "--yes", "--name", &too_long]);
+    assert_eq!(code, 2, "{out}");
+    assert!(!d.0.join(".vivac").exists());
+}
+
+/// Point 8: a second site sharing repositories is refused with the fixed
+/// name rather than the folder-derived one, and the very `--join`
+/// command the refusal offers works.
+#[test]
+fn a_second_folder_sharing_repos_is_refused_with_the_fixed_name_and_join_works() {
+    let c = Sandbox::new_empty("setup-name-sharing-refusal");
+    let first = c.0.join("Prod");
+    real_git_repo(&first.join("webapi"));
+    run_in(
+        &first,
+        c.global_home(),
+        &["setup", "claude-code", "--yes", "--name", "IQuorum"],
+    );
+
+    let second = c.0.join("Prod-fork");
+    clone_repo(&first.join("webapi"), &second.join("webapi"));
+
+    let (refused_out, refused_code) =
+        run_in(&second, c.global_home(), &["setup", "claude-code", "--yes"]);
+    assert_eq!(refused_code, 1, "{refused_out}");
+    assert!(
+        refused_out.contains("already tracked by project \"IQuorum\""),
+        "{refused_out}"
+    );
+    assert!(
+        refused_out.contains("vivac setup claude-code --join IQuorum"),
+        "{refused_out}"
+    );
+
+    let (out, code) = run_in(
+        &second,
+        c.global_home(),
+        &["setup", "claude-code", "--yes", "--join", "IQuorum"],
+    );
+    assert_eq!(code, 0, "{out}");
+    assert!(second.join(".vivac").join("lane").is_file());
+}
+
+/// Point 9, planting fresh at the tree's own root: the plan names the
+/// product on the same line that names the lane.
+#[test]
+fn the_plan_names_the_product_when_planting_fresh() {
+    let c = Sandbox::new_empty("setup-name-plan-fresh");
+    let (out, code) = c.run(&["setup", "claude-code", "--yes", "--name", "IQuorum"]);
+    assert_eq!(code, 0, "{out}");
+    let lane_name = c.0.file_name().unwrap().to_string_lossy().into_owned();
+    assert!(
+        lane_line_containing(
+            &out,
+            ".vivac/events",
+            &format!(
+                "record: this folder is lane \"{lane_name}\" of \"IQuorum\", with its \
+                 repositories"
+            ),
+        ),
+        "{out}"
+    );
+}
+
+/// Point 9, `--new-tree`: the same line, this time for a folder that
+/// insists on being a separate product despite a shared root commit.
+#[test]
+fn the_plan_names_the_product_with_new_tree_and_name() {
+    let c = Sandbox::new_empty("setup-name-plan-new-tree");
+    let first = c.0.join("Prod");
+    real_git_repo(&first.join("webapi"));
+    run_in(&first, c.global_home(), &["setup", "claude-code", "--yes"]);
+
+    let second = c.0.join("Prod-fork");
+    clone_repo(&first.join("webapi"), &second.join("webapi"));
+
+    let (out, code) = run_in(
+        &second,
+        c.global_home(),
+        &[
+            "setup",
+            "claude-code",
+            "--new-tree",
+            "--yes",
+            "--name",
+            "Fork",
+        ],
+    );
+    assert_eq!(code, 0, "{out}");
+    let lane_name = second.file_name().unwrap().to_string_lossy().into_owned();
+    assert!(
+        lane_line_containing(
+            &out,
+            ".vivac/events",
+            &format!(
+                "record: this folder is lane \"{lane_name}\" of \"Fork\", with its \
+                 repositories"
+            ),
+        ),
+        "{out}"
+    );
+}
+
+/// Point 10 bis: `--name` lets someone fix a name another project on
+/// this machine already answers to. That is a warning, not a refusal --
+/// a project's identity is its first event's id, never its name -- so
+/// setup still writes, but the plan says so first, and `--join` by that
+/// name refuses afterwards with the same ambiguity error
+/// `registry::resolve` already gives two roots that share a name.
+#[test]
+fn name_that_collides_with_another_project_warns_in_the_plan_and_still_writes() {
+    let c = Sandbox::new_empty("setup-name-collision");
+    let first = c.0.join("first");
+    std::fs::create_dir_all(&first).unwrap();
+    run_in(
+        &first,
+        c.global_home(),
+        &["setup", "claude-code", "--yes", "--name", "IQuorum"],
+    );
+
+    let second = c.0.join("second");
+    std::fs::create_dir_all(&second).unwrap();
+    let (out, code) = run_in(
+        &second,
+        c.global_home(),
+        &["setup", "claude-code", "--yes", "--name", "IQuorum"],
+    );
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.contains("\"IQuorum\" already names another project on this machine"),
+        "{out}"
+    );
+    assert!(already_planted(&second));
+
+    let registry = std::fs::read_to_string(c.global_home().join("projects")).unwrap();
+    assert_eq!(
+        registry.matches("\"name\": \"IQuorum\"").count(),
+        2,
+        "{registry}"
+    );
+
+    let (join_out, join_code) = run_in(
+        &second,
+        c.global_home(),
+        &["setup", "claude-code", "--yes", "--join", "IQuorum"],
+    );
+    assert_eq!(join_code, 2, "{join_out}");
+    assert!(
+        join_out.contains("names 2 projects on this machine"),
+        "{join_out}"
+    );
+}
+
+/// The other half of point 10 bis: with nothing to collide against, the
+/// plan carries no warning at all.
+#[test]
+fn name_with_no_collision_shows_no_warning() {
+    let c = Sandbox::new_empty("setup-name-no-collision");
+    let (out, code) = c.run(&["setup", "claude-code", "--yes", "--name", "SoloProject"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(!out.contains("already names another project"), "{out}");
+}
+
+// ---------------------------------------------------------------------------
+// `t640`, `d674`: `--join` walks the same path planting does, minus the
+// plant itself -- the plan, the confirmation, and every piece a plain
+// `setup` writes, all in one commit (`f667`/`f669`).
+// ---------------------------------------------------------------------------
+
+/// Point 11/12: `--join --yes` in a clean folder leaves all three harness
+/// pieces, not only the lane -- the gap `f667` named: a folder that joined
+/// never got the brief or the tools waiting for it at the next session.
+#[test]
+fn join_yes_in_a_clean_folder_writes_the_harness_and_the_lane() {
+    let c = Sandbox::new_empty("setup-join-full-harness");
+    let target = c.0.join("T");
+    std::fs::create_dir_all(&target).unwrap();
+    run_in(&target, c.global_home(), &["setup", "claude-code", "--yes"]);
+
+    let here = c.0.join("F");
+    std::fs::create_dir_all(&here).unwrap();
+    let target_str = target.to_string_lossy().into_owned();
+    let (out, code) = run_in(
+        &here,
+        c.global_home(),
+        &["setup", "claude-code", "--yes", "--join", &target_str],
+    );
+    assert_eq!(code, 0, "{out}");
+
+    assert!(
+        here.join(".claude").join("settings.json").is_file(),
+        "{out}"
+    );
+    assert!(here.join(".mcp.json").is_file(), "{out}");
+    assert!(
+        here.join(".claude")
+            .join("skills")
+            .join("vivac-migrate")
+            .join("SKILL.md")
+            .is_file(),
+        "{out}"
+    );
+    assert!(here.join(".vivac").join("lane").is_file(), "{out}");
+}
+
+/// Point 13: closes `f669` -- `--join` with no terminal and no `--yes`
+/// used to write straight away. Now it refuses first, the same as
+/// planting, and names both ways out.
+#[test]
+fn join_with_no_terminal_and_no_yes_refuses_without_writing() {
+    let c = Sandbox::new_empty("setup-join-no-terminal");
+    let target = c.0.join("T");
+    std::fs::create_dir_all(&target).unwrap();
+    run_in(&target, c.global_home(), &["setup", "claude-code", "--yes"]);
+
+    let here = c.0.join("F");
+    std::fs::create_dir_all(&here).unwrap();
+    let target_str = target.to_string_lossy().into_owned();
+    let (out, code) = run_in(
+        &here,
+        c.global_home(),
+        &["setup", "claude-code", "--join", &target_str],
+    );
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("there is no terminal here to ask"), "{out}");
+    assert!(out.contains("vivac setup claude-code --dry-run"), "{out}");
+    assert!(out.contains("vivac setup claude-code --yes"), "{out}");
+    assert!(!here.join(".vivac").exists(), "the lane was written anyway");
+    assert!(
+        !here.join(".claude").exists(),
+        "the harness was written anyway"
+    );
+}
+
+/// Point 16: the same all-or-nothing commit and rollback every other
+/// write in this module already gets, reached through `--join` this
+/// time. A directory sitting where `.mcp.json` needs to be a file is the
+/// fault `a_write_failure_rolls_the_earlier_files_back`
+/// (`src/setup/mod.rs`) already uses to force a rename to fail on every
+/// platform: the settings file this run already wrote comes back out,
+/// and the folder is left exactly as it was.
+#[test]
+fn a_join_that_fails_mid_write_leaves_the_folder_as_it_was() {
+    let c = Sandbox::new_empty("setup-join-rollback");
+    let target = c.0.join("T");
+    std::fs::create_dir_all(&target).unwrap();
+    run_in(&target, c.global_home(), &["setup", "claude-code", "--yes"]);
+
+    let here = c.0.join("F");
+    std::fs::create_dir_all(&here).unwrap();
+    std::fs::create_dir_all(here.join(".mcp.json")).unwrap();
+
+    let target_str = target.to_string_lossy().into_owned();
+    let (out, code) = run_in(
+        &here,
+        c.global_home(),
+        &["setup", "claude-code", "--yes", "--join", &target_str],
+    );
+    assert_eq!(code, 5, "{out}");
+    assert!(
+        !here.join(".claude").join("settings.json").exists(),
+        "the settings file survived a rolled-back join:\n{out}"
+    );
+    assert!(
+        !here.join(".vivac").exists(),
+        "the lane was written despite the rollback:\n{out}"
     );
 }

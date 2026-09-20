@@ -1481,6 +1481,7 @@ fn join_lane(on: &Sandbox, folder: &str, name: &str) -> Sandbox {
     joined.ok(&[
         "setup",
         "claude-code",
+        "--yes",
         "--join",
         on.0.to_str().unwrap(),
         "--lane-name",

@@ -89,7 +89,10 @@ In the folder that holds the product, with no tree above it and none below:
 vivac setup claude-code
 ```
 
-That plants the tree and makes this folder its first lane.
+That plants the tree and makes this folder its first lane. The product takes
+this folder's name; pass `--name` to give it another one, which is worth doing
+when the folder is a version and not the product — a tree planted in `v2` is a
+product called `v2` until you say otherwise.
 
 ### Add a folder to a tree that already exists
 

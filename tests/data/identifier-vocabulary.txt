@@ -293,6 +293,8 @@ codex
 col
 collect
 collections
+collides
+collision
 colon
 colour
 column
@@ -483,6 +485,7 @@ echoes
 edges
 edit
 edited
+effective
 eight
 either
 elapsed
