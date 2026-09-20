@@ -1049,6 +1049,7 @@ opts
 or
 ord
 order
+ordered
 ordering
 orders
 ordinary
@@ -1523,6 +1524,7 @@ spent
 spin
 spine
 split
+spoken
 src
 st
 stable
@@ -1664,6 +1666,7 @@ tools
 top
 torn
 total
+touch
 touches
 touching
 toward
@@ -1683,6 +1686,7 @@ triage
 trim
 trimmed
 trimming
+trims
 trip
 trips
 true

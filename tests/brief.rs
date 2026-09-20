@@ -218,6 +218,100 @@ fn no_hollow_headings() {
     }
 }
 
+/// `f48`: `BLOCKS` orders by alias number ascending, not by the text of the
+/// formatted line. Sorting the lines would put `q10` ahead of `q2`, since
+/// `'1' < '2'`.
+#[test]
+fn blocks_are_ordered_by_alias_number_not_by_text() {
+    let c = Sandbox::new_seeded("blocks-order");
+    c.ok(&["push", "Root", "--why", "seed"]);
+    c.ok(&[
+        "add",
+        "First blocker",
+        "--parent",
+        "1",
+        "--type",
+        "question",
+        "--blocks",
+        "--why",
+        "it decides the first thing",
+    ]);
+    for i in 0..7 {
+        c.ok(&[
+            "add",
+            &format!("Filler {i}"),
+            "--parent",
+            "1",
+            "--why",
+            "filler",
+        ]);
+    }
+    c.ok(&[
+        "add",
+        "Second blocker",
+        "--parent",
+        "1",
+        "--type",
+        "question",
+        "--blocks",
+        "--why",
+        "it decides the second thing",
+    ]);
+
+    let b = c.ok(&["brief"]);
+    let first = b.find("First blocker").expect("q2 is missing");
+    let second = b.find("Second blocker").expect("q10 is missing");
+    assert!(first < second, "q10 sorted ahead of q2:\n{b}");
+}
+
+/// `f61`: a parked node's lines never get split by the truncation, and what
+/// is left out is counted in nodes, not in the lines they cost. Four parked
+/// nodes with an outcome each cost two lines apiece; against the six-line
+/// ceiling, three come out whole -- the fourth would push the total to
+/// eight -- and the notice says "1 more", never "2 more".
+#[test]
+fn do_not_touch_now_trims_by_whole_nodes() {
+    let c = Sandbox::new_seeded("parked-trim");
+    c.ok(&["push", "Root", "--why", "seed"]);
+    for i in 1..=4 {
+        c.ok(&[
+            "add",
+            &format!("Parked {i}"),
+            "--parent",
+            "1",
+            "--why",
+            "later",
+        ]);
+    }
+    for i in 0..4 {
+        let node = (2 + i).to_string();
+        c.ok(&["park", &node, &format!("reason {i}")]);
+    }
+
+    let b = c.ok(&["brief"]);
+    let heading_at = b.find("DO NOT TOUCH NOW").expect("the section is missing");
+    let end = b[heading_at..]
+        .find("\n\n")
+        .map(|i| heading_at + i)
+        .unwrap_or(b.len());
+    let block = &b[heading_at..end];
+    assert!(block.contains("Parked 1"), "{block}");
+    assert!(block.contains("Parked 2"), "{block}");
+    assert!(block.contains("Parked 3"), "{block}");
+    assert!(
+        !block.contains("Parked 4"),
+        "the fourth node should have been left out whole:\n{block}"
+    );
+    assert!(
+        !block.contains("reason 3"),
+        "the fourth node's own outcome leaked without its title:\n{block}"
+    );
+    assert!(
+        block.contains("and 1 more (vivac parked)"),
+        "the count should be nodes, not the lines they cost:\n{block}"
+    );
+}
+
 /// §10.9 — No flag is rendered without its reason, because it cannot be raised
 /// without one.
 #[test]
@@ -645,6 +739,111 @@ fn last_vivac_line(out: &str) -> &str {
         }
     }
     panic!("no LAST VIVAC section:\n{out}")
+}
+
+/// Every line of the `LAST VIVAC` body, heading excluded: everything from
+/// right after the heading up to the blank line that either closes the
+/// brief or opens the next section.
+fn last_vivac_block(out: &str) -> Vec<&str> {
+    let mut lines = out.lines();
+    for l in &mut lines {
+        if l.trim() == "LAST VIVAC" {
+            break;
+        }
+    }
+    lines.take_while(|l| !l.trim().is_empty()).collect()
+}
+
+// ---------------------------------------------------------------------------
+// `LAST VIVAC`'s label and intent (`f67`, `f64`, `d652`): the label shown is
+// always the one belonging to whichever stop's intent is being quoted, and a
+// hook's automatic stop -- which never carries an intent on purpose -- must
+// not blank out what an earlier manual one said.
+// ---------------------------------------------------------------------------
+
+/// A manual stop with both a label and an intent shows both, and the
+/// intent reads "you were about to" because it is the same stop named on
+/// line 1.
+#[test]
+fn last_vivac_shows_its_own_label_and_intent() {
+    let c = Sandbox::new_seeded("vivac-label-intent");
+    c.ok(&["push", "Root", "--why", "seed"]);
+    c.ok(&["save", "packing up", "--next", "ship it"]);
+
+    let b = c.ok(&["brief"]);
+    assert!(last_vivac_line(&b).contains("manual"), "{b}");
+    assert!(b.contains("\"packing up\""), "{b}");
+    assert!(b.contains("you were about to: ship it"), "{b}");
+}
+
+/// An automatic stop right behind a manual one names itself on line 1, with
+/// its own date, but the label and the intent quoted are the manual stop's
+/// own -- an automatic stop never carries an intent on purpose (`f59`), and
+/// blanking out what the manual one said would erase it for no reason.
+#[test]
+fn an_automatic_stop_does_not_blank_out_the_earlier_intent() {
+    let c = Sandbox::new_seeded("vivac-auto-blank");
+    c.ok(&["push", "Root", "--why", "seed"]);
+    c.ok(&["save", "packing up", "--next", "ship it"]);
+    c.ok(&["note", "1", "something happened"]);
+    c.ok(&["session", "end", "--hook"]);
+
+    let b = c.ok(&["brief"]);
+    let line = last_vivac_line(&b);
+    assert!(line.starts_with("  v3 "), "{b}");
+    assert!(line.contains("auto"), "{b}");
+    assert!(b.contains("\"packing up\""), "{b}");
+    assert!(b.contains("v2 was about to: ship it"), "{b}");
+    assert!(
+        !b.contains("you were about to"),
+        "the automatic stop is not the one that spoke:\n{b}"
+    );
+}
+
+/// No label at all, and the line that carries it is left out entirely.
+#[test]
+fn last_vivac_with_no_label_omits_the_label_line() {
+    let c = Sandbox::new_seeded("vivac-no-label");
+    c.ok(&["push", "Root", "--why", "seed"]);
+
+    let b = c.ok(&["brief"]);
+    let block = last_vivac_block(&b);
+    assert_eq!(block.len(), 2, "{block:?}");
+    assert!(!block[1].contains('"'), "{block:?}");
+    assert!(block[1].contains("you were about to: Root"), "{block:?}");
+}
+
+/// No stop of this lane ever carried an intent: there is no intent line,
+/// and the label shown is the last stop's own.
+#[test]
+fn no_intent_anywhere_still_shows_the_last_stops_label() {
+    let c = Sandbox::new_seeded("vivac-no-intent");
+    c.ok(&["save", "wrap up"]);
+
+    let b = c.ok(&["brief"]);
+    let block = last_vivac_block(&b);
+    assert_eq!(block.len(), 2, "{block:?}");
+    assert!(block[1].contains("\"wrap up\""), "{block:?}");
+    assert!(!b.contains("was about to"), "{b}");
+}
+
+/// The backward search never leaves the lane: a stop with an intent in
+/// another lane, even a more recent one, is not the one cited.
+#[test]
+fn the_search_for_an_intent_does_not_cross_lanes() {
+    let a = Sandbox::new_seeded("vivac-lane-a");
+    a.ok(&["push", "Root A", "--why", "seed"]);
+    a.ok(&["save", "label A", "--next", "handle A"]);
+
+    let b = join_lane(&a, "vivac-lane-b", "other");
+    b.ok(&["push", "Root B", "--why", "seed"]);
+
+    a.ok(&["save", "wrap up"]);
+
+    let out = a.ok(&["brief"]);
+    assert!(out.contains("\"label A\""), "{out}");
+    assert!(out.contains("v2 was about to: handle A"), "{out}");
+    assert!(!out.contains("Root B"), "{out}");
 }
 
 /// `t594` task 4, paso 5 (§4.4): a lone repository keeps the short sha it
