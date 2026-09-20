@@ -49,6 +49,17 @@ pub fn dispatch(cwd: &Path, a: &Args) -> Result<i32, Failure> {
              vivac setup claude-code --join <project>",
         ));
     }
+    // `t640`, point 3: the same gap `f632` already closed for `--join`.
+    // `--name` takes a value too, so nothing after it is the flag present
+    // and the value absent -- left unchecked, that reaches `opt("name")`
+    // as `None`, which reads exactly like `--name` was never given at all.
+    if a.has("name") && a.opt("name").is_none() {
+        return Err(Failure::usage(
+            "--name needs the product's own name, and nothing followed it. \
+             Without that word setup has nothing to save.\n\n  \
+             vivac setup claude-code --name <name>",
+        ));
+    }
     if let [first, ..] = a.extra(1) {
         return Err(Failure::usage(format!(
             "setup does not take \"{first}\".\n\n  It takes one word of its own: the harness to set up."

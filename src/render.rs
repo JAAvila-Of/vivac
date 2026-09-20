@@ -2192,17 +2192,23 @@ pub fn find(a: &Tree, args: &Args) -> R {
     Ok(())
 }
 
-/// The directory's own name, as `d146` defines it: never the path it sits
-/// under, because an absolute path names the account and the machine it
-/// runs on and the security pillar allows neither into a result.
+/// This project's own name, as `d146` first defined it and `t640` amends:
+/// the one saved on purpose with `--name`, when there is one, or the
+/// directory's own name otherwise -- never the path it sits under, because
+/// an absolute path names the account and the machine it runs on and the
+/// security pillar allows neither into a result. `"-"` is what a root with
+/// no name at all falls back to, the withheld-by-the-guard case included:
+/// `registry::effective_name` carries no path-free way to say more than
+/// that once it has withheld one.
 ///
 /// `pub(crate)` rather than private since `d273`'s second half: `registry`
 /// resolves `--project`'s value against the same bare name this hands back,
 /// so a hit `find --everywhere` prints is exactly what `why --project` then
-/// takes.
+/// takes -- and `--join`'s own resolution reads through the very same
+/// name (`t640`, point 10).
 pub(crate) fn project_name(root: &std::path::Path) -> String {
-    root.file_name()
-        .map(|s| s.to_string_lossy().into_owned())
+    crate::store::store_dir()
+        .and_then(|store_dir| crate::registry::effective_name(&store_dir, root))
         .unwrap_or_else(|| "-".into())
 }
 

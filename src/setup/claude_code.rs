@@ -25,7 +25,129 @@ const SESSION_END_COMMAND: &str = "vivac session end --hook";
 const FRONTMATTER: &str = include_str!("skill-frontmatter.md");
 const BODY: &str = include_str!("skill-body.md");
 
+// ---------------------------------------------------------------------------
+// `--name`: naming the product on purpose (`t640`), rather than always
+// deriving it from whichever folder holds the tree.
+// ---------------------------------------------------------------------------
+
+/// `--name` beside `--join` or `--undo` (`t640`, point 2): checked first,
+/// the same reason `refuse_unsupported_flags` in `codex.rs` checks its own
+/// list before reading or writing anything -- a flag nobody reads is a
+/// flag nobody obeys.
+fn refuse_name_with(a: &Args) -> Option<Failure> {
+    a.opt("name")?;
+    if a.has("join") {
+        return Some(Failure::usage(
+            "--join joins a product that already has a name, so --name has \
+             nothing left to fix.\n\n  Give one or the other.",
+        ));
+    }
+    if a.has("undo") {
+        return Some(Failure::usage(
+            "--undo removes what setup wrote and fixes nothing, so --name has \
+             nothing to do here.\n\n  Give one or the other.",
+        ));
+    }
+    None
+}
+
+/// The most `--name` may be, once trimmed. Generous on purpose: this is a
+/// product's own name, not a title with a budget of its own.
+const NAME_MAX_LEN: usize = 100;
+
+/// The minimal shape `--name`'s own value has to have before it ever
+/// reaches the redaction guard (`t640`, point 5): not empty once
+/// surrounding space is trimmed, one line -- the same rule
+/// `ops::validate_arm_text` already holds an arm to -- and at most
+/// [`NAME_MAX_LEN`] characters. Spaces inside are fine: the registry
+/// already knows how to quote a name that has them
+/// (`registry::quote_if_needed`).
+fn validate_name(raw: &str) -> Result<&str, Failure> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(Failure::usage("--name cannot be empty."));
+    }
+    if trimmed.chars().any(|c| c.is_control()) {
+        return Err(Failure::usage(
+            "--name is one line: it cannot carry a newline or another control \
+             character.",
+        ));
+    }
+    if trimmed.chars().count() > NAME_MAX_LEN {
+        return Err(Failure::usage(format!(
+            "--name is {} characters long; the limit is {NAME_MAX_LEN}.",
+            trimmed.chars().count()
+        )));
+    }
+    Ok(trimmed)
+}
+
+/// `--name`'s own value, validated (point 5) and passed through the same
+/// redaction guard `folder_name` already reads a derived name through
+/// (point 4): `Ok(None)` when `--name` was not given at all, and every
+/// other outcome already carries the right exit code -- a usage error
+/// (2) for a shape the guard never gets to see, or `Failure::Redaction`
+/// (3) for one it refuses.
+fn requested_name(a: &Args) -> Result<Option<String>, Failure> {
+    let Some(raw) = a.opt("name") else {
+        return Ok(None);
+    };
+    let trimmed = validate_name(raw)?;
+    match crate::redact::check_field("project name", trimmed) {
+        Some(finding) => Err(Failure::Redaction(Box::new(finding))),
+        None => Ok(Some(trimmed.to_string())),
+    }
+}
+
+/// The product name this run's own plan shows, on the line that names a
+/// lane (`t640`, point 9): `requested`'s own value where this run is
+/// planting with one, or the tree's own effective name otherwise.
+/// `registry::effective_name` already falls back to `tree`'s own folder
+/// name once there is nothing on file for it -- exactly a fresh plant's
+/// own case, since nothing can be on file yet for a tree that does not
+/// exist.
+fn product_name_for_plan(tree: &Path, requested: Option<&str>) -> Option<String> {
+    if let Some(name) = requested {
+        return Some(name.to_string());
+    }
+    let store_dir = crate::store::store_dir()?;
+    crate::registry::effective_name(&store_dir, tree)
+}
+
+/// `name`, quoted the way every other sentence in this module names a
+/// product, or a placeholder once the redaction guard has withheld it --
+/// `registry::label_for`'s own shape, for a product rather than a folder,
+/// since "another folder" reads wrong beside a lane's own name.
+fn product_label(name: Option<&str>) -> String {
+    match name {
+        Some(n) => format!("\"{n}\""),
+        None => "this product".to_string(),
+    }
+}
+
+/// Saves `name` into the registry as `tree`'s own (`t640`, point 6), once
+/// this run has given it a first event to be keyed by. Quiet when there
+/// is nothing to key it by yet, or nowhere to save it to -- the same
+/// promise `note_registry` already makes, and a name is no different: the
+/// registry is a comfort a command can do without.
+fn note_name(tree: &Path, name: Option<&str>) {
+    let Some(name) = name else { return };
+    let Some(store_dir) = crate::store::store_dir() else {
+        return;
+    };
+    let Some(project_id) = crate::store::first_event_id(tree) else {
+        return;
+    };
+    crate::registry::set_name(&store_dir, &project_id, name);
+}
+
 pub fn run(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
+    // `t640`, point 2: checked before either branch below, the same
+    // reason `refuse_home_or_global_store` moved up here -- a guard
+    // inside one branch is a guard the other does not have.
+    if let Some(refusal) = refuse_name_with(a) {
+        return Err(refusal);
+    }
     if a.has("undo") {
         return undo(&roots.here, a);
     }
@@ -62,7 +184,7 @@ pub fn run(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         });
     }
     if let Some(spec) = join_spec {
-        return join(roots, spec, a.opt("lane-name"), a.has("dry-run"));
+        return join(roots, spec, a.opt("lane-name"), a);
     }
     apply(roots, a)
 }
@@ -1376,11 +1498,13 @@ pub(super) fn wrapped_piece_line(label: &str, first: &str, second: &str) -> Stri
 
 // ---------------------------------------------------------------------------
 // `--join`: `t594` §4.5's own escape from §6.3, and the remedy `--new-tree`
-// or a fresh `setup` plants past instead. Narrower than `apply`, on
-// purpose: it resolves a tree that lives somewhere else, writes this
-// folder's own `.vivac/lane` and declares the lane there -- and nothing
-// about the hooks, the server or the skill, since a folder that already
-// ran setup somewhere else has no reason to run it a second time here.
+// or a fresh `setup` plants past instead. It resolves a tree that lives
+// somewhere else, then walks the same path planting does, minus planting
+// itself (`t640`, point 11): the plan, the confirmation, and the hooks,
+// the server and the skill along with this folder's own lane, all in one
+// write. A folder that already ran setup somewhere else still needed the
+// brief and the tools waiting for it the moment it opened a session here
+// -- that is what a join used to leave undone (`f667`/`f669`).
 // ---------------------------------------------------------------------------
 
 /// `spec`, printed back exactly as typed when the tree it names cannot be
@@ -1390,7 +1514,7 @@ fn join(
     roots: &super::Roots,
     spec: &str,
     lane_name: Option<&str>,
-    dry_run: bool,
+    a: &Args,
 ) -> Result<i32, Failure> {
     let target = crate::registry::resolve(spec)?;
     if !crate::store::already_planted(&target) {
@@ -1437,94 +1561,68 @@ fn join(
     // would otherwise echo a path back that a person did not necessarily
     // type themselves -- `spec` might have resolved through a project
     // name, not a path at all.
-    let Some(project) = crate::store::first_event_id(&target) else {
+    if crate::store::first_event_id(&target).is_none() {
         return Err(Failure::Model(
             "  That tree has no events yet, so there is nothing to join: it has\n  \
              no identity yet for a lane to point back at."
                 .to_string(),
         ));
-    };
+    }
 
-    let id = crate::lane::new_id();
-    let folder_name = roots
-        .here
+    // `t640`, point 11: from here, this run walks the very same path
+    // `apply_writes` already walks for a plant, minus the plant --
+    // `join_roots.tree` is `target`, already confirmed planted above, so
+    // `apply_writes` never mints a `Store::create` for it. `located: None`
+    // is safe: `write_lane`, `note_registry` and `apply_writes` itself
+    // only ever read `roots.tree` and `roots.here` off this value, never
+    // `located`, which is `plan_lane`'s own question and `join` answers
+    // for itself with `plan_join_lane` instead.
+    let join_roots = super::Roots {
+        here: roots.here.clone(),
+        tree: target.clone(),
+        located: None,
+    };
+    let lane = plan_join_lane(&roots.here, &target, lane_name);
+    apply_writes(&join_roots, a, lane, None)
+}
+
+/// `--join`'s own lane plan (`t640`, point 11): always a brand new lane.
+/// `join`'s own preamble already rules out the one case where this folder
+/// carries a lane of `target` already -- the idempotent no-op
+/// `say_nothing_was_done` answers with, before this is ever reached -- so
+/// `here` reaching this function never already has an id of its own to
+/// keep, the same as `plan_lane`'s own `Some(_)` branch for a folder that
+/// merely resolves into a tree above it rather than carrying one itself.
+fn plan_join_lane(here: &Path, target: &Path, lane_name: Option<&str>) -> LanePlan {
+    let (repos, excluded) = filtered_repos(crate::repos::scan(here));
+    let folder_name = here
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let name = crate::lane::declared_name(&id, lane_name.unwrap_or(&folder_name));
-    let (repos, _excluded) = filtered_repos(crate::repos::scan(&roots.here));
+    let requested_name = lane_name.unwrap_or(&folder_name);
+    let id = crate::lane::new_id();
+    let name = crate::lane::declared_name(&id, requested_name);
+    let folded = fold_tree(target);
+    let existing = existing_lane(target, &id, &folded);
+    let needs_lock = existing.config_version != crate::store::ConfigVersion::Lanes;
+    // A fresh id can never already be declared, so this always reads
+    // `false` -- computed the same way `plan_lane` computes it rather
+    // than hardcoded, so the two never have a reason to drift apart.
+    let unchanged = existing
+        .declared
+        .is_some_and(|(n, r)| n == name && r == repos);
+    let stale_worktrees = stale_worktree_roots(here, &repos, &id, &folded);
 
-    // `--dry-run` promises nothing is written by any path: `apply` got
-    // that back once and `--join` reopened it (`t594`), so nothing below
-    // this point runs.
-    if dry_run {
-        match crate::registry::folder_name(&target) {
-            Some(name) => outln!("  This folder would become a lane of the tree in \"{name}\"."),
-            None => {
-                outln!("  This folder would become a lane of a tree elsewhere on this machine.")
-            }
-        }
-        outln!("  Nothing written: --dry-run.");
-        return Ok(0);
+    LanePlan {
+        lane_id: id,
+        name,
+        repos,
+        is_new: true,
+        needs_lock,
+        unchanged,
+        excluded,
+        stale_worktrees,
     }
-
-    // The file first, unlocked, then the event under the target's own
-    // lock: the same order `write_lane` already follows and the same
-    // reason -- the one ordering that must never happen is the event
-    // landing first, which would leave this folder signing as `main`
-    // while the tree it just joined already says otherwise.
-    crate::lane::write(
-        &roots.here.join(crate::store::DIR),
-        &crate::lane::Lane {
-            version: 1,
-            id: id.clone(),
-            project,
-        },
-    )?;
-
-    let store = crate::store::Store::open(target.clone())?;
-    let mut ctx = crate::ops::Ctx::load_for_write(
-        store,
-        crate::ops::Whose::Declared(id.clone(), target.clone()),
-    )?;
-    ctx.lock_for_write()?;
-    crate::ops::declare_lane(&mut ctx, name, repos)?;
-
-    // The same registry bookkeeping `note_registry` does for `apply`, but
-    // keyed by `target` -- this folder's own tree, not `roots.tree`, which
-    // still names no tree of its own at all. Quiet on any failure, the
-    // same promise `note_registry` already makes -- but not thrown away:
-    // `lane::write` and `declare_lane` above have already written for
-    // real by the time this runs, so whatever `note` says here is left
-    // for `registry::warn_if_wrote` to act on (`t594`).
-    if let Some(store_dir) = crate::store::store_dir() {
-        if let Some(project_id) = crate::store::first_event_id(&target) {
-            let target_repos = union_repo_roots(&fold_tree(&target));
-            let noted = crate::registry::note(
-                &store_dir,
-                &project_id,
-                crate::registry::Sighting {
-                    root: &target,
-                    lane: Some((&id, &roots.here)),
-                    repos: Some(&target_repos),
-                },
-            );
-            crate::registry::set_pending(noted);
-        }
-    }
-
-    // What a person does not already know after joining, which is the whole
-    // of `d595` in two sentences: the knowledge stayed the product's and the
-    // thread became this folder's. The tree is named by its folder, never by
-    // its path, and the name is withheld when the redaction guard rejects it
-    // (`d600`) -- the sentence survives without it.
-    match crate::registry::folder_name(&target) {
-        Some(name) => outln!("  This folder is now a lane of the tree in \"{name}\"."),
-        None => outln!("  This folder is now a lane of a tree elsewhere on this machine."),
-    }
-    outln!("  The nodes and their numbering are the product's; the stack, the focus");
-    outln!("  and the last stop are this folder's.");
-    Ok(0)
 }
 
 /// The id of the lane `here` itself is, or `None` for a folder that merely
@@ -1577,8 +1675,44 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     // `run` already refused the home folder and the global store before
     // reaching here (`t594`): both guards used to live in
     // this function alone, which is exactly what let `--join` skip them.
+    // `refuse_second_map` is plant-only, on purpose: `--join` already
+    // knows exactly which tree it means, so asking "did you mean to join
+    // a tree that already tracks these repositories?" a second time
+    // would be asking a question this run already answered (`t640`).
     refuse_second_map(roots, a.has("new-tree"))?;
 
+    let tree = &roots.tree;
+    // `t640`, point 1: `--name` fixes a product's own name, and a product
+    // that already exists already has one -- valid only while this run
+    // is planting a fresh tree, or bypassing that question outright with
+    // `--new-tree`. Checked before anything is read or written, so a
+    // shape the redaction guard would refuse never gets the chance to
+    // (point 4): both exits below leave the disk exactly as it was.
+    let requested = requested_name(a)?;
+    if requested.is_some() && crate::store::already_planted(tree) && !a.has("new-tree") {
+        return Err(Failure::usage(
+            "--name only names a product while setup plants one: this \
+             folder's tree already exists, and already has a name of its \
+             own.\n\n  Nothing written.",
+        ));
+    }
+    let lane = plan_lane(roots, a.opt("lane-name"));
+    apply_writes(roots, a, lane, requested)
+}
+
+/// The plant path's own writes, shared with `--join` (`t640`, point 11):
+/// everything past deciding which lane this run declares -- reading the
+/// three files, building the plan, asking, and writing all or nothing.
+/// `roots.tree` decides whether this run plants (`vivac_missing`) or
+/// joins a tree already there; a join's own `roots` always resolves it
+/// to a tree `join`'s own preamble already confirmed exists, so this
+/// never plants on that path.
+fn apply_writes(
+    roots: &super::Roots,
+    a: &Args,
+    lane: LanePlan,
+    requested: Option<String>,
+) -> Result<i32, Failure> {
     let here = &roots.here;
     let tree = &roots.tree;
     // `t594` §4.5, case 2's own extra check (§6.5): never blocks anything,
@@ -1652,8 +1786,6 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         SkillState::Missing | SkillState::Replaceable
     );
 
-    let lane = plan_lane(roots, a.opt("lane-name"));
-
     let nothing_to_write = !vivac_missing
         && !gitignore_missing
         && !start_missing
@@ -1664,6 +1796,17 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         && !lane.needs_lock
         && lane.stale_worktrees.is_empty();
 
+    // `t640`, point 9: the plan names the product on the very line that
+    // names the lane, in every shape that line takes.
+    let product_name = product_name_for_plan(tree, requested.as_deref());
+    // `t640`, point 10 bis: a warning, never a refusal -- a project's
+    // identity is its first event's id, not its name, so two projects
+    // answering to the same name break nothing but `--join <name>`'s own
+    // convenience, and that is worth saying before this is written.
+    let name_collision = requested.as_deref().filter(|name| {
+        crate::store::store_dir()
+            .is_some_and(|store_dir| crate::registry::another_project_answers_to(&store_dir, name))
+    });
     let piece_block = render_piece_block(
         here,
         tree,
@@ -1678,6 +1821,8 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         &mcp_server_state,
         &skill_file_state,
         &lane,
+        product_name.as_deref(),
+        name_collision,
     );
 
     // Asked once per run, and before either early exit below, so a log
@@ -1879,6 +2024,7 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
             && matches!(skill_file_state, SkillState::Missing),
     };
     note_registry(roots);
+    note_name(tree, requested.as_deref());
     print!("\n{}", written_text(&written));
     if log_tracked {
         print!("{}", tracked_git_warning());
@@ -1904,8 +2050,21 @@ fn render_piece_block(
     mcp_server_state: &McpState,
     skill_file_state: &SkillState,
     lane: &LanePlan,
+    product_name: Option<&str>,
+    name_collision: Option<&str>,
 ) -> String {
     let mut s = format!("  vivac setup claude-code, in {}\n\n", here.display());
+
+    // `t640`, point 10 bis: said before anything is written, never a
+    // refusal -- `name_collision` is only ever `Some` once `--name`'s own
+    // value already matches another project's effective name.
+    if let Some(name) = name_collision {
+        s.push_str(&format!(
+            "  \"{name}\" already names another project on this machine. With both\n  \
+             answering to it, --join will need a path instead of the name: two\n  \
+             projects that share a name give it nothing to tell them apart by.\n\n"
+        ));
+    }
 
     // `t579` §4's warning: only when `here` sits inside a repository but is
     // not its root, so nobody has to guess which folder Claude Code was
@@ -1992,11 +2151,18 @@ fn render_piece_block(
     }
 
     if !lane.unchanged {
+        // `t640`, point 9: the plan names the product on this same line,
+        // in both shapes it takes -- a brand new lane and a redeclared
+        // one alike. `product_label` also replaces "the tree above",
+        // which named where this folder sits rather than what it joins,
+        // and stopped being true the moment `--join`'s own plan started
+        // reaching this same line for a tree that is not above it at all.
+        let product = product_label(product_name);
         if lane.is_new {
             s.push_str(&piece_line(
                 LANE_LABEL,
                 &format!(
-                    "create: this folder becomes lane \"{}\" of the tree above",
+                    "create: this folder becomes lane \"{}\" of {product}",
                     lane.name
                 ),
             ));
@@ -2012,7 +2178,7 @@ fn render_piece_block(
             s.push_str(&piece_line(
                 ".vivac/events",
                 &format!(
-                    "record: this folder is lane \"{}\", with its repositories",
+                    "record: this folder is lane \"{}\" of {product}, with its repositories",
                     lane.name
                 ),
             ));

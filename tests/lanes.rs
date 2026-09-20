@@ -1808,7 +1808,13 @@ fn relocate_and_join_treat_two_spellings_of_the_same_folder_as_one() {
     let (first_out, first_code) = run(
         &lane_dir,
         &home,
-        &["setup", "claude-code", "--join", real.to_str().unwrap()],
+        &[
+            "setup",
+            "claude-code",
+            "--yes",
+            "--join",
+            real.to_str().unwrap(),
+        ],
     );
     assert_eq!(first_code, 0, "{first_out}");
     let id_before = lane_id_of(&lane_dir);
@@ -1817,7 +1823,13 @@ fn relocate_and_join_treat_two_spellings_of_the_same_folder_as_one() {
     let (join_out, join_code) = run(
         &lane_dir,
         &home,
-        &["setup", "claude-code", "--join", alias.to_str().unwrap()],
+        &[
+            "setup",
+            "claude-code",
+            "--yes",
+            "--join",
+            alias.to_str().unwrap(),
+        ],
     );
     assert_eq!(join_code, 0, "{join_out}");
     assert!(
@@ -2049,7 +2061,7 @@ fn a_joined_lanes_redeclare_resolves_repositories_from_its_own_folder() {
     let (join_out, join_code) = run(
         &lane_dir,
         &home,
-        &["setup", "claude-code", "--join", &tree_root_str],
+        &["setup", "claude-code", "--yes", "--join", &tree_root_str],
     );
     assert_eq!(join_code, 0, "{join_out}");
 

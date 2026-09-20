@@ -50,6 +50,10 @@ const VERSION: u32 = 2;
 /// first event (`d201`): `path` never moves off whichever folder used a
 /// `vivac` command first while the registry already knew this project, and
 /// every other one is recorded here instead, so it can be told about too.
+/// `name` is the product's own name, chosen on purpose with `--name`
+/// (`t640`) rather than derived from whichever folder `path` happens to
+/// name today -- `None` is exactly today's shape, and stays the shape of
+/// every entry nobody ever named on purpose.
 #[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
 struct Project {
     path: String,
@@ -59,6 +63,8 @@ struct Project {
     lanes: BTreeMap<String, String>,
     #[serde(default)]
     copies: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
 }
 
 /// Version 1 wrote a project as a bare path string. It is read and never
@@ -625,6 +631,81 @@ pub fn folder_name(p: &Path) -> Option<String> {
     }
 }
 
+/// This project's own name, as every reader that used to derive one from
+/// `root`'s folder shows it now (`t640`, points 7 and 10): the name saved
+/// on purpose with `--name`, when there is one and the redaction guard
+/// still accepts it on the way back out (point 8), or `folder_name`
+/// otherwise -- exactly what every one of those readers already fell back
+/// to before this field existed. Renaming `root`'s folder by hand never
+/// changes a name that was fixed on purpose: the saved name wins whenever
+/// both are on hand.
+///
+/// `store_dir` is taken as an argument rather than read from `VIVAC_HOME`
+/// here, the same reason `sharing_repos` already does: a caller that
+/// already resolved it -- `sharing_repos` itself, below -- never pays for
+/// a second resolution, and a test that folds a registry by hand never
+/// has to set `VIVAC_HOME` just to reach this.
+///
+/// `None` for a tree with no events yet (nothing to key the registry by),
+/// the same as `folder_name` withholding a name the guard rejects.
+pub fn effective_name(store_dir: &Path, root: &Path) -> Option<String> {
+    let saved = crate::store::first_event_id(root)
+        .and_then(|project_id| saved_name(store_dir, &project_id));
+    saved.or_else(|| folder_name(root))
+}
+
+/// The name on file for `project_id`, or `None` when there is none, the
+/// registry cannot be read, or the redaction guard would refuse it today
+/// (`t640`, point 8) -- read the same way it was written, in case an older
+/// vivac, a newer one, or a hand edit ever left something the guard would
+/// not have let in.
+fn saved_name(store_dir: &Path, project_id: &str) -> Option<String> {
+    let name = read(&store_dir.join(FILE))?.get(project_id)?.name.clone()?;
+    match crate::redact::check_field("project name", &name) {
+        Some(_) => None,
+        None => Some(name),
+    }
+}
+
+/// Whether some project this registry already knows answers to `name`
+/// too (`t640`, point 10 bis): `--name` lets someone fix a name on
+/// purpose, and nothing stops that name from being one another project
+/// already has. Two projects sharing a name break nothing -- a project's
+/// identity is its first event's id, never its name -- except the
+/// convenience `registry::resolve` gives a bare name: with two answering
+/// to it, `--join <name>` refuses for the same reason `resolve` already
+/// does, and this asks that exact question ahead of time, against every
+/// effective name the registry already carries and nothing else --
+/// never a bare folder name, and never a project this registry has not
+/// heard of.
+pub fn another_project_answers_to(store_dir: &Path, name: &str) -> bool {
+    roots(store_dir)
+        .iter()
+        .any(|root| effective_name(store_dir, root).as_deref() == Some(name))
+}
+
+/// Saves `name` as `project_id`'s own, on purpose (`t640`, point 6):
+/// called once, after `note`, only when `--name` gave `setup` a value to
+/// save. Quiet on every failure the same way `note` already is -- the
+/// registry is a comfort a command can do without, and a name is no
+/// different.
+pub fn set_name(store_dir: &Path, project_id: &str, name: &str) {
+    let _ = try_set_name(store_dir, project_id, name);
+}
+
+fn try_set_name(store_dir: &Path, project_id: &str, name: &str) -> std::io::Result<()> {
+    let path = store_dir.join(FILE);
+    std::fs::create_dir_all(store_dir)?;
+    let _lock = crate::store::lock_with_deadline(&store_dir.join(LOCK), LOCK_WAIT)
+        .map_err(|e| std::io::Error::other(e.message()))?;
+    let Some(mut projects) = read(&path) else {
+        return Ok(());
+    };
+    let entry = projects.entry(project_id.to_string()).or_default();
+    entry.name = Some(name.to_string());
+    write(store_dir, &path, &projects)
+}
+
 /// A folder's name, quoted, or `"another folder"` once the guard has
 /// withheld it: the one placeholder every refusal that names a folder
 /// falls back to, rather than a copy of the same fallback prose per
@@ -768,9 +849,10 @@ pub fn roots(store_dir: &Path) -> Vec<PathBuf> {
 }
 
 /// A project on this machine that shares at least one repository with the
-/// folder being set up. Named by its folder, never by its path: this text
-/// reaches an agent's context, and `d600` withholds a name the redaction
-/// guard rejects.
+/// folder being set up. Named by its effective name (`t640`: the one
+/// saved on purpose, or its folder's own otherwise), never by its path:
+/// this text reaches an agent's context, and `d600` withholds a name the
+/// redaction guard rejects.
 #[derive(Debug)]
 pub struct Sharing {
     pub name: Option<String>,
@@ -818,7 +900,7 @@ pub fn sharing_repos(store_dir: &Path, repos: &[String]) -> Vec<Sharing> {
                 return None;
             }
             Some(Sharing {
-                name: folder_name(&root),
+                name: effective_name(store_dir, &root),
                 root,
                 shared,
             })

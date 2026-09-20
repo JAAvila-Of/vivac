@@ -133,6 +133,8 @@ const USAGE: &str = r#"vivac - provenance of work
     vivac setup claude-code [--dry-run] [--yes] [--undo] [--lane-name <name>]
                                               write what Claude Code needs here:
                                               hooks, the MCP server, a skill
+          [--name <name>]    the product's name, instead of the folder's;
+                             only when setup plants a tree
     vivac setup claude-code --join <name|path> [--lane-name <name>]
                                               join this folder to a tree that
                                               lives somewhere else
@@ -249,12 +251,12 @@ fn run() -> i32 {
     }
 }
 
+/// The brief's own header, and the session hooks that feed it: `t640`,
+/// point 10 -- the same effective name every other surface that used to
+/// derive one from a folder now shows, `render::project_name` reads it
+/// from rather than a second copy of the same derivation.
 fn project_name(ctx: &ops::Ctx) -> String {
-    ctx.store
-        .root
-        .file_name()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "-".into())
+    render::project_name(&ctx.store.root)
 }
 
 fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
@@ -311,7 +313,15 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         "changes" => &["since", "json"],
         "web" => &["port", "no-open", "project"],
         "init" | "hooks" | "mcp" => &[],
-        "setup" => &["dry-run", "yes", "undo", "join", "new-tree", "lane-name"],
+        "setup" => &[
+            "dry-run",
+            "yes",
+            "undo",
+            "join",
+            "new-tree",
+            "lane-name",
+            "name",
+        ],
         "relocate" => &["lane-name"],
         // The reads that speak JSON, spelled out. No shorthand: a shorthand
         // is what let the brief claim it for two releases.

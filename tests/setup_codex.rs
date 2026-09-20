@@ -273,3 +273,15 @@ fn lane_name_refuses_before_writing_anything() {
     assert!(out.contains("--lane-name"), "{out}");
     assert_nothing_was_written(&c);
 }
+
+/// `t640`: `--name` is claude-code's own, and not yet this harness's --
+/// the same refusal every other flag this harness does not know gets,
+/// rather than being silently ignored.
+#[test]
+fn name_refuses_before_writing_anything() {
+    let c = Sandbox::new_empty("setup-codex-flag-name");
+    let (out, code) = c.run(&["setup", "codex", "--yes", "--name", "IQuorum"]);
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("--name"), "{out}");
+    assert_nothing_was_written(&c);
+}

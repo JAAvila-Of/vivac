@@ -234,6 +234,7 @@ fn every_vivac_directory_this_task_touches_carries_no_absolute_path_or_url() {
     let (join_out, join_code) = joined.run(&[
         "setup",
         "claude-code",
+        "--yes",
         "--join",
         destination.0.to_str().unwrap(),
     ]);

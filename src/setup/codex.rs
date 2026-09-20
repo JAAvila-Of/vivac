@@ -109,6 +109,7 @@ const UNSUPPORTED_FLAGS: &[(&str, &str)] = &[
     ("join", "joining a tree that lives elsewhere"),
     ("new-tree", "planting here despite a tracked product"),
     ("lane-name", "naming this folder's lane"),
+    ("name", "naming the product on purpose"),
 ];
 
 fn refuse_unsupported_flags(a: &Args) -> Option<Failure> {
