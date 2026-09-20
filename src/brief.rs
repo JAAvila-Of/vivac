@@ -69,15 +69,31 @@ fn tokens_of(sections: &[Section]) -> usize {
         .sum()
 }
 
-/// Truncates a list keeping the first `n`. An item from the middle is never
-/// dropped in silence.
-fn trim_list(mut v: Vec<String>, n: usize, which: &str) -> Vec<String> {
-    if v.len() > n {
-        let left_over = v.len() - n;
-        v.truncate(n);
-        v.push(format!("      ... and {left_over} more (vivac {which})"));
+/// Truncates a list of items, each carrying one or more lines of its own, to
+/// at most `max_lines` lines. An item is never split across the cut: it
+/// either comes out whole or it does not come out at all, and the first item
+/// always comes out, even when it alone is longer than `max_lines` (`f61`).
+///
+/// What is left out is counted in items, not lines: a park with an outcome
+/// costs two lines and a park without one costs one, so counting lines would
+/// call one missing item "2 more".
+fn trim_list(groups: Vec<Vec<String>>, max_lines: usize, which: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut used = 0;
+    let mut taken = 0;
+    for group in &groups {
+        if taken > 0 && used + group.len() > max_lines {
+            break;
+        }
+        used += group.len();
+        out.extend(group.iter().cloned());
+        taken += 1;
     }
-    v
+    let left_over = groups.len() - taken;
+    if left_over > 0 {
+        out.push(format!("      ... and {left_over} more (vivac {which})"));
+    }
+    out
 }
 
 fn heading(title: &str, body: Vec<String>) -> Vec<String> {
@@ -807,9 +823,12 @@ pub fn to_text(
         .collect();
     s.push(Section::fixed(heading("INVARIANTS", invariants)));
 
-    // 5. Blocking questions: all of them, untruncated.
+    // 5. Blocking questions: all of them, untruncated, ordered by alias
+    // number ascending (`BRIEF-SPEC.md` §2, `f48`). Sorting the nodes
+    // themselves is what that means -- sorting the formatted lines instead
+    // sorts on the rendered text, so q10 reads before q2.
     let on_lineage: HashSet<u64> = lineage.iter().map(|n| n.num).collect();
-    let questions: Vec<String> = a
+    let mut question_nodes: Vec<&Node> = a
         .nodes_iter()
         .filter(|n| n.kind == Kind::Question && n.state.is_open() && n.blocks)
         .filter(|n| {
@@ -817,10 +836,12 @@ pub fn to_text(
                 .iter()
                 .any(|p| on_lineage.contains(&p.num))
         })
+        .collect();
+    question_nodes.sort_by_key(|n| n.num);
+    let questions: Vec<String> = question_nodes
+        .iter()
         .map(|n| format!("  {:<6} {}", n.alias(), n.title(a)))
         .collect();
-    let mut questions = questions;
-    questions.sort();
     s.push(Section::fixed(heading("BLOCKS", questions)));
 
     // 6. Flags on the path, or one hop off it.
@@ -832,22 +853,22 @@ pub fn to_text(
         })
         .collect();
     flagged.sort_by_key(|n| n.num);
-    let flag_lines: Vec<String> = flagged
+    let flag_groups: Vec<Vec<String>> = flagged
         .iter()
         .flat_map(|n| {
             n.flags.iter().map(move |(b, reason)| {
-                format!(
+                vec![format!(
                     "  {:<6} {:<10} {}",
                     n.alias(),
                     b.word(),
                     clip(a.text(*reason), 44)
-                )
+                )]
             })
         })
         .collect();
     s.push(Section::loose(heading(
         "FLAGGED",
-        trim_list(flag_lines, 3, "stats"),
+        trim_list(flag_groups, 3, "stats"),
     )));
 
     // 7. Out of scope: every parked node of the project, regardless of the
@@ -859,9 +880,9 @@ pub fn to_text(
         .filter(|n| n.state == State::Suspended)
         .collect();
     parked_nodes.sort_by_key(|n| n.num);
-    let out_of_scope: Vec<String> = parked_nodes
+    let out_of_scope: Vec<Vec<String>> = parked_nodes
         .iter()
-        .flat_map(|n| {
+        .map(|n| {
             let hangs_off = n
                 .parent
                 .and_then(|p| a.node_by_num(p))
@@ -905,13 +926,13 @@ pub fn to_text(
             d
         }
     };
-    let decisions: Vec<String> = dec
+    let decision_groups: Vec<Vec<String>> = dec
         .iter()
-        .map(|n| format!("  {:<6} {}", n.alias(), clip(n.title(a), 52)))
+        .map(|n| vec![format!("  {:<6} {}", n.alias(), clip(n.title(a), 52))])
         .collect();
     s.push(Section::loose(heading(
         "STANDING DECISIONS",
-        trim_list(decisions, 3, "tree"),
+        trim_list(decision_groups, 3, "tree"),
     )));
 
     // 9. Last vivac. What changed since it used to be answered here too, but
@@ -939,11 +960,35 @@ pub fn to_text(
                     None => String::new(),
                 }
             )];
-            if !v.next_intent.is_empty() {
-                l.push(format!(
-                    "         you were about to: {}",
-                    clip(&v.next_intent, 52)
-                ));
+            // The last stop of this same lane that actually left an intent
+            // for the relief, searching backward from `v` itself (`f67`,
+            // `d652`). An automatic stop never carries one on purpose --
+            // asking would be exactly the judgement of relevance the DX
+            // pillar measured at zero uses -- so a hook's stop landing right
+            // behind a manual one must not blank out what the manual one
+            // said. May be `v` itself, an earlier stop, or nothing at all.
+            let spoken = a
+                .vivacs
+                .iter()
+                .rev()
+                .find(|s| s.lane == v.lane && !s.next_intent.is_empty());
+            // The label shown is always the one belonging to whichever stop
+            // is being quoted: `spoken`'s own when there is one to quote,
+            // `v`'s own otherwise (`f64`).
+            let label = spoken.map_or(v.label.as_str(), |s| s.label.as_str());
+            if !label.is_empty() {
+                l.push(format!("         \"{}\"", clip(label, 52)));
+            }
+            if let Some(s) = spoken {
+                l.push(if s.num == v.num {
+                    format!("         you were about to: {}", clip(&s.next_intent, 52))
+                } else {
+                    format!(
+                        "         {} was about to: {}",
+                        s.alias(),
+                        clip(&s.next_intent, 52)
+                    )
+                });
             }
             l
         }
@@ -1059,8 +1104,8 @@ mod tests {
 
     #[test]
     fn trimming_says_what_is_missing() {
-        let v: Vec<String> = (0..10).map(|i| format!("l{i}")).collect();
-        let r = trim_list(v, 3, "parked");
+        let groups: Vec<Vec<String>> = (0..10).map(|i| vec![format!("l{i}")]).collect();
+        let r = trim_list(groups, 3, "parked");
         assert_eq!(r.len(), 4);
         assert_eq!(r[0], "l0");
         assert!(r[3].contains("7 more"), "{}", r[3]);
