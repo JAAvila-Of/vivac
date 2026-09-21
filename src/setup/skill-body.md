@@ -47,10 +47,11 @@ it is, and ask which to bring in.
   map: note where it came from, for step 6. A file the user keeps for every
   project, like a CLAUDE.md in their home directory, is not this project's.
   Do not bring it in: it already reaches every session.
-- Memory systems. If a memory tool is installed, read it with its own tools.
-  With engram that is mem_context, mem_search, and mem_get_observation for
-  each hit, because search results come back truncated. If its tools are off
-  in this project, its command line reads the same memories. Keep only what
+- Memory systems. If a memory tool is installed, read it with its own tools:
+  the one that recalls what is current, the one that searches, and the one
+  that fetches a single record whole, because search results usually come
+  back truncated and the summary is not the record. If its tools are off in
+  this project, its command line reads the same memories. Keep only what
   belongs to this project. Memory tools often file a project under the name
   of the folder a session was opened in, so look for it under every name it
   may have had, like a repository inside it, and for memories filed under

@@ -2745,7 +2745,7 @@ mod tests {
     fn the_fingerprint_matches_the_known_hash_of_the_literal_text() {
         // Computed independently (Python's own FNV-1a/64) over the exact
         // frontmatter and body this file embeds.
-        assert_eq!(skill_fingerprint(), 0x53833e2dadbcf537);
+        assert_eq!(skill_fingerprint(), 0x373ea81ebebe9f73);
     }
 
     #[test]
