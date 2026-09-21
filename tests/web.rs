@@ -492,6 +492,81 @@ fn a_projects_today_page_serves_with_its_focus_on_it() {
     assert!(a.body.contains("What moved"), "{}", a.body);
 }
 
+/// `f679`: the name `--name` fixes reached every surface on the CLI and
+/// stopped there. The web took the folder's name and asked nothing else, so
+/// a product checked out as `v2` was titled `v2` on its own front page while
+/// `vivac brief` in that same folder called it by its name.
+///
+/// The folder is still the default and still what almost every project goes
+/// by. What it is no longer is the only answer available.
+#[test]
+fn a_page_shows_the_name_the_product_was_given_over_its_folders() {
+    let sandbox = Sandbox::new_empty("web-named");
+    sandbox.ok(&["setup", "claude-code", "--yes", "--name", "IQuorum"]);
+    sandbox.ok(&["push", "Fix the cache adapter", "--why", "the bug needs it"]);
+    let server = Server::start(&sandbox);
+    let boot = call(server.port, &server.boot_path(), &[("Host", server.host())]);
+    let token = token_from(&boot);
+
+    // The readable URL is made from the same name, so this path existing at
+    // all is half the answer: it is what the refusal on the CLI hands out.
+    let a = call(
+        server.port,
+        "/p/IQuorum/",
+        &[("Host", server.host()), ("X-Vivac-Token", token)],
+    );
+    assert_eq!(a.status, 200, "{}", a.body);
+    assert!(a.body.contains("IQuorum"), "{}", a.body);
+    let folder = sandbox
+        .0
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    assert!(
+        !a.body.contains(&folder),
+        "the folder's name reached the page beside the product's: {folder}\n{}",
+        a.body
+    );
+}
+
+/// The same name on the other surface that shows one, and the one a reader
+/// meets first: `d199` says `vivac web` opens from anywhere and lists every
+/// project on the machine. A list that named this one by a version folder
+/// would be a list nobody could find their product in.
+#[test]
+fn the_index_lists_a_project_under_the_name_it_was_given() {
+    let sandbox = Sandbox::new_empty("web-named-index");
+    sandbox.ok(&["setup", "claude-code", "--yes", "--name", "IQuorum"]);
+    // Started outside it, since from inside a project `/` lands on that
+    // project instead of listing -- the same reason `up_many` does this.
+    let server = Server::start_serving(
+        &std::env::temp_dir(),
+        sandbox.global_home(),
+        &[sandbox.0.as_path()],
+    );
+    let boot = call(server.port, &server.boot_path(), &[("Host", server.host())]);
+    let token = token_from(&boot);
+    let a = call(
+        server.port,
+        "/",
+        &[("Host", server.host()), ("X-Vivac-Token", token)],
+    );
+    assert_eq!(a.status, 200, "{}", a.body);
+    assert!(a.body.contains("IQuorum"), "{}", a.body);
+    let folder = sandbox
+        .0
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    assert!(
+        !a.body.contains(&folder),
+        "the index named it by its folder: {folder}\n{}",
+        a.body
+    );
+}
+
 /// `WEB.md` §7.4: the page loads with no internet. Proved on the bytes that
 /// actually left the socket, not on the template they were built from.
 #[test]

@@ -37,9 +37,9 @@ use std::time::SystemTime;
 /// One root, folded, with enough of a fingerprint to know when it moved.
 pub struct Project {
     pub root: PathBuf,
-    /// The readable half of a URL: the directory's name with every run of
+    /// The readable half of a URL: this project's name with every run of
     /// characters outside `A-Za-z0-9._-` collapsed to a single `-`. **Not
-    /// unique** -- two directories with the same name share it, and `d374`
+    /// unique** -- two projects with the same name share it, and `d374`
     /// says an ambiguous one is refused rather than guessed at. It used to
     /// be made unique with a `-2` suffix; `f373` measured what that cost:
     /// the suffix is positional, so the first root leaving the registry
@@ -47,7 +47,14 @@ pub struct Project {
     /// without an error.
     pub slug: String,
 
-    /// The directory's name as it is on disk, which is what a page shows.
+    /// This project's own name, which is what a page shows: the one saved
+    /// with `--name`, and the directory's when nobody fixed one (`f679`).
+    ///
+    /// Read once, when the project is opened, the same as it has always
+    /// been: a folder renamed while the server is up keeps showing the old
+    /// name until it restarts, and a name saved while it is up arrives the
+    /// same way. The permanent link does not depend on either -- it is the
+    /// first event's id, and `ulid` reads that off the fold every time.
     pub name: String,
     ctx: ops::Ctx,
     /// The events the fold was built from, kept because a reader that groups
@@ -321,13 +328,31 @@ impl Registry {
         roots: Vec<PathBuf>,
         here: Option<(PathBuf, store::Located)>,
     ) -> Result<Registry, Failure> {
+        let store_dir = store::store_dir();
+        Registry::open_in(roots, here, store_dir.as_deref())
+    }
+
+    /// [`Self::open`], pointed at a store directory the caller already
+    /// holds instead of the one this machine resolves to. Everything above
+    /// about `here` holds here too; this is where the two part ways.
+    ///
+    /// `None` is a machine with no registry to ask, and every project then
+    /// goes by its folder. It is also what a unit test passes: `open`
+    /// resolves the store the one way there is, and the one way there is
+    /// refuses to run under `cfg(test)` without `VIVAC_HOME` -- on purpose,
+    /// since a test that reached it would read this machine's own registry.
+    pub fn open_in(
+        roots: Vec<PathBuf>,
+        here: Option<(PathBuf, store::Located)>,
+        store_dir: Option<&Path>,
+    ) -> Result<Registry, Failure> {
         if roots.is_empty() {
             return Err(Failure::usage(
                 "vivac needs at least one root to serve.".to_string(),
             ));
         }
         let unique = dedup_by_target(roots);
-        let pairs = assign_names_and_slugs(&unique);
+        let pairs = assign_names_and_slugs(&unique, store_dir);
         let here_key = here
             .as_ref()
             .map(|(root, _)| std::fs::canonicalize(root).unwrap_or_else(|_| root.clone()));
@@ -494,13 +519,27 @@ fn name_or_ulid(id: &str, slugs: &[String], ulids: &[Option<String>]) -> Named {
 /// that suffix was positional, so it moved when the registry changed and a
 /// saved link silently opened the other project. Uniqueness lives on the
 /// ULID now, and ambiguity on the name is answered rather than papered over.
-fn assign_names_and_slugs(roots: &[PathBuf]) -> Vec<(String, String)> {
+///
+/// **The name is the project's, not the folder's** (`f679`). This read
+/// `file_name()` and asked nothing else, so `--name` -- which every surface
+/// on the CLI had read since `t640` -- reached no page at all: a product
+/// checked out as `v2` was titled `v2` on its front page, in the index and
+/// in its URL, while `vivac brief` in the same folder called it by its
+/// name. Both halves move together on purpose: the slug is made from the
+/// name, so the readable URL is the name the resolver on the CLI already
+/// answers to, and the permanent one is the ULID either way.
+///
+/// `store_dir` is `None` for a machine with no registry to ask, and then
+/// the folder is all there is -- which is exactly what this did before.
+/// It is an argument rather than a second resolution for the reason
+/// `registry::effective_name` gives: one resolution serves every root here.
+fn assign_names_and_slugs(roots: &[PathBuf], store_dir: Option<&Path>) -> Vec<(String, String)> {
     roots
         .iter()
         .map(|r| {
-            let name = r
-                .file_name()
-                .map(|s| s.to_string_lossy().into_owned())
+            let name = store_dir
+                .and_then(|d| crate::registry::effective_name(d, r))
+                .or_else(|| crate::registry::folder_name(r))
                 .unwrap_or_else(|| "-".into());
             let slug = sanitize(&name);
             (name, slug)
@@ -516,9 +555,19 @@ mod tests {
         pairs.into_iter().map(|(_, slug)| slug).collect()
     }
 
+    /// The folder-only half of the rule, which is every root below: none of
+    /// these paths is a tree on this disk, so none of them has a name saved
+    /// anywhere. `None` for the store keeps it that way without reading the
+    /// registry of the machine running the suite -- `Registry::open_in`.
+    /// The other half, a name fixed on purpose, is proved over a socket in
+    /// `tests/web.rs`, since it takes a tree and a registry to have one.
+    fn names_and_slugs(roots: &[PathBuf]) -> Vec<(String, String)> {
+        assign_names_and_slugs(roots, None)
+    }
+
     #[test]
     fn a_single_root_gets_its_bare_directory_name() {
-        let slugs = slugs_of(assign_names_and_slugs(&[PathBuf::from("/work/vivac")]));
+        let slugs = slugs_of(names_and_slugs(&[PathBuf::from("/work/vivac")]));
         assert_eq!(slugs, vec!["vivac".to_string()]);
     }
 
@@ -527,7 +576,7 @@ mod tests {
         // The `-2` this used to hand out was positional, and `f373` showed
         // the first root leaving the registry passed its URL to the second.
         // They collide on purpose now, and `name_or_ulid` refuses to guess.
-        let slugs = slugs_of(assign_names_and_slugs(&[
+        let slugs = slugs_of(names_and_slugs(&[
             PathBuf::from("/a/vivac"),
             PathBuf::from("/b/vivac"),
         ]));
@@ -536,13 +585,13 @@ mod tests {
 
     #[test]
     fn a_root_with_no_directory_name_falls_back_to_a_dash() {
-        let slugs = slugs_of(assign_names_and_slugs(&[PathBuf::from("/")]));
+        let slugs = slugs_of(names_and_slugs(&[PathBuf::from("/")]));
         assert_eq!(slugs, vec!["-".to_string()]);
     }
 
     #[test]
     fn a_name_with_characters_a_url_cannot_carry_becomes_a_slug_that_can() {
-        let pairs = assign_names_and_slugs(&[PathBuf::from("/work/my repo#1")]);
+        let pairs = names_and_slugs(&[PathBuf::from("/work/my repo#1")]);
         assert_eq!(
             pairs,
             vec![("my repo#1".to_string(), "my-repo-1".to_string())]
@@ -551,8 +600,7 @@ mod tests {
 
     #[test]
     fn the_name_is_left_alone_however_the_slug_comes_out() {
-        let pairs =
-            assign_names_and_slugs(&[PathBuf::from("/a/my repo"), PathBuf::from("/b/my-repo")]);
+        let pairs = names_and_slugs(&[PathBuf::from("/a/my repo"), PathBuf::from("/b/my-repo")]);
         assert_eq!(
             pairs,
             vec![
@@ -564,7 +612,7 @@ mod tests {
 
     #[test]
     fn a_name_with_nothing_a_url_can_carry_still_gets_a_slug() {
-        let pairs = assign_names_and_slugs(&[PathBuf::from("/work/###")]);
+        let pairs = names_and_slugs(&[PathBuf::from("/work/###")]);
         assert!(!pairs[0].1.is_empty());
     }
 
@@ -656,7 +704,7 @@ mod tests {
         std::fs::create_dir_all(&tmp).unwrap();
         store::Store::create(&tmp).unwrap();
         let want = tmp.file_name().unwrap().to_string_lossy().into_owned();
-        let mut registry = Registry::open(vec![tmp.clone(), tmp.clone()], None)
+        let mut registry = Registry::open_in(vec![tmp.clone(), tmp.clone()], None, None)
             .unwrap_or_else(|e| panic!("{}", e.message()));
         assert_eq!(registry.first().slug, want);
         std::fs::remove_dir_all(&tmp).ok();
@@ -672,8 +720,8 @@ mod tests {
         let tmp = std::env::temp_dir().join(format!("vivac-project-u-{}", crate::id::ulid()));
         std::fs::create_dir_all(&tmp).unwrap();
         store::Store::create(&tmp).unwrap();
-        let mut registry =
-            Registry::open(vec![tmp.clone()], None).unwrap_or_else(|e| panic!("{}", e.message()));
+        let mut registry = Registry::open_in(vec![tmp.clone()], None, None)
+            .unwrap_or_else(|e| panic!("{}", e.message()));
         assert_eq!(registry.first().ulid(), None);
         std::fs::remove_dir_all(&tmp).ok();
     }
@@ -700,8 +748,12 @@ mod tests {
             }),
             worktree: None,
         };
-        let mut registry = Registry::open(vec![a.clone(), b.clone()], Some((a.clone(), located_a)))
-            .unwrap_or_else(|e| panic!("{}", e.message()));
+        let mut registry = Registry::open_in(
+            vec![a.clone(), b.clone()],
+            Some((a.clone(), located_a)),
+            None,
+        )
+        .unwrap_or_else(|e| panic!("{}", e.message()));
 
         let with_lane = registry
             .all()
