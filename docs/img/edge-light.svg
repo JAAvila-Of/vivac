@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 420" width="920" height="420" role="img"><defs><marker id="ar" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#bc4c00"/></marker></defs><rect width="920" height="420" fill="none"/>
+<rect x="8" y="8" width="416" height="404" rx="14" fill="#f6f8fa" stroke="#d1d9e0"/>
+<text x="32" y="44" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif" font-size="15" font-weight="600" fill="#1f2328">Stored as records</text>
+<text x="32" y="65" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif" font-size="12.5" fill="#59636e">ordered by when they were written</text>
+<line x1="44" y1="100" x2="44" y2="338" stroke="#818b98" stroke-dasharray="2 4"/>
+<path d="M44 346 l-4.5 -9 h9 z" fill="#818b98"/>
+<text x="30" y="366" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif" font-size="11" fill="#818b98">time</text>
+<rect x="62" y="92" width="330" height="40" rx="8" fill="#ffffff" stroke="#d1d9e0"/>
+<circle cx="80" cy="112" r="3" fill="#818b98"/>
+<text x="96" y="116.5" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="11.5" fill="#1f2328">make the parser faster</text>
+<rect x="62" y="146" width="330" height="40" rx="8" fill="#ffffff" stroke="#d1d9e0"/>
+<circle cx="80" cy="166" r="3" fill="#818b98"/>
+<text x="96" y="170.5" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="11.5" fill="#1f2328">the parser is the bottleneck</text>
+<rect x="62" y="200" width="330" height="40" rx="8" fill="#ffffff" stroke="#d1d9e0"/>
+<circle cx="80" cy="220" r="3" fill="#818b98"/>
+<text x="96" y="224.5" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="11.5" fill="#1f2328">measured on one file, not the corpus</text>
+<rect x="62" y="254" width="330" height="40" rx="8" fill="#ffffff" stroke="#d1d9e0"/>
+<circle cx="80" cy="274" r="3" fill="#818b98"/>
+<text x="96" y="278.5" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="11.5" fill="#1f2328">the token cache survives the rewrite</text>
+<rect x="62" y="308" width="330" height="40" rx="8" fill="#ffffff" stroke="#d1d9e0"/>
+<circle cx="80" cy="328" r="3" fill="#818b98"/>
+<text x="96" y="332.5" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="11.5" fill="#1f2328">the bottleneck was I/O all along</text>
+<text x="32" y="398" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif" font-size="12.5" fill="#59636e">Everything is here. Nothing says what came from what.</text>
+<rect x="440" y="8" width="472" height="404" rx="14" fill="#f6f8fa" stroke="#bc4c00" stroke-opacity="0.45"/>
+<text x="466" y="44" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif" font-size="15" font-weight="600" fill="#1f2328">Stored as a tree</text>
+<text x="466" y="65" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif" font-size="12.5" fill="#59636e">the same records, plus one edge</text>
+<rect x="466" y="92" width="422" height="42" rx="8" fill="#ffffff" stroke="#d1d9e0"/>
+<text x="480" y="118" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="11.5" font-weight="700" fill="#bc4c00">g1</text>
+<text x="514" y="118" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="11.5" fill="#1f2328">make the parser faster</text>
+<rect x="506" y="168" width="382" height="42" rx="8" fill="#ffffff" stroke="#d1d9e0"/>
+<text x="520" y="194" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="11.5" font-weight="700" fill="#bc4c00">a2</text>
+<text x="554" y="194" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="11.5" fill="#1f2328">the parser is the bottleneck</text>
+<text x="874" y="194" text-anchor="end" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="10.5" fill="#818b98">[abandoned]</text>
+<rect x="546" y="244" width="342" height="42" rx="8" fill="#ffffff" stroke="#d1d9e0"/>
+<text x="560" y="270" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="11.5" font-weight="700" fill="#bc4c00">f4</text>
+<text x="594" y="270" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="11.5" fill="#1f2328">the token cache survives</text>
+<rect x="546" y="312" width="342" height="42" rx="8" fill="#ffffff" stroke="#d1d9e0"/>
+<text x="560" y="338" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="11.5" font-weight="700" fill="#bc4c00">t7</text>
+<text x="594" y="338" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="11.5" fill="#1f2328">rewrite the cache adapter</text>
+<path d="M484 168 V136" fill="none" stroke="#bc4c00" stroke-width="1.6" marker-end="url(#ar)"/><path d="M524 265 H546 M524 333 H546" fill="none" stroke="#bc4c00" stroke-width="1.6"/><path d="M524 333 V214" fill="none" stroke="#bc4c00" stroke-width="1.6" marker-end="url(#ar)"/><text x="494" y="158" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif" font-size="11.5" font-style="italic" fill="#bc4c00">born from</text>
+<text x="466" y="398" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif" font-size="12.5" fill="#59636e">Walk up the edge and you are reading why you are here.</text>
+</svg>

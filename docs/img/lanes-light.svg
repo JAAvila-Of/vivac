@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 340" width="920" height="340" role="img"><defs><marker id="ar" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#bc4c00"/></marker></defs><rect width="920" height="340" fill="none"/>
+<text x="40" y="44" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif" font-size="15" font-weight="600" fill="#1f2328">One product, several folders, one tree</text>
+<rect x="40" y="70" width="240" height="70" rx="10" fill="#ffffff" stroke="#d1d9e0"/>
+<text x="60" y="100" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="12.5" fill="#1f2328">work/api</text>
+<text x="60" y="121" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="11.5" fill="#59636e">on main</text>
+<rect x="222" y="82" width="42" height="19" rx="9.5" fill="none" stroke="#818b98"/>
+<text x="243" y="95.5" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif" font-size="10.5" fill="#818b98">lane</text>
+<path d="M160 146 V194" fill="none" stroke="#bc4c00" stroke-width="1.6" marker-end="url(#ar)"/>
+<rect x="340" y="70" width="240" height="70" rx="10" fill="#ffffff" stroke="#d1d9e0"/>
+<text x="360" y="100" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="12.5" fill="#1f2328">work/api-hotfix</text>
+<text x="360" y="121" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="11.5" fill="#59636e">on 2.1.x</text>
+<rect x="522" y="82" width="42" height="19" rx="9.5" fill="none" stroke="#818b98"/>
+<text x="543" y="95.5" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif" font-size="10.5" fill="#818b98">lane</text>
+<path d="M460 146 V194" fill="none" stroke="#bc4c00" stroke-width="1.6" marker-end="url(#ar)"/>
+<rect x="640" y="70" width="240" height="70" rx="10" fill="#ffffff" stroke="#d1d9e0"/>
+<text x="660" y="100" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="12.5" fill="#1f2328">review/api</text>
+<text x="660" y="121" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="11.5" fill="#59636e">on pr-882</text>
+<rect x="822" y="82" width="42" height="19" rx="9.5" fill="none" stroke="#818b98"/>
+<text x="843" y="95.5" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif" font-size="10.5" fill="#818b98">lane</text>
+<path d="M760 146 V194" fill="none" stroke="#bc4c00" stroke-width="1.6" marker-end="url(#ar)"/>
+<rect x="40" y="200" width="840" height="74" rx="12" fill="#fff1e5" stroke="#bc4c00" stroke-opacity="0.55"/>
+<text x="64" y="234" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="13" font-weight="700" fill="#bc4c00">.vivac</text>
+<text x="126" y="234" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif" font-size="13.5" fill="#1f2328">one tree, one record of what was born from what</text>
+<text x="64" y="257" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif" font-size="12" fill="#59636e">every write carries the folder and the branch it came from</text>
+<text x="40" y="310" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif" font-size="12.5" fill="#59636e">The branch is a fact about each write, not something the tree is kept in.</text>
+</svg>

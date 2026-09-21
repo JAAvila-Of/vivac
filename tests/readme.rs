@@ -18,8 +18,15 @@
 //! makes for the help.
 //!
 //! The chain has three links and every one of them is mechanical: the parser
-//! holds the help honest, the help holds the README honest, and running the
+//! holds the help honest, the help holds the prose honest, and running the
 //! commands holds both.
+//!
+//! It says README throughout because that is where all of this used to live.
+//! The manual moved out to `docs/` when the README became a front page
+//! (`d689`), and the check went with it rather than staying pointed at the
+//! file: `PAGES` is every page that shows a command, and the reading list and
+//! the `--json` prose are now held against `docs/USAGE.md`, which is where
+//! they are.
 
 mod common;
 use common::Sandbox;
@@ -31,10 +38,27 @@ use std::collections::BTreeSet;
 /// which `tests/help.rs` already holds against the parser.
 const SERVERS: [&str; 2] = ["web", "mcp"];
 
-fn readme() -> String {
-    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("README.md");
+fn page(name: &str) -> String {
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(name);
     std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
 }
+
+fn readme() -> String {
+    page("README.md")
+}
+
+/// Every page of public prose that shows commands. The README is the front
+/// door and the rest is the manual it hands off to, and what `f161` caught
+/// was prose rotting rather than one file going stale -- so the check follows
+/// the prose wherever it sits.
+const PAGES: [&str; 6] = [
+    "README.md",
+    "docs/USAGE.md",
+    "docs/SETUP.md",
+    "docs/MIGRATING.md",
+    "docs/PERFORMANCE.md",
+    "docs/VERSIONING.md",
+];
 
 /// Every fenced block, with the word that opened the fence.
 fn blocks(text: &str) -> Vec<(String, String)> {
@@ -167,12 +191,12 @@ fn reads_from_help(help: &str) -> BTreeSet<String> {
     out
 }
 
-/// The reads the README shows the maintainer: the block under its heading.
-fn reads_from_readme(text: &str) -> BTreeSet<String> {
-    const MARK: &str = "**The maintainer reads.**";
+/// The reads the manual shows the maintainer: the block under its heading.
+fn reads_from_docs(text: &str) -> BTreeSet<String> {
+    const MARK: &str = "## The maintainer reads";
     let i = text
         .find(MARK)
-        .unwrap_or_else(|| panic!("the README no longer has a `{MARK}` block to check"));
+        .unwrap_or_else(|| panic!("docs/USAGE.md no longer has a `{MARK}` block to check"));
     let (tag, body) = blocks(&text[i..])
         .into_iter()
         .next()
@@ -204,67 +228,69 @@ fn json_prose(text: &str) -> String {
 }
 
 #[test]
-fn the_binary_takes_every_command_the_readme_shows() {
-    let text = readme();
+fn the_binary_takes_every_command_the_public_prose_shows() {
     let c = Sandbox::new_seeded("readme-commands");
     let help = c.ok(&["--help"]);
     let commands = all_commands(&help);
     let mut seen = 0;
-    for (tag, body) in blocks(&text) {
-        for line in command_lines(&tag, &body) {
-            let words = split(&line);
-            let args: Vec<&str> = words[1..].iter().map(String::as_str).collect();
-            seen += 1;
-            if args.first().is_some_and(|w| SERVERS.contains(w)) {
-                let block = help_block(&help, args[0]);
-                assert!(
-                    !block.is_empty(),
-                    "the README shows `{line}`, and the help has never heard of it"
-                );
-                for flag in args.iter().filter(|a| a.starts_with("--")) {
+    for name in PAGES {
+        let text = page(name);
+        for (tag, body) in blocks(&text) {
+            for line in command_lines(&tag, &body) {
+                let words = split(&line);
+                let args: Vec<&str> = words[1..].iter().map(String::as_str).collect();
+                seen += 1;
+                if args.first().is_some_and(|w| SERVERS.contains(w)) {
+                    let block = help_block(&help, args[0]);
                     assert!(
-                        block.contains(flag),
-                        "the README shows `{line}` and the help does not give it {flag}:\n{block}"
+                        !block.is_empty(),
+                        "{name} shows `{line}`, and the help has never heard of it"
                     );
+                    for flag in args.iter().filter(|a| a.starts_with("--")) {
+                        assert!(
+                            block.contains(flag),
+                            "{name} shows `{line}` and the help does not give it {flag}:\n{block}"
+                        );
+                    }
+                    continue;
                 }
-                continue;
+                // A retired command answers with neither of the words below:
+                // `vivac hooks` left a line saying where to go instead, and
+                // the prose could have gone on showing it. So the command
+                // also has to be one the help still announces.
+                let command = args.first().copied().unwrap_or_default();
+                assert!(
+                    commands.contains(command),
+                    "{name} shows `{line}`, and the help no longer lists `{command}`"
+                );
+                let (out, _) = c.run(&args);
+                assert!(
+                    !out.contains("unknown command:") && !out.contains("does not take"),
+                    "{name} shows `{line}` and the binary refuses it:\n{out}"
+                );
             }
-            // A retired command answers with neither of the words below:
-            // `vivac hooks` left a line saying where to go instead, and the
-            // README could have gone on showing it. So the command also has
-            // to be one the help still announces.
-            let command = args.first().copied().unwrap_or_default();
-            assert!(
-                commands.contains(command),
-                "the README shows `{line}`, and the help no longer lists `{command}`"
-            );
-            let (out, _) = c.run(&args);
-            assert!(
-                !out.contains("unknown command:") && !out.contains("does not take"),
-                "the README shows `{line}` and the binary refuses it:\n{out}"
-            );
         }
     }
     assert!(
         seen >= 10,
-        "only {seen} commands found: what broke is the parsing here, not the README"
+        "only {seen} commands found: what broke is the parsing here, not the prose"
     );
 }
 
 #[test]
-fn the_readme_shows_the_same_reads_as_the_help() {
-    let text = readme();
+fn the_docs_show_the_same_reads_as_the_help() {
+    let text = page("docs/USAGE.md");
     let c = Sandbox::new_seeded("readme-reads");
     let help = c.ok(&["--help"]);
-    let shown = reads_from_readme(&text);
+    let shown = reads_from_docs(&text);
     let real = reads_from_help(&help);
     let missing: Vec<_> = real.difference(&shown).collect();
     let surplus: Vec<_> = shown.difference(&real).collect();
     assert!(
         missing.is_empty() && surplus.is_empty(),
-        "the README's reading list and the help disagree.\n  \
-         the help has it and the README does not: {missing:?}\n  \
-         the README has it and the help does not: {surplus:?}"
+        "the manual's reading list and the help disagree.\n  \
+         the help has it and docs/USAGE.md does not: {missing:?}\n  \
+         docs/USAGE.md has it and the help does not: {surplus:?}"
     );
 }
 
@@ -284,20 +310,20 @@ fn the_brief_is_the_only_read_that_refuses_json() {
 }
 
 #[test]
-fn the_readme_names_every_read_that_refuses_json() {
-    let text = readme();
+fn the_docs_name_every_read_that_refuses_json() {
+    let text = page("docs/USAGE.md");
     let c = Sandbox::new_seeded("readme-json-prose");
     let help = c.ok(&["--help"]);
     let prose = json_prose(&text);
     assert!(
         !prose.is_empty(),
-        "the README no longer says anything about --json"
+        "docs/USAGE.md no longer says anything about --json"
     );
     for read in reads_from_help(&help) {
         if c.run(&[&read, "--json"]).0.contains("does not take --json") {
             assert!(
                 prose.contains(&read),
-                "`{read}` refuses --json and the README does not say so:\n{prose}"
+                "`{read}` refuses --json and docs/USAGE.md does not say so:\n{prose}"
             );
         }
     }
