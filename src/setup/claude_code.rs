@@ -851,11 +851,19 @@ fn product_registered_refusal(
         .map(|r| r.path.as_str())
         .collect();
     repo_names.sort_unstable();
-    let repo_list = repo_names.join(", ");
+    // `f677`: "." is what `Repo::relative` writes when the folder itself
+    // is the repository, and printed bare it disappears into the
+    // sentence's own closing period -- named here instead, the one place
+    // this list turns into words a person reads.
+    let repo_list = repo_names
+        .iter()
+        .map(|p| if *p == "." { "this folder itself" } else { p })
+        .collect::<Vec<_>>()
+        .join(", ");
     match &sharing.name {
         Some(name) => Failure::Model(format!(
-            "  Some repositories here are already tracked by project \"{name}\":\n  \
-             {repo_list}.\n  \
+            "  Some repositories here are already tracked by project \"{name}\":\n      \
+             {repo_list}\n  \
              Planting another tree would give this product two maps.\n\n  \
              To work on {name} from this folder:\n      \
              vivac setup claude-code --join {}\n  \
@@ -865,7 +873,8 @@ fn product_registered_refusal(
         )),
         None => Failure::Model(format!(
             "  Some repositories here are already tracked by another project on this\n  \
-             machine: {repo_list}.\n  \
+             machine:\n      \
+             {repo_list}\n  \
              Planting another tree would give this product two maps.\n\n  \
              To work on it from this folder, give the path to its folder:\n      \
              vivac setup claude-code --join <path to that folder>\n  \
@@ -911,6 +920,37 @@ fn refuse_second_map(roots: &super::Roots, bypass_registered: bool) -> Result<()
         Some(sharing) => Err(product_registered_refusal(&sharing, &here_repos)),
         None => Ok(()),
     }
+}
+
+/// `f676`/`d682`: the guard above only speaks when this folder's own
+/// repositories share a root commit with a project the registry already
+/// tracks -- read the other way round, when the registry knows other
+/// products and this folder shares a root commit with **none** of them,
+/// it says nothing at all. A folder that genuinely is a new product and
+/// one whose repositories the registry simply never learned about yet
+/// look identical from here, and only the first is what a silent plant
+/// should mean.
+///
+/// A warning, never a refusal: it changes nothing about what this run
+/// does, so it is checked independent of `--new-tree`, which only bypasses
+/// the guard above. `None` once the registry has nothing on file yet --
+/// there is nothing for this folder to fail to share with.
+fn second_map_hint(here: &Path) -> Option<String> {
+    let store_dir = crate::store::store_dir()?;
+    if crate::registry::roots(&store_dir).is_empty() {
+        return None;
+    }
+    let (here_repos, _excluded) = filtered_repos(crate::repos::scan(here));
+    let root_commits: Vec<String> = here_repos.iter().filter_map(|r| r.root.clone()).collect();
+    if !crate::registry::sharing_repos(&store_dir, &root_commits).is_empty() {
+        return None;
+    }
+    Some(
+        "  This plants a new product. Nothing here shares a repository with the\n  \
+         projects vivac already tracks, so it cannot tell whether this is one of\n  \
+         them. If it is, stop and use --join <name> instead.\n\n"
+            .to_string(),
+    )
 }
 
 /// §6.5: this folder's own tree -- freshly planted, or the closer one it
@@ -1771,6 +1811,14 @@ fn apply_writes(
     let stop_hook_state = hook_state(&settings_root, "Stop", "end", SESSION_END_COMMAND);
 
     let vivac_missing = !crate::store::already_planted(tree);
+    // `f676`/`d682`: only a genuine plant can be a product the registry
+    // never learned about yet -- `--join` already named its tree, and a
+    // tree already here is already a known one.
+    let unknown_product_warning = if vivac_missing {
+        second_map_hint(here).unwrap_or_default()
+    } else {
+        String::new()
+    };
     // A tree this run plants already carries its `.gitignore`, straight out
     // of `Store::create`: only a tree from before `t594` §4.9 can lack it.
     let gitignore_missing = !vivac_missing
@@ -1838,7 +1886,7 @@ fn apply_writes(
     // An already-set-up project asking for `--dry-run` used
     // to reach the other branch first and note it anyway.
     if a.has("dry-run") {
-        outln!("{piece_block}{TRAILING_PARAGRAPH}\n  Nothing written: --dry-run.");
+        outln!("{piece_block}{unknown_product_warning}{TRAILING_PARAGRAPH}\n  Nothing written: --dry-run.");
         if log_tracked {
             print!("{}", tracked_git_warning());
         }
@@ -1864,10 +1912,10 @@ fn apply_writes(
     }
 
     if !a.has("yes") && !super::stdin_is_terminal() {
-        return Err(Failure::Model(NO_TERMINAL_TEXT.to_string()));
+        return Err(Failure::Model(no_terminal_text(a)));
     }
 
-    print!("{piece_block}{TRAILING_PARAGRAPH}");
+    print!("{piece_block}{unknown_product_warning}{TRAILING_PARAGRAPH}");
     let proceed = a.has("yes") || super::ask("\n  Write it? [y/N] ");
     if !proceed {
         outln!("\n  Nothing written.");
@@ -2018,6 +2066,7 @@ fn apply_writes(
         gitignore_created: gitignore_missing,
         lane_declared: !lane.unchanged || !lane.stale_worktrees.is_empty(),
         config_locked: lane.needs_lock,
+        joined_new_lane: !vivac_missing && lane.is_new,
         undoable: start_missing
             && stop_missing
             && mcp_missing
@@ -2228,7 +2277,54 @@ fn render_piece_block(
 // names Claude Code (`d653`).
 pub(super) const TRAILING_PARAGRAPH: &str = "  The hooks run a command in every session, and the server is how the\n  agent writes to the tree. Nothing outside this directory is touched,\n  and no file is copied.\n";
 
-const NO_TERMINAL_TEXT: &str = "  setup asks before writing, and there is no terminal here to ask.\n  See what it would write:  vivac setup claude-code --dry-run\n  Then write it:            vivac setup claude-code --yes";
+/// A value repeated into `no_terminal_text`, quoted only when it has a
+/// space in it: the same rule the copied command line needs to survive a
+/// shell, and no more than that -- an unquoted path or name with none
+/// reads back exactly as it was typed.
+fn quoted_if_it_has_a_space(value: &str) -> String {
+    if value.contains(' ') {
+        format!("\"{value}\"")
+    } else {
+        value.to_string()
+    }
+}
+
+/// The flags this run was given, in the fixed order the two commands
+/// `no_terminal_text` suggests repeat them in, and only the ones present.
+/// `f675`: dropping them used to hand back two bare commands, and running
+/// the first one literally -- `vivac setup claude-code --dry-run` -- plans
+/// a plant even on a run that asked to `--join` a tree elsewhere. That is
+/// not a shorter version of the advice, it is different advice.
+fn no_terminal_flags(a: &Args) -> String {
+    let mut s = String::new();
+    if let Some(v) = a.opt("join") {
+        s.push_str(" --join ");
+        s.push_str(&quoted_if_it_has_a_space(v));
+    }
+    if a.has("new-tree") {
+        s.push_str(" --new-tree");
+    }
+    if let Some(v) = a.opt("name") {
+        s.push_str(" --name ");
+        s.push_str(&quoted_if_it_has_a_space(v));
+    }
+    if let Some(v) = a.opt("lane-name") {
+        s.push_str(" --lane-name ");
+        s.push_str(&quoted_if_it_has_a_space(v));
+    }
+    s
+}
+
+/// `f675`: built rather than constant, so the two commands it suggests
+/// name the run that is actually stuck rather than a bare plant. The two
+/// columns keep the alignment a fixed label already fixes; only what
+/// comes after `claude-code` grows.
+fn no_terminal_text(a: &Args) -> String {
+    let flags = no_terminal_flags(a);
+    format!(
+        "  setup asks before writing, and there is no terminal here to ask.\n  See what it would write:  vivac setup claude-code{flags} --dry-run\n  Then write it:            vivac setup claude-code{flags} --yes"
+    )
+}
 
 /// What this run wrote, which decides how it ends (`t579` §15.5): a
 /// paragraph is only printed when it is true of this run, and it says
@@ -2264,6 +2360,13 @@ struct Written {
     /// exclusive, which they are not: a brand new lane commonly closes
     /// the lock in the very same write that declares it).
     config_locked: bool,
+    /// This run declared a lane that did not exist here before, on a tree
+    /// that was already there rather than one it just planted (`f678`,
+    /// `d683`): joining, whether that came from an explicit `--join` or
+    /// from `setup` finding the tree above `here` on its own. Always
+    /// `false` when `planted` is, since planting mints the tree's very
+    /// first lane and `MIGRATE_PARAGRAPHS` already covers it.
+    joined_new_lane: bool,
     /// All four of setup's pieces, the skill among them missing before:
     /// `--undo` removes all four, so only then does it take back exactly
     /// this run.
@@ -2288,6 +2391,15 @@ fn written_text(w: &Written) -> String {
             w.lane_declared,
             w.config_locked,
         ));
+        // `f678`/`d683`: the argument for staying quiet here was the
+        // **tree**'s, which a join finds already there and may already
+        // hold content for. It says nothing about the folder, which
+        // arrives with its own instruction files, its own harness memory
+        // and its own documents, and joining a tree never reads any of
+        // that.
+        if w.joined_new_lane {
+            s.push_str(JOIN_MIGRATE_PARAGRAPHS);
+        }
     }
     s.push_str(FILES_PARAGRAPH);
     if w.undoable {
@@ -2396,6 +2508,13 @@ const HAND_REGISTERED_PARAGRAPH: &str = "\n  The tree was here before this serve
 const SKILL_PARAGRAPH: &str = "\n  The vivac-migrate skill is now the one this version of vivac ships.\n  Sessions opened from now on use it.\n";
 
 const MIGRATE_PARAGRAPHS: &str = "\n  Nothing has been brought in from anywhere yet. To bring in what this\n  project already knows, from another memory system, the harness's own\n  memory, instruction files or its documents, ask the agent:\n\n      Use the vivac-migrate skill to bring everything this project knows\n      into vivac.\n\n  It shows you a plan before writing anything, checks what it wrote, and\n  offers to retire the other maps one at a time, only if you say yes.\n\n  Until then, another memory system you use keeps talking to the agent as\n  before, and may tell it to use that system first. That is expected: the\n  skill only reads from it.\n";
+
+/// `f678`/`d683`: `MIGRATE_PARAGRAPHS`'s own argument was for the
+/// **tree**, which a join finds already there and may already carry
+/// content for -- true, and beside the point. This folder's own
+/// instruction files, the harness's memory and its documents came with
+/// the folder, not the tree, and joining a tree never reads any of that.
+const JOIN_MIGRATE_PARAGRAPHS: &str = "\n  This folder's own knowledge is not in the tree. Instruction files, the\n  harness's memory and the documents that live here came with the folder,\n  and joining a tree does not read them. To bring them in, ask the agent:\n\n      Use the vivac-migrate skill to bring everything this project knows\n      into vivac.\n\n  The tree already has content, and the skill expects that: it looks at\n  what is there before writing, and proposes a note on the node that\n  already says it rather than a duplicate.\n";
 
 const TREE_KEPT_PARAGRAPH: &str =
     "\n  The tree was already there, and setup changed nothing in it.\n";

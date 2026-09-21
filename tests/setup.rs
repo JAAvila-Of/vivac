@@ -1415,7 +1415,12 @@ fn a_fresh_setup_prints_the_written_message_verbatim() {
 /// adds the "vivac" server to a tree that was already there before it, and
 /// `HAND_REGISTERED_PARAGRAPH` is now expected right after the session
 /// paragraph.
-const NEW_FOLDER_MESSAGE: &str = "  Written.\n\n  Open a new Claude Code session in this folder. The brief arrives on its\n  own when it starts. If Claude Code asks whether to use the \"vivac\" server\n  from .mcp.json, say yes: it is what lets the agent write to the tree.\n\n  The tree was here before this server was. If you once registered vivac\n  by hand with claude mcp add, Claude Code keeps using that registration\n  and not this one. To keep only this one, run from this folder:\n\n      claude mcp remove vivac -s local\n\n  The tree was already there, and setup wrote in it: this folder's own\n  thread and the sentence that stops an older vivac from reading it.\n\n  The hooks, the server and the skill are plain files in this project:\n  commit them if everyone who works here uses vivac, and keep them out of\n  version control if only you do. .vivac/ is never committed: it is this\n  machine's record, and a copy of it in every clone would diverge from the\n  others. Its own .gitignore keeps it out.\n\n  Undo:  vivac setup claude-code --undo\n";
+///
+/// `f678`/`d683`: `workdir` declares a lane the tree never had, on a tree
+/// this run did not plant -- joined by finding the tree above rather than
+/// by `--join`, but the same shape either way -- so the closing message
+/// now also invites migrating what `workdir` itself knows.
+const NEW_FOLDER_MESSAGE: &str = "  Written.\n\n  Open a new Claude Code session in this folder. The brief arrives on its\n  own when it starts. If Claude Code asks whether to use the \"vivac\" server\n  from .mcp.json, say yes: it is what lets the agent write to the tree.\n\n  The tree was here before this server was. If you once registered vivac\n  by hand with claude mcp add, Claude Code keeps using that registration\n  and not this one. To keep only this one, run from this folder:\n\n      claude mcp remove vivac -s local\n\n  The tree was already there, and setup wrote in it: this folder's own\n  thread and the sentence that stops an older vivac from reading it.\n\n  This folder's own knowledge is not in the tree. Instruction files, the\n  harness's memory and the documents that live here came with the folder,\n  and joining a tree does not read them. To bring them in, ask the agent:\n\n      Use the vivac-migrate skill to bring everything this project knows\n      into vivac.\n\n  The tree already has content, and the skill expects that: it looks at\n  what is there before writing, and proposes a note on the node that\n  already says it rather than a duplicate.\n\n  The hooks, the server and the skill are plain files in this project:\n  commit them if everyone who works here uses vivac, and keep them out of\n  version control if only you do. .vivac/ is never committed: it is this\n  machine's record, and a copy of it in every clone would diverge from the\n  others. Its own .gitignore keeps it out.\n\n  Undo:  vivac setup claude-code --undo\n";
 
 /// §15.5 (c): only the skill, which is what an upgrade writes.
 const SKILL_REPLACED_MESSAGE: &str = "  Written.\n\n  The vivac-migrate skill is now the one this version of vivac ships.\n  Sessions opened from now on use it.\n\n  The tree was already there, and setup changed nothing in it.\n\n  The hooks, the server and the skill are plain files in this project:\n  commit them if everyone who works here uses vivac, and keep them out of\n  version control if only you do. .vivac/ is never committed: it is this\n  machine's record, and a copy of it in every clone would diverge from the\n  others. Its own .gitignore keeps it out.\n";
@@ -1656,6 +1661,17 @@ fn git_status_shows_nothing_of_a_planted_tree() {
 // ---------------------------------------------------------------------------
 
 fn real_git_repo(at: &Path) {
+    real_git_repo_with_content(at, "x");
+}
+
+/// Like [`real_git_repo`], but `content` sets the tree hash, and so the
+/// root commit itself, apart from another repository this file builds:
+/// two plain `real_git_repo` calls write the same content, the same
+/// author and the same message, so only the committer date -- git's own
+/// clock, whatever resolution it has -- tells their root commits apart.
+/// `f676`'s own test needs two repositories whose root commits are
+/// provably different rather than different by luck of the clock.
+fn real_git_repo_with_content(at: &Path, content: &str) {
     std::fs::create_dir_all(at).unwrap();
     let run = |args: &[&str]| {
         std::process::Command::new("git")
@@ -1668,7 +1684,7 @@ fn real_git_repo(at: &Path) {
     run(&["init", "-q"]);
     run(&["config", "user.email", "t@example.com"]);
     run(&["config", "user.name", "t"]);
-    std::fs::write(at.join("f.txt"), "x").unwrap();
+    std::fs::write(at.join("f.txt"), content).unwrap();
     run(&["add", "."]);
     run(&["commit", "-q", "-m", "first"]);
 }
@@ -1884,7 +1900,7 @@ fn a_registered_products_withheld_name_points_at_the_path_remedy() {
         out.contains("Some repositories here are already tracked by another project on this"),
         "{out}"
     );
-    assert!(out.contains("machine: webapi."), "{out}");
+    assert!(out.contains("machine:\n      webapi\n"), "{out}");
     assert!(
         out.contains("Planting another tree would give this product two maps."),
         "{out}"
@@ -1899,6 +1915,76 @@ fn a_registered_products_withheld_name_points_at_the_path_remedy() {
     );
     assert!(out.contains("To plant a separate tree anyway:"), "{out}");
     assert!(out.contains("vivac setup claude-code --new-tree"), "{out}");
+}
+
+/// `f677`: a repository that *is* the folder itself is named "this folder
+/// itself" rather than printed as a bare ".": `Repo::relative` already
+/// returns "." for exactly that folder, and the old message glued it
+/// straight onto the sentence's own closing period, so the line a person
+/// actually read said only "..".
+#[test]
+fn a_repository_that_is_the_folder_itself_is_named_rather_than_a_bare_dot() {
+    let c = Sandbox::new_empty("setup-registered-dot");
+    let first = c.0.join("IQuorum");
+    real_git_repo(&first.join("webapi"));
+    run_in(&first, c.global_home(), &["setup", "claude-code", "--yes"]);
+
+    let second = c.0.join("IQuorum-v2");
+    clone_repo(&first.join("webapi"), &second);
+
+    let (out, code) = run_in(&second, c.global_home(), &["setup", "claude-code", "--yes"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("this folder itself"), "{out}");
+    assert!(
+        !out.lines().any(|l| l.trim() == ".."),
+        "a line read only \"..\":\n{out}"
+    );
+}
+
+/// `f676`/`d682`: a plant where the registry already knows another
+/// product, but this folder's own repository shares no root commit with
+/// it, used to say nothing at all -- the guard above only speaks when the
+/// two look like the same product, so a genuinely new product and one
+/// whose repository the registry simply has not learned about yet read
+/// identically. The plan now says so itself, as a warning rather than a
+/// refusal: exit 0, and it shows with `--dry-run` too.
+#[test]
+fn planting_beside_a_registered_product_that_shares_nothing_warns_in_the_plan() {
+    let c = Sandbox::new_empty("setup-second-map-hint");
+    let first = c.0.join("IQuorum");
+    real_git_repo(&first.join("webapi"));
+    run_in(&first, c.global_home(), &["setup", "claude-code", "--yes"]);
+
+    let second = c.0.join("Unrelated");
+    real_git_repo_with_content(&second.join("app"), "y");
+
+    let (out, code) = run_in(
+        &second,
+        c.global_home(),
+        &["setup", "claude-code", "--dry-run"],
+    );
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("This plants a new product."), "{out}");
+    assert!(
+        out.contains("Nothing here shares a repository with the\n  projects vivac already tracks"),
+        "{out}"
+    );
+    assert!(
+        out.contains("If it is, stop and use --join <name> instead."),
+        "{out}"
+    );
+}
+
+/// The same run against an empty registry carries none of it: there is
+/// nothing yet for this folder's repository to fail to share with.
+#[test]
+fn planting_with_an_empty_registry_carries_no_second_map_hint() {
+    let c = Sandbox::new_empty("setup-second-map-hint-empty");
+    real_git_repo(&c.0.join("app"));
+
+    let (out, code) = c.run(&["setup", "claude-code", "--dry-run"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(!out.contains("This plants a new product."), "{out}");
 }
 
 /// Case 6: A tree that itself sits inside another one warns, but still
@@ -3813,6 +3899,59 @@ fn join_yes_in_a_clean_folder_writes_the_harness_and_the_lane() {
     assert!(here.join(".vivac").join("lane").is_file(), "{out}");
 }
 
+/// `f678`/`d683`: a join brings this folder's own harness pieces, but not
+/// this folder's own knowledge -- instruction files, the harness's memory,
+/// documents -- since the tree it joins already exists and joining it
+/// never reads any of that. The closing summary now says so, and points at
+/// the migration skill the same way a plant's own closing summary already
+/// does, in a paragraph of its own rather than the plant's.
+#[test]
+fn joining_an_existing_tree_points_at_migrating_this_folders_own_knowledge() {
+    let c = Sandbox::new_empty("setup-join-migrate");
+    let target = c.0.join("T");
+    std::fs::create_dir_all(&target).unwrap();
+    run_in(&target, c.global_home(), &["setup", "claude-code", "--yes"]);
+
+    let here = c.0.join("F");
+    std::fs::create_dir_all(&here).unwrap();
+    let target_str = target.to_string_lossy().into_owned();
+    let (out, code) = run_in(
+        &here,
+        c.global_home(),
+        &["setup", "claude-code", "--yes", "--join", &target_str],
+    );
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.contains("This folder's own knowledge is not in the tree"),
+        "{out}"
+    );
+    assert!(
+        out.contains("Use the vivac-migrate skill to bring everything this project knows"),
+        "{out}"
+    );
+    assert!(
+        !out.contains("Nothing has been brought in from anywhere yet"),
+        "the plant's own paragraph showed up on a join:\n{out}"
+    );
+}
+
+/// The same run's own plant, right next to it: still the plant's own
+/// paragraph, and none of the join's.
+#[test]
+fn planting_a_fresh_tree_still_carries_the_plants_own_migrate_paragraph() {
+    let c = Sandbox::new_empty("setup-plant-migrate");
+    let (out, code) = c.run(&["setup", "claude-code", "--yes"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.contains("Nothing has been brought in from anywhere yet"),
+        "{out}"
+    );
+    assert!(
+        !out.contains("This folder's own knowledge is not in the tree"),
+        "{out}"
+    );
+}
+
 /// Point 13: closes `f669` -- `--join` with no terminal and no `--yes`
 /// used to write straight away. Now it refuses first, the same as
 /// planting, and names both ways out.
@@ -3833,8 +3972,22 @@ fn join_with_no_terminal_and_no_yes_refuses_without_writing() {
     );
     assert_eq!(code, 1, "{out}");
     assert!(out.contains("there is no terminal here to ask"), "{out}");
-    assert!(out.contains("vivac setup claude-code --dry-run"), "{out}");
-    assert!(out.contains("vivac setup claude-code --yes"), "{out}");
+    // `f675`: following the bare commands this message used to suggest
+    // would have planted a second tree instead of joining this one, since
+    // dropping `--join` is what turns them into a plant. Both lines have
+    // to carry it back.
+    assert!(
+        out.contains(&format!(
+            "vivac setup claude-code --join {target_str} --dry-run"
+        )),
+        "{out}"
+    );
+    assert!(
+        out.contains(&format!(
+            "vivac setup claude-code --join {target_str} --yes"
+        )),
+        "{out}"
+    );
     assert!(!here.join(".vivac").exists(), "the lane was written anyway");
     assert!(
         !here.join(".claude").exists(),
