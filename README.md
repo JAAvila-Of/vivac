@@ -1,39 +1,84 @@
+<div align="center">
+
 # vivac
 
-[![ci](https://github.com/JAAvila-Of/vivac/actions/workflows/ci.yml/badge.svg)](https://github.com/JAAvila-Of/vivac/actions/workflows/ci.yml)
+**A tree where every node knows which node it was born from.**
 
-**A tree where every node knows which node it was born from.** It exists to
-answer *"why are we here?"* months later, when nobody remembers any more.
+*So that months later something can still answer “why are we here?”*
+
+[![ci](https://github.com/JAAvila-Of/vivac/actions/workflows/ci.yml/badge.svg)](https://github.com/JAAvila-Of/vivac/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/vivac?color=bc4c00&labelColor=24292f)](https://crates.io/crates/vivac)
+[![msrv](https://img.shields.io/badge/msrv-1.89-bc4c00?labelColor=24292f)](rust-toolchain.toml)
+[![licence](https://img.shields.io/badge/licence-MIT%20OR%20Apache--2.0-24292f)](#licence)
+
+</div>
 
 ```
-$ vivac why 11
+$ vivac why 4
 
-  Why we are here  ->  t11
+  Why we are here  ->  t4
   ------------------------------------------------------------------
 
-  g1    vivac 0.1 publishable
-        A provenance system for work that can answer "why are we
-        here" months later.
-        (7 open / 4 closed below)
+  g1    Ship the 2.0 API
+        the first customer is waiting on it
+        (4 open / 1 closed below)
         |
         v
-  t8    Port to Rust in the public repo
-        When the format stops moving, not before.
-        (3 open below)
+  t2    Replace the cache adapter
+        the session bug traces back to it
+        (3 open / 1 closed below)
         |
         v
-  t11   Redaction guard on write
-        Security pillar. Goes BEFORE any cloud mode.
+  t4    No test for expiry  [closed]
+        no way to reproduce the session bug
+        ! the corpus run is what settled it
+        = reproduced: sessions expire at 300s, not 3600
 
         ^^^ you are here
 
-  In parallel, still open (2):
-      t9     Web interface for the maintainer
-      t10    Migrate from JSON to SQLite
+  In parallel, still open (3):
+      t3     Rate limiting is undecided
+      d5     Retry policy: three tries, then fail loudly
+      t6     Migrate the callers
 
-  t8 does not close until these close (1):
-      t11    Redaction guard on write
+  t2 does not close until these close (1):
+      t6     Migrate the callers
 ```
+
+<div align="center">
+
+**[What you get](#what-you-get)** · **[Install](#install)** · **[First five minutes](#the-first-five-minutes)** · **[Why one map](#one-map)** · **[Bring a project in](docs/MIGRATING.md)**
+
+</div>
+
+---
+
+## Built for one person's own work
+
+One person wrote this for their own projects, and it is still measured on
+them. That is the whole of its pedigree, and it shows in what got built:
+every mechanism here came out of a defect that had already cost its author
+days, and every number on this page came off a real tree rather than a
+benchmark written to make a README look good.
+
+The tree this project keeps of itself, 23 days in: **695 nodes, 315 of them
+closed, 176 standing decisions, 16 levels deep.**
+
+Three of those defects, and what each one turned into:
+
+- **A run marked `DONE` with its findings still open** — and 26 days before
+  anybody noticed. Now `vivac done` refuses, and says what is missing.
+- **A reading list of 109 open fronts across 224 lines**, with the one
+  touched yesterday at the bottom. Now `open` answers *what is waiting on
+  you*, in that order, and stops at ten.
+- **Three claims shipped to crates.io that the binary beside them
+  contradicted.** Now a test runs every command this page shows and holds its
+  lists against `--help`.
+
+There are no issues and no pull requests yet; [`CONTRIBUTING.md`](CONTRIBUTING.md)
+says why.
+
+---
 
 ## The problem
 
@@ -45,835 +90,319 @@ provenance problem.** What is written does not say what it was born *from*,
 and without that edge there is no way to reconstruct why you are where you
 are.
 
-Measured on a real compiler: the path between the goal and the day's work was
-**six levels deep**, spread across a chronologically ordered 8,853-line
-tracker, 52 planning documents and 21 issues. The structure was temporal,
-which is exactly the opposite of provenance.
+> Measured on a real compiler: the path between the goal and the day's work
+> was **six levels deep**, spread across a chronologically ordered 8,853-line
+> tracker, 52 planning documents and 21 issues. The structure was temporal,
+> which is exactly the opposite of provenance.
 
-Logbooks, ADRs, issue trackers and session memory for agents all store the
-**node**. None of them stores the **edge**. That is how you can have
-everything written down and still not be able to say where something came
-from.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/edge-dark.svg">
+  <img alt="Left: five records in the order they were written, with nothing connecting them — everything is here, nothing says what came from what. Right: the same five records as a tree, each one pointing at the node it was born from, so walking up the edge reads as why you are here." src="docs/img/edge-light.svg">
+</picture>
 
-[Where it sits](docs/POSITION.md) works through that category by category,
-and says where each of them is better than this.
+Logbooks, decision records, issue trackers and session memory for agents all
+store the **node**. None of them stores the **edge**.
+[Where it sits](docs/POSITION.md) goes through them category by category, and
+says where each one is better than this.
 
-## How it is used
+---
 
-There are two audiences, and the tool splits in two because of them.
+## What you get
 
-**The agent writes.** Capture hangs off the seams of the work: you open a node
-when you start, you close it when you finish. The provenance edge is created
-on its own, with nobody having to remember to declare it.
-
-```sh
-vivac push "Fix the cache adapter" --why "the session bug needs it"
-vivac push "No test for expiry" --why "no way to reproduce the bug" --blocks
-vivac pop "reproduced: expires at 300s, not 3600"
-vivac pop "adapter fixed"
-```
-
-The stack is the path from where this line of work starts to where you are,
-and it can run through nodes that are already closed. Closing or parking one
-below the focus does not move you, and the brief marks it. Only closing the
-focus itself steps back to its parent, and stepping back onto something that
-is already closed leaves it as it was.
-
-Not all of it happens on the stack. A node can be recorded without stepping
-into it, a decision can carry what it rejected, and a node can be marked
-without its state changing:
-
-```sh
-vivac add "Retry policy is undecided" --parent 1 --why "the adapter needs it"
-vivac decide "Expiry stays at 300s" --reason "the session bug was never expiry"
-vivac note "the corpus run is what settled it"
-vivac flag 2 review --why "measured on one file, never on the corpus"
-vivac promote 2
-vivac park 2 "waiting on the corpus run"
-```
-
-`decide` takes `--alternative` for what was turned down and `--supersedes` for
-the decision it replaces, so a reversal reads from either end. `block` marks a
-node as something its parent cannot close over, and `--off` takes it back.
-
-A node is born under the focus, which is what makes the edge free. Work that
-belongs to nothing open is the exception: `--root` on `push`, `add` or
-`decide` gives it no parent, and on `push` it also leaves the stack holding
-only the new node. Nothing on the old stack is closed, and the command says
-how to get back to it. `promote` answers a different case: something already
-in the tree turns out to be a goal of its own, and it keeps where it was born.
-
-```sh
-vivac push "Ship to a second team" --root --why "the first milestone is done"
-```
-
-The tree also holds what governs the project. A `pillar` is an arbiter, and
-its title says so: its name and what it restricts, in the project's own
-words. vivac keeps no list of kinds of pillar: what governs a project is
-found by reasoning about that project, and a menu would decide it first. A
-`rule` hangs under the pillar it answers to, or under the root when no pillar
-owns it, which is also where a rule about how the pillars weigh against each
-other goes. A rule can carry the command that verifies it, at birth with
-`--arm` or later with `vivac arm`; a rule with none is one somebody has to
-judge. vivac never runs an arm: it hands it to whoever is doing the checking,
-through `vivac rules` or the same read over MCP.
-
-```sh
-vivac add "Security: vetoes on the spot" --type pillar --why "the tree maps where a system is weak"
-vivac add "Never store a secret" --parent 7 --type rule --arm "cargo test redact" --why "a leak cannot be taken back"
-```
-
-Rules a project already keeps in files are a different matter. vivac never
-reads `CLAUDE.md`, `AGENTS.md` or any memory file, and it does not guess which
-of their sentences are rules, because telling a rule from the prose around it
-takes judgment. Bringing them in is the agent's job, with a person deciding: the
-agent proposes which lines are pillars, which are rules and which are neither,
-the person rules on it, and the agent writes them with `vivac add`. The
-`vivac-migrate` skill that setup installs takes the agent through it: see
-[Migrating to vivac](#migrating-to-vivac). A tree with
-no pillar and no rule says so when it is asked for its rules. And keep the file
-as it is afterwards, for now: `vivac rules` is read on demand, not handed to the
-agent when a session opens, so the file is still what delivers them unasked.
-
-**The maintainer reads.**
-
-```sh
-vivac brief         where you are, what governs this point, what NOT to touch
-vivac why 11        the path from the root, narrated
-vivac tree          the tree, with false closes marked
-vivac open          what is waiting on you, and what has been sitting
-vivac find cache    every node whose text holds all the words, best first
-vivac stack         the focus stack
-vivac parked        DO NOT TOUCH NOW
-vivac rules         the pillars, rules and invariants that govern this project
-vivac triage        what can be pruned, and with which command
-vivac reconcile     files that changed with nothing in the tree claiming them
-vivac changes       what a stretch of work opened, closed and marked
-vivac stats         the numbers
-vivac check         the invariants; this one belongs in CI
-```
-
-Everything the agent needs to do can be done from the command line, with no
-interface in the way, and every one of those reads takes `--json` — every one
-but the `brief`, which is written to be injected into a session and read as
-prose, never parsed.
-
-Some of them carry more than the line suggests. `why --full` adds the anchor,
-the standing decisions and the open siblings at every step of the path, which
-is the difference between a route and a briefing. `check --gates` widens the
-invariants from this tree to every tree on the machine that nobody has opened,
-because a tree nobody opens is where an invariant goes to break quietly. And
-`open --all` drops the cap, for the times you do want the whole wall.
-
-**`open` answers one sentence, and the order is that sentence.** What is
-waiting on you right now, and what has been open so long you are not working it
-any more. So a front that blocks its parent comes first, because a blocker is
-exactly something waiting on you; among the rest, whichever holds up more tree;
-at a tie, the newest. It stops at ten, because a front is two lines and a list
-you have to scroll has already broken the promise of *right now*, and the line
-underneath says how many were left out and how long the oldest of those has
-been open.
-
-It used to print all of them, oldest first. On the tree this project keeps of
-itself that was a hundred and nine fronts across two hundred and twenty-four
-lines, with the one you touched yesterday at the bottom — which is the defect
-`find` had before it was given an order, in the same product, found again
-because nobody had gone to look at the neighbour.
-
-**And the maintainer looks.** `vivac web` draws the tree in a browser, on this
-machine and nowhere else: a server somebody starts and that dies when they
-close it, bound to `127.0.0.1`, reachable through a one-time key it prints.
-It opens from any directory, including one that is no project at all: the
-roots come from the same registry `find --everywhere` reads, and the working
-directory decides one thing only, which is where `/` lands.
-
-```sh
-vivac web           the tree in a browser, on this machine and nowhere else
-```
-
-It has **no functions of its own.** If a page needs something the command line
-does not have, that thing gets built on the command line first, so there is no
-second write path for the redaction guard to be walked around and anything that
-goes wrong on a page has a command that repeats it.
-
-The drawing of the tree is the one place that is not yet held to that, and it
-is a debt rather than a design: the page walks the tree itself instead of
-calling what `vivac tree` calls, so one shape has two implementations and
-nothing compares them. Naming it here costs less than finding it later.
-
-Where it lands is the index: which project moved, and which has been sitting
-still, without going in to ask them one at a time. Inside a project, what
-moved there while you were not looking, one node's lineage, and the whole
-tree. They are there because a context budget and a screen are not the same
-problem. The `brief` answers *where am I* in a few hundred tokens and does it
-well; it was never going to answer *what changed under me while I was not
-asking*.
-
-**And there are safe stops.** A vivac is the bivouac partway up a climb: a
-coherent state, with the stack frozen and the identity of the code at that
-moment. `push`, `pop` and `park` leave one without anybody asking.
-
-```sh
-vivac save "before touching the adapter" --next "extract the validator"
-vivac restore v14   rebuilds the stack and says what changed since
-vivac vivacs        the stops, latest first
-vivac why v14       that one stop, whole: its label, what you were about to
-                    do, and the stack it carried
-```
-
-`restore` **never touches the working tree**. Mixing context navigation with
-tree manipulation gives you a branch manager worse than git.
-
-## The two edges
-
-It is the distinction that holds the model up, and it came out of seeding two
-real trees and putting them side by side:
-
-|                | Question it answers | When it is created |
-|---|---|---|
-| **born from**  | where did this come from? | on its own, at every `push` |
-| **`--blocks`** | does this stop its parent from closing? | explicitly |
-
-A closed batch of issues with an open finding underneath is **correct**: the
-batch finished and the finding is another thing. An audit marked `DONE` with
-its findings open is a **false marker** — one of those took 26 days to be
-spotted. Same shape, opposite verdict.
-
-That is why `vivac done` **refuses** to close with open conditions and lists
-what is missing. It is the only rule in the model that rejects an operation,
-and it earns that privilege because the case it prevents is measured.
+**The agent starts oriented, and nobody has to ask it to.** A hook runs
+`vivac session start` when a session opens, so the first thing in its context
+is where you are, what has already been decided, and what not to touch:
 
 ```
-$ vivac done 8
+$ vivac brief
 
-  t8 CANNOT close: 1 open closure condition(s)
+vivac · project: demo · lane: main · 2026-09-21
+------------------------------------------------------------
 
-      t11    Redaction guard on write
+ GOAL g1     Ship the 2.0 API
+  |
+  |-- t2     Replace the cache adapter
+  |     why: the session bug traces back to it
+  |
+  `-- t6     Migrate the callers   <== HERE
+        why: the old adapter had a different signature
+
+ STANDING DECISIONS
+  d5     Retry policy: three tries, then fail loudly
+
+ LAST VIVAC
+  v5 · push · 2026-09-21 · bcdba21
+         you were about to: Migrate the callers
+
+------------------------------------------------------------
+ 143 tokens · depth 3 · 0 parked
+```
+
+**In tokens, that is the whole argument.** A project keeping its state in
+three places was asked to pick up where it left off. A hand-written plan
+answered in **9,252 tokens**. A memory system answered *“maybe”* in about
+**12,720**, depending on which of two names for the project it resolved. The
+tree answered in **100**. The brief carries a token budget because a context
+window is the one resource every session spends.
+
+**Nothing closes over what is still open.** The one operation in the model
+that rejects, and it earns it: a run marked done over open findings took 26
+days to be spotted once.
+
+```
+$ vivac done 2
+
+  t2 CANNOT close: 1 open closure condition(s)
+
+      t6     Migrate the callers
 
   A run closes with its findings, not with its report.
-  Closing it anyway leaves a trace:  vivac done 8 --force
+  Closing it anyway leaves a trace:  vivac done 2 --force
 ```
 
-## When a premise turns out false
+**Every decision keeps what it turned down**, and what it was judged against.
+`--alternative` holds the option rejected, `--supersedes` links a reversal to
+what it reverses, and `--against` records the rule or pillar that decided it —
+so a decision can be argued with a year later instead of guessed at. This
+project's own tree carries 176 of them.
 
-The two edges above answer where something came from and what stops it from
-closing. There is a third case, and it is the one that rots a log: an
-assumption is refuted, and everything built on top of it stays on the page
-looking exactly as valid as it did the day before.
+**And you can look at the whole thing.** `vivac web` draws the tree in a
+browser: which project moved and which has been sitting still, one node's
+lineage, and what changed under you while you were not asking. A server you
+start and that dies when you close it, bound to `127.0.0.1`, reachable
+through a one-time key it prints.
 
-```
-$ vivac abandon 2 "the bottleneck was I/O, never the parser" --cascade --rescue 4
+**An assumption that falls does not take its children with it.** `abandon`
+marks the premise refuted and everything under it goes with it, except what
+you rescue — and what is rescued **still hangs where it was born**, because
+being born somewhere is not undone by that place turning out to be wrong.
 
-  a2  The parser is the bottleneck  -> abandoned
-        and 1 descendant(s) with it
+---
 
-  Rescued, and still born from a2:
-      f4     The token cache survives the rewrite
+## One map
 
-  Their lineage crosses an abandoned node on purpose: where they
-  were born does not change because it got discarded.
-```
+**Do not run vivac beside another memory or learning system in the same
+project.** Not because they compete — because **two maps collide.** Each one
+points the agent at the context it holds, and sooner or later one settles
+something the other mapped differently, with nobody noticing which of the two
+oriented the decision.
 
-There is a fair objection to doing any of this, and it is the reason most
-tools stop at reporting the break instead of acting on it: **cutting a link
-discards intent, and nothing left behind can say what was meant.** Once the
-edge is gone the reader is guessing, and a guess written down as a fact is
-worse than a gap.
+That is observed, not assumed:
 
-The objection is right about the danger and wrong that the danger is
-unavoidable, and the whole difference is where the record lives. Intent is
-lost when the link **is** the record — remove it and there is nothing left to
-read. Here the link is not the record. The node is, and it keeps its own
-reason, its outcome and its parent.
+- **A written rule can create a seat no tool can read.** In one project an
+  instruction told the agent to mirror every update into its memory system.
+  That made three seats at the table, and the one that actually governed was
+  the only one nothing could inspect.
+- **The harness brings its own map, whether you chose it or not.** In the
+  project that builds vivac — with everything else deliberately turned off,
+  precisely to test whether the tree alone could carry the thread — the
+  harness's automatic memory kept injecting a copy of the project's doctrine
+  into every session **for five days** before anybody noticed. The measurement
+  was not wrong. It was invalid, and nothing said so.
 
-So **a rescue does not reparent.** `f4` still hangs off the assumption that
-turned out to be false, because that is where it was born, and being born
-somewhere is not undone by that place being wrong. What changes is state, not
-lineage.
+### So why not just the harness?
 
-Which is why "what was meant" is not lost. It is one edge up, and still on the
-path:
+It gives you the session. It does not give you three things, and each absence
+is a specific failure rather than a missing feature:
 
-```
-$ vivac why 4
+- **No edge.** It stores what was learned, not which piece of work it came out
+  of, so there is nothing to walk back along.
+- **No focus.** Everything recalled is equally present, and none of it says
+  *you are here* — or, more to the point, *do not touch that*.
+- **No open and closed state.** Nothing can be reported as still missing.
 
-  g1    Make the parser faster
-        profiles pointed at it
-        |
-        v
-  a2    The parser is the bottleneck  [abandoned]
-        measured on one file, never on the corpus
-        = the bottleneck was I/O, never the parser
-        |
-        v
-  f4    The token cache survives the rewrite
-        it is independent of why we started
-```
+And **the harness's memory belongs to the harness.** Change tool and the
+thread does not come with you. `.vivac/` is a file in your project: plain JSON
+lines, exportable in one command, readable without this binary.
 
-The refuted assumption stays readable, carrying both the reason it was
-believed and the reason it fell, standing between the goal and the thing that
-outlived it. Nothing was dropped, so nothing has to be guessed.
+vivac turns nothing off, and neither does setup — another system is not
+vivac's to touch. What it gives you is a skill that finds every other map the
+agent receives and offers to retire each one, after you say yes, in a form
+that can be undone.
+
+---
+
+## What it costs
+
+Budgets, not aspirations: a read is given **50 ms** and a write **5 ms**, and
+where that is missed it is named rather than left out.
+
+Measured on 18 September 2026 at **ten thousand nodes**, 200 calls per cell,
+on two machines and at two tree shapes, because what `brief` and `open` cost
+is governed by how many fronts are still open rather than by how many nodes
+exist. p99 in milliseconds:
+
+| | `brief` | `why` | `open` | `find` |
+|---|---|---|---|---|
+| **CLI**, cold process, Linux | 15.5 | 18.8 | 20.4 | 19.9 |
+| **MCP**, resident server, Linux | 0.5 | 7.1 | 4.2 | 8.8 |
+
+A write over MCP is **0.6 ms at p99** and flat in the size of the tree. And
+because context is the budget that actually binds, the payloads are measured
+too: `vivac_open` over ten thousand nodes went from 1,993,053 bytes to
+**599,012**, and `why --json` on a deep node from 86,894 to **7,139**.
+
+→ [**The full numbers**](docs/PERFORMANCE.md) — both machines, both tree
+shapes, the write table, and what Windows misses and why.
+
+---
 
 ## What it never stores
 
-A provenance tree is a map of where a system is weak and not yet fixed. That
-forces a few things, and they are not negotiable:
+A provenance tree is a map of where a system is weak and not yet fixed, which
+forces a few things that are not negotiable:
 
-- **No keys and no secrets.** There is a redaction guard at write time. In
-  doubt it refuses and says why; it never stores in silence.
+- **No keys and no secrets.** A redaction guard at write time. In doubt it
+  refuses and says why; it never stores in silence.
 - **No personal data.** No email, no name, no home path. The `actor` on every
   event is an opaque identifier.
 - **No file contents.** Only paths, references and prose about what was
-  decided. A write that opens a fenced code block is refused. It bounds the
-  blast radius of a leak to *what was being worked on*, never to *what the code
-  is*.
-- **No telemetry.** The binary does not phone home.
+  decided — so a leak bounds to *what was being worked on*, never to *what the
+  code is*.
+- **No telemetry.** The binary does not phone home. Ever.
 
-These rules come from the [pillars](docs/PILLARS.md), which govern by
-definition: **security vetoes, performance budgets, UX proves a surface is worth
-reading, DX judges.**
+These come from the [pillars](docs/PILLARS.md): **security vetoes, performance
+budgets, UX proves a surface is worth reading, DX judges.**
 
-## Status
-
-**Tier 0 complete.** The tree, the two edges, the closure rule, the redaction
-guard, the `brief` with its token budget, the session hooks, the vivacs and the
-`Anchor` with its `Git` and `Null` implementations. The suite runs on every
-pull request, on Linux, macOS and Windows; twelve of its tests are the brief
-specification's contract, executed against the real binary.
-
-`reconcile` is the first of Tier 1. It answers the one question that keeps the
-tree honest -- *what changed since the tree last looked, and which of it does
-no node claim?* -- by diffing the anchor's history against the `governs` globs
-the nodes declare. It reports and never writes: it can say nobody claims a
-file, and it cannot say which thread that file belongs to.
-
-`find` is the other half of reading. It returns every node whose title, reason,
-note or outcome holds all of the words, best first, each with the lineage it
-hangs from. Closed nodes are included on purpose: what you go looking for
-months later is usually finished. Neither case nor accents count: `arbol`
-finds `árbol` and `dueño` finds `dueno`, because a tree written from two
-keyboards holds both, and a search that split them would answer with half.
-
-**Ranking is not recency**, and the difference is the whole point. Newest-first
-answers "what was I just doing"; a search answers "where was this decided", and
-the nodes that decided something are the old ones. So three keys, read in
-order: the field the term hit -- a title outranks a reason, a reason outranks a
-note or an outcome -- then how much tree the node holds up, and only then how
-recent it is. No weights, no tunable constants: the judgement is in the order
-of the keys, where it can be argued with.
-
-`find --everywhere` asks the same question of every project this machine has
-seen rather than the one you are standing in. It reads the registry, so it
-works from anywhere, including a directory with no tree above it at all, and
-it groups the answer by project because an alias only means something inside
-its own tree. It reads each project's index instead of folding its log, and it
-never writes: searching from one project does not touch another's `.vivac/`.
-
-An alias from another tree is not addressable on its own, so `why` takes
-`--project`, naming a project by its directory name or by a path. A name that
-matches two projects is refused rather than guessed, because answering about
-the wrong tree looks exactly like answering about the right one.
-
-The browser face came after those and answers the same way. It opens from any
-directory, including one with no tree above it at all: the roots come from that
-same registry, and where you are standing decides only where `/` lands -- on
-the project you are inside, or on the index of all of them when you are inside
-none. A project answers to its own name while that name belongs to one project
-and to the id of its first event always, which is the form a saved link should
-carry. A name two projects share resolves to neither and returns the page that
-lets you pick, for the reason `--project` refuses to guess on the command line.
-
-The `brief` is deterministic by contract: same log, same `--now`, same bytes.
-The spine — the path from the root to the focus — is **never truncated**: if it
-does not fit the budget it comes out anyway, and the warning says that what is
-left over is tree, not render.
-
-A node on the spine that is no longer open carries its state in brackets, so a
-path that still runs through a goal already met says so. What is parked reaches
-every brief wherever the focus is, because something parked on another branch
-is still something not to touch. And with nothing on the stack the brief still
-carries what does not depend on one: the invariants, the standing decisions,
-what is parked and the last stop, with a real node to pick up rather than a
-placeholder.
-
-Measured on 18 September 2026 at ten thousand nodes, 200 calls per cell, p50 /
-p99 in milliseconds, on a tree with its derived index in place — which is what
-a tree has after the first read of it. The CLI columns start a fresh process
-every time and include what that costs; the MCP columns are a resident server,
-which is how an agent calls. Each run is kept beside the numbers it produced,
-with the machine it came off.
-
-**It is measured four times over, because two things were each hiding behind
-one number.** The first is the shape of the tree: what `brief`, `open` and
-`tree` cost is governed less by how many nodes a tree holds than by how many
-are still open, so each table below is the same ten thousand nodes with 134
-open fronts against 3,023. The second is the machine, which the table this
-replaces never named at all.
-
-**Linux**, a container built on `rust:1.89-bookworm`, twelve cores, kernel
-5.15 under WSL2 — not bare metal, and slower than the runner CI uses:
-
-| | CLI, 134 open | CLI, 3023 open | MCP, 134 open | MCP, 3023 open |
-|---|---|---|---|---|
-| `brief` | 11.7 / 15.5 | 14.6 / 19.0 | 0.3 / 0.5 | 3.6 / 5.3 |
-| `why` | 15.2 / 18.8 | 14.3 / 17.3 | 6.0 / 7.1 | 3.9 / 5.2 |
-| `open` | 15.7 / 20.4 | 14.9 / 20.1 | 3.2 / 4.2 | 20.3 / 23.1 |
-| `find` | 17.5 / 19.9 | 16.8 / 18.9 | 6.2 / 8.8 | 5.8 / 7.0 |
-| `tree` | 15.7 / 22.9 | 18.9 / 22.1 | not a tool | not a tool |
-
-**Windows 11**, same trees, same sources, a working machine with a browser on
-it that would not close:
-
-| | CLI, 134 open | CLI, 3023 open | MCP, 134 open | MCP, 3023 open |
-|---|---|---|---|---|
-| `brief` | 17.9 / 46.7 | 20.9 / 52.7 | 0.5 / 0.7 | 3.1 / 4.6 |
-| `why` | 19.9 / 48.5 | 20.4 / 49.8 | 6.3 / 7.7 | 4.6 / 5.8 |
-| `open` | 20.1 / 49.2 | 22.1 / 52.3 | 3.3 / 4.2 | 22.1 / 27.1 |
-| `find` | 23.9 / 52.8 | 24.3 / 55.9 | 7.0 / 9.6 | 6.9 / 8.1 |
-| `tree` | 20.8 / 49.7 | 26.0 / 57.0 | not a tool | not a tool |
-
-Read `why` against `open` on the MCP columns and the first variable stands on
-its own: `why` barely moves between the two shapes, because a lineage is
-bounded by depth, while `open` goes from 3.2 to 20.3 ms out of the same ten
-thousand nodes.
-
-**Linux meets the 50 ms a read is given, tail included. Windows does not, and
-what misses is worth naming.** Every CLI row there has about the same p99, near
-50, while the medians sit between 18 and 26. A tail that is the same across
-five commands whose medians differ is not the tree's — it is what starting a
-process costs on that machine, and it measured 44 to 48 ms there before any of
-this work. An agent does not pay it: the MCP column is the same tree read
-through a server that is already running.
-
-The tree this project keeps of itself is 38% open. Whether a tree stays that
-open on the way to ten thousand nodes is still not measured, and saying so
-costs less than assuming it either way.
-
-**A write does not grow with the tree** — the server appends against the tree
-it is already holding — but it does grow with how many repositories a lane
-declares, because each write reads one `HEAD` per repository inside the lock.
-The same day and the same two machines, two writers arriving at a realistic
-rate, p99 in milliseconds for zero, one, five and ten repositories:
-
-| | 0 | 1 | 5 | 10 |
-|---|---|---|---|---|
-| Linux | 3.9 | 4.0 | 5.2 | 4.3 |
-| Windows | 9.2 | 9.4 | 11.4 | 14.6 |
-
-**The 5 ms a write is given is met on Linux and missed on Windows**, and the
-shape of the miss says where it comes from: the tail is already there with no
-repositories declared at all, where the work itself takes 1.4 ms. It belongs to
-the filesystem rather than to this program, which is a reason to publish it
-rather than to leave it out.
-
-**The first read after an upgrade is slower, once.** The index is derived, and
-a version that does not recognise the format it finds folds the log and writes
-a new one. Nothing to run, and the read after it is back to the table above.
-
-**These numbers do not reconcile with the ones they replace, and cannot.** That
-table named no machine, and the fixture behind it came from a generator that
-exists nowhere any more — so its shape, which is the thing that governs three
-of the five rows, cannot be recovered to compare against. What replaced it is
-kept: the script, the fixtures it builds from a fixed seed, and one file per
-run recording what it measured and where.
-
-Not there yet: team mode.
-
-**0.3.0 does not read a log written by 0.1.x or 0.2.x.** The tool was written
-in Spanish and those releases stored the event fields under Spanish names,
-which 0.2.x read through aliases. 0.3.0 speaks one language, so it reports
-those lines as unreadable rather than guessing. If you have such a log, 0.2.1
-still reads it.
-
-**Releases before 0.3.2 could park the wrong node.** `park <id> "<reason>"`
-with an id that named nothing exited 0, parked whatever the focus was instead
-of what you asked for, and kept the unresolved id as the reason -- dropping the
-reason you wrote. The event it leaves behind is indistinguishable from a
-deliberate park, so the tree never says it happened. If one of your trees was
-written with an earlier release, `vivac parked` is where to look: an entry
-whose reason reads like an id, or a node you do not remember parking.
-`vivac focus <id>` takes it back out and asks no permission to do it, because
-parking only ever said "maybe I will be back".
-
-## Setup
-
-```sh
-vivac setup claude-code
-```
-
-Run it in the folder you open Claude Code in. Claude Code reads its settings
-and its MCP servers only from there, not from the folders above, so that is
-where setup writes them. The tree is the `.vivac/` setup finds going up from
-there, or a new one planted in that folder. If you open Claude Code in more
-than one folder of the same project, run setup in each: they all share the
-tree above them. The plan names every folder before anything is written.
-
-Everything Claude Code needs to work with the tree, written into the project
-and nowhere else:
-
-- `.claude/settings.json` gets two hooks. `SessionStart` runs
-  `vivac session start --hook`, which hands the agent the brief when a session
-  opens and again after a compaction. `Stop` runs `vivac session end --hook`,
-  which leaves an automatic stop.
-- `.mcp.json` gets the server, which runs `vivac mcp` (see [MCP](#mcp)).
-- `.claude/skills/vivac-migrate/` gets the skill an agent follows to bring
-  another memory into the tree (see [Migrating to vivac](#migrating-to-vivac)).
-- `.vivac/` is planted if the project has no tree yet.
-
-Before writing, setup shows every file it will create or add to, and the exact
-command each hook and the server will run, and then it asks. `--dry-run` shows
-the same and writes nothing. `--yes` writes without asking, for a script, or
-for an agent that has already shown you the dry run. setup adds to a file
-rather than replacing it, and keeps every key it does not own in its place.
-It refuses a file it cannot parse, and an entry under its name that it did not
-write. A second run finds nothing to do.
-
-**It keeps no copy of the files it changes, and that is deliberate.** A
-settings file can hold credentials in its `env` block, and a copy under another
-name is no longer covered by the ignore rule that keeps the original out of the
-repository. Instead, it keeps the original in memory. After writing, it reads
-every file back and checks that it holds what setup meant and that nothing
-else in it moved. If one does not, it puts all of them back the way they were.
-`vivac setup claude-code --undo` removes exactly what setup writes and leaves
-anything that is not exactly its own. The tree is never part of it.
-
-The commands are a bare `vivac`, never a path to the executable, because these
-files can end up in a repository and such a path carries the name of the
-account that installed it. So `vivac` has to be on the `PATH` the harness sees.
-These are plain files in your project. Commit them if everyone who works on it
-uses vivac, and keep them out of version control if only you do. `.vivac/`
-never goes in: the tree is this machine's, and one copy per clone would be
-several trees pretending to be one. setup says so before it writes, and leaves
-a `.gitignore` inside the tree that keeps it out. `vivac check` names a tree
-missing that file, and gives the command that takes an already-committed
-`.vivac` back out of git.
-
-### Codex
-
-```sh
-vivac setup codex
-```
-
-The same three pieces, in the three places Codex reads inside a project:
-`.codex/config.toml` gets the server, `.codex/hooks.json` gets `SessionStart`
-and `Stop` running the same two commands, and `.agents/skills/vivac-migrate/`
-gets the same skill file. Nothing goes in your own configuration directory.
-
-Two things setup cannot do for you, and it says both when it finishes. Codex
-reads nothing under a project's `.codex/` until you mark that project trusted,
-and that lives in your own `~/.codex/config.toml`, not in the project. And
-every hook is approved on its own, against its hash, with `/hooks` inside
-Codex: the first time, and whenever a hook changes.
-
-Today it writes on a clean project only: if one of the three is already there
-it says which and writes nothing, and `--undo` is refused by name rather than
-ignored. Merging with a file already there comes next.
-
-`Stop` runs on every turn rather than once at the end, so the last stop does
-not depend on the session closing cleanly. The stop is only saved if the tree
-changed since the previous one: a stop that repeats identically is not a stop,
-it is a log. Both hooks stay quiet and exit 0 where there is no `.vivac/`.
-
-What they call is `vivac session start` and `vivac session end`, which are
-commands like any other. `--hook` makes them speak to a harness instead of a
-person: the brief goes out as plain text, and what kind of start it was is
-read from what the harness passes in. So the pair can be run by hand to see
-what a hook would do. setup writes Claude Code's and Codex's configuration
-today. Any harness that can run a command when a session opens and put its
-output in the agent's context can call the same one, and any MCP client can
-run `vivac mcp`.
-
-## Lanes
-
-One tree records one product. The folders you work on that product in are its
-**lanes** — one today, three by Thursday, and rarely the same three next month.
-
-Two ordinary situations need this. You move between branches in one checkout
-all day, and the record must not fork every time you do. Or the same product is
-checked out in several folders, and the record must not become three trees that
-each answer *what was this born from?* differently.
-
-So the tree belongs to the product, and the branch is a fact about each write
-rather than something the tree is kept in. `vivac setup claude-code` in a folder
-under a tree makes that folder a lane, `--join` names a tree that lives
-somewhere else entirely, and `vivac relocate` moves a tree without leaving any
-lane pointing at where it used to be. The brief says when a branch moved under
-you and what the other lanes have done since you last wrote here, and
-`vivac stack --lanes` shows all of them at once.
-
-[`docs/LANES.md`](docs/LANES.md) is the whole of it: the two shapes, what a lane
-is and is not, and the four ways to get it wrong.
-
-## Migrating to vivac
-
-**Nothing moves into vivac on its own.** If a project already lives in
-another memory system, engram or anything like it, or keeps what it has
-learned in `CLAUDE.md`, `AGENTS.md`, `MEMORY.md`, the harness's own memory or
-internal documents, none of that is in the tree after `vivac setup`. vivac
-never reads another system and never reads those files. Bringing them in is a
-job for the agent, with you deciding what goes in, and the `vivac-migrate`
-skill that setup installs tells the agent where to look, how to sort what it
-finds, how to check what it wrote, and how to retire the other maps
-afterwards.
-
-**We strongly recommend not running another memory or learning system
-alongside vivac in the same project.** Two maps collide: each one points the
-agent at the context it holds, and sooner or later one of them settles
-something the other mapped differently, without anyone noticing which of the
-two oriented the decision. This has been observed, not assumed:
-
-- Asked to pick up where it left off, a project with three places keeping its
-  state got three answers. A hand-written plan answered in 9,252 tokens. A
-  memory system answered "maybe" in about 12,720, depending on which of two
-  names for the project it resolved. The tree answered in 100. None of the
-  three knew what it did not know.
-- In that same project a written rule told the agent to mirror every update
-  into the memory system. That made three seats, and the one that actually
-  governed was the only one no tool could read.
-- In the project that builds vivac, with the memory system turned off
-  precisely to test whether the tree alone could carry the thread, the
-  harness's own automatic memory kept injecting a copy of the project's
-  doctrine for five days before anybody noticed.
-
-vivac itself does not turn anything off, and neither does setup: another
-system is not vivac's to touch. The skill finds every other map the agent
-receives, from a memory tool's plugin to lines in an instruction file that
-tell the agent to save somewhere else, and at the end offers to retire each
-one for this project, in every folder you open Claude Code in. Your agent
-takes each step only after you say yes to it, in a form that can be undone,
-and never deletes another system's data or uninstalls it.
-
-### Steps
-
-1. Install vivac and set the project up, in the folder you open Claude Code
-   in:
-
-   ```sh
-   cargo install vivac
-   vivac setup claude-code
-   ```
-
-2. Open a new Claude Code session in the project. If it asks whether to use
-   the `vivac` server, say yes.
-
-3. Ask the agent:
-
-   > Use the vivac-migrate skill to bring everything this project knows into
-   > vivac.
-
-   It lists every source it finds, from a memory system to the harness's own
-   memory, instruction files and internal documents, and asks which to bring
-   in. It shows you a plan before writing anything, checks what it wrote,
-   and then offers to retire the other maps, one at a time.
-
-   Until then, another memory system you use keeps talking to the agent as
-   before, and may tell it to use that system first. That is expected: the
-   skill only reads from it.
-
-4. Open a fresh session: the brief it starts with is what the tree now knows.
-
-**What has to hold in every session goes in as a constraint under the root
-goal**, which the brief hands the agent every time. Pillars and rules are read
-on demand, with `vivac rules`, when work is checked. Instruction files stay as
-they are for now, because what they say still reaches every session from the
-file.
-
-## MCP
-
-The tree as tools an agent can call. `vivac setup claude-code` writes the
-server into the `.mcp.json` of the folder you open Claude Code in, and the
-first time Claude Code sees it, it may ask whether to use it: say yes. Any
-other MCP client runs `vivac mcp`.
-
-Fourteen of them. Five are reads: `vivac_brief`, `vivac_find`, `vivac_why`,
-`vivac_open` and `vivac_rules`. Nine are writes: `vivac_push`, `vivac_pop`,
-`vivac_add`, `vivac_decide`, `vivac_note`, `vivac_park`, `vivac_save`,
-`vivac_arm` and `vivac_declare`. The server speaks JSON-RPC over standard
-input and adds no dependency: it is the binary you already installed.
-
-Fourteen and not more, because every tool costs context in every session the
-agent ever opens, so the list is a budget and not a catalogue. Seven of the
-writes are the seams of the work: opening something, closing it, parking it,
-noting it, deciding, and the safe stop. The other two are the seams of
-governance: arming a rule with the command that checks it, and declaring what
-a decision was judged against. Nothing else got in.
-
-The same budget governs what a tool hands back. `vivac_open` returns each
-front as five fields — alias, kind, state, title and lineage — rather than
-the whole node, because the answer to what is unfinished is a list of names
-and where they hang; `vivac_why` on an alias brings the rest. It used to
-return the node, which over ten thousand nodes meant 1,993,053 bytes where
-599,012 will do. A payload nobody asked for costs the same context as a tool
-nobody calls.
-
-`vivac_why` follows the same rule for everything but the node you asked
-about, which still comes back whole. The ancestors on its path carry their
-bodies clipped the way the prose clips them, and its siblings, children and
-blockers come back as handles — alias, kind, state and title, plus whether a
-child blocks. It used to return every one of them whole: `why --json` on a
-node deep in this project's own tree weighed 86,894 bytes against 3,685 for
-the prose, and weighs 7,139 now. Across every node of three real trees, this
-one among them, the JSON went from 8.8, 6.7 and 5.7 times the prose to 1.5,
-1.8 and 2.1.
-
-`vivac_find` takes `everywhere` and `vivac_why` takes `project`, the same two
-questions the command line answers. They arrived together on purpose: a hit
-from another tree carries an alias, an alias means nothing outside the tree
-that issued it, and finding without being able to open would be half an
-answer. **What crosses is the project's name, never its path** — a path carries
-whatever the account and its directories happen to be called, and through a
-tool that lands in a model's context. No write tool takes a project: writing
-into a tree you are not standing in is a larger permission than reading one,
-and nobody has asked for it.
-
-**Nothing destructive is reachable from here, and that is deliberate.**
-`abandon` discards a node and everything below it, and through a tool that
-would happen without anybody seeing a command. It stays on the command line,
-where somebody is looking. So do the operations that reshape a tree rather
-than record work — closing another node, blocking, flagging, restoring a
-safe point. Those belong to whoever maintains the tree, and they have a
-terminal.
-
-The writes are here because the command line cannot be where an agent writes.
-Starting the process is 8.2 ms at the median, more than the whole 5 ms budget
-the performance pillar sets for writing a node, and no process design brings
-that down.
-
-Over MCP the server folds the tree once and keeps it, so a write is an
-append against a tree that is already there: **0.6 ms at p99 over ten
-thousand nodes**, and flat in the size of the tree, because what used to grow
-with it was the fold. A read straight after a write no longer pays for a
-second one either.
-
-That correctness rests on a staleness check, not on trust: if another process
-wrote to the log, the tree is folded again before the operation. Eight tests
-assert that what the server holds after a write equals a fresh fold of the
-log, because a fast write that quietly drifts from the record would be worse
-than a slow one.
-
-Hooks and MCP are not the same offer, and the difference matters. A hook fires
-whether or not anybody wanted it; a tool is called only if the agent decides to.
-So the brief still arrives through `SessionStart`, where nothing has to choose
-it — `vivac_brief` is for asking again mid-session, not for the opening.
-
-**On Windows, stop the server before updating.** A running `vivac mcp` holds
-the executable open, so `cargo install vivac` cannot replace it and fails with
-an access-denied error — *os error 5* — that names neither MCP nor this
-command, and so does not lead back to the cause. Close the session that
-started the server, then install. Linux and macOS replace a running binary
-without complaining, so this one is Windows only.
+---
 
 ## Install
 
 Every [release](https://github.com/JAAvila-Of/vivac/releases) carries a
-precompiled binary: Linux and macOS on both `x86_64` and `aarch64`, Windows on
-`x86_64`. Unpack one, put `vivac` somewhere on your `PATH`, and run
-`vivac setup claude-code` in the folder you open Claude Code in, or
-`vivac init` for a tree with no harness around it. The Linux builds link
-against musl, so they run on older distributions too rather than on nothing
-older than the machine that built them.
-
-Every archive is listed in `SHA256SUMS` and carries signed build provenance,
-which ties the file to the workflow, the repository and the commit that
-produced it:
-
-```sh
-gh attestation verify vivac-x86_64-unknown-linux-musl.tar.gz --repo JAAvila-Of/vivac
-```
+precompiled binary — Linux and macOS on `x86_64` and `aarch64`, Windows on
+`x86_64` — listed in `SHA256SUMS` and carrying signed build provenance.
+Unpack one and put `vivac` on your `PATH`.
 
 With a Rust toolchain, 1.89 or newer:
 
 ```sh
 cargo install vivac
+```
+
+`cargo install` is not the fallback: it builds from the source published to
+crates.io, so it stays the auditable path for anyone who cares about the
+supply chain of a tool that reads their work.
+→ [**Setting it up**](docs/SETUP.md)
+
+---
+
+## The first five minutes
+
+**1.** In the folder you open your agent in. It shows every file it will
+touch and the exact command each hook will run, and then it asks:
+
+```sh
 vivac setup claude-code
 ```
 
-**Coming from 0.11?** Every release opens with what it changes on disk and what
-to run: see [the changelog](CHANGELOG.md). For `0.12.0` the short of it is that
-nothing in a tree changes until `vivac setup` runs in it, and that once a tree
-holds lanes it needs 0.12 or newer.
+**2.** Start the first thread. You were going to say what you are doing
+anyway; saying it here is what creates the edge, for free:
 
-**`cargo install` is not the fallback.** It builds from the source published to
-crates.io, so it stays the auditable path for anyone who cares about the supply
-chain of a tool that reads their work. The binaries are for everyone who has no
-toolchain and should not need one to start.
+```sh
+vivac push "Replace the cache adapter" --why "the session bug traces back to it"
+vivac push "No test for expiry" --why "no way to reproduce it" --blocks
+vivac pop "reproduced: sessions expire at 300s, not 3600"
+```
 
-From source, `cargo install --path .` inside the repo.
+**3.** Ask where you are, and why:
 
-No background process, and no network in the write path — `push` is the binary
-writing to a file. **The binary never phones home**, and that one is a promise
-rather than a description of the current version. The store is `.vivac/`,
-three files: the log, the config, and a derived index that can be deleted
-without changing any command's output.
+```sh
+vivac brief        where you are, and what NOT to touch
+vivac why 2        the path from the root, narrated
+vivac open         what is waiting on you, and what has been sitting
+vivac web          the whole tree in a browser, on this machine only
+```
 
-There is a second place, and it is the only thing this binary puts in your
-home directory: `~/.vivac/`, one per machine, holding a registry of the trees
-the machine has seen. A project enters it by being used — every command
-already knows the root it is standing in, so registering it is an effect of
-the work rather than a step to remember, and nothing goes looking through your
-disk. Entries are keyed by the id of each project's first event, so moving a
-directory reads as the same project at a new path instead of a second one.
-`VIVAC_HOME` points the whole thing elsewhere.
+That is the loop. → [**Every command**](docs/USAGE.md)
 
-The search that finds a project walks up looking for a `.vivac/`, and this
-is one, so it skips it: a directory under your home with no project above it
-refuses rather than resolving to your home. What it skips is recognised by
-holding the registry, not by sitting at a particular path, which is what
-keeps the rule true once `VIVAC_HOME` has moved the store.
+---
 
-It holds absolute paths and it stays here. Nothing sends it anywhere, and it
-lives outside every project, so no repository carries it off by accident.
-Deleting it costs you the list until each tree is next used, and costs no tree
-anything at all.
+## Bringing a project in
 
-## Getting it all out
+> **Nothing moves into vivac on its own.**
 
-`vivac tree --json` prints the whole tree: every node with its reason, its
-note, its outcome, what it refers to and what it governs. It is not the
-filtered view `tree` shows a person — the JSON ignores `--all` and carries the
-closed and the parked as well, because an export that quietly drops what
-finished is not one.
+If your project already keeps what it has learned — in a memory system, in
+`CLAUDE.md`, `AGENTS.md`, `MEMORY.md`, the harness's own memory, or internal
+documents — **none of that is in the tree after `vivac setup`.** vivac never
+reads another system and never reads those files, because telling a rule from
+the prose around it takes judgment, and a tool that guessed would fill your
+tree with confident nonsense on day one.
 
-`vivac import <tree.json>` is the way back in, and it is how the trees that
-predate this binary got here: it reads a tree in that JSON shape and writes the
-log a tree of that shape would have written.
+So it is a job for the agent, with you deciding what goes in. setup installs
+the `vivac-migrate` skill, and you say:
 
-The log underneath, `.vivac/events`, is plain JSON lines and nothing stops you
-reading it. What is not written down anywhere is what a line means, and that is
-on purpose rather than an oversight: the format is still moving, which is what
-keeps `1.0` away, and documenting it as a promise is how it would stop being
-able to move.
+> Use the vivac-migrate skill to bring everything this project knows into
+> vivac.
 
-## Versioning
+It lists every source it finds, asks which to bring in, shows a plan before
+writing anything, checks what it wrote — and then offers to retire the other
+maps, one at a time. **That last step is the point, not the tidying up:** a
+full tree with the old records still talking to the agent is
+[two maps](#one-map), which is the state this gets you out of.
 
-The project is in `0.x`, and while it is, **the minor is the position that
-breaks**: `0.3.x` to `0.4.0` may change a public surface, and a patch never
-does. The rule has been spent ten times — `0.3.0` stopped reading the logs
-`0.1.x` and `0.2.x` wrote, `0.4.0` made `find` hand back handles rather than
-whole nodes, `0.5.0` began refusing a write that opens a fenced code block,
-`0.6.0` made `open` hand back fronts rather than whole nodes, `0.7.0` did the
-same to `why` for everything but the node asked about, `0.8.0` wrote an event
-`0.7.0` stops at, `0.9.0` stopped taking a closed node off the stack when it
-is not the top, `0.10.0` retired `vivac hooks` for `vivac setup` and gave the
-hook its brief as plain text, `0.11.0` made setup write Claude Code's files in
-the folder it is run in and refuse to run in your home folder, and `0.12.0`
-stops a version older than itself reading a tree once that tree holds lanes.
-Each went out as a minor for that reason,
-and counting them here is cheaper than counting them once and letting the
-sentence go stale.
+→ [**Bringing a project in**](docs/MIGRATING.md)
 
-**The format on disk is not settled either**, and that is what keeps `1.0`
-away. It was going to settle by moving into SQLite; the measurement rejected
-that, and [`docs/PILLARS.md`](docs/PILLARS.md) records the reversal where the
-doctrine lives. What is left is smaller than a migration and still open: the
-read cost turned out to sit in how a node is built rather than in where its
-bytes are stored, and that is not something a `1.0` should promise stability
-across before it is answered. `1.0` comes after the store settles.
+---
 
-## Contributing
+## Lanes
 
-Not for now — neither pull requests nor issues. The reason is in
-[`CONTRIBUTING.md`](CONTRIBUTING.md).
+You work on one product from more than one folder: a checkout on `main`, a
+second one for a hotfix, a third for reviewing somebody else's branch. Or one
+folder and ten branch changes a day.
+
+**The record must not fork when the folders do.** *What was this born from?*
+has one answer for the product, not one per checkout — three trees answering
+it three ways is three wrong answers.
+
+So the tree belongs to the **product**, and every folder that works on it is a
+**lane**. The branch is a fact recorded on each write, not something the tree
+is kept in.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/lanes-dark.svg">
+  <img alt="Three folders of the same product, each on a different branch, each marked as a lane, all writing into one .vivac tree. Every write carries the folder and the branch it came from." src="docs/img/lanes-light.svg">
+</picture>
+
+What that buys you: the brief tells you when a branch moved under you, and
+what the other lanes have done since you last wrote here.
+
+| Your situation | What to run |
+|---|---|
+| another folder, under the same tree | `vivac setup claude-code` there too |
+| a folder somewhere else entirely | `vivac setup claude-code --join <name>` |
+| the tree should live elsewhere | `vivac relocate <destination>` |
+| which lanes exist, and what each is on | `vivac stack --lanes` |
+
+→ [**`docs/LANES.md`**](docs/LANES.md) — what a lane is and is not, and the
+four ways to get it wrong.
+
+---
+
+## Where this is measured
+
+| | |
+|---|---|
+| **Claude Code** | `vivac setup claude-code` writes the hooks, the server and the skill. This is the harness every measurement on this page was taken on. |
+| **Codex** | `vivac setup codex` writes the same three pieces where Codex reads them. **Today on a clean project only**, and not yet through a full real project. Merging with a file already there comes next. |
+| **Anything else** | The hooks call ordinary commands. Any harness that can run one when a session opens and put its output in the agent's context can call the same one, and any MCP client can run `vivac mcp`. |
+
+Not there yet: team mode. The project is in `0.x` and
+[**breaks on the minor**](docs/VERSIONING.md) while it is.
+
+---
+
+## Documentation
+
+| | |
+|---|---|
+| [**Using it**](docs/USAGE.md) | every command, grouped by who runs it |
+| [**Setting it up**](docs/SETUP.md) | what setup writes, Codex, the MCP server, where things are stored |
+| [**Bringing a project in**](docs/MIGRATING.md) | the migration, and why it is a migration and not an addition |
+| [**Lanes**](docs/LANES.md) | one product, several folders, one tree |
+| [**What it costs**](docs/PERFORMANCE.md) | the full measurements, and how they were taken |
+| [**Versioning**](docs/VERSIONING.md) | what breaks when, and what keeps `1.0` away |
+| [**Where it sits**](docs/POSITION.md) | what each category of tool stores, and where each is better than this |
+| [**Pillars**](docs/PILLARS.md) | the four arbiters every decision here is judged against |
 
 ## Licence
 

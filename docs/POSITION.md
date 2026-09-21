@@ -121,7 +121,7 @@ some are things it owes.
 - **Scale.** This used to say that a store answering in milliseconds is a
   different engine from a log folded on every call. The log stopped being
   folded on every call: a derived index sits beside it, and the
-  [numbers](../README.md#status) are measured with it in place. What is still
+  [numbers](../README.md#what-it-costs) are measured with it in place. What is still
   true is narrower. A tree is read whole into memory, and nothing here has been
   asked to hold a hundred thousand nodes.
 - **Noticing that a record went stale.** Some memory stores attach a review

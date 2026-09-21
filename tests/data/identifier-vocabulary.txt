@@ -454,6 +454,7 @@ display
 distinct
 div
 do
+docs
 documented
 doe
 does
@@ -1212,6 +1213,7 @@ pruned
 ps
 pt
 pub
+public
 push
 pushed
 pushes
