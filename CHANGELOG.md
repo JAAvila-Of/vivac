@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.4](https://github.com/JAAvila-Of/vivac/compare/v0.12.3...v0.12.4) - 2026-09-21
+
+### Fixed
+
+- *(web)* name a project by the name it was given, not by its folder
+
 ## [0.12.3](https://github.com/JAAvila-Of/vivac/compare/v0.12.2...v0.12.3) - 2026-09-20
 
 ### Added
