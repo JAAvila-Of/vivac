@@ -74,10 +74,12 @@ missing that file, and gives the command that takes an already-committed
 vivac setup codex
 ```
 
-The same three pieces, in the three places Codex reads inside a project:
+The same pieces, in the three places Codex reads inside a project:
 `.codex/config.toml` gets the server, `.codex/hooks.json` gets `SessionStart`
 and `Stop` running the same two commands, and `.agents/skills/vivac-migrate/`
-gets the same skill file. Nothing goes in your own configuration directory.
+gets the same skill file. The tree is planted the same way, because a
+project with the three files and no tree has two hooks that exit 0 in
+silence for ever. Nothing goes in your own configuration directory.
 
 **Two things setup cannot do for you**, and it says both when it finishes.
 Codex reads nothing under a project's `.codex/` until you mark that project
