@@ -1,14 +1,31 @@
 # Setting it up
 
-One command leaves a project ready: the hooks that hand the agent its brief,
-the server it calls the tree through, and the skill it follows to bring in
-what the project already knows.
+Two commands, because a project ready to work in answers two questions:
+which tree this folder belongs to, and what your agent reads inside it.
 
 ```sh
+vivac init
 vivac setup claude-code
 ```
 
-Run it in the folder you open your agent in.
+Run both in the folder you open your agent in. `init` plants the tree, or
+joins the one this project already has, and declares this folder's own
+thread in it. `setup` writes the hooks that hand the agent its brief, the
+server it calls the tree through, and the skill it follows to bring in what
+the project already knows.
+
+**It used to be one command, and the second one is the price of a real
+fix.** The tree was setup's to plant, so which harness you happened to name
+decided things that have nothing to do with a harness: where the tree
+lives, which folder becomes a lane, what the product is called. And `vivac
+init` planted as well — a different tree, with no lane declared and no
+version lock — so whether the guard that stops you keeping two maps of one
+product ever fired depended on which of the two commands you had used, and
+nothing told you. One road to plant is what removes that, and one road is
+what costs the second command.
+
+`setup` refuses now rather than planting half a project. It names the
+`init` to run and writes nothing until you have run it.
 
 ---
 
@@ -16,19 +33,21 @@ Run it in the folder you open your agent in.
 
 Claude Code reads its settings and its MCP servers only from the folder it was
 opened in, not from the folders above, so that is where setup writes them. The
-tree is the `.vivac/` setup finds going up from there, or a new one planted in
-that folder. If you open the agent in more than one folder of the same
-project, run setup in each: they all share the tree above them. The plan names
-every folder before anything is written.
+tree is the `.vivac/` it finds going up from there, and `init` is what put it
+there. If you open the agent in more than one folder of the same project, run
+both commands in each: `init` makes that folder a thread of the same tree, and
+setup gives it the hooks and the server. The plan names every folder before
+anything is written.
 
 | File | What it gets |
 |---|---|
 | `.claude/settings.json` | two hooks — `SessionStart` runs `vivac session start --hook`, which hands the agent the brief when a session opens and again after a compaction; `Stop` runs `vivac session end --hook`, which leaves an automatic stop |
 | `.mcp.json` | the server, which runs `vivac mcp` |
 | `.claude/skills/vivac-migrate/` | the skill an agent follows to bring another record into the tree — see [Migrating](MIGRATING.md) |
-| `.vivac/` | planted, if the project has no tree yet |
 
-Everything goes into the project and nowhere else.
+Everything goes into the project and nowhere else. `.vivac/` is not on the
+list: the tree is `vivac init`'s, and setup neither writes it nor removes
+it.
 
 ### It asks first, and it can be taken back
 
@@ -50,7 +69,9 @@ and that nothing else in it moved. If one does not, it puts all of them back
 the way they were.
 
 `vivac setup claude-code --undo` removes exactly what setup writes and leaves
-anything that is not exactly its own. The tree is never part of it.
+anything that is not exactly its own. The tree is never part of it: what
+`init` wrote, `vivac init --undo` takes back, and it never removes a tree
+that holds work.
 
 ### Why the commands are a bare `vivac`
 
@@ -77,9 +98,14 @@ vivac setup codex
 The same pieces, in the three places Codex reads inside a project:
 `.codex/config.toml` gets the server, `.codex/hooks.json` gets `SessionStart`
 and `Stop` running the same two commands, and `.agents/skills/vivac-migrate/`
-gets the same skill file. The tree is planted the same way, because a
-project with the three files and no tree has two hooks that exit 0 in
-silence for ever. Nothing goes in your own configuration directory.
+gets the same skill file. Nothing goes in your own configuration directory.
+
+It refuses where there is no tree, and that refusal is the same argument
+that used to make setup plant one: a project with the three files and no
+tree has two hooks that exit 0 in silence for ever, and nobody finds out.
+Leaving that behind is not a cheaper setup, it is setup undone. So the
+requirement stands and only the means changed — it names the `vivac init`
+to run, and writes nothing until the tree is there.
 
 It merges, and it can be taken back, the same way the Claude Code side does
 and by the same rules: it adds to a file rather than replacing it, keeps
@@ -110,10 +136,13 @@ output, which Codex adds to the session as context. Above roughly 2,500
 tokens it saves that context to a file and shows the model a shorter preview
 instead; the brief's own budget is 1,500, so that only bites if you raise it.
 
-The flags are the same on both sides, because the ones that matter belong to
-the tree and not to a harness: `--join`, `--new-tree`, `--name`,
-`--lane-name`, `--dry-run`, `--yes` and `--undo` all read here exactly as
-they read there. See [where it is measured](../README.md#where-this-is-measured).
+setup takes three flags, and they read the same on both sides: `--dry-run`,
+`--yes` and `--undo`. The four that decide where the tree lives — `--join`,
+`--new-tree`, `--name` and `--lane-name` — are `vivac init`'s, because
+which tree a folder belongs to has the same answer wherever the agent is
+opened. Typing one of them at setup says so and names the command to run,
+rather than failing as an unknown flag.
+See [where it is measured](../README.md#where-this-is-measured).
 
 `Stop` runs on every turn rather than once at the end, so the last stop does
 not depend on the session closing cleanly. The stop is only saved if the tree
