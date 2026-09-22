@@ -383,8 +383,12 @@ four ways to get it wrong.
 | | |
 |---|---|
 | **Claude Code** | `vivac setup claude-code` writes the hooks, the server and the skill. This is the harness every measurement on this page was taken on. |
-| **Codex** | `vivac setup codex` writes the same three pieces where Codex reads them. **Today on a clean project only**, and not yet through a full real project. Merging with a file already there comes next. |
+| **Codex** | `vivac setup codex` leaves a project just as ready, where Codex reads it. A real Codex session was walked end to end on 22 September 2026: the server resolves once the project is trusted, the skill is offered to the model, the opening hook puts the brief into the agent's context, and the closing hook leaves its stop. **Today on a clean project only** — merging with a file already there comes next. |
 | **Anything else** | The hooks call ordinary commands. Any harness that can run one when a session opens and put its output in the agent's context can call the same one, and any MCP client can run `vivac mcp`. |
+
+One step of that walk is not measured and cannot be: approving each hook
+inside Codex is something a person does, once, and looking at a person is not
+a measurement.
 
 Not there yet: team mode. The project is in `0.x` and
 [**breaks on the minor**](docs/VERSIONING.md) while it is.
