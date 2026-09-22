@@ -786,9 +786,13 @@ pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
         // The node actually asked about prints whole either way; an
         // ancestor's body only survives whole under `--full`.
         let clip_body = !is_last && !full_extra;
-        let body = |text: &str| {
+        // `f715`: a clipped ancestor is only one wrapped line if the clip
+        // itself leaves room for whatever gets printed in front of it --
+        // `ANCESTOR_CLIP` alone is only correct for a bare line, and three
+        // of the four lines below carry a prefix.
+        let body = |text: &str, prefix: usize| {
             if clip_body {
-                clip(text, ANCESTOR_CLIP)
+                clip(text, ANCESTOR_CLIP.saturating_sub(prefix))
             } else {
                 text.to_string()
             }
@@ -806,7 +810,7 @@ pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
         if p.kind == Kind::Decision && (is_last || full_extra) {
             print_against(a, p, "        ");
         }
-        for l in wrap(&body(p.why(a)), WIDTH, "        ") {
+        for l in wrap(&body(p.why(a), 0), WIDTH, "        ") {
             outln!("{l}");
         }
         let notes = p.notes(a);
@@ -818,20 +822,36 @@ pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
             // dropping the lineage's empty anchor.
             for (at, text) in &notes {
                 let date = crate::clock::date_of(at);
-                for l in wrap(&format!("! [{date}] {}", body(text)), WIDTH, "        ") {
+                let prefix = format!("! [{date}] ");
+                let prefix_len = prefix.chars().count();
+                for l in wrap(
+                    &format!("{prefix}{}", body(text, prefix_len)),
+                    WIDTH,
+                    "        ",
+                ) {
                     outln!("{l}");
                 }
             }
         } else {
             let note = p.note(a);
-            for l in wrap(&format!("! {}", body(note)), WIDTH, "        ") {
+            let prefix = "! ";
+            for l in wrap(
+                &format!("{prefix}{}", body(note, prefix.chars().count())),
+                WIDTH,
+                "        ",
+            ) {
                 if !note.is_empty() {
                     outln!("{l}");
                 }
             }
         }
         let outcome = p.outcome(a);
-        for l in wrap(&format!("= {}", body(outcome)), WIDTH, "        ") {
+        let prefix = "= ";
+        for l in wrap(
+            &format!("{prefix}{}", body(outcome, prefix.chars().count())),
+            WIDTH,
+            "        ",
+        ) {
             if !outcome.is_empty() {
                 outln!("{l}");
             }
@@ -1973,6 +1993,24 @@ fn snippet(text: &str, terms: &[String], width: usize) -> String {
         .unwrap_or(0);
     let end = (at + width * 2 / 3).clamp(width, chars.len());
     let start = end - width;
+    // `f716`: a raw offset usually lands inside a word on both sides.
+    // `start` moves forward to the next boundary and `end` moves back to
+    // the previous one, but neither is allowed to lose the hit that picked
+    // this window in the first place: `start` never passes `at`, and `end`
+    // never drops below `at + 1`. Where no boundary sits in that room, the
+    // side stays at its raw cut -- a split word beats an empty window.
+    let is_start = |i: usize| i == 0 || chars[i - 1].is_whitespace();
+    let is_end = |i: usize| i == chars.len() || chars[i].is_whitespace();
+    let mut s = start;
+    while s < at && !is_start(s) {
+        s += 1;
+    }
+    let start = if is_start(s) { s } else { start };
+    let mut e = end;
+    while e > at + 1 && !is_end(e) {
+        e -= 1;
+    }
+    let end = if is_end(e) { e } else { end };
     let mut out = String::new();
     if start > 0 {
         out.push_str("...");
