@@ -825,9 +825,13 @@ fn the_skill_is_golden_and_its_fingerprint_is_the_real_hash_of_its_text() {
         "the fingerprint is not the FNV-1a of the text it claims to cover"
     );
 
+    // The marker names no harness. It named `claude-code` until `f714`,
+    // and this is the same file byte for byte wherever setup writes it, so
+    // a project set up with Codex was handed a line proposing a command for
+    // the other harness.
     let expected = format!(
-        "{FRONTMATTER}<!-- written by vivac setup; fingerprint {claimed:016x}; vivac setup \
-         claude-code --undo removes it while the text is unchanged -->\n{BODY}"
+        "{FRONTMATTER}<!-- written by vivac setup; fingerprint {claimed:016x}; setup removes \
+         it with --undo while the text is unchanged -->\n{BODY}"
     );
     assert_eq!(skill, expected, "the skill drifted from the literal text");
 }
