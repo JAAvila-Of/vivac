@@ -373,6 +373,10 @@ what the other lanes have done since you last wrote here.
 | the tree should live elsewhere | `vivac relocate <destination>` |
 | which lanes exist, and what each is on | `vivac stack --lanes` |
 
+Read `codex` for `claude-code` wherever you use it, including in the same
+folder as the other: the harness decides which files a folder gets, and never
+anything about the tree.
+
 → [**`docs/LANES.md`**](docs/LANES.md) — what a lane is and is not, and the
 four ways to get it wrong.
 
@@ -383,7 +387,7 @@ four ways to get it wrong.
 | | |
 |---|---|
 | **Claude Code** | `vivac setup claude-code` writes the hooks, the server and the skill. This is the harness every measurement on this page was taken on. |
-| **Codex** | `vivac setup codex` leaves a project just as ready, where Codex reads it. A real Codex session was walked end to end on 22 September 2026: the server resolves once the project is trusted, the skill is offered to the model, the opening hook puts the brief into the agent's context, and the closing hook leaves its stop. It merges with what is already there the same way the Claude Code side does; **`--undo` is the one piece still missing**. |
+| **Codex** | `vivac setup codex` leaves a project just as ready, where Codex reads it. A real Codex session was walked end to end on 22 September 2026: the server resolves once the project is trusted, the skill is offered to the model, the opening hook puts the brief into the agent's context, and the closing hook leaves its stop. It merges with what is already there, runs twice without writing anything the second time, and takes itself back — the same way the Claude Code side does, and through the same flags. |
 | **Anything else** | The hooks call ordinary commands. Any harness that can run one when a session opens and put its output in the agent's context can call the same one, and any MCP client can run `vivac mcp`. |
 
 One step of that walk is not measured and cannot be: approving each hook

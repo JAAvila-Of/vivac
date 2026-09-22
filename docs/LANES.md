@@ -108,6 +108,11 @@ vivac setup claude-code --join "<project>"
 `--join` takes the project's name or the path to it. Add `--lane-name` to call
 the lane something other than the folder's name.
 
+`vivac setup codex --join` reads exactly the same, and so does every other
+flag on this page: what the harness decides is which files this folder gets,
+never anything about the tree. Two folders of one product can take a harness
+each.
+
 Setup knows when two folders are the same product, because it compares the
 repository's root commit against the projects it already knows. When it finds a
 match it stops and asks which you meant, rather than guessing — `--join` to
