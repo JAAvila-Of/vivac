@@ -285,10 +285,9 @@ pub fn run(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
 }
 
 /// Named after `t565` §7.8's own two-column plan, reused rather than
-/// refixed a second time (`d653`): `piece_line`, `sub_line` and
-/// `wrapped_piece_line` are `claude_code.rs`'s, and so is the paragraph
-/// beneath it -- true of these hooks and this server too, and it names
-/// neither harness.
+/// refixed a second time (`d653`): `piece_line` and `sub_line` are
+/// `claude_code.rs`'s, and so is the paragraph beneath it -- true of
+/// these hooks and this server too, and it names neither harness.
 ///
 /// The tree's own fourth piece (`t592` tranche 2, `d710`) is rendered
 /// here too, and **around** this harness's three rather than after them,
@@ -313,7 +312,7 @@ fn render_plan(
     skill_file_state: &SkillState,
     plan: &tree::TreePlan,
 ) -> String {
-    use super::claude_code::{piece_line, sub_line, wrapped_piece_line};
+    use super::claude_code::{piece_line, sub_line};
     let mut s = format!("  vivac setup codex, in {}\n\n", here.display());
     s.push_str(&tree::opening_lines(plan));
 
@@ -349,10 +348,9 @@ fn render_plan(
     }
 
     match skill_file_state {
-        SkillState::Missing => s.push_str(&wrapped_piece_line(
+        SkillState::Missing => s.push_str(&piece_line(
             SKILL_LABEL,
-            "create: how an agent brings",
-            "another memory into vivac",
+            "create: how an agent brings another memory into vivac",
         )),
         SkillState::Replaceable => s.push_str(&piece_line(
             SKILL_LABEL,
@@ -637,7 +635,7 @@ fn apply_writes(
 // ---------------------------------------------------------------------------
 
 fn undo(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
-    use super::claude_code::{piece_line, sub_line, wrapped_piece_line};
+    use super::claude_code::{piece_line, sub_line};
 
     let here = &roots.here;
     let target = paths(here);
@@ -691,7 +689,7 @@ fn undo(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
 
     let hooks_status: String = match (start_ours, stop_ours) {
         (true, true) if hooks_becomes_empty => {
-            "remove the two hooks setup wrote;\nNOTHING_ELSE".to_string()
+            "remove the two hooks setup wrote; nothing else is left, so it goes".to_string()
         }
         (true, true) => "remove the two hooks setup wrote".to_string(),
         (true, false) => "remove the SessionStart hook".to_string(),
@@ -726,10 +724,9 @@ fn undo(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
                 .as_deref()
                 .expect("ConfigUndoState::Ours only reached with a file present");
             if remove_config_block(existing).trim().is_empty() {
-                s.push_str(&wrapped_piece_line(
+                s.push_str(&piece_line(
                     CONFIG_LABEL,
-                    "remove the \"vivac\" server;",
-                    "nothing else is left, so it goes",
+                    "remove the \"vivac\" server; nothing else is left, so it goes",
                 ));
             } else {
                 s.push_str(&piece_line(CONFIG_LABEL, "remove the \"vivac\" server"));
@@ -740,15 +737,7 @@ fn undo(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         }
     }
 
-    if hooks_status.contains("NOTHING_ELSE") {
-        s.push_str(&wrapped_piece_line(
-            HOOKS_LABEL,
-            "remove the two hooks setup wrote;",
-            "nothing else is left, so it goes",
-        ));
-    } else {
-        s.push_str(&piece_line(HOOKS_LABEL, &hooks_status));
-    }
+    s.push_str(&piece_line(HOOKS_LABEL, &hooks_status));
     if let HookState::Different(_) = &start_hook_state {
         s.push_str(&sub_line(
             "SessionStart",

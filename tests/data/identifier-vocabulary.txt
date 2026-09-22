@@ -1862,6 +1862,7 @@ why
 why3
 why4
 wide
+wider
 width
 windows
 wins

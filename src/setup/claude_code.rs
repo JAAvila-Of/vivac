@@ -681,16 +681,51 @@ fn guarded_relative(base: &Path, path: &Path) -> Option<String> {
 
 // `pub(super)`: `codex.rs` renders its own plan in the same two columns,
 // rather than fixing the same widths a second time (`d653`).
+
+/// The plan's own line width: the same 76 `wrapped`, below, and
+/// `registry::NOTICE_WIDTH` already wrap their own prose to, and for the
+/// same reason (`f720`). A status can carry a lane name or a product
+/// name typed by whoever runs setup, which has no bound, so cutting it
+/// by hand is wrong by construction and not by oversight.
+const PLAN_WIDTH: usize = 76;
+
+const PIECE_INDENT: usize = 4;
+const PIECE_LABEL_WIDTH: usize = 41;
+
+/// Where a status starts: the indent plus the label column's own width,
+/// so a status `render::wrap` splits lands its later lines under the
+/// first one instead of under the label. Derived once here rather than
+/// written as `45` by hand in three places (`f720`).
+const PIECE_STATUS_COLUMN: usize = PIECE_INDENT + PIECE_LABEL_WIDTH;
+
 pub(super) fn piece_line(label: &str, status: &str) -> String {
-    format!("    {label:<41}{status}\n")
+    let indent = " ".repeat(PIECE_STATUS_COLUMN);
+    let mut lines =
+        crate::render::wrap(status, PLAN_WIDTH - PIECE_STATUS_COLUMN, &indent).into_iter();
+    let first = lines
+        .next()
+        .map(|line| line.trim_start().to_string())
+        .unwrap_or_default();
+    let mut out = format!(
+        "{:indent_width$}{label:<label_width$}{first}\n",
+        "",
+        indent_width = PIECE_INDENT,
+        label_width = PIECE_LABEL_WIDTH
+    );
+    for line in lines {
+        out.push_str(&line);
+        out.push('\n');
+    }
+    out
 }
 
+/// `label`'s value on its own indented line, never wrapped: `value` is a
+/// command line or a path, and a command line broken across two lines is
+/// not one anybody can paste -- `registry.rs` says the same of its own
+/// such lines. `piece_line`'s status gained a width (`f720`); this did
+/// not, on purpose.
 pub(super) fn sub_line(label: &str, value: &str) -> String {
     format!("        {label:<15}{value}\n")
-}
-
-pub(super) fn wrapped_piece_line(label: &str, first: &str, second: &str) -> String {
-    format!("    {label:<41}{first}\n{:45}{second}\n", "")
 }
 
 // ---------------------------------------------------------------------------
@@ -1063,10 +1098,9 @@ fn render_piece_block(
     }
 
     match skill_file_state {
-        SkillState::Missing => s.push_str(&wrapped_piece_line(
+        SkillState::Missing => s.push_str(&piece_line(
             SKILL_LABEL,
-            "create: how an agent brings",
-            "another memory into vivac",
+            "create: how an agent brings another memory into vivac",
         )),
         SkillState::Replaceable => s.push_str(&piece_line(
             SKILL_LABEL,
@@ -1405,7 +1439,7 @@ fn undo(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
 
     let settings_status: String = match (start_ours, stop_ours) {
         (true, true) if settings_becomes_empty => {
-            "remove the two hooks setup wrote;\nNOTHING_ELSE".to_string()
+            "remove the two hooks setup wrote; nothing else is left, so it goes".to_string()
         }
         (true, true) => "remove the two hooks setup wrote".to_string(),
         (true, false) => "remove the SessionStart hook".to_string(),
@@ -1417,15 +1451,7 @@ fn undo(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         "  vivac setup claude-code --undo, in {}\n\n",
         root.display()
     );
-    if settings_status.contains("NOTHING_ELSE") {
-        s.push_str(&wrapped_piece_line(
-            SETTINGS_LABEL,
-            "remove the two hooks setup wrote;",
-            "nothing else is left, so it goes",
-        ));
-    } else {
-        s.push_str(&piece_line(SETTINGS_LABEL, &settings_status));
-    }
+    s.push_str(&piece_line(SETTINGS_LABEL, &settings_status));
     if let HookState::Different(_) = &start_hook_state {
         s.push_str(&sub_line(
             "SessionStart",
@@ -1436,22 +1462,16 @@ fn undo(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         s.push_str(&sub_line("Stop", "runs vivac another way; left as it is"));
     }
 
-    if mcp_becomes_empty {
-        s.push_str(&wrapped_piece_line(
-            MCP_LABEL,
-            "remove the server \"vivac\";",
-            "nothing else is left, so it goes",
-        ));
-    } else {
-        s.push_str(&piece_line(
-            MCP_LABEL,
-            if mcp_ours {
-                "remove the server \"vivac\""
-            } else {
-                "left as it is"
-            },
-        ));
-    }
+    s.push_str(&piece_line(
+        MCP_LABEL,
+        if mcp_becomes_empty {
+            "remove the server \"vivac\"; nothing else is left, so it goes"
+        } else if mcp_ours {
+            "remove the server \"vivac\""
+        } else {
+            "left as it is"
+        },
+    ));
 
     s.push_str(&piece_line(
         SKILL_LABEL,

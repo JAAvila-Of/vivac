@@ -1256,13 +1256,19 @@ pub(super) fn plan_join(
 pub(super) fn opening_lines(plan: &TreePlan) -> String {
     let mut s = String::new();
     let vivac_status = if plan.vivac_missing {
-        "plant the tree".to_string()
-    } else if plan.tree == plan.here {
-        "already there".to_string()
+        "plant the tree"
     } else {
-        format!("already there, in {}", plan.tree.display())
+        "already there"
     };
-    s.push_str(&super::claude_code::piece_line(VIVAC_LABEL, &vivac_status));
+    s.push_str(&super::claude_code::piece_line(VIVAC_LABEL, vivac_status));
+    // The status is prose and wraps (`f720`); where the tree actually
+    // lives is not prose, the same reason a `sub_line`'s own value never
+    // wraps, so a tree found above this folder gets its path on a line
+    // of its own rather than riding inside the status that does.
+    if !plan.vivac_missing && plan.tree != plan.here {
+        let path = plan.tree.display().to_string();
+        s.push_str(&super::claude_code::sub_line("in", &path));
+    }
     if plan.gitignore_missing {
         // Two different files, in two different folders, can both need
         // this line in the same run -- the tree's own, from before `t594`
@@ -1539,10 +1545,10 @@ pub(super) fn undo_lane_lines(lane: &UndoLane) -> String {
     if lane.removable {
         super::claude_code::piece_line(LANE_LABEL, "remove this folder's lane")
     } else {
-        super::claude_code::wrapped_piece_line(
+        super::claude_code::piece_line(
             LANE_LABEL,
-            "left as it is: this lane has written to the tree,",
-            "and removing it would orphan what it wrote",
+            "left as it is: this lane has written to the tree, and removing it would orphan \
+             what it wrote",
         )
     }
 }
