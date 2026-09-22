@@ -722,11 +722,12 @@ fn relocate_into_a_subfolder_of_the_origin_is_refused() {
     assert!(c.0.join(".vivac").join("events").is_file());
 }
 
-/// `t594`: the destination is the tree now, but it is not
-/// a lane yet, and the success text has to say so up front rather than
-/// leaving that for the first refused write to explain.
+/// `d681`: the destination is the tree now, and it already answers as a
+/// lane of its own -- `relocate` gives it that identity itself, rather
+/// than leaving it in the no-lane-file limbo that used to fall to the
+/// implicit `main` rule -- and the success text has to say so up front.
 #[test]
-fn the_success_text_says_the_new_folder_is_not_a_lane_yet() {
+fn the_success_text_says_the_new_folder_answers_as_a_lane_of_its_own() {
     let c = Sandbox::new_seeded("reloc-print");
     c.ok(&["push", "a goal", "--why", "seed"]);
     let dest = sibling_dir(&c, "print");
@@ -735,8 +736,9 @@ fn the_success_text_says_the_new_folder_is_not_a_lane_yet() {
     assert_eq!(code, 0, "{out}");
     assert!(says(
         &out,
-        "The new folder holds the tree but is not a lane yet. To work there:"
+        "The new folder holds the tree and answers as a lane of its own. To give"
     ));
+    assert!(says(&out, "it the hooks, the server and the skill:"));
     assert!(says(&out, "vivac setup claude-code"));
 
     std::fs::remove_dir_all(&dest).ok();

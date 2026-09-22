@@ -432,14 +432,16 @@ fn the_iquorum_scenario_moves_joins_and_shares_one_tree_across_five_roots() {
 
     // C3 and C4 joined in part 3 above but never wrote: `stack --lanes`
     // names both anyway (`f668`), with nothing pushed yet where a front
-    // would sit.
+    // would sit. P itself is the fifth: `relocate` gave it a lane of its
+    // own in part 1 (`d681`), and nobody has run `setup` or pushed from
+    // there since.
     let before_json = ok(&c1, &home, &["stack", "--lanes", "--json"]);
     let before: serde_json::Value = serde_json::from_str(&before_json).unwrap_or_else(|e| {
         panic!("stack --lanes --json did not print an object: {e}\n{before_json}")
     });
     assert_eq!(
         before["lanes"].as_array().expect("lanes is an array").len(),
-        4,
+        5,
         "{before_json}"
     );
 
@@ -463,9 +465,9 @@ fn the_iquorum_scenario_moves_joins_and_shares_one_tree_across_five_roots() {
     let rows = after["lanes"].as_array().expect("lanes is an array");
     assert_eq!(
         rows.len(),
-        4,
-        "`stack --lanes` should still name every lane, C4's own front-less \
-         one included:\n{after_json}"
+        5,
+        "`stack --lanes` should still name every lane, C4's and P's own \
+         front-less ones included:\n{after_json}"
     );
     let titles: Vec<&str> = rows
         .iter()

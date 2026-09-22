@@ -49,11 +49,15 @@
 //!    then drop the stale index. Every point in this sequence still reads
 //!    as a real folder: either the origin's own tree, still there, or a
 //!    lane whose tree the registry already relocated to in step 7.
-//! 9. In the tree now at the destination: `lane.claimed` for `main`, and
-//!    `lane.declared` when it is owed. Past step 7 there is nothing left
-//!    to roll back -- the move already happened -- so a failure here
-//!    still exits 0 and says what is missing, rather than reporting a
-//!    move that did not happen when it did.
+//! 9. In the tree now at the destination: its own `.vivac/lane`, minted
+//!    fresh, and `lane.declared` under the name its folder gives it
+//!    (`d681`) -- without it the destination fell to the implicit `main`
+//!    rule and answered as the very lane the origin just kept. Then
+//!    `lane.claimed` for `main`, and `lane.declared` for the lane that
+//!    stays, when either is owed. Past step 7 there is nothing left to
+//!    roll back -- the move already happened -- so a failure here still
+//!    exits 0 and says what is missing, rather than reporting a move
+//!    that did not happen when it did.
 //! 10. Print what moved, and where.
 //!
 //! **Step 6's own byte mismatch has no trigger a black-box test can
@@ -307,7 +311,7 @@ pub fn run(
     // with what it actually means, not the bare IO error underneath it --
     // see `write_origin_bookkeeping`'s own doc for the order, and why it
     // is safe to be interrupted anywhere in it.
-    if let Err(e) = write_origin_bookkeeping(&origin_vivac, &stays_lane, first_event_id) {
+    if let Err(e) = write_origin_bookkeeping(&origin_vivac, &stays_lane, first_event_id.clone()) {
         return Err(Failure::Io(std::io::Error::other(format!(
             "{e}\n\n  Something failed while updating this folder's own bookkeeping. \
              The destination already has the tree, and the registry already points \
@@ -336,6 +340,7 @@ pub fn run(
         was_implicit_main,
         &stays_lane,
         lane_name,
+        &first_event_id,
     )
     .is_ok();
 
@@ -348,7 +353,8 @@ pub fn run(
     );
     outln!("  This folder stays one of its lanes, with its own thread.");
     outln!("  The old log is kept here as .vivac/{RELOCATED_LOG}.");
-    outln!("  The new folder holds the tree but is not a lane yet. To work there:");
+    outln!("  The new folder holds the tree and answers as a lane of its own. To give");
+    outln!("  it the hooks, the server and the skill:");
     outln!("    vivac setup claude-code");
     outln!("  Restart any session open on this tree.");
     if !marked {
@@ -660,6 +666,16 @@ fn union_repo_roots(tree: &Tree) -> Vec<String> {
 /// The administrative events step 9 owes the tree now living at
 /// `destination`, once the origin's own bookkeeping is already written:
 ///
+/// - Its own `.vivac/lane` and `lane.declared` (`d681`): a fresh id from
+///   `lane::new_id()`, and a name taken from `destination`'s own folder
+///   the same way `setup::claude_code::plan_lane` names any other lane
+///   from a folder, through `lane::declared_name` -- the one place that
+///   rule lives, reused here rather than repeated. No repositories: a
+///   lane with none declared yet is ordinary here, and scanning for them
+///   is `setup`'s job, not this one's, the first time it runs at the
+///   destination. Without this the destination carried no lane file of
+///   its own, `store::locate` there fell to the implicit `main` rule, and
+///   `main` ended up answering from both folders at once.
 /// - `lane.claimed` for `main`, only when the origin was the implicit
 ///   founding lane (`was_implicit_main`): `main` is retired there, so a
 ///   later `setup` run at the destination mints it a lane of its own
@@ -669,8 +685,9 @@ fn union_repo_roots(tree: &Tree) -> Vec<String> {
 ///   when the origin already had repositories of its own and needs its
 ///   declaration carried forward under the very same lane id.
 ///
-/// Both are signed as `stays_lane`: the folder that stays announces this
-/// about itself, the same convention `ops::declare_lane` already uses.
+/// The destination's own declaration is signed as itself; the other two
+/// are signed as `stays_lane`, the folder that stays announcing this
+/// about itself -- the same convention `ops::declare_lane` already uses.
 /// Appended through a fresh `Store` and its own lock on `destination`,
 /// never the origin's -- `run`'s own lock only ever covers `origin`'s file,
 /// and taking it a second time here would be exactly the mistake
@@ -685,6 +702,7 @@ fn write_claim_and_declaration(
     was_implicit_main: bool,
     stays_lane: &str,
     lane_name: Option<&str>,
+    first_event_id: &str,
 ) -> Result<(), Failure> {
     let existing = tree.lanes.get(stays_lane);
     let existing_repos: Vec<Repo> = existing.map(|s| s.repos.clone()).unwrap_or_default();
@@ -700,30 +718,64 @@ fn write_claim_and_declaration(
         None => None,
     };
 
-    let mut bodies = Vec::new();
+    let mut stays_bodies = Vec::new();
     if was_implicit_main {
-        bodies.push(Body::LaneClaimed {
+        stays_bodies.push(Body::LaneClaimed {
             lane: crate::lane::MAIN.to_string(),
         });
     }
     if let Some(name) = redeclare_name {
-        bodies.push(Body::LaneDeclared {
+        stays_bodies.push(Body::LaneDeclared {
             lane: stays_lane.to_string(),
             name,
             repos: existing_repos,
         });
     }
-    if bodies.is_empty() {
-        return Ok(());
-    }
+
+    // The destination's own identity (`d681`): every folder that ends up
+    // holding a tree needs a lane file of its own, or resolution there
+    // falls to the implicit `main` rule -- the very lane the origin just
+    // kept. The file goes down before the event that announces it, the
+    // same ordering `write_lane` in `setup/claude_code.rs` already keeps
+    // for the same reason: an event with no file behind it would leave
+    // this folder not knowing whose thread it is.
+    let own_id = crate::lane::new_id();
+    let folder_name = destination
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let own_name = crate::lane::declared_name(&own_id, &folder_name);
+    crate::lane::write(
+        &destination.join(crate::store::DIR),
+        &crate::lane::Lane {
+            version: 1,
+            id: own_id.clone(),
+            project: first_event_id.to_string(),
+        },
+    )?;
 
     let mut moved = Store::open(destination.to_path_buf())?;
     let moved_lock = moved.lock_for_write()?;
+    let mut next_seq = tree.seq;
+    if !stays_bodies.is_empty() {
+        let appended = moved.append(
+            &moved_lock,
+            stays_lane,
+            stays_bodies,
+            next_seq,
+            tree.has_governance,
+        )?;
+        next_seq = appended.events.last().map_or(next_seq, |e| e.seq);
+    }
     moved.append(
         &moved_lock,
-        stays_lane,
-        bodies,
-        tree.seq,
+        &own_id,
+        vec![Body::LaneDeclared {
+            lane: own_id.clone(),
+            name: own_name,
+            repos: Vec::new(),
+        }],
+        next_seq,
         tree.has_governance,
     )?;
     Ok(())
@@ -894,14 +946,20 @@ mod tests {
     #[test]
     fn write_claim_and_declaration_fails_when_the_destination_cannot_be_opened() {
         let destination = temp_dir("claim-blocked");
-        // A file where `Store::open` needs a directory: writing
-        // `.vivac/config` underneath it cannot even create the path, so
+        // A file where a directory is needed: writing the destination's
+        // own `.vivac/lane` underneath it cannot even create the path, so
         // this fails before ever reaching a lock.
         std::fs::write(&destination, b"not a directory").unwrap();
         let tree = Tree::default();
 
-        let result =
-            write_claim_and_declaration(&destination, &tree, true, crate::lane::MAIN, None);
+        let result = write_claim_and_declaration(
+            &destination,
+            &tree,
+            true,
+            crate::lane::MAIN,
+            None,
+            "01SEEDEVENTAAAAAAAAAAAAAAA",
+        );
 
         assert!(
             result.is_err(),
@@ -938,6 +996,44 @@ mod tests {
         assert!(
             !log.contains(secret),
             "a name the guard rejects must never reach the log: {log}"
+        );
+
+        std::fs::remove_dir_all(&origin).ok();
+        std::fs::remove_dir_all(&destination).ok();
+    }
+
+    /// `d681`: the destination is the folder that now holds the tree, and
+    /// leaving it with no `.vivac/lane` of its own let `store::locate`
+    /// fall to the implicit `main` rule there too -- the very lane the
+    /// origin just kept. Both folders answered as `main` at once; reading
+    /// from either did no harm, but writing from the destination would
+    /// have signed its own work as a lane that actually lives at the
+    /// origin.
+    #[test]
+    fn the_destination_answers_as_its_own_lane_and_the_origin_keeps_answering_as_main() {
+        let _home = IsolatedVivacHome::new("own-lane-vivac-home");
+        let origin = temp_dir("own-lane-origin");
+        let located = seeded_located(&origin);
+        let destination = temp_dir("own-lane-dest");
+
+        let code = run(&located, &destination, None, &origin).unwrap();
+        assert_eq!(code, 0);
+
+        let at_destination = crate::store::locate(&destination).unwrap().unwrap();
+        let destination_lane = at_destination
+            .lane
+            .expect("the destination must carry its own lane file");
+        assert_ne!(
+            destination_lane.id,
+            crate::lane::MAIN,
+            "the destination must not answer as the origin's own main"
+        );
+
+        let at_origin = crate::store::locate(&origin).unwrap().unwrap();
+        assert_eq!(
+            at_origin.lane.map(|l| l.id),
+            Some(crate::lane::MAIN.to_string()),
+            "the origin must keep answering as the lane it always was"
         );
 
         std::fs::remove_dir_all(&origin).ok();
