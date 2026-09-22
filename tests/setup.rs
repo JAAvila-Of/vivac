@@ -811,6 +811,59 @@ fn undo_removes_an_unwritten_lane_file_even_when_nothing_else_is_left() {
     assert!(!here.join(".vivac").join("lane").exists());
 }
 
+/// `f719`, point B, condition 3: a `.gitignore` `write_gitignore` did not
+/// write in full -- someone added a line of their own -- is not this
+/// tool's to erase, so `--undo` leaves it, and the folder that holds it,
+/// right where they are. The lane file itself still goes: it never wrote,
+/// and nothing about that changes here.
+#[test]
+fn undo_leaves_a_vivac_dir_whose_gitignore_was_hand_edited() {
+    let c = Sandbox::new_empty("setup-undo-vivac-dir-hand-edited-gitignore");
+    let target = c.0.join("Target");
+    std::fs::create_dir_all(&target).unwrap();
+    run_in(&target, c.global_home(), &["setup", "claude-code", "--yes"]);
+
+    let here = c.0.join("Joiner");
+    std::fs::create_dir_all(&here).unwrap();
+    run_in(
+        &here,
+        c.global_home(),
+        &["setup", "claude-code", "--yes", "--join", "Target"],
+    );
+    let gitignore = here.join(".vivac").join(".gitignore");
+    let mut contents = read(&gitignore);
+    contents.push_str("!keep-me\n");
+    std::fs::write(&gitignore, &contents).unwrap();
+
+    let (out, code) = run_in(
+        &here,
+        c.global_home(),
+        &["setup", "claude-code", "--undo", "--yes"],
+    );
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        plan_words(&out).contains("remove this folder's lane"),
+        "{out}"
+    );
+    assert!(
+        plan_words(&out).contains("left as it is: it holds more than this lane"),
+        "{out}"
+    );
+    assert!(
+        !here.join(".vivac").join("lane").exists(),
+        "the lane file must still go once its lane never wrote"
+    );
+    assert!(
+        here.join(".vivac").exists(),
+        "the folder must stay: its .gitignore carries a line this tool never wrote"
+    );
+    assert_eq!(
+        read(&gitignore),
+        contents,
+        "the hand-added line must survive"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // 19. The `hooks` tombstone.
 // ---------------------------------------------------------------------------

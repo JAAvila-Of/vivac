@@ -183,6 +183,66 @@ fn init_refuses_a_folder_that_is_already_a_lane_of_another_tree() {
     std::fs::remove_dir_all(&lane_dir).ok();
 }
 
+/// `f719`'s third case, decided by the coordinator rather than guessed at:
+/// a `.vivac/` that holds neither a tree of its own (no `config`, no
+/// `events`) nor a lane file, sitting under a real tree, is not resolved
+/// either way. Not to itself -- that is `f566`'s own fear, a half-deleted
+/// tree silently treated as whole. Not to the tree above either -- that
+/// is `f719`'s own measurement, a folder an undone join left behind
+/// silently folded into someone else's product. The bytes on disk cannot
+/// tell the two apart, so it refuses instead of picking one, naming both
+/// ways out, the same family as `already_a_lane` (exit 1).
+///
+/// Fabricated by hand rather than reproduced through `--undo`, since the
+/// fix `tests/setup_scenarios.rs::undoing_a_join_leaves_no_hollow_vivac_behind`
+/// guards is precisely what stops `--undo` from producing this shape any
+/// more.
+#[test]
+fn a_vivac_that_holds_neither_a_tree_nor_a_lane_under_a_real_one_refuses() {
+    let c = Sandbox::new_seeded("hollow-under-real-tree");
+    c.ok(&[
+        "push",
+        "Ship the release apparatus",
+        "--why",
+        "seed the tree",
+    ]);
+
+    let hollow = c.0.join("hollow");
+    std::fs::create_dir_all(hollow.join(".vivac")).unwrap();
+    std::fs::write(hollow.join(".vivac").join(".gitignore"), "*\n").unwrap();
+
+    let (s, code) = run(&hollow, c.global_home(), &["open"]);
+
+    assert_eq!(code, 1, "{s}");
+    // `says` folds line breaks away: the folder name is a `Sandbox`'s own,
+    // and `wrap` may land a line break anywhere in the prose around it
+    // (`f720`, measured a second time in `hollow_vivac_refusal`).
+    assert!(
+        says(
+            &s,
+            "This folder has a .vivac/ that is neither a tree nor a lane"
+        ),
+        "{s}"
+    );
+    assert!(says(&s, "A tree sits above it, in "), "{s}");
+    assert!(s.contains("Make it a tree of its own:  vivac init"), "{s}");
+    assert!(
+        s.contains("Or hand it back to the tree above by deleting the empty .vivac/ here."),
+        "{s}"
+    );
+
+    // The refusal's own first remedy has to actually work, or it would be
+    // lying: `init` never walks up looking for a tree above it (`main.rs`
+    // checks only `cwd` itself), so it plants right here instead of
+    // repeating the same refusal.
+    let (init_out, init_code) = run(&hollow, c.global_home(), &["init"]);
+    assert_eq!(init_code, 0, "{init_out}");
+    assert!(
+        hollow.join(".vivac").join("events").is_file(),
+        "init did not plant a tree of its own here:\n{init_out}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // `t594` §4.5: `setup` actually declaring a folder a lane, rather than the
 // resolution above, which only ever reads a `.vivac/lane` some other path
