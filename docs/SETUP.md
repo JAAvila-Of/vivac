@@ -81,16 +81,32 @@ gets the same skill file. The tree is planted the same way, because a
 project with the three files and no tree has two hooks that exit 0 in
 silence for ever. Nothing goes in your own configuration directory.
 
-**Two things setup cannot do for you**, and it says both when it finishes.
-Codex reads nothing under a project's `.codex/` until you mark that project
-trusted, and that lives in your own `~/.codex/config.toml`, not in the
-project. And every hook is approved on its own, against its hash, with
+It merges the same way the Claude Code side does, and by the same rules: it
+adds to a file rather than replacing it, keeps every key it does not own
+where it was, refuses a file it cannot read and an entry under its name that
+it did not write, and a second run finds nothing to do. The server goes into
+`config.toml` between two marker comments, which is how a later run knows
+which lines are its own without this binary carrying a TOML reader it needs
+for nothing else.
+
+**Running it is yours to do, not the agent's.** Once `.codex/` and
+`.agents/` exist, Codex keeps both read-only inside its own sandbox, so an
+agent working in the project cannot run setup here again or merge it. What
+an agent can do is create them on a project that has neither.
+
+**Two things setup cannot do for you either**, and it says both when it
+finishes. Codex reads nothing under a project's `.codex/` until you mark that
+project trusted, and that lives in your own `~/.codex/config.toml`, not in
+the project. And every hook is approved on its own, against its hash, with
 `/hooks` inside Codex: the first time, and whenever a hook changes.
 
-> **Today it writes on a clean project only.** If one of the three files is
-> already there it says which and writes nothing, and `--undo` is refused by
-> name rather than ignored. Merging with a file already there comes next. See
-> [where it is measured](../README.md#where-this-is-measured).
+The brief reaches the agent as plain text on the opening hook's standard
+output, which Codex adds to the session as context. Above roughly 2,500
+tokens it saves that context to a file and shows the model a shorter preview
+instead; the brief's own budget is 1,500, so that only bites if you raise it.
+
+> **`--undo` is not there yet**, and it is refused by name rather than
+> ignored. See [where it is measured](../README.md#where-this-is-measured).
 
 `Stop` runs on every turn rather than once at the end, so the last stop does
 not depend on the session closing cleanly. The stop is only saved if the tree
