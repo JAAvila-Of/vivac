@@ -244,13 +244,14 @@ fn a_vivac_that_holds_neither_a_tree_nor_a_lane_under_a_real_one_refuses() {
 }
 
 // ---------------------------------------------------------------------------
-// `t594` §4.5: `setup` actually declaring a folder a lane, rather than the
+// `t594` §4.5: a folder actually being declared a lane, rather than the
 // resolution above, which only ever reads a `.vivac/lane` some other path
-// already wrote. From here on, `setup` writes it.
+// already wrote. From here on, `init` writes it (`d723` piece B: declaring a
+// lane moved from `setup` to `init` with the rest of the tree's own writes).
 // ---------------------------------------------------------------------------
 
-fn setup_ok(dir: &Path, home: &Path) -> String {
-    let (s, code) = run(dir, home, &["setup", "claude-code", "--yes"]);
+fn init_ok(dir: &Path, home: &Path) -> String {
+    let (s, code) = run(dir, home, &["init", "--yes"]);
     assert_eq!(code, 0, "{s}");
     s
 }
@@ -265,18 +266,18 @@ fn already_planted(dir: &Path) -> bool {
     dir.join(".vivac").join("config").is_file() || dir.join(".vivac").join("events").is_file()
 }
 
-/// (1): `setup` in a second folder of the same product joins the tree
+/// (1): `init` in a second folder of the same product joins the tree
 /// above as a new lane instead of planting a second one -- the bug this
 /// task fixes: `.vivac/lane` appears with a fresh id, `lane.declared`
 /// lands in the tree's own log, and no `config` or `events` appears
 /// under the second folder.
 #[test]
-fn setup_in_a_second_folder_joins_the_tree_above_as_a_new_lane() {
+fn init_in_a_second_folder_joins_the_tree_above_as_a_new_lane() {
     let c = Sandbox::new_seeded("declare-second-folder");
     let second = c.0.join("v2");
     std::fs::create_dir_all(&second).unwrap();
 
-    setup_ok(&second, c.global_home());
+    init_ok(&second, c.global_home());
 
     assert!(
         second.join(".vivac").join("lane").exists(),
@@ -296,7 +297,7 @@ fn each_folder_keeps_its_own_stack_and_focus() {
     let c = Sandbox::new_seeded("declare-own-stack");
     let second = c.0.join("v2");
     std::fs::create_dir_all(&second).unwrap();
-    setup_ok(&second, c.global_home());
+    init_ok(&second, c.global_home());
 
     c.ok(&["push", "Main lane work", "--why", "seed main"]);
     let (out, code) = run(
@@ -324,7 +325,7 @@ fn each_folders_brief_names_its_own_lane_in_the_header() {
     let c = Sandbox::new_seeded("declare-brief-header");
     let second = c.0.join("v2");
     std::fs::create_dir_all(&second).unwrap();
-    setup_ok(&second, c.global_home());
+    init_ok(&second, c.global_home());
 
     let (main_brief, code) = run(&c.0, c.global_home(), &["brief"]);
     assert_eq!(code, 0, "{main_brief}");
@@ -335,18 +336,18 @@ fn each_folders_brief_names_its_own_lane_in_the_header() {
     assert!(second_brief.contains("lane: v2"), "{second_brief}");
 }
 
-/// (4): running `setup` again in the same folder, with nothing changed,
+/// (4): running `init` again in the same folder, with nothing changed,
 /// does not leave a second `lane.declared` behind (`t594` §4.5.2, case
 /// (e)).
 #[test]
-fn running_setup_again_unchanged_does_not_write_a_second_event() {
+fn running_init_again_unchanged_does_not_write_a_second_event() {
     let c = Sandbox::new_seeded("declare-no-repeat");
     let second = c.0.join("v2");
     std::fs::create_dir_all(&second).unwrap();
-    setup_ok(&second, c.global_home());
+    init_ok(&second, c.global_home());
 
     let before = log_text(&c);
-    let out = setup_ok(&second, c.global_home());
+    let out = init_ok(&second, c.global_home());
     assert!(
         out.contains("Nothing to write: this project is already set up."),
         "{out}"
@@ -354,20 +355,21 @@ fn running_setup_again_unchanged_does_not_write_a_second_event() {
     assert_eq!(before, log_text(&c), "a second run wrote to the log");
 }
 
-/// (5): a tree of today, where `setup` had never run, gets `main`
-/// declared when `setup` runs in its own folder (`t594` §4.5.2, case
-/// (b)) -- and every other command answers exactly as it did before,
-/// down to the byte. `d624`: the one exception is the header's own lane
-/// name, which moves from the fallback `main` to this folder's own name,
-/// the same as declaring any other lane already does.
+/// (5): a tree of today, where `init` had never run with a flag that
+/// declares a lane, gets `main` declared when `init` runs in its own
+/// folder (`t594` §4.5.2, case (b)) -- and every other command answers
+/// exactly as it did before, down to the byte. `d624`: the one exception
+/// is the header's own lane name, which moves from the fallback `main` to
+/// this folder's own name, the same as declaring any other lane already
+/// does.
 #[test]
-fn setup_on_an_existing_trees_own_folder_declares_main_and_changes_nothing_else() {
+fn init_on_an_existing_trees_own_folder_declares_main_and_changes_nothing_else() {
     let c = Sandbox::new_seeded("declare-existing-main");
     c.ok(&["push", "Some node", "--why", "seed"]);
     let (before, code) = run(&c.0, c.global_home(), &["brief"]);
     assert_eq!(code, 0, "{before}");
 
-    setup_ok(&c.0, c.global_home());
+    init_ok(&c.0, c.global_home());
 
     let (after, code2) = run(&c.0, c.global_home(), &["brief"]);
     assert_eq!(code2, 0, "{after}");
@@ -460,14 +462,15 @@ fn worktree_fixture(prefix: &str) -> (PathBuf, PathBuf, PathBuf) {
 /// folder, not above it, so the upward walk never finds it and the only
 /// way back is the registry. `setup` used to be the one command that
 /// never noted one, which left the worktree unable to read its own
-/// `brief` ever again once it declared a lane there. `setup` now notes
-/// the tree it joins, the same as any other command that writes to it.
+/// `brief` ever again once it declared a lane there. Joining is `init`'s
+/// alone since `d723` piece B, and `init` notes the tree it joins, the
+/// same as any other command that writes to it.
 #[test]
-fn setup_in_a_linked_worktree_registers_the_tree_it_joins() {
+fn init_in_a_linked_worktree_registers_the_tree_it_joins() {
     let (root, feature, home) = worktree_fixture("registers");
 
-    let (setup_out, setup_code) = run(&feature, &home, &["setup", "claude-code", "--yes"]);
-    assert_eq!(setup_code, 0, "{setup_out}");
+    let (init_out, init_code) = run(&feature, &home, &["init", "--yes"]);
+    assert_eq!(init_code, 0, "{init_out}");
 
     let (brief_out, brief_code) = run(&feature, &home, &["brief"]);
     assert_eq!(brief_code, 0, "{brief_out}");
@@ -490,14 +493,14 @@ fn setup_in_a_linked_worktree_registers_the_tree_it_joins() {
 /// at all. The registry is deleted entirely here, not just left unable
 /// to write, to prove that path is not what this depends on any more.
 #[test]
-fn setup_in_a_linked_worktree_still_works_with_the_registry_gone() {
+fn init_in_a_linked_worktree_still_works_with_the_registry_gone() {
     let (root, feature, home) = worktree_fixture("noreg");
     let _root = RemoveOnDrop(root);
     let _feature = RemoveOnDrop(feature.clone());
     let _home = RemoveOnDrop(home.clone());
 
-    let (setup_out, setup_code) = run(&feature, &home, &["setup", "claude-code", "--yes"]);
-    assert_eq!(setup_code, 0, "{setup_out}");
+    let (init_out, init_code) = run(&feature, &home, &["init", "--yes"]);
+    assert_eq!(init_code, 0, "{init_out}");
 
     std::fs::remove_dir_all(&home).ok();
     assert!(!home.exists(), "the registry survived its own deletion");
@@ -516,12 +519,12 @@ fn setup_in_a_linked_worktree_still_works_with_the_registry_gone() {
 /// Finding 5 (media-baja): `unchanged` used to decide `needs_lock` too, so
 /// a config whose lanes sentence was removed by hand -- or by an older
 /// `Store::open` regenerating one that went missing before it knew a lane
-/// event counts -- never got relocked by a later `setup` that had nothing
+/// event counts -- never got relocked by a later `init` that had nothing
 /// new to declare.
 #[test]
-fn setup_relocks_the_config_when_its_lanes_sentence_was_removed_by_hand() {
+fn init_relocks_the_config_when_its_lanes_sentence_was_removed_by_hand() {
     let c = Sandbox::new_seeded("declare-relock");
-    setup_ok(&c.0, c.global_home());
+    init_ok(&c.0, c.global_home());
 
     let config_path = c.0.join(".vivac").join("config");
     let mut cfg: serde_json::Value =
@@ -533,7 +536,7 @@ fn setup_relocks_the_config_when_its_lanes_sentence_was_removed_by_hand() {
     )
     .unwrap();
 
-    let out = setup_ok(&c.0, c.global_home());
+    let out = init_ok(&c.0, c.global_home());
     let after = std::fs::read_to_string(&config_path).unwrap();
     assert!(
         after.contains("this tree holds lanes"),
@@ -545,7 +548,7 @@ fn setup_relocks_the_config_when_its_lanes_sentence_was_removed_by_hand() {
     assert!(
         says(
             &out,
-            "setup wrote in it: the sentence that stops an older vivac"
+            "init wrote in it: the sentence that stops an older vivac"
         ),
         "{out}"
     );
@@ -793,7 +796,7 @@ fn a_worktrees_own_lane_is_declared_with_the_root_commit_it_shares() {
 
     let real_root = real_root_commit(&root);
 
-    setup_ok(&root, &home);
+    init_ok(&root, &home);
 
     let log = std::fs::read_to_string(root.join(".vivac").join("events")).unwrap();
     let declared_again = log
@@ -829,7 +832,7 @@ fn real_root_commit(repo: &Path) -> String {
 /// about a whole class of write, which is worse than not previewing it at
 /// all -- whoever reads the plan walks away not knowing this exists.
 #[test]
-fn dry_run_names_a_stale_worktree_it_would_redeclare() {
+fn init_dry_run_names_a_stale_worktree_it_would_redeclare() {
     let (root, feature, home) = worktree_inside_fixture("dry-run-stale");
     append_raw_line(
         &root,
@@ -841,7 +844,7 @@ fn dry_run_names_a_stale_worktree_it_would_redeclare() {
     assert_eq!(code, 0, "{out}");
     let before = std::fs::read_to_string(root.join(".vivac").join("events")).unwrap();
 
-    let (out, code) = run(&root, &home, &["setup", "claude-code", "--dry-run"]);
+    let (out, code) = run(&root, &home, &["init", "--dry-run"]);
     assert_eq!(code, 0, "{out}");
     assert!(
         says(
@@ -863,10 +866,10 @@ fn dry_run_names_a_stale_worktree_it_would_redeclare() {
 /// never joined -- `feature` here never wrote anything -- must not be
 /// mistaken for one that needs fixing either.
 #[test]
-fn dry_run_says_nothing_about_worktree_lanes_when_none_are_stale() {
+fn init_dry_run_says_nothing_about_worktree_lanes_when_none_are_stale() {
     let (root, _feature, home) = worktree_inside_fixture("dry-run-no-stale");
 
-    let (out, code) = run(&root, &home, &["setup", "claude-code", "--dry-run"]);
+    let (out, code) = run(&root, &home, &["init", "--dry-run"]);
     assert_eq!(code, 0, "{out}");
     assert!(
         !out.contains("worktree lane"),
@@ -888,7 +891,7 @@ fn dry_run_says_nothing_about_worktree_lanes_when_none_are_stale() {
 /// `.vivac/lane` already exists from an earlier join that copied `None`
 /// forward and was never revisited.
 #[test]
-fn setup_still_fixes_a_stale_worktree_when_its_own_lane_is_unchanged() {
+fn init_still_fixes_a_stale_worktree_when_its_own_lane_is_unchanged() {
     let (root, feature, home) = worktree_inside_fixture("gate-unchanged");
     let real_root = real_root_commit(&root);
     let folder_name = root.file_name().unwrap().to_string_lossy().into_owned();
@@ -906,7 +909,7 @@ fn setup_still_fixes_a_stale_worktree_when_its_own_lane_is_unchanged() {
     seed_lanes_config(&root);
     write_lane(&feature, "01SEEDMAINAAAAAAAAAAAAAAAA");
 
-    setup_ok(&root, &home);
+    init_ok(&root, &home);
 
     let log = std::fs::read_to_string(root.join(".vivac").join("events")).unwrap();
     let declared_again = log
@@ -978,7 +981,7 @@ fn a_worktree_recreates_a_vanished_log_and_signs_main_like_the_tree_does() {
     let home = unique("panic-recipe-home");
     let (init_out, init_code) = run(&root, &home, &["init"]);
     assert_eq!(init_code, 0, "{init_out}");
-    setup_ok(&root, &home);
+    init_ok(&root, &home);
 
     let feature = root.join("wt");
     git(&root, &["worktree", "add", "wt"]);
@@ -1098,7 +1101,7 @@ fn a_worktree_found_through_a_second_spelling_still_inherits_the_root_commit() {
     let home = unique("second-spelling-home");
     let (init_out, init_code) = run(&real_root, &home, &["init"]);
     assert_eq!(init_code, 0, "{init_out}");
-    setup_ok(&real_root, &home);
+    init_ok(&real_root, &home);
     git(&real_root, &["worktree", "add", "wt"]);
 
     let root_line = std::fs::read_to_string(real_root.join(".vivac").join("events"))
@@ -1512,34 +1515,34 @@ fn mcp_joins_a_worktree_the_same_way_the_cli_does() {
 // separately -- see `src/web/mod.rs::serve`.
 
 /// Closed for real later in `t594`: the §6.9 refusal's own
-/// remedy is `vivac setup claude-code`, and running it in the very folder
-/// §6.9 refuses used to refuse too, citing its own message back. `setup`
-/// now mints this folder a lane of its own instead of declaring `main`
-/// again -- `main` genuinely lives elsewhere, and nothing here pretends
-/// otherwise -- so an ordinary write from here works afterwards, signed
-/// with the lane `setup` just minted rather than `main`.
+/// remedy is `vivac init`, and running it in the very folder §6.9 refuses
+/// used to refuse too, citing its own message back. `init` now mints this
+/// folder a lane of its own instead of declaring `main` again -- `main`
+/// genuinely lives elsewhere, and nothing here pretends otherwise -- so an
+/// ordinary write from here works afterwards, signed with the lane `init`
+/// just minted rather than `main`.
 #[test]
-fn setup_fixes_a_folder_whose_main_was_claimed_instead_of_refusing() {
+fn init_fixes_a_folder_whose_main_was_claimed_instead_of_refusing() {
     let c = Sandbox::new_seeded("claimed-setup-fixes-it");
     c.append_raw_line(
         r#"{"seq":1,"id":"01SEEDCLAIMAAAAAAAAAAAAAAA","ts":"2026-01-01T00:00:00Z","actor":"a_test0000000","lane":"main","payload":{"type":"lane.claimed","lane":"main"}}"#,
     );
 
-    setup_ok(&c.0, c.global_home());
+    init_ok(&c.0, c.global_home());
     assert!(
         c.0.join(".vivac").join("lane").exists(),
-        "setup declared main again instead of minting this folder a lane"
+        "init declared main again instead of minting this folder a lane"
     );
     let minted_id = lane_id_of(&c.0);
     assert_ne!(minted_id, "main");
 
-    let (out, code) = c.run(&["push", "After setup", "--why", "seed"]);
+    let (out, code) = c.run(&["push", "After init", "--why", "seed"]);
     assert_eq!(code, 0, "{out}");
     let log = log_text(&c);
     let last = log.lines().last().expect("push wrote a line");
     assert!(
         last.contains(&format!("\"lane\":\"{minted_id}\"")),
-        "the write after setup did not sign the lane setup just minted:\n{last}"
+        "the write after init did not sign the lane init just minted:\n{last}"
     );
 }
 
@@ -1592,7 +1595,7 @@ fn import_signs_the_contexts_own_lane_not_always_main() {
     let c = Sandbox::new_seeded("import-signs-its-own-lane");
     let second = c.0.join("v2");
     std::fs::create_dir_all(&second).unwrap();
-    setup_ok(&second, c.global_home());
+    init_ok(&second, c.global_home());
 
     let tree_json = second.join("tree.json");
     std::fs::write(
@@ -1682,7 +1685,7 @@ fn a_hook_inside_a_worktree_does_not_join_a_tree_that_never_had_setup() {
 #[test]
 fn a_hook_inside_a_worktree_still_joins_once_the_tree_has_lanes() {
     let (root, feature, home) = worktree_inside_fixture("hook-with-setup");
-    setup_ok(&root, &home);
+    init_ok(&root, &home);
 
     let (out, code) = run_stdin(
         &feature,
@@ -1868,13 +1871,7 @@ fn relocate_and_join_treat_two_spellings_of_the_same_folder_as_one() {
     let (first_out, first_code) = run(
         &lane_dir,
         &home,
-        &[
-            "setup",
-            "claude-code",
-            "--yes",
-            "--join",
-            real.to_str().unwrap(),
-        ],
+        &["init", "--yes", "--join", real.to_str().unwrap()],
     );
     assert_eq!(first_code, 0, "{first_out}");
     let id_before = lane_id_of(&lane_dir);
@@ -1883,13 +1880,7 @@ fn relocate_and_join_treat_two_spellings_of_the_same_folder_as_one() {
     let (join_out, join_code) = run(
         &lane_dir,
         &home,
-        &[
-            "setup",
-            "claude-code",
-            "--yes",
-            "--join",
-            alias.to_str().unwrap(),
-        ],
+        &["init", "--yes", "--join", alias.to_str().unwrap()],
     );
     assert_eq!(join_code, 0, "{join_out}");
     assert!(
@@ -1899,7 +1890,7 @@ fn relocate_and_join_treat_two_spellings_of_the_same_folder_as_one() {
     assert!(
         says(
             &join_out,
-            "This folder is already a lane of that tree, and setup changed nothing in it."
+            "This folder is already a lane of that tree, and init changed nothing in it."
         ),
         "the alias was not recognised as the tree this folder already joined:\n{join_out}"
     );
@@ -2050,7 +2041,7 @@ fn moving_a_branch_writes_one_where_and_moving_back_writes_another() {
     let home = unique("where-moves-home");
     let (init_out, init_code) = run(&root, &home, &["init"]);
     assert_eq!(init_code, 0, "{init_out}");
-    setup_ok(&root, &home);
+    init_ok(&root, &home);
     assert_eq!(
         where_changed_count(&root),
         0,
@@ -2100,8 +2091,9 @@ fn commit_a_repo(repo_dir: &Path) {
 
 /// A lane joined from a folder other than the tree's own root, redeclared
 /// once its repositories change, must resolve those repositories against
-/// its own folder -- not against the tree root `setup` opens the store
-/// through. Before the fix, `write_lane` handed `resolve_whose` the tree
+/// its own folder -- not against the tree root `init` opens the store
+/// through (`d723` piece B: declaring and redeclaring a lane are `init`'s
+/// alone). Before the fix, `write_lane` handed `resolve_whose` the tree
 /// root as the lane's folder, so the redeclare's own `where_to_write`
 /// resolved the lane's already-declared repository against the wrong
 /// folder, found nothing there, and wrote a `where.changed` claiming it
@@ -2111,8 +2103,8 @@ fn a_joined_lanes_redeclare_resolves_repositories_from_its_own_folder() {
     let tree_root = unique("redeclare-tree");
     std::fs::create_dir_all(&tree_root).unwrap();
     let home = unique("redeclare-home");
-    let (setup_out, setup_code) = run(&tree_root, &home, &["setup", "claude-code", "--yes"]);
-    assert_eq!(setup_code, 0, "{setup_out}");
+    let (init_out, init_code) = run(&tree_root, &home, &["init", "--yes"]);
+    assert_eq!(init_code, 0, "{init_out}");
 
     let lane_dir = unique("redeclare-lane");
     commit_a_repo(&lane_dir.join("repoA"));
@@ -2121,15 +2113,15 @@ fn a_joined_lanes_redeclare_resolves_repositories_from_its_own_folder() {
     let (join_out, join_code) = run(
         &lane_dir,
         &home,
-        &["setup", "claude-code", "--yes", "--join", &tree_root_str],
+        &["init", "--yes", "--join", &tree_root_str],
     );
     assert_eq!(join_code, 0, "{join_out}");
 
     // A second repository, so the folder's declared list has actually
-    // changed and `setup` has something to redeclare.
+    // changed and `init` has something to redeclare.
     commit_a_repo(&lane_dir.join("repoB"));
 
-    let (redeclare_out, redeclare_code) = run(&lane_dir, &home, &["setup", "claude-code", "--yes"]);
+    let (redeclare_out, redeclare_code) = run(&lane_dir, &home, &["init", "--yes"]);
     assert_eq!(redeclare_code, 0, "{redeclare_out}");
 
     let log = std::fs::read_to_string(tree_root.join(".vivac").join("events")).unwrap();
@@ -2171,7 +2163,7 @@ fn a_stop_in_a_root_without_git_anchors_every_repository_below_it() {
     let home = unique("no-git-home");
     let (init_out, init_code) = run(&root, &home, &["init"]);
     assert_eq!(init_code, 0, "{init_out}");
-    setup_ok(&root, &home);
+    init_ok(&root, &home);
 
     let (out, code) = run(&root, &home, &["save", "checkpoint"]);
     assert_eq!(code, 0, "{out}");
@@ -2225,7 +2217,7 @@ fn a_stop_in_a_root_without_git_shows_the_sha_of_a_lone_repository() {
     let home = unique("one-repo-home");
     let (init_out, init_code) = run(&root, &home, &["init"]);
     assert_eq!(init_code, 0, "{init_out}");
-    setup_ok(&root, &home);
+    init_ok(&root, &home);
 
     let (out, code) = run(&root, &home, &["save", "checkpoint"]);
     assert_eq!(code, 0, "{out}");

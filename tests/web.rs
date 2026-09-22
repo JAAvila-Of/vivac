@@ -502,7 +502,7 @@ fn a_projects_today_page_serves_with_its_focus_on_it() {
 #[test]
 fn a_page_shows_the_name_the_product_was_given_over_its_folders() {
     let sandbox = Sandbox::new_empty("web-named");
-    sandbox.ok(&["setup", "claude-code", "--yes", "--name", "IQuorum"]);
+    sandbox.ok(&["init", "--yes", "--name", "IQuorum"]);
     sandbox.ok(&["push", "Fix the cache adapter", "--why", "the bug needs it"]);
     let server = Server::start(&sandbox);
     let boot = call(server.port, &server.boot_path(), &[("Host", server.host())]);
@@ -537,7 +537,7 @@ fn a_page_shows_the_name_the_product_was_given_over_its_folders() {
 #[test]
 fn the_index_lists_a_project_under_the_name_it_was_given() {
     let sandbox = Sandbox::new_empty("web-named-index");
-    sandbox.ok(&["setup", "claude-code", "--yes", "--name", "IQuorum"]);
+    sandbox.ok(&["init", "--yes", "--name", "IQuorum"]);
     // Started outside it, since from inside a project `/` lands on that
     // project instead of listing -- the same reason `up_many` does this.
     let server = Server::start_serving(
@@ -1554,8 +1554,7 @@ fn the_choice_tells_them_apart_without_naming_a_path() {
 fn join_lane(on: &Sandbox, folder: &str, name: &str) -> Sandbox {
     let joined = Sandbox::new_empty_in(folder, on.global_home());
     joined.ok(&[
-        "setup",
-        "claude-code",
+        "init",
         "--yes",
         "--join",
         on.0.to_str().unwrap(),

@@ -854,12 +854,10 @@ fn the_last_stop_shows_one_short_sha_and_counts_the_rest() {
     // repository must not notice this tranche happened.
     let one = Sandbox::new_empty("brief-repos-one");
     commit_a_repo(&one.0);
-    one.ok(&["init"]);
-    one.ok(&["setup", "claude-code", "--yes"]);
-    // A clean working tree, so the stop's anchor is the repository's own
-    // `HEAD` and nothing setup itself wrote shows up as a change since.
-    git(&one.0, &["add", "-A"]);
-    git(&one.0, &["commit", "-q", "-m", "setup"]);
+    // `init` writes only under `.vivac/`, which the repository ignores, so
+    // the working tree stays exactly as clean as `commit_a_repo` left it:
+    // the stop's anchor is the repository's own `HEAD`.
+    one.ok(&["init", "--yes"]);
     one.ok(&["push", "Something", "--why", "seed"]);
     one.ok(&["save", "checkpoint"]);
     let line = last_vivac_line(&one.ok(&["brief"])).to_string();
@@ -872,9 +870,8 @@ fn the_last_stop_shows_one_short_sha_and_counts_the_rest() {
     let two = Sandbox::new_empty("brief-repos-two");
     commit_a_repo(&two.0.join("webapi"));
     commit_a_repo(&two.0.join("infra"));
-    two.ok(&["init"]);
+    two.ok(&["init", "--yes"]);
     two.ok(&["push", "Something", "--why", "seed"]);
-    two.ok(&["setup", "claude-code", "--yes"]);
     two.ok(&["save", "checkpoint"]);
     let out = two.ok(&["brief"]);
     assert!(last_vivac_line(&out).contains(" · 2 repos"), "{out}");
@@ -943,8 +940,7 @@ fn the_brief_says_the_branch_moved_and_where_that_branch_last_stopped() {
     let c = Sandbox::new_empty("branch-moved-shape");
     let backend = c.0.join("backend");
     commit_a_repo_on_branch(&backend, "feature/net10");
-    c.ok(&["init"]);
-    c.ok(&["setup", "claude-code", "--yes"]);
+    c.ok(&["init", "--yes"]);
     c.ok(&["push", "First task", "--why", "seed"]);
 
     git(&backend, &["checkout", "-q", "-b", "perf/sp"]);
@@ -975,8 +971,7 @@ fn going_back_to_the_branch_makes_the_notice_disappear() {
     let c = Sandbox::new_empty("branch-moved-disappear");
     let backend = c.0.join("backend");
     commit_a_repo_on_branch(&backend, "feature/net10");
-    c.ok(&["init"]);
-    c.ok(&["setup", "claude-code", "--yes"]);
+    c.ok(&["init", "--yes"]);
     c.ok(&["push", "First task", "--why", "seed"]);
 
     git(&backend, &["checkout", "-q", "-b", "perf/sp"]);
@@ -999,8 +994,7 @@ fn a_branch_nobody_worked_on_says_so_instead_of_offering_a_candidate() {
     let c = Sandbox::new_empty("branch-moved-no-candidate");
     let backend = c.0.join("backend");
     commit_a_repo_on_branch(&backend, "feature/net10");
-    c.ok(&["init"]);
-    c.ok(&["setup", "claude-code", "--yes"]);
+    c.ok(&["init", "--yes"]);
     c.ok(&["push", "First task", "--why", "seed"]);
 
     git(&backend, &["checkout", "-q", "-b", "perf/sp"]);
@@ -1025,8 +1019,7 @@ fn the_notice_is_bounded_and_never_truncated() {
     let c = Sandbox::new_empty("branch-moved-bounded");
     let backend = c.0.join("backend");
     commit_a_repo_on_branch(&backend, "feature/net10");
-    c.ok(&["init"]);
-    c.ok(&["setup", "claude-code", "--yes"]);
+    c.ok(&["init", "--yes"]);
     c.ok(&["push", "First task", "--why", "seed"]);
     git(&backend, &["checkout", "-q", "-b", "perf/sp"]);
 
@@ -1060,7 +1053,7 @@ fn a_tree_with_a_single_lane_and_no_repositories_prints_exactly_what_it_did() {
 
 // ---------------------------------------------------------------------------
 // OTHER LANES (`t594` §5.3): a second folder joined to the very same tree,
-// with nothing beyond `setup --join` and `push` -- no repository needed,
+// with nothing beyond `init --join` and `push` -- no repository needed,
 // since the section only ever reads the lane's own thread.
 // ---------------------------------------------------------------------------
 
@@ -1083,8 +1076,7 @@ fn spent_tokens(out: &str) -> usize {
 fn join_lane(on: &Sandbox, folder: &str, name: &str) -> Sandbox {
     let joined = Sandbox::new_empty_in(folder, on.global_home());
     joined.ok(&[
-        "setup",
-        "claude-code",
+        "init",
         "--yes",
         "--join",
         on.0.to_str().unwrap(),

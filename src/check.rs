@@ -135,7 +135,7 @@ pub fn check(a: &Tree, root: &Path, args: &Args) -> Result<i32, crate::failure::
             .is_file()
         {
             project.push(
-                ".vivac/.gitignore is missing, so git can pick up the log: vivac setup writes it"
+                ".vivac/.gitignore is missing, so git can pick up the log: vivac init writes it"
                     .to_string(),
             );
         }

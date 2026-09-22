@@ -18,6 +18,14 @@ pub enum Failure {
     Redaction(Box<Finding>),
     /// There is no `.vivac/` here or further up.
     NoStore,
+    /// `setup`'s own shape of `NoStore` (`d723` piece B): there is no tree
+    /// resolvable from here at all, so `setup` has nothing to configure.
+    /// Shares `NoStore`'s exit code -- a script telling "no tree" apart
+    /// from "I refused" needs the same answer from `setup` as from every
+    /// other command that finds none -- but names the two ways forward
+    /// that are actually `setup`'s to hand back, `vivac init` and `vivac
+    /// init --join`, instead of `NoStore`'s own generic sentence.
+    SetupNoTree,
     Io(std::io::Error),
     /// A line in the log is well-formed JSON but names an event type or a
     /// node kind this version does not know: `t411` §13. Shares `Io`'s exit
@@ -48,7 +56,7 @@ impl Failure {
             Failure::Model(_) | Failure::NotALane(_) => 1,
             Failure::Usage(_) => 2,
             Failure::Redaction(_) => 3,
-            Failure::NoStore | Failure::TreeNotFound(_) => 4,
+            Failure::NoStore | Failure::TreeNotFound(_) | Failure::SetupNoTree => 4,
             Failure::Io(_) | Failure::NewerVivac(_) | Failure::Busy(_) => 5,
         }
     }
@@ -67,6 +75,15 @@ impl Failure {
                 eprintln!("  No .vivac/ here or further up.");
                 eprintln!();
                 eprintln!("  Plant the tree:  vivac init");
+            }
+            Failure::SetupNoTree => {
+                eprintln!(
+                    "  setup writes what an agent reads, and there is no tree here for it to"
+                );
+                eprintln!("  read. Nothing was written.");
+                eprintln!();
+                eprintln!("  Plant one here:  vivac init");
+                eprintln!("  Or join one that already exists:  vivac init --join <name or path>");
             }
             Failure::Io(e) => eprintln!("  Input/output error: {e}"),
         }
@@ -89,6 +106,12 @@ impl Failure {
             | Failure::TreeNotFound(m) => m.trim().to_string(),
             Failure::Redaction(h) => h.to_string(),
             Failure::NoStore => "No .vivac/ here or further up. Plant one: vivac init".into(),
+            Failure::SetupNoTree => {
+                "setup writes what an agent reads, and there is no tree here for it to read. \
+                 Nothing was written. Plant one here: vivac init. Or join one that already \
+                 exists: vivac init --join <name or path>"
+                    .into()
+            }
             Failure::Io(e) => format!("Input/output error: {e}"),
         }
     }
@@ -120,11 +143,11 @@ impl Failure {
     /// `.vivac/lane`, telling the person standing in that very folder to go
     /// run something "in the tree's own folder" (`t594`).
     /// `--join` names the actual remedy: the flag is `t594` §4.5.4, and
-    /// `setup` accepts it.
+    /// `d723` piece B moved it, with planting, onto `init` alone.
     pub fn tree_not_found() -> Failure {
         Failure::TreeNotFound(
             "  This folder is a lane of a tree this machine's registry does not know.\n  \
-             Join it again:  vivac setup claude-code --join <path to the tree>"
+             Join it again:  vivac init --join <path to the tree>"
                 .into(),
         )
     }
@@ -136,7 +159,24 @@ impl Failure {
     pub fn not_a_lane() -> Failure {
         Failure::NotALane(
             "  This folder holds the tree but is not one of its lanes. To write from\n  \
-             here, make it one:  vivac setup claude-code"
+             here, make it one:  vivac init"
+                .into(),
+        )
+    }
+
+    /// A tree resolves from here, but this folder is neither the tree's own
+    /// folder nor one of its declared lanes yet (`d723` piece B): `setup`
+    /// never writes to the tree on its own behalf any more, so a folder
+    /// that would still write as some other folder's lane is one `setup`
+    /// refuses rather than configures blindly. Exit 1, the same family as
+    /// `already_a_lane`: this is the model itself refusing, not a usage
+    /// mistake.
+    pub fn not_a_lane_yet() -> Failure {
+        Failure::Model(
+            "  A tree sits above this folder, and this folder is not one of its lanes\n  \
+             yet: work written from here would be recorded as the tree's own folder\n  \
+             rather than as this one. Nothing was written.\n\n  \
+             Make this folder a lane of that tree:  vivac init"
                 .into(),
         )
     }

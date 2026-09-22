@@ -131,12 +131,11 @@ fn the_emisores_scenario_end_to_end() {
     commit_a_repo_on_branch(&web_two, "feature/ng22");
     commit_a_repo_on_branch(&web_three, "feature/ng22");
 
-    c.ok(&["init"]);
-    c.ok(&["setup", "claude-code", "--yes"]);
+    c.ok(&["init", "--yes"]);
     assert_eq!(
         declared_repo_paths(&c.0),
         vec!["backend", "web1", "web2", "web3"],
-        "setup did not declare all four repositories"
+        "init did not declare all four repositories"
     );
 
     // Two objectives, on two different branches of the backend: the net10
@@ -327,8 +326,7 @@ fn two_declared_repositories_each_carry_their_own_anchor_in_vivacs_json() {
     commit_a_repo_on_branch(&repo_one, "feature/one");
     commit_a_repo_on_branch(&repo_two, "feature/two");
 
-    c.ok(&["init"]);
-    c.ok(&["setup", "claude-code", "--yes"]);
+    c.ok(&["init", "--yes"]);
     c.ok(&["save", "a checkpoint"]);
 
     let out = c.ok(&["vivacs", "--json"]);
@@ -394,8 +392,7 @@ fn reconcile_json_carries_the_anchors_of_the_stop_it_reads_from() {
     commit_a_repo_on_branch(&repo_one, "feature/one");
     commit_a_repo_on_branch(&repo_two, "feature/two");
 
-    c.ok(&["init"]);
-    c.ok(&["setup", "claude-code", "--yes"]);
+    c.ok(&["init", "--yes"]);
     c.ok(&["save", "a checkpoint"]);
 
     let sha_one = git_head(&repo_one);

@@ -3,7 +3,7 @@
 //! plant with none of the flags `setup` already gave the tree side, so
 //! `--join`, `--new-tree`, `--name` and `--lane-name` stayed unreachable
 //! from a folder with no interest in a harness at all (`f721`). This module
-//! is the very same path `claude_code.rs` and `codex.rs` already walk
+//! is the very same path `claude_code.rs` and `codex.rs` used to walk
 //! through `tree.rs`, minus the three files a harness reads: the roots, the
 //! plan, asking, and the tree's own writes -- planting, the lane, the
 //! version lock and the `.gitignore`.
@@ -15,27 +15,30 @@
 //! own comment on the two of them).
 //!
 //! `tree.rs`'s own `plan`, `plan_join` and the refusal a shared repository
-//! raises still take a [`Harness`], with only two words to answer with --
-//! dissolving that parameter is `f717`/piece B's own job, not this one's
-//! (`d723`). This module answers with [`Harness::ClaudeCode`], the same
-//! harness `harness_word` already falls back to when nobody named one: the
-//! rare message that still names it through this door reads "claude-code"
-//! until piece B stops every one of them from naming an arnés at all.
+//! raises no longer take a `Harness` (`d723` piece B, `f717` dissolved):
+//! `init` is the only caller left, and every message a plant or a join can
+//! raise now proposes `vivac init`, which names no arnés at all.
 
 use super::tree;
-use super::Harness;
 use crate::args::Args;
 use crate::failure::Failure;
 use crate::output::outln;
-
-/// The harness passed into `tree.rs` on `init`'s own behalf, until piece B
-/// dissolves the parameter (see the module doc above).
-const NO_HARNESS: Harness = Harness::ClaudeCode;
 
 pub(super) fn run(cwd: &std::path::Path, a: &Args) -> Result<i32, Failure> {
     let roots = super::resolve_roots(cwd)?;
     if a.has("undo") {
         return undo(&roots, a);
+    }
+    // `t594`: this guard used to run ahead of `apply` in `claude_code.rs`,
+    // catching the home folder and the global store before deciding
+    // between planting and joining. `d723` piece B moved that decision
+    // here in full, and the guard belongs wherever the decision is made --
+    // left behind, a tree could be planted or a lane declared in either
+    // place, and only a later `vivac setup` would have caught it, after
+    // the fact. `claude_code::run` and `codex::run` still check it too, for
+    // a lane that already exists there from before this guard moved.
+    if let Some(refusal) = super::refuse_home_or_global_store(&roots) {
+        return Err(refusal);
     }
     apply(&roots, a)
 }
@@ -50,12 +53,12 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         });
     }
     if let Some(spec) = join_spec {
-        return match tree::plan_join(roots, spec, a.opt("lane-name"), NO_HARNESS)? {
+        return match tree::plan_join(roots, spec, a.opt("lane-name"))? {
             Some((join_roots, plan)) => apply_writes(&join_roots, a, plan),
             None => Ok(0),
         };
     }
-    let plan = tree::plan(roots, a, NO_HARNESS)?;
+    let plan = tree::plan(roots, a)?;
     apply_writes(roots, a, plan)
 }
 
@@ -159,10 +162,17 @@ fn apply_writes(roots: &super::Roots, a: &Args, plan: tree::TreePlan) -> Result<
 /// was already there gets `claude_code::tree_paragraph`'s own sentence --
 /// the one piece of `claude_code`'s closing text that was never about a
 /// harness to begin with.
+///
+/// `d723` piece B carried the migration nudge here too, not just the tree
+/// side: planting and joining are what `MIGRATE_PARAGRAPHS` and
+/// `JOIN_MIGRATE_PARAGRAPHS` were always keyed on, and both are `init`'s
+/// alone now. The text is unchanged; only which module shows it moved,
+/// with the writes it was always describing.
 fn written_text(plan: &tree::TreePlan) -> String {
     let mut s = String::from("  Written.\n");
     if plan.vivac_missing {
         s.push_str("\n  First node:  vivac push \"<title>\" --why \"<reason>\"\n");
+        s.push_str(super::claude_code::MIGRATE_PARAGRAPHS);
     } else {
         let lane_declared = !plan.lane.unchanged || !plan.lane.stale_worktrees.is_empty();
         s.push_str(&super::claude_code::tree_paragraph(
@@ -171,6 +181,15 @@ fn written_text(plan: &tree::TreePlan) -> String {
             lane_declared,
             plan.lane.needs_lock,
         ));
+        // `f678`/`d683`: the argument for staying quiet here was the
+        // **tree**'s, which a join finds already there and may already
+        // hold content for. It says nothing about the folder, which
+        // arrives with its own instruction files, its own harness memory
+        // and its own documents, and joining a tree never reads any of
+        // that.
+        if plan.lane.is_new {
+            s.push_str(super::claude_code::JOIN_MIGRATE_PARAGRAPHS);
+        }
     }
     s
 }
@@ -187,7 +206,13 @@ fn undo(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     let here = roots.here.as_path();
     let undo_lane = tree::undo_lane(roots)?;
 
-    if !undo_lane.removable {
+    // `raw` is the field to gate on here, not `removable` (`d680`
+    // regression, caught porting `tests/setup.rs`): a lane that exists but
+    // has written to the tree is not removable either, and used to fall
+    // into this same "nothing to undo" sentence as a folder with no lane
+    // at all -- which is not true, and `undo_lane_lines` below already has
+    // the right sentence for it.
+    if undo_lane.raw.is_none() {
         outln!("  Nothing to undo: this folder carries no lane vivac init wrote.");
         return Ok(0);
     }
@@ -199,6 +224,13 @@ fn undo(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
 
     if a.has("dry-run") {
         outln!("{s}  Nothing written: --dry-run.");
+        return Ok(0);
+    }
+
+    if !undo_lane.removable {
+        // The lane stays -- `undo_lane_lines` above already said why -- so
+        // there is nothing left in this plan to confirm or to write.
+        outln!("{s}  Nothing written: this lane has written to the tree.");
         return Ok(0);
     }
 

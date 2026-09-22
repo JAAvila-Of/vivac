@@ -21,25 +21,23 @@ use std::process::Command;
 /// named `name`: what `reconcile` needs to have anything of its own to
 /// compare, unlike `brief`'s OTHER LANES, which never asks git anything.
 ///
-/// `setup` writes its own hook and config files into the joining folder
-/// without committing them, so a repository left as `setup` leaves it would
-/// show those as changes since any commit forever, no matter when a test's
-/// own stop is saved. Folding them into a commit of their own is what makes
-/// "nothing changed since this lane's own stop" a state a test can reach.
+/// `init --join` writes only under `.vivac/`, which the repository
+/// ignores, so the working tree stays exactly as clean as `commit_a_repo`
+/// left it -- "nothing changed since this lane's own stop" is already the
+/// state a test reaches, with nothing left to fold into a commit of its
+/// own (`d723` piece B: joining moved from `setup` to `init`, which never
+/// wrote outside `.vivac/` to begin with).
 fn join_lane_with_repo(on: &Sandbox, folder: &str, name: &str) -> Sandbox {
     let joined = Sandbox::new_empty_in(folder, on.global_home());
     commit_a_repo(&joined.0);
     joined.ok(&[
-        "setup",
-        "claude-code",
+        "init",
         "--yes",
         "--join",
         on.0.to_str().unwrap(),
         "--lane-name",
         name,
     ]);
-    git_at(&joined.0, &["add", "-A"]);
-    git_at(&joined.0, &["commit", "-qm", "setup"]);
     joined
 }
 
@@ -277,7 +275,7 @@ fn reconcile_prefixes_each_change_with_its_repository() {
     let c = Sandbox::new_empty("recon-prefix");
     commit_a_repo(&c.0.join("webapi"));
     commit_a_repo(&c.0.join("infra"));
-    c.ok(&["init"]);
+    c.ok(&["init", "--yes"]);
     c.ok(&[
         "push",
         "A goal",
@@ -286,7 +284,6 @@ fn reconcile_prefixes_each_change_with_its_repository() {
         "--governs",
         "unrelated/**",
     ]);
-    c.ok(&["setup", "claude-code", "--yes"]);
     c.ok(&["save", "a stop"]);
     write(&c, "webapi/src/one.rs", "a\n");
     write(&c, "infra/main.tf", "b\n");
@@ -304,9 +301,8 @@ fn reconcile_says_a_repository_is_on_another_branch_instead_of_diffing_it() {
     let c = Sandbox::new_empty("recon-branch-moved");
     commit_a_repo(&c.0.join("webapi"));
     git_at(&c.0.join("webapi"), &["branch", "-m", "feature/net10"]);
-    c.ok(&["init"]);
+    c.ok(&["init", "--yes"]);
     c.ok(&["push", "A goal", "--why", "it is needed"]);
-    c.ok(&["setup", "claude-code", "--yes"]);
     c.ok(&["save", "a stop"]);
 
     git_at(&c.0.join("webapi"), &["checkout", "-qb", "perf/sp"]);

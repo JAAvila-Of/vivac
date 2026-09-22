@@ -9,17 +9,15 @@
 //! which is `claude_code::skill_text()` itself rather than a second copy of
 //! it.
 //!
-//! Tranche 2's piece A (`t592`, `d710`) is here: the fourth piece these
-//! three were always missing is the tree itself, planted the same way
-//! `claude_code.rs` plants one, through the module both harnesses share
-//! (`src/setup/tree.rs`, `r515`). `--name`, `--lane-name` and `--new-tree`
-//! are the tree's own flags, so they stop being refused here and behave
-//! exactly as they do for `claude-code`. `--join` joined `claude-code`
-//! alone until piece G of this same tranche (`f714`) gave it the door
-//! this file now shares: `tree::plan_join` and the `Harness` it prints
-//! commands under.
+//! Tranche 2's piece A (`t592`, `d710`) briefly gave this file a fourth
+//! piece, the tree itself, through the module both harnesses shared
+//! (`src/setup/tree.rs`, `r515`). `d723` piece B took it away again: plant,
+//! join and `--name` are `init`'s alone now, so this file goes back to
+//! exactly the three pieces Codex itself reads, once `super::resolve_for_setup`
+//! has already said this folder is either the tree's own or one of its
+//! declared lanes.
 //!
-//! Tranche 2's piece B (`t592` §4) is here too: each of the three files now
+//! Tranche 2's piece B (`t592` §4) is still here: each of the three files
 //! merges with whatever is already there, the same three outcomes
 //! `claude_code.rs` already gives its own files -- create it, add to what
 //! is there, or leave it alone because it already has what this run would
@@ -28,9 +26,9 @@
 //! Tranche 2's piece C (`t592` §5) is `--undo`: it takes off exactly what
 //! this harness wrote and leaves everything else, the same promise
 //! `claude_code::undo` already keeps for its own three files (`r515`, not
-//! reinvented here). `.vivac/lane`'s own piece of that promise -- whether
-//! this folder's lane has written and can go -- is `tree::undo_lane`, the
-//! one part of `claude_code::undo` that moved out rather than being copied.
+//! reinvented here). `d723` piece B: neither `--undo` here nor
+//! `claude_code`'s reaches into `.vivac/lane` any more -- the lane is not
+//! `setup`'s to touch, undoing included.
 //!
 //! Two things Codex needs that this run cannot do for it, because both live
 //! outside the project (`d655`): the project has to be marked trusted in
@@ -270,18 +268,15 @@ fn paths(root: &Path) -> Paths {
     }
 }
 
-pub fn run(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
-    // `--undo` is checked here, before `refuse_home_or_global_store`, the
-    // same order `claude_code::run` already keeps and for the same reason:
-    // undoing whatever an earlier setup wrote is always safe, home folder
-    // or global store included (`t592` tranche 2, piece C).
+pub fn run(cwd: &Path, a: &Args) -> Result<i32, Failure> {
     if a.has("undo") {
-        return undo(roots, a);
+        return undo(cwd, a);
     }
-    if let Some(refusal) = super::refuse_home_or_global_store(roots) {
+    let roots = super::resolve_for_setup(cwd)?;
+    if let Some(refusal) = super::refuse_home_or_global_store(&roots) {
         return Err(refusal);
     }
-    apply(roots, a)
+    apply(&roots, a)
 }
 
 /// Named after `t565` §7.8's own two-column plan, reused rather than
@@ -289,12 +284,10 @@ pub fn run(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
 /// `claude_code.rs`'s, and so is the paragraph beneath it -- true of
 /// these hooks and this server too, and it names neither harness.
 ///
-/// The tree's own fourth piece (`t592` tranche 2, `d710`) is rendered
-/// here too, and **around** this harness's three rather than after them,
-/// the way `claude_code.rs` has always placed it: what the ground is
-/// before what gets written onto it, and what the run records about that
-/// ground last. Appending it instead would read as an afterthought, which
-/// is what it was until `f705`.
+/// `d723` piece B took the tree's own fourth piece back out of this plan:
+/// `resolve_for_setup` has already confirmed this folder is either the
+/// tree's own or one of its declared lanes by the time this renders, so
+/// there is nothing about the tree left for it to say.
 ///
 /// `config_state`, the two hook states and `skill_file_state` decide which
 /// of the three outcomes each piece shows (`t592` tranche 2, piece B): the
@@ -310,11 +303,9 @@ fn render_plan(
     start_missing: bool,
     stop_missing: bool,
     skill_file_state: &SkillState,
-    plan: &tree::TreePlan,
 ) -> String {
     use super::claude_code::{piece_line, sub_line};
     let mut s = format!("  vivac setup codex, in {}\n\n", here.display());
-    s.push_str(&tree::opening_lines(plan));
 
     let config_status = match config_state {
         ConfigState::Create => "create: the \"vivac\" server",
@@ -360,7 +351,6 @@ fn render_plan(
         SkillState::Conflict => unreachable!("a skill conflict never reaches the plan"),
     }
 
-    s.push_str(&tree::closing_lines(plan));
     s
 }
 
@@ -376,53 +366,17 @@ fn skill_conflict() -> String {
     )
 }
 
+/// `d723` piece B: no plan of the tree side joins this one any more --
+/// `run` has already confirmed, through `super::resolve_for_setup`, that
+/// this folder is either the tree's own or one of its declared lanes, so
+/// there is nothing left here to plant, declare or lock. `t592` tranche 2,
+/// piece B: each of the three files can now already be there, so this
+/// reads its state first, the same shape `claude_code::apply` already
+/// reads `settings.json`, `.mcp.json` and the skill in, rather than the
+/// outright refusal tranche 1 gave any of the three already existing.
 fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     let here = &roots.here;
     let target = paths(here);
-
-    // The tree side: the fourth piece these three files were always
-    // missing, and every refusal that belongs to the tree rather than to
-    // this harness -- a tree below, a tree above, a product already
-    // registered elsewhere, and the second-map hint (`t592` tranche 2,
-    // `d710`). `--join` reaches `tree::plan_join` now, the same door
-    // `claude_code.rs` already had (piece G, `f714`): read here, before
-    // deciding which refusal a tree below wins, the same shape
-    // `claude_code::run` already checks this in.
-    let below = tree::trees_below(here);
-    let join_spec = a.opt("join");
-    if !below.is_empty() {
-        return Err(match join_spec {
-            Some(spec) => super::claude_code::tree_below_join_refusal(here, &below, spec),
-            None => tree::tree_below_refusal(&below),
-        });
-    }
-    if let Some(spec) = join_spec {
-        return match tree::plan_join(roots, spec, a.opt("lane-name"), super::Harness::Codex)? {
-            Some((join_roots, plan)) => apply_writes(&join_roots, a, plan, &target),
-            None => Ok(0),
-        };
-    }
-    let plan = tree::plan(roots, a, super::Harness::Codex)?;
-    apply_writes(roots, a, plan, &target)
-}
-
-/// The plant path's own writes, shared with `--join` (piece G, `f714`,
-/// mirroring `claude_code::apply_writes`): everything past deciding which
-/// plan and which roots this run works from -- reading the three files'
-/// own state, rendering the plan, asking, and writing all or nothing.
-///
-/// `t592` tranche 2, piece B: each of the three files can now already be
-/// there, so this reads its state first, the same shape
-/// `claude_code::apply_writes` already reads `settings.json`, `.mcp.json`
-/// and the skill in, rather than the outright refusal tranche 1 gave any
-/// of the three already existing.
-fn apply_writes(
-    roots: &super::Roots,
-    a: &Args,
-    plan: tree::TreePlan,
-    target: &Paths,
-) -> Result<i32, Failure> {
-    let here = &roots.here;
     let config_raw = std::fs::read_to_string(&target.config).ok();
     let hooks = read_json(&target.hooks);
     let skill_raw = std::fs::read_to_string(&target.skill).ok();
@@ -474,14 +428,8 @@ fn apply_writes(
     let config_needs_write = !matches!(config_state, ConfigState::Already);
     let hooks_needs_write = start_missing || stop_missing;
 
-    let nothing_to_write = !plan.vivac_missing
-        && !plan.gitignore_missing
-        && !config_needs_write
-        && !hooks_needs_write
-        && !skill_missing_or_replaceable
-        && plan.lane.unchanged
-        && !plan.lane.needs_lock
-        && plan.lane.stale_worktrees.is_empty();
+    let nothing_to_write =
+        !config_needs_write && !hooks_needs_write && !skill_missing_or_replaceable;
 
     let full_plan = format!(
         "{}\n",
@@ -494,7 +442,6 @@ fn apply_writes(
             start_missing,
             stop_missing,
             &skill_file_state,
-            &plan,
         )
     );
 
@@ -503,27 +450,17 @@ fn apply_writes(
             "{full_plan}{}\n  Nothing written: --dry-run.",
             super::claude_code::TRAILING_PARAGRAPH
         );
-        if plan.log_tracked {
-            print!("{}", super::claude_code::tracked_git_warning());
-        }
-        if let Some(w) = &plan.above_warning {
-            print!("{w}");
-        }
         return Ok(0);
     }
 
     if nothing_to_write {
         // A real run, never `--dry-run`, thanks to the check above: noting
         // the registry is bookkeeping every ordinary command already does
-        // on a pure read, not a write this promise is about.
+        // on a pure read, not a write this promise is about (`d723` piece
+        // B: `setup` never writes to the tree itself any more, so this is
+        // all `note_registry` is left doing).
         tree::note_registry(roots);
         outln!("{full_plan}  Nothing to write: this project is already set up.");
-        if plan.log_tracked {
-            print!("{}", super::claude_code::tracked_git_warning());
-        }
-        if let Some(w) = &plan.above_warning {
-            print!("{w}");
-        }
         return Ok(0);
     }
 
@@ -606,23 +543,13 @@ fn apply_writes(
         ));
     }
 
-    // The tree's own `.gitignore`, last: a plain file write, so it shares
-    // this same all-or-nothing commit rather than a second one of its own
-    // (`t565` §7.3, `t592` tranche 2).
-    writes.extend(tree::file_writes(roots, &plan));
     super::commit(&writes)?;
 
-    tree::commit(roots, &plan, &writes)?;
+    // Bookkeeping, not a write this promise is about (`note_registry`'s
+    // own doc): `d723` piece B, the tree itself is untouched.
     tree::note_registry(roots);
-    tree::note_name(&plan);
 
     print!("\n{}", written_text(here));
-    if plan.log_tracked {
-        print!("{}", super::claude_code::tracked_git_warning());
-    }
-    if let Some(w) = &plan.above_warning {
-        print!("{w}");
-    }
     Ok(0)
 }
 
@@ -634,15 +561,19 @@ fn apply_writes(
 // vocabulary, same all-or-nothing through the same `super::commit`.
 // ---------------------------------------------------------------------------
 
-fn undo(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
+/// `d723` piece B: `--undo` takes off only the three pieces this harness
+/// itself wrote. Neither the lane nor the tree is `setup`'s to touch, so
+/// this reads and writes `here` alone -- no `Roots`, no
+/// `resolve_for_setup`, and none of the tree's own refusals: undoing
+/// whatever an earlier setup wrote is always safe, regardless of what the
+/// tree above `here` is doing.
+fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
     use super::claude_code::{piece_line, sub_line};
 
-    let here = &roots.here;
     let target = paths(here);
     let config_raw = std::fs::read_to_string(&target.config).ok();
     let hooks = read_json(&target.hooks);
     let skill_raw = std::fs::read_to_string(&target.skill).ok();
-    let undo_lane = tree::undo_lane(roots)?;
 
     let mut conflicts: Vec<String> = Vec::new();
     if let Some((line, col)) = hooks.parse_error {
@@ -669,8 +600,7 @@ fn undo(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     let stop_ours = matches!(stop_hook_state, HookState::Exact);
     let skill_ours = skill_raw.as_deref().is_some_and(skill_fingerprint_intact);
 
-    let nothing_to_undo =
-        !config_ours && !start_ours && !stop_ours && !skill_ours && !undo_lane.removable;
+    let nothing_to_undo = !config_ours && !start_ours && !stop_ours && !skill_ours;
     if nothing_to_undo {
         outln!("  Nothing to undo: none of what setup writes is here.");
         return Ok(0);
@@ -759,8 +689,6 @@ fn undo(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         },
     ));
 
-    s.push_str(&tree::vivac_dir_lines(&undo_lane));
-    s.push_str(&tree::undo_lane_lines(&undo_lane));
     s.push('\n');
 
     if a.has("dry-run") {
@@ -839,22 +767,6 @@ fn undo(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         ));
     }
 
-    if undo_lane.removable {
-        writes.push(super::PlannedWrite::delete(
-            undo_lane.path.clone(),
-            undo_lane.raw.clone().unwrap_or_default(),
-        ));
-    }
-    // `f719`, point B: the `.gitignore` this tool wrote alongside the
-    // lane, gone the same commit -- absent when there never was one, the
-    // same as `undo_lane.raw` above.
-    if undo_lane.vivac_dir_removable {
-        let gitignore = undo_lane.vivac_dir.join(crate::store::GITIGNORE);
-        if let Ok(original) = std::fs::read(&gitignore) {
-            writes.push(super::PlannedWrite::delete(gitignore, original));
-        }
-    }
-
     super::commit(&writes)?;
 
     // Best-effort, and only once the commit above is known to have
@@ -877,12 +789,6 @@ fn undo(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     // every `remove_if_empty` above: it costs nothing when the folder is
     // not actually empty, or is already gone.
     super::claude_code::remove_if_empty(target.config.parent());
-    // `f719`, point B: `.vivac/` itself, once the lane and its
-    // `.gitignore` are both gone -- a join's own folder, holding nothing
-    // else, has no reason left to carry one.
-    if undo_lane.vivac_dir_removable {
-        super::claude_code::remove_if_empty(Some(&undo_lane.vivac_dir));
-    }
 
     outln!("  Undone. The tree in .vivac/ is untouched.");
     Ok(0)

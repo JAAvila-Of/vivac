@@ -226,7 +226,7 @@ fn the_iquorum_scenario_moves_joins_and_shares_one_tree_across_five_roots() {
     let c1 = p.join("c1");
     std::fs::create_dir_all(&c1).unwrap();
     seed_repos(&c1, &templates);
-    ok(&c1, &home, &["setup", "claude-code", "--yes"]);
+    ok(&c1, &home, &["init", "--yes"]);
     assert!(
         c1.join(".vivac").join("lane").is_file(),
         "C1 never became a lane of the tree above it"
@@ -257,19 +257,13 @@ fn the_iquorum_scenario_moves_joins_and_shares_one_tree_across_five_roots() {
     let c3 = TempDir::new("c3");
     std::fs::create_dir_all(&c3).unwrap();
     seed_repos(&c3, &templates);
-    let (refusal3, code3) = run(&c3, &home, &["setup", "claude-code", "--yes"]);
+    let (refusal3, code3) = run(&c3, &home, &["init", "--yes"]);
     assert_eq!(code3, 1, "{refusal3}");
     assert!(refusal3.contains("--join"), "{refusal3}");
     ok(
         &c3,
         &home,
-        &[
-            "setup",
-            "claude-code",
-            "--yes",
-            "--join",
-            p.to_str().unwrap(),
-        ],
+        &["init", "--yes", "--join", p.to_str().unwrap()],
     );
     assert!(c3.join(".vivac").join("lane").is_file());
 
@@ -277,19 +271,13 @@ fn the_iquorum_scenario_moves_joins_and_shares_one_tree_across_five_roots() {
     std::fs::create_dir_all(&c4).unwrap();
     seed_repos(&c4, &templates);
     clone_into(&extra_template, &c4.join("repo4"));
-    let (refusal4, code4) = run(&c4, &home, &["setup", "claude-code", "--yes"]);
+    let (refusal4, code4) = run(&c4, &home, &["init", "--yes"]);
     assert_eq!(code4, 1, "{refusal4}");
     assert!(refusal4.contains("--join"), "{refusal4}");
     ok(
         &c4,
         &home,
-        &[
-            "setup",
-            "claude-code",
-            "--yes",
-            "--join",
-            p.to_str().unwrap(),
-        ],
+        &["init", "--yes", "--join", p.to_str().unwrap()],
     );
     assert!(c4.join(".vivac").join("lane").is_file());
 
@@ -530,8 +518,7 @@ fn brief_marks_here_on_every_lanes_own_front_not_only_this_ones() {
         &b,
         &home,
         &[
-            "setup",
-            "claude-code",
+            "init",
             "--yes",
             "--join",
             p.to_str().unwrap(),
@@ -603,8 +590,7 @@ fn brief_carries_an_other_lanes_block() {
         &b,
         &home,
         &[
-            "setup",
-            "claude-code",
+            "init",
             "--yes",
             "--join",
             p.to_str().unwrap(),
@@ -645,8 +631,7 @@ fn stack_lanes_lists_every_lanes_own_stack() {
         &b,
         &home,
         &[
-            "setup",
-            "claude-code",
+            "init",
             "--yes",
             "--join",
             p.to_str().unwrap(),

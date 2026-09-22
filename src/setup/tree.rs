@@ -1,33 +1,23 @@
-//! The tree's own side of `vivac setup`, shared by every harness.
+//! The tree's own side of planting: `init`'s alone since `d723` piece B.
 //!
-//! `t592` tranche 2, `d710`: `claude_code.rs` used to be the only place this
-//! lived, which is exactly the shape `r515` forbids -- planting cannot end
-//! up with two homes somebody has to keep in step. Both harnesses call the
-//! same functions: [`plan`] gathers the tree's own refusals and works out
-//! what a run would do to it, [`opening_lines`] and [`closing_lines`]
-//! render that as the same lines `claude_code.rs` has always shown for the
-//! tree, and [`commit`] does the writing -- planting, the lane, and the
-//! version lock -- with the same all-or-nothing this module has always
-//! given it. The tree's own `.gitignore` is a plain file write, so it
-//! travels in the caller's own batch through [`file_writes`] instead.
+//! `t592` tranche 2, `d710`, built this shared by both harnesses; `d723`
+//! piece B took planting, joining and `--name` away from `setup` entirely,
+//! so `init.rs` is the only caller left for [`plan`], [`plan_join`],
+//! [`opening_lines`], [`closing_lines`], [`file_writes`] and [`commit`].
+//! Nothing here proposes a harness's own command any more, `f717`
+//! dissolved: every message this module raises names `vivac init`, which
+//! reads the same wherever an agent is opened.
 //!
-//! `--join`'s own preamble moved in too, piece G of `t592` tranche 2
-//! (`f714`): [`plan_join`] is every refusal `--join` owns and the plan it
-//! ends in, once `codex.rs` needed the same door `claude_code.rs` already
-//! had. `tree_above_refusal`, one of the refusals only reachable through
-//! it, moved with it. `tree_below_join_refusal` stayed in
-//! `claude_code.rs`, the one piece of that preamble `codex.rs` now calls
-//! rather than owning a copy of.
+//! [`undo_lane`], [`undo_lane_lines`] and [`vivac_dir_lines`] moved in for
+//! `--undo`, piece C of the same tranche (`r515`), when both harnesses'
+//! own `--undo` still took a joined folder's lane back with them. `d723`
+//! piece B ended that too: `init --undo` is their only caller now, the
+//! lane and the tree having never been `setup`'s to undo.
 //!
-//! `--undo`'s own piece of the tree moved in too, piece C of the same
-//! tranche (`r515`): [`undo_lane`] and [`undo_lane_lines`] are whether this
-//! folder's own `.vivac/lane` can go and what the plan says about it
-//! either way, out of `claude_code::undo`, the only place that lived until
-//! `codex::undo` needed the same answer. The tree itself stays out of
-//! `--undo` entirely, for a tree -- but a joined folder's `.vivac/` is not
-//! one: it was this same union that wrote it, and taking the lane away
-//! leaves it with no reason to exist. [`vivac_dir_lines`] is the plan's own
-//! word on that folder's `.vivac/` either way (`f719`).
+//! What stays behind in `claude_code.rs`, `pub(super)` for `init.rs` to
+//! call: `tree_below_join_refusal`, one refusal `--join`'s own preamble
+//! still raises, and `piece_line`/`sub_line`, the two-column rendering
+//! [`opening_lines`] and [`closing_lines`] still draw through.
 
 use crate::args::Args;
 use crate::failure::Failure;
@@ -225,7 +215,7 @@ pub(super) fn tree_below_refusal(paths: &[PathBuf]) -> Failure {
             "  There is already a tree inside this folder, in {label}.\n  \
              Planting another one here would split this project: sessions opened in\n  \
              {label} would use that one, and the rest this one.\n\n  \
-             Move that tree up here, then run setup again. From inside {label}:\n      \
+             Move that tree up here, then run init again. From inside {label}:\n      \
              vivac relocate .."
         ));
     }
@@ -253,11 +243,7 @@ pub(super) fn tree_below_refusal(paths: &[PathBuf]) -> Failure {
 /// forks that share a root commit) -- and skipped when there is a tree
 /// above `here` at all, since with one this is an ordinary join and the
 /// product question does not arise.
-fn refuse_second_map(
-    roots: &super::Roots,
-    bypass_registered: bool,
-    h: super::Harness,
-) -> Result<(), Failure> {
+fn refuse_second_map(roots: &super::Roots, bypass_registered: bool) -> Result<(), Failure> {
     if roots.located.is_some() {
         return Ok(());
     }
@@ -276,7 +262,7 @@ fn refuse_second_map(
         .into_iter()
         .find(|s| !crate::anchor::same_folder(&s.root, &roots.here));
     match best {
-        Some(sharing) => Err(product_registered_refusal(&sharing, &here_repos, h)),
+        Some(sharing) => Err(product_registered_refusal(&sharing, &here_repos)),
         None => Ok(()),
     }
 }
@@ -295,7 +281,6 @@ fn refuse_second_map(
 fn product_registered_refusal(
     sharing: &crate::registry::Sharing,
     here_repos: &[crate::event::Repo],
-    h: super::Harness,
 ) -> Failure {
     let mut repo_names: Vec<&str> = here_repos
         .iter()
@@ -316,21 +301,20 @@ fn product_registered_refusal(
         .map(|p| if *p == "." { "this folder itself" } else { p })
         .collect::<Vec<_>>()
         .join(", ");
-    // `f714`: names the harness this run was invoked as, not always
-    // `claude-code` -- a person who typed `codex` gets a command back that
-    // Codex actually takes.
-    let word = h.word();
+    // `d723` piece B: proposes `vivac init`, which names no arnés, rather
+    // than `vivac setup <harness>` (`f717` dissolved) -- planting is
+    // `init`'s question wherever this refusal is reached from.
     match &sharing.name {
         Some(name) => Failure::Model(format!(
             "  Some repositories here are already tracked by project \"{name}\":\n      \
              {repo_list}\n  \
              Planting another tree would give this product two maps.\n\n  \
              To work on {name} from this folder:\n      \
-             vivac setup {word} --join {}\n  \
+             vivac init --join {}\n  \
              If the tree should live here instead, run this in the folder that holds it:\n      \
              vivac relocate <path to this folder>\n  \
              To plant a separate tree anyway:\n      \
-             vivac setup {word} --new-tree",
+             vivac init --new-tree",
             crate::registry::quote_if_needed(name)
         )),
         None => Failure::Model(format!(
@@ -339,11 +323,11 @@ fn product_registered_refusal(
              {repo_list}\n  \
              Planting another tree would give this product two maps.\n\n  \
              To work on it from this folder, give the path to its folder:\n      \
-             vivac setup {word} --join <path to that folder>\n  \
+             vivac init --join <path to that folder>\n  \
              If the tree should live here instead, run this in the folder that holds it:\n      \
              vivac relocate <path to this folder>\n  \
              To plant a separate tree anyway:\n      \
-             vivac setup {word} --new-tree"
+             vivac init --new-tree"
         )),
     }
 }
@@ -736,7 +720,31 @@ fn ensure_first_event(tree: &Path) -> Result<String, Failure> {
 /// must never do is land *after* the event: that is the one ordering that
 /// leaves a folder signing as `main` while the tree already says
 /// otherwise, and nothing here permits it.
+/// `write_lane_inner`'s own errors, wrapped so a fresh lane's own file
+/// never survives a failure past it (`t565` §7.7, ported to the scope
+/// `init` has now, `d723` piece B): `write_lane_inner` writes this
+/// folder's own `.vivac/lane` before it ever reaches the target's own
+/// log, and the two used to have no shared fate -- a failure in the
+/// second left the first sitting on disk, claiming a lane the target's
+/// log never received.
 fn write_lane(roots: &super::Roots, plan: &LanePlan) -> Result<(), Failure> {
+    match write_lane_inner(roots, plan) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            if plan.is_new {
+                undo_fresh_lane_file(roots);
+            }
+            Err(e)
+        }
+    }
+}
+
+/// What this run actually does, in order, once `write_lane` above has a
+/// failure of its own to clean up around: this folder's own
+/// `.vivac/lane` on disk first -- only for a brand new lane, and with no
+/// lock held over it at all -- and only then `declare_lane`, which takes
+/// the write lock, locks the config and emits `lane.declared` together.
+fn write_lane_inner(roots: &super::Roots, plan: &LanePlan) -> Result<(), Failure> {
     if plan.is_new {
         let project = ensure_first_event(&roots.tree)?;
         let lane = crate::lane::Lane {
@@ -765,6 +773,29 @@ fn write_lane(roots: &super::Roots, plan: &LanePlan) -> Result<(), Failure> {
     ctx.lock_for_write()?;
     crate::ops::declare_lane(&mut ctx, plan.name.clone(), plan.repos.clone())?;
     redeclare_stale_worktrees(&mut ctx, plan)
+}
+
+/// Takes back what `write_lane_inner` had already written in `roots.here`
+/// before the run failed: the lane file `crate::lane::write` puts there
+/// for a brand new lane, and the `.gitignore` beside it once the file is
+/// the only other thing left in `.vivac/` -- the exact same shape
+/// `--undo`'s own `f719` cleanup already reasons about, reused here
+/// rather than a second copy of the same check.
+///
+/// Best-effort, like `--undo`'s own `remove_if_empty`: the run is already
+/// failing, and a second failure here has nothing left to report that the
+/// first one has not already said. Safe even when `write_lane_inner`
+/// never got past `crate::lane::write` in the first place -- there is
+/// nothing on disk yet, and removing a file that is not there is not an
+/// error this ignores, it is the ordinary case.
+fn undo_fresh_lane_file(roots: &super::Roots) {
+    let vivac_dir = roots.here.join(crate::store::DIR);
+    let dir_holds_only_the_lane = vivac_dir_holds_only_the_lane(&vivac_dir);
+    let _ = std::fs::remove_file(vivac_dir.join(crate::lane::FILE));
+    if dir_holds_only_the_lane {
+        let _ = std::fs::remove_file(vivac_dir.join(crate::store::GITIGNORE));
+        let _ = std::fs::remove_dir(&vivac_dir);
+    }
 }
 
 /// Just `plan`'s stale-worktree redeclarations (`f609`), for a run whose
@@ -996,7 +1027,7 @@ pub(super) fn lane_carried_by<'a>(l: &'a crate::store::Located, here: &Path) -> 
 /// a run without the flag reads no log at all.
 pub(super) fn say_nothing_was_done(target: &Path, lane_id: &str, lane_name: Option<&str>) {
     crate::output::outln!(
-        "  This folder is already a lane of that tree, and setup changed nothing in it."
+        "  This folder is already a lane of that tree, and init changed nothing in it."
     );
     let Some(requested) = lane_name else {
         return;
@@ -1114,16 +1145,16 @@ fn build_plan(roots: &super::Roots, lane: LanePlan, requested: Option<String>) -
 /// knows, unless `--new-tree` bypasses that too (`refuse_second_map`);
 /// and only then the lane this folder itself would become
 /// (`plan_lane`). A tree already sitting below `here` is a caller's own
-/// guard, checked before this is ever called: `claude_code::run` needs to
-/// know about it earlier than this, to choose between a plant's own
-/// refusal and a join's.
-pub(super) fn plan(roots: &super::Roots, a: &Args, h: super::Harness) -> Result<TreePlan, Failure> {
-    refuse_second_map(roots, a.has("new-tree"), h)?;
+/// guard, checked before this is ever called: `init::run` (`d723` piece B,
+/// the one caller left) needs to know about it earlier than this, to
+/// choose between a plant's own refusal and a join's.
+pub(super) fn plan(roots: &super::Roots, a: &Args) -> Result<TreePlan, Failure> {
+    refuse_second_map(roots, a.has("new-tree"))?;
     let tree = &roots.tree;
     let requested = requested_name(a)?;
     if requested.is_some() && crate::store::already_planted(tree) && !a.has("new-tree") {
         return Err(Failure::usage(
-            "--name only names a product while setup plants one: this \
+            "--name only names a product while init plants one: this \
              folder's tree already exists, and already has a name of its \
              own.\n\n  Nothing written.",
         ));
@@ -1169,14 +1200,12 @@ pub(super) fn plan_join(
     roots: &super::Roots,
     spec: &str,
     lane_name: Option<&str>,
-    h: super::Harness,
 ) -> Result<Option<(super::Roots, TreePlan)>, Failure> {
     let target = crate::registry::resolve(spec)?;
     if !crate::store::already_planted(&target) {
         return Err(Failure::Model(format!(
             "  \"{spec}\" has no tree yet, so there is nothing to join.\n  \
-             Plant one there first:  vivac setup {}",
-            h.word()
+             Plant one there first:  vivac init"
         )));
     }
     // §4.5: refuses when this folder already is a lane of *another* tree --
@@ -1364,7 +1393,8 @@ pub(super) fn closing_lines(plan: &TreePlan) -> String {
 
 /// The exit-5 text for a lane declaration or a config relock that failed,
 /// after `unrestored` -- what `super::rollback` could not put back among
-/// the settings/mcp/skill/gitignore pieces -- is already known.
+/// the tree's own `.gitignore` -- is already known, and after `write_lane`'s
+/// own best-effort cleanup of a fresh join's lane file has already run.
 ///
 /// Unlike `failure_with_rollback`, this never says every file came back:
 /// by the time either call above can fail, a real event may already sit
@@ -1375,21 +1405,26 @@ pub(super) fn closing_lines(plan: &TreePlan) -> String {
 /// informational value before it can fail, and a lane's own event does,
 /// so this says the log stays instead of claiming a rollback it did not
 /// do and cannot do.
+///
+/// `d723` piece B: `init` is the only caller left, and there is no
+/// settings file, server entry or skill for this run to have touched --
+/// `write_lane` above already took its own lane file and `.gitignore`
+/// back out before this is ever built.
 fn lane_failure_with_rollback(clause: String, unrestored: &[PathBuf]) -> Failure {
     let mut message = clause;
     if unrestored.is_empty() {
         message.push_str(
-            ", so setup put the settings, the server entry and the skill back\n  \
-             as they were. Whatever this already wrote to the tree's own log stays\n  \
+            ", so init put back everything it had already written here and in\n  \
+             the tree. Whatever this already wrote to the tree's own log stays\n  \
              either way: the log only ever grows.",
         );
     } else {
-        message.push_str(", and setup could not put these back as they were:\n");
+        message.push_str(", and init could not put these back as they were:\n");
         for p in unrestored {
             message.push_str(&format!("      {}\n", p.display()));
         }
         message.push_str(
-            "  setup keeps no copy on disk, so the only other copy is whatever\n  \
+            "  init keeps no copy on disk, so the only other copy is whatever\n  \
              version control holds. Whatever this already wrote to the tree's own\n  \
              log stays either way: the log only ever grows.",
         );
@@ -1686,16 +1721,17 @@ mod tests {
     /// `lane_failure_with_rollback` must never claim every file came back:
     /// by the time a lane declaration fails, a real event can already sit
     /// in the tree's own log, which `rollback` never touches. With
-    /// nothing left `rollback` could not restore, this still says the
-    /// harness's own files came back **and** that the log stays either
-    /// way -- both halves, not one instead of the other.
+    /// nothing left `rollback` could not restore, this still says
+    /// whatever `init` itself had already written came back **and** that
+    /// the log stays either way -- both halves, not one instead of the
+    /// other.
     #[test]
     fn lane_failure_with_rollback_with_nothing_unrestored_still_says_the_log_stays() {
         let msg =
             lane_failure_with_rollback("the lane could not be declared (boom)".to_string(), &[])
                 .message();
         assert!(
-            msg.contains("so setup put the settings, the server entry and the skill back"),
+            msg.contains("so init put back everything it had already written"),
             "{msg}"
         );
         assert!(msg.contains("the log only ever grows"), "{msg}");
@@ -1708,14 +1744,14 @@ mod tests {
     #[test]
     fn lane_failure_with_rollback_with_something_unrestored_names_it_and_still_says_the_log_stays()
     {
-        let unrestored = vec![PathBuf::from("/tmp/.mcp.json")];
+        let unrestored = vec![PathBuf::from("/tmp/.vivac/.gitignore")];
         let msg = lane_failure_with_rollback(
             "the lane could not be declared (boom)".to_string(),
             &unrestored,
         )
         .message();
-        assert!(msg.contains("/tmp/.mcp.json"), "{msg}");
-        assert!(msg.contains("setup keeps no copy on disk"), "{msg}");
+        assert!(msg.contains("/tmp/.vivac/.gitignore"), "{msg}");
+        assert!(msg.contains("init keeps no copy on disk"), "{msg}");
         assert!(msg.contains("the log only ever grows"), "{msg}");
     }
 }

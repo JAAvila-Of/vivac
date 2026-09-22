@@ -130,19 +130,21 @@ const USAGE: &str = r#"vivac - provenance of work
 
   Getting started
 
-    vivac setup claude-code [--dry-run] [--yes] [--undo] [--lane-name <name>]
-                                              write what Claude Code needs here:
-                                              hooks, the MCP server, a skill
+    vivac init [--dry-run] [--yes] [--undo] [--lane-name <name>]
+                                              plant .vivac/ here, or answer
+                                              which tree this folder belongs to
           [--name <name>]    the product's name, instead of the folder's;
-                             only when setup plants a tree
-    vivac setup claude-code --join <name|path> [--lane-name <name>]
+                             only when init plants a tree
+    vivac init --join <name|path> [--lane-name <name>]
                                               join this folder to a tree that
                                               lives somewhere else
-    vivac setup claude-code --new-tree        plant here even if this
+    vivac init --new-tree                     plant here even if this
                                               folder's repositories already
                                               belong to a tracked product
-    vivac setup codex [--dry-run] [--yes] [--undo] [--lane-name <name>]
-          [--name <name>] [--join <name|path>] [--new-tree]
+    vivac setup claude-code [--dry-run] [--yes] [--undo]
+                                              write what Claude Code needs here:
+                                              hooks, the MCP server, a skill
+    vivac setup codex [--dry-run] [--yes] [--undo]
                                               write what Codex needs here:
                                               hooks, the MCP server, a skill.
                                               Every flag above means the same
@@ -151,7 +153,6 @@ const USAGE: &str = r#"vivac - provenance of work
                                               folder that holds it; this one
                                               stays a lane of it, with its own
                                               thread
-    vivac init                                plant .vivac/ here
     vivac import <tree.json>                  bring in a tree from the spike
 
   Exit codes
@@ -848,6 +849,7 @@ mod tests {
             Failure::usage("unknown command: bogus"),
             Failure::Redaction(Box::new(finding)),
             Failure::NoStore,
+            Failure::SetupNoTree,
             Failure::Io(std::io::Error::other("disk full")),
             Failure::newer_vivac("this log holds an event this version does not know"),
             Failure::busy(std::time::Duration::from_secs(5)),
@@ -861,6 +863,7 @@ mod tests {
                 Failure::Usage(_) => f.code(),
                 Failure::Redaction(_) => f.code(),
                 Failure::NoStore => f.code(),
+                Failure::SetupNoTree => f.code(),
                 Failure::Io(_) => f.code(),
                 Failure::NewerVivac(_) => f.code(),
                 Failure::Busy(_) => f.code(),

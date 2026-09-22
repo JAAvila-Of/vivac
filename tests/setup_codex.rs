@@ -86,6 +86,9 @@ fn printed(p: &std::path::Path) -> std::path::PathBuf {
 #[test]
 fn dry_run_writes_nothing_and_shows_the_three_paths() {
     let c = Sandbox::new_empty("setup-codex-dry-run");
+    // `d723` piece B: `setup` never plants, so a tree has to be here
+    // already, or this run refuses before it ever gets to a plan.
+    c.ok(&["init", "--yes"]);
     let before: Vec<_> = std::fs::read_dir(&c.0).unwrap().collect();
     let (out, code) = c.run(&["setup", "codex", "--dry-run"]);
     assert_eq!(code, 0, "{out}");
@@ -107,6 +110,7 @@ fn dry_run_writes_nothing_and_shows_the_three_paths() {
 #[test]
 fn a_clean_project_gets_the_three_files_with_the_exact_content() {
     let c = Sandbox::new_empty("setup-codex-fresh");
+    c.ok(&["init", "--yes"]);
     let (out, code) = c.run(&["setup", "codex", "--yes"]);
     assert_eq!(code, 0, "{out}");
     assert!(out.contains("Written."), "{out}");
@@ -130,6 +134,7 @@ fn a_clean_project_gets_the_three_files_with_the_exact_content() {
 #[test]
 fn the_skill_is_byte_for_byte_the_one_claude_code_writes() {
     let c = Sandbox::new_empty("setup-codex-skill");
+    c.ok(&["init", "--yes"]);
     c.ok(&["setup", "codex", "--yes"]);
     c.ok(&["setup", "claude-code", "--yes"]);
 
@@ -154,6 +159,7 @@ fn the_skill_is_byte_for_byte_the_one_claude_code_writes() {
 #[test]
 fn the_summary_names_the_two_doors_with_the_real_project_path() {
     let c = Sandbox::new_empty("setup-codex-doors");
+    c.ok(&["init", "--yes"]);
     let (out, code) = c.run(&["setup", "codex", "--yes"]);
     assert_eq!(code, 0, "{out}");
     let path = printed(&c.0);
@@ -177,6 +183,7 @@ fn the_summary_names_the_two_doors_with_the_real_project_path() {
 #[test]
 fn none_of_the_three_files_carries_an_absolute_path() {
     let c = Sandbox::new_empty("setup-codex-no-path");
+    c.ok(&["init", "--yes"]);
     c.ok(&["setup", "codex", "--yes"]);
     let needle = c.0.to_string_lossy().into_owned();
     for (label, text) in [
@@ -203,6 +210,7 @@ fn none_of_the_three_files_carries_an_absolute_path() {
 #[test]
 fn a_foreign_config_toml_keeps_its_content_and_gains_our_block_after_it() {
     let c = Sandbox::new_empty("setup-codex-config-foreign");
+    c.ok(&["init", "--yes"]);
     std::fs::create_dir_all(c.0.join(".codex")).unwrap();
     std::fs::write(config_path(&c), "# hand-written\nsomething = 1\n").unwrap();
 
@@ -221,6 +229,7 @@ fn a_foreign_config_toml_keeps_its_content_and_gains_our_block_after_it() {
 #[test]
 fn a_config_toml_with_our_block_already_there_is_left_untouched() {
     let c = Sandbox::new_empty("setup-codex-config-already");
+    c.ok(&["init", "--yes"]);
     std::fs::create_dir_all(c.0.join(".codex")).unwrap();
     std::fs::write(config_path(&c), EXPECTED_CONFIG).unwrap();
 
@@ -236,6 +245,7 @@ fn a_config_toml_with_our_block_already_there_is_left_untouched() {
 #[test]
 fn a_config_toml_with_an_opening_marker_and_no_closing_one_is_rejected() {
     let c = Sandbox::new_empty("setup-codex-config-half-marker");
+    c.ok(&["init", "--yes"]);
     std::fs::create_dir_all(c.0.join(".codex")).unwrap();
     std::fs::write(
         config_path(&c),
@@ -256,6 +266,7 @@ fn a_config_toml_with_an_opening_marker_and_no_closing_one_is_rejected() {
 #[test]
 fn a_foreign_hooks_json_keeps_its_other_event_and_gains_ours() {
     let c = Sandbox::new_empty("setup-codex-hooks-foreign");
+    c.ok(&["init", "--yes"]);
     std::fs::create_dir_all(c.0.join(".codex")).unwrap();
     let foreign = serde_json::json!({
         "hooks": {
@@ -301,6 +312,7 @@ fn a_foreign_hooks_json_keeps_its_other_event_and_gains_ours() {
 #[test]
 fn broken_hooks_json_refuses_and_writes_nothing() {
     let c = Sandbox::new_empty("setup-codex-hooks-broken");
+    c.ok(&["init", "--yes"]);
     std::fs::create_dir_all(c.0.join(".codex")).unwrap();
     std::fs::write(hooks_path(&c), "{\n  \"hooks\": ,\n}").unwrap();
 
@@ -317,6 +329,7 @@ fn broken_hooks_json_refuses_and_writes_nothing() {
 #[test]
 fn a_hooks_json_with_a_root_description_keeps_it() {
     let c = Sandbox::new_empty("setup-codex-hooks-description");
+    c.ok(&["init", "--yes"]);
     std::fs::create_dir_all(c.0.join(".codex")).unwrap();
     let foreign = serde_json::json!({ "description": "our own hooks" });
     std::fs::write(
@@ -336,6 +349,7 @@ fn a_hooks_json_with_a_root_description_keeps_it() {
 #[test]
 fn a_hand_edited_skill_is_a_conflict_and_is_not_overwritten() {
     let c = Sandbox::new_empty("setup-codex-skill-conflict");
+    c.ok(&["init", "--yes"]);
     std::fs::create_dir_all(skill_path(&c).parent().unwrap()).unwrap();
     std::fs::write(skill_path(&c), "# Someone else's skill\n").unwrap();
 
@@ -352,6 +366,7 @@ fn a_hand_edited_skill_is_a_conflict_and_is_not_overwritten() {
 #[test]
 fn a_foreign_mcp_servers_vivac_table_is_rejected() {
     let c = Sandbox::new_empty("setup-codex-config-mcp-table");
+    c.ok(&["init", "--yes"]);
     std::fs::create_dir_all(c.0.join(".codex")).unwrap();
     std::fs::write(
         config_path(&c),
@@ -373,6 +388,7 @@ fn a_foreign_mcp_servers_vivac_table_is_rejected() {
 #[test]
 fn a_second_run_writes_nothing() {
     let c = Sandbox::new_empty("setup-codex-idempotent");
+    c.ok(&["init", "--yes"]);
     c.ok(&["setup", "codex", "--yes"]);
     let config_before = std::fs::read(config_path(&c)).unwrap();
     let hooks_before = std::fs::read(hooks_path(&c)).unwrap();
@@ -418,56 +434,67 @@ fn setup_with_an_unknown_harness_names_both_harnesses() {
 }
 
 // ---------------------------------------------------------------------------
-// 7. `t592` tranche 2 (`d710`): `--new-tree`, `--lane-name` and `--name` are
-//    the tree's own flags, not the harness's, so they behave exactly as
-//    they do for `claude-code` instead of being refused.
+// 7. `t592` tranche 2 (`d710`) gave `--new-tree`, `--lane-name` and `--name`
+//    to `setup codex` as the tree's own flags. `d723` piece B took them
+//    away again, to `init` alone: each one now carries a lapida naming
+//    `vivac init` instead of doing anything here. `tests/init.rs` already
+//    covers what each flag does; what is left to prove here is that
+//    `setup codex` sends whoever still types one to the command that
+//    reads it now, rather than a plain "unknown flag" or silently
+//    planting.
 // ---------------------------------------------------------------------------
 
-/// `t592` tranche 2 (`d710`): `--new-tree`, `--lane-name` and `--name` are
-/// the tree's own flags, not the harness's, so they stop being refused and
-/// behave exactly as they do for `claude-code`. `--join` joined this
-/// harness too in piece G of the same tranche (`f714`); `tests/setup_scenarios.rs`
-/// covers it.
 #[test]
-fn new_tree_is_accepted_and_plants_the_tree() {
+fn new_tree_is_a_tombstone_pointing_at_init() {
     let c = Sandbox::new_empty("setup-codex-flag-new-tree");
+    c.ok(&["init", "--yes"]);
     let (out, code) = c.run(&["setup", "codex", "--yes", "--new-tree"]);
-    assert_eq!(code, 0, "{out}");
-    assert!(c.0.join(".vivac").exists(), "the tree was not planted");
-}
-
-#[test]
-fn lane_name_names_the_lane_it_declares() {
-    let c = Sandbox::new_empty("setup-codex-flag-lane-name");
-    let (out, code) = c.run(&["setup", "codex", "--yes", "--lane-name", "custom-name"]);
-    assert_eq!(code, 0, "{out}");
+    assert_eq!(code, 2, "{out}");
     assert!(
-        read(&c.0.join(".vivac").join("events")).contains("\"name\":\"custom-name\""),
+        out.contains("--new-tree is vivac init's, not setup's"),
         "{out}"
     );
+    assert!(out.contains("vivac init --new-tree"), "{out}");
+    assert!(out.contains("vivac setup codex"), "{out}");
 }
 
-/// `t640`: `--name` is claude-code's own too, and now this harness's as
-/// well -- it saves the product's name the same way, rather than being
-/// refused or silently ignored.
 #[test]
-fn name_names_the_product_it_plants() {
+fn lane_name_is_a_tombstone_pointing_at_init() {
+    let c = Sandbox::new_empty("setup-codex-flag-lane-name");
+    c.ok(&["init", "--yes"]);
+    let (out, code) = c.run(&["setup", "codex", "--yes", "--lane-name", "custom-name"]);
+    assert_eq!(code, 2, "{out}");
+    assert!(
+        out.contains("--lane-name is vivac init's, not setup's"),
+        "{out}"
+    );
+    assert!(out.contains("vivac init --lane-name"), "{out}");
+}
+
+/// `t640`: `--name` used to be claude-code's own too, and codex's as well.
+/// `d723` piece B moved it to `init` with the rest of the tree side.
+#[test]
+fn name_is_a_tombstone_pointing_at_init() {
     let c = Sandbox::new_empty("setup-codex-flag-name");
+    c.ok(&["init", "--yes"]);
     let (out, code) = c.run(&["setup", "codex", "--yes", "--name", "IQuorum"]);
-    assert_eq!(code, 0, "{out}");
-    let registry = read(&c.global_home().join("projects"));
-    assert!(registry.contains("\"name\": \"IQuorum\""), "{registry}");
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("--name is vivac init's, not setup's"), "{out}");
+    assert!(out.contains("vivac init --name"), "{out}");
 }
 
 // ---------------------------------------------------------------------------
-// 8. `t592` tranche 2 (`d710`): the fourth piece -- planting the tree the
-//    same way `claude-code` does, from the module both harnesses share
-//    (`src/setup/tree.rs`).
+// 8. `t592` tranche 2 (`d710`) gave `setup` a fourth piece here: planting
+// the tree the same way `claude-code` did, from the module both harnesses
+// shared (`src/setup/tree.rs`). `d723` piece B took it away again --
+// planting is `init`'s alone now, and neither harness's own plan says
+// anything about the tree any more.
 // ---------------------------------------------------------------------------
 
 /// The tree's own lines of a plan, told apart from the harness's own --
 /// `.vivac/`, `.vivac/lane`, `.vivac/events`, and the `config` lock line,
-/// which is the fourth piece `t592` tranche 1 left out (`f705`).
+/// which was the fourth piece `t592` tranche 1 left out (`f705`), and is
+/// `init`'s alone since `d723` piece B.
 fn tree_lines(out: &str) -> Vec<&str> {
     out.lines()
         .filter(|l| {
@@ -477,73 +504,67 @@ fn tree_lines(out: &str) -> Vec<&str> {
         .collect()
 }
 
-/// `f705`: `setup codex --dry-run` used to show three lines where
-/// `claude-code` showed six, because it never touched the tree at all.
-/// Point 2 of `d710` §3: both plans now name the same tree, in the same
-/// words -- checked on the tree's own lines, not the whole output, since
-/// the two harnesses' own pieces are not the same and were never meant to
-/// be.
+/// `f705`'s own guard used to compare the two harnesses' tree lines for
+/// equality -- neither can be compared to the other that way any more,
+/// since `d723` piece B leaves both with none. What is left worth holding
+/// is the negative: `setup` touching the tree again, for either harness,
+/// is exactly the regression `f717`/`f721` were about.
 #[test]
-fn dry_run_shows_the_same_tree_lines_claude_code_does() {
+fn dry_run_shows_no_tree_lines_for_either_harness() {
     let c = Sandbox::new_empty("setup-codex-tree-lines");
+    c.ok(&["init", "--yes"]);
     let (claude_out, claude_code) = c.run(&["setup", "claude-code", "--dry-run"]);
     assert_eq!(claude_code, 0, "{claude_out}");
     let (codex_out, codex_code) = c.run(&["setup", "codex", "--dry-run"]);
     assert_eq!(codex_code, 0, "{codex_out}");
 
-    let claude_tree = tree_lines(&claude_out);
-    let codex_tree = tree_lines(&codex_out);
-    assert!(!claude_tree.is_empty(), "{claude_out}");
-    assert_eq!(
-        claude_tree, codex_tree,
-        "codex's own tree lines drifted from claude-code's:\n\
-         claude-code: {claude_tree:?}\ncodex: {codex_tree:?}"
-    );
-
-    // And where they sit, not only that they are there: the same lines in
-    // the same order still read as an afterthought if all three arrive
-    // after this harness's own pieces, which is what they were until
-    // `f705`. The ground is named first and what the run records about it
-    // last, exactly as `claude-code` has always placed them.
-    let at = |needle: &str| {
-        codex_out
-            .find(needle)
-            .unwrap_or_else(|| panic!("{needle} is missing from the plan:\n{codex_out}"))
-    };
     assert!(
-        at(".vivac/ ") < at(".codex/config.toml"),
-        "planting the tree is announced after the files that need it:\n{codex_out}"
+        tree_lines(&claude_out).is_empty(),
+        "claude-code's own plan named the tree:\n{claude_out}"
     );
     assert!(
-        at(".agents/skills") < at(".vivac/events"),
-        "what the run records about the tree is announced before the pieces:\n{codex_out}"
+        tree_lines(&codex_out).is_empty(),
+        "codex's own plan named the tree:\n{codex_out}"
     );
 }
 
-/// Point 3: a clean plant leaves the tree exactly as `claude-code` would --
-/// planted, its own `.gitignore`, its own version lock, and a lane `stack
-/// --lanes` already knows about.
+/// `setup` writes its own three pieces onto a tree `init` already planted,
+/// and touches nothing under `.vivac/`: the tree, its `.gitignore`, its
+/// version lock and the lane `stack --lanes` already knows about all stay
+/// exactly as `init` left them.
 #[test]
-fn a_clean_plant_also_plants_the_tree() {
+fn a_clean_setup_run_leaves_the_tree_as_init_left_it() {
     let c = Sandbox::new_empty("setup-codex-plants-tree");
+    c.ok(&["init", "--yes"]);
+    let events_before = std::fs::read(c.0.join(".vivac").join("events")).unwrap();
+    let config_before = std::fs::read(c.0.join(".vivac").join("config")).unwrap();
+
     let (out, code) = c.run(&["setup", "codex", "--yes"]);
     assert_eq!(code, 0, "{out}");
 
-    assert!(c.0.join(".vivac").join("events").is_file(), "{out}");
-    assert!(c.0.join(".vivac").join(".gitignore").is_file(), "{out}");
-    assert!(c.0.join(".vivac").join("config").is_file(), "{out}");
+    assert_eq!(
+        events_before,
+        std::fs::read(c.0.join(".vivac").join("events")).unwrap(),
+        "setup touched the log"
+    );
+    assert_eq!(
+        config_before,
+        std::fs::read(c.0.join(".vivac").join("config")).unwrap(),
+        "setup touched the config"
+    );
 
     let stack = c.ok(&["stack", "--lanes"]);
     let folder_name = c.0.file_name().unwrap().to_string_lossy().into_owned();
     assert!(stack.contains(&folder_name), "{stack}");
 }
 
-/// Point 4: the one thing `f705` actually cost -- with no tree, the start
-/// hook stays quiet forever. Run by hand right after `setup codex --yes`,
+/// Point 4 of `f705`'s own spec: with no tree, the start hook stays quiet
+/// forever. Run by hand right after `init --yes` and `setup codex --yes`,
 /// it now prints the brief instead.
 #[test]
 fn after_a_clean_plant_the_start_hook_prints_a_brief_instead_of_staying_quiet() {
     let c = Sandbox::new_empty("setup-codex-start-hook-brief");
+    c.ok(&["init", "--yes"]);
     c.ok(&["setup", "codex", "--yes"]);
     let (out, code) = c.run(&["session", "start", "--hook"]);
     assert_eq!(code, 0, "{out}");
@@ -578,6 +599,7 @@ fn list_without_the_tree(dir: &std::path::Path) -> Vec<String> {
 #[test]
 fn undo_after_a_clean_setup_leaves_the_folder_as_it_was_except_the_tree() {
     let c = Sandbox::new_empty("setup-codex-undo-clean");
+    c.ok(&["init", "--yes"]);
     let before = list_without_the_tree(&c.0);
     c.ok(&["setup", "codex", "--yes"]);
 
@@ -596,6 +618,7 @@ fn undo_after_a_clean_setup_leaves_the_folder_as_it_was_except_the_tree() {
 #[test]
 fn undo_over_a_foreign_config_toml_returns_it_to_the_original_bytes() {
     let c = Sandbox::new_empty("setup-codex-undo-config-foreign");
+    c.ok(&["init", "--yes"]);
     std::fs::create_dir_all(c.0.join(".codex")).unwrap();
     let foreign = "# hand-written\nsomething = 1\n";
     std::fs::write(config_path(&c), foreign).unwrap();
@@ -609,6 +632,9 @@ fn undo_over_a_foreign_config_toml_returns_it_to_the_original_bytes() {
 /// Test 14: `--undo` where `setup` never ran removes nothing and says so.
 #[test]
 fn undo_where_setup_never_ran_removes_nothing_and_says_so() {
+    // No tree either, on purpose: `d723` piece B makes `--undo` the one
+    // door into `setup` that never resolves one, so this is the one test
+    // in this file that plants nothing at all.
     let c = Sandbox::new_empty("setup-codex-undo-never-ran");
     let (out, code) = c.run(&["setup", "codex", "--undo", "--yes"]);
     assert_eq!(code, 0, "{out}");
@@ -626,6 +652,7 @@ fn undo_where_setup_never_ran_removes_nothing_and_says_so() {
 #[test]
 fn undo_over_hooks_json_with_a_foreign_event_keeps_it_and_removes_ours() {
     let c = Sandbox::new_empty("setup-codex-undo-hooks-foreign-event");
+    c.ok(&["init", "--yes"]);
     c.ok(&["setup", "codex", "--yes"]);
     let mut hooks: serde_json::Value = serde_json::from_str(&read(&hooks_path(&c))).unwrap();
     hooks["hooks"]["PreCompact"] = serde_json::json!([
@@ -655,6 +682,7 @@ fn undo_over_hooks_json_with_a_foreign_event_keeps_it_and_removes_ours() {
 #[test]
 fn undo_over_hooks_json_with_a_root_description_keeps_it_and_drops_hooks() {
     let c = Sandbox::new_empty("setup-codex-undo-hooks-description");
+    c.ok(&["init", "--yes"]);
     c.ok(&["setup", "codex", "--yes"]);
     let mut hooks: serde_json::Value = serde_json::from_str(&read(&hooks_path(&c))).unwrap();
     hooks["description"] = serde_json::json!("our own hooks");
@@ -677,6 +705,7 @@ fn undo_over_hooks_json_with_a_root_description_keeps_it_and_drops_hooks() {
 #[test]
 fn undo_leaves_a_hand_edited_skill_and_says_so() {
     let c = Sandbox::new_empty("setup-codex-undo-skill-edited");
+    c.ok(&["init", "--yes"]);
     c.ok(&["setup", "codex", "--yes"]);
     let skill = read(&skill_path(&c));
     std::fs::write(skill_path(&c), format!("{skill}\nedited by hand\n")).unwrap();
@@ -697,6 +726,7 @@ fn undo_leaves_a_hand_edited_skill_and_says_so() {
 #[test]
 fn undo_leaves_a_config_toml_with_a_half_written_marker_and_says_so() {
     let c = Sandbox::new_empty("setup-codex-undo-config-half-marker");
+    c.ok(&["init", "--yes"]);
     c.ok(&["setup", "codex", "--yes"]);
     let broken = read(&config_path(&c)).replace("# end of what vivac setup codex added\n", "");
     std::fs::write(config_path(&c), &broken).unwrap();
@@ -737,6 +767,7 @@ fn undo_leaves_a_config_toml_with_a_half_written_marker_and_says_so() {
 #[test]
 fn no_terminal_and_no_yes_refuses_an_undo_too_and_removes_nothing() {
     let c = Sandbox::new_empty("setup-codex-no-terminal-undo");
+    c.ok(&["init", "--yes"]);
     c.ok(&["setup", "codex", "--yes"]);
     let (out, code) = c.run(&["setup", "codex", "--undo"]);
     assert_eq!(code, 1, "{out}");

@@ -9,7 +9,6 @@ absolute
 accent
 accented
 accents
-accepted
 accepts
 access
 accessor
@@ -800,7 +799,6 @@ invalid
 invariant
 invariants
 invents
-invites
 io
 ip
 iquorum
@@ -958,7 +956,6 @@ mid
 middle
 migrate
 migrating
-migration
 millis
 min
 mine
@@ -1179,6 +1176,7 @@ platform
 plural
 pluralised
 plus
+pointing
 points
 pop
 popped
@@ -1224,7 +1222,6 @@ prompt
 pronoun
 properties
 property
-proposes
 prose
 protocol
 prune
@@ -1762,7 +1759,6 @@ under
 underneath
 undo
 undoable
-undoing
 undone
 unfold
 ungoverned
@@ -1873,7 +1869,6 @@ why
 why3
 why4
 wide
-wider
 width
 windows
 wins
