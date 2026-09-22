@@ -1,7 +1,7 @@
 //! `vivac setup codex` — tranche 1 (`t592`) covers a clean project, none of
 //! the three files Codex reads there yet. Tranche 2 adds merging with a
-//! file already there (piece B, `t592` §4) and running it twice (piece D,
-//! §6). `--undo` is piece C and is not this file's job yet.
+//! file already there (piece B, `t592` §4), running it twice (piece D,
+//! §6), and taking it off again (piece C, §5).
 
 mod common;
 use common::Sandbox;
@@ -408,33 +408,16 @@ fn setup_with_an_unknown_harness_names_both_harnesses() {
 }
 
 // ---------------------------------------------------------------------------
-// 7. A flag this harness does not know yet refuses before writing anything
-//    (`t592` tranche 2): the same usage error the rest of the module gives
-//    a flag it does not take, not the silence that once let `--undo` write
-//    the three files it was asked to remove.
+// 7. `t592` tranche 2 (`d710`): `--new-tree`, `--lane-name` and `--name` are
+//    the tree's own flags, not the harness's, so they behave exactly as
+//    they do for `claude-code` instead of being refused.
 // ---------------------------------------------------------------------------
-
-fn assert_nothing_was_written(c: &Sandbox) {
-    assert!(!config_path(c).exists(), "config.toml was written anyway");
-    assert!(!hooks_path(c).exists(), "hooks.json was written anyway");
-    assert!(!skill_path(c).exists(), "SKILL.md was written anyway");
-}
-
-#[test]
-fn undo_refuses_before_writing_anything() {
-    let c = Sandbox::new_empty("setup-codex-flag-undo");
-    let (out, code) = c.run(&["setup", "codex", "--yes", "--undo"]);
-    assert_eq!(code, 2, "{out}");
-    assert!(out.contains("--undo"), "{out}");
-    assert_nothing_was_written(&c);
-}
 
 /// `t592` tranche 2 (`d710`): `--new-tree`, `--lane-name` and `--name` are
 /// the tree's own flags, not the harness's, so they stop being refused and
 /// behave exactly as they do for `claude-code`. `--join` joined this
 /// harness too in piece G of the same tranche (`f714`); `tests/setup_scenarios.rs`
-/// covers it. `--undo` is not this tranche's (`d710` §3) and still refuses
-/// above.
+/// covers it.
 #[test]
 fn new_tree_is_accepted_and_plants_the_tree() {
     let c = Sandbox::new_empty("setup-codex-flag-new-tree");
@@ -555,4 +538,205 @@ fn after_a_clean_plant_the_start_hook_prints_a_brief_instead_of_staying_quiet() 
     let (out, code) = c.run(&["session", "start", "--hook"]);
     assert_eq!(code, 0, "{out}");
     assert!(out.starts_with("vivac · project:"), "{out}");
+}
+
+// ---------------------------------------------------------------------------
+// 9. `t592` tranche 2, piece C (`d710` §5): `--undo` takes off exactly what
+//    this harness wrote and leaves everything else, mirroring
+//    `claude_code::undo` rather than reinventing it (`r515`).
+// ---------------------------------------------------------------------------
+
+/// The folder's own top-level entries, `.vivac/` aside: enough to prove
+/// `--undo` leaves nothing of its own behind, the same shallow listing
+/// `tests/setup.rs`'s own `list` takes for the same reason.
+fn list_without_the_tree(dir: &std::path::Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .map(|rd| {
+            rd.flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|n| n != ".vivac")
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    names
+}
+
+/// Test 12: a clean plant undone leaves the folder exactly as it was --
+/// `.vivac/` aside, which stays -- checked against the folder's entire
+/// listing rather than just the three files `setup` itself knows about.
+#[test]
+fn undo_after_a_clean_setup_leaves_the_folder_as_it_was_except_the_tree() {
+    let c = Sandbox::new_empty("setup-codex-undo-clean");
+    let before = list_without_the_tree(&c.0);
+    c.ok(&["setup", "codex", "--yes"]);
+
+    let (out, code) = c.run(&["setup", "codex", "--undo", "--yes"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.contains("Undone. The tree in .vivac/ is untouched."),
+        "{out}"
+    );
+    assert_eq!(list_without_the_tree(&c.0), before, "{out}");
+    assert!(c.0.join(".vivac").exists(), "the tree must stay");
+}
+
+/// Test 13: a foreign `config.toml` from before the first run comes back
+/// byte for byte once `--undo` takes our block back off.
+#[test]
+fn undo_over_a_foreign_config_toml_returns_it_to_the_original_bytes() {
+    let c = Sandbox::new_empty("setup-codex-undo-config-foreign");
+    std::fs::create_dir_all(c.0.join(".codex")).unwrap();
+    let foreign = "# hand-written\nsomething = 1\n";
+    std::fs::write(config_path(&c), foreign).unwrap();
+
+    c.ok(&["setup", "codex", "--yes"]);
+    let (out, code) = c.run(&["setup", "codex", "--undo", "--yes"]);
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(read(&config_path(&c)), foreign, "{out}");
+}
+
+/// Test 14: `--undo` where `setup` never ran removes nothing and says so.
+#[test]
+fn undo_where_setup_never_ran_removes_nothing_and_says_so() {
+    let c = Sandbox::new_empty("setup-codex-undo-never-ran");
+    let (out, code) = c.run(&["setup", "codex", "--undo", "--yes"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.contains("Nothing to undo: none of what setup writes is here."),
+        "{out}"
+    );
+    assert!(!c.0.join(".codex").exists(), "{out}");
+    assert!(!c.0.join(".agents").exists(), "{out}");
+    assert!(!c.0.join(".vivac").exists(), "{out}");
+}
+
+/// Test 15: a foreign event in `hooks.json` survives `--undo` intact, and
+/// the file itself stays -- only our two entries go.
+#[test]
+fn undo_over_hooks_json_with_a_foreign_event_keeps_it_and_removes_ours() {
+    let c = Sandbox::new_empty("setup-codex-undo-hooks-foreign-event");
+    c.ok(&["setup", "codex", "--yes"]);
+    let mut hooks: serde_json::Value = serde_json::from_str(&read(&hooks_path(&c))).unwrap();
+    hooks["hooks"]["PreCompact"] = serde_json::json!([
+        { "hooks": [ { "type": "command", "command": "some-other-tool" } ] }
+    ]);
+    std::fs::write(
+        hooks_path(&c),
+        serde_json::to_string_pretty(&hooks).unwrap(),
+    )
+    .unwrap();
+
+    let (out, code) = c.run(&["setup", "codex", "--undo", "--yes"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(hooks_path(&c).exists(), "{out}");
+    let after: serde_json::Value = serde_json::from_str(&read(&hooks_path(&c))).unwrap();
+    assert_eq!(
+        after["hooks"]["PreCompact"][0]["hooks"][0]["command"], "some-other-tool",
+        "{after}"
+    );
+    assert!(after["hooks"].get("SessionStart").is_none(), "{after}");
+    assert!(after["hooks"].get("Stop").is_none(), "{after}");
+}
+
+/// Test 16: a root-level `description` in `hooks.json`, with only our own
+/// hooks otherwise, survives `--undo`; `hooks` itself goes since nothing of
+/// ours is left in it.
+#[test]
+fn undo_over_hooks_json_with_a_root_description_keeps_it_and_drops_hooks() {
+    let c = Sandbox::new_empty("setup-codex-undo-hooks-description");
+    c.ok(&["setup", "codex", "--yes"]);
+    let mut hooks: serde_json::Value = serde_json::from_str(&read(&hooks_path(&c))).unwrap();
+    hooks["description"] = serde_json::json!("our own hooks");
+    std::fs::write(
+        hooks_path(&c),
+        serde_json::to_string_pretty(&hooks).unwrap(),
+    )
+    .unwrap();
+
+    let (out, code) = c.run(&["setup", "codex", "--undo", "--yes"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(hooks_path(&c).exists(), "{out}");
+    let after: serde_json::Value = serde_json::from_str(&read(&hooks_path(&c))).unwrap();
+    assert_eq!(after["description"], "our own hooks", "{after}");
+    assert!(after.get("hooks").is_none(), "{after}");
+}
+
+/// Test 17: a skill changed since `setup` wrote it is left alone, and the
+/// plan says why.
+#[test]
+fn undo_leaves_a_hand_edited_skill_and_says_so() {
+    let c = Sandbox::new_empty("setup-codex-undo-skill-edited");
+    c.ok(&["setup", "codex", "--yes"]);
+    let skill = read(&skill_path(&c));
+    std::fs::write(skill_path(&c), format!("{skill}\nedited by hand\n")).unwrap();
+
+    let (out, code) = c.run(&["setup", "codex", "--undo", "--yes"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.contains("changed since setup wrote it; left as it is"),
+        "{out}"
+    );
+    assert!(skill_path(&c).exists(), "the edited skill was removed");
+}
+
+/// Test 18: a `config.toml` with the opening marker but not the closing one
+/// is not `--undo`'s to guess the end of -- it names the file, says which
+/// marker is missing, and leaves the file untouched, while the other two
+/// files it does recognise still go.
+#[test]
+fn undo_leaves_a_config_toml_with_a_half_written_marker_and_says_so() {
+    let c = Sandbox::new_empty("setup-codex-undo-config-half-marker");
+    c.ok(&["setup", "codex", "--yes"]);
+    let broken = read(&config_path(&c)).replace("# end of what vivac setup codex added\n", "");
+    std::fs::write(config_path(&c), &broken).unwrap();
+
+    let (out, code) = c.run(&["setup", "codex", "--undo", "--yes"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains(CONFIG_LABEL), "{out}");
+    // A status line in the plan's own grid, and the missing marker under
+    // it, rather than the paragraph `apply` refuses with: that one ends by
+    // saying to run setup again, which is not what this reader asked for.
+    assert!(
+        out.contains("left as it is: its marker block is half written"),
+        "{out}"
+    );
+    assert!(
+        out.contains("# end of what vivac setup codex added"),
+        "{out}"
+    );
+    assert_eq!(
+        read(&config_path(&c)),
+        broken,
+        "config.toml must be untouched"
+    );
+    assert!(
+        !hooks_path(&c).exists(),
+        "hooks.json should have been removed"
+    );
+    assert!(
+        !skill_path(&c).exists(),
+        "the skill should have been removed"
+    );
+}
+
+/// `f718`, this harness's half: `--undo` used to reach its own question
+/// with nobody there to answer it, remove nothing and exit 0. The command
+/// it hands back keeps the `--undo` it was given, or it would be advice
+/// for the opposite run (`f675`).
+#[test]
+fn no_terminal_and_no_yes_refuses_an_undo_too_and_removes_nothing() {
+    let c = Sandbox::new_empty("setup-codex-no-terminal-undo");
+    c.ok(&["setup", "codex", "--yes"]);
+    let (out, code) = c.run(&["setup", "codex", "--undo"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("there is no terminal to ask"), "{out}");
+    assert!(out.contains("vivac setup codex --undo --dry-run"), "{out}");
+    assert!(out.contains("vivac setup codex --undo --yes"), "{out}");
+    assert!(
+        config_path(&c).is_file(),
+        "the run removed something it had not been allowed to confirm"
+    );
+    assert!(hooks_path(&c).is_file(), "{out}");
+    assert!(skill_path(&c).is_file(), "{out}");
 }

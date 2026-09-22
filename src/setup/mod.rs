@@ -450,6 +450,13 @@ fn quoted_if_it_has_a_space(value: &str) -> String {
 /// not a shorter version of the advice, it is different advice.
 fn no_terminal_flags(a: &Args) -> String {
     let mut s = String::new();
+    // First, because it is the one flag that decides which of the two
+    // sentences below gets built at all (`f718`): dropped, the command
+    // this hands back takes the run's own files off nothing and writes
+    // them instead, which is the opposite of what was asked.
+    if a.has("undo") {
+        s.push_str(" --undo");
+    }
     if let Some(v) = a.opt("join") {
         s.push_str(" --join ");
         s.push_str(&quoted_if_it_has_a_space(v));
@@ -478,6 +485,16 @@ fn no_terminal_flags(a: &Args) -> String {
 pub(super) fn no_terminal_text(h: Harness, a: &Args) -> String {
     let flags = no_terminal_flags(a);
     let word = h.word();
+    // `f718`: `--undo` reached its own question without ever passing here,
+    // so a run with nobody to answer printed the question anyway, did
+    // nothing and exited 0 -- which a script reads as done. It says
+    // "remove" rather than "write" because that is what the run asked for,
+    // and a sentence about writing would send the reader to the other door.
+    if a.has("undo") {
+        return format!(
+            "  setup asks before removing anything, and there is no terminal to ask.\n  See what it would remove:  vivac setup {word}{flags} --dry-run\n  Then remove it:            vivac setup {word}{flags} --yes"
+        );
+    }
     format!(
         "  setup asks before writing, and there is no terminal here to ask.\n  See what it would write:  vivac setup {word}{flags} --dry-run\n  Then write it:            vivac setup {word}{flags} --yes"
     )

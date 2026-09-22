@@ -23,7 +23,14 @@
 //! merges with whatever is already there, the same three outcomes
 //! `claude_code.rs` already gives its own files -- create it, add to what
 //! is there, or leave it alone because it already has what this run would
-//! write. `--undo` is piece C and stays refused by name until it lands.
+//! write.
+//!
+//! Tranche 2's piece C (`t592` §5) is `--undo`: it takes off exactly what
+//! this harness wrote and leaves everything else, the same promise
+//! `claude_code::undo` already keeps for its own three files (`r515`, not
+//! reinvented here). `.vivac/lane`'s own piece of that promise -- whether
+//! this folder's lane has written and can go -- is `tree::undo_lane`, the
+//! one part of `claude_code::undo` that moved out rather than being copied.
 //!
 //! Two things Codex needs that this run cannot do for it, because both live
 //! outside the project (`d655`): the project has to be marked trusted in
@@ -32,8 +39,8 @@
 //! inside Codex. The closing summary names both.
 
 use super::claude_code::{
-    append_hook, hook_state, not_object_conflict, read_json, skill_state, skill_text,
-    unreadable_conflict, HookState, SkillState,
+    append_hook, hook_state, not_object_conflict, read_json, remove_hook, skill_fingerprint_intact,
+    skill_state, skill_text, unreadable_conflict, HookState, SkillState,
 };
 use super::json::{self, Value};
 use super::tree;
@@ -174,6 +181,77 @@ fn append_config(existing: &str) -> String {
     s
 }
 
+// ---------------------------------------------------------------------------
+// `.codex/config.toml`, the `--undo` side (`t592` tranche 2, piece C): the
+// same two markers `config_state` scans for, read for the opposite
+// question -- not whether the block can be added, but whether it can be
+// taken off. A half-written block is the one state `--undo` treats
+// differently from `apply`: `config_state` refuses outright on it, but
+// `--undo` never blocks on a file it is not sure it can touch -- it leaves
+// that one file alone and says why, the same as a hook it does not
+// recognise or a skill changed since setup wrote it.
+// ---------------------------------------------------------------------------
+
+enum ConfigUndoState {
+    /// Both markers present: setup's own block is there to take off.
+    Ours,
+    /// Neither marker: nothing here is setup's, whether the file is
+    /// missing, empty, or has content of its own that never went through
+    /// `append_config`.
+    NotOurs,
+    /// One marker without the other -- `true` when the opening one is the
+    /// one present, so the closing one is what is missing.
+    HalfMarker(bool),
+}
+
+fn config_undo_state(existing: &str) -> ConfigUndoState {
+    let lines: Vec<&str> = existing.lines().collect();
+    let has_open = lines.contains(&CONFIG_OPEN_MARKER);
+    let has_close = lines.contains(&CONFIG_CLOSE_MARKER);
+    if has_open && has_close {
+        ConfigUndoState::Ours
+    } else if has_open != has_close {
+        ConfigUndoState::HalfMarker(has_open)
+    } else {
+        ConfigUndoState::NotOurs
+    }
+}
+
+/// `existing`, with setup's own block taken off -- the exact inverse of
+/// `append_config`, byte for byte. Only ever called once `config_undo_state`
+/// has already confirmed both markers are present.
+///
+/// The blank line right before the opening marker goes too, but only when
+/// `append_config` is the one thing that could have put it there: a blank
+/// line sitting right before the marker, with a line of its own before
+/// that. A block written onto empty ground (`ConfigState::Create`) never
+/// gained that blank line to begin with, so the marker starting at the very
+/// top of the file leaves nothing extra to take off.
+fn remove_config_block(existing: &str) -> String {
+    let lines: Vec<&str> = existing.lines().collect();
+    let open = lines
+        .iter()
+        .position(|&l| l == CONFIG_OPEN_MARKER)
+        .expect("config_undo_state::Ours already confirmed this marker is here");
+    let close = lines
+        .iter()
+        .position(|&l| l == CONFIG_CLOSE_MARKER)
+        .expect("config_undo_state::Ours already confirmed this marker is here");
+    let start = if open > 1 && lines[open - 1].is_empty() {
+        open - 1
+    } else {
+        open
+    };
+    let mut kept: Vec<&str> = Vec::new();
+    kept.extend_from_slice(&lines[..start]);
+    kept.extend_from_slice(&lines[close + 1..]);
+    let mut s = kept.join("\n");
+    if !s.is_empty() {
+        s.push('\n');
+    }
+    s
+}
+
 struct Paths {
     config: PathBuf,
     hooks: PathBuf,
@@ -193,44 +271,17 @@ fn paths(root: &Path) -> Paths {
 }
 
 pub fn run(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
-    if let Some(refusal) = refuse_unsupported_flags(a) {
-        return Err(refusal);
+    // `--undo` is checked here, before `refuse_home_or_global_store`, the
+    // same order `claude_code::run` already keeps and for the same reason:
+    // undoing whatever an earlier setup wrote is always safe, home folder
+    // or global store included (`t592` tranche 2, piece C).
+    if a.has("undo") {
+        return undo(roots, a);
     }
     if let Some(refusal) = super::refuse_home_or_global_store(roots) {
         return Err(refusal);
     }
     apply(roots, a)
-}
-
-/// The flags `claude_code.rs` already knows and this harness does not yet:
-/// checked first, before this run reads a single file or writes one.
-/// Reading them later, inside `apply`, is exactly the shape that let
-/// `--undo` on a clean project write the three files instead of removing
-/// anything -- a flag nobody reads is a flag nobody obeys, the same lesson
-/// `f52` already drew from a positional silently dropped rather than a
-/// flag. `--new-tree`, `--lane-name` and `--name` left this list in `t592`
-/// tranche 2 (`d710`): they are the tree's own flags, and `tree::plan`
-/// reads them the same way it does for `claude-code`. `--join` left it in
-/// piece G of the same tranche (`f714`): it joins through `tree::plan_join`
-/// now, the same door `claude_code.rs` already had. `--undo` is piece C and
-/// is not here yet.
-const UNSUPPORTED_FLAGS: &[(&str, &str)] = &[("undo", "removing what it wrote")];
-
-fn refuse_unsupported_flags(a: &Args) -> Option<Failure> {
-    for &(flag, does) in UNSUPPORTED_FLAGS {
-        if a.has(flag) {
-            let sentence =
-                format!("setup codex does not take --{flag} yet: {does} lands in a later release.");
-            let body = super::claude_code::wrapped(&sentence);
-            // `Failure::Usage` directly, not the `Failure::usage` helper:
-            // that helper prepends its own two spaces for a one-line
-            // message, and `wrapped` already opens every line, the first
-            // included, with the same two spaces the rest of this module's
-            // paragraphs use.
-            return Some(Failure::Usage(format!("{body}\n  Nothing written.")));
-        }
-    }
-    None
 }
 
 /// Named after `t565` §7.8's own two-column plan, reused rather than
@@ -574,6 +625,265 @@ fn apply_writes(
     if let Some(w) = &plan.above_warning {
         print!("{w}");
     }
+    Ok(0)
+}
+
+// ---------------------------------------------------------------------------
+// `--undo` (`t592` tranche 2, piece C): takes off exactly what this harness
+// wrote, and leaves everything else. `claude_code::undo` already resolves
+// this whole shape for its own three files; this mirrors it rather than
+// reinventing it (`r515`) -- same order of pieces in the plan, same
+// vocabulary, same all-or-nothing through the same `super::commit`.
+// ---------------------------------------------------------------------------
+
+fn undo(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
+    use super::claude_code::{piece_line, sub_line, wrapped_piece_line};
+
+    let here = &roots.here;
+    let target = paths(here);
+    let config_raw = std::fs::read_to_string(&target.config).ok();
+    let hooks = read_json(&target.hooks);
+    let skill_raw = std::fs::read_to_string(&target.skill).ok();
+    let undo_lane = tree::undo_lane(roots)?;
+
+    let mut conflicts: Vec<String> = Vec::new();
+    if let Some((line, col)) = hooks.parse_error {
+        conflicts.push(unreadable_conflict(HOOKS_LABEL, line, col));
+    } else if hooks.not_object {
+        conflicts.push(not_object_conflict(HOOKS_LABEL));
+    }
+    if !conflicts.is_empty() {
+        let mut msg = conflicts.join("\n\n");
+        msg.push_str("\n\n  Nothing written.");
+        return Err(Failure::Model(msg));
+    }
+
+    // `.codex/config.toml` has no such abort of its own: a half-written
+    // block is never unreadable the way broken JSON is, so `--undo` leaves
+    // it alone and says why instead of blocking on it (`t592` tranche 2 §5).
+    let config_state = config_raw.as_deref().map(config_undo_state);
+    let config_ours = matches!(config_state, Some(ConfigUndoState::Ours));
+
+    let hooks_root = hooks.value.clone().unwrap_or_else(|| Value::object(vec![]));
+    let start_hook_state = hook_state(&hooks_root, "SessionStart", "start", SESSION_START_COMMAND);
+    let stop_hook_state = hook_state(&hooks_root, "Stop", "end", SESSION_END_COMMAND);
+    let start_ours = matches!(start_hook_state, HookState::Exact);
+    let stop_ours = matches!(stop_hook_state, HookState::Exact);
+    let skill_ours = skill_raw.as_deref().is_some_and(skill_fingerprint_intact);
+
+    let nothing_to_undo =
+        !config_ours && !start_ours && !stop_ours && !skill_ours && !undo_lane.removable;
+    if nothing_to_undo {
+        outln!("  Nothing to undo: none of what setup writes is here.");
+        return Ok(0);
+    }
+
+    let mut preview = hooks_root.clone();
+    if start_ours {
+        remove_hook(&mut preview, "SessionStart", SESSION_START_COMMAND);
+    }
+    if stop_ours {
+        remove_hook(&mut preview, "Stop", SESSION_END_COMMAND);
+    }
+    let hooks_becomes_empty = preview
+        .as_object()
+        .is_some_and(|s: &[(String, Value)]| s.is_empty());
+
+    let hooks_status: String = match (start_ours, stop_ours) {
+        (true, true) if hooks_becomes_empty => {
+            "remove the two hooks setup wrote;\nNOTHING_ELSE".to_string()
+        }
+        (true, true) => "remove the two hooks setup wrote".to_string(),
+        (true, false) => "remove the SessionStart hook".to_string(),
+        (false, true) => "remove the Stop hook".to_string(),
+        (false, false) => "left as it is".to_string(),
+    };
+
+    let mut s = format!("  vivac setup codex --undo, in {}\n\n", here.display());
+
+    // `t592` tranche 2 §5: a half-written block is not this run's to guess
+    // the end of, so the file is left alone and the line says why. A status
+    // line and not the paragraph `apply` refuses with: that paragraph ends
+    // by saying to run setup again, which is not what the person in front
+    // of it asked for, and a plan reads as a grid.
+    match &config_state {
+        Some(ConfigUndoState::HalfMarker(has_open)) => {
+            s.push_str(&piece_line(
+                CONFIG_LABEL,
+                "left as it is: its marker block is half written",
+            ));
+            s.push_str(&sub_line(
+                "missing",
+                if *has_open {
+                    CONFIG_CLOSE_MARKER
+                } else {
+                    CONFIG_OPEN_MARKER
+                },
+            ));
+        }
+        Some(ConfigUndoState::Ours) => {
+            let existing = config_raw
+                .as_deref()
+                .expect("ConfigUndoState::Ours only reached with a file present");
+            if remove_config_block(existing).trim().is_empty() {
+                s.push_str(&wrapped_piece_line(
+                    CONFIG_LABEL,
+                    "remove the \"vivac\" server;",
+                    "nothing else is left, so it goes",
+                ));
+            } else {
+                s.push_str(&piece_line(CONFIG_LABEL, "remove the \"vivac\" server"));
+            }
+        }
+        Some(ConfigUndoState::NotOurs) | None => {
+            s.push_str(&piece_line(CONFIG_LABEL, "left as it is"));
+        }
+    }
+
+    if hooks_status.contains("NOTHING_ELSE") {
+        s.push_str(&wrapped_piece_line(
+            HOOKS_LABEL,
+            "remove the two hooks setup wrote;",
+            "nothing else is left, so it goes",
+        ));
+    } else {
+        s.push_str(&piece_line(HOOKS_LABEL, &hooks_status));
+    }
+    if let HookState::Different(_) = &start_hook_state {
+        s.push_str(&sub_line(
+            "SessionStart",
+            "runs vivac another way; left as it is",
+        ));
+    }
+    if let HookState::Different(_) = &stop_hook_state {
+        s.push_str(&sub_line("Stop", "runs vivac another way; left as it is"));
+    }
+
+    s.push_str(&piece_line(
+        SKILL_LABEL,
+        if skill_ours {
+            "remove"
+        } else if skill_raw.is_some() {
+            "changed since setup wrote it; left as it is"
+        } else {
+            "left as it is"
+        },
+    ));
+
+    s.push_str(&piece_line(
+        tree::VIVAC_LABEL,
+        "kept: the tree is not setup's",
+    ));
+    s.push_str(&tree::undo_lane_lines(&undo_lane));
+    s.push('\n');
+
+    if a.has("dry-run") {
+        outln!("{s}  Nothing written: --dry-run.");
+        return Ok(0);
+    }
+
+    // `f718`, the same guard the writing path has: a run with nobody to
+    // answer used to print the question anyway, remove nothing and exit 0.
+    if !a.has("yes") && !super::stdin_is_terminal() {
+        return Err(Failure::Model(super::no_terminal_text(
+            super::Harness::Codex,
+            a,
+        )));
+    }
+
+    print!("{s}");
+    let proceed = a.has("yes") || super::ask("  Undo it? [y/N] ");
+    if !proceed {
+        outln!("\n  Nothing written.");
+        return Ok(0);
+    }
+
+    let mut writes = Vec::new();
+
+    if config_ours {
+        let existing = config_raw.expect("config_ours only true with a file present");
+        let removed = remove_config_block(&existing);
+        if removed.trim().is_empty() {
+            writes.push(super::PlannedWrite::delete(
+                target.config.clone(),
+                existing.into_bytes(),
+            ));
+        } else {
+            writes.push(super::PlannedWrite::write(
+                target.config.clone(),
+                removed,
+                Some(existing.into_bytes()),
+            ));
+        }
+    }
+
+    if start_ours || stop_ours {
+        let original = hooks.raw.clone().into_bytes();
+        if hooks_becomes_empty {
+            writes.push(super::PlannedWrite::delete(target.hooks.clone(), original));
+        } else {
+            let mut new_hooks = hooks_root.clone();
+            if start_ours {
+                remove_hook(&mut new_hooks, "SessionStart", SESSION_START_COMMAND);
+            }
+            if stop_ours {
+                remove_hook(&mut new_hooks, "Stop", SESSION_END_COMMAND);
+            }
+            let rendered = json::finalize(
+                &json::render(&new_hooks, &hooks.indent),
+                hooks.eol,
+                hooks.trailing_newline,
+            );
+            let before = hooks_root.clone();
+            writes.push(super::PlannedWrite {
+                path: target.hooks.clone(),
+                action: super::Action::Write(rendered),
+                original: Some(original),
+                preserved: Some(Box::new(move |updated| {
+                    json::contained_in(updated, &before)
+                })),
+            });
+        }
+    }
+
+    if skill_ours {
+        writes.push(super::PlannedWrite::delete(
+            target.skill.clone(),
+            skill_raw.clone().unwrap().into_bytes(),
+        ));
+    }
+
+    if undo_lane.removable {
+        writes.push(super::PlannedWrite::delete(
+            undo_lane.path.clone(),
+            undo_lane.raw.clone().unwrap_or_default(),
+        ));
+    }
+
+    super::commit(&writes)?;
+
+    // Best-effort, and only once the commit above is known to have
+    // succeeded: an empty directory left behind costs nothing to leave for
+    // a later run, but is tidier gone.
+    if skill_ours {
+        super::claude_code::remove_if_empty(target.skill.parent());
+        super::claude_code::remove_if_empty(target.skill.parent().and_then(Path::parent));
+        super::claude_code::remove_if_empty(
+            target
+                .skill
+                .parent()
+                .and_then(Path::parent)
+                .and_then(Path::parent),
+        );
+    }
+    // `.codex/` itself: the one folder `claude_code.rs` has no equivalent
+    // of, since `.codex/config.toml` and `.codex/hooks.json` are its only
+    // two files (`t592` tranche 2 §5). Attempted unconditionally, same as
+    // every `remove_if_empty` above: it costs nothing when the folder is
+    // not actually empty, or is already gone.
+    super::claude_code::remove_if_empty(target.config.parent());
+
+    outln!("  Undone. The tree in .vivac/ is untouched.");
     Ok(0)
 }
 
