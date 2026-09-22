@@ -24,6 +24,38 @@ use std::path::{Path, PathBuf};
 
 const HARNESSES: &[&str] = &["claude-code", "codex"];
 
+/// Which harness this run was invoked as, so a command this run proposes
+/// is one the person can actually run from where they are (`f714`): the
+/// second-map refusal used to name `claude-code` to a person who had
+/// typed `codex`, and the flag it proposed that person was refused by
+/// name.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Harness {
+    ClaudeCode,
+    Codex,
+}
+
+impl Harness {
+    /// The word `vivac setup` itself takes.
+    pub(super) fn word(self) -> &'static str {
+        match self {
+            Self::ClaudeCode => "claude-code",
+            Self::Codex => "codex",
+        }
+    }
+}
+
+/// The harness word for a message built before the positional has been
+/// dispatched: the one this run actually typed when it is one `setup`
+/// knows, and the first harness otherwise -- a run with no harness at all
+/// is refused by its own message a few lines below, which names both.
+fn harness_word(a: &Args) -> &'static str {
+    match a.positional(0) {
+        Some("codex") => Harness::Codex.word(),
+        _ => Harness::ClaudeCode.word(),
+    }
+}
+
 pub fn dispatch(cwd: &Path, a: &Args) -> Result<i32, Failure> {
     if a.has("dry-run") && a.has("yes") {
         return Err(Failure::usage(
@@ -43,23 +75,25 @@ pub fn dispatch(cwd: &Path, a: &Args) -> Result<i32, Failure> {
     // `has("join")`. Left unchecked, that fell straight through to the
     // plant branch and gave a second tree to someone who asked to join one.
     if a.has("join") && a.opt("join").is_none() {
-        return Err(Failure::usage(
+        return Err(Failure::usage(format!(
             "--join needs the project to join, and nothing followed it. Without \
              that word setup plants instead of joining, which is a second tree \
              for a product that already has one.\n\n  \
-             vivac setup claude-code --join <project>",
-        ));
+             vivac setup {} --join <project>",
+            harness_word(a)
+        )));
     }
     // `t640`, point 3: the same gap `f632` already closed for `--join`.
     // `--name` takes a value too, so nothing after it is the flag present
     // and the value absent -- left unchecked, that reaches `opt("name")`
     // as `None`, which reads exactly like `--name` was never given at all.
     if a.has("name") && a.opt("name").is_none() {
-        return Err(Failure::usage(
+        return Err(Failure::usage(format!(
             "--name needs the product's own name, and nothing followed it. \
              Without that word setup has nothing to save.\n\n  \
-             vivac setup claude-code --name <name>",
-        ));
+             vivac setup {} --name <name>",
+            harness_word(a)
+        )));
     }
     if let [first, ..] = a.extra(1) {
         return Err(Failure::usage(format!(
@@ -394,6 +428,59 @@ pub fn ask(prompt: &str) -> bool {
 
 pub fn stdin_is_terminal() -> bool {
     std::io::stdin().is_terminal()
+}
+
+/// A value repeated into `no_terminal_text`, quoted only when it has a
+/// space in it: the same rule the copied command line needs to survive a
+/// shell, and no more than that -- an unquoted path or name with none
+/// reads back exactly as it was typed.
+fn quoted_if_it_has_a_space(value: &str) -> String {
+    if value.contains(' ') {
+        format!("\"{value}\"")
+    } else {
+        value.to_string()
+    }
+}
+
+/// The flags this run was given, in the fixed order the two commands
+/// `no_terminal_text` suggests repeat them in, and only the ones present.
+/// `f675`: dropping them used to hand back two bare commands, and running
+/// the first one literally -- `vivac setup claude-code --dry-run` -- plans
+/// a plant even on a run that asked to `--join` a tree elsewhere. That is
+/// not a shorter version of the advice, it is different advice.
+fn no_terminal_flags(a: &Args) -> String {
+    let mut s = String::new();
+    if let Some(v) = a.opt("join") {
+        s.push_str(" --join ");
+        s.push_str(&quoted_if_it_has_a_space(v));
+    }
+    if a.has("new-tree") {
+        s.push_str(" --new-tree");
+    }
+    if let Some(v) = a.opt("name") {
+        s.push_str(" --name ");
+        s.push_str(&quoted_if_it_has_a_space(v));
+    }
+    if let Some(v) = a.opt("lane-name") {
+        s.push_str(" --lane-name ");
+        s.push_str(&quoted_if_it_has_a_space(v));
+    }
+    s
+}
+
+/// `f675`: built rather than constant, so the two commands it suggests
+/// name the run that is actually stuck rather than a bare plant. The two
+/// columns keep the alignment a fixed label already fixes; only what
+/// comes after the harness word grows. Moved here from `claude_code.rs`
+/// alongside [`Harness`] (`f714`), which is what `codex.rs`'s own copy of
+/// this text was missing: the same flags, but for a harness that was
+/// never spelled out.
+pub(super) fn no_terminal_text(h: Harness, a: &Args) -> String {
+    let flags = no_terminal_flags(a);
+    let word = h.word();
+    format!(
+        "  setup asks before writing, and there is no terminal here to ask.\n  See what it would write:  vivac setup {word}{flags} --dry-run\n  Then write it:            vivac setup {word}{flags} --yes"
+    )
 }
 
 /// 64-bit FNV-1a over `data`. Not a cryptographic hash and not meant to be

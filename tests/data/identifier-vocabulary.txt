@@ -1214,6 +1214,7 @@ prompt
 pronoun
 properties
 property
+proposes
 prose
 protocol
 prune

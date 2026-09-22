@@ -8,6 +8,7 @@
 
 use super::json::{self, Value};
 use super::tree;
+use super::Harness;
 use crate::args::Args;
 use crate::failure::Failure;
 use crate::output::outln;
@@ -520,9 +521,10 @@ fn paths(root: &Path) -> Paths {
 // Recognizing an existing product, before planting a second map of it:
 // `t594` §4.5, case 3 -- reached only when there is no tree above `here`
 // at all. `trees_below`, `tree_below_refusal`, `refuse_second_map` and
-// `second_map_hint` moved to `tree.rs` (`t592` tranche 2, `d710`): what
-// stays here is only the `--join` case, `tree_below_join_refusal` and
-// `tree_above_refusal`, which no other harness shares yet.
+// `second_map_hint` moved to `tree.rs` (`t592` tranche 2, `d710`), and
+// `tree_above_refusal` moved with `--join`'s own preamble (piece G,
+// `f714`). What stays here is only the `--join` case:
+// `tree_below_join_refusal`, `pub(super)` since `codex.rs` calls it too now.
 // ---------------------------------------------------------------------------
 
 /// `d626`: the same disk state `tree::tree_below_refusal` names for a plant,
@@ -546,7 +548,7 @@ fn paths(root: &Path) -> Paths {
 /// several of those deep. With a mix of withheld and shown routes, only
 /// the shown ones are listed, and how many are missing is never said:
 /// the count is also something the guard would be handing over.
-fn tree_below_join_refusal(here: &Path, below: &[PathBuf], spec: &str) -> Failure {
+pub(super) fn tree_below_join_refusal(here: &Path, below: &[PathBuf], spec: &str) -> Failure {
     let routes: Vec<Option<String>> = below.iter().map(|p| guarded_relative(here, p)).collect();
     let shown: Vec<&str> = routes.iter().filter_map(|r| r.as_deref()).collect();
 
@@ -619,28 +621,6 @@ fn guarded_relative(base: &Path, path: &Path) -> Option<String> {
     Some(parts.join("/"))
 }
 
-/// §6.4's mirror image, upward: a folder with no `.vivac/` of its own,
-/// told to `--join` a tree somewhere else while the tree it already
-/// resolves to sits above it.
-///
-/// `Failure::already_a_lane` used to answer here, and its own doc says
-/// what is wrong with that: it is for "a folder that already carries
-/// somebody else's `.vivac/lane`", and this folder carries none at all.
-/// The refusal itself was never in doubt -- joining would split the
-/// product either way -- so what changes is only the sentence, which now
-/// says the thing that is true and where to go and read it.
-///
-/// Named, and the name withheld when the redaction guard rejects it
-/// (`d600`), the same as every other folder this module names.
-fn tree_above_refusal(tree_root: &Path) -> Failure {
-    let label = crate::registry::label_for(tree::guarded_folder_name(tree_root).as_deref());
-    Failure::Model(format!(
-        "  A tree sits above this folder, in {label}, so this folder already belongs to\n  \
-         that product. Joining it to a different tree would split the two. To see\n  \
-         where it belongs:  vivac brief"
-    ))
-}
-
 // ---------------------------------------------------------------------------
 // Formatting: the two-column plan lines `t565` §7.8 fixes the width of.
 // ---------------------------------------------------------------------------
@@ -670,84 +650,19 @@ pub(super) fn wrapped_piece_line(label: &str, first: &str, second: &str) -> Stri
 // -- that is what a join used to leave undone (`f667`/`f669`).
 // ---------------------------------------------------------------------------
 
-/// `spec`, printed back exactly as typed when the tree it names cannot be
-/// joined: a person's own words, the same reasoning `relocate`'s own
-/// destination is printed under -- not a path this tool went looking for.
+/// `--join`'s own preamble is `tree::plan_join` now, shared with `codex.rs`
+/// (`t592` tranche 2, piece G, `f714`): everything past deciding the plan is
+/// this harness's own `apply_writes`, the same as a plant.
 fn join(
     roots: &super::Roots,
     spec: &str,
     lane_name: Option<&str>,
     a: &Args,
 ) -> Result<i32, Failure> {
-    let target = crate::registry::resolve(spec)?;
-    if !crate::store::already_planted(&target) {
-        return Err(Failure::Model(format!(
-            "  \"{spec}\" has no tree yet, so there is nothing to join.\n  \
-             Plant one there first:  vivac setup claude-code"
-        )));
+    match tree::plan_join(roots, spec, lane_name, Harness::ClaudeCode)? {
+        Some((join_roots, plan)) => apply_writes(&join_roots, a, plan),
+        None => Ok(0),
     }
-    // §4.5: refuses when this folder already is a lane of *another* tree --
-    // joining the very one it already resolves to does nothing at all, since
-    // there is nothing left to do. A folder that holds a tree of its own
-    // gets a different text: it carries no lane to redirect, it carries
-    // the tree (`t594`).
-    if let Some(l) = &roots.located {
-        if !crate::anchor::same_folder(&l.root, &target) {
-            if crate::anchor::same_folder(&roots.here, &l.root) {
-                return Err(Failure::already_has_a_tree());
-            }
-            // Two different folders reach this line, and only one of them
-            // is a lane: the one that carries `.vivac/lane` itself.
-            // Everything else here has no `.vivac/` of its own at all and
-            // simply resolves up into the tree above it, which is a
-            // different sentence -- `already_a_lane` names a file that
-            // folder does not have.
-            if tree::lane_carried_by(l, &roots.here).is_some() {
-                return Err(Failure::already_a_lane());
-            }
-            return Err(tree_above_refusal(&l.root));
-        }
-        // The same tree, and this folder already carries the lane file
-        // that says so: everything below would mint a second lane id for
-        // a folder that already has one, orphaning the stack, the focus
-        // and the counters the first one holds. Nothing is written and
-        // nothing is appended, so this returns ahead of `--dry-run` too:
-        // what that flag reports is what a run would do, and this run
-        // would do nothing either way.
-        if let Some(id) = tree::lane_carried_by(l, &roots.here) {
-            tree::say_nothing_was_done(&target, id, lane_name);
-            return Ok(0);
-        }
-    }
-    // Never `spec`, and never `target` either (`t594`):
-    // unlike the "no tree yet" refusal above, this is the one place `join`
-    // would otherwise echo a path back that a person did not necessarily
-    // type themselves -- `spec` might have resolved through a project
-    // name, not a path at all.
-    if crate::store::first_event_id(&target).is_none() {
-        return Err(Failure::Model(
-            "  That tree has no events yet, so there is nothing to join: it has\n  \
-             no identity yet for a lane to point back at."
-                .to_string(),
-        ));
-    }
-
-    // `t640`, point 11: from here, this run walks the very same path
-    // `apply_writes` already walks for a plant, minus the plant --
-    // `join_roots.tree` is `target`, already confirmed planted above, so
-    // `apply_writes` never mints a `Store::create` for it. `located: None`
-    // is safe: `write_lane`, `note_registry` and `apply_writes` itself
-    // only ever read `roots.tree` and `roots.here` off this value, never
-    // `located`, which is `plan_lane`'s own question and `join` answers
-    // for itself with `tree::plan_join_lane` instead.
-    let join_roots = super::Roots {
-        here: roots.here.clone(),
-        tree: target.clone(),
-        located: None,
-    };
-    let lane = tree::plan_join_lane(&roots.here, &target, lane_name);
-    let plan = tree::plan_for_join(&join_roots, lane);
-    apply_writes(&join_roots, a, plan)
 }
 
 // ---------------------------------------------------------------------------
@@ -760,7 +675,7 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     // this function alone, which is exactly what let `--join` skip them.
     // Every refusal of the tree side, and the lane this folder itself
     // would become, is `tree::plan`'s own (`t592` tranche 2, `d710`).
-    let plan = tree::plan(roots, a)?;
+    let plan = tree::plan(roots, a, Harness::ClaudeCode)?;
     apply_writes(roots, a, plan)
 }
 
@@ -889,7 +804,10 @@ fn apply_writes(roots: &super::Roots, a: &Args, plan: tree::TreePlan) -> Result<
     }
 
     if !a.has("yes") && !super::stdin_is_terminal() {
-        return Err(Failure::Model(no_terminal_text(a)));
+        return Err(Failure::Model(super::no_terminal_text(
+            Harness::ClaudeCode,
+            a,
+        )));
     }
 
     print!(
@@ -1112,55 +1030,6 @@ fn render_piece_block(
 // `pub(super)`: true of `codex.rs`'s own hooks and server too, and neither
 // names Claude Code (`d653`).
 pub(super) const TRAILING_PARAGRAPH: &str = "  The hooks run a command in every session, and the server is how the\n  agent writes to the tree. Nothing outside this directory is touched,\n  and no file is copied.\n";
-
-/// A value repeated into `no_terminal_text`, quoted only when it has a
-/// space in it: the same rule the copied command line needs to survive a
-/// shell, and no more than that -- an unquoted path or name with none
-/// reads back exactly as it was typed.
-fn quoted_if_it_has_a_space(value: &str) -> String {
-    if value.contains(' ') {
-        format!("\"{value}\"")
-    } else {
-        value.to_string()
-    }
-}
-
-/// The flags this run was given, in the fixed order the two commands
-/// `no_terminal_text` suggests repeat them in, and only the ones present.
-/// `f675`: dropping them used to hand back two bare commands, and running
-/// the first one literally -- `vivac setup claude-code --dry-run` -- plans
-/// a plant even on a run that asked to `--join` a tree elsewhere. That is
-/// not a shorter version of the advice, it is different advice.
-fn no_terminal_flags(a: &Args) -> String {
-    let mut s = String::new();
-    if let Some(v) = a.opt("join") {
-        s.push_str(" --join ");
-        s.push_str(&quoted_if_it_has_a_space(v));
-    }
-    if a.has("new-tree") {
-        s.push_str(" --new-tree");
-    }
-    if let Some(v) = a.opt("name") {
-        s.push_str(" --name ");
-        s.push_str(&quoted_if_it_has_a_space(v));
-    }
-    if let Some(v) = a.opt("lane-name") {
-        s.push_str(" --lane-name ");
-        s.push_str(&quoted_if_it_has_a_space(v));
-    }
-    s
-}
-
-/// `f675`: built rather than constant, so the two commands it suggests
-/// name the run that is actually stuck rather than a bare plant. The two
-/// columns keep the alignment a fixed label already fixes; only what
-/// comes after `claude-code` grows.
-fn no_terminal_text(a: &Args) -> String {
-    let flags = no_terminal_flags(a);
-    format!(
-        "  setup asks before writing, and there is no terminal here to ask.\n  See what it would write:  vivac setup claude-code{flags} --dry-run\n  Then write it:            vivac setup claude-code{flags} --yes"
-    )
-}
 
 /// What this run wrote, which decides how it ends (`t579` §15.5): a
 /// paragraph is only printed when it is true of this run, and it says
@@ -1675,28 +1544,6 @@ fn remove_if_empty(dir: Option<&Path>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The same promise for the refusal's mirror image, upward: the tree
-    /// above is named, and a name the redaction guard rejects is not
-    /// written down at all -- the sentence still says where to go and
-    /// read it.
-    #[test]
-    fn tree_above_refusal_with_the_name_withheld_says_so_without_naming_anyone() {
-        let secret = "someone@example.com";
-        assert!(
-            crate::redact::check_field("folder name", secret).is_some(),
-            "the guard must actually reject this name, or the test proves nothing"
-        );
-
-        let msg = tree_above_refusal(&PathBuf::from("/tmp").join(secret)).message();
-
-        assert!(
-            msg.contains("A tree sits above this folder, in another folder,"),
-            "{msg}"
-        );
-        assert!(msg.contains("vivac brief"), "{msg}");
-        assert!(!msg.contains(secret), "{msg}");
-    }
 
     #[test]
     fn is_vivac_command_strips_quotes_path_and_extension() {

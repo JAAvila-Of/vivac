@@ -247,19 +247,12 @@ fn undo_refuses_before_writing_anything() {
     assert_nothing_was_written(&c);
 }
 
-#[test]
-fn join_refuses_before_writing_anything() {
-    let c = Sandbox::new_empty("setup-codex-flag-join");
-    let (out, code) = c.run(&["setup", "codex", "--yes", "--join", "somewhere"]);
-    assert_eq!(code, 2, "{out}");
-    assert!(out.contains("--join"), "{out}");
-    assert_nothing_was_written(&c);
-}
-
 /// `t592` tranche 2 (`d710`): `--new-tree`, `--lane-name` and `--name` are
 /// the tree's own flags, not the harness's, so they stop being refused and
-/// behave exactly as they do for `claude-code`. `--join` and `--undo` are
-/// not this tranche's (`d710` §3) and still refuse above.
+/// behave exactly as they do for `claude-code`. `--join` joined this
+/// harness too in piece G of the same tranche (`f714`); `tests/setup_scenarios.rs`
+/// covers it. `--undo` is not this tranche's (`d710` §3) and still refuses
+/// above.
 #[test]
 fn new_tree_is_accepted_and_plants_the_tree() {
     let c = Sandbox::new_empty("setup-codex-flag-new-tree");

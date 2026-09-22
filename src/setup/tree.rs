@@ -11,9 +11,14 @@
 //! given it. The tree's own `.gitignore` is a plain file write, so it
 //! travels in the caller's own batch through [`file_writes`] instead.
 //!
-//! What stays out: `--join`'s own preamble (`claude_code::join`) and the
-//! refusals only reachable through it (`tree_below_join_refusal`,
-//! `tree_above_refusal`), and `--undo`. Neither harness shares those yet.
+//! `--join`'s own preamble moved in too, piece G of `t592` tranche 2
+//! (`f714`): [`plan_join`] is every refusal `--join` owns and the plan it
+//! ends in, once `codex.rs` needed the same door `claude_code.rs` already
+//! had. `tree_above_refusal`, one of the refusals only reachable through
+//! it, moved with it. `tree_below_join_refusal` stayed in
+//! `claude_code.rs`, the one piece of that preamble `codex.rs` now calls
+//! rather than owning a copy of. What still stays out: `--undo`. Neither
+//! harness shares that yet.
 
 use crate::args::Args;
 use crate::failure::Failure;
@@ -192,9 +197,6 @@ fn walk_for_trees(dir: &Path, depth: u32, found: &mut Vec<PathBuf>) {
 /// `path`'s own folder name, or `None` when the redaction guard rejects
 /// it: this text reaches an agent's context (`d600`), the same rule
 /// `registry::folder_name` already follows for a copy's folder.
-///
-/// `pub(super)`: `claude_code::tree_above_refusal` names a folder the same
-/// way, for `--join`'s own refusal, which this module does not share.
 pub(super) fn guarded_folder_name(path: &Path) -> Option<String> {
     let name = path.file_name()?.to_string_lossy().into_owned();
     match crate::redact::check_field("folder name", &name) {
@@ -242,7 +244,11 @@ pub(super) fn tree_below_refusal(paths: &[PathBuf]) -> Failure {
 /// forks that share a root commit) -- and skipped when there is a tree
 /// above `here` at all, since with one this is an ordinary join and the
 /// product question does not arise.
-fn refuse_second_map(roots: &super::Roots, bypass_registered: bool) -> Result<(), Failure> {
+fn refuse_second_map(
+    roots: &super::Roots,
+    bypass_registered: bool,
+    h: super::Harness,
+) -> Result<(), Failure> {
     if roots.located.is_some() {
         return Ok(());
     }
@@ -261,7 +267,7 @@ fn refuse_second_map(roots: &super::Roots, bypass_registered: bool) -> Result<()
         .into_iter()
         .find(|s| !crate::anchor::same_folder(&s.root, &roots.here));
     match best {
-        Some(sharing) => Err(product_registered_refusal(&sharing, &here_repos)),
+        Some(sharing) => Err(product_registered_refusal(&sharing, &here_repos, h)),
         None => Ok(()),
     }
 }
@@ -280,6 +286,7 @@ fn refuse_second_map(roots: &super::Roots, bypass_registered: bool) -> Result<()
 fn product_registered_refusal(
     sharing: &crate::registry::Sharing,
     here_repos: &[crate::event::Repo],
+    h: super::Harness,
 ) -> Failure {
     let mut repo_names: Vec<&str> = here_repos
         .iter()
@@ -300,17 +307,21 @@ fn product_registered_refusal(
         .map(|p| if *p == "." { "this folder itself" } else { p })
         .collect::<Vec<_>>()
         .join(", ");
+    // `f714`: names the harness this run was invoked as, not always
+    // `claude-code` -- a person who typed `codex` gets a command back that
+    // Codex actually takes.
+    let word = h.word();
     match &sharing.name {
         Some(name) => Failure::Model(format!(
             "  Some repositories here are already tracked by project \"{name}\":\n      \
              {repo_list}\n  \
              Planting another tree would give this product two maps.\n\n  \
              To work on {name} from this folder:\n      \
-             vivac setup claude-code --join {}\n  \
+             vivac setup {word} --join {}\n  \
              If the tree should live here instead, run this in the folder that holds it:\n      \
              vivac relocate <path to this folder>\n  \
              To plant a separate tree anyway:\n      \
-             vivac setup claude-code --new-tree",
+             vivac setup {word} --new-tree",
             crate::registry::quote_if_needed(name)
         )),
         None => Failure::Model(format!(
@@ -319,11 +330,11 @@ fn product_registered_refusal(
              {repo_list}\n  \
              Planting another tree would give this product two maps.\n\n  \
              To work on it from this folder, give the path to its folder:\n      \
-             vivac setup claude-code --join <path to that folder>\n  \
+             vivac setup {word} --join <path to that folder>\n  \
              If the tree should live here instead, run this in the folder that holds it:\n      \
              vivac relocate <path to this folder>\n  \
              To plant a separate tree anyway:\n      \
-             vivac setup claude-code --new-tree"
+             vivac setup {word} --new-tree"
         )),
     }
 }
@@ -1097,8 +1108,8 @@ fn build_plan(roots: &super::Roots, lane: LanePlan, requested: Option<String>) -
 /// guard, checked before this is ever called: `claude_code::run` needs to
 /// know about it earlier than this, to choose between a plant's own
 /// refusal and a join's.
-pub(super) fn plan(roots: &super::Roots, a: &Args) -> Result<TreePlan, Failure> {
-    refuse_second_map(roots, a.has("new-tree"))?;
+pub(super) fn plan(roots: &super::Roots, a: &Args, h: super::Harness) -> Result<TreePlan, Failure> {
+    refuse_second_map(roots, a.has("new-tree"), h)?;
     let tree = &roots.tree;
     let requested = requested_name(a)?;
     if requested.is_some() && crate::store::already_planted(tree) && !a.has("new-tree") {
@@ -1118,6 +1129,109 @@ pub(super) fn plan(roots: &super::Roots, a: &Args) -> Result<TreePlan, Failure> 
 /// decided and no requested name -- `--join` does not take `--name`.
 pub(super) fn plan_for_join(join_roots: &super::Roots, lane: LanePlan) -> TreePlan {
     build_plan(join_roots, lane, None)
+}
+
+/// §6.4's mirror image, upward: a folder with no `.vivac/` of its own,
+/// told to `--join` a tree somewhere else while the tree it already
+/// resolves to sits above it.
+///
+/// `Failure::already_a_lane` used to answer here, and its own doc says
+/// what is wrong with that: it is for "a folder that already carries
+/// somebody else's `.vivac/lane`", and this folder carries none at all.
+/// The refusal itself was never in doubt -- joining would split the
+/// product either way -- so what changes is only the sentence, which now
+/// says the thing that is true and where to go and read it.
+///
+/// Named, and the name withheld when the redaction guard rejects it
+/// (`d600`), the same as every other folder this module names.
+fn tree_above_refusal(tree_root: &Path) -> Failure {
+    let label = crate::registry::label_for(guarded_folder_name(tree_root).as_deref());
+    Failure::Model(format!(
+        "  A tree sits above this folder, in {label}, so this folder already belongs to\n  \
+         that product. Joining it to a different tree would split the two. To see\n  \
+         where it belongs:  vivac brief"
+    ))
+}
+
+/// Every refusal `--join` owns, and the plan it ends in. `Ok(None)` means
+/// the run found nothing left to do and has already said so, so the caller
+/// returns `Ok(0)` without writing or printing anything more.
+pub(super) fn plan_join(
+    roots: &super::Roots,
+    spec: &str,
+    lane_name: Option<&str>,
+    h: super::Harness,
+) -> Result<Option<(super::Roots, TreePlan)>, Failure> {
+    let target = crate::registry::resolve(spec)?;
+    if !crate::store::already_planted(&target) {
+        return Err(Failure::Model(format!(
+            "  \"{spec}\" has no tree yet, so there is nothing to join.\n  \
+             Plant one there first:  vivac setup {}",
+            h.word()
+        )));
+    }
+    // §4.5: refuses when this folder already is a lane of *another* tree --
+    // joining the very one it already resolves to does nothing at all, since
+    // there is nothing left to do. A folder that holds a tree of its own
+    // gets a different text: it carries no lane to redirect, it carries
+    // the tree (`t594`).
+    if let Some(l) = &roots.located {
+        if !crate::anchor::same_folder(&l.root, &target) {
+            if crate::anchor::same_folder(&roots.here, &l.root) {
+                return Err(Failure::already_has_a_tree());
+            }
+            // Two different folders reach this line, and only one of them
+            // is a lane: the one that carries `.vivac/lane` itself.
+            // Everything else here has no `.vivac/` of its own at all and
+            // simply resolves up into the tree above it, which is a
+            // different sentence -- `already_a_lane` names a file that
+            // folder does not have.
+            if lane_carried_by(l, &roots.here).is_some() {
+                return Err(Failure::already_a_lane());
+            }
+            return Err(tree_above_refusal(&l.root));
+        }
+        // The same tree, and this folder already carries the lane file
+        // that says so: everything below would mint a second lane id for
+        // a folder that already has one, orphaning the stack, the focus
+        // and the counters the first one holds. Nothing is written and
+        // nothing is appended, so this returns ahead of `--dry-run` too:
+        // what that flag reports is what a run would do, and this run
+        // would do nothing either way.
+        if let Some(id) = lane_carried_by(l, &roots.here) {
+            say_nothing_was_done(&target, id, lane_name);
+            return Ok(None);
+        }
+    }
+    // Never `spec`, and never `target` either (`t594`):
+    // unlike the "no tree yet" refusal above, this is the one place `join`
+    // would otherwise echo a path back that a person did not necessarily
+    // type themselves -- `spec` might have resolved through a project
+    // name, not a path at all.
+    if crate::store::first_event_id(&target).is_none() {
+        return Err(Failure::Model(
+            "  That tree has no events yet, so there is nothing to join: it has\n  \
+             no identity yet for a lane to point back at."
+                .to_string(),
+        ));
+    }
+
+    // `t640`, point 11: from here, this run walks the very same path
+    // `apply_writes` already walks for a plant, minus the plant --
+    // `join_roots.tree` is `target`, already confirmed planted above, so
+    // `apply_writes` never mints a `Store::create` for it. `located: None`
+    // is safe: `write_lane`, `note_registry` and `apply_writes` itself
+    // only ever read `roots.tree` and `roots.here` off this value, never
+    // `located`, which is `plan_lane`'s own question and `join` answers
+    // for itself with `plan_join_lane` instead.
+    let join_roots = super::Roots {
+        here: roots.here.clone(),
+        tree: target.clone(),
+        located: None,
+    };
+    let lane = plan_join_lane(&roots.here, &target, lane_name);
+    let plan = plan_for_join(&join_roots, lane);
+    Ok(Some((join_roots, plan)))
 }
 
 // ---------------------------------------------------------------------------
@@ -1373,6 +1487,28 @@ pub(super) fn commit(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The same promise for the refusal's mirror image, upward: the tree
+    /// above is named, and a name the redaction guard rejects is not
+    /// written down at all -- the sentence still says where to go and
+    /// read it.
+    #[test]
+    fn tree_above_refusal_with_the_name_withheld_says_so_without_naming_anyone() {
+        let secret = "someone@example.com";
+        assert!(
+            crate::redact::check_field("folder name", secret).is_some(),
+            "the guard must actually reject this name, or the test proves nothing"
+        );
+
+        let msg = tree_above_refusal(&PathBuf::from("/tmp").join(secret)).message();
+
+        assert!(
+            msg.contains("A tree sits above this folder, in another folder,"),
+            "{msg}"
+        );
+        assert!(msg.contains("vivac brief"), "{msg}");
+        assert!(!msg.contains(secret), "{msg}");
+    }
 
     /// `tree_below_refusal`'s own fallback for two or more trees below
     /// whose names the redaction guard withholds entirely: unspecified by
