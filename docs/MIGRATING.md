@@ -4,8 +4,8 @@
 
 If a project already keeps what it has learned — in a memory or learning
 system, in `CLAUDE.md`, `AGENTS.md`, `MEMORY.md`, the harness's own memory, or
-internal documents — **none of that is in the tree after `vivac setup`.** vivac
-never reads another system, and never reads those files.
+internal documents — **none of that is in the tree once vivac is set up.**
+vivac never reads another system, and never reads those files.
 
 That is not an omission waiting to be fixed. Telling a rule from the prose
 around it takes judgment, and a tool that guessed would fill your tree with
@@ -44,8 +44,12 @@ in:
 
 ```sh
 cargo install vivac
+vivac init
 vivac setup claude-code
 ```
+
+`init` plants the tree, `setup` gives the agent the hooks, the server and
+this skill. See [Setting it up](SETUP.md) for what each one writes.
 
 **2.** Open a new session in the project. If it asks whether to use the
 `vivac` server, say yes.
