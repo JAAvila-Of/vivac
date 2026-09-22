@@ -315,8 +315,13 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         "reconcile" => &["since", "all", "json"],
         "changes" => &["since", "json"],
         "web" => &["port", "no-open", "project"],
-        "init" | "hooks" | "mcp" => &[],
-        "setup" => &[
+        "hooks" | "mcp" => &[],
+        // `d723` piece A: the same six `setup` already took, with the same
+        // meaning -- planting is `init`'s job now, and these are what a
+        // plant needs to say. A bare `init` still takes none of them, the
+        // same as before this piece: see the guard below, ahead of the
+        // block these six actually reach.
+        "init" | "setup" => &[
             "dry-run",
             "yes",
             "undo",
@@ -376,6 +381,27 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
     }
 
     if cmd == "init" {
+        // `d723` piece A: any of the six flags `setup` already had sends
+        // this run to the same tree path `setup` already walks through
+        // `tree.rs` (`setup::init`). Neither guard below reads back the
+        // same way through that path -- `resolve_roots` resolves a lane
+        // through `store::locate` rather than the read just below, which
+        // can succeed or fail with a different sentence than
+        // `already_a_lane`'s own, and an already-planted folder is shown
+        // the full plan there rather than the one line the second guard
+        // prints -- so a bare `vivac init` still takes both guards exactly
+        // as they were before this piece, and only a run carrying one of
+        // these six ever reaches the new path at all.
+        let has_new_flags = a.has("dry-run")
+            || a.has("yes")
+            || a.has("name")
+            || a.has("lane-name")
+            || a.has("join")
+            || a.has("new-tree")
+            || a.has("undo");
+        if has_new_flags {
+            return setup::init(&cwd, a);
+        }
         // `t594`: a folder can carry a `.vivac/lane`
         // naming another tree entirely -- exactly what `relocate` leaves
         // the origin holding -- without itself being `already_planted`, the

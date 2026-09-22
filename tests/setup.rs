@@ -4175,6 +4175,54 @@ fn name_that_collides_with_another_project_warns_in_the_plan_and_still_writes() 
     );
 }
 
+/// `f724`: a message that splices in a name has to reach its width through
+/// `render::wrap`, never a break placed by hand before the name was ever
+/// typed. The collision line above is the one line of the plan that
+/// carries one, and `--name` accepts up to `t640`'s own `NAME_MAX_LEN`
+/// (100) -- long enough on its own to run past 76 columns without any help
+/// from a long folder, which is what makes this the sibling of
+/// `tests/init.rs`'s own version of this same test rather than a repeat of
+/// it.
+#[test]
+fn setup_name_collision_wraps_a_long_name_rather_than_running_past_the_width() {
+    let c = Sandbox::new_empty("setup-name-collision-width");
+    let first = c.0.join("first");
+    std::fs::create_dir_all(&first).unwrap();
+    let long = "A Name Chosen On Purpose To Run Longer Than One Line Of The Plan Could Hold";
+    run_in(
+        &first,
+        c.global_home(),
+        &["setup", "claude-code", "--yes", "--name", long],
+    );
+
+    let second = c.0.join("second");
+    std::fs::create_dir_all(&second).unwrap();
+    let (out, code) = run_in(
+        &second,
+        c.global_home(),
+        &["setup", "claude-code", "--dry-run", "--name", long],
+    );
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("already names another project"), "{out}");
+    // The header line names a path with no bound of its own, and a
+    // `sub_line` -- eight spaces in -- carries a path or a command that is
+    // not this test's to word-wrap either: the same two shapes
+    // `tests/setup_scenarios.rs`'s own `assert_no_plan_line_is_wider_than_the_block`
+    // skips, by what they are rather than by their text.
+    const SUB_LINE_INDENT: usize = 8;
+    for line in out.lines() {
+        let trimmed = line.trim_start();
+        let indent = line.len() - trimmed.len();
+        if indent == SUB_LINE_INDENT || trimmed.starts_with("vivac setup") {
+            continue;
+        }
+        assert!(
+            line.chars().count() <= 76,
+            "a plan line ran past 76 columns: {line:?}\nfull output:\n{out}"
+        );
+    }
+}
+
 /// The other half of point 10 bis: with nothing to collide against, the
 /// plan carries no warning at all.
 #[test]
