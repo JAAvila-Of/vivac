@@ -81,18 +81,23 @@ gets the same skill file. The tree is planted the same way, because a
 project with the three files and no tree has two hooks that exit 0 in
 silence for ever. Nothing goes in your own configuration directory.
 
-It merges the same way the Claude Code side does, and by the same rules: it
-adds to a file rather than replacing it, keeps every key it does not own
-where it was, refuses a file it cannot read and an entry under its name that
-it did not write, and a second run finds nothing to do. The server goes into
-`config.toml` between two marker comments, which is how a later run knows
-which lines are its own without this binary carrying a TOML reader it needs
-for nothing else.
+It merges, and it can be taken back, the same way the Claude Code side does
+and by the same rules: it adds to a file rather than replacing it, keeps
+every key it does not own where it was, refuses a file it cannot read and an
+entry under its name that it did not write, and a second run finds nothing
+to do. `vivac setup codex --undo` removes exactly what it wrote and leaves
+anything that is not exactly its own; the tree is never part of it.
+
+The server goes into `config.toml` between two marker comments, which is how
+a later run knows which lines are its own without this binary carrying a
+TOML reader it needs for nothing else. A block with one marker and not the
+other is left alone and named, by both directions: where it ended is a guess,
+and this tool does not guess.
 
 **Running it is yours to do, not the agent's.** Once `.codex/` and
 `.agents/` exist, Codex keeps both read-only inside its own sandbox, so an
-agent working in the project cannot run setup here again or merge it. What
-an agent can do is create them on a project that has neither.
+agent working in the project cannot run setup here again, merge it or take
+it back. What an agent can do is create them on a project that has neither.
 
 **Two things setup cannot do for you either**, and it says both when it
 finishes. Codex reads nothing under a project's `.codex/` until you mark that
@@ -105,8 +110,10 @@ output, which Codex adds to the session as context. Above roughly 2,500
 tokens it saves that context to a file and shows the model a shorter preview
 instead; the brief's own budget is 1,500, so that only bites if you raise it.
 
-> **`--undo` is not there yet**, and it is refused by name rather than
-> ignored. See [where it is measured](../README.md#where-this-is-measured).
+The flags are the same on both sides, because the ones that matter belong to
+the tree and not to a harness: `--join`, `--new-tree`, `--name`,
+`--lane-name`, `--dry-run`, `--yes` and `--undo` all read here exactly as
+they read there. See [where it is measured](../README.md#where-this-is-measured).
 
 `Stop` runs on every turn rather than once at the end, so the last stop does
 not depend on the session closing cleanly. The stop is only saved if the tree
