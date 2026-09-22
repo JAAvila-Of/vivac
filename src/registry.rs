@@ -795,6 +795,24 @@ pub fn lanes_with_missing_folder(store_dir: &Path, project_id: &str) -> Vec<Stri
     missing
 }
 
+/// The folder the registry last recorded for `lane_id` of `project_id`,
+/// whatever `exists()` says about it right now -- that question is
+/// `lanes_with_missing_folder`'s, kept apart the same reason `root_of`
+/// stays apart from `roots`: a caller that already knows a folder is there
+/// asks this directly, and one that has to check first calls both rather
+/// than this one guessing.
+///
+/// `reconcile` (`f699`, `d701`) is the first reader: comparing another
+/// lane's own history needs that lane's own checkout, not this one's, and
+/// `entry.lanes` is the only place that folder is written down (`path`
+/// itself never moves off the founding lane, `f612`'s own doc comment
+/// above).
+pub fn lane_folder(store_dir: &Path, project_id: &str, lane_id: &str) -> Option<PathBuf> {
+    let projects = read(&store_dir.join(FILE))?;
+    let entry = projects.get(project_id)?;
+    entry.lanes.get(lane_id).map(PathBuf::from)
+}
+
 /// Folds `s` into `projects`, minting the entry when `project_id` is new.
 /// `s.repos` and `s.lane` only ever add: `None` leaves what is already
 /// there.

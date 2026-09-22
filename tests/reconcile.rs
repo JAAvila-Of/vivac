@@ -10,6 +10,39 @@ mod common;
 use common::Sandbox;
 use std::process::Command;
 
+// ---------------------------------------------------------------------------
+// `f699`/`d701`: `reconcile` used to be recut to the lane it ran from, so a
+// change that landed in a sibling folder of the same product never came out
+// no matter which terminal asked. These prove it now covers every lane the
+// registry can still resolve, each measured against its own last stop.
+// ---------------------------------------------------------------------------
+
+/// A second folder, its own git repository, joined to `on`'s tree as a lane
+/// named `name`: what `reconcile` needs to have anything of its own to
+/// compare, unlike `brief`'s OTHER LANES, which never asks git anything.
+///
+/// `setup` writes its own hook and config files into the joining folder
+/// without committing them, so a repository left as `setup` leaves it would
+/// show those as changes since any commit forever, no matter when a test's
+/// own stop is saved. Folding them into a commit of their own is what makes
+/// "nothing changed since this lane's own stop" a state a test can reach.
+fn join_lane_with_repo(on: &Sandbox, folder: &str, name: &str) -> Sandbox {
+    let joined = Sandbox::new_empty_in(folder, on.global_home());
+    commit_a_repo(&joined.0);
+    joined.ok(&[
+        "setup",
+        "claude-code",
+        "--yes",
+        "--join",
+        on.0.to_str().unwrap(),
+        "--lane-name",
+        name,
+    ]);
+    git_at(&joined.0, &["add", "-A"]);
+    git_at(&joined.0, &["commit", "-qm", "setup"]);
+    joined
+}
+
 /// A sandbox that is also a git repository with one commit, which is what it
 /// takes for `Anchor` to be `Git` and not `Null`.
 fn with_git(name: &str) -> Sandbox {
@@ -293,4 +326,175 @@ fn reconcile_says_a_repository_is_on_another_branch_instead_of_diffing_it() {
         !s.contains("webapi/src/one.rs"),
         "the moved repository was diffed anyway:\n{s}"
     );
+}
+
+/// The reproduction of `f699` itself: a file changes in lane B's folder,
+/// nobody claims it, and `reconcile` run from lane A's own folder has to
+/// say so, under lane B's own name -- not silence, and not lane A's name.
+#[test]
+fn a_change_in_another_lane_of_the_same_product_comes_out_under_its_own_name() {
+    let a = with_git("recon-multilane-found");
+    a.ok(&[
+        "push",
+        "A goal",
+        "--why",
+        "it is needed",
+        "--governs",
+        "unrelated/**",
+    ]);
+    a.ok(&["save", "a stop"]);
+
+    let b = join_lane_with_repo(&a, "recon-multilane-b", "sibling");
+    b.ok(&["save", "a stop"]);
+    write(&b, "stray_edit.rs", "nobody in lane a asked for this\n");
+
+    let s = a.ok(&["reconcile"]);
+    assert!(s.contains("IN OTHER LANES OF THIS PRODUCT"), "{s}");
+    assert!(
+        s.contains("sibling"),
+        "the lane's own name is missing:\n{s}"
+    );
+    assert!(
+        s.contains("stray_edit.rs"),
+        "the change from the other lane never surfaced:\n{s}"
+    );
+}
+
+/// A lane with nothing unclaimed since its own last stop stays out: the
+/// report does not grow just because a lane exists.
+#[test]
+fn a_lane_with_nothing_unclaimed_is_not_mentioned() {
+    let a = with_git("recon-multilane-quiet-found");
+    a.ok(&[
+        "push",
+        "A goal",
+        "--why",
+        "it is needed",
+        "--governs",
+        "unrelated/**",
+    ]);
+    a.ok(&["save", "a stop"]);
+
+    let b = join_lane_with_repo(&a, "recon-multilane-quiet-b", "quiet");
+    b.ok(&["save", "a stop"]);
+    // Nothing touched in `b` after its own stop.
+
+    let s = a.ok(&["reconcile"]);
+    assert!(!s.contains("IN OTHER LANES OF THIS PRODUCT"), "{s}");
+    assert!(!s.contains("quiet"), "{s}");
+}
+
+/// A lane whose folder disappeared -- moved, on a disconnected disk, or
+/// simply deleted -- is named and skipped rather than failing the command.
+#[test]
+fn a_lane_whose_folder_is_gone_is_named_and_skipped() {
+    let a = with_git("recon-multilane-gone-found");
+    a.ok(&[
+        "push",
+        "A goal",
+        "--why",
+        "it is needed",
+        "--governs",
+        "unrelated/**",
+    ]);
+    a.ok(&["save", "a stop"]);
+
+    let b = join_lane_with_repo(&a, "recon-multilane-gone-b", "ghost");
+    b.ok(&["save", "a stop"]);
+    write(&b, "stray_edit.rs", "x\n");
+    std::fs::remove_dir_all(&b.0).unwrap();
+
+    let (s, code) = a.run(&["reconcile"]);
+    assert_eq!(code, 0, "{s}");
+    assert!(s.contains("ghost"), "{s}");
+    assert!(s.contains("folder not readable from here, skipped"), "{s}");
+}
+
+/// `--since` keeps naming one stop, and comparing it against another
+/// lane's history would compare commits this checkout does not have:
+/// only this lane is measured, and the command says why the rest were
+/// left out.
+#[test]
+fn since_measures_only_this_lane_and_says_why() {
+    let a = with_git("recon-multilane-since-found");
+    a.ok(&[
+        "push",
+        "A goal",
+        "--why",
+        "it is needed",
+        "--governs",
+        "unrelated/**",
+    ]);
+    a.ok(&["save", "first"]);
+
+    let b = join_lane_with_repo(&a, "recon-multilane-since-b", "other");
+    b.ok(&["save", "a stop"]);
+    write(&b, "stray_edit.rs", "x\n");
+
+    let s = a.ok(&["reconcile", "--since", "v1"]);
+    assert!(!s.contains("IN OTHER LANES OF THIS PRODUCT"), "{s}");
+    assert!(!s.contains("stray_edit.rs"), "{s}");
+    assert!(
+        s.contains("Only this lane was measured: --since names one stop, and another lane's"),
+        "{s}"
+    );
+    assert!(
+        s.contains("Run reconcile with no\n  --since to cover every lane."),
+        "{s}"
+    );
+}
+
+/// The agent's half again: every entry, this lane's own included, gains a
+/// `lane` field, and the rest of the schema stays put.
+#[test]
+fn json_entries_carry_the_lane_field() {
+    let a = with_git("recon-multilane-json-found");
+    a.ok(&[
+        "push",
+        "A goal",
+        "--why",
+        "it is needed",
+        "--governs",
+        "unrelated/**",
+    ]);
+    a.ok(&["save", "a stop"]);
+
+    let b = join_lane_with_repo(&a, "recon-multilane-json-b", "sibling");
+    b.ok(&["save", "a stop"]);
+    write(&b, "stray_edit.rs", "x\n");
+
+    let s = a.ok(&["reconcile", "--json"]);
+    assert!(s.contains("\"lane\""), "{s}");
+    assert!(s.contains("\"sibling\""), "{s}");
+    assert!(s.contains("stray_edit.rs"), "{s}");
+}
+
+/// "Quiet" means nothing to report, not "nothing unclaimed": a lane whose
+/// only changed file is claimed by work that has since closed still has a
+/// finding worth naming -- the same CLAIMED ONLY BY CLOSED WORK basket the
+/// local lane's own report already prints -- and dropping the lane here
+/// would say less about it than the same report says about this one.
+#[test]
+fn a_lane_claimed_only_by_closed_work_still_shows() {
+    let a = with_git("recon-multilane-stale-found");
+    a.ok(&[
+        "push",
+        "Auth adapter",
+        "--why",
+        "it is due",
+        "--governs",
+        "claimed/**",
+    ]);
+    a.ok(&["pop", "adapter shipped"]);
+    a.ok(&["save", "a stop"]);
+
+    let b = join_lane_with_repo(&a, "recon-multilane-stale-b", "sibling");
+    b.ok(&["save", "a stop"]);
+    write(&b, "claimed/store.rs", "moved anyway\n");
+
+    let s = a.ok(&["reconcile"]);
+    assert!(s.contains("IN OTHER LANES OF THIS PRODUCT"), "{s}");
+    assert!(s.contains("sibling"), "{s}");
+    assert!(s.contains("CLAIMED ONLY BY CLOSED WORK"), "{s}");
+    assert!(s.contains("claimed/store.rs"), "{s}");
 }

@@ -18,6 +18,18 @@
 //! acts on it, the way `triage` does. The menu can come later, in the TUI,
 //! over exactly this data.
 //!
+//! **Product-wide, not lane-wide.** `f699` found the blind spot: an agent
+//! sat in one folder of a product, a change landed in a sibling folder of
+//! the *same* product, and every one of `anchors_of`, the working set and
+//! this command's own default folder said "this lane" -- truthfully, since
+//! that is where the command ran, and uselessly, since nothing said the
+//! diff was being read from the wrong folder. This lane still reconciles
+//! exactly as it always has; every other lane the registry can still
+//! resolve is reconciled too, each against its **own** last stop
+//! (`reference`'s own comment says why), so a stray edit in a sibling
+//! folder shows up here instead of staying invisible until somebody
+//! happens to ask from the right terminal (`d701`).
+//!
 //! It never writes. Reconciling is a judgement about what the work meant, and
 //! the tool does not have it: it can say *nobody claims `src/util/retry.rs`*,
 //! and it cannot say which thread that file belongs to.
@@ -30,6 +42,7 @@ use crate::failure::R;
 use crate::glob;
 use crate::model::{Node, Tree, Vivac};
 use crate::output::outln;
+use crate::registry;
 use crate::render::print_json;
 use serde_json::json;
 use std::path::Path;
@@ -37,6 +50,12 @@ use std::path::Path;
 /// How many files a section prints before it stops and says how many are left.
 /// `--json` is never truncated.
 const SHOWN: usize = 20;
+
+/// The extra indent every line of a section gains when it is printed under
+/// IN OTHER LANES OF THIS PRODUCT rather than for the lane in view: the
+/// lane's own name sits one level under that heading, and its verdict lines
+/// sit one level under the name.
+const NESTED: &str = "    ";
 
 /// A changed file, and what the tree has to say about it.
 struct Verdict<'a> {
@@ -120,72 +139,22 @@ fn plural(n: usize, one: &str, many: &str) -> String {
     }
 }
 
-/// Which stop to measure from: `--since <v>` names any stop the whole tree
-/// ever wrote, and stays that way -- naming one by hand is a different
-/// question from the default. With no name, the default is *this* lane's
-/// own last stop, not the log's: reconciling compares the git of **this**
-/// folder against a stop's anchor, and another lane's last stop can point
-/// at a commit this checkout does not even have (`t594`).
-fn reference<'a>(a: &'a Tree, args: &Args) -> Result<Option<&'a Vivac>, crate::failure::Failure> {
-    match args.opt("since") {
-        Some(s) => a
-            .vivac(s)
-            .map(Some)
-            .ok_or_else(|| crate::failure::Failure::usage(format!("No such vivac: {s}."))),
-        None => Ok(a.last_vivac()),
-    }
-}
-
-pub fn reconcile(a: &Tree, lane_dir: &Path, args: &Args) -> R {
-    let Some(since) = reference(a, args)? else {
-        outln!();
-        outln!("  No stop to measure from: this tree has no vivacs yet.");
-        outln!();
-        outln!("      vivac save \"<label>\"");
-        outln!();
-        return Ok(());
-    };
-
-    // A lane with declared repositories reconciles each of them (§4.4). A
-    // lane with none -- every tree nobody has run `setup` in -- keeps
-    // reading the single anchor this folder itself is, exactly as before
-    // this tranche (`f25`).
-    let declared: &[Repo] = a
-        .lanes
-        .get(a.lane())
-        .map(|s| s.repos.as_slice())
-        .unwrap_or(&[]);
-
-    let (changes, moved) = if declared.is_empty() {
-        if since.anchor.is_empty_tree() {
-            outln!();
-            outln!(
-                "  {} has no anchor, so there is no history to read.",
-                since.alias()
-            );
-            outln!("  Without version control the tree cannot be contradicted; that is");
-            outln!("  the floor of the product and not a failure.");
-            outln!();
-            return Ok(());
-        }
-        let root = anchor::detect(lane_dir);
-        (root.changed_since(&since.anchor), Vec::new())
-    } else {
-        repo_changes(declared, &since.anchors, lane_dir)
-    };
-
-    // The tool's own store is not work. Without this, every reconcile reports
-    // the log it just wrote to.
-    let changes: Vec<Change> = changes
+/// The tool's own store is not work. Without this, every reconcile reports
+/// the log it just wrote to. Shared between this lane's own changes and
+/// every other lane's, since the store lives under `.vivac/` in every one
+/// of them alike.
+fn without_store(changes: Vec<Change>) -> Vec<Change> {
+    changes
         .into_iter()
         .filter(|c| !c.file_path.replace('\\', "/").starts_with(".vivac/"))
-        .collect();
+        .collect()
+}
 
-    let governing: Vec<&Node> = a
-        .nodes_iter()
-        .filter(|n| !n.governs(a).is_empty())
-        .collect();
-
+/// Every changed file paired with who, if anyone, claims it -- worst
+/// offender first, then by path. A file's claim depends only on `governs`,
+/// which is one tree-wide fact, so this is the one place that reads it,
+/// used for this lane's own changes and for every other lane's alike.
+fn verdicts_of<'a>(changes: &[Change], governing: &[&'a Node], a: &'a Tree) -> Vec<Verdict<'a>> {
     let mut verdicts: Vec<Verdict> = changes
         .iter()
         .map(|c| {
@@ -203,19 +172,226 @@ pub fn reconcile(a: &Tree, lane_dir: &Path, args: &Args) -> R {
         })
         .collect();
     verdicts.sort_by(|x, y| y.times.cmp(&x.times).then_with(|| x.file.cmp(&y.file)));
+    verdicts
+}
 
-    let unclaimed: Vec<&Verdict> = verdicts
+/// The three baskets a set of verdicts sorts into: nobody claims it, only
+/// closed work claims it, and open work claims it -- the last of which
+/// `print_other_lanes` never shows, only computed here so this stays the
+/// one place that decides what "claimed" and "open" mean together.
+fn split_baskets<'v, 'a>(
+    verdicts: &'v [Verdict<'a>],
+) -> (
+    Vec<&'v Verdict<'a>>,
+    Vec<&'v Verdict<'a>>,
+    Vec<&'v Verdict<'a>>,
+) {
+    let unclaimed = verdicts
         .iter()
         .filter(|v| v.claimed_by.is_empty())
         .collect();
-    let stale: Vec<&Verdict> = verdicts
+    let stale = verdicts
         .iter()
         .filter(|v| !v.claimed_by.is_empty() && !v.claimed_and_open())
         .collect();
-    let live: Vec<&Verdict> = verdicts.iter().filter(|v| v.claimed_and_open()).collect();
+    let live = verdicts.iter().filter(|v| v.claimed_and_open()).collect();
+    (unclaimed, stale, live)
+}
+
+/// Which stop to measure from: `--since <v>` names any stop the whole tree
+/// ever wrote, and stays that way -- naming one by hand is a different
+/// question from the default. With no name, the default is *this* lane's
+/// own last stop, not the log's: reconciling compares the git of **this**
+/// folder against a stop's anchor, and another lane's last stop can point
+/// at a commit this checkout does not even have (`t594`). Every other lane
+/// reconciled below reads its own last stop the same way, straight off
+/// `a.vivacs`, for exactly this reason.
+fn reference<'a>(a: &'a Tree, args: &Args) -> Result<Option<&'a Vivac>, crate::failure::Failure> {
+    match args.opt("since") {
+        Some(s) => a
+            .vivac(s)
+            .map(Some)
+            .ok_or_else(|| crate::failure::Failure::usage(format!("No such vivac: {s}."))),
+        None => Ok(a.last_vivac()),
+    }
+}
+
+/// One other lane's own report: named, and either unreadable from here or
+/// carrying at least one file nobody claims (§4.4's own rule -- the report
+/// does not grow just because a lane exists).
+struct OtherLane<'a> {
+    name: &'a str,
+    unreadable: bool,
+    verdicts: Vec<Verdict<'a>>,
+}
+
+/// Every other lane worth a line: declared repositories of its own, a
+/// folder the registry can still resolve (or, failing that, named and
+/// marked so it can be skipped rather than silently dropped), and -- for
+/// the ones that are readable -- at least one file nobody claims since its
+/// own last stop.
+///
+/// `lanes` is `brief::all_lanes`, the same accessor `stack --lanes` reads
+/// to name every lane the tree knows of; `registry::lanes_with_missing_folder`
+/// is the same check that section marks `(folder gone)` with. Both are
+/// reused here rather than reading the registry's own JSON by hand.
+///
+/// `None` for `store_dir` or the project's own first event leaves this
+/// empty rather than guessing: nothing to check another lane's folder
+/// against.
+fn other_lanes<'a>(
+    a: &'a Tree,
+    root: &Path,
+    current: &str,
+    governing: &[&'a Node],
+    lanes: &[crate::brief::LaneRow<'a>],
+) -> Vec<OtherLane<'a>> {
+    let mut out = Vec::new();
+    let Some(store_dir) = crate::store::store_dir() else {
+        return out;
+    };
+    let Some(project_id) = crate::store::first_event_id(root) else {
+        return out;
+    };
+    let gone = registry::lanes_with_missing_folder(&store_dir, &project_id);
+    for row in lanes {
+        if row.id == current {
+            continue;
+        }
+        let declared: &[Repo] = a
+            .lanes
+            .get(row.id)
+            .map(|s| s.repos.as_slice())
+            .unwrap_or(&[]);
+        if declared.is_empty() {
+            continue;
+        }
+        if gone.iter().any(|g| g == row.id) {
+            out.push(OtherLane {
+                name: row.name,
+                unreadable: true,
+                verdicts: Vec::new(),
+            });
+            continue;
+        }
+        let Some(folder) = registry::lane_folder(&store_dir, &project_id, row.id) else {
+            continue;
+        };
+        let Some(since) = a.vivacs.iter().rev().find(|v| v.lane == row.id) else {
+            continue;
+        };
+        let (changes, _moved) = repo_changes(declared, &since.anchors, &folder);
+        let changes = without_store(changes);
+        let verdicts = verdicts_of(&changes, governing, a);
+        // Quiet means nothing to report, not "nothing unclaimed": a lane
+        // whose changes are all claimed by work that has closed fills the
+        // second basket, and dropping it here would have shown less about
+        // another lane than the same report shows about this one.
+        if verdicts.iter().all(|v| v.claimed_and_open()) {
+            continue;
+        }
+        out.push(OtherLane {
+            name: row.name,
+            unreadable: false,
+            verdicts,
+        });
+    }
+    out
+}
+
+/// IN OTHER LANES OF THIS PRODUCT, once for every qualifying lane
+/// `other_lanes` found: the same two sections this lane's own report
+/// prints -- NOBODY CLAIMS THESE and CLAIMED ONLY BY CLOSED WORK -- nested
+/// one level under the lane's own name. Open, claimed work is never shown
+/// here: it is not a finding, and a reassurance line per lane is exactly
+/// the noise §4.4's own rule rules out.
+fn print_other_lanes(others: &[OtherLane]) {
+    if others.is_empty() {
+        return;
+    }
+    outln!();
+    outln!("  IN OTHER LANES OF THIS PRODUCT");
+    for lane in others {
+        outln!();
+        if lane.unreadable {
+            outln!("    {}   folder not readable from here, skipped", lane.name);
+            continue;
+        }
+        outln!("    {}", lane.name);
+        let (unclaimed, stale, _live) = split_baskets(&lane.verdicts);
+        section(
+            "NOBODY CLAIMS THESE",
+            "push \"<title>\" --governs <path>",
+            &unclaimed,
+            |_| String::new(),
+            NESTED,
+        );
+        section(
+            "CLAIMED ONLY BY CLOSED WORK",
+            "focus <id> --reopen  |  block <id>",
+            &stale,
+            |v| {
+                v.claimed_by
+                    .iter()
+                    .map(|n| format!("{} [{}]", n.alias(), n.state.word(n.kind)))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            },
+            NESTED,
+        );
+    }
+    outln!();
+}
+
+pub fn reconcile(a: &Tree, root: &Path, lane_dir: &Path, args: &Args) -> R {
+    let Some(since) = reference(a, args)? else {
+        outln!();
+        outln!("  No stop to measure from: this tree has no vivacs yet.");
+        outln!();
+        outln!("      vivac save \"<label>\"");
+        outln!();
+        return Ok(());
+    };
+
+    let here = a.lane();
+    let lanes = crate::brief::all_lanes(a);
+
+    // A lane with declared repositories reconciles each of them (§4.4). A
+    // lane with none -- every tree nobody has run `setup` in -- keeps
+    // reading the single anchor this folder itself is, exactly as before
+    // this tranche (`f25`).
+    let declared: &[Repo] = a.lanes.get(here).map(|s| s.repos.as_slice()).unwrap_or(&[]);
+
+    let (changes, moved) = if declared.is_empty() {
+        if since.anchor.is_empty_tree() {
+            outln!();
+            outln!(
+                "  {} has no anchor, so there is no history to read.",
+                since.alias()
+            );
+            outln!("  Without version control the tree cannot be contradicted; that is");
+            outln!("  the floor of the product and not a failure.");
+            outln!();
+            return Ok(());
+        }
+        let anchor = anchor::detect(lane_dir);
+        (anchor.changed_since(&since.anchor), Vec::new())
+    } else {
+        repo_changes(declared, &since.anchors, lane_dir)
+    };
+
+    let changes = without_store(changes);
+
+    let governing: Vec<&Node> = a
+        .nodes_iter()
+        .filter(|n| !n.governs(a).is_empty())
+        .collect();
+
+    let verdicts = verdicts_of(&changes, &governing, a);
+    let (unclaimed, stale, live) = split_baskets(&verdicts);
 
     if args.has("json") {
-        let one = |v: &Verdict| {
+        let one = |v: &Verdict, lane: &str| {
             json!({
                 "file": v.file,
                 "changes": v.times,
@@ -224,8 +400,25 @@ pub fn reconcile(a: &Tree, lane_dir: &Path, args: &Args) -> R {
                     "title": n.title(a),
                     "state": n.state,
                 })).collect::<Vec<_>>(),
+                "lane": lane,
             })
         };
+        let here_name = lanes
+            .iter()
+            .find(|r| r.id == here)
+            .map(|r| r.name)
+            .unwrap_or(here);
+        let mut unclaimed_json: Vec<_> = unclaimed.iter().map(|v| one(v, here_name)).collect();
+        let mut stale_json: Vec<_> = stale.iter().map(|v| one(v, here_name)).collect();
+        let mut live_json: Vec<_> = live.iter().map(|v| one(v, here_name)).collect();
+        if args.opt("since").is_none() {
+            for lane in other_lanes(a, root, here, &governing, &lanes) {
+                let (u, s, l) = split_baskets(&lane.verdicts);
+                unclaimed_json.extend(u.iter().map(|v| one(v, lane.name)));
+                stale_json.extend(s.iter().map(|v| one(v, lane.name)));
+                live_json.extend(l.iter().map(|v| one(v, lane.name)));
+            }
+        }
         return print_json(json!({
             "since": since.alias(),
             "since_ts": since.ts,
@@ -233,9 +426,9 @@ pub fn reconcile(a: &Tree, lane_dir: &Path, args: &Args) -> R {
             "anchors": since.anchors,
             "governing_nodes": governing.len(),
             "changed": verdicts.len(),
-            "unclaimed": unclaimed.iter().map(|v| one(v)).collect::<Vec<_>>(),
-            "claimed_by_closed_work": stale.iter().map(|v| one(v)).collect::<Vec<_>>(),
-            "claimed_and_open": live.iter().map(|v| one(v)).collect::<Vec<_>>(),
+            "unclaimed": unclaimed_json,
+            "claimed_by_closed_work": stale_json,
+            "claimed_and_open": live_json,
         }));
     }
 
@@ -263,13 +456,12 @@ pub fn reconcile(a: &Tree, lane_dir: &Path, args: &Args) -> R {
             outln!("  Nothing changed. The tree and the work agree.");
         }
         outln!();
-        return Ok(());
-    }
-
-    // The case that will be true of most trees on the first run, and the one
-    // where a list of every file is the least useful thing to print. Say the
-    // real problem once instead of repeating a symptom per line.
-    if governing.is_empty() {
+    } else if governing.is_empty() {
+        // The case that will be true of most trees on the first run, and
+        // the one where a list of every file is the least useful thing to
+        // print. Say the real problem once instead of repeating a symptom
+        // per line -- tree-wide, so no other lane has a different answer
+        // to add, and this returns rather than going on to one.
         outln!();
         outln!("  No node declares what it governs, so nothing here can be claimed.");
         outln!("  Until some node says which files it owns, this command has nothing");
@@ -278,53 +470,77 @@ pub fn reconcile(a: &Tree, lane_dir: &Path, args: &Args) -> R {
         outln!("      vivac push \"<title>\" --why \"<reason>\" --governs \"src/auth/**\"");
         outln!();
         return Ok(());
-    }
-
-    section(
-        "NOBODY CLAIMS THESE",
-        "push \"<title>\" --governs <path>",
-        &unclaimed,
-        |_| String::new(),
-    );
-    section(
-        "CLAIMED ONLY BY CLOSED WORK",
-        "focus <id> --reopen  |  block <id>",
-        &stale,
-        |v| {
-            v.claimed_by
-                .iter()
-                .map(|n| format!("{} [{}]", n.alias(), n.state.word(n.kind)))
-                .collect::<Vec<_>>()
-                .join(" ")
-        },
-    );
-
-    if args.has("all") {
-        section("CLAIMED, AND THE WORK IS OPEN", "", &live, |v| {
-            v.claimed_by
-                .iter()
-                .filter(|n| n.state.is_open())
-                .map(|n| n.alias())
-                .collect::<Vec<_>>()
-                .join(" ")
-        });
-    } else if !live.is_empty() {
-        outln!();
-        outln!(
-            "  {} under work that is open, which is what is supposed to happen.  --all",
-            plural(live.len(), "file", "files")
+    } else {
+        section(
+            "NOBODY CLAIMS THESE",
+            "push \"<title>\" --governs <path>",
+            &unclaimed,
+            |_| String::new(),
+            "",
         );
+        section(
+            "CLAIMED ONLY BY CLOSED WORK",
+            "focus <id> --reopen  |  block <id>",
+            &stale,
+            |v| {
+                v.claimed_by
+                    .iter()
+                    .map(|n| format!("{} [{}]", n.alias(), n.state.word(n.kind)))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            },
+            "",
+        );
+
+        if args.has("all") {
+            section(
+                "CLAIMED, AND THE WORK IS OPEN",
+                "",
+                &live,
+                |v| {
+                    v.claimed_by
+                        .iter()
+                        .filter(|n| n.state.is_open())
+                        .map(|n| n.alias())
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                },
+                "",
+            );
+        } else if !live.is_empty() {
+            outln!();
+            outln!(
+                "  {} under work that is open, which is what is supposed to happen.  --all",
+                plural(live.len(), "file", "files")
+            );
+        }
+
+        if unclaimed.is_empty() && stale.is_empty() {
+            outln!();
+            outln!("  Nothing to reconcile.");
+        }
+        outln!();
     }
 
-    if unclaimed.is_empty() && stale.is_empty() {
+    if args.opt("since").is_some() {
         outln!();
-        outln!("  Nothing to reconcile.");
+        outln!("  Only this lane was measured: --since names one stop, and another lane's");
+        outln!("  stop points at commits this folder does not have. Run reconcile with no");
+        outln!("  --since to cover every lane.");
+        return Ok(());
     }
-    outln!();
+
+    print_other_lanes(&other_lanes(a, root, here, &governing, &lanes));
     Ok(())
 }
 
-fn section(title: &str, action: &str, rows: &[&Verdict], note: impl Fn(&Verdict) -> String) {
+fn section(
+    title: &str,
+    action: &str,
+    rows: &[&Verdict],
+    note: impl Fn(&Verdict) -> String,
+    indent: &str,
+) {
     if rows.is_empty() {
         return;
     }
@@ -332,7 +548,7 @@ fn section(title: &str, action: &str, rows: &[&Verdict], note: impl Fn(&Verdict)
     outln!(
         "{}",
         format!(
-            "  {} ({}){}{}",
+            "{indent}  {} ({}){}{}",
             title,
             rows.len(),
             " ".repeat(38usize.saturating_sub(title.len() + 4)),
@@ -345,10 +561,16 @@ fn section(title: &str, action: &str, rows: &[&Verdict], note: impl Fn(&Verdict)
         // column padding out to the edge of the line.
         outln!(
             "{}",
-            format!("    {:<44} {:>3}  {}", clip(&v.file, 44), v.times, note(v)).trim_end()
+            format!(
+                "{indent}    {:<44} {:>3}  {}",
+                clip(&v.file, 44),
+                v.times,
+                note(v)
+            )
+            .trim_end()
         );
     }
     if rows.len() > SHOWN {
-        outln!("    + {} more   --json", rows.len() - SHOWN);
+        outln!("{indent}    + {} more   --json", rows.len() - SHOWN);
     }
 }
