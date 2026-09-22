@@ -1036,11 +1036,7 @@ fn render_piece_block(
     // refusal -- `name_collision` is only ever `Some` once `--name`'s own
     // value already matches another project's effective name.
     if let Some(name) = &plan.name_collision {
-        s.push_str(&format!(
-            "  \"{name}\" already names another project on this machine. With both\n  \
-             answering to it, --join will need a path instead of the name: two\n  \
-             projects that share a name give it nothing to tell them apart by.\n\n"
-        ));
+        s.push_str(&name_collision_paragraph(name));
     }
 
     // `t579` §4's warning: only when `here` sits inside a repository but is
@@ -1185,6 +1181,7 @@ fn written_text(w: &Written) -> String {
         s.push_str(MIGRATE_PARAGRAPHS);
     } else {
         s.push_str(&tree_paragraph(
+            "setup",
             w.gitignore_created,
             w.lane_declared,
             w.config_locked,
@@ -1217,7 +1214,20 @@ fn written_text(w: &Written) -> String {
 /// could only name one, and a run that only wrote the tree's `.gitignore`
 /// had no branch at all and claimed to have changed nothing -- two lines
 /// under its own plan announcing that write (`t594`).
-fn tree_paragraph(gitignore_created: bool, lane_declared: bool, config_locked: bool) -> String {
+///
+/// `pub(super)`: `init.rs` reads the very same tree state, with none of
+/// this file's own hooks, server or skill beside it (`d723` piece A), so
+/// its own closing text is this sentence alone rather than a second copy.
+/// `actor` is the command this sentence names as the one that wrote --
+/// `"setup"` for every call already here, unchanged, and `"init"` for
+/// `init.rs`'s own: the sentence would otherwise tell whoever typed
+/// `vivac init` that `setup` did the writing.
+pub(super) fn tree_paragraph(
+    actor: &str,
+    gitignore_created: bool,
+    lane_declared: bool,
+    config_locked: bool,
+) -> String {
     let mut clauses = Vec::new();
     if gitignore_created {
         clauses.push("its own .gitignore");
@@ -1229,7 +1239,7 @@ fn tree_paragraph(gitignore_created: bool, lane_declared: bool, config_locked: b
         clauses.push("the sentence that stops an older vivac from reading it");
     }
     if clauses.is_empty() {
-        return TREE_KEPT_PARAGRAPH.to_string();
+        return tree_kept_paragraph(actor);
     }
     // Noun phrases rather than verb phrases: they share one subject, so
     // two of them join without the reader having to carry a verb across
@@ -1238,7 +1248,7 @@ fn tree_paragraph(gitignore_created: bool, lane_declared: bool, config_locked: b
     format!(
         "\n{}",
         wrapped(&format!(
-            "The tree was already there, and setup wrote in it: {}.",
+            "The tree was already there, and {actor} wrote in it: {}.",
             join_with_and(&clauses)
         ))
     )
@@ -1267,6 +1277,30 @@ pub(super) fn wrapped(text: &str) -> String {
     out.push_str(line.trim_end());
     out.push('\n');
     out
+}
+
+/// `name`'s own collision paragraph (`t640`, point 10 bis): `name` already
+/// names another project on this machine, wrapped through [`wrapped`]
+/// rather than split by hand the way this used to be written twice, once
+/// here and once in `init.rs` (`f724`). A product's own name runs up to
+/// `tree::NAME_MAX_LEN` characters, none of them this run's to shorten, so
+/// a break placed by hand before it was ever typed could not promise to
+/// still land under the width once it was in -- measured: sixty-one fixed
+/// characters ahead of the break this used to have, so any name sixteen
+/// characters or longer already ran past it.
+///
+/// `pub(super)`: `setup`'s own plan reads this, and so does `init.rs`'s
+/// (`d723` piece A) -- one sentence, read from one place, rather than a
+/// second copy that only one of the two gets fixed on.
+pub(super) fn name_collision_paragraph(name: &str) -> String {
+    format!(
+        "{}\n",
+        wrapped(&format!(
+            "\"{name}\" already names another project on this machine. With both \
+             answering to it, --join will need a path instead of the name: two \
+             projects that share a name give it nothing to tell them apart by."
+        ))
+    )
 }
 
 /// `items`, in English list form: one on its own, two joined by "and",
@@ -1317,8 +1351,11 @@ const MIGRATE_PARAGRAPHS: &str = "\n  Nothing has been brought in from anywhere 
 /// the folder, not the tree, and joining a tree never reads any of that.
 const JOIN_MIGRATE_PARAGRAPHS: &str = "\n  This folder's own knowledge is not in the tree. Instruction files, the\n  harness's memory and the documents that live here came with the folder,\n  and joining a tree does not read them. To bring them in, ask the agent:\n\n      Use the vivac-migrate skill to bring everything this project knows\n      into vivac.\n\n  The tree already has content, and the skill expects that: it looks at\n  what is there before writing, and proposes a note on the node that\n  already says it rather than a duplicate.\n";
 
-const TREE_KEPT_PARAGRAPH: &str =
-    "\n  The tree was already there, and setup changed nothing in it.\n";
+/// `tree_paragraph`'s own text for nothing changed, naming `actor` the same
+/// way its other sentence does.
+fn tree_kept_paragraph(actor: &str) -> String {
+    format!("\n  The tree was already there, and {actor} changed nothing in it.\n")
+}
 
 const FILES_PARAGRAPH: &str = "\n  The hooks, the server and the skill are plain files in this project:\n  commit them if everyone who works here uses vivac, and keep them out of\n  version control if only you do. .vivac/ is never committed: it is this\n  machine's record, and a copy of it in every clone would diverge from the\n  others. Its own .gitignore keeps it out.\n";
 

@@ -14,6 +14,7 @@
 
 mod claude_code;
 mod codex;
+mod init;
 pub mod json;
 mod tree;
 
@@ -114,6 +115,51 @@ pub fn dispatch(cwd: &Path, a: &Args) -> Result<i32, Failure> {
             HARNESSES.join(", ")
         ))),
     }
+}
+
+/// `vivac init`'s own entry point (`d723` piece A), reached once this run
+/// carries at least one of the flags this piece gave `init` -- a bare
+/// `vivac init` never reaches here at all (`main.rs`'s own guard). The four
+/// checks below are `dispatch`'s own, repeated rather than shared: they
+/// name the command that is actually stuck, `vivac init` rather than
+/// `vivac setup <harness>`, and `dispatch`'s own copies are already tied to
+/// `harness_word`, which `init` has none of to give them.
+pub fn init(cwd: &Path, a: &Args) -> Result<i32, Failure> {
+    if a.has("dry-run") && a.has("yes") {
+        return Err(Failure::usage(
+            "--dry-run writes nothing, so there is nothing for --yes to confirm.\n\n  \
+             Give one or the other.",
+        ));
+    }
+    if a.has("join") && a.has("new-tree") {
+        return Err(Failure::usage(
+            "--join joins a tree that already exists, and --new-tree plants a \
+             separate one, so they contradict each other.\n\n  Give one or the other.",
+        ));
+    }
+    // `f632`: `--join` takes a value, so with nothing after it the parser
+    // records the flag as present and its value as absent, and every
+    // reader downstream only ever asks for the value -- `opt("join")`,
+    // never `has("join")`. Left unchecked, that falls straight through to
+    // the plant branch and gives a second tree to someone who asked to
+    // join one.
+    if a.has("join") && a.opt("join").is_none() {
+        return Err(Failure::usage(
+            "--join needs the project to join, and nothing followed it. Without \
+             that word init plants instead of joining, which is a second tree \
+             for a product that already has one.\n\n  \
+             vivac init --join <project>",
+        ));
+    }
+    // `t640`, point 3: the same gap `f632` already closed for `--join`.
+    if a.has("name") && a.opt("name").is_none() {
+        return Err(Failure::usage(
+            "--name needs the product's own name, and nothing followed it. \
+             Without that word init has nothing to save.\n\n  \
+             vivac init --name <name>",
+        ));
+    }
+    init::run(cwd, a)
 }
 
 /// The two roots setup writes into (`t579` §4). Claude Code never reads
@@ -497,6 +543,21 @@ pub(super) fn no_terminal_text(h: Harness, a: &Args) -> String {
     }
     format!(
         "  setup asks before writing, and there is no terminal here to ask.\n  See what it would write:  vivac setup {word}{flags} --dry-run\n  Then write it:            vivac setup {word}{flags} --yes"
+    )
+}
+
+/// [`no_terminal_text`]'s own mirror for `init` (`d723` piece A): the same
+/// two commands, naming `vivac init` rather than a harness word `init` has
+/// none of to give.
+pub(super) fn init_no_terminal_text(a: &Args) -> String {
+    let flags = no_terminal_flags(a);
+    if a.has("undo") {
+        return format!(
+            "  init asks before removing anything, and there is no terminal to ask.\n  See what it would remove:  vivac init{flags} --dry-run\n  Then remove it:            vivac init{flags} --yes"
+        );
+    }
+    format!(
+        "  init asks before writing, and there is no terminal here to ask.\n  See what it would write:  vivac init{flags} --dry-run\n  Then write it:            vivac init{flags} --yes"
     )
 }
 
