@@ -759,10 +759,7 @@ fn undo(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         },
     ));
 
-    s.push_str(&piece_line(
-        tree::VIVAC_LABEL,
-        "kept: the tree is not setup's",
-    ));
+    s.push_str(&tree::vivac_dir_lines(&undo_lane));
     s.push_str(&tree::undo_lane_lines(&undo_lane));
     s.push('\n');
 
@@ -848,6 +845,15 @@ fn undo(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
             undo_lane.raw.clone().unwrap_or_default(),
         ));
     }
+    // `f719`, point B: the `.gitignore` this tool wrote alongside the
+    // lane, gone the same commit -- absent when there never was one, the
+    // same as `undo_lane.raw` above.
+    if undo_lane.vivac_dir_removable {
+        let gitignore = undo_lane.vivac_dir.join(crate::store::GITIGNORE);
+        if let Ok(original) = std::fs::read(&gitignore) {
+            writes.push(super::PlannedWrite::delete(gitignore, original));
+        }
+    }
 
     super::commit(&writes)?;
 
@@ -871,6 +877,12 @@ fn undo(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     // every `remove_if_empty` above: it costs nothing when the folder is
     // not actually empty, or is already gone.
     super::claude_code::remove_if_empty(target.config.parent());
+    // `f719`, point B: `.vivac/` itself, once the lane and its
+    // `.gitignore` are both gone -- a join's own folder, holding nothing
+    // else, has no reason left to carry one.
+    if undo_lane.vivac_dir_removable {
+        super::claude_code::remove_if_empty(Some(&undo_lane.vivac_dir));
+    }
 
     outln!("  Undone. The tree in .vivac/ is untouched.");
     Ok(0)

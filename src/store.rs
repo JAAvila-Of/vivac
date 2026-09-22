@@ -298,17 +298,93 @@ pub struct Store {
 /// not find it, and this is that sentence. It asks what the directory holds
 /// rather than where it sits, because `VIVAC_HOME` can move the store and a
 /// rule that compared paths would fail exactly when somebody moved it.
-pub fn find_root(from_dir: &Path) -> Option<PathBuf> {
+///
+/// The same question settles two more cases the same way (`f719`), and
+/// neither is decided by guessing. A `.vivac/` that holds neither a tree
+/// (`already_planted`) nor a lane file is not a map -- exactly what an
+/// `--undo` that took a lane's own folder back used to leave behind, and
+/// also what a half-deleted tree leaves behind, and the bytes on disk
+/// cannot tell the two apart. With nothing above it either, there is
+/// nothing to confuse it with: the walk passes it by, finds no map at
+/// all, and `Ok(None)` reaches the ordinary "no store" answer, same as an
+/// empty `.vivac/` always has (`f566`). With a real map above it, though,
+/// stopping at the hollow one would silently treat somebody's half-gone
+/// tree as its own -- `f566`'s own fear -- and passing it by would just as
+/// silently fold this folder into the tree above, orphaning whatever it
+/// was for -- `f719`'s own measurement. Both are a guess dressed as an
+/// answer, so this refuses instead, the same as a half-written Codex
+/// marker block does rather than guessing where it was meant to close.
+pub fn find_root(from_dir: &Path) -> Result<Option<PathBuf>, Failure> {
     let mut d = from_dir.to_path_buf();
+    let mut passed_a_hollow_one = false;
     loop {
         let candidate = d.join(DIR);
         if candidate.is_dir() && !crate::registry::marks_global_store(&candidate) {
-            return Some(d);
+            if already_planted(&d) || candidate.join(LANE).is_file() {
+                if passed_a_hollow_one {
+                    return Err(hollow_vivac_refusal(&d));
+                }
+                return Ok(Some(d));
+            }
+            passed_a_hollow_one = true;
         }
         if !d.pop() {
-            return None;
+            return Ok(None);
         }
     }
+}
+
+/// The same product-wide ceiling `f720` gave the setup plan (`PLAN_WIDTH`,
+/// `claude_code.rs`) and the registry gives its own notices (`NOTICE_WIDTH`,
+/// `registry.rs`): no printed line is wider than this, the indent counted
+/// in. `hollow_vivac_refusal` is the one place in this module that embeds
+/// text of unbounded length -- a folder name a person chose -- so it is the
+/// one place here that needs it.
+const REFUSAL_WIDTH: usize = 76;
+const REFUSAL_INDENT: &str = "  ";
+
+/// `f719`'s third case: a hollow `.vivac/` sat somewhere below `tree_above`
+/// in the walk that found it -- holding neither a tree nor a lane. Which
+/// of the two the hollow one belongs to is not on the filesystem to read,
+/// so this names both ways out rather than picking one. The hollow
+/// folder's own path is not named in the text: the sentence already says
+/// "this folder", which is wherever the command was run from, and that is
+/// not always the hollow folder itself -- a subfolder with no `.vivac/` of
+/// its own, sitting under one that is hollow, reaches this exactly the
+/// same way.
+///
+/// The paragraph goes through `render::wrap` rather than a hand-split
+/// literal (`f720`, measured a second time here): `tree_above`'s own name
+/// is a folder name a person chose, with no bound on how long it runs, and
+/// splicing it into lines split by hand is wrong by construction the
+/// moment that name is not the one this was tried against. The two lines
+/// after it are not prose but the two ways out, one of them a command, and
+/// a command broken across two lines is not one anybody can paste -- the
+/// same exemption `sub_line` already has, so they are pushed whole.
+fn hollow_vivac_refusal(tree_above: &Path) -> Failure {
+    let name = tree_above
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .and_then(|n| match crate::redact::check_field("folder name", &n) {
+            Some(_) => None,
+            None => Some(n),
+        });
+    let label = crate::registry::label_for(name.as_deref());
+    let prose = format!(
+        "This folder has a .vivac/ that is neither a tree nor a lane: no log, no \
+         config, no lane file. A tree sits above it, in {label}. Which of the two \
+         this folder belongs to is a guess, and this tool does not guess."
+    );
+    let mut lines =
+        crate::render::wrap(&prose, REFUSAL_WIDTH - REFUSAL_INDENT.len(), REFUSAL_INDENT);
+    lines.push(String::new());
+    lines.push(format!(
+        "{REFUSAL_INDENT}Make it a tree of its own:  vivac init"
+    ));
+    lines.push(format!(
+        "{REFUSAL_INDENT}Or hand it back to the tree above by deleting the empty .vivac/ here."
+    ));
+    Failure::Model(lines.join("\n"))
 }
 
 /// What resolving a working folder answers: not just where the tree is,
@@ -383,7 +459,7 @@ fn locate_from(from_dir: &Path, registry_dir: Option<&Path>) -> Result<Option<Lo
 /// The upward walk for the nearest `.vivac/`, and what it means once found:
 /// a lane to resolve, or the implicit `main` every tree with none is.
 fn locate_here(from_dir: &Path, registry_dir: Option<&Path>) -> Result<Option<Located>, Failure> {
-    let Some(d) = find_root(from_dir) else {
+    let Some(d) = find_root(from_dir)? else {
         return Ok(None);
     };
     match crate::lane::read(&d.join(DIR))? {
@@ -1190,9 +1266,9 @@ mod tests {
         let tmp = std::env::temp_dir().join(format!("vivac-t-{}", id::ulid()));
         let depth_of = tmp.join("a").join("b").join("c");
         fs::create_dir_all(&depth_of).unwrap();
-        assert!(find_root(&depth_of).is_none());
+        assert!(find_root(&depth_of).unwrap().is_none());
         Store::create(&tmp).unwrap();
-        assert_eq!(find_root(&depth_of).unwrap(), tmp);
+        assert_eq!(find_root(&depth_of).unwrap().unwrap(), tmp);
         fs::remove_dir_all(&tmp).ok();
     }
 
@@ -1205,7 +1281,7 @@ mod tests {
         let deep = tmp.join("a").join("b");
         fs::create_dir_all(&deep).unwrap();
         Store::create(&tmp).unwrap();
-        assert_eq!(find_root(&deep).unwrap(), tmp);
+        assert_eq!(find_root(&deep).unwrap().unwrap(), tmp);
         crate::registry::note(
             &tmp.join(DIR),
             "01aaaaaaaaaaaaaaaaaaaaaaaa",
@@ -1215,7 +1291,7 @@ mod tests {
                 repos: None,
             },
         );
-        assert_ne!(find_root(&deep), Some(tmp.clone()));
+        assert_ne!(find_root(&deep).unwrap(), Some(tmp.clone()));
         fs::remove_dir_all(&tmp).ok();
     }
 
@@ -1237,7 +1313,7 @@ mod tests {
             },
         );
         Store::create(&project).unwrap();
-        assert_eq!(find_root(&deep).unwrap(), project);
+        assert_eq!(find_root(&deep).unwrap().unwrap(), project);
         fs::remove_dir_all(&tmp).ok();
     }
 
@@ -1453,18 +1529,85 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_vivac_directory_still_answers_the_walk() {
-        // `f566`: a `.vivac/` that holds neither a log nor a config is the
-        // shape a half-finished delete leaves behind, and it resolves to
-        // itself, exactly as it did before lanes. Walking past it to the
-        // tree above would quietly move somebody's work to another tree.
+    fn an_empty_vivac_directory_with_nothing_above_answers_as_no_store() {
+        // `f566` first drew this shape -- a `.vivac/` with no log and no
+        // config, what a half-finished delete leaves behind -- and made it
+        // resolve to itself, worried that walking past it would quietly
+        // move somebody's work to another tree. `f719` measured the
+        // mirror shape: the very same bytes are also what an undone join
+        // leaves behind, and *that* folder belongs to the tree above, not
+        // to itself. The two cannot be told apart by what is on disk, so
+        // neither guess is made any more (`hollow_vivac_refusal` is where
+        // the guess would live, and it only fires with a real tree above
+        // to be confused with). With nothing above to confuse it with,
+        // there is nothing to guess: this is the ordinary "no store"
+        // answer, the same one an empty `.vivac/` already gets
+        // everywhere else the walk finds no map at all. `f566`'s own
+        // outcome is unaffected: `init` never calls this walk, checks
+        // only `cwd` itself, and plants a tree over an empty `.vivac/`
+        // exactly as it always has.
         let tmp = locate_tmp("empty-vivac");
         fs::create_dir_all(tmp.join(DIR)).unwrap();
-        let located = locate_from(&tmp, None).unwrap().unwrap();
-        assert_eq!(located.root, tmp);
-        assert_eq!(located.lane_dir, tmp);
-        assert!(located.lane.is_none());
+        assert!(locate_from(&tmp, None).unwrap().is_none());
         fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn an_empty_vivac_directory_under_a_real_tree_refuses_rather_than_guessing() {
+        // `f719`'s third case: which of `f566`'s worry and `f719`'s own
+        // measurement this shape is cannot be read off the filesystem, so
+        // resolving it either way -- to itself, or to the tree above --
+        // would be a guess dressed as an answer.
+        let tmp = locate_tmp("hollow-under-tree");
+        let hollow = tmp.join("hollow");
+        Store::create(&tmp).unwrap();
+        fs::create_dir_all(hollow.join(DIR)).unwrap();
+        let err = locate_from(&hollow, None).unwrap_err();
+        assert_eq!(err.code(), 1);
+        assert!(
+            err.message()
+                .contains("This folder has a .vivac/ that is neither a tree nor a lane"),
+            "{}",
+            err.message()
+        );
+        assert!(err.message().contains("vivac init"), "{}", err.message());
+        fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// `f720`, measured a second time (`hollow_vivac_refusal`'s doc comment
+    /// says where): a folder name has no bound of its own, and the text
+    /// this refusal used to splice it into was split by hand at columns
+    /// that only ever fit the one name it was tried against -- anything
+    /// past nine characters already ran past 76. This one runs well over a
+    /// hundred, in the neighbourhood of `t640`'s own `NAME_MAX_LEN` --
+    /// the longest a name in this product is ever let to run -- built out
+    /// of repeated words rather than typed by hand, so nobody shortens it
+    /// for the sake of a tidier diff: the point is that `wrap` needs no
+    /// shortening to hold it, and a real name carries spaces to break on
+    /// the same as this one does.
+    #[test]
+    fn hollow_vivac_refusal_never_prints_a_line_past_76_columns() {
+        let long_name = "folder name ".repeat(9).trim().to_string();
+        let tree_above = PathBuf::from("/tmp").join(&long_name);
+        let message = hollow_vivac_refusal(&tree_above).message();
+        // The name's own spaces are exactly where `wrap` may break a
+        // line, the same as any other run of words, so this checks the
+        // name arrived whole with the wrapping folded back out rather
+        // than demanding it landed on one physical line.
+        let unwrapped: String = message.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(unwrapped.contains(&long_name), "{message}");
+        for line in message.lines() {
+            let trimmed = line.trim_start();
+            // The two ways out, one of them a command: whole on purpose,
+            // the same exemption `sub_line` already has (`f720`).
+            let is_a_way_out = trimmed.starts_with("Make it a tree of its own")
+                || trimmed.starts_with("Or hand it back to the tree above");
+            assert!(
+                is_a_way_out || line.chars().count() <= 76,
+                "a wrapped line ran past 76 columns ({} chars): {line:?}\nfull message:\n{message}",
+                line.chars().count()
+            );
+        }
     }
 
     #[test]

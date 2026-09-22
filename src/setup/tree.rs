@@ -24,8 +24,10 @@
 //! folder's own `.vivac/lane` can go and what the plan says about it
 //! either way, out of `claude_code::undo`, the only place that lived until
 //! `codex::undo` needed the same answer. The tree itself stays out of
-//! `--undo` entirely -- `.vivac/` is not setup's to remove, in either
-//! harness's plan.
+//! `--undo` entirely, for a tree -- but a joined folder's `.vivac/` is not
+//! one: it was this same union that wrote it, and taking the lane away
+//! leaves it with no reason to exist. [`vivac_dir_lines`] is the plan's own
+//! word on that folder's `.vivac/` either way (`f719`).
 
 use crate::args::Args;
 use crate::failure::Failure;
@@ -1512,6 +1514,21 @@ pub(super) struct UndoLane {
     pub(super) raw: Option<Vec<u8>>,
     exists: bool,
     pub(super) removable: bool,
+    /// This folder's own `.vivac/`, so `--undo` can delete its
+    /// `.gitignore` and the now-empty directory itself without rebuilding
+    /// the path from `roots` a second time (`f719`, point B).
+    pub(super) vivac_dir: PathBuf,
+    /// Whether `.vivac/` here holds no tree of its own (`already_planted`
+    /// false): the one fact that tells a joined folder's `.vivac/` apart
+    /// from the folder that actually holds the tree, which `--undo` never
+    /// touches. `false` whenever `exists` is too -- a folder with no lane
+    /// file of its own never joined anything in the first place.
+    joined: bool,
+    /// Whether `--undo` may remove `.vivac/` itself once `path` is gone:
+    /// every one of `f719`'s own three conditions at once -- the lane was
+    /// retirable, this folder holds no tree, and nothing is left inside
+    /// but the `.gitignore` this tool itself would have written.
+    pub(super) vivac_dir_removable: bool,
 }
 
 /// Reads this folder's own `.vivac/lane`, without writing anything, and
@@ -1519,20 +1536,62 @@ pub(super) struct UndoLane {
 /// already skips the context events a join writes on a lane's own behalf,
 /// so a lane that only ever joined and never pushed, popped or noted
 /// anything owns no history for the file to orphan.
+///
+/// Also decides whether `.vivac/` itself may go once that lane does
+/// (`f719`, point B): it was the union that wrote this folder's own
+/// `.vivac/` in the first place, so taking the lane away leaves it with no
+/// reason to exist, as long as this folder holds no tree of its own and
+/// nothing beyond the lane and a stock `.gitignore` is left inside.
 pub(super) fn undo_lane(roots: &super::Roots) -> Result<UndoLane, Failure> {
     let here = roots.here.as_path();
-    let path = here.join(crate::store::DIR).join(crate::lane::FILE);
+    let vivac_dir = here.join(crate::store::DIR);
+    let path = vivac_dir.join(crate::lane::FILE);
     let raw = std::fs::read(&path).ok();
-    let own_lane = crate::lane::read(&here.join(crate::store::DIR))?;
+    let own_lane = crate::lane::read(&vivac_dir)?;
     let wrote = own_lane
         .as_ref()
         .is_some_and(|lane| lane_has_written(&roots.tree, &lane.id));
+    let exists = own_lane.is_some();
+    let removable = exists && !wrote;
+    let joined = exists && !crate::store::already_planted(here);
+    let vivac_dir_removable = joined && removable && vivac_dir_holds_only_the_lane(&vivac_dir);
     Ok(UndoLane {
         path,
         raw,
-        exists: own_lane.is_some(),
-        removable: own_lane.is_some() && !wrote,
+        exists,
+        removable,
+        vivac_dir,
+        joined,
+        vivac_dir_removable,
     })
+}
+
+/// Whether `vivac_dir` holds nothing beyond the `lane` file `--undo` is
+/// about to take and, at most, the `.gitignore` `write_gitignore` itself
+/// would have written (`f719`, point B, condition 3): a `.gitignore`
+/// missing entirely counts the same as one that matches -- neither is
+/// anything this tool did not write -- and any other name at all, or a
+/// `.gitignore` whose content does not match, answers `false`: a line
+/// somebody added by hand is theirs, and `write_gitignore` already
+/// promises never to touch a file that already exists.
+fn vivac_dir_holds_only_the_lane(vivac_dir: &Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(vivac_dir) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        if name == std::ffi::OsStr::new(crate::lane::FILE) {
+            continue;
+        }
+        if name == std::ffi::OsStr::new(crate::store::GITIGNORE) {
+            if matches!(std::fs::read_to_string(entry.path()), Ok(c) if c == "*\n") {
+                continue;
+            }
+            return false;
+        }
+        return false;
+    }
+    true
 }
 
 /// The lane's own line(s) in `--undo`'s plan: nothing at all when this
@@ -1550,6 +1609,23 @@ pub(super) fn undo_lane_lines(lane: &UndoLane) -> String {
             "left as it is: this lane has written to the tree, and removing it would orphan \
              what it wrote",
         )
+    }
+}
+
+/// The `.vivac/` line itself, in `--undo`'s plan (`f719`, point B): the
+/// same reassurance it has always given once the tree lives in this
+/// folder -- unchanged, since the tree itself still stays out of `--undo`
+/// entirely -- or, once it does not, the decision this folder's own
+/// `.vivac/` earns for holding nothing a join did not write: gone along
+/// with the lane that justified it, or left in place and said why.
+pub(super) fn vivac_dir_lines(lane: &UndoLane) -> String {
+    if !lane.joined {
+        return super::claude_code::piece_line(VIVAC_LABEL, "kept: the tree is not setup's");
+    }
+    if lane.vivac_dir_removable {
+        super::claude_code::piece_line(VIVAC_LABEL, "remove: it holds nothing but this lane")
+    } else {
+        super::claude_code::piece_line(VIVAC_LABEL, "left as it is: it holds more than this lane")
     }
 }
 

@@ -301,6 +301,7 @@ collision
 colon
 colour
 column
+columns
 combining
 come
 comes
@@ -334,6 +335,7 @@ container
 containing
 contains
 content
+contents
 contexts
 continue
 continues
@@ -682,6 +684,7 @@ guard
 guarded
 guess
 guessed
+guessing
 gutter
 had
 half
@@ -1129,6 +1132,7 @@ partial
 partition
 parts
 pass
+passed
 passes
 past
 path
@@ -1753,6 +1757,7 @@ under
 underneath
 undo
 undoable
+undoing
 undone
 unfold
 ungoverned
@@ -1777,6 +1782,7 @@ unterminated
 until
 untouched
 unwrap
+unwrapped
 unwritable
 unwritten
 up

@@ -384,3 +384,65 @@ fn seed_foreign_file(harness: &str, dir: &Path) {
         other => unreachable!("no third harness: {other}"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// 6: `f719` -- undoing a join must not leave a hollow `.vivac/` behind. A
+// folder nested under the tree it joined, once its lane is gone, has no
+// reason left to carry a `.vivac/` of its own: the folder that wrote it is
+// the same one taking it back.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn undoing_a_join_leaves_no_hollow_vivac_behind() {
+    for harness in ["claude-code", "codex"] {
+        let c = Sandbox::new_empty(&format!("scenarios-undo-hollow-{harness}"));
+        let upper = &c.0;
+        let upper_str = upper.to_string_lossy().into_owned();
+        ok_in(
+            upper,
+            c.global_home(),
+            &["setup", harness, "--yes", "--name", "Upper Product"],
+        );
+
+        // Nested under the tree it joins, so that once its own `.vivac/`
+        // is gone, the ordinary upward walk lands back on `upper` --
+        // exactly the shape the bug report measured.
+        let nested = upper.join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        let (join_out, join_code) = run_in(
+            &nested,
+            c.global_home(),
+            &["setup", harness, "--yes", "--join", &upper_str],
+        );
+        assert_eq!(join_code, 0, "{join_out}");
+        assert!(nested.join(".vivac").join("lane").is_file(), "{join_out}");
+
+        let (undo_out, undo_code) = run_in(
+            &nested,
+            c.global_home(),
+            &["setup", harness, "--undo", "--yes"],
+        );
+        assert_eq!(undo_code, 0, "{undo_out}");
+        assert!(
+            !nested.join(".vivac").exists(),
+            "a hollow .vivac/ was left behind after undo, for {harness}:\n{undo_out}"
+        );
+
+        let brief = ok_in(&nested, c.global_home(), &["brief"]);
+        assert!(
+            brief.contains("project: Upper Product"),
+            "brief from the joined folder must name the product above, not \
+             itself, for {harness}:\n{brief}"
+        );
+
+        assert!(
+            already_planted(upper),
+            "the tree that was joined must stay intact, for {harness}"
+        );
+        let upper_brief = ok_in(upper, c.global_home(), &["brief"]);
+        assert!(
+            upper_brief.contains("project: Upper Product"),
+            "the tree's own folder must still resolve to itself, for {harness}:\n{upper_brief}"
+        );
+    }
+}
