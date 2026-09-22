@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Upgrading
+
+- **`vivac setup <harness>` no longer plants the tree, and refuses where
+  there is none.** Which tree a folder belongs to has the same answer
+  wherever an agent is opened, so it was never a harness's question. Run
+  `vivac init` first, then `vivac setup claude-code` or `vivac setup codex`.
+  With no tree resolvable from the folder, setup exits `4` — the code every
+  other command already gives that condition. With a tree above it but the
+  folder not yet one of its lanes, it exits `1` and says why: work written
+  from there would be recorded as the tree's own folder rather than as that
+  one. A script that ran setup alone in a fresh folder now needs the two.
+- **`--join`, `--new-tree`, `--name` and `--lane-name` are `vivac init`'s.**
+  Passing one to setup names the command to run instead of failing as an
+  unknown flag, the same way `vivac hooks` still points at where it went.
+  `vivac setup claude-code --undo` keeps removing the harness's own three
+  pieces and nothing else; what `init` wrote, `vivac init --undo` takes
+  back.
+- **A `.vivac/` that holds neither a tree nor a lane no longer answers as a
+  project root.** Undoing a join used to leave one behind holding only its
+  `.gitignore`, and from then on that folder read as its own project: the
+  brief named the folder instead of the tree above it, and the next setup
+  said the tree was already there. The walk up now stops at a tree or a
+  lane, never at a directory that merely has the name. Where such a folder
+  sits under a real tree, every command refuses and names the two ways out,
+  because which of the two it belongs to cannot be read off the disk. Undo
+  no longer creates them either.
+
+### Added
+
+- **`vivac setup codex` merges, runs twice without writing, and takes itself
+  back**, the same way the Claude Code side does. The server goes into
+  `.codex/config.toml` between two marker comments; a block with one marker
+  and not the other is left alone and named, in both directions.
+
+### Fixed
+
+- **The setup plan has a width.** Its second column wraps at the same 76
+  columns the rest of this binary's prose already used, so a lane or product
+  name of any length no longer runs a line past the edge of an 80-column
+  terminal and lands under the labels.
+- **A join that failed halfway no longer leaves a folder claiming a lane the
+  target never received.** The lane file was written before the declaration
+  reached the target's log, and the rollback that should have covered it was
+  only ever exercised against the other half of that write.
+- **`vivac setup <harness> --undo` without a terminal exits non-zero and
+  removes nothing**, instead of printing a question nobody can answer and
+  exiting `0`.
+
 ## [0.12.5](https://github.com/JAAvila-Of/vivac/compare/v0.12.4...v0.12.5) - 2026-09-22
 
 ### Upgrading
