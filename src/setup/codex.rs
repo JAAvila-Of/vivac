@@ -7,9 +7,17 @@
 //! comments rather than parsed, `d654`), the two session hooks in
 //! `.codex/hooks.json`, and the skill at `.agents/skills/vivac-migrate/`,
 //! which is `claude_code::skill_text()` itself rather than a second copy of
-//! it. Merging with a file already there, `--undo` and running this twice
-//! are tranche 2 and are not this file's job yet: a target that already
+//! it. Merging with a file already there and `--undo` are tranche 2's own
+//! pieces B and C and are not this file's job yet: a target that already
 //! exists stops the run instead.
+//!
+//! Tranche 2's piece A (`t592`, `d710`) is here: the fourth piece these
+//! three were always missing is the tree itself, planted the same way
+//! `claude_code.rs` plants one, through the module both harnesses share
+//! (`src/setup/tree.rs`, `r515`). `--name`, `--lane-name` and `--new-tree`
+//! are the tree's own flags, so they stop being refused here and behave
+//! exactly as they do for `claude-code`. `--join` stays out of this
+//! tranche and is still refused by name.
 //!
 //! Two things Codex needs that this run cannot do for it, because both live
 //! outside the project (`d655`): the project has to be marked trusted in
@@ -17,6 +25,7 @@
 //! `.codex/`, and each hook is approved on its own, against its hash,
 //! inside Codex. The closing summary names both.
 
+use super::tree;
 use crate::args::Args;
 use crate::failure::Failure;
 use crate::output::outln;
@@ -95,21 +104,20 @@ pub fn run(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     apply(roots, a)
 }
 
-/// The flags `claude_code.rs` already knows and this harness does not yet
-/// (`t592` tranche 2): checked first, before this run reads a single file
-/// or writes one. Reading them later, inside `apply`, is exactly the shape
-/// that let `--undo` on a clean project write the three files instead of
-/// removing anything -- a flag nobody reads is a flag nobody obeys, the same
-/// lesson `f52` already drew from a positional silently dropped rather than
-/// a flag. The order among the four is arbitrary; it only has to be fixed,
-/// so which one a run names never depends on how the flags happened to be
-/// typed.
+/// The flags `claude_code.rs` already knows and this harness does not yet:
+/// checked first, before this run reads a single file or writes one.
+/// Reading them later, inside `apply`, is exactly the shape that let
+/// `--undo` on a clean project write the three files instead of removing
+/// anything -- a flag nobody reads is a flag nobody obeys, the same lesson
+/// `f52` already drew from a positional silently dropped rather than a
+/// flag. `--new-tree`, `--lane-name` and `--name` left this list in `t592`
+/// tranche 2 (`d710`): they are the tree's own flags, and `tree::plan`
+/// reads them the same way it does for `claude-code`. The order between
+/// the two left is arbitrary; it only has to be fixed, so which one a run
+/// names never depends on how the flags happened to be typed.
 const UNSUPPORTED_FLAGS: &[(&str, &str)] = &[
     ("undo", "removing what it wrote"),
     ("join", "joining a tree that lives elsewhere"),
-    ("new-tree", "planting here despite a tracked product"),
-    ("lane-name", "naming this folder's lane"),
-    ("name", "naming the product on purpose"),
 ];
 
 fn refuse_unsupported_flags(a: &Args) -> Option<Failure> {
@@ -134,9 +142,17 @@ fn refuse_unsupported_flags(a: &Args) -> Option<Failure> {
 /// `wrapped_piece_line` are `claude_code.rs`'s, and so is the paragraph
 /// beneath it -- true of these hooks and this server too, and it names
 /// neither harness.
-fn render_plan(here: &Path) -> String {
+///
+/// The tree's own fourth piece (`t592` tranche 2, `d710`) is rendered
+/// here too, and **around** this harness's three rather than after them,
+/// the way `claude_code.rs` has always placed it: what the ground is
+/// before what gets written onto it, and what the run records about that
+/// ground last. Appending it instead would read as an afterthought, which
+/// is what it was until `f705`.
+fn render_plan(here: &Path, plan: &tree::TreePlan) -> String {
     use super::claude_code::{piece_line, sub_line, wrapped_piece_line};
     let mut s = format!("  vivac setup codex, in {}\n\n", here.display());
+    s.push_str(&tree::opening_lines(plan));
     s.push_str(&piece_line(CONFIG_LABEL, "create: the \"vivac\" server"));
     s.push_str("        vivac mcp\n");
     s.push_str(&piece_line(HOOKS_LABEL, "create: two hooks"));
@@ -147,7 +163,7 @@ fn render_plan(here: &Path) -> String {
         "create: how an agent brings",
         "another memory into vivac",
     ));
-    s.push('\n');
+    s.push_str(&tree::closing_lines(plan));
     s
 }
 
@@ -179,13 +195,31 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         return Err(existing_files_refusal(&existing));
     }
 
-    let plan = render_plan(here);
+    // The tree side: the fourth piece these three files were always
+    // missing, and every refusal that belongs to the tree rather than to
+    // this harness -- a tree below, a tree above, a product already
+    // registered elsewhere, and the second-map hint (`t592` tranche 2,
+    // `d710`). `--join` stays refused above, so this never reaches
+    // `tree::plan_for_join`: only a plant reaches here yet.
+    let below = tree::trees_below(here);
+    if !below.is_empty() {
+        return Err(tree::tree_below_refusal(&below));
+    }
+    let plan = tree::plan(roots, a)?;
+
+    let full_plan = format!("{}\n", render_plan(here, &plan));
 
     if a.has("dry-run") {
         outln!(
-            "{plan}{}\n  Nothing written: --dry-run.",
+            "{full_plan}{}\n  Nothing written: --dry-run.",
             super::claude_code::TRAILING_PARAGRAPH
         );
+        if plan.log_tracked {
+            print!("{}", super::claude_code::tracked_git_warning());
+        }
+        if let Some(w) = &plan.above_warning {
+            print!("{w}");
+        }
         return Ok(0);
     }
 
@@ -193,21 +227,35 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         return Err(Failure::Model(NO_TERMINAL_TEXT.to_string()));
     }
 
-    print!("{plan}{}", super::claude_code::TRAILING_PARAGRAPH);
+    print!("{full_plan}{}", super::claude_code::TRAILING_PARAGRAPH);
     let proceed = a.has("yes") || super::ask("\n  Write it? [y/N] ");
     if !proceed {
         outln!("\n  Nothing written.");
         return Ok(0);
     }
 
-    let writes = vec![
+    let mut writes = vec![
         super::PlannedWrite::write(target.config.clone(), CONFIG_CONTENT.to_string(), None),
         super::PlannedWrite::write(target.hooks.clone(), hooks_content(), None),
         super::PlannedWrite::write(target.skill.clone(), super::claude_code::skill_text(), None),
     ];
+    // The tree's own `.gitignore`, last: a plain file write, so it shares
+    // this same all-or-nothing commit rather than a second one of its own
+    // (`t565` §7.3, `t592` tranche 2).
+    writes.extend(tree::file_writes(roots, &plan));
     super::commit(&writes)?;
 
+    tree::commit(roots, &plan, &writes)?;
+    tree::note_registry(roots);
+    tree::note_name(&plan);
+
     print!("\n{}", written_text(here));
+    if plan.log_tracked {
+        print!("{}", super::claude_code::tracked_git_warning());
+    }
+    if let Some(w) = &plan.above_warning {
+        print!("{w}");
+    }
     Ok(0)
 }
 

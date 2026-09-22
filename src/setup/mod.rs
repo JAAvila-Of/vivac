@@ -15,6 +15,7 @@
 mod claude_code;
 mod codex;
 pub mod json;
+mod tree;
 
 use crate::args::Args;
 use crate::failure::Failure;
