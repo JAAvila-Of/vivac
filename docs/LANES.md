@@ -75,18 +75,23 @@ Two consequences worth spelling out:
   the branch is gone, the reason is not.
 
 The lane's *name* is not its identity either. The name is the folder's name,
-and it is recalculated every time `vivac setup` runs there. Rename the folder
-and the tree keeps showing the old name until the next `setup` — the id under
+and it is recalculated every time `vivac init` runs there. Rename the folder
+and the tree keeps showing the old name until the next `init` — the id under
 it never moved, so nothing is lost, and nothing is silently re-pointed.
 
 ## Setting one up
+
+**Everything on this page is `vivac init`'s.** Which tree a folder belongs
+to, what the product is called and which folder becomes a lane have the same
+answer wherever you open an agent, so no harness decides any of it. `vivac
+setup <harness>` comes after, and only writes the files that harness reads.
 
 ### Plant a tree
 
 In the folder that holds the product, with no tree above it and none below:
 
 ```sh
-vivac setup claude-code
+vivac init
 ```
 
 That plants the tree and makes this folder its first lane. The product takes
@@ -102,18 +107,19 @@ becomes a lane of that tree and there is nothing else to say.
 If the tree is somewhere else entirely — another clone, another disk — name it:
 
 ```sh
-vivac setup claude-code --join "<project>"
+vivac init --join "<project>"
 ```
 
 `--join` takes the project's name or the path to it. Add `--lane-name` to call
 the lane something other than the folder's name.
 
-`vivac setup codex --join` reads exactly the same, and so does every other
-flag on this page: what the harness decides is which files this folder gets,
-never anything about the tree. Two folders of one product can take a harness
-each.
+Then run `vivac setup claude-code`, or `vivac setup codex`, in that folder.
+Two folders of one product can take a harness each: what the harness decides
+is which files this folder gets, never anything about the tree. Running setup
+first says so and names the `init` to run, rather than writing files that
+would have nothing to read.
 
-Setup knows when two folders are the same product, because it compares the
+`init` knows when two folders are the same product, because it compares the
 repository's root commit against the projects it already knows. When it finds a
 match it stops and asks which you meant, rather than guessing — `--join` to
 make this folder a lane of that product, `--new-tree` to insist that this one
@@ -187,12 +193,12 @@ saying this tree looks like a copy of another, and says which. Take the warning
 seriously — the fix is to delete one and join it properly.
 
 **Committing `.vivac`.** It is this machine's record; a copy of it in every
-clone would diverge from every other copy within a day. `vivac setup` writes a
+clone would diverge from every other copy within a day. `vivac init` writes a
 `.gitignore` inside `.vivac` that keeps it out, and `vivac check` tells you
 when an older tree is missing it, along with the command that un-commits what
 already went in.
 
-**Nesting one tree under another.** Setup refuses, lists the trees it found
+**Nesting one tree under another.** `init` refuses, lists the trees it found
 below, and tells you how to move them. It refuses rather than picking, because
 the two readings — *this is one product* and *these are two* — are both
 plausible and only you know which is true. A folder whose name trips the

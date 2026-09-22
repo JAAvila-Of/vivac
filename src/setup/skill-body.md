@@ -188,9 +188,12 @@ and keeps a separate memory for each repository. If the person may open
 Claude Code in another folder of this project, like a repository inside it
 with its own .claude folder, or one a memory system files memories under,
 ask them. In each folder they do, offer those steps there as well, and offer
-to set vivac up there, so that sessions opened there get the brief: show them
-the plan that vivac setup claude-code --dry-run prints in that folder, and
-run vivac setup claude-code --yes there only after they say yes.
+to set vivac up there, so that sessions opened there get the brief. That is
+two commands in each folder, and both ask before writing: show them the plan
+that vivac init --dry-run prints there, and run vivac init --yes only after
+they say yes, then do the same with vivac setup claude-code. The first makes
+the folder a thread of this same tree; the second gives that folder the hooks,
+the server and the skill.
 
 Never delete another system's data and never uninstall it: whether it keeps
 running for other projects is the person's call.

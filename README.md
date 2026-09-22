@@ -288,10 +288,12 @@ supply chain of a tool that reads their work.
 
 ## The first five minutes
 
-**1.** In the folder you open your agent in. It shows every file it will
-touch and the exact command each hook will run, and then it asks:
+**1.** In the folder you open your agent in. The first plants the tree, the
+second gives your agent the hooks, the server and the skill. Both show every
+file they will touch, and the exact command each hook will run, and then ask:
 
 ```sh
+vivac init
 vivac setup claude-code
 ```
 
@@ -368,8 +370,8 @@ what the other lanes have done since you last wrote here.
 
 | Your situation | What to run |
 |---|---|
-| another folder, under the same tree | `vivac setup claude-code` there too |
-| a folder somewhere else entirely | `vivac setup claude-code --join <name>` |
+| another folder, under the same tree | `vivac init` there too, then `vivac setup claude-code` |
+| a folder somewhere else entirely | `vivac init --join <name>`, then `vivac setup claude-code` |
 | the tree should live elsewhere | `vivac relocate <destination>` |
 | which lanes exist, and what each is on | `vivac stack --lanes` |
 
@@ -387,7 +389,7 @@ four ways to get it wrong.
 | | |
 |---|---|
 | **Claude Code** | `vivac setup claude-code` writes the hooks, the server and the skill. This is the harness every measurement on this page was taken on. |
-| **Codex** | `vivac setup codex` leaves a project just as ready, where Codex reads it. A real Codex session was walked end to end on 22 September 2026: the server resolves once the project is trusted, the skill is offered to the model, the opening hook puts the brief into the agent's context, and the closing hook leaves its stop. It merges with what is already there, runs twice without writing anything the second time, and takes itself back — the same way the Claude Code side does, and through the same flags. |
+| **Codex** | `vivac setup codex` leaves a project just as ready, where Codex reads it. A real Codex session was walked end to end on 22 September 2026: the server resolves once the project is trusted, the skill is offered to the model, the opening hook puts the brief into the agent's context, and the closing hook leaves its stop. It merges with what is already there, runs twice without writing anything the second time, and takes itself back — the same way the Claude Code side does, and through the same three flags. The tree is neither side's: `vivac init` plants it once, and both harnesses read the one it left. |
 | **Anything else** | The hooks call ordinary commands. Any harness that can run one when a session opens and put its output in the agent's context can call the same one, and any MCP client can run `vivac mcp`. |
 
 One step of that walk is not measured and cannot be: approving each hook

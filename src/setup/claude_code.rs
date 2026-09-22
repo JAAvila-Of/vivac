@@ -1470,8 +1470,11 @@ mod tests {
     #[test]
     fn the_fingerprint_matches_the_known_hash_of_the_literal_text() {
         // Computed independently (Python's own FNV-1a/64) over the exact
-        // frontmatter and body this file embeds.
-        assert_eq!(skill_fingerprint(), 0x373ea81ebebe9f73);
+        // frontmatter and body this file embeds. It moves whenever the
+        // skill's text does, and moving it is meant to be deliberate: the
+        // last time was `d723`, which made the skill offer two commands in
+        // a second folder of one project rather than one.
+        assert_eq!(skill_fingerprint(), 0xbc570f48b5eb961d);
     }
 
     #[test]
