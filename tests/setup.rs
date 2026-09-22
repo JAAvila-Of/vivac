@@ -621,6 +621,129 @@ fn undo_leaves_a_differently_spelled_hook_and_an_edited_skill() {
 }
 
 // ---------------------------------------------------------------------------
+// `d680`: `--undo` and the lane file `--join` leaves behind.
+// ---------------------------------------------------------------------------
+
+/// `--join` writes `.vivac/lane`, and `--undo` used to leave it in place no
+/// matter what: the only way off was deleting the folder by hand, and
+/// while it stayed, `relocate` refused the folder as already holding a
+/// lane. A lane that never wrote anything to the tree owns no history for
+/// the file to orphan, so `--undo` can take it -- and once it does, the
+/// folder no longer blocks `relocate`.
+#[test]
+fn undo_after_a_join_that_wrote_nothing_removes_the_lane_file_and_unblocks_relocate() {
+    let c = Sandbox::new_empty("setup-undo-lane-unwritten");
+    let target = c.0.join("Target");
+    std::fs::create_dir_all(&target).unwrap();
+    run_in(&target, c.global_home(), &["setup", "claude-code", "--yes"]);
+
+    let here = c.0.join("Joiner");
+    std::fs::create_dir_all(&here).unwrap();
+    run_in(
+        &here,
+        c.global_home(),
+        &["setup", "claude-code", "--yes", "--join", "Target"],
+    );
+    assert!(here.join(".vivac").join("lane").exists());
+
+    let (out, code) = run_in(
+        &here,
+        c.global_home(),
+        &["setup", "claude-code", "--undo", "--yes"],
+    );
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("remove this folder's lane"), "{out}");
+    assert!(
+        !here.join(".vivac").join("lane").exists(),
+        "the lane file must be gone once its lane never wrote"
+    );
+
+    let (relocate_out, relocate_code) = run_in(
+        &target,
+        c.global_home(),
+        &["relocate", here.to_str().unwrap()],
+    );
+    assert_eq!(relocate_code, 0, "{relocate_out}");
+}
+
+/// A lane that did write something owns a piece of history no longer
+/// findable through anything but its own id: `--undo` leaves its file
+/// alone and says why, rather than deleting the one file that still names
+/// it.
+#[test]
+fn undo_after_a_join_that_wrote_something_keeps_the_lane_file() {
+    let c = Sandbox::new_empty("setup-undo-lane-written");
+    let target = c.0.join("Target");
+    std::fs::create_dir_all(&target).unwrap();
+    run_in(&target, c.global_home(), &["setup", "claude-code", "--yes"]);
+
+    let here = c.0.join("Joiner");
+    std::fs::create_dir_all(&here).unwrap();
+    run_in(
+        &here,
+        c.global_home(),
+        &["setup", "claude-code", "--yes", "--join", "Target"],
+    );
+    run_in(
+        &here,
+        c.global_home(),
+        &["push", "work from the joined folder", "--why", "seed"],
+    );
+
+    let (out, code) = run_in(
+        &here,
+        c.global_home(),
+        &["setup", "claude-code", "--undo", "--yes"],
+    );
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.contains("left as it is: this lane has written to the tree,"),
+        "{out}"
+    );
+    assert!(
+        out.contains("and removing it would orphan what it wrote"),
+        "{out}"
+    );
+    assert!(
+        here.join(".vivac").join("lane").exists(),
+        "the lane file must stay once its lane has written"
+    );
+}
+
+/// Everything else `--undo` manages can already be gone while the lane
+/// file it left behind still blocks `relocate`: `nothing_to_undo` has to
+/// count a removable lane file as something to undo, not just the four
+/// pieces it already knew about, or this run would report nothing left to
+/// do and leave the very file that is still blocking `relocate`.
+#[test]
+fn undo_removes_an_unwritten_lane_file_even_when_nothing_else_is_left() {
+    let c = Sandbox::new_empty("setup-undo-lane-only");
+    let target = c.0.join("Target");
+    std::fs::create_dir_all(&target).unwrap();
+    run_in(&target, c.global_home(), &["setup", "claude-code", "--yes"]);
+
+    let here = c.0.join("Joiner");
+    std::fs::create_dir_all(&here).unwrap();
+    run_in(
+        &here,
+        c.global_home(),
+        &["setup", "claude-code", "--yes", "--join", "Target"],
+    );
+    std::fs::remove_dir_all(here.join(".claude")).unwrap();
+    std::fs::remove_file(here.join(".mcp.json")).unwrap();
+
+    let (out, code) = run_in(
+        &here,
+        c.global_home(),
+        &["setup", "claude-code", "--undo", "--yes"],
+    );
+    assert_eq!(code, 0, "{out}");
+    assert!(!out.contains("Nothing to undo"), "{out}");
+    assert!(out.contains("remove this folder's lane"), "{out}");
+    assert!(!here.join(".vivac").join("lane").exists());
+}
+
+// ---------------------------------------------------------------------------
 // 19. The `hooks` tombstone.
 // ---------------------------------------------------------------------------
 
@@ -989,8 +1112,9 @@ fn a_tree_above_keeps_claude_codes_files_below_and_names_the_tree_root() {
 /// (f): `--undo` in a subfolder of a tree removes only what was written
 /// there, and leaves the tree above exactly as the earlier `setup`
 /// (which joined it as a lane, `t594` §4.5) left it: `--undo` never
-/// touches the log, so it has nothing to say about the lane that call
-/// already declared.
+/// touches the log. It does still have something to say about the lane
+/// that call declared, though (`d680`): this one never wrote to the tree,
+/// so its file goes too.
 #[test]
 fn undo_in_a_subfolder_removes_only_that_folders_files() {
     let c = Sandbox::new_seeded("setup-two-roots-undo-subfolder");
@@ -1014,8 +1138,8 @@ fn undo_in_a_subfolder_removes_only_that_folders_files() {
     assert!(!sub.join(".claude").exists());
     assert!(!sub.join(".mcp.json").exists());
     assert!(
-        sub.join(".vivac").join("lane").exists(),
-        "undo removed the lane file, which is not one of the four pieces it undoes"
+        !sub.join(".vivac").join("lane").exists(),
+        "a lane that never wrote to the tree should have its file removed by undo (d680)"
     );
     assert!(
         c.0.join(".vivac").exists(),
@@ -1915,6 +2039,75 @@ fn a_registered_products_withheld_name_points_at_the_path_remedy() {
     );
     assert!(out.contains("To plant a separate tree anyway:"), "{out}");
     assert!(out.contains("vivac setup claude-code --new-tree"), "{out}");
+}
+
+/// `d680`, second half: the refusal used to name only two ways out --
+/// joining, or planting a separate tree -- and never the one that keeps
+/// the tree already grown here: moving it into place first, then joining.
+/// Reached before `--new-tree`'s own remedy, so a reader following the
+/// refusal down the page meets it before the escape that gives up this
+/// folder's own tree.
+#[test]
+fn the_refusal_names_relocate_before_new_tree() {
+    let c = Sandbox::new_empty("setup-registered-relocate-remedy");
+    let first = c.0.join("IQuorum");
+    real_git_repo(&first.join("webapi"));
+    run_in(&first, c.global_home(), &["setup", "claude-code", "--yes"]);
+
+    let second = c.0.join("IQuorum-v2");
+    clone_repo(&first.join("webapi"), &second.join("webapi"));
+
+    let (out, code) = run_in(&second, c.global_home(), &["setup", "claude-code", "--yes"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        out.contains("If the tree should live here instead, run this in the folder that holds it:"),
+        "{out}"
+    );
+    assert!(
+        out.contains("vivac relocate <path to this folder>"),
+        "{out}"
+    );
+    let relocate_at = out.find("vivac relocate").expect("relocate remedy missing");
+    let new_tree_at = out
+        .find("vivac setup claude-code --new-tree")
+        .expect("new-tree remedy missing");
+    assert!(
+        relocate_at < new_tree_at,
+        "relocate must be named before --new-tree: {out}"
+    );
+}
+
+/// The withheld-name form of the same refusal carries the same remedy, in
+/// the same place.
+#[test]
+fn the_withheld_name_refusal_also_names_relocate_before_new_tree() {
+    let secret_name = "someone@example.com";
+    let c = Sandbox::new_empty("setup-registered-relocate-remedy-withheld");
+    let first = c.0.join(secret_name);
+    real_git_repo(&first.join("webapi"));
+    run_in(&first, c.global_home(), &["setup", "claude-code", "--yes"]);
+
+    let second = c.0.join("Prod-v3");
+    clone_repo(&first.join("webapi"), &second.join("webapi"));
+
+    let (out, code) = run_in(&second, c.global_home(), &["setup", "claude-code", "--yes"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        out.contains("If the tree should live here instead, run this in the folder that holds it:"),
+        "{out}"
+    );
+    assert!(
+        out.contains("vivac relocate <path to this folder>"),
+        "{out}"
+    );
+    let relocate_at = out.find("vivac relocate").expect("relocate remedy missing");
+    let new_tree_at = out
+        .find("vivac setup claude-code --new-tree")
+        .expect("new-tree remedy missing");
+    assert!(
+        relocate_at < new_tree_at,
+        "relocate must be named before --new-tree: {out}"
+    );
 }
 
 /// `f677`: a repository that *is* the folder itself is named "this folder

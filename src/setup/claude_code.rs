@@ -149,7 +149,7 @@ pub fn run(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         return Err(refusal);
     }
     if a.has("undo") {
-        return undo(&roots.here, a);
+        return undo(roots, a);
     }
     // Checked here, before the branch below, rather than inside `apply`
     // alone: a guard that lives in one branch is a guard the other branch
@@ -837,6 +837,14 @@ fn tree_above_refusal(tree_root: &Path) -> Failure {
 /// §6.3: this folder's own repositories already belong to a project the
 /// registry tracks. `here_repos` names the repositories printed --
 /// **this** folder's own, per `repos::scan`, never the other project's.
+///
+/// Names three ways out, not two (`d680`): the correct one when the tree
+/// belongs here rather than where it landed -- `relocate` it into place
+/// first, then join -- used to go unnamed, and the two that were left,
+/// joining from here or planting a second tree, cost a reader who followed
+/// them the tree they meant to keep. The `relocate` line sits before
+/// `--new-tree`'s own: the escape that keeps the tree, read before the one
+/// that gives it up.
 fn product_registered_refusal(
     sharing: &crate::registry::Sharing,
     here_repos: &[crate::event::Repo],
@@ -867,6 +875,8 @@ fn product_registered_refusal(
              Planting another tree would give this product two maps.\n\n  \
              To work on {name} from this folder:\n      \
              vivac setup claude-code --join {}\n  \
+             If the tree should live here instead, run this in the folder that holds it:\n      \
+             vivac relocate <path to this folder>\n  \
              To plant a separate tree anyway:\n      \
              vivac setup claude-code --new-tree",
             crate::registry::quote_if_needed(name)
@@ -878,6 +888,8 @@ fn product_registered_refusal(
              Planting another tree would give this product two maps.\n\n  \
              To work on it from this folder, give the path to its folder:\n      \
              vivac setup claude-code --join <path to that folder>\n  \
+             If the tree should live here instead, run this in the folder that holds it:\n      \
+             vivac relocate <path to this folder>\n  \
              To plant a separate tree anyway:\n      \
              vivac setup claude-code --new-tree"
         )),
@@ -1058,6 +1070,20 @@ fn fold_tree(tree_root: &Path) -> crate::model::Tree {
         crate::store::read_all_from(&tree_root.join(crate::store::DIR).join(crate::store::LOG))
             .unwrap_or_default();
     crate::model::fold(&events, broken)
+}
+
+/// Whether `lane_id` has changed `tree_root`'s own tree beyond declaring
+/// itself: `LaneState::seq_change` already skips the context events
+/// (`lane.declared`, `lane.claimed`, `where.changed`) a join writes on a
+/// lane's own behalf, so a lane that only ever joined and never pushed,
+/// popped or noted anything answers `false` here. `--undo`'s own use is
+/// the one thing this decides: a lane that never wrote owns no history for
+/// removing `.vivac/lane` to orphan (`d680`).
+fn lane_has_written(tree_root: &Path, lane_id: &str) -> bool {
+    fold_tree(tree_root)
+        .lanes
+        .get(lane_id)
+        .is_some_and(|s| s.seq_change != 0)
 }
 
 /// What the tree already says about `lane_id`, read without writing
@@ -2566,11 +2592,14 @@ fn skill_conflict() -> String {
 // `--undo`.
 // ---------------------------------------------------------------------------
 
-fn undo(root: &Path, a: &Args) -> Result<i32, Failure> {
+fn undo(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
+    let root = roots.here.as_path();
     let paths = paths(root);
     let settings = read_json(&paths.settings);
     let mcp = read_json(&paths.mcp);
     let skill_raw = std::fs::read_to_string(&paths.skill).ok();
+    let lane_path = root.join(crate::store::DIR).join(crate::lane::FILE);
+    let lane_raw = std::fs::read(&lane_path).ok();
 
     let mut conflicts: Vec<String> = Vec::new();
     if let Some((line, col)) = settings.parse_error {
@@ -2605,7 +2634,20 @@ fn undo(root: &Path, a: &Args) -> Result<i32, Failure> {
     let stop_ours = matches!(stop_hook_state, HookState::Exact);
     let mcp_ours = matches!(mcp_server_state, McpState::Ours);
 
-    let nothing_to_undo = !start_ours && !stop_ours && !mcp_ours && !skill_ours;
+    // `d680`: `.vivac/lane` is not something setup wrote *for* Claude Code,
+    // and it carries no field saying who wrote it -- its shape is
+    // `{version, id, project}` and nothing else -- so this cannot ask "did
+    // setup write this". What it asks instead is the one thing that can be
+    // checked and loses nothing either way: whether the lane it names has
+    // ever changed the tree. `lane_removable` is `false` whenever there is
+    // no file to weigh in the first place.
+    let own_lane = crate::lane::read(&root.join(crate::store::DIR))?;
+    let lane_wrote = own_lane
+        .as_ref()
+        .is_some_and(|lane| lane_has_written(&roots.tree, &lane.id));
+    let lane_removable = own_lane.is_some() && !lane_wrote;
+
+    let nothing_to_undo = !start_ours && !stop_ours && !mcp_ours && !skill_ours && !lane_removable;
     if nothing_to_undo {
         outln!("  Nothing to undo: none of what setup writes is here.");
         return Ok(0);
@@ -2690,6 +2732,17 @@ fn undo(root: &Path, a: &Args) -> Result<i32, Failure> {
     ));
 
     s.push_str(&piece_line(VIVAC_LABEL, "kept: the tree is not setup's"));
+    if own_lane.is_some() {
+        if lane_removable {
+            s.push_str(&piece_line(LANE_LABEL, "remove this folder's lane"));
+        } else {
+            s.push_str(&wrapped_piece_line(
+                LANE_LABEL,
+                "left as it is: this lane has written to the tree,",
+                "and removing it would orphan what it wrote",
+            ));
+        }
+    }
     s.push('\n');
 
     if a.has("dry-run") {
@@ -2764,6 +2817,12 @@ fn undo(root: &Path, a: &Args) -> Result<i32, Failure> {
         writes.push(super::PlannedWrite::delete(
             paths.skill.clone(),
             skill_raw.clone().unwrap().into_bytes(),
+        ));
+    }
+    if lane_removable {
+        writes.push(super::PlannedWrite::delete(
+            lane_path.clone(),
+            lane_raw.clone().unwrap_or_default(),
         ));
     }
 
