@@ -403,6 +403,34 @@ fn dry_run_writes_nothing() {
 // 11. No terminal and no `--yes`.
 // ---------------------------------------------------------------------------
 
+/// `f718`: the same guard on the other door. `--undo` reached its own
+/// question without ever passing the check, so a run with nobody to answer
+/// printed the question anyway, removed nothing and exited 0 -- and 0 with
+/// nothing done is what a script reads as done. The command it hands back
+/// keeps the `--undo` it was given, for the reason `f675` already gave:
+/// without it, the advice is advice for the opposite run.
+#[test]
+fn no_terminal_and_no_yes_refuses_an_undo_too_and_removes_nothing() {
+    let c = Sandbox::new_empty("setup-no-terminal-undo");
+    c.ok(&["setup", "claude-code", "--yes"]);
+    let (out, code) = c.run(&["setup", "claude-code", "--undo"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("there is no terminal to ask"), "{out}");
+    assert!(
+        out.contains("vivac setup claude-code --undo --dry-run"),
+        "{out}"
+    );
+    assert!(
+        out.contains("vivac setup claude-code --undo --yes"),
+        "{out}"
+    );
+    assert!(
+        c.0.join(".claude").join("settings.json").is_file(),
+        "the run removed something it had not been allowed to confirm"
+    );
+    assert!(c.0.join(".mcp.json").is_file(), "{out}");
+}
+
 #[test]
 fn no_terminal_and_no_yes_refuses_without_a_plan() {
     let c = Sandbox::new_empty("setup-no-terminal");

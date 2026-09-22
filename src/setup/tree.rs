@@ -17,8 +17,15 @@
 //! had. `tree_above_refusal`, one of the refusals only reachable through
 //! it, moved with it. `tree_below_join_refusal` stayed in
 //! `claude_code.rs`, the one piece of that preamble `codex.rs` now calls
-//! rather than owning a copy of. What still stays out: `--undo`. Neither
-//! harness shares that yet.
+//! rather than owning a copy of.
+//!
+//! `--undo`'s own piece of the tree moved in too, piece C of the same
+//! tranche (`r515`): [`undo_lane`] and [`undo_lane_lines`] are whether this
+//! folder's own `.vivac/lane` can go and what the plan says about it
+//! either way, out of `claude_code::undo`, the only place that lived until
+//! `codex::undo` needed the same answer. The tree itself stays out of
+//! `--undo` entirely -- `.vivac/` is not setup's to remove, in either
+//! harness's plan.
 
 use crate::args::Args;
 use crate::failure::Failure;
@@ -1482,6 +1489,62 @@ pub(super) fn commit(
     }
 
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// `--undo`'s own piece of the tree, shared by both harnesses (`t592`
+// tranche 2, piece C, `r515`): whether this folder's own lane file can go,
+// and what the plan says about it either way. Out of `claude_code::undo`,
+// the only place it lived until `codex::undo` needed the same door.
+// ---------------------------------------------------------------------------
+
+/// `raw` is `Some` only once a lane file was actually there to read; `Ok`
+/// with `exists: false` is the ordinary shape of a folder with no lane file
+/// at all, and has nothing for `--undo`'s plan to say about this piece.
+pub(super) struct UndoLane {
+    pub(super) path: PathBuf,
+    pub(super) raw: Option<Vec<u8>>,
+    exists: bool,
+    pub(super) removable: bool,
+}
+
+/// Reads this folder's own `.vivac/lane`, without writing anything, and
+/// decides whether `--undo` may take it (`d680`): `lane_has_written`
+/// already skips the context events a join writes on a lane's own behalf,
+/// so a lane that only ever joined and never pushed, popped or noted
+/// anything owns no history for the file to orphan.
+pub(super) fn undo_lane(roots: &super::Roots) -> Result<UndoLane, Failure> {
+    let here = roots.here.as_path();
+    let path = here.join(crate::store::DIR).join(crate::lane::FILE);
+    let raw = std::fs::read(&path).ok();
+    let own_lane = crate::lane::read(&here.join(crate::store::DIR))?;
+    let wrote = own_lane
+        .as_ref()
+        .is_some_and(|lane| lane_has_written(&roots.tree, &lane.id));
+    Ok(UndoLane {
+        path,
+        raw,
+        exists: own_lane.is_some(),
+        removable: own_lane.is_some() && !wrote,
+    })
+}
+
+/// The lane's own line(s) in `--undo`'s plan: nothing at all when this
+/// folder never had a lane file, a plain `piece_line` when it can go, and
+/// the wrapped explanation when it stays because its lane has written.
+pub(super) fn undo_lane_lines(lane: &UndoLane) -> String {
+    if !lane.exists {
+        return String::new();
+    }
+    if lane.removable {
+        super::claude_code::piece_line(LANE_LABEL, "remove this folder's lane")
+    } else {
+        super::claude_code::wrapped_piece_line(
+            LANE_LABEL,
+            "left as it is: this lane has written to the tree,",
+            "and removing it would orphan what it wrote",
+        )
+    }
 }
 
 #[cfg(test)]

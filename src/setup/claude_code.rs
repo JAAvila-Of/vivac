@@ -315,7 +315,10 @@ pub(super) fn append_hook(root: &mut Value, event: &str, command: &str, matcher:
 /// Removes every array entry whose sole hook is exactly `command`, then
 /// drops the event key if its array is now empty, and `hooks` itself if
 /// that leaves it with nothing. `t565` §7.7.
-fn remove_hook(root: &mut Value, event: &str, command: &str) -> bool {
+///
+/// `pub(super)`: `codex.rs` takes its own two hooks off through this same
+/// function (`t592` tranche 2, piece C).
+pub(super) fn remove_hook(root: &mut Value, event: &str, command: &str) -> bool {
     let mut removed = false;
     let Some(hooks) = root.get("hooks").cloned() else {
         return false;
@@ -536,7 +539,10 @@ pub(super) fn skill_state(existing: &str) -> SkillState {
 /// Whether an existing skill's fingerprint is intact, regardless of whether
 /// its text still matches what this version would write today. `--undo`
 /// only ever removes a file it (or an earlier vivac) actually wrote.
-fn skill_fingerprint_intact(existing: &str) -> bool {
+///
+/// `pub(super)`: `codex.rs` checks its own skill's fingerprint through this
+/// same function before `--undo` takes it (`t592` tranche 2, piece C).
+pub(super) fn skill_fingerprint_intact(existing: &str) -> bool {
     matches!(
         skill_state(existing),
         SkillState::Same | SkillState::Replaceable
@@ -1338,8 +1344,7 @@ fn undo(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     let settings = read_json(&paths.settings);
     let mcp = read_json(&paths.mcp);
     let skill_raw = std::fs::read_to_string(&paths.skill).ok();
-    let lane_path = root.join(crate::store::DIR).join(crate::lane::FILE);
-    let lane_raw = std::fs::read(&lane_path).ok();
+    let undo_lane = tree::undo_lane(roots)?;
 
     let mut conflicts: Vec<String> = Vec::new();
     if let Some((line, col)) = settings.parse_error {
@@ -1374,20 +1379,8 @@ fn undo(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     let stop_ours = matches!(stop_hook_state, HookState::Exact);
     let mcp_ours = matches!(mcp_server_state, McpState::Ours);
 
-    // `d680`: `.vivac/lane` is not something setup wrote *for* Claude Code,
-    // and it carries no field saying who wrote it -- its shape is
-    // `{version, id, project}` and nothing else -- so this cannot ask "did
-    // setup write this". What it asks instead is the one thing that can be
-    // checked and loses nothing either way: whether the lane it names has
-    // ever changed the tree. `lane_removable` is `false` whenever there is
-    // no file to weigh in the first place.
-    let own_lane = crate::lane::read(&root.join(crate::store::DIR))?;
-    let lane_wrote = own_lane
-        .as_ref()
-        .is_some_and(|lane| tree::lane_has_written(&roots.tree, &lane.id));
-    let lane_removable = own_lane.is_some() && !lane_wrote;
-
-    let nothing_to_undo = !start_ours && !stop_ours && !mcp_ours && !skill_ours && !lane_removable;
+    let nothing_to_undo =
+        !start_ours && !stop_ours && !mcp_ours && !skill_ours && !undo_lane.removable;
     if nothing_to_undo {
         outln!("  Nothing to undo: none of what setup writes is here.");
         return Ok(0);
@@ -1475,22 +1468,23 @@ fn undo(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         tree::VIVAC_LABEL,
         "kept: the tree is not setup's",
     ));
-    if own_lane.is_some() {
-        if lane_removable {
-            s.push_str(&piece_line(tree::LANE_LABEL, "remove this folder's lane"));
-        } else {
-            s.push_str(&wrapped_piece_line(
-                tree::LANE_LABEL,
-                "left as it is: this lane has written to the tree,",
-                "and removing it would orphan what it wrote",
-            ));
-        }
-    }
+    s.push_str(&tree::undo_lane_lines(&undo_lane));
     s.push('\n');
 
     if a.has("dry-run") {
         outln!("{s}  Nothing written: --dry-run.");
         return Ok(0);
+    }
+
+    // `f718`: the same guard `apply_writes` has had all along, missing
+    // here. Without it a run with nobody to answer printed the question
+    // anyway, removed nothing, and exited 0 -- and 0 with nothing done is
+    // what a script reads as done.
+    if !a.has("yes") && !super::stdin_is_terminal() {
+        return Err(Failure::Model(super::no_terminal_text(
+            Harness::ClaudeCode,
+            a,
+        )));
     }
 
     print!("{s}");
@@ -1562,10 +1556,10 @@ fn undo(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
             skill_raw.clone().unwrap().into_bytes(),
         ));
     }
-    if lane_removable {
+    if undo_lane.removable {
         writes.push(super::PlannedWrite::delete(
-            lane_path.clone(),
-            lane_raw.clone().unwrap_or_default(),
+            undo_lane.path.clone(),
+            undo_lane.raw.clone().unwrap_or_default(),
         ));
     }
 
@@ -1590,7 +1584,10 @@ fn undo(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     Ok(0)
 }
 
-fn remove_if_empty(dir: Option<&Path>) {
+/// `pub(super)`: `codex.rs` cleans up its own empty directories with this
+/// same best-effort removal after its own `--undo` commit (`t592` tranche 2,
+/// piece C).
+pub(super) fn remove_if_empty(dir: Option<&Path>) {
     if let Some(dir) = dir {
         let _ = std::fs::remove_dir(dir);
     }
