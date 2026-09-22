@@ -681,7 +681,6 @@ guard
 guarded
 guess
 guessed
-guessing
 gutter
 had
 half
@@ -923,11 +922,13 @@ mapped
 mark
 marked
 marker
+markers
 marks
 markup
 mask
 match
 matched
+matcher
 matches
 matching
 matter
@@ -942,7 +943,6 @@ measures
 mem
 mentioned
 merely
-merge
 message
 messy
 metadata
@@ -1094,6 +1094,7 @@ ov
 over
 overall
 overwrites
+overwritten
 own
 owned
 p11
@@ -1686,6 +1687,7 @@ token
 tokens
 told
 tombstone
+toml
 too
 tool
 tools

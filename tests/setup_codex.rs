@@ -1,7 +1,7 @@
-//! `vivac setup codex` — `t592`, tranche 1: a clean project, none of the
-//! three files Codex reads there yet. Merging with a file already there,
-//! `--undo` and running it twice are tranche 2 and are not this file's job
-//! (`d653`).
+//! `vivac setup codex` — tranche 1 (`t592`) covers a clean project, none of
+//! the three files Codex reads there yet. Tranche 2 adds merging with a
+//! file already there (piece B, `t592` §4) and running it twice (piece D,
+//! §6). `--undo` is piece C and is not this file's job yet.
 
 mod common;
 use common::Sandbox;
@@ -182,25 +182,207 @@ fn none_of_the_three_files_carries_an_absolute_path() {
 }
 
 // ---------------------------------------------------------------------------
-// 5. A file already there: tranche 1 stops rather than merging (`t592`).
+// 5. `t592` tranche 2, piece B: each file merges with what is already
+//    there instead of refusing outright, and piece D: running it twice
+//    writes nothing the second time.
 // ---------------------------------------------------------------------------
 
+/// Test 5 of the piece B/D specification: a foreign `config.toml` keeps its
+/// own content, byte for byte, and gains our block behind it, preceded by a
+/// blank line.
 #[test]
-fn a_file_already_there_stops_instead_of_guessing_how_to_merge() {
-    let c = Sandbox::new_empty("setup-codex-conflict");
+fn a_foreign_config_toml_keeps_its_content_and_gains_our_block_after_it() {
+    let c = Sandbox::new_empty("setup-codex-config-foreign");
     std::fs::create_dir_all(c.0.join(".codex")).unwrap();
-    std::fs::write(config_path(&c), "# hand-written\n").unwrap();
+    std::fs::write(config_path(&c), "# hand-written\nsomething = 1\n").unwrap();
+
+    let (out, code) = c.run(&["setup", "codex", "--yes"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("add: the \"vivac\" server"), "{out}");
+    assert_eq!(
+        read(&config_path(&c)),
+        format!("# hand-written\nsomething = 1\n\n{EXPECTED_CONFIG}")
+    );
+}
+
+/// Test 6: `config.toml` already carrying our block is left alone -- not a
+/// single byte changes, even though this run still has the other two files
+/// to write.
+#[test]
+fn a_config_toml_with_our_block_already_there_is_left_untouched() {
+    let c = Sandbox::new_empty("setup-codex-config-already");
+    std::fs::create_dir_all(c.0.join(".codex")).unwrap();
+    std::fs::write(config_path(&c), EXPECTED_CONFIG).unwrap();
+
+    let (out, code) = c.run(&["setup", "codex", "--yes"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("already has the \"vivac\" server"), "{out}");
+    assert_eq!(read(&config_path(&c)), EXPECTED_CONFIG);
+}
+
+/// Test 7: an opening marker with no closing one refuses, names the file
+/// and which marker is missing, and writes nothing anywhere -- not even the
+/// other two files this run would otherwise have created.
+#[test]
+fn a_config_toml_with_an_opening_marker_and_no_closing_one_is_rejected() {
+    let c = Sandbox::new_empty("setup-codex-config-half-marker");
+    std::fs::create_dir_all(c.0.join(".codex")).unwrap();
+    std::fs::write(
+        config_path(&c),
+        "# added by vivac setup codex\n[mcp_servers.vivac]\ncommand = \"vivac\"\n",
+    )
+    .unwrap();
 
     let (out, code) = c.run(&["setup", "codex", "--yes"]);
     assert_eq!(code, 1, "{out}");
     assert!(out.contains(CONFIG_LABEL), "{out}");
+    assert!(out.contains("closing"), "{out}");
+    assert!(!hooks_path(&c).exists(), "{out}");
+    assert!(!skill_path(&c).exists(), "{out}");
+}
+
+/// Test 8: a foreign `hooks.json` keeps its own event intact, and ours are
+/// added beside it, with the matcher on `SessionStart` and none on `Stop`.
+#[test]
+fn a_foreign_hooks_json_keeps_its_other_event_and_gains_ours() {
+    let c = Sandbox::new_empty("setup-codex-hooks-foreign");
+    std::fs::create_dir_all(c.0.join(".codex")).unwrap();
+    let foreign = serde_json::json!({
+        "hooks": {
+            "PreCompact": [
+                { "hooks": [ { "type": "command", "command": "some-other-tool" } ] }
+            ]
+        }
+    });
+    std::fs::write(
+        hooks_path(&c),
+        serde_json::to_string_pretty(&foreign).unwrap(),
+    )
+    .unwrap();
+
+    let (out, code) = c.run(&["setup", "codex", "--yes"]);
+    assert_eq!(code, 0, "{out}");
+
+    let after: serde_json::Value = serde_json::from_str(&read(&hooks_path(&c))).unwrap();
     assert_eq!(
-        read(&config_path(&c)),
-        "# hand-written\n",
-        "the existing file was touched"
+        after["hooks"]["PreCompact"][0]["hooks"][0]["command"], "some-other-tool",
+        "{after}"
     );
-    assert!(!hooks_path(&c).exists(), "hooks.json was written anyway");
-    assert!(!skill_path(&c).exists(), "SKILL.md was written anyway");
+    assert_eq!(
+        after["hooks"]["SessionStart"][0]["matcher"], "startup|resume|clear|compact",
+        "{after}"
+    );
+    assert_eq!(
+        after["hooks"]["SessionStart"][0]["hooks"][0]["command"],
+        SESSION_START
+    );
+    assert!(
+        after["hooks"]["Stop"][0].get("matcher").is_none(),
+        "{after}"
+    );
+    assert_eq!(
+        after["hooks"]["Stop"][0]["hooks"][0]["command"],
+        SESSION_END
+    );
+}
+
+/// Test 9: `hooks.json` that does not parse refuses, and writes neither the
+/// TOML nor the skill -- all or nothing stays all or nothing.
+#[test]
+fn broken_hooks_json_refuses_and_writes_nothing() {
+    let c = Sandbox::new_empty("setup-codex-hooks-broken");
+    std::fs::create_dir_all(c.0.join(".codex")).unwrap();
+    std::fs::write(hooks_path(&c), "{\n  \"hooks\": ,\n}").unwrap();
+
+    let (out, code) = c.run(&["setup", "codex", "--yes"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains(HOOKS_LABEL), "{out}");
+    assert!(out.contains("not JSON setup can read"), "{out}");
+    assert!(!config_path(&c).exists(), "{out}");
+    assert!(!skill_path(&c).exists(), "{out}");
+}
+
+/// Test 10: a `description` at the root of `hooks.json` is not ours, and
+/// stays there after this run adds its own hooks.
+#[test]
+fn a_hooks_json_with_a_root_description_keeps_it() {
+    let c = Sandbox::new_empty("setup-codex-hooks-description");
+    std::fs::create_dir_all(c.0.join(".codex")).unwrap();
+    let foreign = serde_json::json!({ "description": "our own hooks" });
+    std::fs::write(
+        hooks_path(&c),
+        serde_json::to_string_pretty(&foreign).unwrap(),
+    )
+    .unwrap();
+
+    let (out, code) = c.run(&["setup", "codex", "--yes"]);
+    assert_eq!(code, 0, "{out}");
+    let after: serde_json::Value = serde_json::from_str(&read(&hooks_path(&c))).unwrap();
+    assert_eq!(after["description"], "our own hooks", "{after}");
+}
+
+/// Test 11: a skill changed since setup wrote it is a conflict, and stays
+/// exactly as it was found.
+#[test]
+fn a_hand_edited_skill_is_a_conflict_and_is_not_overwritten() {
+    let c = Sandbox::new_empty("setup-codex-skill-conflict");
+    std::fs::create_dir_all(skill_path(&c).parent().unwrap()).unwrap();
+    std::fs::write(skill_path(&c), "# Someone else's skill\n").unwrap();
+
+    let (out, code) = c.run(&["setup", "codex", "--yes"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains(SKILL_LABEL), "{out}");
+    assert_eq!(read(&skill_path(&c)), "# Someone else's skill\n");
+    assert!(!config_path(&c).exists(), "{out}");
+    assert!(!hooks_path(&c).exists(), "{out}");
+}
+
+/// Test 12: a foreign `[mcp_servers.vivac]` table, with none of our
+/// markers, is rejected rather than duplicated into invalid TOML.
+#[test]
+fn a_foreign_mcp_servers_vivac_table_is_rejected() {
+    let c = Sandbox::new_empty("setup-codex-config-mcp-table");
+    std::fs::create_dir_all(c.0.join(".codex")).unwrap();
+    std::fs::write(
+        config_path(&c),
+        "[mcp_servers.vivac]\ncommand = \"something-else\"\n",
+    )
+    .unwrap();
+
+    let (out, code) = c.run(&["setup", "codex", "--yes"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains(CONFIG_LABEL), "{out}");
+    assert!(out.contains("[mcp_servers.vivac]"), "{out}");
+    assert!(!hooks_path(&c).exists(), "{out}");
+    assert!(!skill_path(&c).exists(), "{out}");
+}
+
+/// Test 13, piece D: running `setup codex --yes` twice writes nothing the
+/// second time, and not one of the three files -- nor `.vivac/events` --
+/// changes a single byte.
+#[test]
+fn a_second_run_writes_nothing() {
+    let c = Sandbox::new_empty("setup-codex-idempotent");
+    c.ok(&["setup", "codex", "--yes"]);
+    let config_before = std::fs::read(config_path(&c)).unwrap();
+    let hooks_before = std::fs::read(hooks_path(&c)).unwrap();
+    let skill_before = std::fs::read(skill_path(&c)).unwrap();
+    let events_before = std::fs::read(c.0.join(".vivac").join("events")).unwrap();
+
+    let (out, code) = c.run(&["setup", "codex", "--yes"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.contains("Nothing to write: this project is already set up."),
+        "{out}"
+    );
+    assert_eq!(config_before, std::fs::read(config_path(&c)).unwrap());
+    assert_eq!(hooks_before, std::fs::read(hooks_path(&c)).unwrap());
+    assert_eq!(skill_before, std::fs::read(skill_path(&c)).unwrap());
+    assert_eq!(
+        events_before,
+        std::fs::read(c.0.join(".vivac").join("events")).unwrap(),
+        "the second run touched the tree"
+    );
 }
 
 // ---------------------------------------------------------------------------

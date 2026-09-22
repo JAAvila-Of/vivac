@@ -7,9 +7,7 @@
 //! comments rather than parsed, `d654`), the two session hooks in
 //! `.codex/hooks.json`, and the skill at `.agents/skills/vivac-migrate/`,
 //! which is `claude_code::skill_text()` itself rather than a second copy of
-//! it. Merging with a file already there and `--undo` are tranche 2's own
-//! pieces B and C and are not this file's job yet: a target that already
-//! exists stops the run instead.
+//! it.
 //!
 //! Tranche 2's piece A (`t592`, `d710`) is here: the fourth piece these
 //! three were always missing is the tree itself, planted the same way
@@ -21,12 +19,23 @@
 //! this file now shares: `tree::plan_join` and the `Harness` it prints
 //! commands under.
 //!
+//! Tranche 2's piece B (`t592` §4) is here too: each of the three files now
+//! merges with whatever is already there, the same three outcomes
+//! `claude_code.rs` already gives its own files -- create it, add to what
+//! is there, or leave it alone because it already has what this run would
+//! write. `--undo` is piece C and stays refused by name until it lands.
+//!
 //! Two things Codex needs that this run cannot do for it, because both live
 //! outside the project (`d655`): the project has to be marked trusted in
 //! the person's own Codex configuration before it reads anything under
 //! `.codex/`, and each hook is approved on its own, against its hash,
 //! inside Codex. The closing summary names both.
 
+use super::claude_code::{
+    append_hook, hook_state, not_object_conflict, read_json, skill_state, skill_text,
+    unreadable_conflict, HookState, SkillState,
+};
+use super::json::{self, Value};
 use super::tree;
 use crate::args::Args;
 use crate::failure::Failure;
@@ -39,28 +48,26 @@ const SKILL_LABEL: &str = ".agents/skills/vivac-migrate/SKILL.md";
 
 const SESSION_START_COMMAND: &str = "vivac session start --hook";
 const SESSION_END_COMMAND: &str = "vivac session end --hook";
+const SESSION_START_MATCHER: &str = "startup|resume|clear|compact";
 
 /// `d654`: written whole, between the two marker comments a later `--undo`
 /// will look for -- no TOML reader in this crate, and none needed for a
-/// file this tranche only ever writes onto empty ground.
-const CONFIG_CONTENT: &str = "# added by vivac setup codex\n\
-[mcp_servers.vivac]\n\
-command = \"vivac\"\n\
-args = [\"mcp\"]\n\
-# end of what vivac setup codex added\n";
-
-/// `d653`: `SessionStart` and `Stop`, the literal translation of the TOML
-/// hook shape into Codex's own JSON one -- an event name, a list of groups,
-/// each with its own `hooks` list. `Stop` runs during a turn, the mirror of
-/// Claude Code's own `Stop` (`d656`), rather than `SessionEnd`, which runs
-/// once and only long after the work that motivated it.
+/// file this only ever writes out this way onto empty ground.
+///
+/// Only for that ground: once `.codex/hooks.json` exists, its state is read
+/// and grown through the JSON machinery `claude_code.rs` already has
+/// (`read_json`, `hook_state`, `append_hook`), not through this string.
+/// `serde_json`'s own pretty-printer puts every object on its own line, so
+/// its output stops matching this string byte for byte the moment there is
+/// anything to merge with -- one puts `{ "type": ..., "command": ... }` on
+/// one line and the other never does (`t592` tranche 2, piece B).
 fn hooks_content() -> String {
     format!(
         "{{\n  \
            \"hooks\": {{\n    \
              \"SessionStart\": [\n      \
                {{\n        \
-                 \"matcher\": \"startup|resume|clear|compact\",\n        \
+                 \"matcher\": \"{SESSION_START_MATCHER}\",\n        \
                  \"hooks\": [\n          \
                    {{ \"type\": \"command\", \"command\": \"{SESSION_START_COMMAND}\" }}\n        \
                  ]\n      \
@@ -76,6 +83,95 @@ fn hooks_content() -> String {
            }}\n\
          }}\n"
     )
+}
+
+// ---------------------------------------------------------------------------
+// `.codex/config.toml`: no TOML reader in this crate (`d654`), so its state
+// is read by scanning lines for the two marker comments setup's own block
+// sits between, never by parsing.
+// ---------------------------------------------------------------------------
+
+const CONFIG_OPEN_MARKER: &str = "# added by vivac setup codex";
+const CONFIG_CLOSE_MARKER: &str = "# end of what vivac setup codex added";
+
+/// `d654`: written whole between the two markers above -- the block itself,
+/// unchanged from tranche 1.
+const CONFIG_CONTENT: &str = "# added by vivac setup codex\n\
+[mcp_servers.vivac]\n\
+command = \"vivac\"\n\
+args = [\"mcp\"]\n\
+# end of what vivac setup codex added\n";
+
+#[derive(Debug)]
+enum ConfigState {
+    Create,
+    Append,
+    Already,
+}
+
+/// `existing`'s own state, read by scanning its lines rather than parsing
+/// TOML (`d654`): both markers present is `Already`, neither is `Append`,
+/// and one without the other is a conflict this returns as `Err` rather
+/// than a state, because a half-written block cannot be repaired by
+/// guessing where it ended. `Err` covers a second case too: neither marker
+/// present, but a foreign `[mcp_servers.vivac]` table already there would
+/// collide with the one this run would add.
+///
+/// A line search is not a TOML parse: it can false-positive on a line
+/// inside a multi-line string that happens to read exactly like one of
+/// these markers or that table header. A false positive here is a plain
+/// refusal instead of a broken file underneath -- the side to be wrong on.
+fn config_state(existing: &str) -> Result<ConfigState, String> {
+    let lines: Vec<&str> = existing.lines().collect();
+    let has_open = lines.contains(&CONFIG_OPEN_MARKER);
+    let has_close = lines.contains(&CONFIG_CLOSE_MARKER);
+    if has_open && has_close {
+        return Ok(ConfigState::Already);
+    }
+    if has_open != has_close {
+        return Err(config_marker_conflict(has_open));
+    }
+    if lines.iter().any(|&l| l.trim() == "[mcp_servers.vivac]") {
+        return Err(config_table_conflict());
+    }
+    Ok(ConfigState::Append)
+}
+
+fn config_marker_conflict(has_open: bool) -> String {
+    let (missing_word, missing_marker) = if has_open {
+        ("closing", CONFIG_CLOSE_MARKER)
+    } else {
+        ("opening", CONFIG_OPEN_MARKER)
+    };
+    format!(
+        "  {CONFIG_LABEL} has one of setup's own two markers and not the other.\n  \
+         The {missing_word} one is missing:\n      {missing_marker}\n  \
+         A half-written block is not repaired by guessing where it ended. Fix it\n  \
+         by hand, or take out the marker that is there, then run setup again."
+    )
+}
+
+fn config_table_conflict() -> String {
+    format!(
+        "  {CONFIG_LABEL} already has a [mcp_servers.vivac] table that setup did not\n  \
+         write, and setup never rewrites an entry it did not write. Adding ours\n  \
+         below it would declare that table twice, which is a file Codex cannot\n  \
+         read at all. Rename or remove it, then run setup again."
+    )
+}
+
+/// `existing`, with setup's own block appended at the end, preceded by a
+/// blank line: `existing` itself is never touched, down to the byte, other
+/// than gaining a trailing newline first when it did not already end in
+/// one.
+fn append_config(existing: &str) -> String {
+    let mut s = existing.to_string();
+    if !s.ends_with('\n') {
+        s.push('\n');
+    }
+    s.push('\n');
+    s.push_str(CONFIG_CONTENT);
+    s
 }
 
 struct Paths {
@@ -116,7 +212,8 @@ pub fn run(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
 /// tranche 2 (`d710`): they are the tree's own flags, and `tree::plan`
 /// reads them the same way it does for `claude-code`. `--join` left it in
 /// piece G of the same tranche (`f714`): it joins through `tree::plan_join`
-/// now, the same door `claude_code.rs` already had.
+/// now, the same door `claude_code.rs` already had. `--undo` is piece C and
+/// is not here yet.
 const UNSUPPORTED_FLAGS: &[(&str, &str)] = &[("undo", "removing what it wrote")];
 
 fn refuse_unsupported_flags(a: &Args) -> Option<Failure> {
@@ -148,49 +245,91 @@ fn refuse_unsupported_flags(a: &Args) -> Option<Failure> {
 /// before what gets written onto it, and what the run records about that
 /// ground last. Appending it instead would read as an afterthought, which
 /// is what it was until `f705`.
-fn render_plan(here: &Path, plan: &tree::TreePlan) -> String {
+///
+/// `config_state`, the two hook states and `skill_file_state` decide which
+/// of the three outcomes each piece shows (`t592` tranche 2, piece B): the
+/// same "already has it" versus "add to it" versus "create it" `claude_code`
+/// already draws for its own files.
+#[allow(clippy::too_many_arguments)]
+fn render_plan(
+    here: &Path,
+    config_state: &ConfigState,
+    hooks_exists: bool,
+    start_hook_state: &HookState,
+    stop_hook_state: &HookState,
+    start_missing: bool,
+    stop_missing: bool,
+    skill_file_state: &SkillState,
+    plan: &tree::TreePlan,
+) -> String {
     use super::claude_code::{piece_line, sub_line, wrapped_piece_line};
     let mut s = format!("  vivac setup codex, in {}\n\n", here.display());
     s.push_str(&tree::opening_lines(plan));
-    s.push_str(&piece_line(CONFIG_LABEL, "create: the \"vivac\" server"));
-    s.push_str("        vivac mcp\n");
-    s.push_str(&piece_line(HOOKS_LABEL, "create: two hooks"));
-    s.push_str(&sub_line("SessionStart", SESSION_START_COMMAND));
-    s.push_str(&sub_line("Stop", SESSION_END_COMMAND));
-    s.push_str(&wrapped_piece_line(
-        SKILL_LABEL,
-        "create: how an agent brings",
-        "another memory into vivac",
-    ));
+
+    let config_status = match config_state {
+        ConfigState::Create => "create: the \"vivac\" server",
+        ConfigState::Append => "add: the \"vivac\" server",
+        ConfigState::Already => "already has the \"vivac\" server",
+    };
+    s.push_str(&piece_line(CONFIG_LABEL, config_status));
+    if !matches!(config_state, ConfigState::Already) {
+        s.push_str("        vivac mcp\n");
+    }
+
+    let hooks_status = match (hooks_exists, start_missing, stop_missing) {
+        (_, false, false) => "already has both hooks",
+        (_, true, false) => "add the SessionStart hook",
+        (_, false, true) => "add the Stop hook",
+        (false, true, true) => "create: two hooks",
+        (true, true, true) => "add two hooks",
+    };
+    s.push_str(&piece_line(HOOKS_LABEL, hooks_status));
+    match start_hook_state {
+        HookState::Missing => s.push_str(&sub_line("SessionStart", SESSION_START_COMMAND)),
+        HookState::Different(cmd) => {
+            s.push_str(&sub_line("SessionStart", &format!("already runs  {cmd}")))
+        }
+        HookState::Exact => {}
+    }
+    match stop_hook_state {
+        HookState::Missing => s.push_str(&sub_line("Stop", SESSION_END_COMMAND)),
+        HookState::Different(cmd) => s.push_str(&sub_line("Stop", &format!("already runs  {cmd}"))),
+        HookState::Exact => {}
+    }
+
+    match skill_file_state {
+        SkillState::Missing => s.push_str(&wrapped_piece_line(
+            SKILL_LABEL,
+            "create: how an agent brings",
+            "another memory into vivac",
+        )),
+        SkillState::Replaceable => s.push_str(&piece_line(
+            SKILL_LABEL,
+            "replace the copy an earlier vivac wrote",
+        )),
+        SkillState::Same => s.push_str(&piece_line(SKILL_LABEL, "already there")),
+        SkillState::Conflict => unreachable!("a skill conflict never reaches the plan"),
+    }
+
     s.push_str(&tree::closing_lines(plan));
     s
 }
 
-fn existing_files_refusal(existing: &[&str]) -> Failure {
-    let list = existing.join("\n      ");
-    Failure::Model(format!(
-        "  This project already has:\n      {list}\n\n  \
-         setup codex does not merge with a file that is already there yet: that\n  \
-         lands in a later release. Move it aside, then run setup again.\n\n  \
-         Nothing written."
-    ))
+/// `.agents/skills/vivac-migrate/SKILL.md` is already there, and either
+/// setup did not write it or it was changed since -- the same rejection
+/// `claude_code.rs` gives its own skill, naming this harness's own path
+/// (`t592` tranche 2, piece B).
+fn skill_conflict() -> String {
+    format!(
+        "  {SKILL_LABEL} is already there, and either setup did not write it or\n  \
+         it was changed since. setup never overwrites it: move it away, then run\n  \
+         setup again."
+    )
 }
 
 fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     let here = &roots.here;
     let target = paths(here);
-
-    let existing: Vec<&str> = [
-        (target.config.exists(), CONFIG_LABEL),
-        (target.hooks.exists(), HOOKS_LABEL),
-        (target.skill.exists(), SKILL_LABEL),
-    ]
-    .into_iter()
-    .filter_map(|(exists, label)| exists.then_some(label))
-    .collect();
-    if !existing.is_empty() {
-        return Err(existing_files_refusal(&existing));
-    }
 
     // The tree side: the fourth piece these three files were always
     // missing, and every refusal that belongs to the tree rather than to
@@ -220,8 +359,14 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
 
 /// The plant path's own writes, shared with `--join` (piece G, `f714`,
 /// mirroring `claude_code::apply_writes`): everything past deciding which
-/// plan and which roots this run works from -- rendering the plan, asking,
-/// and writing all or nothing.
+/// plan and which roots this run works from -- reading the three files'
+/// own state, rendering the plan, asking, and writing all or nothing.
+///
+/// `t592` tranche 2, piece B: each of the three files can now already be
+/// there, so this reads its state first, the same shape
+/// `claude_code::apply_writes` already reads `settings.json`, `.mcp.json`
+/// and the skill in, rather than the outright refusal tranche 1 gave any
+/// of the three already existing.
 fn apply_writes(
     roots: &super::Roots,
     a: &Args,
@@ -229,13 +374,101 @@ fn apply_writes(
     target: &Paths,
 ) -> Result<i32, Failure> {
     let here = &roots.here;
-    let full_plan = format!("{}\n", render_plan(here, &plan));
+    let config_raw = std::fs::read_to_string(&target.config).ok();
+    let hooks = read_json(&target.hooks);
+    let skill_raw = std::fs::read_to_string(&target.skill).ok();
+
+    let mut conflicts: Vec<String> = Vec::new();
+
+    let config_state_result = match &config_raw {
+        None => Ok(ConfigState::Create),
+        Some(text) => config_state(text),
+    };
+    if let Err(msg) = &config_state_result {
+        conflicts.push(msg.clone());
+    }
+
+    if let Some((line, col)) = hooks.parse_error {
+        conflicts.push(unreadable_conflict(HOOKS_LABEL, line, col));
+    } else if hooks.not_object {
+        conflicts.push(not_object_conflict(HOOKS_LABEL));
+    }
+
+    let skill_file_state = match &skill_raw {
+        None => SkillState::Missing,
+        Some(text) => skill_state(text),
+    };
+    if matches!(skill_file_state, SkillState::Conflict) {
+        conflicts.push(skill_conflict());
+    }
+
+    if !conflicts.is_empty() {
+        let mut msg = conflicts.join("\n\n");
+        msg.push_str("\n\n  Nothing written.");
+        return Err(Failure::Model(msg));
+    }
+
+    // Every conflict above is checked, so every `Err` branch already went
+    // into `conflicts` and returned: what is left here is always `Ok`.
+    let config_state = config_state_result.expect("checked above");
+
+    let hooks_root = hooks.value.clone().unwrap_or_else(|| Value::object(vec![]));
+    let start_hook_state = hook_state(&hooks_root, "SessionStart", "start", SESSION_START_COMMAND);
+    let stop_hook_state = hook_state(&hooks_root, "Stop", "end", SESSION_END_COMMAND);
+    let start_missing = matches!(start_hook_state, HookState::Missing);
+    let stop_missing = matches!(stop_hook_state, HookState::Missing);
+    let skill_missing_or_replaceable = matches!(
+        skill_file_state,
+        SkillState::Missing | SkillState::Replaceable
+    );
+
+    let config_needs_write = !matches!(config_state, ConfigState::Already);
+    let hooks_needs_write = start_missing || stop_missing;
+
+    let nothing_to_write = !plan.vivac_missing
+        && !plan.gitignore_missing
+        && !config_needs_write
+        && !hooks_needs_write
+        && !skill_missing_or_replaceable
+        && plan.lane.unchanged
+        && !plan.lane.needs_lock
+        && plan.lane.stale_worktrees.is_empty();
+
+    let full_plan = format!(
+        "{}\n",
+        render_plan(
+            here,
+            &config_state,
+            hooks.exists,
+            &start_hook_state,
+            &stop_hook_state,
+            start_missing,
+            stop_missing,
+            &skill_file_state,
+            &plan,
+        )
+    );
 
     if a.has("dry-run") {
         outln!(
             "{full_plan}{}\n  Nothing written: --dry-run.",
             super::claude_code::TRAILING_PARAGRAPH
         );
+        if plan.log_tracked {
+            print!("{}", super::claude_code::tracked_git_warning());
+        }
+        if let Some(w) = &plan.above_warning {
+            print!("{w}");
+        }
+        return Ok(0);
+    }
+
+    if nothing_to_write {
+        // A real run, never `--dry-run`, thanks to the check above: noting
+        // the registry is bookkeeping every ordinary command already does
+        // on a pure read, not a write this promise is about.
+        tree::note_registry(roots);
+        outln!("{full_plan}  Nothing to write: this project is already set up.");
         if plan.log_tracked {
             print!("{}", super::claude_code::tracked_git_warning());
         }
@@ -259,11 +492,71 @@ fn apply_writes(
         return Ok(0);
     }
 
-    let mut writes = vec![
-        super::PlannedWrite::write(target.config.clone(), CONFIG_CONTENT.to_string(), None),
-        super::PlannedWrite::write(target.hooks.clone(), hooks_content(), None),
-        super::PlannedWrite::write(target.skill.clone(), super::claude_code::skill_text(), None),
-    ];
+    let mut writes = Vec::new();
+
+    match config_state {
+        ConfigState::Create => {
+            writes.push(super::PlannedWrite::write(
+                target.config.clone(),
+                CONFIG_CONTENT.to_string(),
+                None,
+            ));
+        }
+        ConfigState::Append => {
+            let existing = config_raw.expect("Append only reached with a file already there");
+            let rendered = append_config(&existing);
+            writes.push(super::PlannedWrite::write(
+                target.config.clone(),
+                rendered,
+                Some(existing.into_bytes()),
+            ));
+        }
+        ConfigState::Already => {}
+    }
+
+    if hooks_needs_write {
+        if hooks.exists {
+            let mut new_hooks = hooks_root.clone();
+            if start_missing {
+                append_hook(
+                    &mut new_hooks,
+                    "SessionStart",
+                    SESSION_START_COMMAND,
+                    Some(SESSION_START_MATCHER),
+                );
+            }
+            if stop_missing {
+                append_hook(&mut new_hooks, "Stop", SESSION_END_COMMAND, None);
+            }
+            let rendered = json::finalize(
+                &json::render(&new_hooks, &hooks.indent),
+                hooks.eol,
+                hooks.trailing_newline,
+            );
+            let before = hooks_root.clone();
+            writes.push(super::PlannedWrite {
+                path: target.hooks.clone(),
+                action: super::Action::Write(rendered),
+                original: Some(hooks.raw.clone().into_bytes()),
+                preserved: Some(Box::new(move |updated| json::extends(&before, updated))),
+            });
+        } else {
+            writes.push(super::PlannedWrite::write(
+                target.hooks.clone(),
+                hooks_content(),
+                None,
+            ));
+        }
+    }
+
+    if skill_missing_or_replaceable {
+        writes.push(super::PlannedWrite::write(
+            target.skill.clone(),
+            skill_text(),
+            skill_raw.clone().map(String::into_bytes),
+        ));
+    }
+
     // The tree's own `.gitignore`, last: a plain file write, so it shares
     // this same all-or-nothing commit rather than a second one of its own
     // (`t565` §7.3, `t592` tranche 2).
@@ -321,11 +614,19 @@ fn trusted_paragraph(here: &Path) -> String {
     )
 }
 
+/// `f706`: the last word, because it decides who can do any of the three
+/// things above. Under Codex's own sandbox `.codex` and `.agents` are
+/// read-only once they exist as directories, which they do from the line
+/// before this one, so running this again is a person's job from here on
+/// and an agent that tries it only learns that it cannot.
+const SANDBOX_PARAGRAPH: &str = "\n  Running setup here again is yours to do from a terminal. Now that .codex/\n  and .agents/ exist, Codex keeps both read-only inside its own sandbox, so\n  an agent working in this project cannot write to either.\n";
+
 fn written_text(here: &Path) -> String {
     let mut s = String::from("  Written.\n");
     s.push_str(FILES_PARAGRAPH);
     s.push_str(&trusted_paragraph(here));
     s.push_str(HOOK_PARAGRAPH);
+    s.push_str(SANDBOX_PARAGRAPH);
     s
 }
 
@@ -375,5 +676,65 @@ mod tests {
                 "{quoted:?} leaves a backslash TOML would read as a bad escape"
             );
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // `config_state`: the four states and the fifth rejection, decided by
+    // scanning lines rather than parsing TOML (`t592` tranche 2, piece B).
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn config_state_reads_both_markers_as_already() {
+        let existing = format!("{CONFIG_OPEN_MARKER}\nsomething\n{CONFIG_CLOSE_MARKER}\n");
+        assert!(matches!(config_state(&existing), Ok(ConfigState::Already)));
+    }
+
+    #[test]
+    fn config_state_reads_neither_marker_as_append() {
+        assert!(matches!(
+            config_state("[other]\nkey = 1\n"),
+            Ok(ConfigState::Append)
+        ));
+    }
+
+    #[test]
+    fn config_state_rejects_an_opening_marker_with_no_closing_one() {
+        let existing = format!("{CONFIG_OPEN_MARKER}\nsomething\n");
+        let err = config_state(&existing).unwrap_err();
+        assert!(err.contains(CONFIG_LABEL), "{err}");
+        assert!(err.contains("closing"), "{err}");
+    }
+
+    #[test]
+    fn config_state_rejects_a_closing_marker_with_no_opening_one() {
+        let existing = format!("something\n{CONFIG_CLOSE_MARKER}\n");
+        let err = config_state(&existing).unwrap_err();
+        assert!(err.contains(CONFIG_LABEL), "{err}");
+        assert!(err.contains("opening"), "{err}");
+    }
+
+    #[test]
+    fn config_state_rejects_a_foreign_mcp_servers_vivac_table() {
+        let existing = "[mcp_servers.vivac]\ncommand = \"something-else\"\n";
+        let err = config_state(existing).unwrap_err();
+        assert!(err.contains(CONFIG_LABEL), "{err}");
+        assert!(err.contains("[mcp_servers.vivac]"), "{err}");
+    }
+
+    #[test]
+    fn append_config_adds_a_blank_line_then_the_block() {
+        let existing = "# hand-written\n";
+        let after = append_config(existing);
+        assert_eq!(after, format!("# hand-written\n\n{CONFIG_CONTENT}"));
+    }
+
+    #[test]
+    fn append_config_adds_the_missing_newline_before_the_blank_line() {
+        let existing = "# hand-written, no trailing newline";
+        let after = append_config(existing);
+        assert_eq!(
+            after,
+            format!("# hand-written, no trailing newline\n\n{CONFIG_CONTENT}")
+        );
     }
 }

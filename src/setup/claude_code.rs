@@ -118,21 +118,24 @@ fn is_vivac_command(word: &str) -> bool {
     stem.eq_ignore_ascii_case("vivac")
 }
 
-struct JsonFile {
-    exists: bool,
-    raw: String,
-    indent: String,
-    eol: &'static str,
-    trailing_newline: bool,
+/// `pub(super)`: `codex.rs` reads its own `.codex/hooks.json` through this
+/// same struct and its fields, rather than a second reader for JSON it also
+/// treats the way `d654` reserves for JSON alone (`t592` tranche 2, piece B).
+pub(super) struct JsonFile {
+    pub(super) exists: bool,
+    pub(super) raw: String,
+    pub(super) indent: String,
+    pub(super) eol: &'static str,
+    pub(super) trailing_newline: bool,
     /// `Some` once parsed as an object; `None` for a missing file (nothing to
     /// parse) or a conflict (unreadable, or not an object).
-    value: Option<Value>,
+    pub(super) value: Option<Value>,
     /// Line and column of a parse failure, for the conflict message.
-    parse_error: Option<(usize, usize)>,
-    not_object: bool,
+    pub(super) parse_error: Option<(usize, usize)>,
+    pub(super) not_object: bool,
 }
 
-fn read_json(path: &Path) -> JsonFile {
+pub(super) fn read_json(path: &Path) -> JsonFile {
     let Ok(raw) = std::fs::read_to_string(path) else {
         return JsonFile {
             exists: false,
@@ -186,7 +189,9 @@ fn read_json(path: &Path) -> JsonFile {
 // Hooks: SessionStart and Stop.
 // ---------------------------------------------------------------------------
 
-enum HookState {
+/// `pub(super)`: `codex.rs` reads its own two hooks through this same type
+/// (`t592` tranche 2, piece B).
+pub(super) enum HookState {
     Missing,
     Exact,
     Different(String),
@@ -200,7 +205,11 @@ fn command_first_word(cmd: &str) -> Option<&str> {
 /// (`SessionStart` or `Stop` are never top-level keys of their own: Claude
 /// Code nests every event under `hooks`), for a vivac command whose
 /// arguments start with `session start` or `session end`.
-fn hook_state(root: &Value, event: &str, session_word: &str, ours: &str) -> HookState {
+///
+/// `pub(super)`: Codex nests its own two events under the same top-level
+/// `hooks` key, so `codex.rs` reads its own hooks.json through this same
+/// function (`t592` tranche 2, piece B).
+pub(super) fn hook_state(root: &Value, event: &str, session_word: &str, ours: &str) -> HookState {
     let Some(arr) = root
         .get("hooks")
         .and_then(|h| h.get(event))
@@ -245,6 +254,23 @@ fn our_hook_entry(command: &str) -> Value {
     )])
 }
 
+/// The same entry `our_hook_entry` builds, with the matcher Codex's own
+/// `SessionStart` filters its sources by. Claude Code's `SessionStart`
+/// takes no matcher, so this is Codex's alone rather than a parameter on
+/// the shared one.
+fn our_hook_entry_with_matcher(command: &str, matcher: &str) -> Value {
+    Value::object(vec![
+        ("matcher", Value::str(matcher)),
+        (
+            "hooks",
+            Value::Array(vec![Value::object(vec![
+                ("type", Value::str("command")),
+                ("command", Value::str(command)),
+            ])]),
+        ),
+    ])
+}
+
 /// Gets `root[key]` as an object, creating it first if it is missing.
 fn get_or_insert_object<'a>(root: &'a mut Value, key: &str) -> &'a mut Value {
     if root.get(key).map(Value::is_object) != Some(true) {
@@ -258,7 +284,14 @@ fn get_or_insert_object<'a>(root: &'a mut Value, key: &str) -> &'a mut Value {
         .unwrap()
 }
 
-fn append_hook(root: &mut Value, event: &str, command: &str) {
+/// `matcher`: `None` for Claude Code's own hooks, which take no matcher at
+/// all. Codex's `SessionStart` passes `Some` and its `Stop` passes `None`
+/// too, because Codex ignores a matcher on that event (`t592` tranche 2,
+/// piece B) -- the one place the two harnesses' hook shapes differ.
+///
+/// `pub(super)`: `codex.rs` appends its own two hooks through this same
+/// function.
+pub(super) fn append_hook(root: &mut Value, event: &str, command: &str, matcher: Option<&str>) {
     let hooks = get_or_insert_object(root, "hooks");
     if hooks.get(event).map(Value::as_array).is_none() {
         hooks.set(event, Value::Array(vec![]));
@@ -272,7 +305,11 @@ fn append_hook(root: &mut Value, event: &str, command: &str) {
         .unwrap()
         .as_array_mut()
         .unwrap();
-    arr.push(our_hook_entry(command));
+    let entry = match matcher {
+        Some(m) => our_hook_entry_with_matcher(command, m),
+        None => our_hook_entry(command),
+    };
+    arr.push(entry);
 }
 
 /// Removes every array entry whose sole hook is exactly `command`, then
@@ -415,17 +452,25 @@ fn without_our_mcp_server(root: &Value) -> Value {
 // The skill file.
 // ---------------------------------------------------------------------------
 
-enum SkillState {
+/// `pub(super)`: `codex.rs` reads its own skill's state through this same
+/// type (`t592` tranche 2, piece B).
+pub(super) enum SkillState {
     Missing,
     Same,
     Replaceable,
     Conflict,
 }
 
+/// The marker names no harness, and used to name `claude-code` (`f714`):
+/// this file is the same one byte for byte wherever setup writes it
+/// (`d653`), so a project set up with Codex was handed a line proposing a
+/// command for the other harness. What `extract_marker` reads back is the
+/// prefix up to the fingerprint, which has not moved, so a file an earlier
+/// vivac wrote still reads as its own and `--undo` still takes it away.
 fn marker_line(fingerprint: u64) -> String {
     format!(
-        "<!-- written by vivac setup; fingerprint {fingerprint:016x}; vivac setup \
-         claude-code --undo removes it while the text is unchanged -->\n"
+        "<!-- written by vivac setup; fingerprint {fingerprint:016x}; setup removes \
+         it with --undo while the text is unchanged -->\n"
     )
 }
 
@@ -467,7 +512,10 @@ fn extract_marker(text: &str) -> Option<(String, String)> {
     Some((fp, without.join("\n")))
 }
 
-fn skill_state(existing: &str) -> SkillState {
+/// `pub(super)`: `codex.rs` calls this for its own skill file, since
+/// `skill_text()` is `claude_code::skill_text()` itself rather than a
+/// second copy (`d653`, `t592` tranche 2 piece B).
+pub(super) fn skill_state(existing: &str) -> SkillState {
     if existing == skill_text() {
         return SkillState::Same;
     }
@@ -830,10 +878,15 @@ fn apply_writes(roots: &super::Roots, a: &Args, plan: tree::TreePlan) -> Result<
     if start_missing || stop_missing {
         let mut new_settings = settings_root.clone();
         if start_missing {
-            append_hook(&mut new_settings, "SessionStart", SESSION_START_COMMAND);
+            append_hook(
+                &mut new_settings,
+                "SessionStart",
+                SESSION_START_COMMAND,
+                None,
+            );
         }
         if stop_missing {
-            append_hook(&mut new_settings, "Stop", SESSION_END_COMMAND);
+            append_hook(&mut new_settings, "Stop", SESSION_END_COMMAND, None);
         }
         let rendered = json::finalize(
             &json::render(&new_settings, &settings.indent),
@@ -1242,7 +1295,9 @@ pub(super) fn tracked_git_warning() -> String {
     format!("\n{}", wrapped(crate::anchor::EVENTS_TRACKED_WARNING))
 }
 
-fn unreadable_conflict(label: &str, line: usize, column: usize) -> String {
+/// `pub(super)`: `codex.rs` reports the same conflict for its own
+/// `.codex/hooks.json`, naming its own label (`t592` tranche 2, piece B).
+pub(super) fn unreadable_conflict(label: &str, line: usize, column: usize) -> String {
     format!(
         "  {label} is not JSON setup can read (line {line}, column {column}), so\n  \
          it will not touch it: a file it cannot read is a file it could only\n  \
@@ -1250,7 +1305,7 @@ fn unreadable_conflict(label: &str, line: usize, column: usize) -> String {
     )
 }
 
-fn not_object_conflict(label: &str) -> String {
+pub(super) fn not_object_conflict(label: &str) -> String {
     format!(
         "  {label} holds JSON whose top level is not an object, so setup will\n  \
          not touch it: a file it cannot read is a file it could only overwrite."
