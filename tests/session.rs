@@ -142,6 +142,45 @@ fn they_stay_quiet_where_there_is_no_tree() {
     }
 }
 
+/// `f708`: Codex's own hook manual is taxative about `Stop` -- plain text on
+/// its stdout is **invalid**, and exiting 0 with nothing printed is what
+/// counts as success there. The end hook already behaves this way, in every
+/// shape a turn can leave it: no tree at all, a tree with nothing new to
+/// close, and a tree with a change that does leave an automatic stop behind.
+/// Nothing here made that true on purpose -- it only holds because nothing
+/// in `session::end`'s hook path ever calls `outln!` -- so this is the test
+/// that would have caught the day a courtesy line got added to it, the
+/// mirror of [`the_start_hook_prints_the_brief_as_plain_text`] for the
+/// opposite promise: not what the hook prints, but that it prints nothing
+/// at all.
+#[test]
+fn the_end_hook_prints_nothing_to_stdout() {
+    let no_tree = Sandbox::new_empty("end-hook-silent-no-tree");
+    let (stdout, _stderr, code) = run_stdin_split(&no_tree, &["session", "end", "--hook"], "");
+    assert_eq!(code, 0, "{stdout}");
+    assert_eq!(
+        stdout, "",
+        "the end hook printed something with no tree:\n{stdout}"
+    );
+
+    let unchanged = Sandbox::new_seeded("end-hook-silent-unchanged");
+    let (stdout, _stderr, code) = run_stdin_split(&unchanged, &["session", "end", "--hook"], "");
+    assert_eq!(code, 0, "{stdout}");
+    assert_eq!(
+        stdout, "",
+        "the end hook printed something with nothing changed:\n{stdout}"
+    );
+
+    let changed = Sandbox::new_seeded("end-hook-silent-changed");
+    changed.ok(&["push", "A goal", "--why", "it is needed"]);
+    let (stdout, _stderr, code) = run_stdin_split(&changed, &["session", "end", "--hook"], "");
+    assert_eq!(code, 0, "{stdout}");
+    assert_eq!(
+        stdout, "",
+        "the end hook printed something even though it left a stop:\n{stdout}"
+    );
+}
+
 /// An automatic stop nobody declared still has to say something. Two autos in
 /// a row that read identically do not segment a session, they log it (`f59`).
 /// The label is derived from the seams --what the segment contained-- and never
