@@ -275,6 +275,7 @@ cleared
 clears
 cli
 clip
+clipped
 clipping
 clippy
 clock
