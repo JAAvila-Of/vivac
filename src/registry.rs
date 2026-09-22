@@ -263,7 +263,7 @@ pub fn copy_notice(first: Option<&str>, rest: &[Option<String>]) -> CopyNotice {
                          so one of them is a copy, and copies diverge in silence. Keep one: \
                          delete the other, or delete this one and join this folder to it with"
                     ),
-                    &format!("vivac setup claude-code --join {}", quote_if_needed(name)),
+                    &format!("vivac init --join {}", quote_if_needed(name)),
                 ),
             },
             // The command used to sit inline at the end of this
@@ -279,7 +279,7 @@ pub fn copy_notice(first: Option<&str>, rest: &[Option<String>]) -> CopyNotice {
                      machine, so one of them is a copy, and copies diverge in silence. Keep \
                      one: delete the other, or delete this one and join this folder to it \
                      with",
-                    "vivac setup claude-code --join <path to that folder>",
+                    "vivac init --join <path to that folder>",
                 ),
             },
         };
@@ -294,7 +294,7 @@ pub fn copy_notice(first: Option<&str>, rest: &[Option<String>]) -> CopyNotice {
         .map(|n| format!("\"{n}\""))
         .collect::<Vec<_>>()
         .join(", ");
-    let command = "vivac setup claude-code --join <the folder you kept>";
+    let command = "vivac init --join <the folder you kept>";
     let body = if named.len() == total {
         wrapped_with_command(
             &format!(
@@ -996,7 +996,7 @@ fn resolve_no_match(spec: &str) -> Result<PathBuf, Failure> {
     Err(Failure::Model(format!(
         "  No project named {spec} in the registry.\n\n  \
          These do:  vivac vivacs\n  \
-         If {spec} was meant as a folder, it has no tree: vivac setup claude-code"
+         If {spec} was meant as a folder, it has no tree: vivac init"
     )))
 }
 

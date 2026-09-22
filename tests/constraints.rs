@@ -231,13 +231,8 @@ fn every_vivac_directory_this_task_touches_carries_no_absolute_path_or_url() {
     assert_eq!(copy_code, 1, "{copy_out}");
 
     let joined = Sandbox::new_empty_in("sec-path-joined", origin.global_home());
-    let (join_out, join_code) = joined.run(&[
-        "setup",
-        "claude-code",
-        "--yes",
-        "--join",
-        destination.0.to_str().unwrap(),
-    ]);
+    let (join_out, join_code) =
+        joined.run(&["init", "--yes", "--join", destination.0.to_str().unwrap()]);
     assert_eq!(join_code, 0, "{join_out}");
 
     let roots = [&origin.0, &destination.0, &copy.0, &joined.0];
@@ -267,14 +262,14 @@ fn every_vivac_directory_this_task_touches_carries_no_absolute_path_or_url() {
 /// folder, never a path.
 #[test]
 fn no_printed_surface_this_task_added_names_an_absolute_path() {
-    // A setup refusal: two folders sharing one repository's root commit.
+    // A second-map refusal: two folders sharing one repository's root
+    // commit. `d723` piece B: the guard is `init`'s alone now.
     let a = Sandbox::new_empty("sec-print-setup-a");
     git(&a.0, &["init", "-q"]);
     std::fs::write(a.0.join("f.txt"), "x").unwrap();
     git(&a.0, &["add", "."]);
     git(&a.0, &["commit", "-q", "-m", "first"]);
-    a.ok(&["init"]);
-    a.ok(&["setup", "claude-code", "--yes"]);
+    a.ok(&["init", "--yes"]);
 
     let b = Sandbox::new_empty_in("sec-print-setup-b", a.global_home());
     let out = std::process::Command::new("git")
@@ -287,7 +282,7 @@ fn no_printed_surface_this_task_added_names_an_absolute_path() {
         "git clone failed: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let (refusal, refusal_code) = b.run(&["setup", "claude-code", "--yes"]);
+    let (refusal, refusal_code) = b.run(&["init", "--yes"]);
     assert_eq!(refusal_code, 1, "{refusal}");
     assert!(refusal.contains("--join"), "{refusal}");
 
@@ -397,16 +392,14 @@ fn emisores_leaves_no_absolute_path_or_url_anywhere() {
     commit_a_repo_on_branch(&backend, "feature/net10");
     commit_a_repo_on_branch(&web, "feature/ng22");
 
-    // `init`'s "vivac planted in <path>" and `setup`'s own "vivac setup
-    // claude-code, in <path>" header are both pre-existing and already
-    // accepted (`tests/init.rs`, `tests/setup.rs`): each confirms the
-    // folder the caller just ran it from, not something this tranche's own
-    // surfaces leak. Left out of the scan below on purpose, the same way
-    // `relocate`'s own destination is
+    // `init`'s "vivac planted in <path>" header is pre-existing and already
+    // accepted (`tests/init.rs`): it confirms the folder the caller just
+    // ran it from, not something this tranche's own surfaces leak. Left
+    // out of the scan below on purpose, the same way `relocate`'s own
+    // destination is
     // (`no_printed_surface_this_task_added_names_an_absolute_path`, above).
     // §9.2.18 itself only asks this of the brief.
-    c.ok(&["init"]);
-    c.ok(&["setup", "claude-code", "--yes"]);
+    c.ok(&["init", "--yes"]);
     let migrate_out = c.ok(&["push", "Migrate the backend", "--why", "seed"]);
 
     git(&backend, &["checkout", "-q", "-b", "perf/sp"]);

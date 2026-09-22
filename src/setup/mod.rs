@@ -46,15 +46,37 @@ impl Harness {
     }
 }
 
-/// The harness word for a message built before the positional has been
-/// dispatched: the one this run actually typed when it is one `setup`
-/// knows, and the first harness otherwise -- a run with no harness at all
-/// is refused by its own message a few lines below, which names both.
-fn harness_word(a: &Args) -> &'static str {
-    match a.positional(0) {
-        Some("codex") => Harness::Codex.word(),
-        _ => Harness::ClaudeCode.word(),
-    }
+/// The four flags that used to be `setup`'s own, before `d723` piece B gave
+/// them to `init`: which tree a folder belongs to reads the same wherever
+/// an agent is opened, so it is `init`'s question to answer and not a
+/// harness's. Still recognised rather than unknown, in this order, so a
+/// script that still passes one is sent to the command that reads it now.
+const MOVED_TO_INIT: &[&str] = &["join", "new-tree", "lane-name", "name"];
+
+/// A tombstone for whichever of [`MOVED_TO_INIT`] this run still carries,
+/// naming that flag and the harness this run was invoked as (`f714`'s own
+/// reason): `None` once none of the four are present, which is every
+/// ordinary run.
+///
+/// The opening paragraph goes through [`claude_code::wrapped`] rather than
+/// a hand-picked line break: `--lane-name` is longer than the other three,
+/// and a break placed by hand for the shortest of them ran past 76 columns
+/// once the flag itself grew (`f724`'s own lesson, measured a second time
+/// here). The command line stays whole -- it is two commands to paste, not
+/// prose to wrap.
+fn moved_to_init_tombstone(a: &Args, h: Harness) -> Option<Failure> {
+    let flag = MOVED_TO_INIT.iter().find(|f| a.has(f))?;
+    let mut message = claude_code::wrapped(&format!(
+        "--{flag} is vivac init's, not setup's: which tree this folder belongs to \
+         reads the same wherever an agent is opened, so it is not a harness's \
+         question to answer."
+    ));
+    message.push('\n');
+    message.push_str(&format!(
+        "  Run vivac init --{flag} first, then vivac setup {} here.",
+        h.word()
+    ));
+    Some(Failure::Usage(message))
 }
 
 pub fn dispatch(cwd: &Path, a: &Args) -> Result<i32, Failure> {
@@ -63,38 +85,6 @@ pub fn dispatch(cwd: &Path, a: &Args) -> Result<i32, Failure> {
             "--dry-run writes nothing, so there is nothing for --yes to confirm.\n\n  \
              Give one or the other.",
         ));
-    }
-    if a.has("join") && a.has("new-tree") {
-        return Err(Failure::usage(
-            "--join joins a tree that already exists, and --new-tree plants a \
-             separate one, so they contradict each other.\n\n  Give one or the other.",
-        ));
-    }
-    // `f632`: `--join` takes a value, so with nothing after it the parser
-    // records the flag as present and its value as absent, and every reader
-    // downstream only ever asks for the value -- `opt("join")`, never
-    // `has("join")`. Left unchecked, that fell straight through to the
-    // plant branch and gave a second tree to someone who asked to join one.
-    if a.has("join") && a.opt("join").is_none() {
-        return Err(Failure::usage(format!(
-            "--join needs the project to join, and nothing followed it. Without \
-             that word setup plants instead of joining, which is a second tree \
-             for a product that already has one.\n\n  \
-             vivac setup {} --join <project>",
-            harness_word(a)
-        )));
-    }
-    // `t640`, point 3: the same gap `f632` already closed for `--join`.
-    // `--name` takes a value too, so nothing after it is the flag present
-    // and the value absent -- left unchecked, that reaches `opt("name")`
-    // as `None`, which reads exactly like `--name` was never given at all.
-    if a.has("name") && a.opt("name").is_none() {
-        return Err(Failure::usage(format!(
-            "--name needs the product's own name, and nothing followed it. \
-             Without that word setup has nothing to save.\n\n  \
-             vivac setup {} --name <name>",
-            harness_word(a)
-        )));
     }
     if let [first, ..] = a.extra(1) {
         return Err(Failure::usage(format!(
@@ -107,13 +97,22 @@ pub fn dispatch(cwd: &Path, a: &Args) -> Result<i32, Failure> {
              It knows claude-code and codex today.",
         ));
     };
-    match harness {
-        "claude-code" => claude_code::run(&resolve_roots(cwd)?, a),
-        "codex" => codex::run(&resolve_roots(cwd)?, a),
-        other => Err(Failure::usage(format!(
-            "vivac setup does not know \"{other}\" yet. It knows: {}",
-            HARNESSES.join(", ")
-        ))),
+    let h = match harness {
+        "claude-code" => Harness::ClaudeCode,
+        "codex" => Harness::Codex,
+        other => {
+            return Err(Failure::usage(format!(
+                "vivac setup does not know \"{other}\" yet. It knows: {}",
+                HARNESSES.join(", ")
+            )))
+        }
+    };
+    if let Some(tombstone) = moved_to_init_tombstone(a, h) {
+        return Err(tombstone);
+    }
+    match h {
+        Harness::ClaudeCode => claude_code::run(cwd, a),
+        Harness::Codex => codex::run(cwd, a),
     }
 }
 
@@ -135,6 +134,26 @@ pub fn init(cwd: &Path, a: &Args) -> Result<i32, Failure> {
         return Err(Failure::usage(
             "--join joins a tree that already exists, and --new-tree plants a \
              separate one, so they contradict each other.\n\n  Give one or the other.",
+        ));
+    }
+    // `t640`, point 2: `--name` fixes a product's name while planting it for
+    // the first time, and both `--join` and `--undo` leave planting out of
+    // the run entirely -- one joins a product that already has whatever
+    // name it has, the other only takes earlier writes back. Left
+    // unchecked, `apply`'s own join branch never reads `--name` at all,
+    // which would accept the flag and quietly do nothing with it.
+    if a.has("name") && a.has("join") {
+        return Err(Failure::usage(
+            "--name names a product for the first time, and --join always joins \
+             one that already has a name, so they contradict each other.\n\n  \
+             Give one or the other.",
+        ));
+    }
+    if a.has("name") && a.has("undo") {
+        return Err(Failure::usage(
+            "--name names a product while planting it, and --undo only takes \
+             earlier writes back, so they contradict each other.\n\n  \
+             Give one or the other.",
         ));
     }
     // `f632`: `--join` takes a value, so with nothing after it the parser
@@ -175,25 +194,66 @@ pub struct Roots {
     pub located: Option<crate::store::Located>,
 }
 
+/// Whether `tree` is the very folder that holds the registry of every tree
+/// on the machine (`t565` §7.2): a project's tree living inside that one
+/// would mix a project with the registry that lists every project. Shared
+/// by [`resolve_roots`] (`init`'s own root, planted or not) and
+/// [`resolve_for_setup`] (`setup`'s, which only ever reads one that already
+/// exists).
+fn refuse_registry_as_tree(tree: &Path) -> Option<Failure> {
+    let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let is_registry = crate::store::store_dir().is_some_and(|d| canon(&d) == canon(tree));
+    is_registry.then(|| registry_refusal(tree))
+}
+
 /// Resolves both roots, and refuses if the tree root turns out to be the
-/// very folder that holds the registry of every tree on the machine (`t565`
-/// §7.2): a project's tree living inside that one would mix a project with
-/// the registry that lists every project.
+/// registry's own folder (`refuse_registry_as_tree`). `init`'s own: a tree
+/// this run may be about to plant has nothing at `cwd` yet, so `tree` falls
+/// back to `cwd` itself rather than failing the way `store::locate` alone
+/// would.
 pub fn resolve_roots(cwd: &Path) -> Result<Roots, Failure> {
     let located = crate::store::locate(cwd)?;
     let tree = located
         .as_ref()
         .map(|l| l.root.clone())
         .unwrap_or_else(|| cwd.to_path_buf());
-    let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
-    let is_registry = crate::store::store_dir().is_some_and(|d| canon(&d) == canon(&tree));
-    if is_registry {
-        return Err(registry_refusal(&tree));
+    if let Some(refusal) = refuse_registry_as_tree(&tree) {
+        return Err(refusal);
     }
     Ok(Roots {
         here: cwd.to_path_buf(),
         tree,
         located,
+    })
+}
+
+/// `setup`'s own roots (`d723` piece B): `setup` never plants, so there is
+/// no folder to fall back to the way `resolve_roots` falls back to `cwd`
+/// for `init` -- no tree resolvable from here at all is `setup`'s first
+/// refusal (`Failure::SetupNoTree`), and a tree that resolves from here
+/// without this exact folder being either its own or one of its declared
+/// lanes yet is its second (`Failure::not_a_lane_yet`): writing the three
+/// pieces there would record them under a lane this folder is not.
+///
+/// `Located::lane_dir` already answers which folder a lane's own files
+/// belong to -- the same folder `find_root` stops the upward walk at, once
+/// it carries a `.vivac/` of its own -- so comparing it to `cwd` is the
+/// whole check; nothing here reads a repository or a lane's own name.
+pub(super) fn resolve_for_setup(cwd: &Path) -> Result<Roots, Failure> {
+    let Some(located) = crate::store::locate(cwd)? else {
+        return Err(Failure::SetupNoTree);
+    };
+    if !crate::anchor::same_folder(&located.lane_dir, cwd) {
+        return Err(Failure::not_a_lane_yet());
+    }
+    let tree = located.root.clone();
+    if let Some(refusal) = refuse_registry_as_tree(&tree) {
+        return Err(refusal);
+    }
+    Ok(Roots {
+        here: cwd.to_path_buf(),
+        tree,
+        located: Some(located),
     })
 }
 

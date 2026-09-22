@@ -203,8 +203,7 @@ fn restore_reports_closed_nodes_still_on_the_path_apart_from_what_left() {
 fn join_lane(on: &Sandbox, folder: &str, name: &str) -> Sandbox {
     let joined = Sandbox::new_empty_in(folder, on.global_home());
     joined.ok(&[
-        "setup",
-        "claude-code",
+        "init",
         "--yes",
         "--join",
         on.0.to_str().unwrap(),
@@ -292,18 +291,19 @@ fn stack_without_the_flag_prints_exactly_what_it_did() {
 // doing that.
 // ---------------------------------------------------------------------------
 
-/// Plants the tree in `on` itself (`--yes`, no terminal needed) without
-/// pushing anything, so `on`'s own lane is declared with an empty stack --
-/// the plan `stack --lanes` needs a lane with no front of its own to name.
-fn setup_with_no_front(on: &Sandbox) {
-    on.ok(&["setup", "claude-code", "--yes"]);
+/// Declares `on`'s own lane (`--yes`, no terminal needed) without pushing
+/// anything, so it carries an empty stack -- the plan `stack --lanes`
+/// needs a lane with no front of its own to name. `d723` piece B:
+/// declaring a lane is `init`'s alone now.
+fn declare_with_no_front(on: &Sandbox) {
+    on.ok(&["init", "--yes"]);
 }
 
 /// Two lanes, neither with anything pushed: both still have to be named.
 #[test]
 fn stack_lanes_names_a_lane_with_nothing_pushed() {
     let a = Sandbox::new_seeded("stack-lanes-no-front-both");
-    setup_with_no_front(&a);
+    declare_with_no_front(&a);
     join_lane(&a, "stack-lanes-no-front-both-b", "sonar");
 
     let json = a.ok(&["stack", "--lanes", "--json"]);
@@ -334,7 +334,7 @@ fn stack_lanes_names_a_lane_with_nothing_pushed() {
 #[test]
 fn stack_lanes_orders_a_lane_with_a_front_before_one_without() {
     let a = Sandbox::new_seeded("stack-lanes-mixed-front");
-    setup_with_no_front(&a);
+    declare_with_no_front(&a);
     let b = join_lane(&a, "stack-lanes-mixed-front-b", "sonar");
     b.ok(&["push", "Ship the sonar dashboard", "--why", "seed"]);
 
@@ -363,13 +363,13 @@ fn stack_lanes_orders_a_lane_with_a_front_before_one_without() {
 }
 
 /// A tree with no lane at all -- `vivac init`, and nothing else -- names
-/// `vivac setup claude-code` instead of the empty-stack text, which answers
-/// a different question (`f668`).
+/// `vivac init` instead of the empty-stack text, which answers a different
+/// question (`f668`).
 #[test]
-fn stack_lanes_on_a_tree_with_no_lane_names_setup() {
+fn stack_lanes_on_a_tree_with_no_lane_names_init() {
     let c = Sandbox::new_seeded("stack-lanes-no-lane-at-all");
     let text = c.ok(&["stack", "--lanes"]);
-    assert!(text.contains("vivac setup claude-code"), "{text}");
+    assert!(text.contains("vivac init"), "{text}");
     assert!(
         !text.contains("Empty stack"),
         "a tree with no lane answers a different question than an empty stack:\n{text}"

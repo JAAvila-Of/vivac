@@ -5,10 +5,19 @@
 //! shape of a hook entry, and how a command line already there is told apart
 //! from a foreign one. `t565` §9: this is the module `INTEGRATION.md` points
 //! at for the level-one work of a new harness.
+//!
+//! `d723` piece B: this file no longer touches the tree at all -- planting,
+//! joining and `--name` moved to `init` in piece A, and here that means
+//! `run` never reaches `tree::plan` or `tree::plan_join` any more. What
+//! stays is exactly the three pieces Claude Code itself reads, once
+//! `super::resolve_for_setup` has already said this folder is either the
+//! tree's own or one of its declared lanes. `tree_below_join_refusal` and
+//! `join_with_and` stay here even so: `init`'s own `--join` still calls
+//! them, and moving two functions nobody asked to move is not this piece's
+//! job.
 
 use super::json::{self, Value};
 use super::tree;
-use super::Harness;
 use crate::args::Args;
 use crate::failure::Failure;
 use crate::output::outln;
@@ -24,81 +33,18 @@ const SESSION_END_COMMAND: &str = "vivac session end --hook";
 const FRONTMATTER: &str = include_str!("skill-frontmatter.md");
 const BODY: &str = include_str!("skill-body.md");
 
-// ---------------------------------------------------------------------------
-// `--name`: naming the product on purpose (`t640`), rather than always
-// deriving it from whichever folder holds the tree. Validating the value
-// and turning it into a plan's own product name is `tree.rs`'s own
-// (`t592` tranche 2, `d710`); this is only the one check that belongs to
-// `--join` and `--undo`, which the tree side does not know about.
-// ---------------------------------------------------------------------------
-
-/// `--name` beside `--join` or `--undo` (`t640`, point 2): checked first,
-/// the same reason `refuse_unsupported_flags` in `codex.rs` checks its own
-/// list before reading or writing anything -- a flag nobody reads is a
-/// flag nobody obeys.
-fn refuse_name_with(a: &Args) -> Option<Failure> {
-    a.opt("name")?;
-    if a.has("join") {
-        return Some(Failure::usage(
-            "--join joins a product that already has a name, so --name has \
-             nothing left to fix.\n\n  Give one or the other.",
-        ));
-    }
+pub fn run(cwd: &Path, a: &Args) -> Result<i32, Failure> {
     if a.has("undo") {
-        return Some(Failure::usage(
-            "--undo removes what setup wrote and fixes nothing, so --name has \
-             nothing to do here.\n\n  Give one or the other.",
-        ));
+        return undo(cwd, a);
     }
-    None
-}
-
-pub fn run(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
-    // `t640`, point 2: checked before either branch below, the same
-    // reason `refuse_home_or_global_store` moved up here -- a guard
-    // inside one branch is a guard the other does not have.
-    if let Some(refusal) = refuse_name_with(a) {
+    let roots = super::resolve_for_setup(cwd)?;
+    // Still checked here, and still excluded from `--undo`: undoing
+    // whatever an earlier setup wrote there is always safe, home folder or
+    // global store included.
+    if let Some(refusal) = super::refuse_home_or_global_store(&roots) {
         return Err(refusal);
     }
-    if a.has("undo") {
-        return undo(roots, a);
-    }
-    // Checked here, before the branch below, rather than inside `apply`
-    // alone: a guard that lives in one branch is a guard the other branch
-    // does not have, and `--join` used to skip it entirely (`t594`).
-    // `--undo` is still excluded, on purpose: undoing whatever
-    // an earlier setup wrote there is always safe.
-    if let Some(refusal) = super::refuse_home_or_global_store(roots) {
-        return Err(refusal);
-    }
-    // Here for the same reason, and it took a second round to actually put
-    // it here: `refuse_second_map`'s own doc already said trees below run
-    // in both branches, but the check itself stayed inside it, and
-    // `refuse_second_map` is only ever called from `apply` -- so `--join`
-    // walked around this one exactly the way it walked around the guard
-    // above. §4.5.1 still decides the order within `apply`: a tree below
-    // describes a state of the disk that has to be fixed before the
-    // product question, or "plant or join", means anything at all, and
-    // moving it up here only makes that truer.
-    //
-    // `d626`: fixed being asked before either branch runs, this still
-    // answered every caller with the plant branch's own sentence, since
-    // nothing here had looked at `--join` yet to know which door it was
-    // answering. The state itself does not wait on the flag; only which
-    // sentence names it does, so the flag is read here too, before the
-    // branch it would have picked.
-    let below = tree::trees_below(&roots.here);
-    let join_spec = a.opt("join");
-    if !below.is_empty() {
-        return Err(match join_spec {
-            Some(spec) => tree_below_join_refusal(&roots.here, &below, spec),
-            None => tree::tree_below_refusal(&below),
-        });
-    }
-    if let Some(spec) = join_spec {
-        return join(roots, spec, a.opt("lane-name"), a);
-    }
-    apply(roots, a)
+    apply(&roots, a)
 }
 
 // ---------------------------------------------------------------------------
@@ -729,53 +675,14 @@ pub(super) fn sub_line(label: &str, value: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// `--join`: `t594` §4.5's own escape from §6.3, and the remedy `--new-tree`
-// or a fresh `setup` plants past instead. It resolves a tree that lives
-// somewhere else, then walks the same path planting does, minus planting
-// itself (`t640`, point 11): the plan, the confirmation, and the hooks,
-// the server and the skill along with this folder's own lane, all in one
-// write. A folder that already ran setup somewhere else still needed the
-// brief and the tools waiting for it the moment it opened a session here
-// -- that is what a join used to leave undone (`f667`/`f669`).
-// ---------------------------------------------------------------------------
-
-/// `--join`'s own preamble is `tree::plan_join` now, shared with `codex.rs`
-/// (`t592` tranche 2, piece G, `f714`): everything past deciding the plan is
-/// this harness's own `apply_writes`, the same as a plant.
-fn join(
-    roots: &super::Roots,
-    spec: &str,
-    lane_name: Option<&str>,
-    a: &Args,
-) -> Result<i32, Failure> {
-    match tree::plan_join(roots, spec, lane_name, Harness::ClaudeCode)? {
-        Some((join_roots, plan)) => apply_writes(&join_roots, a, plan),
-        None => Ok(0),
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Applying: plan, ask, write.
+// Applying: plan, ask, write. `d723` piece B: no plan of the tree side
+// joins this one any more -- `run` has already confirmed, through
+// `super::resolve_for_setup`, that this folder is either the tree's own or
+// one of its declared lanes, so there is nothing left here to plant,
+// declare or lock.
 // ---------------------------------------------------------------------------
 
 fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
-    // `run` already refused the home folder and the global store before
-    // reaching here (`t594`): both guards used to live in
-    // this function alone, which is exactly what let `--join` skip them.
-    // Every refusal of the tree side, and the lane this folder itself
-    // would become, is `tree::plan`'s own (`t592` tranche 2, `d710`).
-    let plan = tree::plan(roots, a, Harness::ClaudeCode)?;
-    apply_writes(roots, a, plan)
-}
-
-/// The plant path's own writes, shared with `--join` (`t640`, point 11):
-/// everything past deciding which lane this run declares -- reading the
-/// three files, building the plan, asking, and writing all or nothing.
-/// `plan.vivac_missing` decides whether this run plants or joins a tree
-/// already there; a join's own `plan` always resolves it to a tree
-/// `join`'s own preamble already confirmed exists, so this never plants
-/// on that path.
-fn apply_writes(roots: &super::Roots, a: &Args, plan: tree::TreePlan) -> Result<i32, Failure> {
     let here = &roots.here;
     let paths = paths(here);
     let settings = read_json(&paths.settings);
@@ -835,15 +742,8 @@ fn apply_writes(roots: &super::Roots, a: &Args, plan: tree::TreePlan) -> Result<
         SkillState::Missing | SkillState::Replaceable
     );
 
-    let nothing_to_write = !plan.vivac_missing
-        && !plan.gitignore_missing
-        && !start_missing
-        && !stop_missing
-        && !mcp_missing
-        && !skill_missing_or_replaceable
-        && plan.lane.unchanged
-        && !plan.lane.needs_lock
-        && plan.lane.stale_worktrees.is_empty();
+    let nothing_to_write =
+        !start_missing && !stop_missing && !mcp_missing && !skill_missing_or_replaceable;
 
     let piece_block = render_piece_block(
         here,
@@ -855,7 +755,6 @@ fn apply_writes(roots: &super::Roots, a: &Args, plan: tree::TreePlan) -> Result<
         stop_missing,
         &mcp_server_state,
         &skill_file_state,
-        &plan,
     );
 
     // Checked before `nothing_to_write`, not after: that branch notes the
@@ -864,45 +763,29 @@ fn apply_writes(roots: &super::Roots, a: &Args, plan: tree::TreePlan) -> Result<
     // An already-set-up project asking for `--dry-run` used
     // to reach the other branch first and note it anyway.
     if a.has("dry-run") {
-        outln!(
-            "{piece_block}{}{TRAILING_PARAGRAPH}\n  Nothing written: --dry-run.",
-            plan.unknown_product_warning
-        );
-        if plan.log_tracked {
-            print!("{}", tracked_git_warning());
-        }
-        if let Some(w) = &plan.above_warning {
-            print!("{w}");
-        }
+        outln!("{piece_block}{TRAILING_PARAGRAPH}\n  Nothing written: --dry-run.");
         return Ok(0);
     }
 
     if nothing_to_write {
         // A real run, never `--dry-run`, thanks to the check above: noting
         // the registry is bookkeeping every ordinary command already does
-        // on a pure read, not a write this promise is about.
+        // on a pure read, not a write this promise is about (`d723` piece
+        // B: `setup` never writes to the tree itself any more, so this is
+        // all `note_registry` is left doing).
         tree::note_registry(roots);
         outln!("{piece_block}  Nothing to write: this project is already set up.");
-        if plan.log_tracked {
-            print!("{}", tracked_git_warning());
-        }
-        if let Some(w) = &plan.above_warning {
-            print!("{w}");
-        }
         return Ok(0);
     }
 
     if !a.has("yes") && !super::stdin_is_terminal() {
         return Err(Failure::Model(super::no_terminal_text(
-            Harness::ClaudeCode,
+            super::Harness::ClaudeCode,
             a,
         )));
     }
 
-    print!(
-        "{piece_block}{}{TRAILING_PARAGRAPH}",
-        plan.unknown_product_warning
-    );
+    print!("{piece_block}{TRAILING_PARAGRAPH}");
     let proceed = a.has("yes") || super::ask("\n  Write it? [y/N] ");
     if !proceed {
         outln!("\n  Nothing written.");
@@ -910,11 +793,10 @@ fn apply_writes(roots: &super::Roots, a: &Args, plan: tree::TreePlan) -> Result<
     }
 
     // Build every write, then commit them together (`t565` §7.3: "se
-    // pregunta una sola vez por todo y se escribe todo o nada"). The
-    // tree's own `.gitignore` joins this same batch (`tree::file_writes`,
-    // `t592` tranche 2, `d710`); planting, the lane and the version lock
-    // are not plain file writes and are `tree::commit`'s own, run only
-    // once this batch has already committed.
+    // pregunta una sola vez por todo y se escribe todo o nada"). `d723`
+    // piece B: the tree's own `.gitignore` no longer joins this batch --
+    // planting, the lane, the version lock and `.gitignore` are `init`'s
+    // alone now, and this run never reaches any of them.
     let mut writes = Vec::new();
     if start_missing || stop_missing {
         let mut new_settings = settings_root.clone();
@@ -973,47 +855,28 @@ fn apply_writes(roots: &super::Roots, a: &Args, plan: tree::TreePlan) -> Result<
         ));
     }
 
-    // The tree's own `.gitignore`, last, exactly where it always sat: a
-    // plain file write, so it shares this same all-or-nothing commit
-    // rather than a second one of its own (`t565` §7.3, `t592` tranche 2).
-    writes.extend(tree::file_writes(roots, &plan));
-
     super::commit(&writes)?;
 
-    tree::commit(roots, &plan, &writes)?;
-
-    // What *this run* actually did to the tree, for `written_text`
-    // (`t594`): every one of these is independent, and `needs_lock`
-    // decides `config_locked` regardless of which branch above closed
-    // it -- both `write_lane`'s own `declare_lane` and `relock_lanes`
-    // close the same lock, and only ever do it for real when it was
-    // still open beforehand.
+    // `d723` piece B: this run never touched the tree, so what it wrote is
+    // exactly the three pieces above -- `needs_lock`, `lane_declared` and
+    // the rest of what `tree::commit` used to report are `init`'s to say
+    // now, not `setup`'s.
     let written = Written {
         connection: start_missing || stop_missing || mcp_missing,
-        // `f638`, `d641`: the tree existed before this run (this run did
-        // not plant it) and this run is the one adding the "vivac" server
-        // -- `mcp_missing` decided the write above.
-        hand_registered_risk: !plan.vivac_missing && mcp_missing,
+        // `f638`, `d641`: every tree `setup` writes into already existed
+        // before this run, so the one question left is whether this run
+        // is the one adding the "vivac" server to it.
+        hand_registered_risk: mcp_missing,
         skill: skill_missing_or_replaceable,
-        planted: plan.vivac_missing,
-        gitignore_created: plan.gitignore_missing,
-        lane_declared: !plan.lane.unchanged || !plan.lane.stale_worktrees.is_empty(),
-        config_locked: plan.lane.needs_lock,
-        joined_new_lane: !plan.vivac_missing && plan.lane.is_new,
         undoable: start_missing
             && stop_missing
             && mcp_missing
             && matches!(skill_file_state, SkillState::Missing),
     };
+    // Bookkeeping, not a write this promise is about (`note_registry`'s
+    // own doc): the tree itself is untouched.
     tree::note_registry(roots);
-    tree::note_name(&plan);
     print!("\n{}", written_text(&written));
-    if plan.log_tracked {
-        print!("{}", tracked_git_warning());
-    }
-    if let Some(w) = &plan.above_warning {
-        print!("{w}");
-    }
     Ok(0)
 }
 
@@ -1028,16 +891,8 @@ fn render_piece_block(
     stop_missing: bool,
     mcp_server_state: &McpState,
     skill_file_state: &SkillState,
-    plan: &tree::TreePlan,
 ) -> String {
     let mut s = format!("  vivac setup claude-code, in {}\n\n", here.display());
-
-    // `t640`, point 10 bis: said before anything is written, never a
-    // refusal -- `name_collision` is only ever `Some` once `--name`'s own
-    // value already matches another project's effective name.
-    if let Some(name) = &plan.name_collision {
-        s.push_str(&name_collision_paragraph(name));
-    }
 
     // `t579` §4's warning: only when `here` sits inside a repository but is
     // not its root, so nobody has to guess which folder Claude Code was
@@ -1053,12 +908,6 @@ fn render_piece_block(
             ));
         }
     }
-
-    // The tree's own opening lines -- `.vivac/` itself, and its
-    // `.gitignore` when an existing tree still lacks one -- are
-    // `tree.rs`'s own (`t592` tranche 2, `d710`): the same lines this
-    // module has always shown, from the one place that renders them.
-    s.push_str(&tree::opening_lines(plan));
 
     let settings_status = match (settings_exists, start_missing, stop_missing) {
         (_, false, false) => "already has both hooks",
@@ -1106,12 +955,6 @@ fn render_piece_block(
         SkillState::Conflict => unreachable!("a skill conflict never reaches the plan"),
     }
 
-    // The lane's own lines, the stale-worktree and excluded-repository
-    // lines, and the version lock: `tree.rs`'s own too (`t592` tranche 2,
-    // `d710`), the same lines this module has always shown after the
-    // hooks, the server and the skill.
-    s.push_str(&tree::closing_lines(plan));
-
     s.push('\n');
     s
 }
@@ -1133,34 +976,12 @@ struct Written {
     /// from before `setup` existed can shadow the one this run just added,
     /// and nothing on screen says so. Always `false`
     /// when `connection` is, since this is never true without the server
-    /// being part of what made `connection` true.
+    /// being part of what made `connection` true. `d723` piece B: every
+    /// tree `setup` writes into already existed before this run, so this
+    /// no longer has a plant to be conditioned on.
     hand_registered_risk: bool,
     /// The skill, where it was missing or an earlier release's copy.
     skill: bool,
-    /// The tree, planted by this run rather than found.
-    planted: bool,
-    /// The tree's own `.vivac/.gitignore`, on a tree from before `t594`
-    /// §4.9 that never got one (`gitignore_missing`). Independent of
-    /// everything else here: a tree can be missing this and have its
-    /// lanes fully settled, or the other way round.
-    gitignore_created: bool,
-    /// This run declared this folder's lane, redeclared an existing one,
-    /// or redeclared a worktree lane stuck with no root commit (`f609`):
-    /// a real change to the tree's own log, either way.
-    lane_declared: bool,
-    /// This run closed the lanes lock, whether that happened on its own
-    /// (nothing else changed) or alongside declaring the lane above
-    /// (`t594` first tried to treat these as mutually
-    /// exclusive, which they are not: a brand new lane commonly closes
-    /// the lock in the very same write that declares it).
-    config_locked: bool,
-    /// This run declared a lane that did not exist here before, on a tree
-    /// that was already there rather than one it just planted (`f678`,
-    /// `d683`): joining, whether that came from an explicit `--join` or
-    /// from `setup` finding the tree above `here` on its own. Always
-    /// `false` when `planted` is, since planting mints the tree's very
-    /// first lane and `MIGRATE_PARAGRAPHS` already covers it.
-    joined_new_lane: bool,
     /// All four of setup's pieces, the skill among them missing before:
     /// `--undo` removes all four, so only then does it take back exactly
     /// this run.
@@ -1177,25 +998,6 @@ fn written_text(w: &Written) -> String {
     } else if w.skill {
         s.push_str(SKILL_PARAGRAPH);
     }
-    if w.planted {
-        s.push_str(MIGRATE_PARAGRAPHS);
-    } else {
-        s.push_str(&tree_paragraph(
-            "setup",
-            w.gitignore_created,
-            w.lane_declared,
-            w.config_locked,
-        ));
-        // `f678`/`d683`: the argument for staying quiet here was the
-        // **tree**'s, which a join finds already there and may already
-        // hold content for. It says nothing about the folder, which
-        // arrives with its own instruction files, its own harness memory
-        // and its own documents, and joining a tree never reads any of
-        // that.
-        if w.joined_new_lane {
-            s.push_str(JOIN_MIGRATE_PARAGRAPHS);
-        }
-    }
     s.push_str(FILES_PARAGRAPH);
     if w.undoable {
         s.push_str(UNDO_LINE);
@@ -1203,8 +1005,7 @@ fn written_text(w: &Written) -> String {
     s
 }
 
-/// The paragraph about the tree itself, once planting it is ruled out
-/// (`MIGRATE_PARAGRAPHS` covers that): `TREE_KEPT_PARAGRAPH` when none of
+/// The paragraph about the tree itself: `tree_kept_paragraph` when none of
 /// the three actually happened, and one sentence naming exactly the ones
 /// that did otherwise -- never more than what this run wrote, and never
 /// silent about any of it.
@@ -1215,13 +1016,11 @@ fn written_text(w: &Written) -> String {
 /// had no branch at all and claimed to have changed nothing -- two lines
 /// under its own plan announcing that write (`t594`).
 ///
-/// `pub(super)`: `init.rs` reads the very same tree state, with none of
-/// this file's own hooks, server or skill beside it (`d723` piece A), so
-/// its own closing text is this sentence alone rather than a second copy.
-/// `actor` is the command this sentence names as the one that wrote --
-/// `"setup"` for every call already here, unchanged, and `"init"` for
-/// `init.rs`'s own: the sentence would otherwise tell whoever typed
-/// `vivac init` that `setup` did the writing.
+/// `pub(super)`: `init.rs` is this function's only caller since `d723`
+/// piece B -- `setup` itself never writes to the tree any more, so `actor`
+/// is always `"init"` at the one call site left. Kept as a parameter even
+/// so, rather than a literal `"init"` inlined below: renaming a plain
+/// helper that already says what it takes is not this piece's job.
 pub(super) fn tree_paragraph(
     actor: &str,
     gitignore_created: bool,
@@ -1289,9 +1088,9 @@ pub(super) fn wrapped(text: &str) -> String {
 /// characters ahead of the break this used to have, so any name sixteen
 /// characters or longer already ran past it.
 ///
-/// `pub(super)`: `setup`'s own plan reads this, and so does `init.rs`'s
-/// (`d723` piece A) -- one sentence, read from one place, rather than a
-/// second copy that only one of the two gets fixed on.
+/// `pub(super)`: `init.rs`'s own plan reads this (`d723` piece A) -- `--name`
+/// moved there with the rest of the tree side in piece B, so `init` is this
+/// function's only caller left.
 pub(super) fn name_collision_paragraph(name: &str) -> String {
     format!(
         "{}\n",
@@ -1342,14 +1141,25 @@ const HAND_REGISTERED_PARAGRAPH: &str = "\n  The tree was here before this serve
 
 const SKILL_PARAGRAPH: &str = "\n  The vivac-migrate skill is now the one this version of vivac ships.\n  Sessions opened from now on use it.\n";
 
-const MIGRATE_PARAGRAPHS: &str = "\n  Nothing has been brought in from anywhere yet. To bring in what this\n  project already knows, from another memory system, the harness's own\n  memory, instruction files or its documents, ask the agent:\n\n      Use the vivac-migrate skill to bring everything this project knows\n      into vivac.\n\n  It shows you a plan before writing anything, checks what it wrote, and\n  offers to retire the other maps one at a time, only if you say yes.\n\n  Until then, another memory system you use keeps talking to the agent as\n  before, and may tell it to use that system first. That is expected: the\n  skill only reads from it.\n";
+/// `pub(super)`: `init.rs` is this constant's only caller since `d723`
+/// piece B -- planting is `init`'s alone now, and this is what a fresh
+/// plant has always said about bringing in what the project already
+/// knows. The text is unchanged; only the module that shows it moved,
+/// with planting.
+pub(super) const MIGRATE_PARAGRAPHS: &str = "\n  Nothing has been brought in from anywhere yet. To bring in what this\n  project already knows, from another memory system, the harness's own\n  memory, instruction files or its documents, ask the agent:\n\n      Use the vivac-migrate skill to bring everything this project knows\n      into vivac.\n\n  It shows you a plan before writing anything, checks what it wrote, and\n  offers to retire the other maps one at a time, only if you say yes.\n\n  Until then, another memory system you use keeps talking to the agent as\n  before, and may tell it to use that system first. That is expected: the\n  skill only reads from it.\n";
 
-/// `f678`/`d683`: `MIGRATE_PARAGRAPHS`'s own argument was for the
+/// `f678`/`d683`: [`MIGRATE_PARAGRAPHS`]'s own argument was for the
 /// **tree**, which a join finds already there and may already carry
 /// content for -- true, and beside the point. This folder's own
 /// instruction files, the harness's memory and its documents came with
 /// the folder, not the tree, and joining a tree never reads any of that.
-const JOIN_MIGRATE_PARAGRAPHS: &str = "\n  This folder's own knowledge is not in the tree. Instruction files, the\n  harness's memory and the documents that live here came with the folder,\n  and joining a tree does not read them. To bring them in, ask the agent:\n\n      Use the vivac-migrate skill to bring everything this project knows\n      into vivac.\n\n  The tree already has content, and the skill expects that: it looks at\n  what is there before writing, and proposes a note on the node that\n  already says it rather than a duplicate.\n";
+///
+/// `pub(super)`: `init.rs` is this constant's only caller since `d723`
+/// piece B -- joining is `init`'s alone now, and this is what joining an
+/// existing tree has always said about this folder's own knowledge, apart
+/// from the tree's. The text is unchanged; only the module that shows it
+/// moved, with joining.
+pub(super) const JOIN_MIGRATE_PARAGRAPHS: &str = "\n  This folder's own knowledge is not in the tree. Instruction files, the\n  harness's memory and the documents that live here came with the folder,\n  and joining a tree does not read them. To bring them in, ask the agent:\n\n      Use the vivac-migrate skill to bring everything this project knows\n      into vivac.\n\n  The tree already has content, and the skill expects that: it looks at\n  what is there before writing, and proposes a note on the node that\n  already says it rather than a duplicate.\n";
 
 /// `tree_paragraph`'s own text for nothing changed, naming `actor` the same
 /// way its other sentence does.
@@ -1409,13 +1219,16 @@ fn skill_conflict() -> String {
 // `--undo`.
 // ---------------------------------------------------------------------------
 
-fn undo(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
-    let root = roots.here.as_path();
-    let paths = paths(root);
+/// `d723` piece B: `--undo` takes off only the three pieces this harness
+/// itself wrote. Neither the lane nor the tree is `setup`'s to touch, so
+/// this reads and writes `here` alone -- no `Roots`, no `resolve_for_setup`,
+/// and none of the tree's own refusals: undoing whatever an earlier setup
+/// wrote is always safe, regardless of what the tree above `here` is doing.
+fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
+    let paths = paths(here);
     let settings = read_json(&paths.settings);
     let mcp = read_json(&paths.mcp);
     let skill_raw = std::fs::read_to_string(&paths.skill).ok();
-    let undo_lane = tree::undo_lane(roots)?;
 
     let mut conflicts: Vec<String> = Vec::new();
     if let Some((line, col)) = settings.parse_error {
@@ -1450,8 +1263,7 @@ fn undo(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     let stop_ours = matches!(stop_hook_state, HookState::Exact);
     let mcp_ours = matches!(mcp_server_state, McpState::Ours);
 
-    let nothing_to_undo =
-        !start_ours && !stop_ours && !mcp_ours && !skill_ours && !undo_lane.removable;
+    let nothing_to_undo = !start_ours && !stop_ours && !mcp_ours && !skill_ours;
     if nothing_to_undo {
         outln!("  Nothing to undo: none of what setup writes is here.");
         return Ok(0);
@@ -1486,7 +1298,7 @@ fn undo(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
 
     let mut s = format!(
         "  vivac setup claude-code --undo, in {}\n\n",
-        root.display()
+        here.display()
     );
     s.push_str(&piece_line(SETTINGS_LABEL, &settings_status));
     if let HookState::Different(_) = &start_hook_state {
@@ -1521,8 +1333,6 @@ fn undo(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         },
     ));
 
-    s.push_str(&tree::vivac_dir_lines(&undo_lane));
-    s.push_str(&tree::undo_lane_lines(&undo_lane));
     s.push('\n');
 
     if a.has("dry-run") {
@@ -1530,13 +1340,13 @@ fn undo(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         return Ok(0);
     }
 
-    // `f718`: the same guard `apply_writes` has had all along, missing
+    // `f718`: the same guard `apply` has had all along, missing
     // here. Without it a run with nobody to answer printed the question
     // anyway, removed nothing, and exited 0 -- and 0 with nothing done is
     // what a script reads as done.
     if !a.has("yes") && !super::stdin_is_terminal() {
         return Err(Failure::Model(super::no_terminal_text(
-            Harness::ClaudeCode,
+            super::Harness::ClaudeCode,
             a,
         )));
     }
@@ -1610,21 +1420,6 @@ fn undo(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
             skill_raw.clone().unwrap().into_bytes(),
         ));
     }
-    if undo_lane.removable {
-        writes.push(super::PlannedWrite::delete(
-            undo_lane.path.clone(),
-            undo_lane.raw.clone().unwrap_or_default(),
-        ));
-    }
-    // `f719`, point B: the `.gitignore` this tool wrote alongside the
-    // lane, gone the same commit -- absent when there never was one, the
-    // same as `undo_lane.raw` above.
-    if undo_lane.vivac_dir_removable {
-        let gitignore = undo_lane.vivac_dir.join(crate::store::GITIGNORE);
-        if let Ok(original) = std::fs::read(&gitignore) {
-            writes.push(super::PlannedWrite::delete(gitignore, original));
-        }
-    }
 
     super::commit(&writes)?;
 
@@ -1641,12 +1436,6 @@ fn undo(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
                 .and_then(Path::parent)
                 .and_then(Path::parent),
         );
-    }
-    // `f719`, point B: `.vivac/` itself, once the lane and its
-    // `.gitignore` are both gone -- a join's own folder, holding nothing
-    // else, has no reason left to carry one.
-    if undo_lane.vivac_dir_removable {
-        remove_if_empty(Some(&undo_lane.vivac_dir));
     }
 
     outln!("  Undone. The tree in .vivac/ is untouched.");

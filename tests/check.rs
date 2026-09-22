@@ -238,8 +238,11 @@ fn check_says_when_the_log_is_tracked_by_git() {
 /// different sentences, and `check`'s did not even name a worktree. The
 /// two are compared against each other, not against a literal either
 /// one could still drift toward alone.
+///
+/// `d723` piece B: showing this warning moved from `setup` to `init`, so
+/// `init`'s own dry-run is the other side of the comparison now.
 #[test]
-fn check_and_setup_warn_about_vivac_in_git_the_same_way() {
+fn check_and_init_warn_about_vivac_in_git_the_same_way() {
     let c = Sandbox::new_seeded("tracked-check-side");
     c.ok(&["push", "Something", "--why", "so the log is not empty"]);
     git(&c.0, &["init", "-q"]);
@@ -248,17 +251,17 @@ fn check_and_setup_warn_about_vivac_in_git_the_same_way() {
     let (check_out, code) = c.run(&["check"]);
     assert_eq!(code, 1, "{check_out}");
 
-    let s = Sandbox::new_seeded("tracked-setup-side");
+    let s = Sandbox::new_seeded("tracked-init-side");
     git(&s.0, &["init", "-q"]);
     git(&s.0, &["add", "-f", ".vivac/events"]);
     git(&s.0, &["commit", "-q", "-m", "track the log by mistake"]);
-    let (setup_out, setup_code) = s.run(&["setup", "claude-code", "--dry-run"]);
-    assert_eq!(setup_code, 0, "{setup_out}");
+    let (init_out, init_code) = s.run(&["init", "--dry-run"]);
+    assert_eq!(init_code, 0, "{init_out}");
 
     assert_eq!(
         tracked_warning_words(&check_out),
-        tracked_warning_words(&setup_out),
-        "check said:\n{check_out}\n\nsetup said:\n{setup_out}"
+        tracked_warning_words(&init_out),
+        "check said:\n{check_out}\n\ninit said:\n{init_out}"
     );
 }
 
@@ -396,7 +399,7 @@ fn words(s: &str) -> String {
 /// which is never wrapped no matter how long it gets.
 fn assert_no_wrapped_line_too_long(out: &str) {
     for line in out.lines() {
-        if line.trim_start().starts_with("vivac setup claude-code") {
+        if line.trim_start().starts_with("vivac init --join") {
             continue;
         }
         assert!(
@@ -420,10 +423,7 @@ fn check_names_the_other_folder() {
         flat.contains(&format!("the one in folder \"{name}\"")),
         "{out}"
     );
-    assert!(
-        flat.contains(&format!("vivac setup claude-code --join {name}")),
-        "{out}"
-    );
+    assert!(flat.contains(&format!("vivac init --join {name}")), "{out}");
     assert_no_wrapped_line_too_long(&out);
 }
 
@@ -477,7 +477,7 @@ fn check_withholds_a_name_the_guard_rejects() {
     );
     assert!(out.contains("as one in another folder on this"), "{out}");
     assert!(
-        out.contains("vivac setup claude-code --join <path to that folder>"),
+        out.contains("vivac init --join <path to that folder>"),
         "{out}"
     );
     assert_no_wrapped_line_too_long(&out);
@@ -623,10 +623,7 @@ fn the_join_command_quotes_a_name_with_a_space() {
 
     let (out, code) = run_bin(&copy_dir, &home, &["check"]);
     assert_eq!(code, 1, "{out}");
-    assert!(
-        out.contains("vivac setup claude-code --join \"My Project\""),
-        "{out}"
-    );
+    assert!(out.contains("vivac init --join \"My Project\""), "{out}");
 
     std::fs::remove_dir_all(&parent).ok();
     std::fs::remove_dir_all(&copy_dir).ok();
@@ -1013,7 +1010,7 @@ fn two_copies_both_names_withheld_says_other_folders_with_no_list() {
     assert!(out.contains("COPIES OF THIS TREE"), "{out}");
     assert!(words(&out).contains(&expected_prose), "{out}");
     assert!(
-        out.contains("vivac setup claude-code --join <the folder you kept>"),
+        out.contains("vivac init --join <the folder you kept>"),
         "{out}"
     );
     assert!(!out.contains("someone@example.com"), "{out}");
@@ -1051,10 +1048,7 @@ fn the_join_command_quotes_a_name_that_is_not_just_safe_characters() {
 
     let (out, code) = run_bin(&copy_dir, &home, &["check"]);
     assert_eq!(code, 1, "{out}");
-    assert!(
-        out.contains("vivac setup claude-code --join \"A&B\""),
-        "{out}"
-    );
+    assert!(out.contains("vivac init --join \"A&B\""), "{out}");
 
     std::fs::remove_dir_all(&parent).ok();
     std::fs::remove_dir_all(&copy_dir).ok();

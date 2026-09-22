@@ -61,8 +61,9 @@ impl Sandbox {
         Sandbox(d, home.to_path_buf())
     }
 
-    // `mod common` is compiled once per test binary; `setup.rs` seeds
-    // nothing, since setup itself plants the tree.
+    // `mod common` is compiled once per test binary; `setup.rs` no longer
+    // seeds through `setup` itself, since planting moved to `init`
+    // (`d723` piece B).
     #[allow(dead_code)]
     pub fn new_seeded(name: &str) -> Sandbox {
         let d = unique("t", name);

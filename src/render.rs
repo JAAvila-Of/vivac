@@ -1642,7 +1642,7 @@ fn stack_lanes(a: &Tree, root: &Path, args: &Args, ag: &Aggregates) -> R {
         }));
     }
     if rows.is_empty() {
-        outln!("  No lanes yet.  vivac setup claude-code plants one.");
+        outln!("  No lanes yet.  vivac init plants one.");
         return Ok(());
     }
     outln!();

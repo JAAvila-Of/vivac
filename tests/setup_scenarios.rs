@@ -94,6 +94,11 @@ fn assert_both_harnesses_share_one_tree_and_one_lane(c: &Sandbox) {
 #[test]
 fn both_harnesses_in_one_folder_share_one_tree_and_one_lane() {
     let c = Sandbox::new_empty("scenarios-both-cc-first");
+    // `--yes`, not a bare `init`: this scenario pushes nothing, so only the
+    // flagged path -- the one that declares the founding lane in the same
+    // write as the plant -- leaves a lane here at all (`d723` piece B:
+    // `setup` no longer declares one either).
+    c.ok(&["init", "--yes"]);
     c.ok(&["setup", "claude-code", "--yes"]);
     c.ok(&["setup", "codex", "--yes"]);
     assert_both_harnesses_share_one_tree_and_one_lane(&c);
@@ -102,15 +107,17 @@ fn both_harnesses_in_one_folder_share_one_tree_and_one_lane() {
 #[test]
 fn the_other_order_lands_in_the_same_place() {
     let c = Sandbox::new_empty("scenarios-both-codex-first");
+    c.ok(&["init", "--yes"]);
     c.ok(&["setup", "codex", "--yes"]);
     c.ok(&["setup", "claude-code", "--yes"]);
     assert_both_harnesses_share_one_tree_and_one_lane(&c);
 }
 
 // ---------------------------------------------------------------------------
-// 3: one product, two folders, one harness each, joined across them
-// (`--join` in Codex, piece G's own point 2). Also covers point 5: this
-// join is not refused by name any more.
+// 3: one product, two folders, one harness each, joined across them.
+// `d723` piece B moved the join itself to `init --join`; what is left for
+// `setup` to prove is that its own three files still land in the joined
+// folder once the join has already happened.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -118,32 +125,33 @@ fn a_product_in_two_folders_takes_one_harness_each() {
     let c = Sandbox::new_empty("scenarios-two-folders-one-product");
     let a = c.0.join("FolderA");
     std::fs::create_dir_all(&a).unwrap();
-    let (setup_out, setup_code) = run_in(
+    // `d723` piece B: planting and naming the product are `init`'s alone
+    // now, so the tree is built with `init --name` first, and `setup`
+    // only ever writes Claude Code's own three files on top of it.
+    let (init_out, init_code) = run_in(
         &a,
         c.global_home(),
-        &["setup", "claude-code", "--yes", "--name", "Producto"],
+        &["init", "--yes", "--name", "Producto"],
     );
+    assert_eq!(init_code, 0, "{init_out}");
+    let (setup_out, setup_code) = run_in(&a, c.global_home(), &["setup", "claude-code", "--yes"]);
     assert_eq!(setup_code, 0, "{setup_out}");
 
     let b = c.0.join("FolderB");
     std::fs::create_dir_all(&b).unwrap();
     let a_str = a.to_string_lossy().into_owned();
-    let (join_out, join_code) = run_in(
-        &b,
-        c.global_home(),
-        &["setup", "codex", "--yes", "--join", &a_str],
-    );
+    let (join_out, join_code) = run_in(&b, c.global_home(), &["init", "--yes", "--join", &a_str]);
     assert_eq!(join_code, 0, "{join_out}");
-    // Point 5: `setup codex --join` used to refuse by name before ever
-    // reaching the tree.
-    assert!(!join_out.contains("does not take --join yet"), "{join_out}");
+    let (join_setup_out, join_setup_code) =
+        run_in(&b, c.global_home(), &["setup", "codex", "--yes"]);
+    assert_eq!(join_setup_code, 0, "{join_setup_out}");
 
     assert!(a.join(".vivac").join("events").is_file(), "no tree at A");
     assert!(!already_planted(&b), "B grew a tree of its own");
-    // A join used to leave the harness's own files undone (`f667`/`f669`),
-    // which is the whole reason it walks the write path at all: the folder
-    // that joined still needs the hooks, the server and the skill waiting
-    // for the moment a session opens in it.
+    // `f667`/`f669`: a join used to leave the harness's own files undone.
+    // `setup codex --yes`, run after `init --join`, is what B's own folder
+    // still needs before a session opened there has the hooks, the server
+    // and the skill waiting for it.
     assert!(
         b.join(".codex").join("config.toml").is_file(),
         "the join left B without the server"
@@ -175,8 +183,13 @@ fn a_product_in_two_folders_takes_one_harness_each() {
 }
 
 // ---------------------------------------------------------------------------
-// 4: the second-map refusal proposes commands of the harness it was asked
-// as, not always `claude-code` (`f714`, the defect this piece fixes).
+// 4: the second-map refusal used to propose commands of the harness it was
+// asked as, not always `claude-code` (`f714`). `d723` piece B moved the
+// refusal itself to `init`, which answers with none: the folder that used
+// to reach this from `setup codex`/`setup claude-code` now refuses earlier,
+// with no tree resolvable from it at all (`Failure::SetupNoTree`), so what
+// is left to prove is that `init`'s own refusal never names a harness --
+// `f717` dissolved rather than merely worked around per harness.
 // ---------------------------------------------------------------------------
 
 fn real_git_repo(at: &Path) {
@@ -217,232 +230,43 @@ fn clone_repo(src: &Path, destination: &Path) {
 }
 
 #[test]
-fn the_second_map_refusal_proposes_commands_of_the_harness_it_was_asked_as() {
+fn the_second_map_refusal_never_names_a_harness() {
     let c = Sandbox::new_empty("scenarios-second-map-harness-word");
     let a = c.0.join("FolderA");
     real_git_repo(&a.join("repo"));
-    let (setup_out, setup_code) = run_in(
+    let (init_out, init_code) = run_in(
         &a,
         c.global_home(),
-        &["setup", "claude-code", "--yes", "--name", "Producto"],
+        &["init", "--yes", "--name", "Producto"],
     );
-    assert_eq!(setup_code, 0, "{setup_out}");
+    assert_eq!(init_code, 0, "{init_out}");
 
     let b = c.0.join("FolderB");
     clone_repo(&a.join("repo"), &b.join("repo"));
 
-    let (codex_out, codex_code) = run_in(&b, c.global_home(), &["setup", "codex"]);
-    assert_eq!(codex_code, 1, "{codex_out}");
-    assert!(
-        codex_out.contains("vivac setup codex --join"),
-        "{codex_out}"
-    );
-    assert!(
-        codex_out.contains("vivac setup codex --new-tree"),
-        "{codex_out}"
-    );
-    assert!(!codex_out.contains("setup claude-code"), "{codex_out}");
-
-    let (claude_code_out, claude_code_code) =
-        run_in(&b, c.global_home(), &["setup", "claude-code"]);
-    assert_eq!(claude_code_code, 1, "{claude_code_out}");
-    assert!(
-        claude_code_out.contains("vivac setup claude-code --join"),
-        "{claude_code_out}"
-    );
-    assert!(
-        claude_code_out.contains("vivac setup claude-code --new-tree"),
-        "{claude_code_out}"
-    );
-    assert!(
-        !claude_code_out.contains("setup codex"),
-        "{claude_code_out}"
-    );
+    // `--yes`, not a bare `init`: the second-map guard lives on the
+    // flagged path through `tree.rs` (`main.rs`'s own guard on `init`), and
+    // a bare `init` in a folder with no tree of its own just plants one.
+    let (out, code) = run_in(&b, c.global_home(), &["init", "--yes"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("vivac init --join"), "{out}");
+    assert!(out.contains("vivac init --new-tree"), "{out}");
+    assert!(!out.contains("claude-code"), "{out}");
+    assert!(!out.contains("codex"), "{out}");
 }
 
 // ---------------------------------------------------------------------------
-// 5: `f720` -- no line of a printed plan is wider than the two-column block
-// itself draws, for either harness, across the shapes that plan takes.
+// 5 and 6 used to live here: `f720`'s plan-width guard across plant, join
+// and `--undo`, and `f719`'s "no hollow `.vivac/` after undoing a join".
+// `d723` piece B moved both subjects to `init` outright -- `setup` neither
+// plants nor joins nor undoes a lane any more, so there is no plan of the
+// tree side left for a long name to run past the width in, and no lane for
+// `setup --undo` to leave a hollow `.vivac/` behind by taking away.
+//
+// The width guard survives as `tests/init.rs`'s own
+// `init_join_wraps_a_long_lane_name_rather_than_running_past_the_width`:
+// the same wrap, reached the same way, now that `init` is the only door to
+// it. The hollow-`.vivac/` guard survives as `tests/init.rs`'s own
+// `init_undo_removes_a_joined_lane_and_leaves_the_target_log_growing_only`,
+// grown to check the same follow-on `brief` this file used to.
 // ---------------------------------------------------------------------------
-
-/// A lane's name comes straight from its folder's own name and a
-/// product's from whoever runs `--name` (up to 100 characters,
-/// `tree::NAME_MAX_LEN`), and neither one has a bound of its own -- the
-/// whole reason `f720` wraps a status instead of trusting it to fit. A
-/// short fixture would not tell the two apart: the record and lock lines
-/// `f720`'s own spec measured already overflowed at names four
-/// characters long, so what this is actually proving is that the wrap
-/// holds once a name is long enough to span several lines of its own,
-/// not just spill one word past the label. Built from several words
-/// rather than one long one so the words -- not this test -- decide
-/// where the wrap breaks.
-fn long_name(tag: &str) -> String {
-    format!("A Name Chosen On Purpose To Run Longer Than One Line Of The Plan Could Hold, {tag}")
-}
-
-/// Every printed line of `out` fits in the block `piece_line` draws,
-/// except the two shapes `f720`'s own spec says stay whole: the header
-/// line, which names a path with no bound of its own either, and a
-/// `sub_line`, a command or a path that is not this test's to word-wrap.
-/// Skipped by what they are -- the first line, and eight-space indent --
-/// not by their text.
-fn assert_no_plan_line_is_wider_than_the_block(out: &str) {
-    const SUB_LINE_INDENT: usize = 8;
-    for line in out.lines() {
-        let trimmed = line.trim_start();
-        let indent = line.len() - trimmed.len();
-        if indent == SUB_LINE_INDENT || trimmed.starts_with("vivac setup") {
-            continue;
-        }
-        assert!(
-            line.chars().count() <= 76,
-            "a plan line ran past 76 columns: {line:?}\nfull output:\n{out}"
-        );
-    }
-}
-
-/// `--dry-run` prints exactly the plan `f720`'s own spec measured, with
-/// nothing written and nothing appended after it -- the shape this test
-/// checks, isolated from the harness-specific prose a real write adds
-/// afterward (Codex's own trust instructions, for one), which `f720`
-/// never claimed to bound.
-fn dry_run_plan(dir: &Path, home: &Path, args: &[&str]) -> String {
-    let mut full = vec!["setup"];
-    full.extend_from_slice(args);
-    full.push("--dry-run");
-    let (out, code) = run_in(dir, home, &full);
-    assert_eq!(code, 0, "`vivac {}` failed:\n{out}", full.join(" "));
-    assert_no_plan_line_is_wider_than_the_block(&out);
-    out
-}
-
-#[test]
-fn no_plan_line_is_wider_than_the_block() {
-    for harness in ["claude-code", "codex"] {
-        let c = Sandbox::new_empty(&format!("scenarios-plan-width-{harness}"));
-
-        // Plant: a fresh tree, in a folder named long and declared under
-        // a product name just as long.
-        let planted = c.0.join(long_name("plant"));
-        std::fs::create_dir_all(&planted).unwrap();
-        let product = long_name("plant product");
-        dry_run_plan(&planted, c.global_home(), &[harness, "--name", &product]);
-        ok_in(
-            &planted,
-            c.global_home(),
-            &["setup", harness, "--yes", "--name", &product],
-        );
-
-        // The same folder again: nothing left to write.
-        dry_run_plan(&planted, c.global_home(), &[harness]);
-
-        // `--join`: a second, long-named folder joining the tree above.
-        let joining = c.0.join(long_name("join"));
-        std::fs::create_dir_all(&joining).unwrap();
-        let planted_str = planted.to_string_lossy().into_owned();
-        dry_run_plan(
-            &joining,
-            c.global_home(),
-            &[harness, "--join", &planted_str],
-        );
-
-        // A file setup never wrote, already foreign to the plan.
-        let foreign = c.0.join(long_name("merge"));
-        std::fs::create_dir_all(&foreign).unwrap();
-        seed_foreign_file(harness, &foreign);
-        dry_run_plan(
-            &foreign,
-            c.global_home(),
-            &[harness, "--name", &long_name("merge product")],
-        );
-
-        // `--undo`, on the folder that actually planted.
-        dry_run_plan(&planted, c.global_home(), &[harness, "--undo"]);
-    }
-}
-
-/// A file setup did not write, already in place before it ever runs, so
-/// the plan reports a merge ("add") rather than a plant ("create").
-fn seed_foreign_file(harness: &str, dir: &Path) {
-    match harness {
-        "claude-code" => {
-            std::fs::create_dir_all(dir.join(".claude")).unwrap();
-            std::fs::write(
-                dir.join(".claude").join("settings.json"),
-                "{\n  \"otherKey\": true\n}\n",
-            )
-            .unwrap();
-        }
-        "codex" => {
-            std::fs::create_dir_all(dir.join(".codex")).unwrap();
-            std::fs::write(
-                dir.join(".codex").join("config.toml"),
-                "# hand-written\nsomething = 1\n",
-            )
-            .unwrap();
-        }
-        other => unreachable!("no third harness: {other}"),
-    }
-}
-
-// ---------------------------------------------------------------------------
-// 6: `f719` -- undoing a join must not leave a hollow `.vivac/` behind. A
-// folder nested under the tree it joined, once its lane is gone, has no
-// reason left to carry a `.vivac/` of its own: the folder that wrote it is
-// the same one taking it back.
-// ---------------------------------------------------------------------------
-
-#[test]
-fn undoing_a_join_leaves_no_hollow_vivac_behind() {
-    for harness in ["claude-code", "codex"] {
-        let c = Sandbox::new_empty(&format!("scenarios-undo-hollow-{harness}"));
-        let upper = &c.0;
-        let upper_str = upper.to_string_lossy().into_owned();
-        ok_in(
-            upper,
-            c.global_home(),
-            &["setup", harness, "--yes", "--name", "Upper Product"],
-        );
-
-        // Nested under the tree it joins, so that once its own `.vivac/`
-        // is gone, the ordinary upward walk lands back on `upper` --
-        // exactly the shape the bug report measured.
-        let nested = upper.join("nested");
-        std::fs::create_dir_all(&nested).unwrap();
-        let (join_out, join_code) = run_in(
-            &nested,
-            c.global_home(),
-            &["setup", harness, "--yes", "--join", &upper_str],
-        );
-        assert_eq!(join_code, 0, "{join_out}");
-        assert!(nested.join(".vivac").join("lane").is_file(), "{join_out}");
-
-        let (undo_out, undo_code) = run_in(
-            &nested,
-            c.global_home(),
-            &["setup", harness, "--undo", "--yes"],
-        );
-        assert_eq!(undo_code, 0, "{undo_out}");
-        assert!(
-            !nested.join(".vivac").exists(),
-            "a hollow .vivac/ was left behind after undo, for {harness}:\n{undo_out}"
-        );
-
-        let brief = ok_in(&nested, c.global_home(), &["brief"]);
-        assert!(
-            brief.contains("project: Upper Product"),
-            "brief from the joined folder must name the product above, not \
-             itself, for {harness}:\n{brief}"
-        );
-
-        assert!(
-            already_planted(upper),
-            "the tree that was joined must stay intact, for {harness}"
-        );
-        let upper_brief = ok_in(upper, c.global_home(), &["brief"]);
-        assert!(
-            upper_brief.contains("project: Upper Product"),
-            "the tree's own folder must still resolve to itself, for {harness}:\n{upper_brief}"
-        );
-    }
-}
