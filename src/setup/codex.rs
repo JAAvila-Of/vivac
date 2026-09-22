@@ -16,8 +16,10 @@
 //! `claude_code.rs` plants one, through the module both harnesses share
 //! (`src/setup/tree.rs`, `r515`). `--name`, `--lane-name` and `--new-tree`
 //! are the tree's own flags, so they stop being refused here and behave
-//! exactly as they do for `claude-code`. `--join` stays out of this
-//! tranche and is still refused by name.
+//! exactly as they do for `claude-code`. `--join` joined `claude-code`
+//! alone until piece G of this same tranche (`f714`) gave it the door
+//! this file now shares: `tree::plan_join` and the `Harness` it prints
+//! commands under.
 //!
 //! Two things Codex needs that this run cannot do for it, because both live
 //! outside the project (`d655`): the project has to be marked trusted in
@@ -112,13 +114,10 @@ pub fn run(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
 /// `f52` already drew from a positional silently dropped rather than a
 /// flag. `--new-tree`, `--lane-name` and `--name` left this list in `t592`
 /// tranche 2 (`d710`): they are the tree's own flags, and `tree::plan`
-/// reads them the same way it does for `claude-code`. The order between
-/// the two left is arbitrary; it only has to be fixed, so which one a run
-/// names never depends on how the flags happened to be typed.
-const UNSUPPORTED_FLAGS: &[(&str, &str)] = &[
-    ("undo", "removing what it wrote"),
-    ("join", "joining a tree that lives elsewhere"),
-];
+/// reads them the same way it does for `claude-code`. `--join` left it in
+/// piece G of the same tranche (`f714`): it joins through `tree::plan_join`
+/// now, the same door `claude_code.rs` already had.
+const UNSUPPORTED_FLAGS: &[(&str, &str)] = &[("undo", "removing what it wrote")];
 
 fn refuse_unsupported_flags(a: &Args) -> Option<Failure> {
     for &(flag, does) in UNSUPPORTED_FLAGS {
@@ -177,8 +176,6 @@ fn existing_files_refusal(existing: &[&str]) -> Failure {
     ))
 }
 
-const NO_TERMINAL_TEXT: &str = "  setup asks before writing, and there is no terminal here to ask.\n  See what it would write:  vivac setup codex --dry-run\n  Then write it:            vivac setup codex --yes";
-
 fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     let here = &roots.here;
     let target = paths(here);
@@ -199,14 +196,39 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     // missing, and every refusal that belongs to the tree rather than to
     // this harness -- a tree below, a tree above, a product already
     // registered elsewhere, and the second-map hint (`t592` tranche 2,
-    // `d710`). `--join` stays refused above, so this never reaches
-    // `tree::plan_for_join`: only a plant reaches here yet.
+    // `d710`). `--join` reaches `tree::plan_join` now, the same door
+    // `claude_code.rs` already had (piece G, `f714`): read here, before
+    // deciding which refusal a tree below wins, the same shape
+    // `claude_code::run` already checks this in.
     let below = tree::trees_below(here);
+    let join_spec = a.opt("join");
     if !below.is_empty() {
-        return Err(tree::tree_below_refusal(&below));
+        return Err(match join_spec {
+            Some(spec) => super::claude_code::tree_below_join_refusal(here, &below, spec),
+            None => tree::tree_below_refusal(&below),
+        });
     }
-    let plan = tree::plan(roots, a)?;
+    if let Some(spec) = join_spec {
+        return match tree::plan_join(roots, spec, a.opt("lane-name"), super::Harness::Codex)? {
+            Some((join_roots, plan)) => apply_writes(&join_roots, a, plan, &target),
+            None => Ok(0),
+        };
+    }
+    let plan = tree::plan(roots, a, super::Harness::Codex)?;
+    apply_writes(roots, a, plan, &target)
+}
 
+/// The plant path's own writes, shared with `--join` (piece G, `f714`,
+/// mirroring `claude_code::apply_writes`): everything past deciding which
+/// plan and which roots this run works from -- rendering the plan, asking,
+/// and writing all or nothing.
+fn apply_writes(
+    roots: &super::Roots,
+    a: &Args,
+    plan: tree::TreePlan,
+    target: &Paths,
+) -> Result<i32, Failure> {
+    let here = &roots.here;
     let full_plan = format!("{}\n", render_plan(here, &plan));
 
     if a.has("dry-run") {
@@ -224,7 +246,10 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     }
 
     if !a.has("yes") && !super::stdin_is_terminal() {
-        return Err(Failure::Model(NO_TERMINAL_TEXT.to_string()));
+        return Err(Failure::Model(super::no_terminal_text(
+            super::Harness::Codex,
+            a,
+        )));
     }
 
     print!("{full_plan}{}", super::claude_code::TRAILING_PARAGRAPH);
