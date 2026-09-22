@@ -9,6 +9,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.12.5](https://github.com/JAAvila-Of/vivac/compare/v0.12.4...v0.12.5) - 2026-09-22
 
+### Upgrading
+
+- **`reconcile` now answers for the product, not for the folder you are
+  standing in.** When another lane of the same product has changes nothing
+  in the tree claims, they come out under a new `IN OTHER LANES OF THIS
+  PRODUCT` section, each lane measured against its own last stop. A lane
+  whose folder cannot be read is named and skipped. `--since` still measures
+  this lane alone, and now says so. `--json` entries gain a `lane` field
+  beside the ones already there, so anything counting the old output will
+  count more.
+- **A relocated product reports one more lane than it did.** `relocate` now
+  gives the destination -- the folder that ends up holding the tree -- a
+  lane of its own. It had none, and fell through to the founding lane that
+  had just been handed to the folder it moved from, so writing from there
+  was recorded against a lane living somewhere else. `vivac stack --lanes`
+  shows the extra one, and nothing has to be run for it.
+- **`vivac setup claude-code --undo` now removes `.vivac/lane`**, when that
+  lane has never written anything to the tree. Until now it left the file
+  behind, and while the file is there the folder cannot receive the tree at
+  all: `relocate` refuses it for holding a lane. A lane that has written is
+  left exactly as it was, and `--undo` says why.
+- **Four of `setup`'s messages changed wording.** The refusal with no
+  terminal repeats the flags you typed, a repository that is the folder
+  itself is named rather than printed as a bare dot, planting beside a
+  product the registry cannot recognise says so, and joining a folder to an
+  existing tree points at migrating what that folder knows. Anything
+  matching those messages by exact text will stop matching.
+- **The measurements moved out of the README** into `docs/PERFORMANCE.md`,
+  and the versioning rule into `docs/VERSIONING.md`. A link to
+  `README.md#status` no longer resolves.
+
 ### Documentation
 
 - *(setup)* name no memory product in the skill setup writes
