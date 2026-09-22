@@ -256,32 +256,128 @@ fn join_refuses_before_writing_anything() {
     assert_nothing_was_written(&c);
 }
 
+/// `t592` tranche 2 (`d710`): `--new-tree`, `--lane-name` and `--name` are
+/// the tree's own flags, not the harness's, so they stop being refused and
+/// behave exactly as they do for `claude-code`. `--join` and `--undo` are
+/// not this tranche's (`d710` §3) and still refuse above.
 #[test]
-fn new_tree_refuses_before_writing_anything() {
+fn new_tree_is_accepted_and_plants_the_tree() {
     let c = Sandbox::new_empty("setup-codex-flag-new-tree");
     let (out, code) = c.run(&["setup", "codex", "--yes", "--new-tree"]);
-    assert_eq!(code, 2, "{out}");
-    assert!(out.contains("--new-tree"), "{out}");
-    assert_nothing_was_written(&c);
+    assert_eq!(code, 0, "{out}");
+    assert!(c.0.join(".vivac").exists(), "the tree was not planted");
 }
 
 #[test]
-fn lane_name_refuses_before_writing_anything() {
+fn lane_name_names_the_lane_it_declares() {
     let c = Sandbox::new_empty("setup-codex-flag-lane-name");
-    let (out, code) = c.run(&["setup", "codex", "--yes", "--lane-name", "mine"]);
-    assert_eq!(code, 2, "{out}");
-    assert!(out.contains("--lane-name"), "{out}");
-    assert_nothing_was_written(&c);
+    let (out, code) = c.run(&["setup", "codex", "--yes", "--lane-name", "custom-name"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        read(&c.0.join(".vivac").join("events")).contains("\"name\":\"custom-name\""),
+        "{out}"
+    );
 }
 
-/// `t640`: `--name` is claude-code's own, and not yet this harness's --
-/// the same refusal every other flag this harness does not know gets,
-/// rather than being silently ignored.
+/// `t640`: `--name` is claude-code's own too, and now this harness's as
+/// well -- it saves the product's name the same way, rather than being
+/// refused or silently ignored.
 #[test]
-fn name_refuses_before_writing_anything() {
+fn name_names_the_product_it_plants() {
     let c = Sandbox::new_empty("setup-codex-flag-name");
     let (out, code) = c.run(&["setup", "codex", "--yes", "--name", "IQuorum"]);
-    assert_eq!(code, 2, "{out}");
-    assert!(out.contains("--name"), "{out}");
-    assert_nothing_was_written(&c);
+    assert_eq!(code, 0, "{out}");
+    let registry = read(&c.global_home().join("projects"));
+    assert!(registry.contains("\"name\": \"IQuorum\""), "{registry}");
+}
+
+// ---------------------------------------------------------------------------
+// 8. `t592` tranche 2 (`d710`): the fourth piece -- planting the tree the
+//    same way `claude-code` does, from the module both harnesses share
+//    (`src/setup/tree.rs`).
+// ---------------------------------------------------------------------------
+
+/// The tree's own lines of a plan, told apart from the harness's own --
+/// `.vivac/`, `.vivac/lane`, `.vivac/events`, and the `config` lock line,
+/// which is the fourth piece `t592` tranche 1 left out (`f705`).
+fn tree_lines(out: &str) -> Vec<&str> {
+    out.lines()
+        .filter(|l| {
+            let t = l.trim_start();
+            t.starts_with(".vivac/") || t.starts_with("config")
+        })
+        .collect()
+}
+
+/// `f705`: `setup codex --dry-run` used to show three lines where
+/// `claude-code` showed six, because it never touched the tree at all.
+/// Point 2 of `d710` §3: both plans now name the same tree, in the same
+/// words -- checked on the tree's own lines, not the whole output, since
+/// the two harnesses' own pieces are not the same and were never meant to
+/// be.
+#[test]
+fn dry_run_shows_the_same_tree_lines_claude_code_does() {
+    let c = Sandbox::new_empty("setup-codex-tree-lines");
+    let (claude_out, claude_code) = c.run(&["setup", "claude-code", "--dry-run"]);
+    assert_eq!(claude_code, 0, "{claude_out}");
+    let (codex_out, codex_code) = c.run(&["setup", "codex", "--dry-run"]);
+    assert_eq!(codex_code, 0, "{codex_out}");
+
+    let claude_tree = tree_lines(&claude_out);
+    let codex_tree = tree_lines(&codex_out);
+    assert!(!claude_tree.is_empty(), "{claude_out}");
+    assert_eq!(
+        claude_tree, codex_tree,
+        "codex's own tree lines drifted from claude-code's:\n\
+         claude-code: {claude_tree:?}\ncodex: {codex_tree:?}"
+    );
+
+    // And where they sit, not only that they are there: the same lines in
+    // the same order still read as an afterthought if all three arrive
+    // after this harness's own pieces, which is what they were until
+    // `f705`. The ground is named first and what the run records about it
+    // last, exactly as `claude-code` has always placed them.
+    let at = |needle: &str| {
+        codex_out
+            .find(needle)
+            .unwrap_or_else(|| panic!("{needle} is missing from the plan:\n{codex_out}"))
+    };
+    assert!(
+        at(".vivac/ ") < at(".codex/config.toml"),
+        "planting the tree is announced after the files that need it:\n{codex_out}"
+    );
+    assert!(
+        at(".agents/skills") < at(".vivac/events"),
+        "what the run records about the tree is announced before the pieces:\n{codex_out}"
+    );
+}
+
+/// Point 3: a clean plant leaves the tree exactly as `claude-code` would --
+/// planted, its own `.gitignore`, its own version lock, and a lane `stack
+/// --lanes` already knows about.
+#[test]
+fn a_clean_plant_also_plants_the_tree() {
+    let c = Sandbox::new_empty("setup-codex-plants-tree");
+    let (out, code) = c.run(&["setup", "codex", "--yes"]);
+    assert_eq!(code, 0, "{out}");
+
+    assert!(c.0.join(".vivac").join("events").is_file(), "{out}");
+    assert!(c.0.join(".vivac").join(".gitignore").is_file(), "{out}");
+    assert!(c.0.join(".vivac").join("config").is_file(), "{out}");
+
+    let stack = c.ok(&["stack", "--lanes"]);
+    let folder_name = c.0.file_name().unwrap().to_string_lossy().into_owned();
+    assert!(stack.contains(&folder_name), "{stack}");
+}
+
+/// Point 4: the one thing `f705` actually cost -- with no tree, the start
+/// hook stays quiet forever. Run by hand right after `setup codex --yes`,
+/// it now prints the brief instead.
+#[test]
+fn after_a_clean_plant_the_start_hook_prints_a_brief_instead_of_staying_quiet() {
+    let c = Sandbox::new_empty("setup-codex-start-hook-brief");
+    c.ok(&["setup", "codex", "--yes"]);
+    let (out, code) = c.run(&["session", "start", "--hook"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.starts_with("vivac · project:"), "{out}");
 }
