@@ -56,6 +56,16 @@ fn read(p: &std::path::Path) -> String {
     std::fs::read_to_string(p).unwrap_or_else(|e| panic!("reading {p:?}: {e}"))
 }
 
+/// The words of `out`, run together regardless of which line
+/// `render::wrap` (`f720`) put them on: width wraps a long status now,
+/// not a hand-picked cut, so a test that cares about the words has to
+/// stop caring which line they landed on -- the same shift
+/// `tests/check.rs`'s own `words` already made for `copy_notice`'s
+/// prose.
+fn plan_words(out: &str) -> String {
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// `p` the way the binary's own `current_dir()` would print it -- the same
 /// split `tests/setup.rs` already needs, and for the same reason: on
 /// Windows `current_dir()` returns the path as given rather than a
@@ -674,7 +684,7 @@ fn undo_leaves_a_hand_edited_skill_and_says_so() {
     let (out, code) = c.run(&["setup", "codex", "--undo", "--yes"]);
     assert_eq!(code, 0, "{out}");
     assert!(
-        out.contains("changed since setup wrote it; left as it is"),
+        plan_words(&out).contains("changed since setup wrote it; left as it is"),
         "{out}"
     );
     assert!(skill_path(&c).exists(), "the edited skill was removed");
@@ -698,7 +708,7 @@ fn undo_leaves_a_config_toml_with_a_half_written_marker_and_says_so() {
     // it, rather than the paragraph `apply` refuses with: that one ends by
     // saying to run setup again, which is not what this reader asked for.
     assert!(
-        out.contains("left as it is: its marker block is half written"),
+        plan_words(&out).contains("left as it is: its marker block is half written"),
         "{out}"
     );
     assert!(

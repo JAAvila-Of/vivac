@@ -279,7 +279,7 @@ fn another_name_already_running_vivac_mcp_is_left_as_it_is() {
     let (out, code) = c.run(&["setup", "claude-code", "--yes"]);
     assert_eq!(code, 0, "{out}");
     assert!(
-        out.contains("already runs vivac mcp as \"vivac-tree\""),
+        plan_words(&out).contains("already runs vivac mcp as \"vivac-tree\""),
         "{out}"
     );
 
@@ -337,7 +337,7 @@ fn a_skill_an_earlier_vivac_wrote_is_replaced() {
     let (out, code) = c.run(&["setup", "claude-code", "--yes"]);
     assert_eq!(code, 0, "{out}");
     assert!(
-        out.contains("replace the copy an earlier vivac wrote"),
+        plan_words(&out).contains("replace the copy an earlier vivac wrote"),
         "{out}"
     );
     let after = read(&skill_path(&c));
@@ -451,9 +451,47 @@ fn no_terminal_and_no_yes_refuses_without_a_plan() {
 // brand new lane of the tree above it.
 // ---------------------------------------------------------------------------
 
+/// Where a wrapped status's continuation lines start: `f720`'s own
+/// `claude_code::PIECE_STATUS_COLUMN`, not reachable from here since an
+/// integration test only sees what the binary prints.
+const PLAN_STATUS_COLUMN: usize = 45;
+
+/// Whether the plan shows a line for `label` whose status contains
+/// `rest`, once a status `render::wrap` (`f720`) split across more than
+/// one line is put back together. Width wraps a long status now, not a
+/// hand-picked cut, so a test that cares about the words has to stop
+/// caring which line they landed on -- the same shift `tests/check.rs`'s
+/// own `words` already made for `copy_notice`'s prose.
 fn lane_line_containing(out: &str, label: &str, rest: &str) -> bool {
-    out.lines()
-        .any(|l| l.trim_start().starts_with(label) && l.contains(rest))
+    let lines: Vec<&str> = out.lines().collect();
+    lines.iter().enumerate().any(|(i, l)| {
+        if !l.trim_start().starts_with(label) {
+            return false;
+        }
+        let mut joined = l.trim_start().to_string();
+        for cont in &lines[i + 1..] {
+            if !cont.starts_with(&" ".repeat(PLAN_STATUS_COLUMN)) {
+                break;
+            }
+            joined.push(' ');
+            joined.push_str(cont.trim());
+        }
+        joined
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .contains(rest)
+    })
+}
+
+/// The words of `out`, run together regardless of which line
+/// `render::wrap` (`f720`) put them on -- for a plain `.contains` check
+/// that does not anchor on a label the way `lane_line_containing` does.
+/// The same shift `tests/check.rs`'s own `words` already made for
+/// `copy_notice`'s prose, for the same reason: width wraps a status now,
+/// not a hand-picked cut.
+fn plan_words(out: &str) -> String {
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 #[test]
@@ -638,7 +676,7 @@ fn undo_leaves_a_differently_spelled_hook_and_an_edited_skill() {
         "{out}"
     );
     assert!(
-        out.contains("changed since setup wrote it; left as it is"),
+        plan_words(&out).contains("changed since setup wrote it; left as it is"),
         "{out}"
     );
     assert!(
@@ -724,12 +762,14 @@ fn undo_after_a_join_that_wrote_something_keeps_the_lane_file() {
         &["setup", "claude-code", "--undo", "--yes"],
     );
     assert_eq!(code, 0, "{out}");
+    // Insensitive to where width wraps the sentence (`f720`); its own
+    // width is `no_plan_line_is_wider_than_the_block`'s to answer for,
+    // not this test's.
     assert!(
-        out.contains("left as it is: this lane has written to the tree,"),
-        "{out}"
-    );
-    assert!(
-        out.contains("and removing it would orphan what it wrote"),
+        plan_words(&out).contains(
+            "left as it is: this lane has written to the tree, and removing it would orphan \
+             what it wrote"
+        ),
         "{out}"
     );
     assert!(
@@ -886,11 +926,11 @@ fn setup_writes_the_gitignore_a_tree_from_before_lacks() {
     std::fs::remove_file(c.0.join(".vivac").join(".gitignore")).unwrap();
     let plan = c.ok(&["setup", "claude-code", "--dry-run"]);
     assert!(
-        plan.lines().any(|l| {
-            let l = l.trim_start();
-            l.starts_with(".vivac/.gitignore")
-                && l.contains("create: keeps .vivac/ out of version control")
-        }),
+        lane_line_containing(
+            &plan,
+            ".vivac/.gitignore",
+            "create: keeps .vivac/ out of version control",
+        ),
         "{plan}"
     );
     c.ok(&["setup", "claude-code", "--yes"]);
@@ -970,15 +1010,19 @@ fn undo_dry_run_shows_the_plan_and_writes_nothing() {
 }
 
 /// E: when `.mcp.json` will be removed because it holds nothing else, the
-/// undo plan wraps it the same two-line way `settings.json` already does.
+/// undo plan says so in the one sentence `settings.json`'s own removal
+/// already uses -- wrapped by width now (`f720`), not by a hand-picked
+/// cut, so this checks the sentence and not which line it landed on.
 #[test]
 fn undo_plan_wraps_the_mcp_removal_when_the_file_would_empty_out() {
     let c = Sandbox::new_empty("setup-undo-mcp-wrap");
     c.ok(&["setup", "claude-code", "--yes"]);
 
     let (out, _) = c.run(&["setup", "claude-code", "--undo", "--dry-run"]);
-    assert!(out.contains("remove the server \"vivac\";"), "{out}");
-    assert!(out.contains("nothing else is left, so it goes"), "{out}");
+    assert!(
+        plan_words(&out).contains("remove the server \"vivac\"; nothing else is left, so it goes"),
+        "{out}"
+    );
 }
 
 /// F: `--dry-run` with `--yes` is a usage error with the literal text, and
@@ -1120,10 +1164,13 @@ fn a_tree_above_keeps_claude_codes_files_below_and_names_the_tree_root() {
 
     let (out, code) = run_in(&sub, c.global_home(), &["setup", "claude-code", "--yes"]);
     assert_eq!(code, 0, "{out}");
+    // `f720`: the status stays "already there" (prose, which wraps); the
+    // path is atomic, so it moved to its own `in` line below, never split.
     assert!(
-        out.contains(&format!("already there, in {}", printed(&c.0).display())),
+        lane_line_containing(&out, ".vivac/", "already there"),
         "{out}"
     );
+    assert!(out.contains(&printed(&c.0).display().to_string()), "{out}");
     assert!(sub.join(".claude").join("settings.json").exists());
     assert!(sub.join(".mcp.json").exists());
     assert!(
@@ -1212,10 +1259,13 @@ fn a_workspace_and_a_repository_inside_it_share_one_tree_and_get_two_sets_of_fil
     );
     assert_eq!(code, 0, "{out}");
     assert!(!out.contains("is inside the repository at"), "{out}");
+    // `f720`: same shift as above -- "already there" plus the path on
+    // its own `in` line, never split.
     assert!(
-        out.contains(&format!("already there, in {}", printed(&c.0).display())),
+        lane_line_containing(&out, ".vivac/", "already there"),
         "{out}"
     );
+    assert!(out.contains(&printed(&c.0).display().to_string()), "{out}");
 
     assert!(c.0.join(".claude").join("settings.json").exists());
     assert!(repository.join(".claude").join("settings.json").exists());
@@ -1359,7 +1409,7 @@ fn every_earlier_release_skill_is_replaced_by_the_new_one() {
         let (out, code) = c.run(&["setup", "claude-code", "--yes"]);
         assert_eq!(code, 0, "{release}: {out}");
         assert!(
-            out.contains("replace the copy an earlier vivac wrote"),
+            plan_words(&out).contains("replace the copy an earlier vivac wrote"),
             "{release}: {out}"
         );
         assert_eq!(read(&skill_path(&c)), expected, "{release}");

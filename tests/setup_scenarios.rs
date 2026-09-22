@@ -259,3 +259,128 @@ fn the_second_map_refusal_proposes_commands_of_the_harness_it_was_asked_as() {
         "{claude_code_out}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// 5: `f720` -- no line of a printed plan is wider than the two-column block
+// itself draws, for either harness, across the shapes that plan takes.
+// ---------------------------------------------------------------------------
+
+/// A lane's name comes straight from its folder's own name and a
+/// product's from whoever runs `--name` (up to 100 characters,
+/// `tree::NAME_MAX_LEN`), and neither one has a bound of its own -- the
+/// whole reason `f720` wraps a status instead of trusting it to fit. A
+/// short fixture would not tell the two apart: the record and lock lines
+/// `f720`'s own spec measured already overflowed at names four
+/// characters long, so what this is actually proving is that the wrap
+/// holds once a name is long enough to span several lines of its own,
+/// not just spill one word past the label. Built from several words
+/// rather than one long one so the words -- not this test -- decide
+/// where the wrap breaks.
+fn long_name(tag: &str) -> String {
+    format!("A Name Chosen On Purpose To Run Longer Than One Line Of The Plan Could Hold, {tag}")
+}
+
+/// Every printed line of `out` fits in the block `piece_line` draws,
+/// except the two shapes `f720`'s own spec says stay whole: the header
+/// line, which names a path with no bound of its own either, and a
+/// `sub_line`, a command or a path that is not this test's to word-wrap.
+/// Skipped by what they are -- the first line, and eight-space indent --
+/// not by their text.
+fn assert_no_plan_line_is_wider_than_the_block(out: &str) {
+    const SUB_LINE_INDENT: usize = 8;
+    for line in out.lines() {
+        let trimmed = line.trim_start();
+        let indent = line.len() - trimmed.len();
+        if indent == SUB_LINE_INDENT || trimmed.starts_with("vivac setup") {
+            continue;
+        }
+        assert!(
+            line.chars().count() <= 76,
+            "a plan line ran past 76 columns: {line:?}\nfull output:\n{out}"
+        );
+    }
+}
+
+/// `--dry-run` prints exactly the plan `f720`'s own spec measured, with
+/// nothing written and nothing appended after it -- the shape this test
+/// checks, isolated from the harness-specific prose a real write adds
+/// afterward (Codex's own trust instructions, for one), which `f720`
+/// never claimed to bound.
+fn dry_run_plan(dir: &Path, home: &Path, args: &[&str]) -> String {
+    let mut full = vec!["setup"];
+    full.extend_from_slice(args);
+    full.push("--dry-run");
+    let (out, code) = run_in(dir, home, &full);
+    assert_eq!(code, 0, "`vivac {}` failed:\n{out}", full.join(" "));
+    assert_no_plan_line_is_wider_than_the_block(&out);
+    out
+}
+
+#[test]
+fn no_plan_line_is_wider_than_the_block() {
+    for harness in ["claude-code", "codex"] {
+        let c = Sandbox::new_empty(&format!("scenarios-plan-width-{harness}"));
+
+        // Plant: a fresh tree, in a folder named long and declared under
+        // a product name just as long.
+        let planted = c.0.join(long_name("plant"));
+        std::fs::create_dir_all(&planted).unwrap();
+        let product = long_name("plant product");
+        dry_run_plan(&planted, c.global_home(), &[harness, "--name", &product]);
+        ok_in(
+            &planted,
+            c.global_home(),
+            &["setup", harness, "--yes", "--name", &product],
+        );
+
+        // The same folder again: nothing left to write.
+        dry_run_plan(&planted, c.global_home(), &[harness]);
+
+        // `--join`: a second, long-named folder joining the tree above.
+        let joining = c.0.join(long_name("join"));
+        std::fs::create_dir_all(&joining).unwrap();
+        let planted_str = planted.to_string_lossy().into_owned();
+        dry_run_plan(
+            &joining,
+            c.global_home(),
+            &[harness, "--join", &planted_str],
+        );
+
+        // A file setup never wrote, already foreign to the plan.
+        let foreign = c.0.join(long_name("merge"));
+        std::fs::create_dir_all(&foreign).unwrap();
+        seed_foreign_file(harness, &foreign);
+        dry_run_plan(
+            &foreign,
+            c.global_home(),
+            &[harness, "--name", &long_name("merge product")],
+        );
+
+        // `--undo`, on the folder that actually planted.
+        dry_run_plan(&planted, c.global_home(), &[harness, "--undo"]);
+    }
+}
+
+/// A file setup did not write, already in place before it ever runs, so
+/// the plan reports a merge ("add") rather than a plant ("create").
+fn seed_foreign_file(harness: &str, dir: &Path) {
+    match harness {
+        "claude-code" => {
+            std::fs::create_dir_all(dir.join(".claude")).unwrap();
+            std::fs::write(
+                dir.join(".claude").join("settings.json"),
+                "{\n  \"otherKey\": true\n}\n",
+            )
+            .unwrap();
+        }
+        "codex" => {
+            std::fs::create_dir_all(dir.join(".codex")).unwrap();
+            std::fs::write(
+                dir.join(".codex").join("config.toml"),
+                "# hand-written\nsomething = 1\n",
+            )
+            .unwrap();
+        }
+        other => unreachable!("no third harness: {other}"),
+    }
+}
