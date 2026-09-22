@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.5](https://github.com/JAAvila-Of/vivac/compare/v0.12.4...v0.12.5) - 2026-09-22
+
+### Documentation
+
+- *(setup)* name no memory product in the skill setup writes
+- make the README a front page, and its examples real captures
+
+### Fixed
+
+- *(lanes)* one folder, one lane, and a way back out of a join
+- *(reconcile)* answer for the product, not for the folder you stand in
+- *(setup)* four messages that left out what the reader needed next
+
 ## [0.12.4](https://github.com/JAAvila-Of/vivac/compare/v0.12.3...v0.12.4) - 2026-09-21
 
 ### Fixed
