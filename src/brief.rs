@@ -351,7 +351,7 @@ fn no_focus_block(a: &Tree) -> Vec<String> {
 }
 
 pub fn brief(a: &Tree, root: &Path, lane_dir: &Path, args: &Args, project: &str) -> R {
-    print!("{}", to_text(a, root, lane_dir, args, project)?);
+    print!("{}", to_text(a, root, lane_dir, args, project, false)?);
     Ok(())
 }
 
@@ -744,16 +744,76 @@ fn other_lanes_fallback(n: usize) -> Vec<String> {
     )
 }
 
+/// The capture seams (`d738`): one row per place work is supposed to land,
+/// its label, the CLI shown for it, and the MCP tool that does the same
+/// thing. `f737` measured the gap this closes -- an agent with no project
+/// doctrine of its own only wrote to the tree when the person asked,
+/// because nothing it received unasked said when to.
+///
+/// Single source: [`capture_seams_block`] renders every row of this table,
+/// so the label column, the command and the tool name can never drift out
+/// of step with each other.
+const CAPTURE_SEAMS: &[(&str, &str, &str)] = &[
+    (
+        "new line of work",
+        "vivac push \"<title>\" --why \"<why>\"",
+        "vivac_push",
+    ),
+    (
+        "a choice is settled",
+        "vivac decide \"<t>\" --reason \"<r>\" --alternative \"<x>\"",
+        "vivac_decide",
+    ),
+    (
+        "you report findings",
+        "vivac add \"<t>\" --type finding --why \"<where>\"",
+        "vivac_add",
+    ),
+    (
+        "told \"not now\"",
+        "vivac park <id> \"<their words>\"",
+        "vivac_park",
+    ),
+    ("the work is done", "vivac pop \"<outcome>\"", "vivac_pop"),
+];
+
+/// Renders [`CAPTURE_SEAMS`] into the block the hook brief shows. The label
+/// column is padded to the longest label plus two spaces, from the table
+/// itself, so a longer label added later keeps the columns lined up rather
+/// than needing a hand-picked width kept in step by hand.
+fn capture_seams_block() -> Vec<String> {
+    let width = CAPTURE_SEAMS
+        .iter()
+        .map(|(label, _, _)| label.chars().count())
+        .max()
+        .unwrap_or(0)
+        + 2;
+    let mut body: Vec<String> = CAPTURE_SEAMS
+        .iter()
+        .map(|(label, command, _)| format!("  {label:<width$}{command}"))
+        .collect();
+    body.push("  Or the same moves through the vivac_* tools.".to_string());
+    heading("WRITE AT THESE SEAMS", body)
+}
+
 /// The brief as text. `session start --hook` prints it straight to stdout
 /// (`f403`, `f404`): Claude Code turns plain-text stdout on `SessionStart`
 /// into context the agent can see and act on, so there is nothing further to
 /// wrap it in.
+///
+/// `for_hook` is the only thing that tells the hook's own call apart from
+/// `vivac brief`, read by a person, and the MCP `vivac_brief` tool. Only it
+/// gets the capture-seams block (`d738`): a person reading `vivac brief`
+/// learns nothing from being told when to write, and the block belongs here,
+/// appended once, rather than being built twice by callers that would have
+/// to agree on it by hand.
 pub fn to_text(
     a: &Tree,
     root: &Path,
     lane_dir: &Path,
     args: &Args,
     project: &str,
+    for_hook: bool,
 ) -> Result<String, crate::failure::Failure> {
     let today = args.opt("now").unwrap_or("").to_string();
     let today = if today.is_empty() {
@@ -1055,6 +1115,15 @@ pub fn to_text(
                 s.push(Section::loose(short));
             }
         }
+    }
+
+    // 12. Capture seams (`d738`): the hook's own addition, last, right
+    // ahead of the closing rule and the tokens/depth footer `emit` appends
+    // -- and fixed, never trimmed, because the budget dropping the one
+    // block that tells an agent when to write would be worse than the
+    // brief running long.
+    if for_hook {
+        s.push(Section::fixed(capture_seams_block()));
     }
 
     emit(s, budget, a)

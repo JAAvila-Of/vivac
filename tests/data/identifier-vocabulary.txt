@@ -224,6 +224,7 @@ cap
 capacity
 capped
 caps
+capture
 carried
 carries
 carry
@@ -456,6 +457,7 @@ disappear
 disclosure
 disk
 dispatch
+dispatches
 display
 distinct
 div
@@ -1443,6 +1445,8 @@ scheme
 scope
 scratch
 script
+seam
+seams
 search
 searchable
 searched
@@ -1870,6 +1874,7 @@ why
 why3
 why4
 wide
+widen
 width
 windows
 wins

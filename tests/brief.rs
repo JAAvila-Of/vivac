@@ -1170,3 +1170,17 @@ fn the_block_says_so_when_trimmed_by_the_budget() {
         "an earlier section fell first:\n{tight}"
     );
 }
+
+/// `d738`, test (b): `vivac brief` is read by a person, who already knows
+/// the project's own doctrine -- telling them when to write teaches
+/// nothing. The block belongs only to `session start --hook`
+/// (`tests/session.rs`'s own `the_hook_brief_names_the_capture_seams`).
+#[test]
+fn the_capture_seams_block_is_hook_only() {
+    let c = populated("capture-seams-brief");
+    let out = c.ok(&["brief", "--now", "2026-09-15T10:00:00Z"]);
+    assert!(
+        !out.contains("WRITE AT THESE SEAMS"),
+        "a person running `vivac brief` was told when to write:\n{out}"
+    );
+}
