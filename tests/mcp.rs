@@ -1808,3 +1808,44 @@ fn the_server_releases_the_lock_once_its_write_is_done() {
     ]);
     assert_eq!(code, 0, "{out}");
 }
+
+/// `d738`, test (c): the MCP `vivac_brief` tool stays out, the same as a
+/// person running `vivac brief` (`tests/brief.rs`'s own
+/// `the_capture_seams_block_is_hook_only`) -- the block is for the hook
+/// alone.
+#[test]
+fn vivac_brief_over_mcp_carries_no_capture_seams_block() {
+    let c = seeded("mcp-brief-no-seams");
+    let mut s = hello(&c);
+    let r = s.ask(
+        r#"{"jsonrpc":"2.0","id":40,"method":"tools/call","params":{"name":"vivac_brief","arguments":{}}}"#,
+    );
+    let t = text_of(&r);
+    assert!(
+        !t.contains("WRITE AT THESE SEAMS"),
+        "the MCP brief tool was told when to write:\n{t}"
+    );
+}
+
+/// `d738`, test (e): every MCP tool name the hook's capture-seams block
+/// names is a real one, still reachable through `tools/list`.
+#[test]
+fn every_capture_seam_mcp_tool_is_in_the_tool_list() {
+    let c = seeded("capture-seams-mcp-tools");
+    let mut s = hello(&c);
+    let r = s.ask(r#"{"jsonrpc":"2.0","id":41,"method":"tools/list"}"#);
+    let tools = r["result"]["tools"].as_array().unwrap().clone();
+    let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+    for named in [
+        "vivac_push",
+        "vivac_decide",
+        "vivac_add",
+        "vivac_park",
+        "vivac_pop",
+    ] {
+        assert!(
+            names.contains(&named),
+            "{named} is named in the capture-seams block but not in tools/list: {names:?}"
+        );
+    }
+}

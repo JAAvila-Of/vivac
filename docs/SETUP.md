@@ -41,7 +41,7 @@ anything is written.
 
 | File | What it gets |
 |---|---|
-| `.claude/settings.json` | two hooks — `SessionStart` runs `vivac session start --hook`, which hands the agent the brief when a session opens and again after a compaction; `Stop` runs `vivac session end --hook`, which leaves an automatic stop |
+| `.claude/settings.json` | two hooks — `SessionStart` runs `vivac session start --hook`, which hands the agent the brief when a session opens and again after a compaction, ending with the seams where work is written down and the command for each; `Stop` runs `vivac session end --hook`, which leaves an automatic stop |
 | `.mcp.json` | the server, which runs `vivac mcp` |
 | `.claude/skills/vivac-migrate/` | the skill an agent follows to bring another record into the tree — see [Migrating](MIGRATING.md) |
 

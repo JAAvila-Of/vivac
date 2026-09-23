@@ -59,7 +59,7 @@ pub fn start(ctx: &mut crate::ops::Ctx, a: &Args, project: &str) -> R {
     // Code's own hook reference says plain-text stdout on `SessionStart`
     // becomes context the agent can see and act on (`f403`, `f404`), so there
     // is no envelope to build and no format only this one hook understands.
-    let text = crate::brief::to_text(&ctx.tree, &ctx.store.root, &ctx.lane_dir, a, project)?;
+    let text = crate::brief::to_text(&ctx.tree, &ctx.store.root, &ctx.lane_dir, a, project, true)?;
     print!("{text}");
     // The brief goes out **first**, and the write cannot take it down. A
     // failure that left the agent with no brief would turn a hole in the

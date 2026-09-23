@@ -527,3 +527,154 @@ fn a_real_session_identifier_passes_through_untouched() {
         "the guard fired on a real payload:\n{log}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// `d738`: the hook brief names the capture seams. `f737` measured why -- an
+// agent with no project doctrine of its own only writes to the tree when a
+// person asks, because nothing it receives unasked says when to.
+// ---------------------------------------------------------------------------
+
+/// The approved text, byte for byte. Widths measured by machine: 21, 57, 76,
+/// 69, 54, 44, 46 -- none over the 76-column ceiling that
+/// `capture_seams_lines_never_widen_past_76_columns`, below, checks against
+/// the real rendering rather than against this constant.
+const CAPTURE_SEAMS_BLOCK: &str = "\n WRITE AT THESE SEAMS\n  new line of work     vivac push \"<title>\" --why \"<why>\"\n  a choice is settled  vivac decide \"<t>\" --reason \"<r>\" --alternative \"<x>\"\n  you report findings  vivac add \"<t>\" --type finding --why \"<where>\"\n  told \"not now\"       vivac park <id> \"<their words>\"\n  the work is done     vivac pop \"<outcome>\"\n  Or the same moves through the vivac_* tools.\n";
+
+/// Test (a): the hook's own brief carries the block, exactly.
+#[test]
+fn the_hook_brief_names_the_capture_seams() {
+    let c = Sandbox::new_seeded("capture-seams-hook");
+    let (s, code) = c.run_stdin(&["session", "start", "--hook"], "{}");
+    assert_eq!(code, 0, "{s}");
+    assert!(
+        s.contains(CAPTURE_SEAMS_BLOCK),
+        "the hook brief did not carry the capture-seams block byte for byte:\n{s}"
+    );
+    // It sits right ahead of the closing rule and the tokens/depth footer,
+    // not buried earlier in the body.
+    let block_at = s.find(CAPTURE_SEAMS_BLOCK).unwrap();
+    let footer_at = s.find("tokens · depth").unwrap();
+    assert!(
+        block_at < footer_at,
+        "the block did not land ahead of the footer:\n{s}"
+    );
+}
+
+/// Test (b)'s other half lives in `tests/brief.rs`, as
+/// `the_capture_seams_block_is_hook_only`; this is the same claim read off
+/// the person-facing render this file already exercises: a plain `vivac
+/// session start` (no `--hook`) is the CLI path a person runs, and it stays
+/// out.
+#[test]
+fn a_person_running_session_start_without_hook_gets_no_capture_seams() {
+    let c = Sandbox::new_seeded("capture-seams-no-hook");
+    let out = c.ok(&["session", "start"]);
+    assert!(
+        !out.contains("WRITE AT THESE SEAMS"),
+        "a person reading `vivac session start` was told when to write:\n{out}"
+    );
+}
+
+/// Test (f): no line of the block, as actually rendered, is wider than 76
+/// columns. Read off `s` itself rather than off [`CAPTURE_SEAMS_BLOCK`], so
+/// a row that grows without anyone updating that constant still gets
+/// caught here.
+#[test]
+fn capture_seams_lines_never_widen_past_76_columns() {
+    let c = Sandbox::new_seeded("capture-seams-width");
+    let (s, code) = c.run_stdin(&["session", "start", "--hook"], "{}");
+    assert_eq!(code, 0, "{s}");
+    let start = s
+        .find(" WRITE AT THESE SEAMS")
+        .expect("no capture-seams heading in the hook brief");
+    let block = &s[start..];
+    let end = block.find("\n\n").unwrap_or(block.len());
+    for line in block[..end].lines() {
+        assert!(
+            line.chars().count() <= 76,
+            "a capture-seams line is wider than 76 columns ({} chars): {line:?}",
+            line.chars().count()
+        );
+    }
+}
+
+/// A command line, split the way a shell would: whitespace-separated,
+/// except inside a pair of double quotes. Enough to run the exact commands
+/// the capture-seams block shows, placeholders swapped for real values.
+fn shell_split(line: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    for c in line.chars() {
+        match c {
+            '"' => in_quotes = !in_quotes,
+            c if c.is_whitespace() && !in_quotes => {
+                if !current.is_empty() {
+                    args.push(std::mem::take(&mut current));
+                }
+            }
+            c => current.push(c),
+        }
+    }
+    if !current.is_empty() {
+        args.push(current);
+    }
+    args
+}
+
+/// Test (d): every command the block shows is a real one -- its verb
+/// dispatches, and every flag on its row is a flag that verb accepts.
+/// Checked two ways per row: a bogus flag on the verb comes back with
+/// "does not take" (the verb was recognised) rather than "unknown command"
+/// (it was not), and the row itself, with its `<placeholders>` swapped for
+/// real values, exits 0.
+#[test]
+fn every_capture_seam_command_dispatches_and_takes_its_flags() {
+    let rows = [
+        "vivac push \"<title>\" --why \"<why>\"",
+        "vivac decide \"<t>\" --reason \"<r>\" --alternative \"<x>\"",
+        "vivac add \"<t>\" --type finding --why \"<where>\"",
+        "vivac park <id> \"<their words>\"",
+        "vivac pop \"<outcome>\"",
+    ];
+    for row in rows {
+        let mut argv = shell_split(row);
+        assert_eq!(argv.remove(0), "vivac");
+        let verb = argv[0].clone();
+
+        // The verb dispatches: a bogus flag is refused by name, not by
+        // "unknown command" -- proof the command itself was recognised.
+        let (out, code) = Sandbox::new_seeded(&format!("capture-seams-bogus-{verb}"))
+            .run(&[verb.as_str(), "--bogus-flag-for-this-test"]);
+        assert_ne!(code, 0, "a bogus flag was silently accepted:\n{out}");
+        assert!(
+            out.contains("does not take"),
+            "{verb} did not dispatch as a known command:\n{out}"
+        );
+        assert!(
+            !out.contains(&format!("unknown command: {verb}")),
+            "{verb} is not a real command:\n{out}"
+        );
+
+        // Every flag on the row is accepted: the row itself, run for real
+        // with placeholders swapped for plain values, exits 0.
+        let c = Sandbox::new_seeded(&format!("capture-seams-real-{verb}"));
+        if verb == "park" || verb == "pop" {
+            c.ok(&["push", "a title to act on", "--why", "seed"]);
+        }
+        let real_args: Vec<String> = argv
+            .into_iter()
+            .map(|a| {
+                if a == "<id>" {
+                    "1".to_string()
+                } else if a.starts_with('<') && a.ends_with('>') {
+                    "a value".to_string()
+                } else {
+                    a
+                }
+            })
+            .collect();
+        let arg_refs: Vec<&str> = real_args.iter().map(String::as_str).collect();
+        c.ok(&arg_refs);
+    }
+}
