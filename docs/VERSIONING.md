@@ -7,7 +7,7 @@ does.
 Every release opens with what it changes on disk and what to run — see the
 [changelog](../CHANGELOG.md).
 
-## The rule has been spent ten times
+## The rule has been spent eleven times
 
 | | |
 |---|---|
@@ -21,6 +21,7 @@ Every release opens with what it changes on disk and what to run — see the
 | `0.10.0` | retired `vivac hooks` for `vivac setup`, and gave the hook its brief as plain text |
 | `0.11.0` | made setup write Claude Code's files in the folder it is run in, and refuse to run in your home folder |
 | `0.12.0` | stops a version older than itself reading a tree once that tree holds lanes |
+| `0.13.0` | took planting the tree away from `vivac setup`, which now refuses where there is none |
 
 Each went out as a minor for that reason, and counting them here is cheaper
 than counting them once and letting the sentence go stale.
@@ -57,6 +58,10 @@ deliberate park, so the tree never says it happened. If one of your trees was
 written with an earlier release, `vivac parked` is where to look: an entry
 whose reason reads like an id, or a node you do not remember parking.
 `vivac focus <id>` takes it back out.
+
+**`0.12.6` is yanked.** It shipped what `0.13.0` ships, a break, under a
+patch number. If `vivac --version` says `0.12.6`, the notes you need are
+under `0.13.0` in the changelog, and `cargo install vivac` takes you there.
 
 **On Windows, close every session and any `vivac web` before installing.** A
 running `vivac mcp` or `vivac web` holds the executable open, and
