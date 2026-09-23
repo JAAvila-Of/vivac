@@ -643,6 +643,70 @@ pub fn write_gitignore(vivac_dir: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Builds `vivac_dir` whole rather than empty-then-filled, for the one case
+/// it does not exist yet: everything `fill` writes lands in a sibling
+/// temporary directory first -- named `<DIR>.<ulid>.tmp`, so it sits beside
+/// `vivac_dir` on the same filesystem and two writers never pick the same
+/// name -- and only once `fill` returns `Ok` is that directory renamed
+/// onto `vivac_dir`, in one filesystem call. A reader resolving `vivac_dir`
+/// while this runs therefore sees either nothing at all, or a folder that
+/// already holds everything `fill` put there -- never a directory that
+/// exists but is still empty, or half of what `fill` meant to write
+/// (`f735`). `lane::write` and `Store::create` are its two callers: the
+/// mechanics used to be copied between them, which is exactly the mistake
+/// `f724` warns about -- closing one instance of a class of bug and finding
+/// it again, unfixed, the same day.
+///
+/// Returns `Ok(true)` once `vivac_dir` holds this write. Returns `Ok(false)`
+/// without ever calling `fill` when `vivac_dir` already exists -- an
+/// empty or hollow `.vivac/` included (`f566`, `d734`): there is no fresh
+/// appearance left to make atomic at that point, so the caller falls back
+/// to writing in place, exactly as every caller did before this existed.
+/// Returns `Ok(false)` a second way too, after `fill` has already run:
+/// the rename itself can still lose a race with another writer whose own
+/// `vivac_dir` appeared in the gap between the check above and the rename
+/// below. On Unix, renaming a directory onto one that is empty succeeds and
+/// replaces it outright, so a loser that finds only an empty directory
+/// there quietly wins anyway, landing its own complete write; but once the
+/// other writer's content has landed the directory is no longer empty, and
+/// the rename fails there the same way it always fails on Windows, empty or
+/// not. Either branch ends with `vivac_dir` holding someone's whole write,
+/// never a hollow one -- which is all this call ever promises about the
+/// folder it does not itself finish.
+///
+/// Every path out of here that is not the successful rename removes the
+/// temporary directory, best effort. The one thing it cannot clean up after
+/// is a literal crash between two of its own steps, not an `Err` it can
+/// catch -- the most that leaves behind is the `<DIR>.<ulid>.tmp` sibling
+/// itself, never a hollow `vivac_dir`: nothing is ever renamed there until
+/// `fill` has already finished it.
+pub(crate) fn build_fresh(
+    vivac_dir: &Path,
+    fill: impl FnOnce(&Path) -> std::io::Result<()>,
+) -> std::io::Result<bool> {
+    if vivac_dir.is_dir() {
+        return Ok(false);
+    }
+    let Some(parent) = vivac_dir.parent() else {
+        return Ok(false);
+    };
+    let tmp_dir = parent.join(format!("{DIR}.{}.tmp", id::ulid()));
+    if let Err(e) = (|| -> std::io::Result<()> {
+        fs::create_dir_all(&tmp_dir)?;
+        fill(&tmp_dir)
+    })() {
+        fs::remove_dir_all(&tmp_dir).ok();
+        return Err(e);
+    }
+    match fs::rename(&tmp_dir, vivac_dir) {
+        Ok(()) => Ok(true),
+        Err(_) => {
+            fs::remove_dir_all(&tmp_dir).ok();
+            Ok(false)
+        }
+    }
+}
+
 /// The log's length and modification time: the whole change detector.
 /// The log only grows, so a different length is exact; the time rides
 /// along for a rewrite that lands on the same byte count.
@@ -774,15 +838,34 @@ impl Store {
     /// already does calls `open` instead, so this always writes a fresh
     /// config -- calling it over an existing tree would hand it a new
     /// `project_id` and drop `d444`'s lock back to `1`.
+    ///
+    /// Built whole through `build_fresh` (`f735`): `config`, `events` and
+    /// `.gitignore` all land in a sibling temporary directory before it is
+    /// ever renamed onto `root/.vivac`, so a reader resolving this folder
+    /// mid-plant sees either nothing yet or the finished tree, never a
+    /// directory that exists but holds none of the three. When `d` is
+    /// already there -- an empty or hollow `.vivac/`, which `d734` lets
+    /// `init` plant straight over -- `build_fresh` calls back `Ok(false)`
+    /// without touching anything, and this falls back to the same three
+    /// writes, in the same order, `create` has always done in place: there
+    /// is no fresh appearance left to make atomic once the folder already
+    /// exists.
     pub fn create(root: &Path) -> std::io::Result<Store> {
         let d = root.join(DIR);
-        fs::create_dir_all(&d)?;
         let config = Config::new_seeded();
-        write_config(root, &config)?;
-        if !d.join(LOG).exists() {
-            File::create(d.join(LOG))?;
+        let built = build_fresh(&d, |tmp_dir| {
+            write_config_into(tmp_dir, &config)?;
+            File::create(tmp_dir.join(LOG))?;
+            write_gitignore(tmp_dir)
+        })?;
+        if !built {
+            fs::create_dir_all(&d)?;
+            write_config(root, &config)?;
+            if !d.join(LOG).exists() {
+                File::create(d.join(LOG))?;
+            }
+            write_gitignore(&d)?;
         }
-        write_gitignore(&d)?;
         Ok(Store {
             root: root.to_path_buf(),
             config,
@@ -811,7 +894,15 @@ impl Store {
 }
 
 fn write_config(root: &Path, c: &Config) -> std::io::Result<()> {
-    let mut f = File::create(root.join(DIR).join(CONFIG))?;
+    write_config_into(&root.join(DIR), c)
+}
+
+/// `write_config`, given the `.vivac/` directory itself rather than its
+/// parent: the shape `build_fresh`'s `fill` needs, since the directory it
+/// hands back while planting a tree fresh is a temporary sibling, not
+/// `root.join(DIR)` yet.
+fn write_config_into(vivac_dir: &Path, c: &Config) -> std::io::Result<()> {
+    let mut f = File::create(vivac_dir.join(CONFIG))?;
     f.write_all(serde_json::to_string_pretty(c)?.as_bytes())?;
     f.write_all(b"\n")
 }
@@ -2098,5 +2189,86 @@ mod tests {
         let reopened = Store::open(tmp.clone()).unwrap();
         assert_eq!(reopened.config.version, ConfigVersion::Lanes);
         fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn build_fresh_writes_everything_fill_wrote_and_leaves_no_temp_sibling() {
+        let root = std::env::temp_dir().join(format!("vivac-fresh-{}", id::ulid()));
+        let dir = root.join(DIR);
+        assert!(
+            !dir.exists(),
+            "the fixture must start with no .vivac/ at all"
+        );
+        let built = build_fresh(&dir, |tmp_dir| fs::write(tmp_dir.join("marker"), b"x")).unwrap();
+        assert!(built);
+        assert!(dir.join("marker").is_file());
+        let siblings: Vec<String> = fs::read_dir(&root)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            siblings,
+            vec![DIR.to_string()],
+            "a temporary sibling directory was left behind: {siblings:?}"
+        );
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn build_fresh_falls_back_without_running_fill_when_the_directory_is_already_there() {
+        // `f566`, `d734`: an empty or hollow `.vivac/` that is already
+        // there is planted in place, not through this helper -- there is
+        // no fresh appearance left to make atomic. `fill` never runs at
+        // all in that case, which this pins with a flag rather than
+        // trusting the return value alone.
+        let root = std::env::temp_dir().join(format!("vivac-exists-{}", id::ulid()));
+        let dir = root.join(DIR);
+        fs::create_dir_all(&dir).unwrap();
+        let ran = std::cell::Cell::new(false);
+        let built = build_fresh(&dir, |_tmp_dir| {
+            ran.set(true);
+            Ok(())
+        })
+        .unwrap();
+        assert!(!built);
+        assert!(!ran.get(), "fill ran even though vivac_dir already existed");
+        fs::remove_dir_all(&root).ok();
+    }
+
+    /// The other half of `f735`: `Store::create` used to `create_dir_all(&d)`
+    /// and only *afterwards* write `config`, `events` and `.gitignore`, so a
+    /// reader resolving this same folder mid-plant could see the identical
+    /// hollow shape `lane::write` could. Same proof, same shape: a reader
+    /// spins in a tight loop against a writer planting a tree into a folder
+    /// that does not exist yet, round after round. `already_planted` is
+    /// enough to tell hollow apart here -- `Store::create` never writes a
+    /// `lane` file, so `find_root`'s other way out of "hollow" never applies.
+    #[test]
+    fn a_reader_racing_a_fresh_plant_never_sees_vivac_dir_hollow() {
+        const ROUNDS: usize = 500;
+        for round in 0..ROUNDS {
+            let root = std::env::temp_dir().join(format!("vivac-plant-race-{}", id::ulid()));
+            let dir = root.join(DIR);
+            let hollow_seen = std::sync::atomic::AtomicBool::new(false);
+            let stop = std::sync::atomic::AtomicBool::new(false);
+            std::thread::scope(|s| {
+                s.spawn(|| {
+                    while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                        if dir.is_dir() && !already_planted(&root) {
+                            hollow_seen.store(true, std::sync::atomic::Ordering::Relaxed);
+                            break;
+                        }
+                    }
+                });
+                Store::create(&root).unwrap();
+                stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            });
+            fs::remove_dir_all(&root).ok();
+            assert!(
+                !hollow_seen.load(std::sync::atomic::Ordering::Relaxed),
+                "a reader observed a hollow .vivac/ on round {round} of {ROUNDS}"
+            );
+        }
     }
 }
