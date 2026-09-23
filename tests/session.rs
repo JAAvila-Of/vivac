@@ -534,11 +534,11 @@ fn a_real_session_identifier_passes_through_untouched() {
 // person asks, because nothing it receives unasked says when to.
 // ---------------------------------------------------------------------------
 
-/// The approved text, byte for byte. Widths measured by machine: 21, 57, 76,
-/// 69, 54, 44, 46 -- none over the 76-column ceiling that
+/// The approved text, byte for byte (`d757`). Widths measured by machine,
+/// every line included, none over the 76-column ceiling that
 /// `capture_seams_lines_never_widen_past_76_columns`, below, checks against
 /// the real rendering rather than against this constant.
-const CAPTURE_SEAMS_BLOCK: &str = "\n WRITE AT THESE SEAMS\n  new line of work     vivac push \"<title>\" --why \"<why>\"\n  a choice is settled  vivac decide \"<t>\" --reason \"<r>\" --alternative \"<x>\"\n  you report findings  vivac add \"<t>\" --type finding --why \"<where>\"\n  told \"not now\"       vivac park <id> \"<their words>\"\n  the work is done     vivac pop \"<outcome>\"\n  Or the same moves through the vivac_* tools.\n";
+const CAPTURE_SEAMS_BLOCK: &str = "\n WRITE AT THESE SEAMS\n  Look first: vivac find \"<words>\". Work the tree already holds goes under\n  its node, never into a second one. The focus above is where work was\n  left, maybe not by you: hang new work from what it continues.\n  new line of work     vivac push \"<title>\" --why \"<why>\" --parent <id>\n                       or --root, when it continues nothing in the tree\n  a choice is settled  vivac decide \"<t>\" --reason \"<r>\" --alternative \"<x>\"\n  you report findings  vivac add \"<t>\" --type finding --why \"<where>\"\n                       one for each thing found that you tell the person\n  told \"not now\"       vivac park <id> \"<their words>\"\n                       nothing to park yet? vivac add it, then park it\n  the work is done     vivac pop \"<outcome>\"\n                       and again if that settles the node it returns to\n  Or the same moves through the vivac_* tools.\n";
 
 /// Test (a): the hook's own brief carries the block, exactly.
 #[test]
@@ -628,10 +628,16 @@ fn shell_split(line: &str) -> Vec<String> {
 /// "does not take" (the verb was recognised) rather than "unknown command"
 /// (it was not), and the row itself, with its `<placeholders>` swapped for
 /// real values, exits 0.
+///
+/// `d757` adds the look-first line's own `vivac find` and `push`'s new
+/// `--parent <id>`: `push` needs a real, open node to point `--parent` at,
+/// the same as `park` and `pop` already need one to act on, so it joins
+/// them below.
 #[test]
 fn every_capture_seam_command_dispatches_and_takes_its_flags() {
     let rows = [
-        "vivac push \"<title>\" --why \"<why>\"",
+        "vivac find \"<words>\"",
+        "vivac push \"<title>\" --why \"<why>\" --parent <id>",
         "vivac decide \"<t>\" --reason \"<r>\" --alternative \"<x>\"",
         "vivac add \"<t>\" --type finding --why \"<where>\"",
         "vivac park <id> \"<their words>\"",
@@ -659,7 +665,7 @@ fn every_capture_seam_command_dispatches_and_takes_its_flags() {
         // Every flag on the row is accepted: the row itself, run for real
         // with placeholders swapped for plain values, exits 0.
         let c = Sandbox::new_seeded(&format!("capture-seams-real-{verb}"));
-        if verb == "park" || verb == "pop" {
+        if verb == "park" || verb == "pop" || verb == "push" {
             c.ok(&["push", "a title to act on", "--why", "seed"]);
         }
         let real_args: Vec<String> = argv
@@ -677,4 +683,10 @@ fn every_capture_seam_command_dispatches_and_takes_its_flags() {
         let arg_refs: Vec<&str> = real_args.iter().map(String::as_str).collect();
         c.ok(&arg_refs);
     }
+
+    // `--root` is `push`'s own other way of saying where a node is born
+    // (`d757`'s hint line names it): on an empty stack it needs nothing to
+    // point at and still exits 0.
+    let c = Sandbox::new_seeded("capture-seams-push-root");
+    c.ok(&["push", "A goal", "--why", "a value", "--root"]);
 }

@@ -853,13 +853,66 @@ fn guarded_or_refused(field: &str, text: &str) -> String {
     }
 }
 
-/// `--root` given together with `--parent` on `add` or `decide`: both name
-/// where a node is born, and a node is born in one place. `t533` §1.1.
+/// `--root` given together with `--parent` on `add`, `decide` or `push`:
+/// both name where a node is born, and a node is born in one place. `t533`
+/// §1.1, `d757` for `push`.
 fn root_and_parent_error() -> Failure {
     Failure::usage(
         "--root and --parent both say where it is born, and a node is born in one place.\n  \
          Keep the one you mean.",
     )
+}
+
+/// The node `push --parent` names, resolved and checked open. Opening under
+/// a closed or abandoned node would silently reopen a claim nobody made;
+/// opening under a parked one would silently take back what somebody put
+/// off. `d757`.
+fn open_parent(ctx: &Ctx, id: &str) -> Result<crate::model::Node, Failure> {
+    let n = ctx.resolve(id)?.clone();
+    if n.state == State::Suspended {
+        return Err(Failure::Model(format!(
+            "  {} is parked. New work does not open under it until someone takes it back.\n\n  \
+             To take it back:  vivac focus {}",
+            n.alias(),
+            n.num
+        )));
+    }
+    if !n.state.is_open() {
+        return Err(Failure::Model(format!(
+            "  {} is {}. New work does not open under it.\n\n  \
+             If it really was not finished:  vivac focus {} --reopen",
+            n.alias(),
+            n.state.word(n.kind),
+            n.num
+        )));
+    }
+    Ok(n)
+}
+
+/// The stack's own nodes not on `num`'s path, and that path's own nodes not
+/// yet on the stack -- each kept in its source's own order, so a caller
+/// decides for itself how a `Popped` or a `Pushed` per node reads in the
+/// log. Shared by `focus`, stepping back onto an existing node, and `push
+/// --parent`, opening new work under one instead (`d757`).
+fn stack_to(ctx: &Ctx, num: u64) -> (Vec<u64>, Vec<(u64, String)>) {
+    let lineage: Vec<(u64, String)> = ctx
+        .tree
+        .ancestors(num)
+        .iter()
+        .map(|n| (n.num, n.id.clone()))
+        .collect();
+    let to_pop: Vec<u64> = ctx
+        .tree
+        .stack()
+        .iter()
+        .copied()
+        .filter(|n| !lineage.iter().any(|(lineage_num, _)| lineage_num == n))
+        .collect();
+    let to_push: Vec<(u64, String)> = lineage
+        .into_iter()
+        .filter(|(n, _)| !ctx.tree.stack().contains(n))
+        .collect();
+    (to_pop, to_push)
 }
 
 fn kind_of(raw: Option<&str>, fallback: Kind) -> Result<Kind, Failure> {
@@ -1156,9 +1209,25 @@ fn born(ctx: &Ctx, b: Born) -> Result<(Body, u64, String, bool), Failure> {
 /// the tree, and the events that record it are the same ones `focus` already
 /// writes crossing branches: a `stack.popped` per node that leaves, top to
 /// bottom, then the `stack.pushed` of the new one.
+///
+/// `--parent` (`d757`) opens under a node other than the focus instead: the
+/// stack is rebuilt to that node's own path, the way `focus` rebuilds it,
+/// and the new node lands on top in the same move. Refused together with
+/// `--root` -- a node is born in one place -- and on a node that is closed,
+/// abandoned or parked (`open_parent`), so this never revives in silence
+/// what somebody closed or put off.
 pub fn push(ctx: &mut Ctx, p: params::Push) -> Result<Outcome, Failure> {
+    if p.root && p.parent.is_some() {
+        return Err(root_and_parent_error());
+    }
+    let target = match &p.parent {
+        Some(id) => Some(open_parent(ctx, id)?),
+        None => None,
+    };
     let parent = if p.root {
         None
+    } else if let Some(t) = &target {
+        Some(t.id.clone())
     } else {
         ctx.tree.focus().map(|n| n.id.clone())
     };
@@ -1186,29 +1255,36 @@ pub fn push(ctx: &mut Ctx, p: params::Push) -> Result<Outcome, Failure> {
             against,
         },
     )?;
-    // The old stack, bottom to top, kept only for `--root`: it is what
-    // `left_stack` reports and what the vivac below freezes.
-    let old_stack: Vec<u64> = if p.root {
-        ctx.tree.stack().to_vec()
+    // What leaves the stack, and what joins it to reach the target's own
+    // path: `--root` clears it outright and nothing joins; `--parent`
+    // rebuilds it the way `focus` would; a plain push moves neither. Bottom
+    // to top, kept for `left_stack` below and for what the vivac freezes.
+    let (to_pop, to_push): (Vec<u64>, Vec<(u64, String)>) = if p.root {
+        (ctx.tree.stack().to_vec(), Vec::new())
+    } else if let Some(t) = &target {
+        stack_to(ctx, t.num)
     } else {
-        Vec::new()
+        (Vec::new(), Vec::new())
     };
     // The vivac goes **before** the push: it freezes the stack at the moment
     // of the fork, which is the belay where you make yourself safe before
     // setting off. The `next_intent` is the child being opened, because that
     let v = vivac(ctx, VivacKind::Push, &p.title, parent, "");
     let mut evs = vec![v, ev];
-    for &n in old_stack.iter().rev() {
+    for &n in to_pop.iter().rev() {
         if let Some(left) = ctx.tree.node_by_num(n) {
             evs.push(Body::Popped {
                 node: left.id.clone(),
             });
         }
     }
+    for (_, id) in &to_push {
+        evs.push(Body::Pushed { node: id.clone() });
+    }
     evs.push(Body::Pushed { node });
     ctx.emit(evs)?;
 
-    let left_stack: Vec<String> = old_stack
+    let left_stack: Vec<String> = to_pop
         .iter()
         .filter_map(|&n| ctx.tree.node_by_num(n))
         .map(|n| n.alias())
@@ -1216,7 +1292,7 @@ pub fn push(ctx: &mut Ctx, p: params::Push) -> Result<Outcome, Failure> {
     // The deepest of what left that is still open or parked: the one worth
     // naming to get back to. Depth here means position in the old stack, top
     // first, not how far it is from any root.
-    let back_to: Option<String> = old_stack
+    let back_to: Option<String> = to_pop
         .iter()
         .rev()
         .filter_map(|&n| ctx.tree.node_by_num(n))
@@ -1256,6 +1332,7 @@ pub fn push(ctx: &mut Ctx, p: params::Push) -> Result<Outcome, Failure> {
         no_against,
         left_stack,
         back_to,
+        under: target.map(|t| t.alias()),
     })
 }
 
@@ -1739,17 +1816,12 @@ pub fn focus(ctx: &mut Ctx, p: params::Focus) -> Result<Outcome, Failure> {
         }
     }
 
-    let lineage: Vec<(u64, String)> = ctx
-        .tree
-        .ancestors(n.num)
+    // `stack_to` (`d757`): shared with `push --parent`, which rebuilds the
+    // stack the same way to open new work under a node other than the
+    // focus.
+    let (to_pop, to_push) = stack_to(ctx, n.num);
+    let mut evs: Vec<Body> = to_pop
         .iter()
-        .map(|p| (p.num, p.id.clone()))
-        .collect();
-    let mut evs: Vec<Body> = ctx
-        .tree
-        .stack()
-        .iter()
-        .filter(|num| !lineage.iter().any(|(lineage_num, _)| lineage_num == *num))
         .filter_map(|&num| ctx.tree.node_by_num(num))
         .map(|n| Body::Popped { node: n.id.clone() })
         .collect();
@@ -1761,11 +1833,11 @@ pub fn focus(ctx: &mut Ctx, p: params::Focus) -> Result<Outcome, Failure> {
             forced: false,
         });
     }
-    for (num, id) in &lineage {
-        if !ctx.tree.stack().contains(num) {
-            evs.push(Body::Pushed { node: id.clone() });
-        }
-    }
+    evs.extend(
+        to_push
+            .iter()
+            .map(|(_, id)| Body::Pushed { node: id.clone() }),
+    );
     let revived = !n.state.is_open();
     ctx.emit(evs)?;
     // Trap: `render::stack` used to be called from here, reading `a` for its

@@ -36,6 +36,10 @@ pub struct Push {
     /// Born at the root, with no parent, instead of under the focus. `t533`
     /// §1: the stack is left holding only the new node.
     pub root: bool,
+    /// Born under this node instead of the focus: the stack is rebuilt to
+    /// its own path first. Refused together with `root`, and on a node
+    /// that is closed, abandoned or parked (`d757`).
+    pub parent: Option<String>,
 }
 
 impl Push {
@@ -61,6 +65,7 @@ impl Push {
             against: a.list("against"),
             via_mcp: false,
             root: a.has("root"),
+            parent: a.opt("parent").map(str::to_string),
         })
     }
 }

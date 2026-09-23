@@ -744,54 +744,82 @@ fn other_lanes_fallback(n: usize) -> Vec<String> {
     )
 }
 
-/// The capture seams (`d738`): one row per place work is supposed to land,
-/// its label, the CLI shown for it, and the MCP tool that does the same
-/// thing. `f737` measured the gap this closes -- an agent with no project
-/// doctrine of its own only wrote to the tree when the person asked,
-/// because nothing it received unasked said when to.
+/// The three lines ahead of the table (`d757`): look at what the tree
+/// already holds before writing, and hang new work from what it continues
+/// -- the focus is wherever work was left, maybe by another session and
+/// about something else -- rather than from wherever the stack happens to
+/// sit.
+const CAPTURE_SEAMS_HEAD: &[&str] = &[
+    "  Look first: vivac find \"<words>\". Work the tree already holds goes under",
+    "  its node, never into a second one. The focus above is where work was",
+    "  left, maybe not by you: hang new work from what it continues.",
+];
+
+/// The capture seams (`d738`, `d757`): one row per place work is supposed to
+/// land, its label, the CLI shown for it, an optional second line for that
+/// row, and the MCP tool that does the same thing. `f737` measured the gap
+/// this closes -- an agent with no project doctrine of its own only wrote
+/// to the tree when the person asked, because nothing it received unasked
+/// said when to -- and `f755`/`f756` measured that once it does write
+/// there, it still does not look first or say where a new line of work
+/// hangs from.
 ///
 /// Single source: [`capture_seams_block`] renders every row of this table,
-/// so the label column, the command and the tool name can never drift out
-/// of step with each other.
-const CAPTURE_SEAMS: &[(&str, &str, &str)] = &[
+/// so the label column, the command, the hint and the tool name can never
+/// drift out of step with each other.
+const CAPTURE_SEAMS: &[(&str, &str, Option<&str>, &str)] = &[
     (
         "new line of work",
-        "vivac push \"<title>\" --why \"<why>\"",
+        "vivac push \"<title>\" --why \"<why>\" --parent <id>",
+        Some("or --root, when it continues nothing in the tree"),
         "vivac_push",
     ),
     (
         "a choice is settled",
         "vivac decide \"<t>\" --reason \"<r>\" --alternative \"<x>\"",
+        None,
         "vivac_decide",
     ),
     (
         "you report findings",
         "vivac add \"<t>\" --type finding --why \"<where>\"",
+        Some("one for each thing found that you tell the person"),
         "vivac_add",
     ),
     (
         "told \"not now\"",
         "vivac park <id> \"<their words>\"",
+        Some("nothing to park yet? vivac add it, then park it"),
         "vivac_park",
     ),
-    ("the work is done", "vivac pop \"<outcome>\"", "vivac_pop"),
+    (
+        "the work is done",
+        "vivac pop \"<outcome>\"",
+        Some("and again if that settles the node it returns to"),
+        "vivac_pop",
+    ),
 ];
 
-/// Renders [`CAPTURE_SEAMS`] into the block the hook brief shows. The label
-/// column is padded to the longest label plus two spaces, from the table
-/// itself, so a longer label added later keeps the columns lined up rather
-/// than needing a hand-picked width kept in step by hand.
+/// Renders [`CAPTURE_SEAMS_HEAD`] and [`CAPTURE_SEAMS`] into the block the
+/// hook brief shows. The label column is padded to the longest label plus
+/// two spaces, from the table itself, so a longer label added later keeps
+/// the columns lined up rather than needing a hand-picked width kept in
+/// step by hand; a row's own hint, when it has one, is indented to that
+/// same column.
 fn capture_seams_block() -> Vec<String> {
     let width = CAPTURE_SEAMS
         .iter()
-        .map(|(label, _, _)| label.chars().count())
+        .map(|(label, _, _, _)| label.chars().count())
         .max()
         .unwrap_or(0)
         + 2;
-    let mut body: Vec<String> = CAPTURE_SEAMS
-        .iter()
-        .map(|(label, command, _)| format!("  {label:<width$}{command}"))
-        .collect();
+    let mut body: Vec<String> = CAPTURE_SEAMS_HEAD.iter().map(|l| l.to_string()).collect();
+    for (label, command, hint, _) in CAPTURE_SEAMS {
+        body.push(format!("  {label:<width$}{command}"));
+        if let Some(hint) = hint {
+            body.push(format!("{}{hint}", " ".repeat(2 + width)));
+        }
+    }
     body.push("  Or the same moves through the vivac_* tools.".to_string());
     heading("WRITE AT THESE SEAMS", body)
 }
@@ -803,7 +831,7 @@ fn capture_seams_block() -> Vec<String> {
 ///
 /// `for_hook` is the only thing that tells the hook's own call apart from
 /// `vivac brief`, read by a person, and the MCP `vivac_brief` tool. Only it
-/// gets the capture-seams block (`d738`): a person reading `vivac brief`
+/// gets the capture-seams block (`d738`, `d757`): a person reading `vivac brief`
 /// learns nothing from being told when to write, and the block belongs here,
 /// appended once, rather than being built twice by callers that would have
 /// to agree on it by hand.
@@ -1117,7 +1145,7 @@ pub fn to_text(
         }
     }
 
-    // 12. Capture seams (`d738`): the hook's own addition, last, right
+    // 12. Capture seams (`d738`, `d757`): the hook's own addition, last, right
     // ahead of the closing rule and the tokens/depth footer `emit` appends
     // -- and fixed, never trimmed, because the budget dropping the one
     // block that tells an agent when to write would be worse than the

@@ -54,6 +54,7 @@ const USAGE: &str = r#"vivac - provenance of work
           [--type goal|task|decision|question|constraint|finding|assumption
                   |pillar|rule]
           [--blocks]         its parent cannot close until this one closes
+          [--parent N]       under N and not the focus; the stack goes to N
           [--root]           born at the root; the stack keeps only it
           [--ref R] [--governs G]
           [--arm "<command>"]  what verifies a rule; vivac never runs it
@@ -281,7 +282,8 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
     // describes.
     let allowed: &[&str] = match cmd {
         "push" => &[
-            "why", "type", "blocks", "root", "ref", "governs", "arm", "arm-dir", "against",
+            "why", "type", "blocks", "root", "parent", "ref", "governs", "arm", "arm-dir",
+            "against",
         ],
         "pop" => &["force", "next"],
         "decide" => &[

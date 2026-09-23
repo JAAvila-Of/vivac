@@ -191,11 +191,16 @@ const TOOLS: &[Tool] = &[
         name: "vivac_push",
         description: "Open a node and step into it: it becomes the focus, and everything \
                       captured next hangs from it until a matching pop. Call it the moment \
-                      work forks away from the current line -- a question that has to be \
-                      settled before continuing, a detour worth its own trace -- never \
-                      after the fact, once the reason for taking it has already faded. \
-                      `why` is mandatory for exactly that reason: a detour with no reason \
-                      recorded is the failure this tree exists to catch.",
+                      a new line of work starts or forks away from the current one -- a \
+                      question that has to be settled before continuing, a detour worth \
+                      its own trace -- never after the fact, once the reason for taking it \
+                      has already faded. Look first with `vivac_find`: work the tree \
+                      already holds goes under its node, never into a second one. The \
+                      focus is wherever work was left, perhaps by another session and \
+                      about something else, so name in `parent` the node this work \
+                      continues, or pass `root` when it continues nothing. `why` is \
+                      mandatory: a detour with no reason recorded is the failure this tree \
+                      exists to catch.",
         args: &[
             Arg {
                 name: "title",
@@ -263,13 +268,23 @@ const TOOLS: &[Tool] = &[
                               \"r12: the write path stays local\". Repeat for each one.",
             },
             Arg {
+                name: "parent",
+                kind: ArgKind::Str,
+                required: false,
+                description: "The node this work continues, when it is not the focus. \
+                              The stack is rebuilt as that node's path, the way vivac \
+                              focus does, and the new node opens under it; the answer \
+                              says what left the stack. Refused together with root, and \
+                              on a node that is closed or parked.",
+            },
+            Arg {
                 name: "root",
                 kind: ArgKind::Bool,
                 required: false,
                 description: "Born at the root, with no parent, instead of under the \
                               focus. The stack is left holding only the new node; \
                               nothing on it is closed, and the answer says how to get \
-                              back.",
+                              back. Refused together with parent.",
             },
         ],
     },
@@ -280,7 +295,9 @@ const TOOLS: &[Tool] = &[
                       finished, not on a whim to clear the stack: a node with open closure \
                       conditions refuses to close on its own, because a run that closes \
                       with its findings still open is exactly the mistake that refusal \
-                      exists to catch.",
+                      exists to catch. It steps back to the parent: if the work also \
+                      settles that node -- the finding it fixed, the question it \
+                      answered -- pop again.",
         args: &[
             Arg {
                 name: "outcome",
@@ -311,7 +328,10 @@ const TOOLS: &[Tool] = &[
                       not the next thing about to happen -- a finding surfaced while \
                       working on something else, a sibling task filed for later, a piece \
                       of an existing structure being brought in. `vivac_push` is for what \
-                      comes next; this is for what was just noticed.",
+                      comes next; this is for what was just noticed. Look first with \
+                      `vivac_find`: what the tree already holds is not filed twice. A \
+                      finding is one node for each thing found that you tell the person, \
+                      written when you tell them.",
         args: &[
             Arg {
                 name: "title",
@@ -496,10 +516,12 @@ const TOOLS: &[Tool] = &[
     Tool {
         name: "vivac_park",
         description: "Suspend a node without abandoning it: it drops off the stack and \
-                      becomes something a later session is told not to touch until \
-                      whatever parked it is resolved. Call it when work is genuinely \
-                      stuck on something outside this session, not as a substitute for \
-                      `vivac_pop` on something that is simply finished.",
+                      becomes something a later session is told not to touch. Call it \
+                      when the person says not now, or when work is stuck on something \
+                      outside this session -- never as a substitute for `vivac_pop` on \
+                      something that is simply finished. What is put off has to be a \
+                      node first: if it is not in the tree yet, file it with `vivac_add` \
+                      and park that.",
         args: &[
             Arg {
                 name: "id",
@@ -511,7 +533,8 @@ const TOOLS: &[Tool] = &[
                 name: "reason",
                 kind: ArgKind::Str,
                 required: false,
-                description: "Why it is stuck. Read back verbatim under DO NOT TOUCH NOW.",
+                description: "Why it waits: the person's own words when they said not \
+                              now. Read back verbatim under DO NOT TOUCH NOW.",
             },
         ],
     },
@@ -848,6 +871,7 @@ fn call(project: &mut Project, params: &Value) -> Result<String, Failure> {
                 against: a.list("against"),
                 via_mcp: true,
                 root: a.bool("root"),
+                parent: a.str("parent").map(str::to_string),
             };
             outcome_text(project.write(|ctx| ops::push(ctx, p))?)
         }

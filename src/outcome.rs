@@ -193,6 +193,11 @@ pub enum Outcome {
         /// worth naming to get back to. Always present; `null` when nothing
         /// left, or everything that did is closed or abandoned.
         back_to: Option<String>,
+        /// `--parent` (`d757`): the node it opened under when that was not
+        /// the focus. Absent otherwise, so a plain push reads as it always
+        /// did.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        under: Option<String>,
     },
     Popped {
         closed: Closed,
@@ -342,21 +347,27 @@ pub fn to_text(o: &Outcome) -> String {
             no_against,
             left_stack,
             back_to,
+            under,
         } => {
             lines.push(format!("  {alias}  {title}"));
             if *blocks {
                 lines.push("        blocks its parent from closing".to_string());
             }
-            // `--root` (`t533` §1.4): what the stack held before is reported
-            // here, right after the node born and what it blocks.
+            // `--root` (`t533` §1.4) and `--parent` (`d757`): what the stack
+            // held before is reported here, right after the node born and
+            // what it blocks, prefixed by where the new node went.
+            let place = match under {
+                Some(p) => format!("under {p}"),
+                None => "at the root".to_string(),
+            };
             if let [bottom, .., top] = left_stack.as_slice() {
                 lines.push(format!(
-                    "        at the root: {} left the stack, {bottom} to {top}, none closed by this",
+                    "        {place}: {} left the stack, {bottom} to {top}, none closed by this",
                     left_stack.len()
                 ));
             } else if let [only] = left_stack.as_slice() {
                 lines.push(format!(
-                    "        at the root: {only} left the stack, not closed by this"
+                    "        {place}: {only} left the stack, not closed by this"
                 ));
             }
             if let Some(b) = back_to {
