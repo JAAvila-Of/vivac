@@ -53,14 +53,21 @@ vivac park 2 "waiting on the corpus run"
 the decision it replaces, so a reversal reads from either end. `block` marks a
 node as something its parent cannot close over, and `--off` takes it back.
 
-A node is born under the focus, which is what makes the edge free. Work that
-belongs to nothing open is the exception: `--root` on `push`, `add` or
-`decide` gives it no parent, and on `push` it also leaves the stack holding
-only the new node. Nothing on the old stack is closed, and the command says
-how to get back to it. `promote` answers a different case: something already
-in the tree turns out to be a goal of its own, and it keeps where it was born.
+A node is born under the focus, which is what makes the edge free. But the
+focus is wherever work was left, perhaps by another session and about
+something else, so the focus is not always where new work belongs. `--parent`
+on `push` opens it under the node it continues instead: the stack is rebuilt
+as that node's path, as `focus` would, and the new node opens on top. A closed
+or parked node is refused, since opening work under it would quietly take back
+what somebody closed or put off. Work that belongs to nothing open takes
+`--root` on `push`, `add` or `decide`, which gives it no parent, and on `push`
+it also leaves the stack holding only the new node. Either way nothing that
+leaves the stack is closed, and the command says how to get back to it.
+`promote` answers a different case: something already in the tree turns out
+to be a goal of its own, and it keeps where it was born.
 
 ```sh
+vivac push "Guard the start callback" --parent 12 --why "the finding it fixes"
 vivac push "Ship to a second team" --root --why "the first milestone is done"
 ```
 

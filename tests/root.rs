@@ -158,4 +158,20 @@ fn root_with_parent_is_refused_on_add_and_decide() {
         "{out}"
     );
     assert_eq!(before, c.log(), "decide wrote despite the conflict");
+
+    let (out, code) = c.run(&[
+        "push",
+        "A follow-up",
+        "--why",
+        "noticed in passing",
+        "--parent",
+        "1",
+        "--root",
+    ]);
+    assert_eq!(code, 2, "{out}");
+    assert!(
+        out.contains("--root and --parent both say where it is born"),
+        "{out}"
+    );
+    assert_eq!(before, c.log(), "push wrote despite the conflict");
 }

@@ -1475,7 +1475,8 @@ fn add_root_and_decide_root_by_mcp_write_the_same_events_as_the_cli() {
 }
 
 /// `root` and `parent` together are refused over MCP with the same text as
-/// on the CLI, on both tools.
+/// on the CLI, on all three tools that take both (`d757` adds `vivac_push`
+/// to the two `t533` already covered).
 #[test]
 fn root_with_parent_is_refused_by_mcp() {
     let c = seeded("root-parent-conflict-mcp");
@@ -1496,6 +1497,71 @@ fn root_with_parent_is_refused_by_mcp() {
         text_of(&r).contains("--root and --parent both say where it is born"),
         "{r}"
     );
+    let r = s.ask(
+        r#"{"jsonrpc":"2.0","id":45,"method":"tools/call","params":{"name":"vivac_push","arguments":{"title":"A follow-up","why":"next","parent":"1","root":true}}}"#,
+    );
+    assert_eq!(r["result"]["isError"], true, "{r}");
+    assert!(
+        text_of(&r).contains("--root and --parent both say where it is born"),
+        "{r}"
+    );
+}
+
+/// `vivac_push` with `parent` set writes the same events as the CLI's
+/// `--parent`, on a stack that shares nothing with the node named (`d757`).
+#[test]
+fn push_parent_by_mcp_writes_the_same_events_as_the_cli() {
+    let cli = Sandbox::new_seeded("push-parent-cli");
+    cli.ok(&["push", "Goal A", "--why", "first branch"]);
+    cli.ok(&["push", "Task under A", "--why", "detail on A"]);
+    cli.ok(&["push", "Goal B", "--why", "second branch", "--root"]);
+    let via_mcp = twin_of(&cli, "push-parent-mcp");
+
+    cli.ok(&[
+        "push",
+        "Continue A's task",
+        "--why",
+        "it continues t2",
+        "--parent",
+        "2",
+    ]);
+
+    let mut s = hello(&via_mcp);
+    let r = s.ask(
+        r#"{"jsonrpc":"2.0","id":46,"method":"tools/call","params":{"name":"vivac_push","arguments":{"title":"Continue A's task","why":"it continues t2","parent":"2"}}}"#,
+    );
+    assert_eq!(r["result"]["isError"], false, "{r}");
+    assert_eq!(tree_events(&cli), tree_events(&via_mcp));
+
+    let payload = mcp_write_payload(&r);
+    assert_eq!(payload["left_stack"], serde_json::json!(["g3"]));
+    assert_eq!(payload["back_to"], "g3");
+}
+
+/// `vivac_push` with `parent` on a parked node: refused, and the node is
+/// left parked (`d757`).
+#[test]
+fn push_parent_on_a_parked_node_is_refused_by_mcp() {
+    let c = seeded("push-parent-parked-mcp");
+    let mut s = hello(&c);
+    s.ask(
+        r#"{"jsonrpc":"2.0","id":47,"method":"tools/call","params":{"name":"vivac_push","arguments":{"title":"Goal A","why":"root of the branch"}}}"#,
+    );
+    s.ask(
+        r#"{"jsonrpc":"2.0","id":48,"method":"tools/call","params":{"name":"vivac_park","arguments":{"id":"1","reason":"waiting on the review"}}}"#,
+    );
+    let before = c.log();
+
+    let r = s.ask(
+        r#"{"jsonrpc":"2.0","id":49,"method":"tools/call","params":{"name":"vivac_push","arguments":{"title":"A follow-up","why":"next","parent":"1"}}}"#,
+    );
+    assert_eq!(r["result"]["isError"], true, "{r}");
+    assert!(
+        text_of(&r)
+            .contains("is parked. New work does not open under it until someone takes it back."),
+        "{r}"
+    );
+    assert_eq!(before, c.log(), "a refused push wrote to the log");
 }
 
 #[test]
@@ -1827,8 +1893,9 @@ fn vivac_brief_over_mcp_carries_no_capture_seams_block() {
     );
 }
 
-/// `d738`, test (e): every MCP tool name the hook's capture-seams block
-/// names is a real one, still reachable through `tools/list`.
+/// `d738`, `d757`, test (e): every MCP tool name the hook's capture-seams
+/// block names is a real one, still reachable through `tools/list` --
+/// `vivac_find`, named by the block's own look-first line, included.
 #[test]
 fn every_capture_seam_mcp_tool_is_in_the_tool_list() {
     let c = seeded("capture-seams-mcp-tools");
@@ -1837,6 +1904,7 @@ fn every_capture_seam_mcp_tool_is_in_the_tool_list() {
     let tools = r["result"]["tools"].as_array().unwrap().clone();
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
     for named in [
+        "vivac_find",
         "vivac_push",
         "vivac_decide",
         "vivac_add",
