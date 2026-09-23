@@ -7,34 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.12.6](https://github.com/JAAvila-Of/vivac/compare/v0.12.5...v0.12.6) - 2026-09-23
+## [0.13.0](https://github.com/JAAvila-Of/vivac/compare/v0.12.5...v0.13.0) - 2026-09-23
 
-### Added
-
-- *(setup)* setup writes what a harness reads, and nothing of the tree
-- *(init)* let init answer which tree this folder belongs to
-- *(setup)* let setup codex take back exactly what it wrote
-- *(setup)* let setup codex merge with what the project already has
-- *(setup)* give the Codex side the join its own refusal proposes
-- *(setup)* give setup codex the tree it was leaving out
-
-### Documentation
-
-- write the upgrading note this branch owes, and finish the sweep
-- say that leaving a project ready is two commands now
-- stop writing the flags as if one harness owned them
-- stop saying Codex only works on a clean project
-- say what a real Codex session actually showed
-
-### Fixed
-
-- *(render)* count what goes in front of a clip, and cut on a word
-- a .vivac/ that is neither a tree nor a lane is not a map
-- *(setup)* give the plan's second column a width
-
-### Internal
-
-- *(session)* require the closing hook to print nothing at all
+This is what `0.12.6` shipped, under the number it should have had. It
+breaks a public surface, and in `0.x` that is a minor, never a patch.
 
 ### Upgrading
 
@@ -69,6 +45,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   back**, the same way the Claude Code side does. The server goes into
   `.codex/config.toml` between two marker comments; a block with one marker
   and not the other is left alone and named, in both directions.
+- *(setup)* setup writes what a harness reads, and nothing of the tree
+- *(init)* let init answer which tree this folder belongs to
+- *(setup)* let setup codex take back exactly what it wrote
+- *(setup)* let setup codex merge with what the project already has
+- *(setup)* give the Codex side the join its own refusal proposes
+- *(setup)* give setup codex the tree it was leaving out
 
 ### Fixed
 
@@ -83,6 +65,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`vivac setup <harness> --undo` without a terminal exits non-zero and
   removes nothing**, instead of printing a question nobody can answer and
   exiting `0`.
+- *(render)* count what goes in front of a clip, and cut on a word
+- a .vivac/ that is neither a tree nor a lane is not a map
+- *(setup)* give the plan's second column a width
+
+### Documentation
+
+- write the upgrading note this branch owes, and finish the sweep
+- say that leaving a project ready is two commands now
+- stop writing the flags as if one harness owned them
+- stop saying Codex only works on a clean project
+- say what a real Codex session actually showed
+
+### Internal
+
+- *(session)* require the closing hook to print nothing at all
+
+## [0.12.6](https://github.com/JAAvila-Of/vivac/compare/v0.12.5...v0.12.6) - 2026-09-23 [YANKED]
+
+Yanked the day it went out: it broke a public surface under a patch
+number. Its contents are `0.13.0`'s, which is where the notes are.
 
 ## [0.12.5](https://github.com/JAAvila-Of/vivac/compare/v0.12.4...v0.12.5) - 2026-09-22
 
