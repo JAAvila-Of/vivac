@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Upgrading
+
+- **`vivac init` with no flags now does what its own plan says.** In `0.13.0`
+  a bare `vivac init` still planted the old way: no lane declared, no
+  repositories recorded, no version lock, while `vivac init --dry-run` showed
+  a plan doing all three. There is one way to plant now, and it asks before
+  writing: with no terminal and no `--yes`, `init` exits `1`, writes nothing,
+  and names `--dry-run` and `--yes`. A script that ran `vivac init` alone
+  needs `--yes`.
+- **A tree planted by a bare `vivac init` in `0.13.0` or earlier has no lane
+  and no lock**, so the refusal that stops a second clone of the same product
+  from planting a tree of its own never sees it. Run `vivac init` once in the
+  tree's own folder: the plan shows the lane and the lock it adds, and nothing
+  else. From then on the tree needs vivac `0.12` or newer to read it, as every
+  tree with lanes already does.
+- **Under a real tree, a folder whose `.vivac/` holds neither a tree nor a
+  lane can now be planted with `vivac init`.** Every other command refuses
+  there and names `vivac init` as one way out, which `init` itself used to
+  refuse. The plan says a tree sits above before anything is written.
+
 ## [0.13.0](https://github.com/JAAvila-Of/vivac/compare/v0.12.5...v0.13.0) - 2026-09-23
 
 This is what `0.12.6` shipped, under the number it should have had. It
