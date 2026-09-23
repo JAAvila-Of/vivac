@@ -7,16 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.13.1](https://github.com/JAAvila-Of/vivac/compare/v0.13.0...v0.13.1) - 2026-09-23
-
-### Documentation
-
-- *(changelog)* say what bare init does now, and what old trees need
-
-### Fixed
-
-- *(store)* make a new .vivac/ appear whole, never empty first
-- *(init)* plant through one path, with flags or without
+## [0.14.0](https://github.com/JAAvila-Of/vivac/compare/v0.13.0...v0.14.0) - 2026-09-23
 
 ### Upgrading
 
@@ -37,6 +28,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lane can now be planted with `vivac init`.** Every other command refuses
   there and names `vivac init` as one way out, which `init` itself used to
   refuse. The plan says a tree sits above before anything is written.
+
+### Fixed
+
+- **A session's first write in a new worktree is no longer refused by its
+  own hook.** Joining a lane created `.vivac/` first and wrote the lane
+  file after, and since `0.13.0` a `.vivac/` holding neither a tree nor a
+  lane under a real tree is refused. The opening hook and the first `push`
+  joining the same worktree could meet in that gap. A new `.vivac/`, for a
+  lane or a tree, now appears with everything in it at once.
+- *(store)* make a new .vivac/ appear whole, never empty first
+- *(init)* plant through one path, with flags or without
+
+### Documentation
+
+- *(changelog)* say what bare init does now, and what old trees need
 
 ## [0.13.0](https://github.com/JAAvila-Of/vivac/compare/v0.12.5...v0.13.0) - 2026-09-23
 
