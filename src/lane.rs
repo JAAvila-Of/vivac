@@ -119,23 +119,61 @@ fn check_lane_version(version: Option<&serde_json::Value>) -> Result<(), Failure
     Ok(())
 }
 
-/// Writes `vivac_dir/lane` whole: a temporary sibling, named with a ULID so
-/// two writers never collide, then a rename over the real file. A process
-/// that dies between the two leaves the old file exactly as it was.
+/// Writes `vivac_dir/lane` whole. `vivac_dir` itself is the part that used
+/// to appear in two steps -- `create_dir_all` first, `lane` only after --
+/// and a reader resolving that folder in between saw a `.vivac/` with
+/// neither a tree nor a lane file: exactly the hollow shape `f719`'s
+/// `find_root` refuses over (`f735`). A concurrent auto-join -- the
+/// `SessionStart` hook and the first `push` both resolving the same
+/// worktree, one of them holding the tree's lock and the other's
+/// `find_root` not needing it -- could catch that window.
 ///
-/// Also writes `vivac_dir`'s own `.gitignore`: a lane folder holds no tree,
-/// so nothing else would ever have written it.
+/// `store::build_fresh` closes it: when `vivac_dir` does not exist yet,
+/// `lane` and `.gitignore` are written into a sibling temporary directory
+/// first, and only that whole directory is ever renamed onto `vivac_dir`.
+/// A reader now sees either no `.vivac/` at all, or one that already holds
+/// `lane` -- never anything in between. `Store::create` builds a tree the
+/// same way, through the same helper, rather than a second copy of these
+/// mechanics (`f724`).
+///
+/// When `vivac_dir` already exists, behaviour is exactly what it always
+/// was: `lane` is replaced through its own temporary file and rename, then
+/// `.gitignore` is written if it is not there yet. A directory that already
+/// exists cannot turn hollow by this call -- it was either already whole,
+/// or some earlier write left it in a shape this call does not judge.
 pub fn write(vivac_dir: &Path, lane: &Lane) -> std::io::Result<()> {
+    let built = crate::store::build_fresh(vivac_dir, |tmp_dir| {
+        write_lane_file(tmp_dir, lane)?;
+        crate::store::write_gitignore(tmp_dir)
+    })?;
+    if built {
+        crate::store::mark_write();
+        return Ok(());
+    }
+    write_in_place(vivac_dir, lane)
+}
+
+/// Today's behaviour, unchanged: `vivac_dir` is created if it is not
+/// already there (a no-op in that case), `lane` is replaced through its own
+/// temporary file and rename, and `.gitignore` is written if it is missing.
+fn write_in_place(vivac_dir: &Path, lane: &Lane) -> std::io::Result<()> {
     std::fs::create_dir_all(vivac_dir)?;
+    write_lane_file(vivac_dir, lane)?;
+    crate::store::mark_write();
+    crate::store::write_gitignore(vivac_dir)
+}
+
+/// `vivac_dir/lane`, replaced whole: a temporary sibling *file*, named with
+/// a ULID so two writers never collide, then a rename over the real one. A
+/// process that dies between the two leaves the old file exactly as it was.
+fn write_lane_file(vivac_dir: &Path, lane: &Lane) -> std::io::Result<()> {
     let tmp = vivac_dir.join(format!("{FILE}.{}.tmp", crate::id::ulid()));
     {
         let mut f = File::create(&tmp)?;
         f.write_all(serde_json::to_string_pretty(lane)?.as_bytes())?;
         f.write_all(b"\n")?;
     }
-    std::fs::rename(&tmp, vivac_dir.join(FILE))?;
-    crate::store::mark_write();
-    crate::store::write_gitignore(vivac_dir)
+    std::fs::rename(&tmp, vivac_dir.join(FILE))
 }
 
 #[cfg(test)]
@@ -291,5 +329,121 @@ mod tests {
             e.message()
         );
         std::fs::remove_dir_all(dir.parent().unwrap()).ok();
+    }
+
+    /// `f735`: `write` used to `create_dir_all(vivac_dir)` and only
+    /// *afterwards* write `lane` and `.gitignore`, so a reader resolving
+    /// this same folder in between -- `store::find_root`, `f719` -- could
+    /// see a `.vivac/` that held neither a tree nor a lane, and refuse.
+    /// The window is a handful of syscalls wide, so this spins a reader in
+    /// a tight loop against a writer, round after round, each round
+    /// starting from a `vivac_dir` that does not exist yet at all -- the
+    /// shape a fresh worktree's auto-join races on (`ops.rs`, the
+    /// `SessionStart` hook against the first `push`, `t594`). Against the
+    /// pre-fix `write`, this caught the hollow shape on the very first
+    /// round; 500 leaves ample margin. `thread::scope`, the same idiom
+    /// `registry.rs`'s own race test already uses, needs no `Arc`: the
+    /// reader only ever borrows `dir` and `stop`, and both outlive it.
+    #[test]
+    fn a_reader_racing_a_fresh_write_never_sees_vivac_dir_hollow() {
+        const ROUNDS: usize = 500;
+        for round in 0..ROUNDS {
+            let root = std::env::temp_dir().join(format!("vivac-race-{}", crate::id::ulid()));
+            let dir = root.join(crate::store::DIR);
+            let hollow_seen = std::sync::atomic::AtomicBool::new(false);
+            let stop = std::sync::atomic::AtomicBool::new(false);
+            std::thread::scope(|s| {
+                s.spawn(|| {
+                    while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                        if dir.is_dir() && !dir.join(FILE).is_file() {
+                            hollow_seen.store(true, std::sync::atomic::Ordering::Relaxed);
+                            break;
+                        }
+                    }
+                });
+                let lane = Lane {
+                    version: 1,
+                    id: "01A".into(),
+                    project: "01P".into(),
+                };
+                write(&dir, &lane).unwrap();
+                stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            });
+            std::fs::remove_dir_all(&root).ok();
+            assert!(
+                !hollow_seen.load(std::sync::atomic::Ordering::Relaxed),
+                "a reader observed a hollow .vivac/ on round {round} of {ROUNDS}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_fresh_vivac_dir_holds_lane_and_gitignore_with_no_temp_sibling_left_behind() {
+        // The whole point of building `vivac_dir` in a sibling first: once
+        // `write` returns, `root` holds nothing but the finished `.vivac/`
+        // -- no `.tmp`-suffixed directory left lying beside it.
+        let root = std::env::temp_dir().join(format!("vivac-fresh-{}", crate::id::ulid()));
+        let dir = root.join(crate::store::DIR);
+        assert!(
+            !dir.exists(),
+            "the fixture must start with no .vivac/ at all"
+        );
+        let l = Lane {
+            version: 1,
+            id: "01A".into(),
+            project: "01P".into(),
+        };
+        write(&dir, &l).unwrap();
+        assert_eq!(read(&dir).unwrap().unwrap().id, "01A");
+        assert_eq!(
+            std::fs::read_to_string(dir.join(crate::store::GITIGNORE)).unwrap(),
+            "*\n"
+        );
+        assert_eq!(
+            only_entry_of(&root),
+            crate::store::DIR,
+            "a temporary sibling directory was left behind"
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn writing_into_an_existing_vivac_dir_keeps_writing_in_place() {
+        // `vivac_dir` already there: the fresh-sibling machinery never
+        // engages at all, so this is `write_in_place` alone -- no sibling
+        // directory appears next to `vivac_dir` either.
+        let dir = temp_vivac("existing");
+        let l = Lane {
+            version: 1,
+            id: "01A".into(),
+            project: "01P".into(),
+        };
+        write(&dir, &l).unwrap();
+        assert_eq!(read(&dir).unwrap().unwrap().id, "01A");
+        let root = dir.parent().unwrap();
+        assert_eq!(only_entry_of(root), crate::store::DIR);
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    // `write`'s own fallback -- `build_fresh` backing off when `vivac_dir`
+    // already exists, rather than a second copy of that mechanic living
+    // here -- is tested once, in `store.rs`'s own tests, where the helper
+    // itself lives (`f724`).
+
+    /// The single file or directory name inside `dir`, panicking unless
+    /// there is exactly one -- the shape every test above expects once a
+    /// write has finished and cleaned up after itself.
+    fn only_entry_of(dir: &Path) -> String {
+        let entries: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            entries.len(),
+            1,
+            "expected exactly one entry, found {entries:?}"
+        );
+        entries.into_iter().next().unwrap()
     }
 }
