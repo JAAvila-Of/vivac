@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.1](https://github.com/JAAvila-Of/vivac/compare/v0.13.0...v0.13.1) - 2026-09-23
+
+### Documentation
+
+- *(changelog)* say what bare init does now, and what old trees need
+
+### Fixed
+
+- *(store)* make a new .vivac/ appear whole, never empty first
+- *(init)* plant through one path, with flags or without
+
 ### Upgrading
 
 - **`vivac init` with no flags now does what its own plan says.** In `0.13.0`
