@@ -123,12 +123,12 @@ fn an_ambiguous_name_refuses_with_exit_2_and_names_the_candidates() {
     std::fs::create_dir_all(&proj_x).unwrap();
     std::fs::create_dir_all(&proj_y).unwrap();
 
-    let (out, code) = run(&proj_x, &home, &["init"]);
+    let (out, code) = run(&proj_x, &home, &["init", "--yes"]);
     assert_eq!(code, 0, "{out}");
     run(&proj_x, &home, &["push", "In x", "--why", "a"]);
     run(&proj_x, &home, &["stack"]);
 
-    let (out, code) = run(&proj_y, &home, &["init"]);
+    let (out, code) = run(&proj_y, &home, &["init", "--yes"]);
     assert_eq!(code, 0, "{out}");
     run(&proj_y, &home, &["push", "In y", "--why", "b"]);
     run(&proj_y, &home, &["stack"]);

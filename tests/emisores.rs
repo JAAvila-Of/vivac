@@ -423,13 +423,19 @@ fn reconcile_json_carries_the_anchors_of_the_stop_it_reads_from() {
 
 /// The same schema-stability `f639` asked of `vivacs --json`, here for
 /// `reconcile --json`: a lane with nothing declared still gets `anchors`,
-/// empty rather than absent.
+/// empty rather than absent, even though there is a real repository for
+/// `reconcile` to measure against -- the whole point being that it reads
+/// what the lane declared, not a fresh scan of what is on disk now.
+///
+/// `f721`: the repository has to arrive *after* the plant now, not
+/// alongside it -- planting scans and declares whatever it finds, bare or
+/// not, so a repository already there at plant time would no longer be
+/// "nothing declared".
 #[test]
 fn a_lane_with_no_declared_repositories_still_shows_empty_anchors_in_reconcile_json() {
     let c = Sandbox::new_empty("no-declared-repos-reconcile");
+    c.ok(&["init", "--yes"]);
     commit_a_repo_on_branch(&c.0, "feature/solo");
-
-    c.ok(&["init"]);
     c.ok(&["push", "A goal", "--why", "it is needed"]);
     c.ok(&["save", "a checkpoint"]);
 

@@ -194,7 +194,7 @@ fn the_iquorum_scenario_moves_joins_and_shares_one_tree_across_five_roots() {
     let c2 = TempDir::new("c2");
     std::fs::create_dir_all(&c2).unwrap();
     seed_repos(&c2, &templates);
-    ok(&c2, &home, &["init"]);
+    ok(&c2, &home, &["init", "--yes"]);
     ok(
         &c2,
         &home,
@@ -505,7 +505,7 @@ fn brief_marks_here_on_every_lanes_own_front_not_only_this_ones() {
     let home = TempDir::new("home");
     let p = TempDir::new("p");
     std::fs::create_dir_all(&p).unwrap();
-    ok(&p, &home, &["init"]);
+    ok(&p, &home, &["init", "--yes"]);
     ok(
         &p,
         &home,
@@ -577,7 +577,7 @@ fn brief_carries_an_other_lanes_block() {
     let home = TempDir::new("home");
     let p = TempDir::new("p");
     std::fs::create_dir_all(&p).unwrap();
-    ok(&p, &home, &["init"]);
+    ok(&p, &home, &["init", "--yes"]);
     ok(
         &p,
         &home,
@@ -618,7 +618,7 @@ fn stack_lanes_lists_every_lanes_own_stack() {
     let home = TempDir::new("home");
     let p = TempDir::new("p");
     std::fs::create_dir_all(&p).unwrap();
-    ok(&p, &home, &["init"]);
+    ok(&p, &home, &["init", "--yes"]);
     ok(
         &p,
         &home,
@@ -658,9 +658,13 @@ fn stack_lanes_lists_every_lanes_own_stack() {
         .find(|l| l["name"] == "sonar")
         .unwrap_or_else(|| panic!("the joined lane is missing:\n{json}"));
     assert_eq!(joined["focus"]["title"], "Ship the sonar dashboard");
+    // By `id`, not `name`: `f721` made the founding lane's own name the
+    // folder's, not the fallback `main`, the same as every other lane
+    // already got -- its `id` is still `main`, the internal key `--join`
+    // above names as the lane it joins.
     let main = lanes
         .iter()
-        .find(|l| l["name"] == "main")
+        .find(|l| l["id"] == "main")
         .unwrap_or_else(|| panic!("this folder's own lane is missing:\n{json}"));
     assert_eq!(main["focus"]["title"], "Track the sonar release");
 

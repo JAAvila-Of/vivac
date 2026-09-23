@@ -676,7 +676,13 @@ fn relocate_with_an_empty_destination_is_a_usage_error() {
 /// it and cementing a made-up one.
 #[test]
 fn relocate_refuses_a_tree_with_no_events_yet() {
-    let c = Sandbox::new_seeded("reloc-no-events");
+    // `f721`: `init` cannot leave this shape behind any more -- it
+    // declares the founding lane's own event as part of planting now,
+    // bare or not -- so `common::plant_undeclared` fabricates it by hand
+    // instead, the way `write_lane` already does for a shape no CLI path
+    // writes either.
+    let c = Sandbox::new_empty("reloc-no-events");
+    common::plant_undeclared(&c.0, "reloc-no-events");
     let dest = sibling_dir(&c, "no-events-dest");
 
     let (out, code) = c.run(&["relocate", dest.to_str().unwrap()]);
@@ -793,7 +799,7 @@ fn relocate_dot_dot_moves_the_tree_up_one_level() {
     let clone = container.join("clone");
     std::fs::create_dir_all(&clone).unwrap();
 
-    let (init_out, init_code) = run_in(&clone, &home, &["init"]);
+    let (init_out, init_code) = run_in(&clone, &home, &["init", "--yes"]);
     assert_eq!(init_code, 0, "{init_out}");
     let (push_out, push_code) = run_in(&clone, &home, &["push", "a goal", "--why", "seed"]);
     assert_eq!(push_code, 0, "{push_out}");
@@ -823,7 +829,7 @@ fn relocate_dot_dot_normalizes_the_path_the_registry_keeps() {
     let clone = container.join("clone");
     std::fs::create_dir_all(&clone).unwrap();
 
-    let (init_out, init_code) = run_in(&clone, &home, &["init"]);
+    let (init_out, init_code) = run_in(&clone, &home, &["init", "--yes"]);
     assert_eq!(init_code, 0, "{init_out}");
     let (push_out, push_code) = run_in(&clone, &home, &["push", "a goal", "--why", "seed"]);
     assert_eq!(push_code, 0, "{push_out}");

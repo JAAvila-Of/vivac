@@ -30,13 +30,25 @@ fn a_second_init_leaves_a_locked_config_and_log_untouched() {
     c.ok(&["add", "A rule", "--type", "rule", "--why", "guard"]);
     let config_before = config_bytes(&c);
     let log_before = log_bytes(&c);
+    // `f721`: `new_seeded` already locks the config to `LANE_SENTENCE` at
+    // plant time, and a tree already off `1` never moves again for a rule
+    // alone (`lock_if_needed`'s own guard) -- so this only checks that
+    // *some* lock is already in place, the same way the config was always
+    // going to be locked well before this test's own rule.
     assert!(
-        is_locked(&config_before),
-        "setup: the rule should have locked the config"
+        c.is_locked_any(),
+        "setup: the tree should already be locked"
     );
 
-    let out = c.ok(&["init"]);
-    assert!(out.contains("vivac is already planted in"), "{out}");
+    // `f721`: bare `init` now walks the same path `--yes` already did,
+    // whose own answer for an already-set-up tree is
+    // `setup::init::apply_writes`'s "Nothing to write", not the old
+    // direct path's "vivac is already planted in".
+    let out = c.ok(&["init", "--yes"]);
+    assert!(
+        out.contains("Nothing to write: this project is already set up."),
+        "{out}"
+    );
     assert_eq!(config_before, config_bytes(&c), "the config moved");
     assert_eq!(log_before, log_bytes(&c), "the log moved");
 }
@@ -47,8 +59,15 @@ fn a_second_init_leaves_a_locked_config_and_log_untouched() {
 fn init_over_an_empty_vivac_directory_plants_a_tree() {
     let c = Sandbox::new_empty("init-empty-dir");
     std::fs::create_dir_all(c.0.join(".vivac")).unwrap();
-    let out = c.ok(&["init"]);
-    assert!(out.contains("vivac planted in"), "{out}");
+    // `f721`: the old direct path's "vivac planted in" is gone with it --
+    // `setup::init::written_text` says "Written." and points at the
+    // first node instead, the same as any other fresh plant.
+    let out = c.ok(&["init", "--yes"]);
+    assert!(out.contains("Written."), "{out}");
+    assert!(
+        out.contains("First node:  vivac push \"<title>\" --why \"<reason>\""),
+        "{out}"
+    );
     assert!(c.0.join(".vivac").join("config").is_file());
     assert!(c.0.join(".vivac").join("events").is_file());
 }
@@ -104,16 +123,20 @@ fn init_says_it_created_the_trees_gitignore_instead_of_claiming_nothing_changed(
     assert!(!out.contains("init changed nothing in it"), "{out}");
 }
 
-/// `init` opens rather than creates when there is something to open: a
-/// `.vivac/` with a log and no config regenerates through `Store::open`,
-/// which locks the regenerated config if the log already holds a rule.
+/// A `.vivac/` with a log and no config regenerates through
+/// `Store::open`, which locks the regenerated config if the log already
+/// holds a rule. Read by `stack` rather than `init` here (`f721`): `init`
+/// is no longer a neutral trigger for this -- this tree's log carries no
+/// founding lane at all, so `init` would declare one on the very same
+/// run, locking the regenerated config to `LANE_SENTENCE` instead of the
+/// rule's own `LOCK_SENTENCE` and proving the wrong mechanism.
 #[test]
-fn init_over_a_log_with_no_config_regenerates_it_locked() {
-    let c = Sandbox::new_seeded("init-no-config");
+fn a_log_with_no_config_regenerates_it_locked() {
+    let c = Sandbox::seeded_with_no_lane("init-no-config");
     c.ok(&["add", "A rule", "--type", "rule", "--why", "guard"]);
     std::fs::remove_file(c.0.join(".vivac").join("config")).unwrap();
 
-    c.ok(&["init"]);
+    c.ok(&["stack"]);
     assert!(
         is_locked(&config_bytes(&c)),
         "a config regenerated over a governed log came back unlocked"
@@ -851,7 +874,7 @@ fn a_tree_directly_below_refuses_and_writes_nothing() {
     let c = Sandbox::new_empty("setup-below-one");
     let below = c.0.join("Backend v2");
     std::fs::create_dir_all(&below).unwrap();
-    run_in(&below, c.global_home(), &["init"]);
+    run_in(&below, c.global_home(), &["init", "--yes"]);
     let events_before = std::fs::read_to_string(below.join(".vivac").join("events")).unwrap();
 
     let (out, code) = c.run(&["init", "--yes"]);
@@ -889,8 +912,8 @@ fn two_trees_below_refuse_with_the_plural_text() {
     let b = c.0.join("Web Ova");
     std::fs::create_dir_all(&a).unwrap();
     std::fs::create_dir_all(&b).unwrap();
-    run_in(&a, c.global_home(), &["init"]);
-    run_in(&b, c.global_home(), &["init"]);
+    run_in(&a, c.global_home(), &["init", "--yes"]);
+    run_in(&b, c.global_home(), &["init", "--yes"]);
 
     let (out, code) = c.run(&["init", "--yes"]);
     assert_eq!(code, 1, "{out}");
@@ -1155,8 +1178,13 @@ fn a_tree_above_the_joined_one_warns_but_still_completes() {
     let mid = work.join("T");
     let f = mid.join("sub");
     std::fs::create_dir_all(&f).unwrap();
-    run_in(&work, c.global_home(), &["init"]);
-    run_in(&mid, c.global_home(), &["init"]);
+    run_in(&work, c.global_home(), &["init", "--yes"]);
+    // `f721`: `init` itself now refuses to nest a second tree inside one
+    // it already resolves to -- `mid` would just join `work` as a lane,
+    // never planting a tree of its own -- so this fabricates `mid`'s tree
+    // by hand, the shape two independently-planted, later-nested products
+    // (a copy, or a tree from before `d723`) can still leave behind.
+    common::plant_undeclared(&mid, "setup-above-warning-mid");
 
     let (out, code) = run_in(&f, c.global_home(), &["init", "--yes"]);
     assert_eq!(code, 0, "{out}");
@@ -1231,7 +1259,7 @@ fn a_tree_below_wins_over_a_registered_product() {
     clone_repo(&other_root.join("webapi"), &c.0.join("webapi"));
     let below = c.0.join("Backend v2");
     std::fs::create_dir_all(&below).unwrap();
-    run_in(&below, c.global_home(), &["init"]);
+    run_in(&below, c.global_home(), &["init", "--yes"]);
 
     let (out, code) = c.run(&["init", "--yes"]);
     assert_eq!(code, 1, "{out}");
@@ -1499,7 +1527,10 @@ fn setup_planting_in_a_folder_that_is_a_copy_warns_on_stderr() {
     // -- the warning hangs off a write that happened and off nothing else
     // (`t594`), so a fixture where setup writes only the
     // harness files would prove the opposite of what it looks like.
-    run_in(&original, c.global_home(), &["init"]);
+    // `f721`: `init` alone cannot leave that shape behind any more, since
+    // it declares the founding lane at plant time now -- `plant_undeclared`
+    // fabricates it by hand instead.
+    common::plant_undeclared(&original, "setup-plant-copy");
     run_in(
         &original,
         c.global_home(),
@@ -1680,8 +1711,11 @@ fn a_tree_below_refuses_even_when_there_is_one_above() {
     let f = work.join("F");
     let nested = f.join("Nested");
     std::fs::create_dir_all(&nested).unwrap();
-    run_in(&work, c.global_home(), &["init"]);
-    run_in(&nested, c.global_home(), &["init"]);
+    run_in(&work, c.global_home(), &["init", "--yes"]);
+    // `f721`: `init` refuses to nest a second tree inside one it already
+    // resolves to, so `nested` is fabricated by hand rather than planted
+    // through the CLI (see `a_tree_above_the_joined_one_warns_but_still_completes`).
+    common::plant_undeclared(&nested, "setup-below-and-above-nested");
 
     let (out, code) = run_in(&f, c.global_home(), &["init", "--yes"]);
     assert_eq!(code, 1, "{out}");
@@ -1720,7 +1754,7 @@ fn a_join_with_another_tree_below_names_the_choice_not_the_other_remedy() {
     // A real tree with a first event to point a lane back at, so the only
     // thing left that can refuse this join is the tree below `F`.
     run_in(&target, c.global_home(), &["init", "--yes"]);
-    run_in(&nested, c.global_home(), &["init"]);
+    run_in(&nested, c.global_home(), &["init", "--yes"]);
 
     let target_str = target.to_string_lossy().into_owned();
     let (out, code) = run_in(&f, c.global_home(), &["init", "--join", &target_str]);
@@ -1770,8 +1804,8 @@ fn several_trees_below_refuse_a_join_by_naming_all_of_them() {
     std::fs::create_dir_all(&alpha).unwrap();
     std::fs::create_dir_all(&beta).unwrap();
     run_in(&target, c.global_home(), &["init", "--yes"]);
-    run_in(&alpha, c.global_home(), &["init"]);
-    run_in(&beta, c.global_home(), &["init"]);
+    run_in(&alpha, c.global_home(), &["init", "--yes"]);
+    run_in(&beta, c.global_home(), &["init", "--yes"]);
 
     let target_str = target.to_string_lossy().into_owned();
     let (out, code) = run_in(&f, c.global_home(), &["init", "--join", &target_str]);
@@ -1821,7 +1855,7 @@ fn a_join_with_a_withheld_tree_below_names_neither_the_folder_nor_a_count() {
     std::fs::create_dir_all(&target).unwrap();
     std::fs::create_dir_all(&hidden).unwrap();
     run_in(&target, c.global_home(), &["init", "--yes"]);
-    run_in(&hidden, c.global_home(), &["init"]);
+    run_in(&hidden, c.global_home(), &["init", "--yes"]);
 
     let target_str = target.to_string_lossy().into_owned();
     let (out, code) = run_in(&f, c.global_home(), &["init", "--join", &target_str]);
@@ -1873,8 +1907,8 @@ fn several_withheld_trees_below_refuse_a_join_naming_none_of_them() {
     std::fs::create_dir_all(&first).unwrap();
     std::fs::create_dir_all(&second).unwrap();
     run_in(&target, c.global_home(), &["init", "--yes"]);
-    run_in(&first, c.global_home(), &["init"]);
-    run_in(&second, c.global_home(), &["init"]);
+    run_in(&first, c.global_home(), &["init", "--yes"]);
+    run_in(&second, c.global_home(), &["init", "--yes"]);
 
     let target_str = target.to_string_lossy().into_owned();
     let (out, code) = run_in(&f, c.global_home(), &["init", "--join", &target_str]);
@@ -1924,8 +1958,8 @@ fn a_join_with_some_trees_below_withheld_lists_only_the_ones_it_can_show() {
     std::fs::create_dir_all(&hidden).unwrap();
     std::fs::create_dir_all(&visible).unwrap();
     run_in(&target, c.global_home(), &["init", "--yes"]);
-    run_in(&hidden, c.global_home(), &["init"]);
-    run_in(&visible, c.global_home(), &["init"]);
+    run_in(&hidden, c.global_home(), &["init", "--yes"]);
+    run_in(&visible, c.global_home(), &["init", "--yes"]);
 
     let target_str = target.to_string_lossy().into_owned();
     let (out, code) = run_in(&f, c.global_home(), &["init", "--join", &target_str]);
@@ -1983,7 +2017,7 @@ fn the_join_remedy_names_the_folder_to_run_it_from_not_a_destination() {
     std::fs::create_dir_all(&target).unwrap();
     std::fs::create_dir_all(&deep).unwrap();
     run_in(&target, c.global_home(), &["init", "--yes"]);
-    run_in(&deep, c.global_home(), &["init"]);
+    run_in(&deep, c.global_home(), &["init", "--yes"]);
 
     let target_str = target.to_string_lossy().into_owned();
     let (out, code) = run_in(&f, c.global_home(), &["init", "--join", &target_str]);
@@ -2328,12 +2362,21 @@ fn a_join_to_a_different_tree_is_still_refused_and_a_first_join_still_works() {
 #[test]
 fn a_join_of_a_folder_that_is_both_the_tree_and_its_own_lane_says_so() {
     let c = Sandbox::new_seeded("setup-join-self-lane");
+    // `f721`: `new_seeded` already declares `main` for real as `seq` 1,
+    // with a real, random project id -- so the lane file below has to
+    // name *that* id, and the hand-crafted claim follows it as `seq` 2
+    // rather than colliding with it.
+    let real_project = {
+        let log = std::fs::read_to_string(c.0.join(".vivac").join("events")).unwrap();
+        let first: serde_json::Value = serde_json::from_str(log.lines().next().unwrap()).unwrap();
+        first["id"].as_str().unwrap().to_string()
+    };
     c.append_raw_line(
-        r#"{"seq":1,"id":"01SEEDSELFJOINAAAAAAAAAAAA","ts":"2026-01-01T00:00:00Z","actor":"a_test0000000","lane":"main","payload":{"type":"lane.claimed","lane":"main"}}"#,
+        r#"{"seq":2,"id":"01SEEDSELFJOINAAAAAAAAAAAA","ts":"2026-01-01T00:00:00Z","actor":"a_test0000000","lane":"main","payload":{"type":"lane.claimed","lane":"main"}}"#,
     );
     std::fs::write(
         c.0.join(".vivac").join("lane"),
-        r#"{"version":1,"id":"main","project":"01SEEDSELFJOINAAAAAAAAAAAA"}"#,
+        format!(r#"{{"version":1,"id":"main","project":"{real_project}"}}"#),
     )
     .unwrap();
 
@@ -2521,18 +2564,14 @@ fn setup_names_the_founding_lane_after_its_own_folder() {
     );
 }
 
-/// §2.6, once more: the name changes when `setup` runs and never
-/// before, so a tree from 0.11 prints the header it always printed.
-#[test]
-fn a_tree_nobody_has_run_setup_in_still_says_main() {
-    let c = Sandbox::new_seeded("setup-founding-lane-untouched");
-    let b = c.ok(&["brief", "--now", "2026-09-18T10:00:00Z"]);
-    let header = b.lines().next().unwrap_or("");
-    assert!(
-        header.contains(" · lane: main · 2026-09-18"),
-        "a tree nobody ran setup in should still say main:\n{header}"
-    );
-}
+// `a_tree_nobody_has_run_setup_in_still_says_main` used to live here: a
+// tree from before `setup` ran, whose founding lane read as the fallback
+// `main` rather than its own folder's name, until `setup` declared it for
+// real. `f721` removed the state its whole point depended on -- `d723`
+// folded declaring the founding lane into every plant, bare or not, so a
+// tree that has never had it declared cannot exist any more, and there is
+// no `init` left that leaves one behind. `setup_names_the_founding_lane_after_its_own_folder`,
+// above, still covers the naming rule itself.
 
 // ---------------------------------------------------------------------------
 // `t640`: `--name` fixes the product's own name on purpose, rather than
@@ -3050,6 +3089,101 @@ fn undo_leaves_a_vivac_dir_whose_gitignore_was_hand_edited() {
         read(&gitignore),
         contents,
         "the hand-added line must survive"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// `f721`: a bare `vivac init` used to fall through to the old
+// `Store::create` path instead of `setup::init`'s one path (`d723` piece
+// A) -- no lane declared, no repositories recorded, no version lock, and
+// the guard against two trees of one product never got the chance to run
+// at all, since it lives inside `tree::plan`, which the old path never
+// called.
+// ---------------------------------------------------------------------------
+
+/// `f721`, the exact defect: a bare `init`, no `--yes` and no terminal to
+/// ask, in an ordinary git folder with a remote. The old path never asked
+/// anyone anything and planted regardless; the fix routes it through the
+/// same terminal check `--yes` already had, so it refuses instead, the
+/// same family `no_terminal_and_no_yes_refuses_without_a_plan`
+/// (`tests/setup.rs`) already proves for `setup`.
+#[test]
+fn bare_init_with_no_terminal_and_no_yes_refuses_and_writes_nothing() {
+    let c = Sandbox::new_empty("f721-bare-no-terminal");
+    real_git_repo(&c.0);
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(&c.0)
+        .args([
+            "remote",
+            "add",
+            "origin",
+            "https://example.invalid/f721.git",
+        ])
+        .output()
+        .unwrap();
+
+    let (out, code) = c.run(&["init"]);
+    assert_ne!(code, 0, "{out}");
+    assert!(out.contains("--yes"), "{out}");
+    assert!(
+        !c.0.join(".vivac").join("events").exists(),
+        "a refused bare init must not write the log:\n{out}"
+    );
+}
+
+/// `f721`: every test that only needs *a* tree, not a bare `init`
+/// specifically, seeds one through `common::Sandbox::new_seeded`, and
+/// that helper used to hand back exactly the incomplete tree this defect
+/// produced -- no founding lane, no version lock -- rather than the
+/// complete one `setup::init` plants (`init_alone_leaves_a_complete_tree`,
+/// above, already proves what the flagged path gives). Any test relying
+/// on `new_seeded` for a lane to `stack`/`push` against, or a lock to
+/// check, was silently standing on the bug.
+#[test]
+fn the_seeded_helper_hands_back_a_complete_tree_not_a_bare_one() {
+    let c = Sandbox::new_seeded("f721-seeded-helper-complete");
+    let log = std::fs::read_to_string(c.0.join(".vivac").join("events")).unwrap();
+    assert!(
+        log.contains("\"type\":\"lane.declared\""),
+        "no founding lane declared: {log}"
+    );
+    let config = std::fs::read_to_string(c.0.join(".vivac").join("config")).unwrap();
+    assert!(
+        config.contains("this tree holds lanes"),
+        "the version lock was not set: {config}"
+    );
+}
+
+/// `f721`'s own consequence, reproduced end to end: today, a bare `init`
+/// records no repositories at all (the two tests above), so the guard
+/// against two trees of one product never has anything to compare
+/// against, and a second bare `init` over a clone plants a second, empty
+/// tree right next to the first -- both exiting 0, nothing to tell them
+/// apart. Fixed at the root (`d723`), a bare `init` walks the very same
+/// `tree::plan` the flagged path already did, so the second one is
+/// refused before it ever asks to proceed -- no terminal and no `--yes`
+/// needed, since `refuse_second_map` runs ahead of that question.
+#[test]
+fn a_bare_init_on_a_clone_of_an_already_registered_product_is_refused() {
+    let c = Sandbox::new_empty("f721-bare-second-map");
+    let first = c.0.join("Prod");
+    real_git_repo(&first.join("webapi"));
+    let (setup_out, setup_code) = run_in(&first, c.global_home(), &["init", "--yes"]);
+    assert_eq!(setup_code, 0, "{setup_out}");
+
+    let second = c.0.join("Prod-fork");
+    clone_repo(&first.join("webapi"), &second.join("webapi"));
+
+    let (out, code) = run_in(&second, c.global_home(), &["init"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        out.contains("Planting another tree would give this product two maps."),
+        "{out}"
+    );
+    assert!(
+        !already_planted(&second),
+        "a bare init must not have planted a second tree"
     );
 }
 

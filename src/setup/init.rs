@@ -1,5 +1,5 @@
 //! `vivac init`'s share of the tree side (`d723` piece A): planting is
-//! `init`'s job, and configuring an arnés is `setup`'s -- `init` used to
+//! `init`'s job, and configuring a harness is `setup`'s -- `init` used to
 //! plant with none of the flags `setup` already gave the tree side, so
 //! `--join`, `--new-tree`, `--name` and `--lane-name` stayed unreachable
 //! from a folder with no interest in a harness at all (`f721`). This module
@@ -8,16 +8,19 @@
 //! plan, asking, and the tree's own writes -- planting, the lane, the
 //! version lock and the `.gitignore`.
 //!
-//! Reached only once this run carries at least one of the flags this piece
-//! adds (`main.rs`): a bare `vivac init` still takes the two guards it
-//! already had before this piece existed, unchanged, since neither reads
-//! back the same way through `resolve_roots`/`tree::plan` (see `main.rs`'s
-//! own comment on the two of them).
+//! Reached by every `init` run now, bare or flagged (`main.rs`, `f721`):
+//! a bare run used to take a separate path straight through
+//! `Store::create`, which called neither `tree::plan` nor the guard
+//! against two trees of one product that lives inside it -- planting
+//! quietly succeeded where a flagged run already refused. `main.rs` keeps
+//! one guard of its own ahead of this dispatch, for a folder whose own
+//! `.vivac/lane` cannot be resolved to any tree (`t594`); every other
+//! case, flagged or not, is decided here.
 //!
 //! `tree.rs`'s own `plan`, `plan_join` and the refusal a shared repository
 //! raises no longer take a `Harness` (`d723` piece B, `f717` dissolved):
 //! `init` is the only caller left, and every message a plant or a join can
-//! raise now proposes `vivac init`, which names no arnés at all.
+//! raise now proposes `vivac init`, which names no harness at all.
 
 use super::tree;
 use crate::args::Args;

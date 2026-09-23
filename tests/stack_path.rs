@@ -365,9 +365,16 @@ fn stack_lanes_orders_a_lane_with_a_front_before_one_without() {
 /// A tree with no lane at all -- `vivac init`, and nothing else -- names
 /// `vivac init` instead of the empty-stack text, which answers a different
 /// question (`f668`).
+///
+/// `f721`: `init` cannot leave a tree with no lane declared any more --
+/// it declares the founding one as part of planting now, bare or not --
+/// so `common::plant_undeclared` fabricates the config and the empty log
+/// by hand instead, the shape `Store::create` used to leave before this
+/// fix.
 #[test]
 fn stack_lanes_on_a_tree_with_no_lane_names_init() {
-    let c = Sandbox::new_seeded("stack-lanes-no-lane-at-all");
+    let c = Sandbox::new_empty("stack-lanes-no-lane-at-all");
+    common::plant_undeclared(&c.0, "stack-no-lane");
     let text = c.ok(&["stack", "--lanes"]);
     assert!(text.contains("vivac init"), "{text}");
     assert!(

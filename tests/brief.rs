@@ -96,20 +96,15 @@ fn determinism() {
     assert!(a.contains("2026-09-15"), "--now overrides the clock:\n{a}");
 }
 
-/// `t594` §5.1, the golden case: a tree nobody ran `setup` in has one lane,
-/// the founding one, and it is called `main`. The header has to keep
-/// printing exactly that -- byte for byte what it printed before this
-/// tree learned there could be more than one lane.
-#[test]
-fn the_header_names_the_founding_lane_main() {
-    let c = Sandbox::new_seeded("lane-header");
-    let b = c.ok(&["brief", "--now", "2026-09-16T10:00:00Z"]);
-    let header = b.lines().next().unwrap_or("");
-    assert!(
-        header.contains(" · lane: main · 2026-09-16"),
-        "the founding lane's own header changed:\n{header}"
-    );
-}
+// `the_header_names_the_founding_lane_main` used to live here: `t594`
+// §5.1's golden case, a tree nobody ran `setup` in printing `main` for its
+// one, undeclared, founding lane. `f721` removed the state its whole
+// point depended on -- `d723` folded declaring the founding lane into
+// every plant, bare or not, so a tree whose founding lane is not yet
+// declared cannot exist any more. `tests/lanes.rs`'s own
+// `each_folders_brief_names_its_own_lane_in_the_header` still covers what
+// survives: the header carries the founding lane's own name, whatever it
+// is declared as.
 
 /// §10.2 — With the budget squeezed, the spine comes out whole and says so.
 ///
@@ -889,7 +884,7 @@ fn the_brief_does_not_spawn_a_process() {
     // block still being there, not merely against the words having moved.
     let c = Sandbox::new_empty("brief-no-process");
     commit_a_repo(&c.0);
-    c.ok(&["init"]);
+    c.ok(&["init", "--yes"]);
     c.ok(&["push", "Something", "--why", "seed"]);
     c.ok(&["save", "checkpoint"]);
     std::fs::write(c.0.join("f.txt"), "changed after the stop").unwrap();

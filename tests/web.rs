@@ -412,13 +412,11 @@ fn a_single_project_index_redirects_to_its_page() {
         &[("Host", s.host()), ("X-Vivac-Token", token)],
     );
     assert_eq!(a.status, 302, "{}", a.body);
-    let id = s
-        ._sandbox
-        .0
-        .file_name()
-        .unwrap()
-        .to_string_lossy()
-        .into_owned();
+    // `f721`: `new_seeded` now plants with a founding lane declared, which
+    // registers the project under its real first-event id (`d201`) at
+    // plant time -- not the folder's own name, which only ever stood in
+    // for an id the registry had none of.
+    let id = first_event_id(&s._sandbox.0);
     assert_eq!(
         a.header("Location"),
         Some(format!("/p/{id}/")).as_deref(),
@@ -1376,7 +1374,7 @@ fn twins(name: &str) -> (std::path::PathBuf, std::path::PathBuf, std::path::Path
         let ok = Command::new(BIN)
             .current_dir(&d)
             .env("VIVAC_HOME", &home)
-            .args(["init"])
+            .args(["init", "--yes"])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()

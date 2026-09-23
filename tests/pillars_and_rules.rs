@@ -662,6 +662,9 @@ fn an_armed_rule_gains_its_own_key_but_a_pillar_gains_none() {
     ]);
     let log = c.log();
     let mut lines = log.lines();
+    // `f721`: `new_seeded` now plants with a founding `lane.declared`
+    // event as line 1, so the pillar and the rule are lines 2 and 3.
+    lines.next().expect("the founding lane's own line");
     let pillar_line = lines.next().expect("the pillar's own line");
     let rule_line = lines.next().expect("the rule's own line");
     assert!(!pillar_line.contains("\"power\""), "{pillar_line}");

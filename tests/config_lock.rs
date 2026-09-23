@@ -26,6 +26,13 @@ fn is_locked(c: &Sandbox) -> bool {
     config_text(c).contains(LOCK_SENTENCE)
 }
 
+// `unlocked`, `seeded_with_no_lane` and `is_locked_any` used to live here:
+// `d734` moved them to `common::Sandbox` once the same three existed, word
+// for word bar the JSON read, in this file and in `tests/init.rs` too --
+// `f724`'s own lesson about two hand copies drifting apart. `Sandbox::unlocked`
+// and `Sandbox::seeded_with_no_lane` there carry the doc this file's own
+// copies used to.
+
 // ---------------------------------------------------------------------------
 // §28.1: the first pillar or rule locks the config, event behind it, no
 // leftover `config.tmp`.
@@ -33,7 +40,7 @@ fn is_locked(c: &Sandbox) -> bool {
 
 #[test]
 fn a_pillar_born_by_add_locks_the_config_behind_the_event() {
-    let c = Sandbox::new_seeded("lock-add-pillar");
+    let c = Sandbox::unlocked("lock-add-pillar");
     assert!(!is_locked(&c), "a fresh tree starts unlocked");
     c.ok(&["add", "Security", "--type", "pillar", "--why", "arbiter"]);
     assert!(is_locked(&c), "{}", config_text(&c));
@@ -45,21 +52,21 @@ fn a_pillar_born_by_add_locks_the_config_behind_the_event() {
 
 #[test]
 fn a_rule_born_by_add_locks_the_config() {
-    let c = Sandbox::new_seeded("lock-add-rule");
+    let c = Sandbox::unlocked("lock-add-rule");
     c.ok(&["add", "A rule", "--type", "rule", "--why", "guard"]);
     assert!(is_locked(&c), "{}", config_text(&c));
 }
 
 #[test]
 fn a_pillar_born_by_push_locks_the_config() {
-    let c = Sandbox::new_seeded("lock-push-pillar");
+    let c = Sandbox::unlocked("lock-push-pillar");
     c.ok(&["push", "Security", "--type", "pillar", "--why", "arbiter"]);
     assert!(is_locked(&c), "{}", config_text(&c));
 }
 
 #[test]
 fn a_pillar_born_over_mcp_locks_the_config() {
-    let c = Sandbox::new_seeded("lock-mcp-add");
+    let c = Sandbox::unlocked("lock-mcp-add");
     assert!(!is_locked(&c));
     let mut s = Server::start(&c);
     s.ask(r#"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{}}"#);
@@ -103,7 +110,14 @@ fn ordinary_writes_never_change_the_config() {
 fn a_tree_with_a_rule_and_an_unlocked_config_locks_on_the_next_write() {
     let c = Sandbox::new_seeded("lock-hand-mounted");
     c.ok(&["add", "A rule", "--type", "rule", "--why", "guard"]);
-    assert!(is_locked(&c), "setup: the rule should have locked it");
+    // Already locked from planting (`f721`: `new_seeded` declares its
+    // founding lane first), so the rule itself is a no-op here -- this
+    // only checks that *some* lock is in place before the hand-mount
+    // below puts the config back the way a pre-`d444` tree never had one.
+    assert!(
+        c.is_locked_any(),
+        "setup: the tree should already be locked"
+    );
 
     // Hand-mount: put the config back the way an untouched tree would have
     // it, as if the lock had never run.
@@ -128,7 +142,7 @@ fn a_tree_with_a_rule_and_an_unlocked_config_locks_on_the_next_write() {
 
 #[test]
 fn reads_agree_before_and_after_the_lock() {
-    let c = Sandbox::new_seeded("lock-reads-agree");
+    let c = Sandbox::unlocked("lock-reads-agree");
     c.ok(&["push", "Root", "--why", "reason"]);
     let brief_before = c.ok(&["brief", "--now", "2026-09-10"]);
     let tree_before = c.ok(&["tree"]);
@@ -256,7 +270,7 @@ fn an_mcp_tool_reaching_a_config_it_does_not_recognise_returns_the_error_not_a_h
 
 #[test]
 fn a_missing_config_regenerates_locked_when_the_log_already_has_a_pillar() {
-    let c = Sandbox::new_seeded("lock-regen-locked");
+    let c = Sandbox::seeded_with_no_lane("lock-regen-locked");
     c.ok(&["add", "Security", "--type", "pillar", "--why", "arbiter"]);
     std::fs::remove_file(c.0.join(".vivac").join("config")).unwrap();
 
@@ -270,12 +284,21 @@ fn a_missing_config_regenerates_locked_when_the_log_already_has_a_pillar() {
 
 #[test]
 fn a_missing_config_regenerates_at_one_with_no_governance() {
-    let c = Sandbox::new_seeded("lock-regen-open");
+    let c = Sandbox::seeded_with_no_lane("lock-regen-open");
     c.ok(&["push", "Root", "--why", "reason"]);
     std::fs::remove_file(c.0.join(".vivac").join("config")).unwrap();
 
     c.ok(&["stack"]);
-    assert!(!is_locked(&c), "{}", config_text(&c));
+    // Not just `!is_locked`: that only rules out `d444`'s own sentence,
+    // and a config that came back `Lanes`-locked would pass it just as
+    // wrongly as one that stayed at `1` -- `seeded_with_no_lane` is what
+    // actually keeps the log clear of a founding lane for
+    // `regenerated_version` to find.
+    assert!(
+        config_text(&c).contains("\"version\": 1"),
+        "a config regenerated over an ungoverned log came back locked:\n{}",
+        config_text(&c)
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -284,7 +307,7 @@ fn a_missing_config_regenerates_at_one_with_no_governance() {
 
 #[test]
 fn a_lock_that_cannot_be_written_leaves_the_event_unwritten_and_the_config_alone() {
-    let c = Sandbox::new_seeded("lock-cannot-write");
+    let c = Sandbox::unlocked("lock-cannot-write");
     // A directory sitting where `config.tmp` would need to be a file: fails
     // the same way on Windows, Linux and macOS, unlike a permission bit.
     std::fs::create_dir(c.0.join(".vivac").join("config.tmp")).unwrap();

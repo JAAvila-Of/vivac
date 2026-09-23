@@ -315,6 +315,29 @@ pub struct Store {
 /// answer, so this refuses instead, the same as a half-written Codex
 /// marker block does rather than guessing where it was meant to close.
 pub fn find_root(from_dir: &Path) -> Result<Option<PathBuf>, Failure> {
+    find_root_impl(from_dir, true)
+}
+
+/// [`find_root`], but passing a hollow `.vivac/` by instead of refusing
+/// over it: `init`'s own walk (`d734`), scoped here rather than in
+/// `find_root` itself so every other command keeps `f719`'s refusal
+/// exactly as it always has. The hollow one's own remedy already reads
+/// "Make it a tree of its own: vivac init" (`hollow_vivac_refusal`), and
+/// `init` is the one command whose job is exactly that -- with a plan
+/// that shows the tree above (`above_warning`) and asks before writing,
+/// the choice is the person's, not a guess `f719` still refuses to make
+/// for a command that only reads. `refuse_hollow` false means
+/// `find_root_impl` never raises `Err` itself, but the return type still
+/// carries one: `Located`'s own walk, past this point, still can.
+pub fn find_root_for_planting(from_dir: &Path) -> Result<Option<PathBuf>, Failure> {
+    find_root_impl(from_dir, false)
+}
+
+/// `find_root`'s own walk, shared with [`find_root_for_planting`]:
+/// `refuse_hollow` is the only difference between the two, checked in
+/// exactly one place, `d734`'s own guard against the two drifting apart
+/// the way two hand copies would (`f724`).
+fn find_root_impl(from_dir: &Path, refuse_hollow: bool) -> Result<Option<PathBuf>, Failure> {
     let mut d = from_dir.to_path_buf();
     let mut passed_a_hollow_one = false;
     loop {
@@ -322,9 +345,19 @@ pub fn find_root(from_dir: &Path) -> Result<Option<PathBuf>, Failure> {
         if candidate.is_dir() && !crate::registry::marks_global_store(&candidate) {
             if already_planted(&d) || candidate.join(LANE).is_file() {
                 if passed_a_hollow_one {
+                    if !refuse_hollow {
+                        // `init`: the hollow one already answered "plant
+                        // here" for whichever folder is `from_dir`, not
+                        // "join what is above it" -- the same folder the
+                        // hollow one's own remedy names as "this folder".
+                        return Ok(None);
+                    }
                     return Err(hollow_vivac_refusal(&d));
                 }
                 return Ok(Some(d));
+            }
+            if !refuse_hollow {
+                return Ok(None);
             }
             passed_a_hollow_one = true;
         }
@@ -432,21 +465,41 @@ pub fn locate(from_dir: &Path) -> Result<Option<Located>, Failure> {
     locate_from(from_dir, store_dir().as_deref())
 }
 
+/// [`locate`], but for `init`'s own resolution (`d734`): the same walk,
+/// through `find_root_for_planting` rather than `find_root`, so a hollow
+/// `.vivac/` is passed by instead of refused over -- see that function's
+/// own doc for why, and for whom. Used only by `setup::resolve_roots`.
+pub fn locate_for_planting(from_dir: &Path) -> Result<Option<Located>, Failure> {
+    locate_from_with(from_dir, store_dir().as_deref(), find_root_for_planting)
+}
+
 /// `locate`'s own algorithm, with the registry's directory taken as an
 /// argument rather than read from the environment: `store_dir` reads
 /// `VIVAC_HOME`, and mutating that in a test races every other test in the
 /// same process, the same reason `resolve_store_dir` above is split from
 /// `store_dir`.
 fn locate_from(from_dir: &Path, registry_dir: Option<&Path>) -> Result<Option<Located>, Failure> {
+    locate_from_with(from_dir, registry_dir, find_root)
+}
+
+/// `locate_from`'s own body, and [`locate_for_planting`]'s: which of the
+/// two walks over a `.vivac/` -- `find_root`'s or
+/// `find_root_for_planting`'s -- is the one parameter the two do not
+/// share, so this is the one place either ever has to change (`f724`).
+fn locate_from_with(
+    from_dir: &Path,
+    registry_dir: Option<&Path>,
+    find_root: impl Fn(&Path) -> Result<Option<PathBuf>, Failure> + Copy,
+) -> Result<Option<Located>, Failure> {
     let worktree = anchor::linked_worktree(from_dir);
-    let mut found = locate_here(from_dir, registry_dir)?;
+    let mut found = locate_here(from_dir, registry_dir, find_root)?;
     if found.is_none() {
         // `git worktree add ../feature`: the worktree lives outside the
         // folder that holds the product, and nothing above it will ever
         // carry a `.vivac/` of the tree's own.
         if let Some(worktree_root) = &worktree {
             if let Some(main_root) = anchor::main_copy_of(worktree_root) {
-                found = locate_here(&main_root, registry_dir)?;
+                found = locate_here(&main_root, registry_dir, find_root)?;
             }
         }
     }
@@ -458,7 +511,11 @@ fn locate_from(from_dir: &Path, registry_dir: Option<&Path>) -> Result<Option<Lo
 
 /// The upward walk for the nearest `.vivac/`, and what it means once found:
 /// a lane to resolve, or the implicit `main` every tree with none is.
-fn locate_here(from_dir: &Path, registry_dir: Option<&Path>) -> Result<Option<Located>, Failure> {
+fn locate_here(
+    from_dir: &Path,
+    registry_dir: Option<&Path>,
+    find_root: impl Fn(&Path) -> Result<Option<PathBuf>, Failure>,
+) -> Result<Option<Located>, Failure> {
     let Some(d) = find_root(from_dir)? else {
         return Ok(None);
     };

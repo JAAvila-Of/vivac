@@ -211,8 +211,15 @@ fn refuse_registry_as_tree(tree: &Path) -> Option<Failure> {
 /// this run may be about to plant has nothing at `cwd` yet, so `tree` falls
 /// back to `cwd` itself rather than failing the way `store::locate` alone
 /// would.
+///
+/// `store::locate_for_planting`, not `store::locate` (`d734`): a hollow
+/// `.vivac/` -- neither a tree nor a lane -- answers "plant here" for
+/// `init` specifically, rather than the refusal `store::locate` still
+/// raises for every other command (`f719`, unchanged). `init`'s own plan
+/// shows the tree above (`above_warning`) and asks before writing, which
+/// is what makes this a choice rather than a guess.
 pub fn resolve_roots(cwd: &Path) -> Result<Roots, Failure> {
-    let located = crate::store::locate(cwd)?;
+    let located = crate::store::locate_for_planting(cwd)?;
     let tree = located
         .as_ref()
         .map(|l| l.root.clone())
