@@ -1,8 +1,12 @@
 //! When a project enters the registry, and when it must not.
 //!
 //! `d199` says a project enters by being used, so nothing here calls a command
-//! whose job is to register: the registration is a side effect of ordinary work
-//! and these tests only ever do ordinary work.
+//! whose job is to register: the registration is a side effect of work and
+//! these tests only ever do work. Planting is work too, since `d734`: it
+//! writes the founding lane's own event, a real and permanent one, and
+//! registering right behind that write is what lets the `f721` guard see a
+//! second clone of the same product the moment it plants -- not the first
+//! ordinary command run in it.
 
 mod common;
 use common::Sandbox;
@@ -23,35 +27,29 @@ fn keys(c: &Sandbox) -> Vec<String> {
         .collect()
 }
 
-/// The `id` of line 1 of the log, which is what `d201` keys the registry by.
-fn first_event_id(c: &Sandbox) -> String {
-    let log = c.0.join(".vivac").join("events");
-    let text = std::fs::read_to_string(&log).expect("the log is there");
-    let line = text.lines().next().expect("the log has a first line");
-    let v: serde_json::Value = serde_json::from_str(line).expect("the first line parses");
-    v["id"].as_str().expect("an event has an id").to_string()
-}
-
-/// `f277`. Registration hangs off finding the root, which happens before the
-/// command runs, and the key is the id of the project's first event. A tree
-/// planted a moment ago has no such event, so the first `push` -- the command
-/// that writes it -- could not be the command that registered it, and the
-/// project stayed out of the registry until whatever came next. Out of
-/// `find --everywhere` too, and quietly, which is the part that matters.
-#[test]
-fn the_first_write_registers_the_project() {
-    let c = Sandbox::new_seeded("reg-first");
-    assert!(
-        keys(&c).is_empty(),
-        "an empty tree has no identity under d201 and must not be given one"
-    );
-    c.ok(&["push", "a goal", "--why", "it is the first thing"]);
-    assert_eq!(
-        keys(&c),
-        vec![first_event_id(&c)],
-        "the command that wrote the first event has to be the one that registers it"
-    );
-}
+// `the_first_write_registers_the_project` and, further down,
+// `init_alone_registers_nothing` used to live here: `f277`'s registration
+// hangs off the id of the project's first event, and a tree planted a
+// moment ago had no such event yet, so the first `push` -- the command
+// that writes it -- was the one that first registered it; `init` alone,
+// having written nothing, registered nothing. `f721` removed the state
+// both tests' whole point depended on: `setup::init` writes the founding
+// lane's own event -- a real, permanent one -- as part of planting itself
+// now, bare or not, and its own `apply_writes` notes the registry right
+// behind that write (`tree::note_registry`, called the same way after
+// every write this module's commands make). This is not new: `--yes` and
+// every harness's own `setup` already planted and registered in the same
+// breath before this fix, unrelated to it -- `Sandbox::new_seeded` calling
+// bare `init` is what kept these two tests from ever seeing it.
+//
+// `d734`: accepted, not a `d199` violation. `d199` forbids a command whose
+// *job* is to register; `init`'s job is to plant, and registering is what
+// the write it just made -- the founding lane's own event -- leaves behind
+// as a side effect, the same as any other command's write does. A plant is
+// the tree entering use, not a read conjuring an identity for one that
+// still has none: it is what the `f721` guard needs to see a second clone
+// of the same product the moment that clone plants, rather than waiting
+// for whatever it writes next.
 
 /// Before the upward search learned to skip it, a directory under the home and
 /// outside any project resolved to the home itself, so the home went into the
@@ -88,20 +86,6 @@ fn the_global_store_never_comes_back_as_a_project() {
     assert!(
         after.contains("1 project") && !after.contains("2 projects"),
         "the global store must not answer as a project: {after}"
-    );
-}
-
-/// The other half of the same rule: planting a tree is not using it, and a
-/// directory with `init` run in it and nothing else is not a project anybody
-/// has worked in. It stays out until it has something to say.
-#[test]
-fn init_alone_registers_nothing() {
-    let c = Sandbox::new_seeded("reg-init");
-    c.ok(&["brief"]);
-    c.ok(&["stack"]);
-    assert!(
-        keys(&c).is_empty(),
-        "reads on an empty tree must not conjure an identity for it"
     );
 }
 

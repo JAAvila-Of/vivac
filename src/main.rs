@@ -382,62 +382,33 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
     }
 
     if cmd == "init" {
-        // `d723` piece A: any of the six flags `setup` already had sends
-        // this run to the same tree path `setup` already walks through
-        // `tree.rs` (`setup::init`). Neither guard below reads back the
-        // same way through that path -- `resolve_roots` resolves a lane
-        // through `store::locate` rather than the read just below, which
-        // can succeed or fail with a different sentence than
-        // `already_a_lane`'s own, and an already-planted folder is shown
-        // the full plan there rather than the one line the second guard
-        // prints -- so a bare `vivac init` still takes both guards exactly
-        // as they were before this piece, and only a run carrying one of
-        // these six ever reaches the new path at all.
-        let has_new_flags = a.has("dry-run")
-            || a.has("yes")
-            || a.has("name")
-            || a.has("lane-name")
-            || a.has("join")
-            || a.has("new-tree")
-            || a.has("undo");
-        if has_new_flags {
-            return setup::init(&cwd, a);
-        }
-        // `t594`: a folder can carry a `.vivac/lane`
-        // naming another tree entirely -- exactly what `relocate` leaves
-        // the origin holding -- without itself being `already_planted`, the
-        // renamed-away log and config never counting as one. Planting a
-        // fresh tree there anyway would exit 0 and print success while
-        // `stack`/`push` kept answering for the tree the lane actually
-        // names, leaving the new one to sit at zero bytes forever with no
-        // sign anything was wrong. Checked first, so the ordinary
-        // already-planted message below never gets the chance to fire for a
-        // lane whose own first event does not match what it claims either.
+        // `d723` piece A / `f721`: every run, flagged or bare, walks the
+        // same tree path `setup` already walked through `tree.rs`
+        // (`setup::init`). A bare run used to take an old, separate path
+        // straight through `Store::create`, which never called
+        // `tree::plan` and so never ran the guard against two trees of one
+        // product either -- planting quietly succeeded where the flagged
+        // path already refused. One path only, so which flags a run
+        // carries can no longer decide whether that guard exists.
+        //
+        // `t594` keeps one guard of its own ahead of this dispatch: a
+        // folder whose own `.vivac/lane` cannot be resolved to any tree --
+        // exactly what `relocate` leaves the origin holding -- reaches
+        // `store::locate` inside `resolve_roots` and fails there with
+        // `TreeNotFound`'s generic sentence and exit code, shared with
+        // every other command that loses a lane's tree. `init` alone kept
+        // a sharper answer and its own exit 1 before this piece, and
+        // still does: a lane that resolves fine, to its own tree or to
+        // another one, carries on into `setup::init` unchanged, which is
+        // where both of those are decided now.
         if let Some(lane) = lane::read(&cwd.join(store::DIR))? {
             let is_own_tree = store::already_planted(&cwd)
                 && store::first_event_id(&cwd).as_deref() == Some(lane.project.as_str());
-            if !is_own_tree {
+            if !is_own_tree && matches!(store::locate(&cwd), Err(Failure::TreeNotFound(_))) {
                 return Err(Failure::already_a_lane());
             }
         }
-        // `f566`: a tree already there is something to open, not something
-        // to create over. `Store::open` reads its config as is when one
-        // exists, and only writes when there is none to read --
-        // regenerated locked if the log already governs (`d444`) -- so
-        // opening never duplicates what that path already decides. An
-        // empty `.vivac/` holds no tree yet, so it is planted like a new one.
-        if store::already_planted(&cwd) {
-            let s = store::Store::open(cwd.clone())?;
-            outln!("  vivac is already planted in {}", cwd.display());
-            outln!("        project {}", s.config.project_id);
-            return Ok(0);
-        }
-        let s = store::Store::create(&cwd)?;
-        outln!("  vivac planted in {}", cwd.display());
-        outln!("        project {}", s.config.project_id);
-        outln!();
-        outln!("  First node:  vivac push \"<title>\" --why \"<reason>\"");
-        return Ok(0);
+        return setup::init(&cwd, a);
     }
 
     // A tombstone, not a plain unknown command: `vivac hooks` is gone

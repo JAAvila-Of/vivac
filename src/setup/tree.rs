@@ -301,7 +301,7 @@ fn product_registered_refusal(
         .map(|p| if *p == "." { "this folder itself" } else { p })
         .collect::<Vec<_>>()
         .join(", ");
-    // `d723` piece B: proposes `vivac init`, which names no arnés, rather
+    // `d723` piece B: proposes `vivac init`, which names no harness, rather
     // than `vivac setup <harness>` (`f717` dissolved) -- planting is
     // `init`'s question wherever this refusal is reached from.
     match &sharing.name {

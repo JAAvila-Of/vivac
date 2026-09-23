@@ -230,16 +230,59 @@ fn a_vivac_that_holds_neither_a_tree_nor_a_lane_under_a_real_one_refuses() {
         s.contains("Or hand it back to the tree above by deleting the empty .vivac/ here."),
         "{s}"
     );
+}
 
-    // The refusal's own first remedy has to actually work, or it would be
-    // lying: `init` never walks up looking for a tree above it (`main.rs`
-    // checks only `cwd` itself), so it plants right here instead of
-    // repeating the same refusal.
-    let (init_out, init_code) = run(&hollow, c.global_home(), &["init"]);
-    assert_eq!(init_code, 0, "{init_out}");
+/// The refusal's own first remedy, followed literally (`d734`): `init` is
+/// scoped out of `f719`'s refusal on purpose, since it is the one command
+/// whose job is exactly "plant here" -- with a plan that shows the tree
+/// above (`above_warning`) and asks before writing, so the choice is the
+/// person's, not a guess. `--dry-run` carries that warning beside the
+/// plan; `--yes` plants a tree of its own, not a lane of the one above;
+/// and afterwards `open` here answers for the new tree, not the outer
+/// one's focus.
+#[test]
+fn init_plants_its_own_tree_over_a_hollow_vivac_under_a_real_one() {
+    let c = Sandbox::new_seeded("hollow-init-plants");
+    c.ok(&[
+        "push",
+        "Ship the release apparatus",
+        "--why",
+        "seed the tree",
+    ]);
+
+    let hollow = c.0.join("hollow");
+    std::fs::create_dir_all(hollow.join(".vivac")).unwrap();
+    std::fs::write(hollow.join(".vivac").join(".gitignore"), "*\n").unwrap();
+
+    let (dry, dry_code) = run(&hollow, c.global_home(), &["init", "--dry-run"]);
+    assert_eq!(dry_code, 0, "{dry}");
+    assert!(
+        says(&dry, "This tree sits inside another one, in folder"),
+        "{dry}"
+    );
+    assert!(says(&dry, "plant the tree"), "{dry}");
+    assert!(dry.contains("Nothing written: --dry-run."), "{dry}");
+    assert!(
+        !hollow.join(".vivac").join("events").is_file(),
+        "a dry run must not plant"
+    );
+
+    let (out, code) = run(&hollow, c.global_home(), &["init", "--yes"]);
+    assert_eq!(code, 0, "{out}");
     assert!(
         hollow.join(".vivac").join("events").is_file(),
-        "init did not plant a tree of its own here:\n{init_out}"
+        "init did not plant a tree of its own here:\n{out}"
+    );
+    assert!(
+        !hollow.join(".vivac").join("lane").exists(),
+        "the remedy is a tree of its own, not a lane of the one above"
+    );
+
+    let (open_out, open_code) = run(&hollow, c.global_home(), &["open"]);
+    assert_eq!(open_code, 0, "{open_out}");
+    assert!(
+        !open_out.contains("Ship the release apparatus"),
+        "open here still answered for the tree above, not the new one:\n{open_out}"
     );
 }
 
@@ -327,9 +370,18 @@ fn each_folders_brief_names_its_own_lane_in_the_header() {
     std::fs::create_dir_all(&second).unwrap();
     init_ok(&second, c.global_home());
 
+    // `f721`: `new_seeded` already declares the founding lane at plant
+    // time, after its own folder rather than the fallback `main` --
+    // `setup_names_the_founding_lane_after_its_own_folder`
+    // (`tests/init.rs`) covers that naming rule on its own; this test's
+    // own point is that it is *this* folder's name, not the other one's.
+    let folder_name = c.0.file_name().unwrap().to_string_lossy().into_owned();
     let (main_brief, code) = run(&c.0, c.global_home(), &["brief"]);
     assert_eq!(code, 0, "{main_brief}");
-    assert!(main_brief.contains("lane: main"), "{main_brief}");
+    assert!(
+        main_brief.contains(&format!("lane: {folder_name}")),
+        "{main_brief}"
+    );
 
     let (second_brief, code2) = run(&second, c.global_home(), &["brief"]);
     assert_eq!(code2, 0, "{second_brief}");
@@ -355,63 +407,17 @@ fn running_init_again_unchanged_does_not_write_a_second_event() {
     assert_eq!(before, log_text(&c), "a second run wrote to the log");
 }
 
-/// (5): a tree of today, where `init` had never run with a flag that
-/// declares a lane, gets `main` declared when `init` runs in its own
-/// folder (`t594` §4.5.2, case (b)) -- and every other command answers
-/// exactly as it did before, down to the byte. `d624`: the one exception
-/// is the header's own lane name, which moves from the fallback `main` to
-/// this folder's own name, the same as declaring any other lane already
-/// does.
-#[test]
-fn init_on_an_existing_trees_own_folder_declares_main_and_changes_nothing_else() {
-    let c = Sandbox::new_seeded("declare-existing-main");
-    c.ok(&["push", "Some node", "--why", "seed"]);
-    let (before, code) = run(&c.0, c.global_home(), &["brief"]);
-    assert_eq!(code, 0, "{before}");
-
-    init_ok(&c.0, c.global_home());
-
-    let (after, code2) = run(&c.0, c.global_home(), &["brief"]);
-    assert_eq!(code2, 0, "{after}");
-
-    let before_lines: Vec<&str> = before.lines().collect();
-    let after_lines: Vec<&str> = after.lines().collect();
-    assert_eq!(
-        before_lines.len(),
-        after_lines.len(),
-        "declaring main changed the line count:\nbefore:\n{before}\nafter:\n{after}"
-    );
-
-    let folder_name = c.0.file_name().unwrap().to_string_lossy().into_owned();
-    assert_eq!(
-        before_lines[0].replace("lane: main", &format!("lane: {folder_name}")),
-        after_lines[0],
-        "the header changed in more than its own lane name"
-    );
-    assert_eq!(
-        &before_lines[1..before_lines.len() - 1],
-        &after_lines[1..after_lines.len() - 1],
-        "declaring main changed something besides its own header name"
-    );
-
-    // The header line grew longer, so the footer's own token count grows
-    // with it (`brief.rs:875`); everything past that count still has to
-    // match, down to the byte.
-    let last_before = before_lines[before_lines.len() - 1];
-    let last_after = after_lines[after_lines.len() - 1];
-    let before_rest = last_before
-        .split_once("tokens")
-        .unwrap_or_else(|| panic!("the footer lost its token count: {last_before}"))
-        .1;
-    let after_rest = last_after
-        .split_once("tokens")
-        .unwrap_or_else(|| panic!("the footer lost its token count: {last_after}"))
-        .1;
-    assert_eq!(
-        before_rest, after_rest,
-        "the footer changed in more than its own token count"
-    );
-}
+// (5) used to live here: `init_on_an_existing_trees_own_folder_declares_main_and_changes_nothing_else`
+// proved that running `init` in a tree of today -- one that had never run
+// with a flag that declares a lane -- declares `main` and changes nothing
+// else, the header's own lane name moving from the fallback `main` to the
+// folder's own name. `f721` removed the state that test's whole point
+// depended on: every plant declares its founding lane immediately now,
+// bare or not, so a tree whose folder holds one but has not yet declared
+// it cannot exist any more, and there is no `init` call left that can be
+// the "before" half of that comparison. `each_folders_brief_names_its_own_lane_in_the_header`,
+// above, still covers the one part of it that survives: the header
+// carries this folder's own name.
 
 // ---------------------------------------------------------------------------
 // `t594`.
@@ -431,6 +437,14 @@ fn git(dir: &Path, args: &[&str]) {
     );
 }
 
+// `plant_undeclared` used to live here: `d734` moved it to `common`, word
+// for word, once the same function existed in this file and
+// `tests/init.rs` too (`f724`'s own lesson about two hand copies
+// drifting apart). Most of the fixtures and tests below need exactly its
+// undeclared start, to lay their own hand-crafted first line on top of
+// (`append_raw_line`, this file's own escape hatch for a shape no CLI
+// path writes any more, per its own module doc above).
+
 /// A repository with one commit at a fresh `root`, a linked worktree of
 /// it at `root`-`feature`, and a fresh `VIVAC_HOME` with the root's tree
 /// already `init`ed. Both round 1 and round 2 of the worktree finding
@@ -446,8 +460,7 @@ fn worktree_fixture(prefix: &str) -> (PathBuf, PathBuf, PathBuf) {
     git(&root, &["commit", "-q", "-m", "first"]);
 
     let home = unique(&format!("worktree-{prefix}-home"));
-    let (init_out, init_code) = run(&root, &home, &["init"]);
-    assert_eq!(init_code, 0, "{init_out}");
+    common::plant_undeclared(&root, prefix);
 
     let feature = root.parent().unwrap().join(format!(
         "{}-feature",
@@ -576,8 +589,7 @@ fn worktree_inside_fixture(prefix: &str) -> (PathBuf, PathBuf, PathBuf) {
     git(&root, &["commit", "-q", "-m", "first"]);
 
     let home = unique(&format!("worktree-in-{prefix}-home"));
-    let (init_out, init_code) = run(&root, &home, &["init"]);
-    assert_eq!(init_code, 0, "{init_out}");
+    common::plant_undeclared(&root, prefix);
 
     let feature = root.join("feature");
     git(&root, &["worktree", "add", "feature"]);
@@ -979,7 +991,7 @@ fn a_worktree_recreates_a_vanished_log_and_signs_main_like_the_tree_does() {
     git(&root, &["add", "."]);
     git(&root, &["commit", "-q", "-m", "first"]);
     let home = unique("panic-recipe-home");
-    let (init_out, init_code) = run(&root, &home, &["init"]);
+    let (init_out, init_code) = run(&root, &home, &["init", "--yes"]);
     assert_eq!(init_code, 0, "{init_out}");
     init_ok(&root, &home);
 
@@ -1099,7 +1111,7 @@ fn a_worktree_found_through_a_second_spelling_still_inherits_the_root_commit() {
     git(&real_root, &["add", "."]);
     git(&real_root, &["commit", "-q", "-m", "first"]);
     let home = unique("second-spelling-home");
-    let (init_out, init_code) = run(&real_root, &home, &["init"]);
+    let (init_out, init_code) = run(&real_root, &home, &["init", "--yes"]);
     assert_eq!(init_code, 0, "{init_out}");
     init_ok(&real_root, &home);
     git(&real_root, &["worktree", "add", "wt"]);
@@ -1271,12 +1283,19 @@ fn a_folder_whose_main_was_claimed_elsewhere_can_read_but_not_write() {
 #[test]
 fn a_folder_whose_own_lane_file_names_main_keeps_writing() {
     let c = Sandbox::new_seeded("lane-file-names-main");
+    // `f721`: `new_seeded` already declares `main` for real as `seq` 1,
+    // with a real, random project id -- so the lane file below has to
+    // name *that* id, not a fabricated one, for `resolve_lane` to read
+    // this folder as its own tree rather than an unresolvable lane of
+    // one. This hand-crafted claim follows the real declaration as `seq`
+    // 2 rather than colliding with it.
+    let real_project = first_event_id(&c);
     c.append_raw_line(
-        r#"{"seq":1,"id":"01SEEDCLAIMBAAAAAAAAAAAAAA","ts":"2026-01-01T00:00:00Z","actor":"a_test0000000","lane":"main","payload":{"type":"lane.claimed","lane":"main"}}"#,
+        r#"{"seq":2,"id":"01SEEDCLAIMBAAAAAAAAAAAAAA","ts":"2026-01-01T00:00:00Z","actor":"a_test0000000","lane":"main","payload":{"type":"lane.claimed","lane":"main"}}"#,
     );
     std::fs::write(
         c.0.join(".vivac").join("lane"),
-        r#"{"version":1,"id":"main","project":"01SEEDCLAIMBAAAAAAAAAAAAAA"}"#,
+        format!(r#"{{"version":1,"id":"main","project":"{real_project}"}}"#),
     )
     .unwrap();
 
@@ -1427,8 +1446,7 @@ fn mcp_joins_a_worktree_the_same_way_the_cli_does() {
     git(&root, &["add", "."]);
     git(&root, &["commit", "-q", "-m", "first"]);
     let home = unique("mcp-joins-home");
-    let (init_out, init_code) = run(&root, &home, &["init"]);
-    assert_eq!(init_code, 0, "{init_out}");
+    common::plant_undeclared(&root, "mcp-joins");
     // `t594`: joining on its own requires the tree to
     // already have a lane declared somewhere, so this stands in for a
     // `setup` that ran before either worktree existed.
@@ -1553,8 +1571,10 @@ fn init_fixes_a_folder_whose_main_was_claimed_instead_of_refusing() {
 #[test]
 fn import_continues_the_logs_seq_rather_than_assuming_it_is_empty() {
     let c = Sandbox::new_seeded("import-continues-seq");
+    // `f721`: `new_seeded` already declares the founding lane for real as
+    // `seq` 1, so this hand-crafted line follows it as `seq` 2.
     c.append_raw_line(
-        r#"{"seq":1,"id":"01SEEDSESSIONAAAAAAAAAAAA","ts":"2026-01-01T00:00:00Z","actor":"a_test0000000","lane":"main","payload":{"type":"session.started","source":"test"}}"#,
+        r#"{"seq":2,"id":"01SEEDSESSIONAAAAAAAAAAAA","ts":"2026-01-01T00:00:00Z","actor":"a_test0000000","lane":"main","payload":{"type":"session.started","source":"test"}}"#,
     );
     let tree_json = c.0.join("tree.json");
     std::fs::write(
@@ -1582,7 +1602,7 @@ fn import_continues_the_logs_seq_rather_than_assuming_it_is_empty() {
         seqs.len(),
         "the log carries a duplicate seq: {seqs:?}"
     );
-    assert_eq!(seqs, vec![1, 2], "{log}");
+    assert_eq!(seqs, vec![1, 2, 3], "{log}");
 
     let (check_out, check_code) = c.run(&["check"]);
     assert_eq!(check_code, 0, "{check_out}");
@@ -1770,8 +1790,7 @@ fn a_worktree_named_a_secret_never_writes_it_to_the_log() {
     git(&root, &["add", "."]);
     git(&root, &["commit", "-q", "-m", "first"]);
     let home = unique("redacted-worktree-home");
-    let (init_out, init_code) = run(&root, &home, &["init"]);
-    assert_eq!(init_code, 0, "{init_out}");
+    common::plant_undeclared(&root, "redacted-worktree");
     append_raw_line(
         &root,
         r#"{"seq":1,"id":"01SEEDMAINAAAAAAAAAAAAAAAA","ts":"2026-01-01T00:00:00Z","actor":"a_test0000000","lane":"main","payload":{"type":"lane.declared","lane":"main","name":"main","repos":[{"path":"."}]}}"#,
@@ -1837,7 +1856,7 @@ fn relocate_and_join_treat_two_spellings_of_the_same_folder_as_one() {
     let _home = RemoveOnDrop(home.clone());
     let _real = RemoveOnDrop(real.clone());
     std::fs::create_dir_all(&real).unwrap();
-    let (init_out, init_code) = run(&real, &home, &["init"]);
+    let (init_out, init_code) = run(&real, &home, &["init", "--yes"]);
     assert_eq!(init_code, 0, "{init_out}");
     let (push_out, push_code) = run(&real, &home, &["push", "seed", "--why", "seed"]);
     assert_eq!(push_code, 0, "{push_out}");
@@ -1939,7 +1958,7 @@ fn an_unjoined_worktree_still_writes_nothing_with_another_project_in_the_registr
 
     let elsewhere = unique("beam-elsewhere");
     std::fs::create_dir_all(&elsewhere).unwrap();
-    let (init_out, init_code) = run(&elsewhere, &home, &["init"]);
+    let (init_out, init_code) = run(&elsewhere, &home, &["init", "--yes"]);
     assert_eq!(init_code, 0, "{init_out}");
     let (push_out, push_code) = run(
         &elsewhere,
@@ -2039,7 +2058,7 @@ fn moving_a_branch_writes_one_where_and_moving_back_writes_another() {
     git(&root, &["commit", "-q", "-m", "first"]);
 
     let home = unique("where-moves-home");
-    let (init_out, init_code) = run(&root, &home, &["init"]);
+    let (init_out, init_code) = run(&root, &home, &["init", "--yes"]);
     assert_eq!(init_code, 0, "{init_out}");
     init_ok(&root, &home);
     assert_eq!(
@@ -2161,7 +2180,7 @@ fn a_stop_in_a_root_without_git_anchors_every_repository_below_it() {
     commit_a_repo(&root.join("infra"));
 
     let home = unique("no-git-home");
-    let (init_out, init_code) = run(&root, &home, &["init"]);
+    let (init_out, init_code) = run(&root, &home, &["init", "--yes"]);
     assert_eq!(init_code, 0, "{init_out}");
     init_ok(&root, &home);
 
@@ -2215,7 +2234,7 @@ fn a_stop_in_a_root_without_git_shows_the_sha_of_a_lone_repository() {
     commit_a_repo(&root.join("webapi"));
 
     let home = unique("one-repo-home");
-    let (init_out, init_code) = run(&root, &home, &["init"]);
+    let (init_out, init_code) = run(&root, &home, &["init", "--yes"]);
     assert_eq!(init_code, 0, "{init_out}");
     init_ok(&root, &home);
 

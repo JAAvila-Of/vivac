@@ -59,7 +59,7 @@ fn with_git(name: &str) -> Sandbox {
     write(&c, "README.md", "start\n");
     git(&["add", "-A"]);
     git(&["commit", "-qm", "init"]);
-    c.ok(&["init"]);
+    c.ok(&["init", "--yes"]);
     c
 }
 

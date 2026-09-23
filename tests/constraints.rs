@@ -392,11 +392,11 @@ fn emisores_leaves_no_absolute_path_or_url_anywhere() {
     commit_a_repo_on_branch(&backend, "feature/net10");
     commit_a_repo_on_branch(&web, "feature/ng22");
 
-    // `init`'s "vivac planted in <path>" header is pre-existing and already
-    // accepted (`tests/init.rs`): it confirms the folder the caller just
-    // ran it from, not something this tranche's own surfaces leak. Left
-    // out of the scan below on purpose, the same way `relocate`'s own
-    // destination is
+    // `init`'s own "vivac init, in <path>" header (`setup::init::full_plan`,
+    // `f721`) is pre-existing and already accepted (`tests/init.rs`): it
+    // confirms the folder the caller just ran it from, not something this
+    // tranche's own surfaces leak. Left out of the scan below on purpose,
+    // the same way `relocate`'s own destination is
     // (`no_printed_surface_this_task_added_names_an_absolute_path`, above).
     // §9.2.18 itself only asks this of the brief.
     c.ok(&["init", "--yes"]);

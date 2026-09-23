@@ -769,6 +769,17 @@ fn changes_counts_a_late_declaration_in_text_and_json() {
 const LOCK_SENTENCE: &str =
     "this tree holds pillars and rules, and this vivac is too old to read them: update vivac";
 
+/// `store::LANE_SENTENCE`: what a config's `version` becomes the moment its
+/// tree gains a lane, which `with_open_rule`'s own `Sandbox::new_seeded`
+/// (`f721`) now does before either the pillar or the rule below it exist.
+/// `lock_if_needed`'s own guard only fires while `version` still reads `1`,
+/// so a tree already locked to this sentence stays here rather than moving
+/// to `LOCK_SENTENCE`'s -- `store.rs`'s own comment: "0.12 reads both
+/// sentences, so a tree that holds pillars and lanes says this one and
+/// loses nothing."
+const LANE_SENTENCE: &str =
+    "this tree holds lanes, and this vivac is too old to read them: update vivac";
+
 fn config_text(c: &Sandbox) -> String {
     std::fs::read_to_string(c.0.join(".vivac").join("config")).unwrap()
 }
@@ -778,8 +789,8 @@ fn declare_on_an_unlocked_config_with_a_rule_already_in_the_log_locks_it() {
     let c = with_open_rule("declare-locks");
     c.ok(&["decide", "A call", "--reason", "because"]); // d3
     assert!(
-        config_text(&c).contains(LOCK_SENTENCE),
-        "setup: the rule should have locked it already"
+        config_text(&c).contains(LANE_SENTENCE),
+        "setup: the founding lane should have locked it already"
     );
 
     // Hand-mount: put the config back the way an untouched tree would have

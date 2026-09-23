@@ -453,7 +453,7 @@ fn check_withholds_a_name_the_guard_rejects() {
     std::fs::create_dir_all(&parent).unwrap();
     let original_dir = parent.join(rejected_name);
     std::fs::create_dir_all(&original_dir).unwrap();
-    run_bin(&original_dir, &home, &["init"]);
+    run_bin(&original_dir, &home, &["init", "--yes"]);
     run_bin(
         &original_dir,
         &home,
@@ -606,7 +606,7 @@ fn the_join_command_quotes_a_name_with_a_space() {
     std::fs::create_dir_all(&parent).unwrap();
     let original_dir = parent.join("My Project");
     std::fs::create_dir_all(&original_dir).unwrap();
-    run_bin(&original_dir, &home, &["init"]);
+    run_bin(&original_dir, &home, &["init", "--yes"]);
     run_bin(
         &original_dir,
         &home,
@@ -667,7 +667,7 @@ fn copy_json_carries_a_null_other_when_the_guard_withholds_the_name() {
     std::fs::create_dir_all(&parent).unwrap();
     let original_dir = parent.join(rejected_name);
     std::fs::create_dir_all(&original_dir).unwrap();
-    run_bin(&original_dir, &home, &["init"]);
+    run_bin(&original_dir, &home, &["init", "--yes"]);
     run_bin(
         &original_dir,
         &home,
@@ -728,7 +728,7 @@ fn copy_output_carries_no_absolute_path_when_the_guard_withholds_the_name() {
     std::fs::create_dir_all(&parent).unwrap();
     let original_dir = parent.join(rejected_name);
     std::fs::create_dir_all(&original_dir).unwrap();
-    run_bin(&original_dir, &home, &["init"]);
+    run_bin(&original_dir, &home, &["init", "--yes"]);
     run_bin(
         &original_dir,
         &home,
@@ -917,7 +917,7 @@ fn two_copies_one_name_withheld_says_more_hold_it_too() {
     std::fs::create_dir_all(&parent).unwrap();
     let original_dir = parent.join("Orig");
     std::fs::create_dir_all(&original_dir).unwrap();
-    run_bin(&original_dir, &home, &["init"]);
+    run_bin(&original_dir, &home, &["init", "--yes"]);
     run_bin(
         &original_dir,
         &home,
@@ -971,7 +971,7 @@ fn two_copies_both_names_withheld_says_other_folders_with_no_list() {
     std::fs::create_dir_all(&parent).unwrap();
     let original_dir = parent.join("Orig");
     std::fs::create_dir_all(&original_dir).unwrap();
-    run_bin(&original_dir, &home, &["init"]);
+    run_bin(&original_dir, &home, &["init", "--yes"]);
     run_bin(
         &original_dir,
         &home,
@@ -1031,7 +1031,7 @@ fn the_join_command_quotes_a_name_that_is_not_just_safe_characters() {
     std::fs::create_dir_all(&parent).unwrap();
     let original_dir = parent.join("A&B");
     std::fs::create_dir_all(&original_dir).unwrap();
-    run_bin(&original_dir, &home, &["init"]);
+    run_bin(&original_dir, &home, &["init", "--yes"]);
     run_bin(
         &original_dir,
         &home,
@@ -1086,8 +1086,11 @@ fn check_names_a_repeated_seq_and_says_where() {
 #[test]
 fn check_names_the_event_a_torn_tail_swallowed() {
     let c = Sandbox::new_seeded("check-torn-tail");
+    // `f721`: `new_seeded` now plants with a founding lane already on line
+    // 1, so the line this test hand-crafts is `seq` 2, not 1, and the torn
+    // line behind it is line 3.
     c.append_raw_line(
-        r#"{"seq":1,"id":"01TORNTAILAAAAAAAAAAAAAAAA","ts":"2026-09-18T00:00:00Z","actor":"a_test0000000","lane":"main","payload":{"type":"node.created","node":"01TORNTAILBBBBBBBBBBBBBBBB","num":1,"kind":"goal","title":"The line that survived"}}"#,
+        r#"{"seq":2,"id":"01TORNTAILAAAAAAAAAAAAAAAA","ts":"2026-09-18T00:00:00Z","actor":"a_test0000000","lane":"main","payload":{"type":"node.created","node":"01TORNTAILBBBBBBBBBBBBBBBB","num":1,"kind":"goal","title":"The line that survived"}}"#,
     );
     {
         use std::io::Write;
@@ -1097,14 +1100,14 @@ fn check_names_the_event_a_torn_tail_swallowed() {
             .unwrap();
         // No trailing newline, and the object itself is cut off mid-field --
         // exactly what a crash mid-write leaves behind.
-        write!(f, "{{\"seq\":2,\"id\":\"chopped").unwrap();
+        write!(f, "{{\"seq\":3,\"id\":\"chopped").unwrap();
     }
 
     let (out, code) = c.run(&["check"]);
     assert_eq!(code, 1, "{out}");
     assert!(
         out.contains(
-            "line 2 does not end with a newline: whatever was appended after it was \
+            "line 3 does not end with a newline: whatever was appended after it was \
              swallowed and cannot be recovered from this log"
         ),
         "{out}"

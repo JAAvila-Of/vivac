@@ -41,6 +41,14 @@ fn already_planted(dir: &Path) -> bool {
     dir.join(".vivac").join("config").is_file() || dir.join(".vivac").join("events").is_file()
 }
 
+// `unlocked` used to live here: `d734` moved it to `common::Sandbox` once
+// the same function existed, word for word bar the JSON read, in this
+// file and two others (`f724`'s own lesson about two hand copies
+// drifting apart). The two tests below are about the lock line a plan
+// shows the moment a tree is not locked to `store::LANE_SENTENCE` yet,
+// which a freshly seeded tree no longer is -- `Sandbox::unlocked` puts it
+// back.
+
 /// `p` the way the binary's own `current_dir()` would print it, for building
 /// an expected text around a path.
 ///
@@ -501,7 +509,7 @@ fn plan_words(out: &str) -> String {
 // three tests run instead of `setup claude-code --yes`.
 #[test]
 fn the_plan_for_a_new_lane_shows_the_three_lines_the_spec_gives() {
-    let c = Sandbox::new_seeded("setup-lane-plan-lines");
+    let c = Sandbox::unlocked("setup-lane-plan-lines");
     let second = c.0.join("v2");
     std::fs::create_dir_all(&second).unwrap();
 
@@ -542,7 +550,7 @@ fn the_plan_for_a_new_lane_shows_the_three_lines_the_spec_gives() {
 /// the line, exactly where the plan showed it above.
 #[test]
 fn the_lane_config_warning_shows_up_before_anything_is_written() {
-    let c = Sandbox::new_seeded("setup-lane-plan-dry-run");
+    let c = Sandbox::unlocked("setup-lane-plan-dry-run");
     let second = c.0.join("v2");
     std::fs::create_dir_all(&second).unwrap();
 
@@ -1705,7 +1713,7 @@ fn git_status_shows_nothing_of_a_planted_tree() {
     );
     std::fs::write(c.0.join("untracked.txt"), "new").unwrap();
 
-    c.ok(&["init"]);
+    c.ok(&["init", "--yes"]);
 
     let out = std::process::Command::new("git")
         .current_dir(&c.0)

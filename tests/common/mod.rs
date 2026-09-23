@@ -35,6 +35,41 @@ fn unique(prefix: &str, name: &str) -> PathBuf {
     ))
 }
 
+/// `d444`'s own sentence, and `store::LANE_SENTENCE`: the two ways a
+/// config's `version` leaves `1`. Kept private here, for
+/// [`Sandbox::is_locked_any`] alone -- files with their own `is_locked`
+/// keyed on `d444`'s sentence specifically keep their own copy of it,
+/// the same pre-existing duplication `f724` did not ask to close.
+const LOCK_SENTENCE: &str =
+    "this tree holds pillars and rules, and this vivac is too old to read them: update vivac";
+const LANE_SENTENCE: &str =
+    "this tree holds lanes, and this vivac is too old to read them: update vivac";
+
+/// A tree the way a bare `init` used to leave one before `f721`: a
+/// `.vivac/` with a config at `version: 1` and an empty log, its founding
+/// lane not yet declared. Planting through the CLI cannot produce this
+/// shape any more -- `d723` folded declaring the founding lane into every
+/// plant, bare or not -- and several tests need exactly this undeclared
+/// start, at a folder that is not always a `Sandbox`'s own (`lanes.rs`'s
+/// nested fixtures, `init.rs`'s copy source), so this takes a bare path
+/// rather than returning a `Sandbox`. `d734`: moved here once the same
+/// function existed, word for word, in more than one test file -- `f724`'s
+/// own lesson about two hand copies drifting apart.
+#[allow(dead_code)]
+pub fn plant_undeclared(root: &Path, seed: &str) {
+    let dir = root.join(".vivac");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("config"),
+        format!(
+            "{{\n  \"version\": 1,\n  \"project_id\": \"01PLANT{seed}PROJECT\",\n  \"actor\": \"a_{seed}\"\n}}\n"
+        ),
+    )
+    .unwrap();
+    std::fs::File::create(dir.join("events")).unwrap();
+    std::fs::write(dir.join(".gitignore"), "*\n").unwrap();
+}
+
 pub struct Sandbox(pub PathBuf, PathBuf);
 
 impl Sandbox {
@@ -63,13 +98,16 @@ impl Sandbox {
 
     // `mod common` is compiled once per test binary; `setup.rs` no longer
     // seeds through `setup` itself, since planting moved to `init`
-    // (`d723` piece B).
+    // (`d723` piece B). `--yes` is required now, not just a convenience:
+    // `f721` closed the door a bare `init` used to slip through without a
+    // terminal, so a suite run with none needs it to seed anything at all
+    // (`tests/init.rs`'s own `bare_init_with_no_terminal_and_no_yes_refuses_and_writes_nothing`).
     #[allow(dead_code)]
     pub fn new_seeded(name: &str) -> Sandbox {
         let d = unique("t", name);
         std::fs::create_dir_all(&d).unwrap();
         let c = Sandbox(d, unique("t-home", name));
-        c.ok(&["init"]);
+        c.ok(&["init", "--yes"]);
         c
     }
 
@@ -83,8 +121,53 @@ impl Sandbox {
         let d = unique("t", name);
         std::fs::create_dir_all(&d).unwrap();
         let c = Sandbox(d, home.to_path_buf());
-        c.ok(&["init"]);
+        c.ok(&["init", "--yes"]);
         c
+    }
+
+    /// `new_seeded`, hand-mounted back to an unlocked config (`version:
+    /// 1`): `f721` made every seeded tree declare a founding lane at
+    /// plant time, which locks the config to `LANE_SENTENCE` before a
+    /// test about `d444`'s own pillar/rule lock -- a different mechanism
+    /// entirely -- ever gets a turn. `lock_if_needed` (`store.rs`) only
+    /// ever reads the config's own `version`, never the log, so putting
+    /// it back to `1` by hand reconstructs exactly the precondition those
+    /// tests need. `d734`: moved here once the same function existed,
+    /// word for word bar the JSON read, in three test files.
+    #[allow(dead_code)]
+    pub fn unlocked(name: &str) -> Sandbox {
+        let c = Sandbox::new_seeded(name);
+        let cfg = c.0.join(".vivac").join("config");
+        let raw = std::fs::read_to_string(&cfg).unwrap();
+        let mut v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        v["version"] = serde_json::Value::from(1);
+        std::fs::write(&cfg, serde_json::to_string_pretty(&v).unwrap()).unwrap();
+        c
+    }
+
+    /// [`Self::unlocked`], with the founding lane taken out of the log
+    /// too: `regenerated_version` (`store.rs`) reads the log rather than
+    /// the config, and stops at the first `lane.declared` it finds -- the
+    /// very event `new_seeded` now always writes first. Needed by tests
+    /// about a log that holds a pillar (or nothing) and no lane at all,
+    /// the shape every tree had before `d723` folded lane declaration
+    /// into planting, and there is no CLI path left that produces it
+    /// fresh.
+    #[allow(dead_code)]
+    pub fn seeded_with_no_lane(name: &str) -> Sandbox {
+        let c = Sandbox::unlocked(name);
+        std::fs::write(c.0.join(".vivac").join("events"), "").unwrap();
+        c
+    }
+
+    /// Either of the two sentences a lock can leave, for the tests that
+    /// only care that *something* already moved this tree's config off
+    /// `1` -- a file's own `is_locked` keeps meaning `d444`'s sentence
+    /// specifically.
+    #[allow(dead_code)]
+    pub fn is_locked_any(&self) -> bool {
+        let t = std::fs::read_to_string(self.0.join(".vivac").join("config")).unwrap_or_default();
+        t.contains(LOCK_SENTENCE) || t.contains(LANE_SENTENCE)
     }
 
     /// Where `VIVAC_HOME` points for every subprocess this sandbox spawns.
