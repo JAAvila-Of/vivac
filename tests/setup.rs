@@ -1344,12 +1344,13 @@ fn setup_refuses_when_the_trees_own_vivac_is_the_global_store() {
 /// copy an earlier vivac wrote; these fixtures are what those copies actually
 /// looked like. The ones from v0.11.0 on are byte for byte the copies those
 /// releases wrote into real projects.
-const EARLIER_RELEASE_SKILLS: [(&str, &str); 5] = [
+const EARLIER_RELEASE_SKILLS: [(&str, &str); 6] = [
     ("v0.10.0", include_str!("data/skill-v0.10.0.md")),
     ("v0.11.0", include_str!("data/skill-v0.11.0.md")),
     ("v0.11.1", include_str!("data/skill-v0.11.1.md")),
     ("v0.11.2", include_str!("data/skill-v0.11.2.md")),
     ("v0.15.0", include_str!("data/skill-v0.15.0.md")),
+    ("v0.15.2", include_str!("data/skill-v0.15.2.md")),
 ];
 
 #[test]

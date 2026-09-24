@@ -1564,10 +1564,10 @@ mod tests {
         // Computed independently (Python's own FNV-1a/64) over the exact
         // frontmatter and body this file embeds. It moves whenever the
         // skill's text does, and moving it is meant to be deliberate: the
-        // last time was `t767`, which made the skill check every source can
-        // still be found, work in batches and close lessons as records,
-        // after the migration of a real project lost three sources in four.
-        assert_eq!(skill_fingerprint(), 0x0f51521030b6eafe);
+        // last time was `f793`/`f794`, after an unguided migration wrote a
+        // batch on a yes to its sources, never showed the nodes, and said
+        // nothing about pillars.
+        assert_eq!(skill_fingerprint(), 0x1d86b0aa9ecb020d);
     }
 
     #[test]

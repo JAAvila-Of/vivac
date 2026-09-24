@@ -1,3 +1,8 @@
+---
+name: vivac-migrate
+description: Bring everything a project already knows into the vivac tree, from another memory system, the harness's own memory, instruction files for any agent, decision records and internal documents; check it, and retire the other maps with the person's yes. Use when asked to migrate, import or move memories, notes, rules, decisions or documentation into vivac, or to bring what a project knows into it.
+---
+<!-- written by vivac setup; fingerprint 0f51521030b6eafe; setup removes it with --undo while the text is unchanged -->
 
 # Bringing what a project knows into vivac
 
@@ -131,9 +136,7 @@ next agent on its own:
   nobody named it, propose it marked as inferred, and for each one show what
   it would reject in practice and whether it holds for the whole project. One
   that only holds for one part of the work is a rule under that part's goal.
-  Let the person decide. Whatever you found, the plan says it: the pillars
-  the sources name, the ones you infer, or that there are none. Rules with no
-  pillar above them are allowed, but the person has to have seen that.
+  Let the person decide.
 - A description of how the system works is not a rule, however important it
   is. A rule is a line that work can be checked against; the description stays
   in its document.
@@ -164,10 +167,6 @@ Show the person, for each source, how many nodes come out of it and what is
 left out and why. Then a table per kind, with the source, the title, the parent
 and, for each decision, its --against. Then the other maps you found in step
 1. Wait for their answer before writing.
-
-A yes to the sources and how you will treat them is not a yes to the nodes.
-Each batch shows its own tables, title by title, and waits for its own yes,
-even when the person already approved the plan or asked for only one batch.
 
 ## 4. Write
 
