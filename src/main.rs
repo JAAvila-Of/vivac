@@ -162,6 +162,155 @@ const USAGE: &str = r#"vivac - provenance of work
       another process kept locked
 "#;
 
+/// Every command the CLI actually dispatches, exactly as `USAGE` names
+/// them: `commands_and_usage_stay_in_sync` keeps the two from drifting
+/// apart. `unknown_command` walks this before anything else runs (`d772`),
+/// so a command left off it would read as unknown no matter what
+/// `dispatch` does with it further down.
+///
+/// `hooks` is deliberately not here: it is gone (`d557`) and answers with
+/// its own tombstone, which `unknown_command` is never allowed to shadow --
+/// see the `cmd != "hooks"` guard where this is read.
+const COMMANDS: &[&str] = &[
+    "focus",
+    "push",
+    "pop",
+    "park",
+    "promote",
+    "abandon",
+    "add",
+    "done",
+    "note",
+    "block",
+    "arm",
+    "declare",
+    "decide",
+    "flag",
+    "save",
+    "restore",
+    "vivacs",
+    "brief",
+    "why",
+    "tree",
+    "open",
+    "find",
+    "stack",
+    "parked",
+    "rules",
+    "triage",
+    "reconcile",
+    "changes",
+    "stats",
+    "check",
+    "session",
+    "mcp",
+    "web",
+    "init",
+    "setup",
+    "relocate",
+    "import",
+];
+
+/// A synonym typed for a command that does exist, paired with the second
+/// line `unknown_command` gives instead of guessing which flags it takes:
+/// the word for a thing an agent already knows how to ask for, spelled
+/// differently (`d772`, `f770`).
+const COMMAND_HINTS: &[(&[&str], &str)] = &[
+    (
+        &[
+            "show", "get", "read", "view", "cat", "info", "describe", "inspect",
+        ],
+        "  To read a node and why it exists:  vivac why <id>",
+    ),
+    (&["list", "ls"], "  What is still open:  vivac open"),
+    (
+        &["search", "grep", "query"],
+        "  To search the tree:  vivac find \"<words>\"",
+    ),
+    (
+        &["status", "where", "context"],
+        "  Where you are and what not to touch:  vivac brief",
+    ),
+    (
+        &["close", "finish", "complete", "resolve"],
+        "  To close a node:  vivac done <id> \"<outcome>\", or the focus:  vivac pop",
+    ),
+    (
+        &["new", "create", "start"],
+        "  To open a node:  vivac push \"<title>\" --why \"<why>\"",
+    ),
+    (
+        &["log", "history", "diff"],
+        "  What moved since a stop:  vivac changes",
+    ),
+];
+
+/// Levenshtein edit distance: insert, delete and substitute each cost one.
+/// Hand-rolled rather than pulled in, the same call `args.rs`'s own module
+/// doc makes about the parser itself -- a command name is a handful of
+/// characters, so the O(n*m) table this walks is never a cost worth a
+/// dependency.
+fn edit_distance(x: &str, y: &str) -> usize {
+    let x: Vec<char> = x.chars().collect();
+    let y: Vec<char> = y.chars().collect();
+    let mut row: Vec<usize> = (0..=y.len()).collect();
+    for (i, &p) in x.iter().enumerate() {
+        let mut prev = row[0];
+        row[0] = i + 1;
+        for (j, &q) in y.iter().enumerate() {
+            let above = row[j + 1];
+            row[j + 1] = if p == q {
+                prev
+            } else {
+                1 + prev.min(row[j]).min(above)
+            };
+            prev = above;
+        }
+    }
+    row[y.len()]
+}
+
+/// The second line `unknown_command` gives, when it has one to give: a
+/// known synonym's own hint first, and only then the closest real command
+/// within two edits, ties broken alphabetically (`d772`).
+fn unknown_command_hint(cmd: &str) -> Option<String> {
+    for (words, hint) in COMMAND_HINTS {
+        if words.contains(&cmd) {
+            return Some(hint.to_string());
+        }
+    }
+    let mut best: Option<(&str, usize)> = None;
+    for &candidate in COMMANDS {
+        let distance = edit_distance(cmd, candidate);
+        if distance > 2 {
+            continue;
+        }
+        best = match best {
+            Some((word, current))
+                if current < distance || (current == distance && word < candidate) =>
+            {
+                Some((word, current))
+            }
+            _ => Some((candidate, distance)),
+        };
+    }
+    best.map(|(candidate, _)| format!("  Closest:  vivac {candidate}"))
+}
+
+/// `d772`: a command that is not one of `COMMANDS` -- and is not the
+/// `hooks` tombstone below, which answers on its own -- is refused before
+/// any flag, positional or tree-lookup check runs, so a typo never gets
+/// treated as if the command it named actually existed.
+fn unknown_command(cmd: &str) -> Failure {
+    let mut msg = format!("\"{cmd}\" is not a vivac command.");
+    if let Some(hint) = unknown_command_hint(cmd) {
+        msg.push('\n');
+        msg.push_str(&hint);
+    }
+    msg.push_str("\n  Every command:  vivac --help");
+    Failure::usage(msg)
+}
+
 /// A root that reached the registry with no identity to be keyed by, and
 /// the lane it was seen under (its id and folder, when the folder carries
 /// one), kept so the attempt can be made again once the command has run.
@@ -265,6 +414,13 @@ fn project_name(ctx: &ops::Ctx) -> String {
 }
 
 fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
+    // `d772`: ahead of every other check below -- flags, positionals, the
+    // tree underfoot -- because none of those mean anything for a command
+    // that does not exist. `hooks` answers with its own tombstone further
+    // down and must not be shadowed by this.
+    if !COMMANDS.contains(&cmd) && cmd != "hooks" {
+        return Err(unknown_command(cmd));
+    }
     let cwd = std::env::current_dir().map_err(Failure::Io)?;
 
     // Valid options per command. One that is not here is an error and not
@@ -786,10 +942,56 @@ fn write_op(cmd: &str, ctx: &mut ops::Ctx, a: &Args) -> Result<Option<outcome::O
 
 #[cfg(test)]
 mod tests {
-    use super::USAGE;
+    use super::{COMMANDS, USAGE};
     use crate::failure::Failure;
     use crate::redact;
     use std::collections::BTreeSet;
+
+    /// Every command `USAGE` actually shows, parsed rather than
+    /// hand-copied: a line whose trimmed text starts with `vivac ` names one
+    /// in the word right after it. Lines that only mention `vivac` in
+    /// passing -- "vivac never runs it", the exit-code sentence about "a
+    /// tree written by a newer vivac" -- do not start that way, and drop
+    /// out on their own.
+    fn commands_in_usage(help: &str) -> BTreeSet<&str> {
+        help.lines()
+            // The title line, `vivac - provenance of work`, sits at column
+            // zero and would otherwise read as a command named `-`; every
+            // real example is indented under one of the sections below it.
+            .filter(|l| l.starts_with(' '))
+            .filter_map(|l| l.trim_start().strip_prefix("vivac "))
+            .filter_map(|rest| rest.split_whitespace().next())
+            .collect()
+    }
+
+    /// `d772`: `COMMANDS` is what `unknown_command` checks a typed command
+    /// against, and `USAGE` is what a person reads to learn the real ones.
+    /// The two have to agree in both directions, or a command could be
+    /// refused as unknown while `USAGE` still lists it, or dispatched while
+    /// nobody reading `USAGE` would know it exists.
+    #[test]
+    fn commands_and_usage_stay_in_sync() {
+        let listed = commands_in_usage(USAGE);
+        let declared: BTreeSet<&str> = COMMANDS.iter().copied().collect();
+        assert_eq!(
+            listed, declared,
+            "COMMANDS and USAGE's own `vivac <command>` lines have drifted."
+        );
+    }
+
+    /// `d772`: a hint is one line of an answer an agent reads in a terminal,
+    /// so it keeps to the 76 columns every other line of help does. The
+    /// `close` hint first came in at 83.
+    #[test]
+    fn every_unknown_command_hint_fits_76_columns() {
+        for (_, hint) in super::COMMAND_HINTS {
+            assert!(
+                hint.chars().count() <= 76,
+                "a hint is {} columns wide: {hint:?}",
+                hint.chars().count()
+            );
+        }
+    }
 
     /// Every number in the `Exit codes` block of the help text: the codes
     /// this binary claims to be able to return. Parsed rather than
