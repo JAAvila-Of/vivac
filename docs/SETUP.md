@@ -69,9 +69,13 @@ and that nothing else in it moved. If one does not, it puts all of them back
 the way they were.
 
 `vivac setup claude-code --undo` removes exactly what setup writes and leaves
-anything that is not exactly its own. The tree is never part of it: what
-`init` wrote, `vivac init --undo` takes back, and it never removes a tree
-that holds work.
+anything that is not exactly its own. Of folders it removes only its own
+`vivac-migrate`: `.claude/` stays, even empty, because setup cannot tell
+whether it was there before. The tree is never part of it: what `init`
+wrote, `vivac init --undo` takes back. Right after planting, while the tree
+holds no work yet, that is the whole `.vivac/` and its line in this
+machine's registry. Once the tree holds work, `init --undo` never removes
+it, and says so.
 
 ### Why the commands are a bare `vivac`
 
@@ -112,7 +116,8 @@ and by the same rules: it adds to a file rather than replacing it, keeps
 every key it does not own where it was, refuses a file it cannot read and an
 entry under its name that it did not write, and a second run finds nothing
 to do. `vivac setup codex --undo` removes exactly what it wrote and leaves
-anything that is not exactly its own; the tree is never part of it.
+anything that is not exactly its own, `.codex/` and `.agents/` included; the
+tree is never part of it.
 
 The server goes into `config.toml` between two marker comments, which is how
 a later run knows which lines are its own without this binary carrying a
@@ -126,10 +131,13 @@ agent working in the project cannot run setup here again, merge it or take
 it back. What an agent can do is create them on a project that has neither.
 
 **Two things setup cannot do for you either**, and it says both when it
-finishes. Codex reads nothing under a project's `.codex/` until you mark that
-project trusted, and that lives in your own `~/.codex/config.toml`, not in
-the project. And every hook is approved on its own, against its hash, with
-`/hooks` inside Codex: the first time, and whenever a hook changes.
+finishes. Codex reads nothing under a project's `.codex/` until the project
+is trusted, which lives in your own configuration, not the project's. The
+first time Codex opens the folder it asks: say yes. If it does not ask, setup
+prints the lines to add to `~/.codex/config.toml` yourself. And every hook is
+approved on its own, against its hash, with `/hooks` inside Codex: the first
+time, and whenever a hook changes, as the third one does for projects set up
+before it existed.
 
 The brief reaches the agent as plain text on the opening hook's standard
 output, which Codex adds to the session as context. Above roughly 2,500

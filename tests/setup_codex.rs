@@ -655,30 +655,15 @@ fn after_a_clean_plant_the_start_hook_prints_a_brief_instead_of_staying_quiet() 
 //    `claude_code::undo` rather than reinventing it (`r515`).
 // ---------------------------------------------------------------------------
 
-/// The folder's own top-level entries, `.vivac/` aside: enough to prove
-/// `--undo` leaves nothing of its own behind, the same shallow listing
-/// `tests/setup.rs`'s own `list` takes for the same reason.
-fn list_without_the_tree(dir: &std::path::Path) -> Vec<String> {
-    let mut names: Vec<String> = std::fs::read_dir(dir)
-        .map(|rd| {
-            rd.flatten()
-                .map(|e| e.file_name().to_string_lossy().into_owned())
-                .filter(|n| n != ".vivac")
-                .collect()
-        })
-        .unwrap_or_default();
-    names.sort();
-    names
-}
-
-/// Test 12: a clean plant undone leaves the folder exactly as it was --
-/// `.vivac/` aside, which stays -- checked against the folder's entire
-/// listing rather than just the three files `setup` itself knows about.
+/// Test 12: a clean plant undone removes every file setup wrote, and the
+/// `vivac-migrate` folder alongside it -- `.vivac/` aside, which stays,
+/// the same as `.codex/` and `.agents/` themselves: `d784` took away
+/// `--undo`'s license to remove either for being empty, even though
+/// setup is what created them here.
 #[test]
 fn undo_after_a_clean_setup_leaves_the_folder_as_it_was_except_the_tree() {
     let c = Sandbox::new_empty("setup-codex-undo-clean");
     c.ok(&["init", "--yes"]);
-    let before = list_without_the_tree(&c.0);
     c.ok(&["setup", "codex", "--yes"]);
 
     let (out, code) = c.run(&["setup", "codex", "--undo", "--yes"]);
@@ -692,7 +677,20 @@ fn undo_after_a_clean_setup_leaves_the_folder_as_it_was_except_the_tree() {
         out.contains("Undone. The tree in .vivac/ is untouched."),
         "{out}"
     );
-    assert_eq!(list_without_the_tree(&c.0), before, "{out}");
+    assert!(!config_path(&c).exists());
+    assert!(!hooks_path(&c).exists());
+    assert!(
+        !skill_path(&c).parent().unwrap().exists(),
+        "the vivac-migrate folder must go"
+    );
+    assert!(
+        c.0.join(".codex").exists(),
+        "setup must never remove .codex/ itself"
+    );
+    assert!(
+        c.0.join(".agents").exists(),
+        "setup must never remove .agents/ itself"
+    );
     assert!(c.0.join(".vivac").exists(), "the tree must stay");
 }
 

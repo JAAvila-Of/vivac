@@ -216,6 +216,16 @@ fn undo(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     // at all -- which is not true, and `undo_lane_lines` below already has
     // the right sentence for it.
     if undo_lane.raw.is_none() {
+        // `d784`: a bare plant -- this folder's own `main`, never claimed
+        // elsewhere -- writes no `.vivac/lane` file at all (`lane::read`'s
+        // own "ordinary absence"), so `undo_lane` above has nothing to
+        // say about it and `.vivac/` sat outside `--undo`'s reach no
+        // matter how empty it still was. A join never lands here: it
+        // always writes a lane file of its own, so `raw` is `Some` for
+        // one.
+        if crate::store::already_planted(here) {
+            return undo_bare_tree(roots, a);
+        }
         outln!("  Nothing to undo: this folder carries no lane vivac init wrote.");
         return Ok(0);
     }
@@ -273,5 +283,70 @@ fn undo(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     }
 
     outln!("  Undone. The tree in .vivac/ is untouched.");
+    Ok(0)
+}
+
+/// `d784`: the one door `--undo` may remove a tree through -- this folder
+/// holds it outright, planted by a bare `init` that wrote no lane file at
+/// all, and nothing has ever written to it. Refuses instead the moment
+/// the log carries even one capture event (`session::capture_count`,
+/// reusing `d779`'s own definition of work): `lane.declared`,
+/// `lane.claimed`, `session.started` and `where.changed` do not count,
+/// since a folder can carry every one of those and still hold no work
+/// anybody would miss.
+fn undo_bare_tree(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
+    let here = roots.here.as_path();
+    let vivac_dir = here.join(crate::store::DIR);
+    let store = crate::store::Store::open(roots.tree.clone())?;
+    let (events, _) = store.read_all()?;
+    let writes = crate::session::capture_count(&events);
+    if writes > 0 {
+        outln!(
+            "  Nothing to undo: the tree in .vivac/ already holds work ({writes} writes), and\n  init --undo never removes a tree that does."
+        );
+        return Ok(0);
+    }
+
+    let mut s = format!("  vivac init --undo, in {}\n\n", here.display());
+    s.push_str(&super::claude_code::piece_line(
+        tree::VIVAC_LABEL,
+        "remove the tree init planted here: it holds no work yet",
+    ));
+    s.push_str(&super::claude_code::piece_line(
+        "registry",
+        "forget this project",
+    ));
+    s.push('\n');
+
+    if a.has("dry-run") {
+        outln!("{s}  Nothing written: --dry-run.");
+        return Ok(0);
+    }
+
+    if !a.has("yes") && !super::stdin_is_terminal() {
+        return Err(Failure::Model(super::init_no_terminal_text(a)));
+    }
+
+    print!("{s}");
+    let proceed = a.has("yes") || super::ask("  Undo it? [y/N] ");
+    if !proceed {
+        outln!("\n  Nothing written.");
+        return Ok(0);
+    }
+
+    // Read before removing: once `.vivac/` is gone, so is the log
+    // `first_event_id` would otherwise read to find it.
+    let project_id = crate::store::first_event_id(&roots.tree);
+    std::fs::remove_dir_all(&vivac_dir).map_err(|e| {
+        Failure::Io(std::io::Error::other(format!(
+            "{} could not be removed ({e})",
+            vivac_dir.display()
+        )))
+    })?;
+    if let (Some(store_dir), Some(project_id)) = (crate::store::store_dir(), project_id) {
+        crate::registry::forget(&store_dir, &project_id);
+    }
+
+    outln!("  Undone. There is no tree here any more.");
     Ok(0)
 }

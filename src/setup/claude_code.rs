@@ -1507,17 +1507,12 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
 
     // Best-effort, and only once the commit above is known to have
     // succeeded: an empty directory left behind costs nothing to leave for
-    // a later run, but is tidier gone.
+    // a later run, but is tidier gone. `d784`: only `vivac-migrate` itself
+    // -- the one folder this tool's own name marks as its to take back --
+    // not `skills` or `.claude` above it, which may have existed before
+    // setup ever ran and are never setup's to remove for being empty.
     if skill_ours {
         remove_if_empty(paths.skill.parent());
-        remove_if_empty(paths.skill.parent().and_then(Path::parent));
-        remove_if_empty(
-            paths
-                .skill
-                .parent()
-                .and_then(Path::parent)
-                .and_then(Path::parent),
-        );
     }
 
     outln!("  Undone. The tree in .vivac/ is untouched.");

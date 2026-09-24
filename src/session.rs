@@ -258,6 +258,15 @@ fn is_capture(body: &Body) -> bool {
     }
 }
 
+/// How many events of the whole log are capture seams, across every lane:
+/// `init --undo`'s own before-birth check (`d784`) asks whether a bare
+/// plant has ever had any work land on it at all, not just this one
+/// lane's share of it -- `lane.declared`, `lane.claimed`, `session.started`
+/// and `where.changed` never count, the same as `is_capture` above.
+pub(crate) fn capture_count(events: &[crate::event::Event]) -> usize {
+    events.iter().filter(|e| is_capture(&e.payload)).count()
+}
+
 /// The `ts` of the last event of this lane that `matches`, log order being
 /// what `Store::read_all` already hands back: the last match in the vector
 /// is the last one in time.

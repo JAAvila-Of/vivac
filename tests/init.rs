@@ -3188,3 +3188,110 @@ fn a_bare_init_on_a_clone_of_an_already_registered_product_is_refused() {
 }
 
 // ---------------------------------------------------------------------------
+// `d784`: a bare `init` writes no lane file at all (`main`'s implicit
+// shape), so `undo_lane` never had anything to say about it and
+// `.vivac/` sat outside `--undo`'s reach no matter how empty it stayed.
+// This is the one door `--undo` may remove a tree through.
+// ---------------------------------------------------------------------------
+
+/// The project id keyed by the log's own first line -- what the registry
+/// keys its entry by, read straight off `.vivac/events` rather than
+/// through any command's own output.
+fn project_id(c: &Sandbox) -> String {
+    let log = c.log();
+    let first = log.lines().next().expect("a seeded tree has a first line");
+    let v: serde_json::Value = serde_json::from_str(first).unwrap();
+    v["id"].as_str().unwrap().to_string()
+}
+
+#[test]
+fn undo_of_a_bare_plant_with_no_work_removes_the_tree_and_forgets_it() {
+    let c = Sandbox::new_seeded("undo-bare-clean");
+    let id = project_id(&c);
+    let registry_before = std::fs::read_to_string(c.global_home().join("projects")).unwrap();
+    assert!(
+        registry_before.contains(&id),
+        "setup: the registry should already know this project: {registry_before}"
+    );
+
+    let (out, code) = c.run(&["init", "--undo", "--yes"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        plan_words(&out).contains("remove the tree init planted here: it holds no work yet"),
+        "{out}"
+    );
+    assert!(plan_words(&out).contains("forget this project"), "{out}");
+    assert!(
+        out.contains("  Undone. There is no tree here any more."),
+        "{out}"
+    );
+    assert!(!c.0.join(".vivac").exists(), "the tree must be gone");
+
+    let registry_after = std::fs::read_to_string(c.global_home().join("projects")).unwrap();
+    assert!(
+        !registry_after.contains(&id),
+        "the registry must forget a project whose tree is gone: {registry_after}"
+    );
+}
+
+/// `--dry-run` plans the removal and writes nothing, the tree included.
+#[test]
+fn undo_of_a_bare_plant_dry_run_writes_nothing() {
+    let c = Sandbox::new_seeded("undo-bare-dry-run");
+
+    let (out, code) = c.run(&["init", "--undo", "--dry-run"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("Nothing written: --dry-run."), "{out}");
+    assert!(c.0.join(".vivac").exists(), "the tree must still be there");
+}
+
+/// A capture event -- here, an ordinary `add` -- makes the tree not
+/// `--undo`'s to remove any more: it refuses outright and touches
+/// nothing, counting only the events `session::capture_count` (`d779`'s
+/// own definition of work) actually counts.
+#[test]
+fn undo_of_a_bare_plant_that_already_holds_work_is_refused_and_touches_nothing() {
+    let c = Sandbox::new_seeded("undo-bare-with-work");
+    c.ok(&["add", "A finding", "--why", "reason"]);
+    let log_before = c.log();
+
+    let (out, code) = c.run(&["init", "--undo", "--yes"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.contains(
+            "  Nothing to undo: the tree in .vivac/ already holds work (1 writes), and\n  \
+             init --undo never removes a tree that does."
+        ),
+        "{out}"
+    );
+    assert!(c.0.join(".vivac").exists(), "the tree must stay");
+    assert_eq!(log_before, c.log(), "a refused undo must write nothing");
+}
+
+/// `session.started` is one of `is_capture`'s own exceptions (`d779`): a
+/// hook that only ever opens a session leaves a tree just as undoable as
+/// one nobody has touched at all.
+#[test]
+fn undo_of_a_bare_plant_stays_available_after_a_session_started_hook() {
+    let c = Sandbox::new_seeded("undo-bare-session-started");
+    let (hook_out, hook_code) = c.run_stdin(
+        &["session", "start", "--hook"],
+        r#"{"source":"startup","session_id":"s1"}"#,
+    );
+    assert_eq!(hook_code, 0, "{hook_out}");
+    assert!(
+        c.log().contains("\"session.started\""),
+        "setup: the hook should have written session.started: {}",
+        c.log()
+    );
+
+    let (out, code) = c.run(&["init", "--undo", "--yes"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.contains("  Undone. There is no tree here any more."),
+        "{out}"
+    );
+    assert!(!c.0.join(".vivac").exists());
+}
+
+// ---------------------------------------------------------------------------

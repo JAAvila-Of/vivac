@@ -706,6 +706,30 @@ fn try_set_name(store_dir: &Path, project_id: &str, name: &str) -> std::io::Resu
     write(store_dir, &path, &projects)
 }
 
+/// Drops `project_id`'s own entry outright: `init --undo` (`d784`) is the
+/// one caller, forgetting a tree it is about to delete so the registry
+/// does not keep pointing a later `--join` or `find --everywhere` at a
+/// folder that no longer holds one. Quiet on every failure, the same as
+/// `note` and `set_name`: a registry entry left stale behind a tree that
+/// is already gone is a comfort a command can do without, not a reason to
+/// fail one.
+pub fn forget(store_dir: &Path, project_id: &str) {
+    let _ = try_forget(store_dir, project_id);
+}
+
+fn try_forget(store_dir: &Path, project_id: &str) -> std::io::Result<()> {
+    let path = store_dir.join(FILE);
+    let _lock = crate::store::lock_with_deadline(&store_dir.join(LOCK), LOCK_WAIT)
+        .map_err(|e| std::io::Error::other(e.message()))?;
+    let Some(mut projects) = read(&path) else {
+        return Ok(());
+    };
+    if projects.remove(project_id).is_none() {
+        return Ok(());
+    }
+    write(store_dir, &path, &projects)
+}
+
 /// A folder's name, quoted, or `"another folder"` once the guard has
 /// withheld it: the one placeholder every refusal that names a folder
 /// falls back to, rather than a copy of the same fallback prose per
@@ -1991,6 +2015,31 @@ mod tests {
 
         std::fs::remove_dir_all(&store_dir).ok();
         std::fs::remove_dir_all(&parent).ok();
+    }
+
+    /// `init --undo` (`d784`) is `forget`'s one caller: an entry `note`
+    /// wrote is gone from the registry once `forget` runs, and asking
+    /// again for a project it never heard of is a quiet no-op.
+    #[test]
+    fn forget_drops_the_entry_note_wrote() {
+        let store_dir = temp_dir("reg-forget");
+        let (root, id) = seeded_project("forget");
+        note(&store_dir, &id, sighting(&root));
+        assert!(read(&store_dir.join(FILE)).unwrap().contains_key(&id));
+
+        forget(&store_dir, &id);
+
+        assert!(!read(&store_dir.join(FILE)).unwrap().contains_key(&id));
+
+        std::fs::remove_dir_all(&store_dir).ok();
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn forgetting_an_unknown_project_never_fails_the_caller() {
+        let store_dir = temp_dir("reg-forget-unknown");
+        forget(&store_dir, "not-a-real-id");
+        std::fs::remove_dir_all(&store_dir).ok();
     }
 
     /// A project whose folder no longer holds a tree with that project's own
