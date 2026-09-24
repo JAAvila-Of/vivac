@@ -144,7 +144,9 @@ const TOOLS: &[Tool] = &[
         name: "vivac_why",
         description: "Why a node exists: the chain from the goal down to it, what is open \
                       in parallel, what was born from it, and what blocks it from closing. \
-                      This is the question the whole tool exists to answer.",
+                      This is the question the whole tool exists to answer. Open siblings \
+                      and children are capped at eight each, every blocking one kept; full \
+                      lists them all.",
         args: &[
             Arg {
                 name: "id",
@@ -159,6 +161,15 @@ const TOOLS: &[Tool] = &[
                 description: "Opens a node that lives in another tree: a project name from \
                               `vivac_find`'s `everywhere`, since an alias only means \
                               something inside its own tree.",
+            },
+            Arg {
+                name: "full",
+                kind: ArgKind::Bool,
+                required: false,
+                description: "Every sibling and every child still open, not only the eight \
+                              the answer keeps, plus each step's anchor, standing decisions \
+                              and what was open at the time: what vivac why --full prints. \
+                              Refused together with project.",
             },
         ],
     },
@@ -830,8 +841,21 @@ fn call(project: &mut Project, params: &Value) -> Result<String, Failure> {
         }
         "vivac_why" => {
             let id = a.str("id").ok_or_else(|| missing("id"))?.to_string();
+            let full = a.bool("full");
             match a.str("project") {
                 Some(spec) => {
+                    // `d771`: `full` reads the whole log, and a foreign
+                    // project's log is never read that way -- the same
+                    // reason the CLI refuses `why --project --full`
+                    // (`main.rs`, the `why` arm of `dispatch`).
+                    if full {
+                        return Err(Failure::usage(
+                            "why --project does not take --full: --full reads the whole \
+                             log, and a foreign project's log is never read that way.\n\n  \
+                             Drop --full or drop --project."
+                                .to_string(),
+                        ));
+                    }
                     let foreign_root = registry::resolve(spec)?;
                     // No `for_lane`: this folder is not a lane of the
                     // foreign tree, so it reads that tree's founding
@@ -842,7 +866,7 @@ fn call(project: &mut Project, params: &Value) -> Result<String, Failure> {
                     // reads one on the CLI: `lane` and `where` (`t594`
                     // §5.4) simply have nothing to answer from here.
                     let tree = index::load(&store::Store::open(foreign_root)?, false)?;
-                    pretty(render::why_data(&tree, &[], &id)?)
+                    pretty(render::why_data(&tree, &[], &id, false)?)
                 }
                 // The resident log, kept for exactly this (`Project::log`'s
                 // own doc): `lane` and `where` answer here the same way
@@ -850,7 +874,7 @@ fn call(project: &mut Project, params: &Value) -> Result<String, Failure> {
                 // log a second time.
                 None => {
                     let (ctx, log) = project.current_with_log()?;
-                    pretty(render::why_data(&ctx.tree, log, &id)?)
+                    pretty(render::why_data(&ctx.tree, log, &id, full)?)
                 }
             }
         }

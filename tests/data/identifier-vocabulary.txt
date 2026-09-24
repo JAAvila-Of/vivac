@@ -459,6 +459,7 @@ disk
 dispatch
 dispatches
 display
+distance
 distinct
 div
 do
@@ -1121,6 +1122,7 @@ panic
 panics
 paragraph
 paragraphs
+parallel
 params
 parent
 parents

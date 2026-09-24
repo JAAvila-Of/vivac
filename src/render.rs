@@ -30,6 +30,13 @@ pub(crate) const WIDTH: usize = 62;
 /// node actually asked about, which stays whole with or without `--full`.
 const ANCESTOR_CLIP: usize = WIDTH;
 
+/// `d771`: how many open siblings or open children `why` lists -- in prose
+/// and in JSON alike -- before it points at `--full` for the rest. `f769`
+/// measured `in_parallel` alone at 6.6 of an 8.3 KB `why --json` on a real
+/// tree, paid on every step of orientation; this is the budget that keeps
+/// it from growing without bound as a tree does.
+const WHY_OPEN_CAP: usize = 8;
+
 pub(crate) fn wrap(text: &str, width: usize, indent: &str) -> Vec<String> {
     if text.trim().is_empty() {
         return vec![];
@@ -260,6 +267,31 @@ fn handle_json(a: &Tree, n: &Node) -> serde_json::Value {
     })
 }
 
+/// `d771`'s own selection: which of `nodes` -- an open sibling list or an
+/// open child list, already in birth order -- `why` actually prints, and how
+/// many were left out. `full` skips the cap entirely, the escape hatch every
+/// capped list in this file gives (`open`'s own `--all`, `tree`'s own).
+///
+/// Otherwise every one that blocks stays in no matter how many there are --
+/// a blocker is never hidden -- and the remaining seats, up to
+/// [`WHY_OPEN_CAP`] altogether, go to whichever are the most recently
+/// opened. The result comes back in the same birth order the caller already
+/// prints in, since which ones made the cut is the only thing this decides.
+fn cap_open(nodes: Vec<&Node>, full: bool) -> (Vec<&Node>, usize) {
+    if full || nodes.len() <= WHY_OPEN_CAP {
+        return (nodes, 0);
+    }
+    let total = nodes.len();
+    let (blockers, mut rest): (Vec<&Node>, Vec<&Node>) = nodes.into_iter().partition(|n| n.blocks);
+    rest.sort_by_key(|n| std::cmp::Reverse(n.num));
+    let room = WHY_OPEN_CAP.saturating_sub(blockers.len());
+    let mut kept = blockers;
+    kept.extend(rest.into_iter().take(room));
+    let more = total - kept.len();
+    kept.sort_by_key(|n| n.num);
+    (kept, more)
+}
+
 /// Adds `lane` and `where` when [`born_where`] has an answer for `n` --
 /// shared by [`json_node_full`] and [`path_step_json`]'s own `--full` half,
 /// so the whole node and every step of the path gain the same two fields
@@ -442,18 +474,23 @@ fn why_data_impl(
     if !hidden.is_empty() {
         node_json["repeated"] = json!({"num": n.num, "hidden": hidden});
     }
-    let siblings: Vec<_> = n
+    let open_siblings: Vec<&Node> = n
         .parent
         .map(|p| a.children(p))
         .unwrap_or_default()
         .into_iter()
         .filter(|c| c.id != n.id && c.state.is_open())
-        .map(|c| handle_json(a, c))
         .collect();
-    let born_here: Vec<_> = a
+    let (siblings, in_parallel_more) = cap_open(open_siblings, full_extra);
+    let siblings: Vec<_> = siblings.into_iter().map(|c| handle_json(a, c)).collect();
+    let open_children: Vec<&Node> = a
         .children(n.num)
-        .iter()
+        .into_iter()
         .filter(|c| c.state.is_open())
+        .collect();
+    let (born_here, born_here_more) = cap_open(open_children, full_extra);
+    let born_here: Vec<_> = born_here
+        .into_iter()
         .map(|c| {
             let mut v = handle_json(a, c);
             v["blocks"] = json!(c.blocks);
@@ -483,7 +520,9 @@ fn why_data_impl(
             .map(|p| path_step_json(a, ag, full, full_extra, p))
             .collect::<Vec<_>>(),
         "in_parallel": siblings,
+        "in_parallel_more": in_parallel_more,
         "born_here": born_here,
+        "born_here_more": born_here_more,
         "blockers": blockers,
     }))
 }
@@ -492,8 +531,18 @@ fn why_data_impl(
 /// path folds its resident one (`t594` §5.4, `lane` and `where`); its
 /// foreign-project path hands back `&[]`, the same as `why --project`
 /// always has, since a foreign log is never read that way.
-pub fn why_data(a: &Tree, log: &[Event], id: &str) -> Result<serde_json::Value, Failure> {
-    why_data_impl(a, &Full::from_log(log), false, id)
+///
+/// `full` is `d771`'s own door: `vivac_why`'s own `full` argument, wired
+/// straight to the same `full_extra` the CLI's `--full` sets, so the tool
+/// answers exactly what `why --full --json` does with nothing of its own
+/// to drift from it.
+pub fn why_data(
+    a: &Tree,
+    log: &[Event],
+    id: &str,
+    full: bool,
+) -> Result<serde_json::Value, Failure> {
+    why_data_impl(a, &Full::from_log(log), full, id)
 }
 
 /// A front, identified by its alias and where it hangs, not the node itself:
@@ -887,8 +936,15 @@ pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
             .collect();
         if !siblings.is_empty() {
             outln!("  In parallel, still open ({}):", siblings.len());
-            for c in siblings {
+            let (shown, more) = cap_open(siblings, full_extra);
+            for c in shown {
                 outln!("      {:<6} {}", c.alias(), c.title(a));
+            }
+            // `d771`: never silent about what the cap left out -- the same
+            // rule `open --all` and `tree --all` already give their own cut
+            // lists, spelled out for this one instead of assumed.
+            if more > 0 {
+                outln!("      + {more} more:  vivac why {} --full", n.alias());
             }
             outln!();
         }
@@ -901,13 +957,17 @@ pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
         .collect();
     if !kids.is_empty() {
         outln!("  Born here and still open ({}):", kids.len());
-        for c in kids {
+        let (shown, more) = cap_open(kids, full_extra);
+        for c in shown {
             outln!(
                 "    {} {:<6} {}",
                 if c.blocks { '*' } else { ' ' },
                 c.alias(),
                 c.title(a)
             );
+        }
+        if more > 0 {
+            outln!("      + {more} more:  vivac why {} --full", n.alias());
         }
         outln!();
     }
