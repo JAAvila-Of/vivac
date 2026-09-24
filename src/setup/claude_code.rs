@@ -671,9 +671,30 @@ pub(super) fn piece_line(label: &str, status: &str) -> String {
 /// not one anybody can paste -- `registry.rs` says the same of its own
 /// such lines. `piece_line`'s status gained a width (`f720`); this did
 /// not, on purpose.
+///
+/// The label column is as wide as the longest label any caller passes plus
+/// two spaces. It was a fixed 15, and `UserPromptSubmit` (`d779`) is 16, so
+/// its line printed with no space at all before the command.
 pub(super) fn sub_line(label: &str, value: &str) -> String {
-    format!("        {label:<15}{value}\n")
+    format!("        {label:<SUB_LINE_LABEL_WIDTH$}{value}\n")
 }
+
+/// Every label [`sub_line`] is given, so the column is computed from them
+/// rather than kept in step by hand: the three hook events and the `in`
+/// that names where a tree lives.
+const SUB_LINE_LABELS: [&str; 4] = ["SessionStart", "UserPromptSubmit", "Stop", "in"];
+
+const SUB_LINE_LABEL_WIDTH: usize = {
+    let mut widest = 0;
+    let mut i = 0;
+    while i < SUB_LINE_LABELS.len() {
+        if SUB_LINE_LABELS[i].len() > widest {
+            widest = SUB_LINE_LABELS[i].len();
+        }
+        i += 1;
+    }
+    widest + 2
+};
 
 // ---------------------------------------------------------------------------
 // Applying: plan, ask, write. `d723` piece B: no plan of the tree side
@@ -1526,6 +1547,21 @@ mod tests {
         assert!(is_vivac_command("/usr/local/bin/vivac"));
         assert!(!is_vivac_command("vivacx"));
         assert!(!is_vivac_command("notvivac"));
+    }
+
+    /// Every label that reaches `sub_line` keeps at least two spaces before
+    /// its value. The fixed column of 15 printed `UserPromptSubmitvivac
+    /// session prompt --hook` in 0.15.1.
+    #[test]
+    fn every_sub_line_label_keeps_two_spaces_before_its_value() {
+        for label in SUB_LINE_LABELS {
+            let line = sub_line(label, "VALUE");
+            let gap = line.trim_start().trim_start_matches(label);
+            assert!(
+                gap.starts_with("  "),
+                "{label} leaves {gap:?} before its value: {line:?}"
+            );
+        }
     }
 
     #[test]
