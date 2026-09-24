@@ -115,6 +115,10 @@ pub enum ArmChange {
 pub struct DeclaredPair {
     pub node: String,
     pub why: String,
+    /// The sentence this one replaced, when the decision already declared
+    /// this pillar or rule. `None` the first time. `d783`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub before: Option<String>,
 }
 
 /// `false` is never serialized: otherwise `d445`'s `no_against` would
@@ -528,6 +532,9 @@ pub fn to_text(o: &Outcome) -> String {
         Outcome::Declared { alias, against } => {
             for a in against {
                 lines.push(format!("  {alias}  judged against {}: {}", a.node, a.why));
+                if let Some(before) = &a.before {
+                    lines.push(format!("        before: {before}"));
+                }
             }
         }
         Outcome::Saved {

@@ -50,7 +50,11 @@ vivac park 2 "waiting on the corpus run"
 ```
 
 `decide` takes `--alternative` for what was turned down and `--supersedes` for
-the decision it replaces, so a reversal reads from either end. `block` marks a
+the decision it replaces, so a reversal reads from either end. `declare`
+names, after the fact, the pillar or rule a decision was judged against;
+declaring the same one again replaces its sentence, keeping the old one in
+the log, which is how a badly worded `--against` is fixed without inventing
+a new decision. `block` marks a
 node as something its parent cannot close over, and `--off` takes it back.
 
 A finding that asks nothing of anyone, a lesson or a measurement, is a record:

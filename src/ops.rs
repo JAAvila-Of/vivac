@@ -2041,23 +2041,25 @@ pub fn declare(ctx: &mut Ctx, p: params::Declare) -> Result<Outcome, Failure> {
         )));
     }
     let entries = against_of(ctx, p.against, Kind::Decision)?;
-    // What the decision already declares, at birth or later, cannot be
-    // declared again.
-    let mut already: Vec<u64> = n.against.iter().map(|a| a.node).collect();
-    for e in &entries {
-        let (num, alias) = ctx
-            .tree
-            .node(&e.node)
-            .map(|x| (x.num, x.alias()))
-            .unwrap_or((u64::MAX, e.node.clone()));
-        if already.contains(&num) {
-            return Err(Failure::usage(format!(
-                "{} already declares {alias}",
-                n.alias()
-            )));
-        }
-        already.push(num);
-    }
+    // `d783`: a later `declare` on a pillar or rule the decision already
+    // declares does not get refused any more -- it substitutes the
+    // sentence. `against_of` already refused the same pillar or rule named
+    // twice inside this one call, which is the only repeat that still is.
+    // What each entry is replacing, if anything, is read here against the
+    // tree as it stood before this write, so `Outcome::Declared` can show
+    // it.
+    let existing = n.against(&ctx.tree);
+    let before: Vec<Option<String>> = entries
+        .iter()
+        .map(|e| {
+            let num = ctx.tree.node(&e.node).map(|x| x.num);
+            n.against
+                .iter()
+                .zip(existing.iter())
+                .find(|(span, _)| Some(span.node) == num)
+                .map(|(_, resolved)| resolved.why.to_string())
+        })
+        .collect();
     guard_text(
         &entries
             .iter()
@@ -2072,9 +2074,11 @@ pub fn declare(ctx: &mut Ctx, p: params::Declare) -> Result<Outcome, Failure> {
         alias: n.alias(),
         against: entries
             .into_iter()
-            .map(|a| outcome::DeclaredPair {
+            .zip(before)
+            .map(|(a, before)| outcome::DeclaredPair {
                 node: ctx.tree.node(&a.node).map(|x| x.alias()).unwrap_or(a.node),
                 why: a.why,
+                before,
             })
             .collect(),
     })
