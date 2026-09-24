@@ -34,6 +34,7 @@ against
 age
 ages
 aggregates
+ago
 agree
 agrees
 al
@@ -343,6 +344,9 @@ continue
 continues
 control
 cookie
+cooldown
+cooled
+cools
 copied
 copies
 copy
@@ -725,6 +729,7 @@ here
 heuristic
 hex
 hexdigit
+hh
 hidden
 hides
 hiding
@@ -966,7 +971,10 @@ mine
 mint
 minted
 minus
+minute
+minutes
 missing
+mm
 mod
 model
 modified
@@ -1033,6 +1041,7 @@ notify
 noun
 now
 nth
+nudge
 null
 num
 number
@@ -1555,6 +1564,7 @@ spanish
 spans
 spawn
 spawning
+speaks
 spec
 spelled
 spelling
@@ -1563,8 +1573,10 @@ spent
 spin
 spine
 split
+spoke
 spoken
 src
+ss
 st
 stable
 stack
@@ -1675,6 +1687,7 @@ then
 there
 they
 third
+thirty
 this
 though
 thread
@@ -1743,6 +1756,8 @@ ts
 tt
 turn
 turns
+twelve
+twenty
 twice
 twin
 twins

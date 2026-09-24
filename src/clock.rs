@@ -109,6 +109,35 @@ fn parse_date(ts: &str) -> Option<(i64, u32, u32)> {
     ))
 }
 
+/// Seconds since the epoch, from a full RFC 3339 stamp with seconds --
+/// `now_rfc3339`'s own shape. `None` for anything shorter or differently
+/// punctuated: `session prompt` (`d779`) compares two of these and a wrong
+/// number is worse than no nudge at all.
+///
+/// `days_between` already has the date half of this; what it throws away is
+/// the position within the day, which a stretch measured in minutes cannot
+/// do without.
+pub fn epoch_seconds(ts: &str) -> Option<i64> {
+    let b = ts.as_bytes();
+    if b.len() != 20
+        || b[4] != b'-'
+        || b[7] != b'-'
+        || b[10] != b'T'
+        || b[13] != b':'
+        || b[16] != b':'
+        || b[19] != b'Z'
+    {
+        return None;
+    }
+    let y: i64 = ts[0..4].parse().ok()?;
+    let m: u32 = ts[5..7].parse().ok()?;
+    let d: u32 = ts[8..10].parse().ok()?;
+    let hh: i64 = ts[11..13].parse().ok()?;
+    let mm: i64 = ts[14..16].parse().ok()?;
+    let ss: i64 = ts[17..19].parse().ok()?;
+    Some(days_from_civil((y, m, d)) * 86_400 + hh * 3600 + mm * 60 + ss)
+}
+
 /// The inverse of [`civil_from_days`], same source.
 fn days_from_civil((y, m, d): (i64, u32, u32)) -> i64 {
     let y = if m <= 2 { y - 1 } else { y };
@@ -206,5 +235,38 @@ mod tests {
         let s = now_rfc3339();
         assert_eq!(s.len(), 20);
         assert!(s.ends_with('Z'));
+    }
+
+    #[test]
+    fn epoch_seconds_reads_the_epoch_itself() {
+        assert_eq!(epoch_seconds("1970-01-01T00:00:00Z"), Some(0));
+    }
+
+    #[test]
+    fn epoch_seconds_counts_the_time_of_day_too() {
+        // `days_between` only ever compares dates; `session prompt` needs
+        // the minutes within a day as well, which is the one thing that
+        // function throws away.
+        assert_eq!(
+            epoch_seconds("1970-01-01T00:01:00Z"),
+            Some(60),
+            "a minute past the epoch is 60 seconds, not 0"
+        );
+        assert_eq!(
+            epoch_seconds("2026-09-08T12:00:00Z").unwrap()
+                - epoch_seconds("2026-09-08T00:00:00Z").unwrap(),
+            43_200,
+            "noon is half a day past midnight on the same date"
+        );
+    }
+
+    #[test]
+    fn epoch_seconds_of_a_bare_date_is_none() {
+        assert_eq!(epoch_seconds("2026-09-08"), None);
+    }
+
+    #[test]
+    fn epoch_seconds_of_garbage_is_none() {
+        assert_eq!(epoch_seconds("not a timestamp"), None);
     }
 }

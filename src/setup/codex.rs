@@ -53,6 +53,7 @@ const SKILL_LABEL: &str = ".agents/skills/vivac-migrate/SKILL.md";
 
 const SESSION_START_COMMAND: &str = "vivac session start --hook";
 const SESSION_END_COMMAND: &str = "vivac session end --hook";
+const SESSION_PROMPT_COMMAND: &str = "vivac session prompt --hook";
 const SESSION_START_MATCHER: &str = "startup|resume|clear|compact";
 
 /// `d654`: written whole, between the two marker comments a later `--undo`
@@ -75,6 +76,13 @@ fn hooks_content() -> String {
                  \"matcher\": \"{SESSION_START_MATCHER}\",\n        \
                  \"hooks\": [\n          \
                    {{ \"type\": \"command\", \"command\": \"{SESSION_START_COMMAND}\" }}\n        \
+                 ]\n      \
+               }}\n    \
+             ],\n    \
+             \"UserPromptSubmit\": [\n      \
+               {{\n        \
+                 \"hooks\": [\n          \
+                   {{ \"type\": \"command\", \"command\": \"{SESSION_PROMPT_COMMAND}\" }}\n        \
                  ]\n      \
                }}\n    \
              ],\n    \
@@ -300,8 +308,10 @@ fn render_plan(
     hooks_exists: bool,
     start_hook_state: &HookState,
     stop_hook_state: &HookState,
+    prompt_hook_state: &HookState,
     start_missing: bool,
     stop_missing: bool,
+    prompt_missing: bool,
     skill_file_state: &SkillState,
 ) -> String {
     use super::claude_code::{piece_line, sub_line};
@@ -317,12 +327,14 @@ fn render_plan(
         s.push_str("        vivac mcp\n");
     }
 
-    let hooks_status = match (hooks_exists, start_missing, stop_missing) {
-        (_, false, false) => "already has both hooks",
-        (_, true, false) => "add the SessionStart hook",
-        (_, false, true) => "add the Stop hook",
-        (false, true, true) => "create: two hooks",
-        (true, true, true) => "add two hooks",
+    let hooks_status = match (hooks_exists, start_missing, stop_missing, prompt_missing) {
+        (_, false, false, false) => "already has all three hooks",
+        (_, true, false, false) => "add the SessionStart hook",
+        (_, false, true, false) => "add the Stop hook",
+        (_, false, false, true) => "add the UserPromptSubmit hook",
+        (_, true, true, false) | (_, true, false, true) | (_, false, true, true) => "add two hooks",
+        (false, true, true, true) => "create: three hooks",
+        (true, true, true, true) => "add three hooks",
     };
     s.push_str(&piece_line(HOOKS_LABEL, hooks_status));
     match start_hook_state {
@@ -335,6 +347,14 @@ fn render_plan(
     match stop_hook_state {
         HookState::Missing => s.push_str(&sub_line("Stop", SESSION_END_COMMAND)),
         HookState::Different(cmd) => s.push_str(&sub_line("Stop", &format!("already runs  {cmd}"))),
+        HookState::Exact => {}
+    }
+    match prompt_hook_state {
+        HookState::Missing => s.push_str(&sub_line("UserPromptSubmit", SESSION_PROMPT_COMMAND)),
+        HookState::Different(cmd) => s.push_str(&sub_line(
+            "UserPromptSubmit",
+            &format!("already runs  {cmd}"),
+        )),
         HookState::Exact => {}
     }
 
@@ -418,15 +438,22 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     let hooks_root = hooks.value.clone().unwrap_or_else(|| Value::object(vec![]));
     let start_hook_state = hook_state(&hooks_root, "SessionStart", "start", SESSION_START_COMMAND);
     let stop_hook_state = hook_state(&hooks_root, "Stop", "end", SESSION_END_COMMAND);
+    let prompt_hook_state = hook_state(
+        &hooks_root,
+        "UserPromptSubmit",
+        "prompt",
+        SESSION_PROMPT_COMMAND,
+    );
     let start_missing = matches!(start_hook_state, HookState::Missing);
     let stop_missing = matches!(stop_hook_state, HookState::Missing);
+    let prompt_missing = matches!(prompt_hook_state, HookState::Missing);
     let skill_missing_or_replaceable = matches!(
         skill_file_state,
         SkillState::Missing | SkillState::Replaceable
     );
 
     let config_needs_write = !matches!(config_state, ConfigState::Already);
-    let hooks_needs_write = start_missing || stop_missing;
+    let hooks_needs_write = start_missing || stop_missing || prompt_missing;
 
     let nothing_to_write =
         !config_needs_write && !hooks_needs_write && !skill_missing_or_replaceable;
@@ -439,8 +466,10 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
             hooks.exists,
             &start_hook_state,
             &stop_hook_state,
+            &prompt_hook_state,
             start_missing,
             stop_missing,
+            prompt_missing,
             &skill_file_state,
         )
     );
@@ -513,6 +542,14 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
             }
             if stop_missing {
                 append_hook(&mut new_hooks, "Stop", SESSION_END_COMMAND, None);
+            }
+            if prompt_missing {
+                append_hook(
+                    &mut new_hooks,
+                    "UserPromptSubmit",
+                    SESSION_PROMPT_COMMAND,
+                    None,
+                );
             }
             let rendered = json::finalize(
                 &json::render(&new_hooks, &hooks.indent),
@@ -596,11 +633,18 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
     let hooks_root = hooks.value.clone().unwrap_or_else(|| Value::object(vec![]));
     let start_hook_state = hook_state(&hooks_root, "SessionStart", "start", SESSION_START_COMMAND);
     let stop_hook_state = hook_state(&hooks_root, "Stop", "end", SESSION_END_COMMAND);
+    let prompt_hook_state = hook_state(
+        &hooks_root,
+        "UserPromptSubmit",
+        "prompt",
+        SESSION_PROMPT_COMMAND,
+    );
     let start_ours = matches!(start_hook_state, HookState::Exact);
     let stop_ours = matches!(stop_hook_state, HookState::Exact);
+    let prompt_ours = matches!(prompt_hook_state, HookState::Exact);
     let skill_ours = skill_raw.as_deref().is_some_and(skill_fingerprint_intact);
 
-    let nothing_to_undo = !config_ours && !start_ours && !stop_ours && !skill_ours;
+    let nothing_to_undo = !config_ours && !start_ours && !stop_ours && !prompt_ours && !skill_ours;
     if nothing_to_undo {
         outln!("  Nothing to undo: none of what setup writes is here.");
         return Ok(0);
@@ -613,18 +657,25 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
     if stop_ours {
         remove_hook(&mut preview, "Stop", SESSION_END_COMMAND);
     }
+    if prompt_ours {
+        remove_hook(&mut preview, "UserPromptSubmit", SESSION_PROMPT_COMMAND);
+    }
     let hooks_becomes_empty = preview
         .as_object()
         .is_some_and(|s: &[(String, Value)]| s.is_empty());
 
-    let hooks_status: String = match (start_ours, stop_ours) {
-        (true, true) if hooks_becomes_empty => {
-            "remove the two hooks setup wrote; nothing else is left, so it goes".to_string()
+    let hooks_status: String = match (start_ours, stop_ours, prompt_ours) {
+        (true, true, true) if hooks_becomes_empty => {
+            "remove the three hooks setup wrote; nothing else is left, so it goes".to_string()
         }
-        (true, true) => "remove the two hooks setup wrote".to_string(),
-        (true, false) => "remove the SessionStart hook".to_string(),
-        (false, true) => "remove the Stop hook".to_string(),
-        (false, false) => "left as it is".to_string(),
+        (true, true, true) => "remove the three hooks setup wrote".to_string(),
+        (true, true, false) => "remove the two hooks setup wrote".to_string(),
+        (true, false, true) => "remove the two hooks setup wrote".to_string(),
+        (false, true, true) => "remove the two hooks setup wrote".to_string(),
+        (true, false, false) => "remove the SessionStart hook".to_string(),
+        (false, true, false) => "remove the Stop hook".to_string(),
+        (false, false, true) => "remove the UserPromptSubmit hook".to_string(),
+        (false, false, false) => "left as it is".to_string(),
     };
 
     let mut s = format!("  vivac setup codex --undo, in {}\n\n", here.display());
@@ -676,6 +727,12 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
     }
     if let HookState::Different(_) = &stop_hook_state {
         s.push_str(&sub_line("Stop", "runs vivac another way; left as it is"));
+    }
+    if let HookState::Different(_) = &prompt_hook_state {
+        s.push_str(&sub_line(
+            "UserPromptSubmit",
+            "runs vivac another way; left as it is",
+        ));
     }
 
     s.push_str(&piece_line(
@@ -731,7 +788,7 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
         }
     }
 
-    if start_ours || stop_ours {
+    if start_ours || stop_ours || prompt_ours {
         let original = hooks.raw.clone().into_bytes();
         if hooks_becomes_empty {
             writes.push(super::PlannedWrite::delete(target.hooks.clone(), original));
@@ -742,6 +799,9 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
             }
             if stop_ours {
                 remove_hook(&mut new_hooks, "Stop", SESSION_END_COMMAND);
+            }
+            if prompt_ours {
+                remove_hook(&mut new_hooks, "UserPromptSubmit", SESSION_PROMPT_COMMAND);
             }
             let rendered = json::finalize(
                 &json::render(&new_hooks, &hooks.indent),

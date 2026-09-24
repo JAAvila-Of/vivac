@@ -8,6 +8,7 @@ use common::Sandbox;
 
 const SESSION_START: &str = "vivac session start --hook";
 const SESSION_END: &str = "vivac session end --hook";
+const SESSION_PROMPT: &str = "vivac session prompt --hook";
 
 const CONFIG_LABEL: &str = ".codex/config.toml";
 const HOOKS_LABEL: &str = ".codex/hooks.json";
@@ -26,6 +27,13 @@ const EXPECTED_HOOKS: &str = "{\n  \
         \"matcher\": \"startup|resume|clear|compact\",\n        \
         \"hooks\": [\n          \
           { \"type\": \"command\", \"command\": \"vivac session start --hook\" }\n        \
+        ]\n      \
+      }\n    \
+    ],\n    \
+    \"UserPromptSubmit\": [\n      \
+      {\n        \
+        \"hooks\": [\n          \
+          { \"type\": \"command\", \"command\": \"vivac session prompt --hook\" }\n        \
         ]\n      \
       }\n    \
     ],\n    \
@@ -126,6 +134,16 @@ fn a_clean_project_gets_the_three_files_with_the_exact_content() {
     assert_eq!(
         hooks["hooks"]["Stop"][0]["hooks"][0]["command"],
         SESSION_END
+    );
+    assert_eq!(
+        hooks["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"],
+        SESSION_PROMPT
+    );
+    assert!(
+        hooks["hooks"]["UserPromptSubmit"][0]
+            .get("matcher")
+            .is_none(),
+        "{hooks}"
     );
 }
 
@@ -304,6 +322,66 @@ fn a_foreign_hooks_json_keeps_its_other_event_and_gains_ours() {
     assert_eq!(
         after["hooks"]["Stop"][0]["hooks"][0]["command"],
         SESSION_END
+    );
+    assert!(
+        after["hooks"]["UserPromptSubmit"][0]
+            .get("matcher")
+            .is_none(),
+        "{after}"
+    );
+    assert_eq!(
+        after["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"],
+        SESSION_PROMPT
+    );
+}
+
+/// `d779`: a project whose `hooks.json` already has the two older hooks
+/// gains only `UserPromptSubmit`, and neither of the first two is touched.
+#[test]
+fn a_hooks_json_with_the_two_older_hooks_gains_only_the_third() {
+    let c = Sandbox::new_empty("setup-codex-prompt-hook-add-third");
+    c.ok(&["init", "--yes"]);
+    std::fs::create_dir_all(c.0.join(".codex")).unwrap();
+    let existing = serde_json::json!({
+        "hooks": {
+            "SessionStart": [
+                {
+                    "matcher": "startup|resume|clear|compact",
+                    "hooks": [ { "type": "command", "command": SESSION_START } ]
+                }
+            ],
+            "Stop": [
+                { "hooks": [ { "type": "command", "command": SESSION_END } ] }
+            ]
+        }
+    });
+    std::fs::write(
+        hooks_path(&c),
+        serde_json::to_string_pretty(&existing).unwrap(),
+    )
+    .unwrap();
+
+    let (out, code) = c.run(&["setup", "codex", "--yes"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        plan_words(&out).contains("add the UserPromptSubmit hook"),
+        "{out}"
+    );
+
+    let after: serde_json::Value = serde_json::from_str(&read(&hooks_path(&c))).unwrap();
+    assert_eq!(
+        after["hooks"]["SessionStart"].as_array().unwrap().len(),
+        1,
+        "the existing SessionStart hook was duplicated:\n{after}"
+    );
+    assert_eq!(
+        after["hooks"]["Stop"].as_array().unwrap().len(),
+        1,
+        "the existing Stop hook was duplicated:\n{after}"
+    );
+    assert_eq!(
+        after["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"],
+        SESSION_PROMPT
     );
 }
 
@@ -606,6 +684,11 @@ fn undo_after_a_clean_setup_leaves_the_folder_as_it_was_except_the_tree() {
     let (out, code) = c.run(&["setup", "codex", "--undo", "--yes"]);
     assert_eq!(code, 0, "{out}");
     assert!(
+        plan_words(&out)
+            .contains("remove the three hooks setup wrote; nothing else is left, so it goes"),
+        "{out}"
+    );
+    assert!(
         out.contains("Undone. The tree in .vivac/ is untouched."),
         "{out}"
     );
@@ -674,6 +757,7 @@ fn undo_over_hooks_json_with_a_foreign_event_keeps_it_and_removes_ours() {
     );
     assert!(after["hooks"].get("SessionStart").is_none(), "{after}");
     assert!(after["hooks"].get("Stop").is_none(), "{after}");
+    assert!(after["hooks"].get("UserPromptSubmit").is_none(), "{after}");
 }
 
 /// Test 16: a root-level `description` in `hooks.json`, with only our own

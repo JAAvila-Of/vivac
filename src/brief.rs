@@ -744,15 +744,17 @@ fn other_lanes_fallback(n: usize) -> Vec<String> {
     )
 }
 
-/// The three lines ahead of the table (`d757`): look at what the tree
-/// already holds before writing, and hang new work from what it continues
-/// -- the focus is wherever work was left, maybe by another session and
-/// about something else -- rather than from wherever the stack happens to
-/// sit.
+/// The four lines ahead of the table (`d757`, `d779`): look at what the tree
+/// already holds before writing, hang new work from what it continues --
+/// the focus is wherever work was left, maybe by another session and about
+/// something else -- and, last, the rule the whole block exists to teach:
+/// what gets told out loud belongs in the tree before it belongs in the
+/// answer, not after.
 const CAPTURE_SEAMS_HEAD: &[&str] = &[
     "  Look first: vivac find \"<words>\". Work the tree already holds goes under",
     "  its node, never into a second one. The focus above is where work was",
     "  left, maybe not by you: hang new work from what it continues.",
+    "  Write before you answer: what you tell the person goes in the tree first.",
 ];
 
 /// The capture seams (`d738`, `d757`): one row per place work is supposed to
@@ -794,6 +796,12 @@ const CAPTURE_SEAMS: &[(&str, &str, &[&str], &str)] = &[
         "vivac park <id> \"<their words>\"",
         &["nothing to park yet? vivac add it, then park it"],
         "vivac_park",
+    ),
+    (
+        "changed outside git",
+        "vivac note <id> \"<what changed, where>\"",
+        &["CI, a tracker, the cloud: the tree is its only record"],
+        "vivac_note",
     ),
     (
         "the work is done",

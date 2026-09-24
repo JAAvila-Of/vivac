@@ -125,6 +125,7 @@ const USAGE: &str = r#"vivac - provenance of work
 
     vivac session start [--hook]              the brief, ready to inject
     vivac session end   [--hook]              automatic stop at close
+    vivac session prompt [--hook]             a nudge when nothing was written
     vivac mcp                                 serve the tree over MCP
     vivac web [--port N] [--no-open]          the tree in a browser, and
           [--project P]                       nowhere but this machine
@@ -632,6 +633,17 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
                 })?),
             };
         return web::serve(roots, located_here, port, !a.has("no-open")).map(|_| 0);
+    }
+
+    // `session prompt` (`d779`) is intercepted here, ahead of `store::locate`'s
+    // own `?`: it runs on every message a person sends, and it must never
+    // fail that turn. No tree, a `locate` that itself errors, a log this
+    // version cannot read -- everything downstream of this line reads the
+    // same as "nothing to say", so none of it is allowed to become a
+    // non-zero exit the way it would for every other command.
+    if cmd == "session" && a.positional(0) == Some("prompt") {
+        session::prompt(&cwd, a);
+        return Ok(0);
     }
 
     let Some(located) = store::locate(&cwd)? else {
