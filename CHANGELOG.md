@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.3](https://github.com/JAAvila-Of/vivac/compare/v0.15.2...v0.15.3) - 2026-09-24
+
+### Added
+
+- *(setup)* print init and setup plans styled, one line per item
+
+### Fixed
+
+- *(migrate)* show each batch's nodes and always say what pillars exist
+- *(session)* count the agent's working minutes before nudging
+
 ## [0.15.2](https://github.com/JAAvila-Of/vivac/compare/v0.15.1...v0.15.2) - 2026-09-24
 
 ### Fixed
