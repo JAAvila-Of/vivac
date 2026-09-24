@@ -77,13 +77,19 @@ impl Failure {
                 eprintln!("  Plant the tree:  vivac init");
             }
             Failure::SetupNoTree => {
-                eprintln!(
-                    "  setup writes what an agent reads, and there is no tree here for it to"
-                );
-                eprintln!("  read. Nothing was written.");
+                use crate::style::{bold, Stream};
+                eprintln!("There is no tree here for setup to connect, so nothing was written.");
                 eprintln!();
-                eprintln!("  Plant one here:  vivac init");
-                eprintln!("  Or join one that already exists:  vivac init --join <name or path>");
+                eprintln!(
+                    "{} plant one here, or join one that already exists",
+                    bold(Stream::Err, "Next:")
+                );
+                eprintln!();
+                eprintln!("  {}", bold(Stream::Err, "vivac init"));
+                eprintln!(
+                    "  {}",
+                    bold(Stream::Err, "vivac init --join <name or path>")
+                );
             }
             Failure::Io(e) => eprintln!("  Input/output error: {e}"),
         }
@@ -107,9 +113,9 @@ impl Failure {
             Failure::Redaction(h) => h.to_string(),
             Failure::NoStore => "No .vivac/ here or further up. Plant one: vivac init".into(),
             Failure::SetupNoTree => {
-                "setup writes what an agent reads, and there is no tree here for it to read. \
-                 Nothing was written. Plant one here: vivac init. Or join one that already \
-                 exists: vivac init --join <name or path>"
+                "There is no tree here for setup to connect, so nothing was written. Plant \
+                 one here: vivac init. Or join one that already exists: vivac init --join \
+                 <name or path>"
                     .into()
             }
             Failure::Io(e) => format!("Input/output error: {e}"),

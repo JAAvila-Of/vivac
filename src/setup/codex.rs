@@ -45,6 +45,7 @@ use super::tree;
 use crate::args::Args;
 use crate::failure::Failure;
 use crate::output::outln;
+use crate::style::Stream;
 use std::path::{Path, PathBuf};
 
 const CONFIG_LABEL: &str = ".codex/config.toml";
@@ -288,7 +289,7 @@ pub fn run(cwd: &Path, a: &Args) -> Result<i32, Failure> {
 }
 
 /// Named after `t565` §7.8's own two-column plan, reused rather than
-/// refixed a second time (`d653`): `piece_line` and `sub_line` are
+/// refixed a second time (`d653`): `PlanItem` and `render_items` are
 /// `claude_code.rs`'s, and so is the paragraph beneath it -- true of
 /// these hooks and this server too, and it names neither harness.
 ///
@@ -302,8 +303,7 @@ pub fn run(cwd: &Path, a: &Args) -> Result<i32, Failure> {
 /// same "already has it" versus "add to it" versus "create it" `claude_code`
 /// already draws for its own files.
 #[allow(clippy::too_many_arguments)]
-fn render_plan(
-    here: &Path,
+fn plan_items(
     config_state: &ConfigState,
     hooks_exists: bool,
     start_hook_state: &HookState,
@@ -313,65 +313,70 @@ fn render_plan(
     stop_missing: bool,
     prompt_missing: bool,
     skill_file_state: &SkillState,
-) -> String {
-    use super::claude_code::{piece_line, sub_line};
-    let mut s = format!("  vivac setup codex, in {}\n\n", here.display());
+) -> Vec<super::claude_code::PlanItem> {
+    use super::claude_code::PlanItem;
 
-    let config_status = match config_state {
-        ConfigState::Create => "create: the \"vivac\" server",
-        ConfigState::Append => "add: the \"vivac\" server",
-        ConfigState::Already => "already has the \"vivac\" server",
+    let (config_verb, config_what) = match config_state {
+        ConfigState::Create => ("create", "the \"vivac\" server"),
+        ConfigState::Append => ("add", "the \"vivac\" server"),
+        ConfigState::Already => ("keep", "already has the \"vivac\" server"),
     };
-    s.push_str(&piece_line(CONFIG_LABEL, config_status));
+    let mut config_item = PlanItem::new(config_verb, CONFIG_LABEL, config_what);
     if !matches!(config_state, ConfigState::Already) {
-        s.push_str("        vivac mcp\n");
+        config_item = config_item.with_sub("run", "vivac mcp");
     }
 
-    let hooks_status = match (hooks_exists, start_missing, stop_missing, prompt_missing) {
-        (_, false, false, false) => "already has all three hooks",
-        (_, true, false, false) => "add the SessionStart hook",
-        (_, false, true, false) => "add the Stop hook",
-        (_, false, false, true) => "add the UserPromptSubmit hook",
-        (_, true, true, false) | (_, true, false, true) | (_, false, true, true) => "add two hooks",
-        (false, true, true, true) => "create: three hooks",
-        (true, true, true, true) => "add three hooks",
+    let (hooks_verb, hooks_what) = match (hooks_exists, start_missing, stop_missing, prompt_missing)
+    {
+        (_, false, false, false) => ("keep", "already has all three hooks"),
+        (_, true, false, false) => ("add", "the SessionStart hook"),
+        (_, false, true, false) => ("add", "the Stop hook"),
+        (_, false, false, true) => ("add", "the UserPromptSubmit hook"),
+        (_, true, true, false) | (_, true, false, true) | (_, false, true, true) => {
+            ("add", "two hooks")
+        }
+        (false, true, true, true) => ("create", "three hooks"),
+        (true, true, true, true) => ("add", "three hooks"),
     };
-    s.push_str(&piece_line(HOOKS_LABEL, hooks_status));
+    let mut hooks_item = PlanItem::new(hooks_verb, HOOKS_LABEL, hooks_what);
     match start_hook_state {
-        HookState::Missing => s.push_str(&sub_line("SessionStart", SESSION_START_COMMAND)),
+        HookState::Missing => {
+            hooks_item = hooks_item.with_sub("SessionStart", SESSION_START_COMMAND)
+        }
         HookState::Different(cmd) => {
-            s.push_str(&sub_line("SessionStart", &format!("already runs  {cmd}")))
+            hooks_item = hooks_item.with_sub("SessionStart", format!("already runs  {cmd}"))
         }
         HookState::Exact => {}
     }
     match stop_hook_state {
-        HookState::Missing => s.push_str(&sub_line("Stop", SESSION_END_COMMAND)),
-        HookState::Different(cmd) => s.push_str(&sub_line("Stop", &format!("already runs  {cmd}"))),
+        HookState::Missing => hooks_item = hooks_item.with_sub("Stop", SESSION_END_COMMAND),
+        HookState::Different(cmd) => {
+            hooks_item = hooks_item.with_sub("Stop", format!("already runs  {cmd}"))
+        }
         HookState::Exact => {}
     }
     match prompt_hook_state {
-        HookState::Missing => s.push_str(&sub_line("UserPromptSubmit", SESSION_PROMPT_COMMAND)),
-        HookState::Different(cmd) => s.push_str(&sub_line(
-            "UserPromptSubmit",
-            &format!("already runs  {cmd}"),
-        )),
+        HookState::Missing => {
+            hooks_item = hooks_item.with_sub("UserPromptSubmit", SESSION_PROMPT_COMMAND)
+        }
+        HookState::Different(cmd) => {
+            hooks_item = hooks_item.with_sub("UserPromptSubmit", format!("already runs  {cmd}"))
+        }
         HookState::Exact => {}
     }
 
-    match skill_file_state {
-        SkillState::Missing => s.push_str(&piece_line(
-            SKILL_LABEL,
-            "create: how an agent brings another memory into vivac",
-        )),
-        SkillState::Replaceable => s.push_str(&piece_line(
-            SKILL_LABEL,
-            "replace the copy an earlier vivac wrote",
-        )),
-        SkillState::Same => s.push_str(&piece_line(SKILL_LABEL, "already there")),
+    let (skill_verb, skill_what) = match skill_file_state {
+        SkillState::Missing => ("create", "how an agent brings another memory into vivac"),
+        SkillState::Replaceable => ("replace", "the copy an earlier vivac wrote"),
+        SkillState::Same => ("keep", "already there"),
         SkillState::Conflict => unreachable!("a skill conflict never reaches the plan"),
-    }
+    };
 
-    s
+    vec![
+        config_item,
+        hooks_item,
+        PlanItem::new(skill_verb, SKILL_LABEL, skill_what),
+    ]
 }
 
 /// `.agents/skills/vivac-migrate/SKILL.md` is already there, and either
@@ -458,26 +463,32 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     let nothing_to_write =
         !config_needs_write && !hooks_needs_write && !skill_missing_or_replaceable;
 
-    let full_plan = format!(
-        "{}\n",
-        render_plan(
-            here,
-            &config_state,
-            hooks.exists,
-            &start_hook_state,
-            &stop_hook_state,
-            &prompt_hook_state,
-            start_missing,
-            stop_missing,
-            prompt_missing,
-            &skill_file_state,
+    let plan_block = format!(
+        "{}{}",
+        super::claude_code::heading(Stream::Out, "vivac setup codex", here),
+        super::claude_code::render_items(
+            Stream::Out,
+            &plan_items(
+                &config_state,
+                hooks.exists,
+                &start_hook_state,
+                &stop_hook_state,
+                &prompt_hook_state,
+                start_missing,
+                stop_missing,
+                prompt_missing,
+                &skill_file_state,
+            ),
         )
     );
 
     if a.has("dry-run") {
         outln!(
-            "{full_plan}{}\n  Nothing written: --dry-run.",
-            super::claude_code::TRAILING_PARAGRAPH
+            "{}",
+            super::claude_code::close_with(
+                &format!("{plan_block}\n{}", super::claude_code::TRAILING_PARAGRAPH),
+                super::claude_code::DRY_RUN_LINE
+            )
         );
         return Ok(0);
     }
@@ -489,7 +500,13 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         // B: `setup` never writes to the tree itself any more, so this is
         // all `note_registry` is left doing).
         tree::note_registry(roots);
-        outln!("{full_plan}  Nothing to write: this project is already set up.");
+        outln!(
+            "{}",
+            super::claude_code::close_with(
+                &plan_block,
+                "Nothing to write: this project is already set up."
+            )
+        );
         return Ok(0);
     }
 
@@ -500,10 +517,13 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         )));
     }
 
-    print!("{full_plan}{}", super::claude_code::TRAILING_PARAGRAPH);
-    let proceed = a.has("yes") || super::ask("\n  Write it? [y/N] ");
+    super::claude_code::print_plan(&format!(
+        "{plan_block}\n{}",
+        super::claude_code::TRAILING_PARAGRAPH
+    ));
+    let proceed = a.has("yes") || super::ask("\nWrite it? [y/N] ");
     if !proceed {
-        outln!("\n  Nothing written.");
+        outln!("\nNothing written.");
         return Ok(0);
     }
 
@@ -587,6 +607,9 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     tree::note_registry(roots);
 
     print!("\n{}", written_text(here));
+    // `f790`: the migrate advice moved off `init` and onto the first
+    // successful `setup` of a lane that has not brought anything in yet.
+    print!("{}", super::claude_code::migrate_advice(roots));
     Ok(0)
 }
 
@@ -605,7 +628,7 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
 /// whatever an earlier setup wrote is always safe, regardless of what the
 /// tree above `here` is doing.
 fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
-    use super::claude_code::{piece_line, sub_line};
+    use super::claude_code::PlanItem;
 
     let target = paths(here);
     let config_raw = std::fs::read_to_string(&target.config).ok();
@@ -646,7 +669,7 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
 
     let nothing_to_undo = !config_ours && !start_ours && !stop_ours && !prompt_ours && !skill_ours;
     if nothing_to_undo {
-        outln!("  Nothing to undo: none of what setup writes is here.");
+        outln!("Nothing to undo: none of what setup writes is here.");
         return Ok(0);
     }
 
@@ -664,92 +687,93 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
         .as_object()
         .is_some_and(|s: &[(String, Value)]| s.is_empty());
 
-    let hooks_status: String = match (start_ours, stop_ours, prompt_ours) {
-        (true, true, true) if hooks_becomes_empty => {
-            "remove the three hooks setup wrote; nothing else is left, so it goes".to_string()
-        }
-        (true, true, true) => "remove the three hooks setup wrote".to_string(),
-        (true, true, false) => "remove the two hooks setup wrote".to_string(),
-        (true, false, true) => "remove the two hooks setup wrote".to_string(),
-        (false, true, true) => "remove the two hooks setup wrote".to_string(),
-        (true, false, false) => "remove the SessionStart hook".to_string(),
-        (false, true, false) => "remove the Stop hook".to_string(),
-        (false, false, true) => "remove the UserPromptSubmit hook".to_string(),
-        (false, false, false) => "left as it is".to_string(),
-    };
-
-    let mut s = format!("  vivac setup codex --undo, in {}\n\n", here.display());
+    let (hooks_verb, hooks_what): (&'static str, &'static str) =
+        match (start_ours, stop_ours, prompt_ours) {
+            (true, true, true) if hooks_becomes_empty => (
+                "remove",
+                "the three hooks setup wrote; nothing else is left, so it goes",
+            ),
+            (true, true, true) => ("remove", "the three hooks setup wrote"),
+            (true, true, false) | (true, false, true) | (false, true, true) => {
+                ("remove", "the two hooks setup wrote")
+            }
+            (true, false, false) => ("remove", "the SessionStart hook"),
+            (false, true, false) => ("remove", "the Stop hook"),
+            (false, false, true) => ("remove", "the UserPromptSubmit hook"),
+            (false, false, false) => ("keep", "left as it is"),
+        };
 
     // `t592` tranche 2 §5: a half-written block is not this run's to guess
     // the end of, so the file is left alone and the line says why. A status
     // line and not the paragraph `apply` refuses with: that paragraph ends
     // by saying to run setup again, which is not what the person in front
     // of it asked for, and a plan reads as a grid.
-    match &config_state {
-        Some(ConfigUndoState::HalfMarker(has_open)) => {
-            s.push_str(&piece_line(
-                CONFIG_LABEL,
-                "left as it is: its marker block is half written",
-            ));
-            s.push_str(&sub_line(
-                "missing",
-                if *has_open {
-                    CONFIG_CLOSE_MARKER
-                } else {
-                    CONFIG_OPEN_MARKER
-                },
-            ));
-        }
+    let config_item = match &config_state {
+        Some(ConfigUndoState::HalfMarker(has_open)) => PlanItem::new(
+            "keep",
+            CONFIG_LABEL,
+            "left as it is: its marker block is half written",
+        )
+        .with_sub(
+            "missing",
+            if *has_open {
+                CONFIG_CLOSE_MARKER
+            } else {
+                CONFIG_OPEN_MARKER
+            },
+        ),
         Some(ConfigUndoState::Ours) => {
             let existing = config_raw
                 .as_deref()
                 .expect("ConfigUndoState::Ours only reached with a file present");
             if remove_config_block(existing).trim().is_empty() {
-                s.push_str(&piece_line(
+                PlanItem::new(
+                    "remove",
                     CONFIG_LABEL,
-                    "remove the \"vivac\" server; nothing else is left, so it goes",
-                ));
+                    "the \"vivac\" server; nothing else is left, so it goes",
+                )
             } else {
-                s.push_str(&piece_line(CONFIG_LABEL, "remove the \"vivac\" server"));
+                PlanItem::new("remove", CONFIG_LABEL, "the \"vivac\" server")
             }
         }
         Some(ConfigUndoState::NotOurs) | None => {
-            s.push_str(&piece_line(CONFIG_LABEL, "left as it is"));
+            PlanItem::new("keep", CONFIG_LABEL, "left as it is")
         }
-    }
+    };
 
-    s.push_str(&piece_line(HOOKS_LABEL, &hooks_status));
+    let mut hooks_item = PlanItem::new(hooks_verb, HOOKS_LABEL, hooks_what);
     if let HookState::Different(_) = &start_hook_state {
-        s.push_str(&sub_line(
-            "SessionStart",
-            "runs vivac another way; left as it is",
-        ));
+        hooks_item = hooks_item.with_sub("SessionStart", "runs vivac another way; left as it is");
     }
     if let HookState::Different(_) = &stop_hook_state {
-        s.push_str(&sub_line("Stop", "runs vivac another way; left as it is"));
+        hooks_item = hooks_item.with_sub("Stop", "runs vivac another way; left as it is");
     }
     if let HookState::Different(_) = &prompt_hook_state {
-        s.push_str(&sub_line(
-            "UserPromptSubmit",
-            "runs vivac another way; left as it is",
-        ));
+        hooks_item =
+            hooks_item.with_sub("UserPromptSubmit", "runs vivac another way; left as it is");
     }
 
-    s.push_str(&piece_line(
-        SKILL_LABEL,
-        if skill_ours {
-            "remove"
-        } else if skill_raw.is_some() {
-            "changed since setup wrote it; left as it is"
-        } else {
-            "left as it is"
-        },
-    ));
+    let (skill_verb, skill_what) = if skill_ours {
+        ("remove", "the skill setup wrote")
+    } else if skill_raw.is_some() {
+        ("keep", "changed since setup wrote it; left as it is")
+    } else {
+        ("keep", "left as it is")
+    };
 
-    s.push('\n');
+    let items = vec![
+        config_item,
+        hooks_item,
+        PlanItem::new(skill_verb, SKILL_LABEL, skill_what),
+    ];
+    let mut s = super::claude_code::heading(Stream::Out, "vivac setup codex --undo", here);
+    s.push_str(&super::claude_code::render_items(Stream::Out, &items));
 
     if a.has("dry-run") {
-        outln!("{s}  Nothing written: --dry-run.");
+        outln!(
+            "{}",
+            super::claude_code::close_with(&s, super::claude_code::DRY_RUN_LINE)
+        );
         return Ok(0);
     }
 
@@ -762,10 +786,10 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
         )));
     }
 
-    print!("{s}");
-    let proceed = a.has("yes") || super::ask("  Undo it? [y/N] ");
+    super::claude_code::print_plan(&s);
+    let proceed = a.has("yes") || super::ask("\nUndo it? [y/N] ");
     if !proceed {
-        outln!("\n  Nothing written.");
+        outln!("\nNothing written.");
         return Ok(0);
     }
 
@@ -840,16 +864,28 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
         super::claude_code::remove_if_empty(target.skill.parent());
     }
 
-    outln!("  Undone. The tree in .vivac/ is untouched.");
+    outln!("\nUndone. The tree in .vivac/ is untouched.");
     Ok(0)
 }
 
-const FILES_PARAGRAPH: &str = "\n  The server entry and the hooks file are plain files in this project:\n  commit them if everyone who works here uses vivac, and keep them out of\n  version control if only you do.\n";
+const FILES_PARAGRAPH: &str =
+    "The server entry and the hooks file are plain files in this project: commit them if \
+     everyone who works here uses vivac, and keep them out of version control if only you \
+     do.";
 
 /// `d655`: the two doors this run cannot open itself, because both live in
 /// configuration this run never touches -- the person's own, for trust, and
-/// Codex's own approval prompt, for the hook.
-const HOOK_PARAGRAPH: &str = "\n  Each hook not already approved is approved on its own, against its hash,\n  and asked again if it changes. Inside Codex, the first time and whenever\n  a hook changes:\n\n      /hooks\n";
+/// Codex's own approval prompt, for the hook. `/hooks` is code-ish
+/// (`d792`), so it stays on its own bold line rather than folded into the
+/// sentence.
+fn hook_paragraph() -> String {
+    format!(
+        "Each hook not already approved is approved on its own, against its hash, and \
+         asked again if it changes. Inside Codex, the first time and whenever a hook \
+         changes:\n\n  {}",
+        crate::style::bold(Stream::Out, "/hooks")
+    )
+}
 
 /// `path`, quoted the way a TOML table key can actually hold it.
 ///
@@ -870,14 +906,19 @@ fn quoted_path(path: &str) -> String {
     format!("\"{escaped}\"")
 }
 
+/// The TOML snippet is code-ish (`d792`), so both of its lines stay bold
+/// and on their own, indented 2, rather than folded into the sentence
+/// around them.
 fn trusted_paragraph(here: &Path) -> String {
     format!(
-        "\n  Codex reads nothing under .codex/ in this project until the folder is\n  \
-         trusted. The first time Codex opens it, it asks: say yes. If it does not\n  \
-         ask, add this to ~/.codex/config.toml instead:\n\n      \
-         [projects.{}]\n      \
-         trust_level = \"trusted\"\n",
-        quoted_path(&here.display().to_string())
+        "Codex reads nothing under .codex/ in this project until the folder is trusted. \
+         The first time Codex opens it, it asks: say yes. If it does not ask, add this to \
+         ~/.codex/config.toml instead:\n\n  {}\n  {}",
+        crate::style::bold(
+            Stream::Out,
+            &format!("[projects.{}]", quoted_path(&here.display().to_string()))
+        ),
+        crate::style::bold(Stream::Out, "trust_level = \"trusted\"")
     )
 }
 
@@ -886,15 +927,23 @@ fn trusted_paragraph(here: &Path) -> String {
 /// read-only once they exist as directories, which they do from the line
 /// before this one, so running this again is a person's job from here on
 /// and an agent that tries it only learns that it cannot.
-const SANDBOX_PARAGRAPH: &str = "\n  Running setup here again is yours to do from a terminal. Now that .codex/\n  and .agents/ exist, Codex keeps both read-only inside its own sandbox, so\n  an agent working in this project cannot write to either.\n";
+const SANDBOX_PARAGRAPH: &str =
+    "Running setup here again is yours to do from a terminal. Now that .codex/ and \
+     .agents/ exist, Codex keeps both read-only inside its own sandbox, so an agent \
+     working in this project cannot write to either.";
 
 fn written_text(here: &Path) -> String {
-    let mut s = String::from("  Written.\n");
-    s.push_str(FILES_PARAGRAPH);
-    s.push_str(&trusted_paragraph(here));
-    s.push_str(HOOK_PARAGRAPH);
-    s.push_str(SANDBOX_PARAGRAPH);
-    s
+    format!(
+        "{}\n",
+        [
+            crate::style::good(Stream::Out, "Written."),
+            FILES_PARAGRAPH.to_string(),
+            trusted_paragraph(here),
+            hook_paragraph(),
+            SANDBOX_PARAGRAPH.to_string(),
+        ]
+        .join("\n\n")
+    )
 }
 
 #[cfg(test)]

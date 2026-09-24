@@ -32,6 +32,7 @@ ag
 again
 against
 age
+agent
 ages
 aggregates
 agree
@@ -169,6 +170,7 @@ blocks
 bodies
 body
 bogus
+bold
 bookkeeping
 bool
 boot
@@ -226,6 +228,7 @@ capacity
 capped
 caps
 capture
+captured
 carried
 carries
 carry
@@ -276,6 +279,7 @@ clear
 cleared
 clears
 cli
+clicolor
 clip
 clipped
 clipping
@@ -302,7 +306,9 @@ collections
 collides
 collision
 colon
+color
 colour
+colours
 column
 columns
 combining
@@ -321,6 +327,7 @@ complete
 completes
 component
 components
+compute
 condition
 config
 confirms
@@ -328,6 +335,7 @@ conflict
 conflicts
 connect
 connection
+console
 const
 constant
 constraint
@@ -381,6 +389,7 @@ custom
 cut
 cuts
 cwd
+cyan
 d200
 dash
 dashes
@@ -397,6 +406,7 @@ debug
 dec
 decide
 decided
+decides
 decision
 decisions
 declaration
@@ -451,10 +461,12 @@ differs
 diffing
 digit
 digits
+dim
 dir
 direct
 directly
 directory
+disables
 disagrees
 disappear
 disclosure
@@ -487,6 +499,7 @@ draws
 drop
 drops
 dry
+dumb
 dump
 duration
 dx
@@ -510,6 +523,9 @@ email
 emisores
 emit
 empty
+enable
+enabled
+enables
 encode
 encoded
 end
@@ -569,6 +585,7 @@ explicit
 extend
 extends
 extension
+extern
 extra
 extract
 eye
@@ -687,6 +704,7 @@ governed
 governing
 governs
 grandchild
+green
 grew
 group
 groups
@@ -849,7 +867,6 @@ knowledge
 known
 knows
 label
-labels
 lacks
 landing
 lands
@@ -981,6 +998,7 @@ minutes
 missing
 mm
 mod
+mode
 model
 modified
 month
@@ -1159,6 +1177,7 @@ paths
 pattern
 payload
 peek
+peekable
 pending
 per
 percent
@@ -1172,7 +1191,6 @@ personal
 phrase
 picked
 picks
-piece
 pieces
 pii
 pile
@@ -1227,6 +1245,7 @@ problem
 proceed
 proceeds
 process
+processing
 product
 products
 prog
@@ -1300,6 +1319,7 @@ recorded
 records
 recreates
 recv
+red
 redact
 redaction
 redeclare
@@ -1383,6 +1403,7 @@ rescue
 rescued
 rescuing
 reserve
+reset
 resident
 resolve
 resolved
@@ -1626,6 +1647,8 @@ strip
 stripped
 strips
 struct
+style
+styles
 sub
 subdirs
 subfolder
@@ -1761,6 +1784,7 @@ trusted
 try
 ts
 tt
+tty
 turn
 turns
 twelve
@@ -1804,6 +1828,7 @@ unreadable
 unrecognised
 unrestorable
 unrestored
+unsafe
 unstable
 unstack
 untagged
@@ -1856,13 +1881,16 @@ version
 very
 via
 view
+virtual
 visible
 visit
 visitor
 vivac
 vivacs
 vocabulary
+void
 vowels
+vt
 vv
 wait
 waited
@@ -1898,7 +1926,6 @@ why3
 why4
 wide
 widen
-widest
 width
 windows
 wins
@@ -1931,6 +1958,8 @@ writing
 written
 wrong
 wrote
+x1b
+yellow
 yes
 yet
 yield

@@ -39,6 +39,7 @@ mod repos;
 mod session;
 mod setup;
 mod store;
+mod style;
 mod web;
 
 use args::Args;

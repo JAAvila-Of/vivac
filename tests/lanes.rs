@@ -260,7 +260,7 @@ fn init_plants_its_own_tree_over_a_hollow_vivac_under_a_real_one() {
         says(&dry, "This tree sits inside another one, in folder"),
         "{dry}"
     );
-    assert!(says(&dry, "plant the tree"), "{dry}");
+    assert!(says(&dry, "plant") && says(&dry, "the tree"), "{dry}");
     assert!(dry.contains("Nothing written: --dry-run."), "{dry}");
     assert!(
         !hollow.join(".vivac").join("events").is_file(),
@@ -859,10 +859,8 @@ fn init_dry_run_names_a_stale_worktree_it_would_redeclare() {
     let (out, code) = run(&root, &home, &["init", "--dry-run"]);
     assert_eq!(code, 0, "{out}");
     assert!(
-        says(
-            &out,
-            "redeclare 1 worktree lane with the repositories this run found"
-        ),
+        says(&out, "redeclare")
+            && says(&out, "1 worktree lane with the repositories this run found"),
         "the dry-run plan never named the stale worktree lane it would fix:\n{out}"
     );
 

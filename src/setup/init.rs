@@ -26,6 +26,7 @@ use super::tree;
 use crate::args::Args;
 use crate::failure::Failure;
 use crate::output::outln;
+use crate::style::Stream;
 
 pub(super) fn run(cwd: &std::path::Path, a: &Args) -> Result<i32, Failure> {
     let roots = super::resolve_roots(cwd)?;
@@ -65,26 +66,45 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     apply_writes(roots, a, plan)
 }
 
-/// `plan`'s own two-column lines, `tree.rs`'s (`t592` tranche 2, `d710`):
-/// the same [`tree::opening_lines`] and [`tree::closing_lines`] every
-/// harness already shows for the tree, with nothing of a harness's own
-/// between them -- `init` writes none.
+/// `plan`'s own plan items, `tree.rs`'s (`t592` tranche 2, `d710`): the
+/// same [`tree::opening_items`] and [`tree::closing_items`] every harness
+/// already shows for the tree, rendered together so every column lines up
+/// across both, with nothing of a harness's own between them -- `init`
+/// writes none.
 fn full_plan(here: &std::path::Path, plan: &tree::TreePlan) -> String {
-    let mut s = format!("  vivac init, in {}\n\n", here.display());
+    let mut s = super::claude_code::heading(Stream::Out, "vivac init", here);
     // `t640`, point 10 bis: said before anything is written, the same
     // sentence `setup`'s own plan shows for the same reason --
     // `name_collision` is only ever `Some` once `--name`'s own value
     // already matches another project's effective name, and that is true
     // of `init`'s own plant exactly as it is of `setup`'s. One sentence,
     // read from `claude_code::name_collision_paragraph` rather than a
-    // second copy of it (`f724`): two copies of a hand-split line is how
-    // one of them keeps the break a long name outgrows.
+    // second copy of it (`f724`).
     if let Some(name) = &plan.name_collision {
         s.push_str(&super::claude_code::name_collision_paragraph(name));
     }
-    s.push_str(&tree::opening_lines(plan));
-    s.push_str(&tree::closing_lines(plan));
+    let mut items = tree::opening_items(plan);
+    items.extend(tree::closing_items(plan));
+    s.push_str(&super::claude_code::render_items(Stream::Out, &items));
     s
+}
+
+/// Every paragraph a run may still have to show past the plan itself --
+/// the second-map hint, the tracked-`.vivac/events` warning, the tree-
+/// above-this-one warning -- collected so every path out joins them the
+/// same way (`d792`: one blank line between each, never a double one).
+fn warning_paragraphs(plan: &tree::TreePlan) -> Vec<String> {
+    let mut v = Vec::new();
+    if !plan.unknown_product_warning.is_empty() {
+        v.push(plan.unknown_product_warning.clone());
+    }
+    if plan.log_tracked {
+        v.push(super::claude_code::tracked_git_warning());
+    }
+    if let Some(w) = &plan.above_warning {
+        v.push(w.clone());
+    }
+    v
 }
 
 fn apply_writes(roots: &super::Roots, a: &Args, plan: tree::TreePlan) -> Result<i32, Failure> {
@@ -95,19 +115,15 @@ fn apply_writes(roots: &super::Roots, a: &Args, plan: tree::TreePlan) -> Result<
         && !plan.lane.needs_lock
         && plan.lane.stale_worktrees.is_empty();
 
-    let plan_text = full_plan(here, &plan);
+    let mut blocks = vec![full_plan(here, &plan).trim_end_matches('\n').to_string()];
+    blocks.extend(warning_paragraphs(&plan));
+    let plan_text = format!("{}\n\n", blocks.join("\n\n"));
 
     if a.has("dry-run") {
         outln!(
-            "{plan_text}{}\n  Nothing written: --dry-run.",
-            plan.unknown_product_warning
+            "{}",
+            super::claude_code::close_with(&plan_text, super::claude_code::DRY_RUN_LINE)
         );
-        if plan.log_tracked {
-            print!("{}", super::claude_code::tracked_git_warning());
-        }
-        if let Some(w) = &plan.above_warning {
-            print!("{w}");
-        }
         return Ok(0);
     }
 
@@ -117,13 +133,13 @@ fn apply_writes(roots: &super::Roots, a: &Args, plan: tree::TreePlan) -> Result<
         // not a write this promise is about (`tree::note_registry`'s own
         // doc).
         tree::note_registry(roots);
-        outln!("{plan_text}  Nothing to write: this project is already set up.");
-        if plan.log_tracked {
-            print!("{}", super::claude_code::tracked_git_warning());
-        }
-        if let Some(w) = &plan.above_warning {
-            print!("{w}");
-        }
+        outln!(
+            "{}",
+            super::claude_code::close_with(
+                &plan_text,
+                "Nothing to write: this project is already set up."
+            )
+        );
         return Ok(0);
     }
 
@@ -131,10 +147,10 @@ fn apply_writes(roots: &super::Roots, a: &Args, plan: tree::TreePlan) -> Result<
         return Err(Failure::Model(super::init_no_terminal_text(a)));
     }
 
-    print!("{plan_text}{}", plan.unknown_product_warning);
-    let proceed = a.has("yes") || super::ask("\n  Write it? [y/N] ");
+    super::claude_code::print_plan(&plan_text);
+    let proceed = a.has("yes") || super::ask("\nWrite it? [y/N] ");
     if !proceed {
-        outln!("\n  Nothing written.");
+        outln!("\nNothing written.");
         return Ok(0);
     }
 
@@ -151,50 +167,46 @@ fn apply_writes(roots: &super::Roots, a: &Args, plan: tree::TreePlan) -> Result<
     tree::note_name(&plan);
 
     print!("\n{}", written_text(&plan));
-    if plan.log_tracked {
-        print!("{}", super::claude_code::tracked_git_warning());
-    }
-    if let Some(w) = &plan.above_warning {
-        print!("{w}");
-    }
     Ok(0)
 }
 
-/// What this run just wrote, in `init`'s own words: a fresh tree gets the
-/// same first-node hint a bare `vivac init` already gives, and a tree that
-/// was already there gets `claude_code::tree_paragraph`'s own sentence --
-/// the one piece of `claude_code`'s closing text that was never about a
-/// harness to begin with.
+/// What this run just wrote, in `init`'s own words, and the `Next:` block
+/// every successful run ends with (`d792`): a tree that was already there
+/// gets `claude_code::tree_paragraph`'s own sentence -- the one piece of
+/// `claude_code`'s closing text that was never about a harness to begin
+/// with. A fresh tree gets no first-node hint any more: the next step is
+/// setting up the agent, and the agent is the one that writes nodes.
 ///
-/// `d723` piece B carried the migration nudge here too, not just the tree
-/// side: planting and joining are what `MIGRATE_PARAGRAPHS` and
-/// `JOIN_MIGRATE_PARAGRAPHS` were always keyed on, and both are `init`'s
-/// alone now. The text is unchanged; only which module shows it moved,
-/// with the writes it was always describing.
+/// `f790`: the migrate nudge that used to end here moved onto `setup`,
+/// the first write a fresh lane usually makes -- `init` only plants or
+/// joins, and whether anything has been brought in yet is a question
+/// about writing, not about that.
 fn written_text(plan: &tree::TreePlan) -> String {
-    let mut s = String::from("  Written.\n");
-    if plan.vivac_missing {
-        s.push_str("\n  First node:  vivac push \"<title>\" --why \"<reason>\"\n");
-        s.push_str(super::claude_code::MIGRATE_PARAGRAPHS);
-    } else {
+    let mut paragraphs = vec![crate::style::good(Stream::Out, "Written.")];
+    if !plan.vivac_missing {
         let lane_declared = !plan.lane.unchanged || !plan.lane.stale_worktrees.is_empty();
-        s.push_str(&super::claude_code::tree_paragraph(
+        paragraphs.push(super::claude_code::tree_paragraph(
             "init",
             plan.gitignore_missing,
             lane_declared,
             plan.lane.needs_lock,
         ));
-        // `f678`/`d683`: the argument for staying quiet here was the
-        // **tree**'s, which a join finds already there and may already
-        // hold content for. It says nothing about the folder, which
-        // arrives with its own instruction files, its own harness memory
-        // and its own documents, and joining a tree never reads any of
-        // that.
-        if plan.lane.is_new {
-            s.push_str(super::claude_code::JOIN_MIGRATE_PARAGRAPHS);
-        }
     }
-    s
+    paragraphs.push(next_agent_block());
+    format!("{}\n", paragraphs.join("\n\n"))
+}
+
+/// The `Next:` block a fresh plant or join always ends with: which harness
+/// to set up next is the one thing this run cannot decide, and every setup
+/// still shows its own migrate nudge once it runs, so `init` never has to
+/// (`f790`).
+fn next_agent_block() -> String {
+    format!(
+        "{} set up the agent you use\n\n  {}\n  {}",
+        crate::style::bold(Stream::Out, "Next:"),
+        crate::style::bold(Stream::Out, "vivac setup claude-code"),
+        crate::style::bold(Stream::Out, "vivac setup codex")
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -226,24 +238,33 @@ fn undo(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         if crate::store::already_planted(here) {
             return undo_bare_tree(roots, a);
         }
-        outln!("  Nothing to undo: this folder carries no lane vivac init wrote.");
+        outln!("Nothing to undo: this folder carries no lane vivac init wrote.");
         return Ok(0);
     }
 
-    let mut s = format!("  vivac init --undo, in {}\n\n", here.display());
-    s.push_str(&tree::vivac_dir_lines(&undo_lane));
-    s.push_str(&tree::undo_lane_lines(&undo_lane));
-    s.push('\n');
+    let mut items = tree::vivac_dir_items(&undo_lane);
+    items.extend(tree::undo_lane_items(&undo_lane));
+    let mut s = super::claude_code::heading(Stream::Out, "vivac init --undo", here);
+    s.push_str(&super::claude_code::render_items(Stream::Out, &items));
 
     if a.has("dry-run") {
-        outln!("{s}  Nothing written: --dry-run.");
+        outln!(
+            "{}",
+            super::claude_code::close_with(&s, super::claude_code::DRY_RUN_LINE)
+        );
         return Ok(0);
     }
 
     if !undo_lane.removable {
-        // The lane stays -- `undo_lane_lines` above already said why -- so
+        // The lane stays -- `undo_lane_items` above already said why -- so
         // there is nothing left in this plan to confirm or to write.
-        outln!("{s}  Nothing written: this lane has written to the tree.");
+        outln!(
+            "{}",
+            super::claude_code::close_with(
+                &s,
+                "Nothing written: this lane has written to the tree."
+            )
+        );
         return Ok(0);
     }
 
@@ -251,10 +272,10 @@ fn undo(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         return Err(Failure::Model(super::init_no_terminal_text(a)));
     }
 
-    print!("{s}");
-    let proceed = a.has("yes") || super::ask("  Undo it? [y/N] ");
+    super::claude_code::print_plan(&s);
+    let proceed = a.has("yes") || super::ask("\nUndo it? [y/N] ");
     if !proceed {
-        outln!("\n  Nothing written.");
+        outln!("\nNothing written.");
         return Ok(0);
     }
 
@@ -282,7 +303,7 @@ fn undo(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         super::claude_code::remove_if_empty(Some(&undo_lane.vivac_dir));
     }
 
-    outln!("  Undone. The tree in .vivac/ is untouched.");
+    outln!("\nUndone. The tree in .vivac/ is untouched.");
     Ok(0)
 }
 
@@ -302,24 +323,28 @@ fn undo_bare_tree(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     let writes = crate::session::capture_count(&events);
     if writes > 0 {
         outln!(
-            "  Nothing to undo: the tree in .vivac/ already holds work ({writes} writes), and\n  init --undo never removes a tree that does."
+            "Nothing to undo: the tree in .vivac/ already holds work ({writes} writes), and \
+             init --undo never removes a tree that does."
         );
         return Ok(0);
     }
 
-    let mut s = format!("  vivac init --undo, in {}\n\n", here.display());
-    s.push_str(&super::claude_code::piece_line(
-        tree::VIVAC_LABEL,
-        "remove the tree init planted here: it holds no work yet",
-    ));
-    s.push_str(&super::claude_code::piece_line(
-        "registry",
-        "forget this project",
-    ));
-    s.push('\n');
+    let items = vec![
+        super::claude_code::PlanItem::new(
+            "remove",
+            tree::VIVAC_LABEL,
+            "the tree init planted here: it holds no work yet",
+        ),
+        super::claude_code::PlanItem::new("forget", "~/.vivac/projects", "this project"),
+    ];
+    let mut s = super::claude_code::heading(Stream::Out, "vivac init --undo", here);
+    s.push_str(&super::claude_code::render_items(Stream::Out, &items));
 
     if a.has("dry-run") {
-        outln!("{s}  Nothing written: --dry-run.");
+        outln!(
+            "{}",
+            super::claude_code::close_with(&s, super::claude_code::DRY_RUN_LINE)
+        );
         return Ok(0);
     }
 
@@ -327,10 +352,10 @@ fn undo_bare_tree(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         return Err(Failure::Model(super::init_no_terminal_text(a)));
     }
 
-    print!("{s}");
-    let proceed = a.has("yes") || super::ask("  Undo it? [y/N] ");
+    super::claude_code::print_plan(&s);
+    let proceed = a.has("yes") || super::ask("\nUndo it? [y/N] ");
     if !proceed {
-        outln!("\n  Nothing written.");
+        outln!("\nNothing written.");
         return Ok(0);
     }
 
@@ -347,6 +372,6 @@ fn undo_bare_tree(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         crate::registry::forget(&store_dir, &project_id);
     }
 
-    outln!("  Undone. There is no tree here any more.");
+    outln!("\nUndone. There is no tree here any more.");
     Ok(0)
 }

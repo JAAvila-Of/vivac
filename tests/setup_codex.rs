@@ -100,7 +100,7 @@ fn dry_run_writes_nothing_and_shows_the_three_paths() {
     let before: Vec<_> = std::fs::read_dir(&c.0).unwrap().collect();
     let (out, code) = c.run(&["setup", "codex", "--dry-run"]);
     assert_eq!(code, 0, "{out}");
-    assert!(out.contains("vivac setup codex, in"), "{out}");
+    assert!(out.contains("vivac setup codex will, in"), "{out}");
     assert!(out.contains(CONFIG_LABEL), "{out}");
     assert!(out.contains(HOOKS_LABEL), "{out}");
     assert!(out.contains(SKILL_LABEL), "{out}");
@@ -234,7 +234,10 @@ fn a_foreign_config_toml_keeps_its_content_and_gains_our_block_after_it() {
 
     let (out, code) = c.run(&["setup", "codex", "--yes"]);
     assert_eq!(code, 0, "{out}");
-    assert!(out.contains("add: the \"vivac\" server"), "{out}");
+    assert!(
+        out.contains("add") && out.contains("the \"vivac\" server"),
+        "{out}"
+    );
     assert_eq!(
         read(&config_path(&c)),
         format!("# hand-written\nsomething = 1\n\n{EXPECTED_CONFIG}")
@@ -364,7 +367,7 @@ fn a_hooks_json_with_the_two_older_hooks_gains_only_the_third() {
     let (out, code) = c.run(&["setup", "codex", "--yes"]);
     assert_eq!(code, 0, "{out}");
     assert!(
-        plan_words(&out).contains("add the UserPromptSubmit hook"),
+        plan_words(&out).contains("add") && plan_words(&out).contains("the UserPromptSubmit hook"),
         "{out}"
     );
 
@@ -669,8 +672,9 @@ fn undo_after_a_clean_setup_leaves_the_folder_as_it_was_except_the_tree() {
     let (out, code) = c.run(&["setup", "codex", "--undo", "--yes"]);
     assert_eq!(code, 0, "{out}");
     assert!(
-        plan_words(&out)
-            .contains("remove the three hooks setup wrote; nothing else is left, so it goes"),
+        plan_words(&out).contains("remove")
+            && plan_words(&out)
+                .contains("the three hooks setup wrote; nothing else is left, so it goes"),
         "{out}"
     );
     assert!(

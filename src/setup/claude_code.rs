@@ -21,6 +21,7 @@ use super::tree;
 use crate::args::Args;
 use crate::failure::Failure;
 use crate::output::outln;
+use crate::style::{self, Stream};
 use std::path::{Path, PathBuf};
 
 const SETTINGS_LABEL: &str = ".claude/settings.json";
@@ -623,78 +624,95 @@ fn guarded_relative(base: &Path, path: &Path) -> Option<String> {
 }
 
 // ---------------------------------------------------------------------------
-// Formatting: the two-column plan lines `t565` §7.8 fixes the width of.
+// Formatting (`d792`, `t789`): a plan is data first -- one `PlanItem` per
+// row, its verb and its "what" already apart -- and rendered second, so
+// every column's width comes from the items actually in this plan rather
+// than a fixed guess (`t565` §7.8's old 41 named no file at all once a
+// label like `.vivac/config` grew past it). `codex.rs` and `tree.rs` build
+// the same `PlanItem`s and render them through the same two functions,
+// rather than fixing the columns a second time (`d653`).
 // ---------------------------------------------------------------------------
 
-// `pub(super)`: `codex.rs` renders its own plan in the same two columns,
-// rather than fixing the same widths a second time (`d653`).
-
-/// The plan's own line width: the same 76 `wrapped`, below, and
-/// `registry::NOTICE_WIDTH` already wrap their own prose to, and for the
-/// same reason (`f720`). A status can carry a lane name or a product
-/// name typed by whoever runs setup, which has no bound, so cutting it
-/// by hand is wrong by construction and not by oversight.
-const PLAN_WIDTH: usize = 76;
-
-const PIECE_INDENT: usize = 4;
-const PIECE_LABEL_WIDTH: usize = 41;
-
-/// Where a status starts: the indent plus the label column's own width,
-/// so a status `render::wrap` splits lands its later lines under the
-/// first one instead of under the label. Derived once here rather than
-/// written as `45` by hand in three places (`f720`).
-const PIECE_STATUS_COLUMN: usize = PIECE_INDENT + PIECE_LABEL_WIDTH;
-
-pub(super) fn piece_line(label: &str, status: &str) -> String {
-    let indent = " ".repeat(PIECE_STATUS_COLUMN);
-    let mut lines =
-        crate::render::wrap(status, PLAN_WIDTH - PIECE_STATUS_COLUMN, &indent).into_iter();
-    let first = lines
-        .next()
-        .map(|line| line.trim_start().to_string())
-        .unwrap_or_default();
-    let mut out = format!(
-        "{:indent_width$}{label:<label_width$}{first}\n",
-        "",
-        indent_width = PIECE_INDENT,
-        label_width = PIECE_LABEL_WIDTH
-    );
-    for line in lines {
-        out.push_str(&line);
-        out.push('\n');
-    }
-    out
+/// One row of a plan: a verb, the path or label it acts on, what it does
+/// in plain words, and the value lines (a hook's command, a tree's own
+/// path) that sit under it, dim and indented to the path column.
+pub(super) struct PlanItem {
+    pub(super) verb: &'static str,
+    pub(super) path: String,
+    pub(super) what: String,
+    pub(super) sub: Vec<(String, String)>,
 }
 
-/// `label`'s value on its own indented line, never wrapped: `value` is a
-/// command line or a path, and a command line broken across two lines is
-/// not one anybody can paste -- `registry.rs` says the same of its own
-/// such lines. `piece_line`'s status gained a width (`f720`); this did
-/// not, on purpose.
-///
-/// The label column is as wide as the longest label any caller passes plus
-/// two spaces. It was a fixed 15, and `UserPromptSubmit` (`d779`) is 16, so
-/// its line printed with no space at all before the command.
-pub(super) fn sub_line(label: &str, value: &str) -> String {
-    format!("        {label:<SUB_LINE_LABEL_WIDTH$}{value}\n")
-}
-
-/// Every label [`sub_line`] is given, so the column is computed from them
-/// rather than kept in step by hand: the three hook events and the `in`
-/// that names where a tree lives.
-const SUB_LINE_LABELS: [&str; 4] = ["SessionStart", "UserPromptSubmit", "Stop", "in"];
-
-const SUB_LINE_LABEL_WIDTH: usize = {
-    let mut widest = 0;
-    let mut i = 0;
-    while i < SUB_LINE_LABELS.len() {
-        if SUB_LINE_LABELS[i].len() > widest {
-            widest = SUB_LINE_LABELS[i].len();
+impl PlanItem {
+    pub(super) fn new(
+        verb: &'static str,
+        path: impl Into<String>,
+        what: impl Into<String>,
+    ) -> PlanItem {
+        PlanItem {
+            verb,
+            path: path.into(),
+            what: what.into(),
+            sub: Vec::new(),
         }
-        i += 1;
     }
-    widest + 2
-};
+
+    pub(super) fn with_sub(
+        mut self,
+        label: impl Into<String>,
+        value: impl Into<String>,
+    ) -> PlanItem {
+        self.sub.push((label.into(), value.into()));
+        self
+    }
+}
+
+/// The line every plan opens with: the command in bold, the folder it acts
+/// on dim, never a verb of its own -- each row below names its own.
+pub(super) fn heading(stream: Stream, cmd: &str, here: &std::path::Path) -> String {
+    format!(
+        "{} will, in {}:\n\n",
+        style::bold(stream, cmd),
+        style::dim(stream, &here.display().to_string())
+    )
+}
+
+/// `items`, rendered: every column padded to the widest plain text in that
+/// column across the whole plan, two spaces of gap after each, so a run
+/// with one long path never drags every other row's own width up with it
+/// column by column but *does* keep its own row's columns lined up with
+/// the rest. Never wrapped (`d792`): a plan item is one line, and the
+/// terminal is what wraps it if it has to.
+pub(super) fn render_items(stream: Stream, items: &[PlanItem]) -> String {
+    let verb_width = items.iter().map(|i| i.verb.len()).max().unwrap_or(0);
+    let path_width = items.iter().map(|i| i.path.len()).max().unwrap_or(0);
+    let sub_label_width = items
+        .iter()
+        .flat_map(|i| i.sub.iter().map(|(label, _)| label.len()))
+        .max()
+        .unwrap_or(0);
+    let sub_indent = " ".repeat(2 + verb_width + 2);
+    let mut s = String::new();
+    for item in items {
+        s.push_str("  ");
+        s.push_str(&style::verb(stream, item.verb));
+        s.push_str(&" ".repeat(verb_width - item.verb.len() + 2));
+        s.push_str(&style::path(stream, &item.path));
+        s.push_str(&" ".repeat(path_width - item.path.len() + 2));
+        s.push_str(&item.what);
+        s.push('\n');
+        for (label, value) in &item.sub {
+            let line = format!(
+                "{label}{}  {value}",
+                " ".repeat(sub_label_width - label.len())
+            );
+            s.push_str(&sub_indent);
+            s.push_str(&style::dim(stream, &line));
+            s.push('\n');
+        }
+    }
+    s
+}
 
 // ---------------------------------------------------------------------------
 // Applying: plan, ask, write. `d723` piece B: no plan of the tree side
@@ -777,19 +795,26 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         && !mcp_missing
         && !skill_missing_or_replaceable;
 
-    let piece_block = render_piece_block(
-        here,
-        settings.exists,
-        mcp.exists,
-        &start_hook_state,
-        &stop_hook_state,
-        &prompt_hook_state,
-        start_missing,
-        stop_missing,
-        prompt_missing,
-        &mcp_server_state,
-        &skill_file_state,
-    );
+    let mut plan_block = heading(Stream::Out, "vivac setup claude-code", here);
+    if let Some(warning) = git_root_warning(here) {
+        plan_block.push_str(&warning);
+        plan_block.push_str("\n\n");
+    }
+    plan_block.push_str(&render_items(
+        Stream::Out,
+        &plan_items(
+            settings.exists,
+            mcp.exists,
+            &start_hook_state,
+            &stop_hook_state,
+            &prompt_hook_state,
+            start_missing,
+            stop_missing,
+            prompt_missing,
+            &mcp_server_state,
+            &skill_file_state,
+        ),
+    ));
 
     // Checked before `nothing_to_write`, not after: that branch notes the
     // registry (`note_registry`), and `--dry-run` promises to write
@@ -797,7 +822,10 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     // An already-set-up project asking for `--dry-run` used
     // to reach the other branch first and note it anyway.
     if a.has("dry-run") {
-        outln!("{piece_block}{TRAILING_PARAGRAPH}\n  Nothing written: --dry-run.");
+        outln!(
+            "{}",
+            close_with(&format!("{plan_block}\n{TRAILING_PARAGRAPH}"), DRY_RUN_LINE)
+        );
         return Ok(0);
     }
 
@@ -808,7 +836,13 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         // B: `setup` never writes to the tree itself any more, so this is
         // all `note_registry` is left doing).
         tree::note_registry(roots);
-        outln!("{piece_block}  Nothing to write: this project is already set up.");
+        outln!(
+            "{}",
+            close_with(
+                &plan_block,
+                "Nothing to write: this project is already set up."
+            )
+        );
         return Ok(0);
     }
 
@@ -819,10 +853,10 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         )));
     }
 
-    print!("{piece_block}{TRAILING_PARAGRAPH}");
-    let proceed = a.has("yes") || super::ask("\n  Write it? [y/N] ");
+    print_plan(&format!("{plan_block}\n{TRAILING_PARAGRAPH}"));
+    let proceed = a.has("yes") || super::ask("\nWrite it? [y/N] ");
     if !proceed {
-        outln!("\n  Nothing written.");
+        outln!("\nNothing written.");
         return Ok(0);
     }
 
@@ -908,7 +942,12 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         // `f638`, `d641`: every tree `setup` writes into already existed
         // before this run, so the one question left is whether this run
         // is the one adding the "vivac" server to it.
-        hand_registered_risk: mcp_missing,
+        // `t789`: since `init` plants on its own, every tree predates this
+        // server, so "the tree was here first" no longer tells a hand
+        // registration apart from a fresh plant. A hand registration is
+        // something done to a tree in use, so a tree with no work in it
+        // yet does not get the warning.
+        hand_registered_risk: mcp_missing && tree_has_work(roots),
         skill: skill_missing_or_replaceable,
         undoable: start_missing
             && stop_missing
@@ -920,12 +959,30 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     // own doc): the tree itself is untouched.
     tree::note_registry(roots);
     print!("\n{}", written_text(&written));
+    // `f790`: the migrate advice moved off `init` and onto the first
+    // successful `setup` of a lane that has not brought anything in yet.
+    print!("{}", migrate_advice(roots));
     Ok(0)
 }
 
+/// `t579` §4's warning, reflowed to one line: only when `here` sits inside
+/// a repository but is not its root, so nobody has to guess which folder
+/// Claude Code was actually opened in.
+pub(super) fn git_root_warning(here: &Path) -> Option<String> {
+    if here.join(".git").exists() {
+        return None;
+    }
+    let git_root = super::git_root_above(here)?;
+    Some(format!(
+        "This folder is inside the repository at {git_root}, not at its root. \
+         Claude Code reads these files only from the folder it is opened in: if you \
+         open it at {git_root}, run setup there instead.",
+        git_root = git_root.display()
+    ))
+}
+
 #[allow(clippy::too_many_arguments)]
-fn render_piece_block(
-    here: &Path,
+fn plan_items(
     settings_exists: bool,
     mcp_exists: bool,
     start_hook_state: &HookState,
@@ -936,87 +993,101 @@ fn render_piece_block(
     prompt_missing: bool,
     mcp_server_state: &McpState,
     skill_file_state: &SkillState,
-) -> String {
-    let mut s = format!("  vivac setup claude-code, in {}\n\n", here.display());
+) -> Vec<PlanItem> {
+    let mut items = Vec::new();
 
-    // `t579` §4's warning: only when `here` sits inside a repository but is
-    // not its root, so nobody has to guess which folder Claude Code was
-    // actually opened in.
-    if !here.join(".git").exists() {
-        if let Some(git_root) = super::git_root_above(here) {
-            s.push_str(&format!(
-                "  This folder is inside the repository at {}, not at its root.\n  \
-                 Claude Code reads these files only from the folder it is opened in: if\n  \
-                 you open it at {}, run setup there instead.\n\n",
-                git_root.display(),
-                git_root.display()
-            ));
-        }
-    }
-
-    let settings_status = match (settings_exists, start_missing, stop_missing, prompt_missing) {
-        (_, false, false, false) => "already has all three hooks",
-        (_, true, false, false) => "add the SessionStart hook",
-        (_, false, true, false) => "add the Stop hook",
-        (_, false, false, true) => "add the UserPromptSubmit hook",
-        (_, true, true, false) | (_, true, false, true) | (_, false, true, true) => "add two hooks",
-        (false, true, true, true) => "create, with three hooks",
-        (true, true, true, true) => "add three hooks",
-    };
-    s.push_str(&piece_line(SETTINGS_LABEL, settings_status));
+    let (settings_verb, settings_what) =
+        match (settings_exists, start_missing, stop_missing, prompt_missing) {
+            (_, false, false, false) => ("keep", "already has all three hooks"),
+            (_, true, false, false) => ("add", "the SessionStart hook"),
+            (_, false, true, false) => ("add", "the Stop hook"),
+            (_, false, false, true) => ("add", "the UserPromptSubmit hook"),
+            (_, true, true, false) | (_, true, false, true) | (_, false, true, true) => {
+                ("add", "two hooks")
+            }
+            (false, true, true, true) => ("create", "three hooks"),
+            (true, true, true, true) => ("add", "three hooks"),
+        };
+    let mut settings_item = PlanItem::new(settings_verb, SETTINGS_LABEL, settings_what);
     match start_hook_state {
-        HookState::Missing => s.push_str(&sub_line("SessionStart", SESSION_START_COMMAND)),
+        HookState::Missing => {
+            settings_item = settings_item.with_sub("SessionStart", SESSION_START_COMMAND)
+        }
         HookState::Different(cmd) => {
-            s.push_str(&sub_line("SessionStart", &format!("already runs  {cmd}")))
+            settings_item = settings_item.with_sub("SessionStart", format!("already runs  {cmd}"))
         }
         HookState::Exact => {}
     }
     match stop_hook_state {
-        HookState::Missing => s.push_str(&sub_line("Stop", SESSION_END_COMMAND)),
-        HookState::Different(cmd) => s.push_str(&sub_line("Stop", &format!("already runs  {cmd}"))),
+        HookState::Missing => settings_item = settings_item.with_sub("Stop", SESSION_END_COMMAND),
+        HookState::Different(cmd) => {
+            settings_item = settings_item.with_sub("Stop", format!("already runs  {cmd}"))
+        }
         HookState::Exact => {}
     }
     match prompt_hook_state {
-        HookState::Missing => s.push_str(&sub_line("UserPromptSubmit", SESSION_PROMPT_COMMAND)),
-        HookState::Different(cmd) => s.push_str(&sub_line(
-            "UserPromptSubmit",
-            &format!("already runs  {cmd}"),
-        )),
+        HookState::Missing => {
+            settings_item = settings_item.with_sub("UserPromptSubmit", SESSION_PROMPT_COMMAND)
+        }
+        HookState::Different(cmd) => {
+            settings_item =
+                settings_item.with_sub("UserPromptSubmit", format!("already runs  {cmd}"))
+        }
         HookState::Exact => {}
     }
+    items.push(settings_item);
 
-    let mcp_status = match mcp_server_state {
-        McpState::Missing if !mcp_exists => "create, with the server \"vivac\"".to_string(),
-        McpState::Missing => "add the server \"vivac\"".to_string(),
-        McpState::Ours => "already has the server \"vivac\"".to_string(),
-        McpState::OtherName(name) => format!("already runs vivac mcp as \"{name}\""),
+    let (mcp_verb, mcp_what): (&'static str, String) = match mcp_server_state {
+        McpState::Missing if !mcp_exists => ("create", "the \"vivac\" server".to_string()),
+        McpState::Missing => ("add", "the \"vivac\" server".to_string()),
+        McpState::Ours => ("keep", "already has the \"vivac\" server".to_string()),
+        McpState::OtherName(name) => ("keep", format!("already runs vivac mcp as \"{name}\"")),
         McpState::NameTaken(_) => unreachable!("a name conflict never reaches the plan"),
     };
-    s.push_str(&piece_line(MCP_LABEL, &mcp_status));
+    let mut mcp_item = PlanItem::new(mcp_verb, MCP_LABEL, mcp_what);
     if matches!(mcp_server_state, McpState::Missing) {
-        s.push_str("        vivac mcp\n");
+        mcp_item = mcp_item.with_sub("run", "vivac mcp");
     }
+    items.push(mcp_item);
 
-    match skill_file_state {
-        SkillState::Missing => s.push_str(&piece_line(
-            SKILL_LABEL,
-            "create: how an agent brings another memory into vivac",
-        )),
-        SkillState::Replaceable => s.push_str(&piece_line(
-            SKILL_LABEL,
-            "replace the copy an earlier vivac wrote",
-        )),
-        SkillState::Same => s.push_str(&piece_line(SKILL_LABEL, "already there")),
+    let (skill_verb, skill_what) = match skill_file_state {
+        SkillState::Missing => ("create", "how an agent brings another memory into vivac"),
+        SkillState::Replaceable => ("replace", "the copy an earlier vivac wrote"),
+        SkillState::Same => ("keep", "already there"),
         SkillState::Conflict => unreachable!("a skill conflict never reaches the plan"),
-    }
+    };
+    items.push(PlanItem::new(skill_verb, SKILL_LABEL, skill_what));
 
-    s.push('\n');
-    s
+    items
 }
 
 // `pub(super)`: true of `codex.rs`'s own hooks and server too, and neither
 // names Claude Code (`d653`).
-pub(super) const TRAILING_PARAGRAPH: &str = "  The hooks run a command in every session, and the server is how the\n  agent writes to the tree. Nothing outside this directory is touched,\n  and no file is copied.\n";
+pub(super) const TRAILING_PARAGRAPH: &str = "The hooks run a command in every session, and the server is how the agent writes to the tree. Nothing outside this directory is touched, and no file is copied.";
+
+/// The plain sentence a plan to write always ends with, once every
+/// optional warning ahead of it has had its own paragraph.
+pub(super) const DRY_RUN_LINE: &str = "Nothing written: --dry-run.";
+
+/// `body`, trimmed of its own trailing blank lines, then exactly one blank
+/// line, then `tail`: every plan this module prints ends this way,
+/// regardless of which optional paragraphs `body` happened to include
+/// (`d792` -- never the double blank a paragraph's own trailing blank line
+/// and this join both leaving one used to add up to).
+pub(super) fn close_with(body: &str, tail: &str) -> String {
+    format!("{}\n\n{tail}", body.trim_end_matches('\n'))
+}
+
+/// Prints `body` trimmed of its own trailing newlines, followed by
+/// exactly one -- ahead of the prompt this always precedes. Built as a
+/// variable and printed through `"{line}"` rather than `print!("{}\n",
+/// ...)` on purpose: a format string ending in `\n` reads to `clippy` as a
+/// plain `println!`, which `no_println` bans under `src/` (`outln!` is
+/// its replacement, and a prompt has no line of its own yet to buffer).
+pub(super) fn print_plan(body: &str) {
+    let line = format!("{}\n", body.trim_end_matches('\n'));
+    print!("{line}");
+}
 
 /// What this run wrote, which decides how it ends (`t579` §15.5): a
 /// paragraph is only printed when it is true of this run, and it says
@@ -1044,20 +1115,108 @@ struct Written {
 }
 
 fn written_text(w: &Written) -> String {
-    let mut s = String::from("  Written.\n");
+    let mut paragraphs = vec![style::good(Stream::Out, "Written.")];
     if w.connection {
-        s.push_str(SESSION_PARAGRAPH);
+        paragraphs.push(SESSION_PARAGRAPH.to_string());
         if w.hand_registered_risk {
-            s.push_str(HAND_REGISTERED_PARAGRAPH);
+            paragraphs.push(hand_registered_paragraph());
         }
     } else if w.skill {
-        s.push_str(SKILL_PARAGRAPH);
+        paragraphs.push(SKILL_PARAGRAPH.to_string());
     }
-    s.push_str(FILES_PARAGRAPH);
+    paragraphs.push(FILES_PARAGRAPH.to_string());
     if w.undoable {
-        s.push_str(UNDO_LINE);
+        paragraphs.push(undo_line());
     }
-    s
+    format!("{}\n", paragraphs.join("\n\n"))
+}
+
+/// `Next:` at the end of a run this lane had never captured anything
+/// before -- the whole tree's own text -- or had captured, but not from
+/// this lane -- the narrower one. `f790`: this used to be `init`'s own
+/// text, shown on the plant or the join itself; it moved here because the
+/// question it answers ("has anything of mine landed in this tree yet?")
+/// is not settled by planting or joining, only by writing, and `setup` is
+/// the first write a fresh lane usually makes. Empty once this lane
+/// already has a capture of its own, or once there is nowhere to read the
+/// log from at all -- never blocks a run that could not check.
+/// Whether the tree `roots` names has had any work land on it, in any
+/// lane. Unreadable reads as no work.
+fn tree_has_work(roots: &super::Roots) -> bool {
+    crate::store::Store::open(roots.tree.clone())
+        .and_then(|store| store.read_all())
+        .map(|(events, _)| crate::session::capture_count(&events) > 0)
+        .unwrap_or(false)
+}
+
+pub(super) fn migrate_advice(roots: &super::Roots) -> String {
+    let Some(located) = &roots.located else {
+        return String::new();
+    };
+    let Ok(store) = crate::store::Store::open(roots.tree.clone()) else {
+        return String::new();
+    };
+    let Ok((events, _)) = store.read_all() else {
+        return String::new();
+    };
+    let lane_id = located
+        .lane
+        .as_ref()
+        .map(|l| l.id.as_str())
+        .unwrap_or(crate::lane::MAIN);
+    if crate::session::capture_count(&events) == 0 {
+        format!("\n{}", migrate_next_block())
+    } else if crate::session::lane_capture_count(&events, lane_id) == 0 {
+        format!("\n{}", join_migrate_next_block())
+    } else {
+        String::new()
+    }
+}
+
+/// The heading every `Next:` block after a migrate nudge shares, and the
+/// bold command line under it: `f790` moved both off `init` and reused
+/// them for whichever of the two paragraphs below actually applies.
+fn migrate_next_heading() -> String {
+    format!(
+        "{} bring in what this project already knows. Ask the agent:\n\n  {}",
+        style::bold(Stream::Out, "Next:"),
+        style::bold(
+            Stream::Out,
+            "Use the vivac-migrate skill to bring everything this project knows into vivac."
+        )
+    )
+}
+
+/// Nothing in the whole tree has captured anything yet.
+fn migrate_next_block() -> String {
+    format!(
+        "{}\n\n{}\n\n{}\n",
+        migrate_next_heading(),
+        "It shows you a plan before writing anything, checks what it wrote, and offers \
+         to retire the other maps one at a time, only if you say yes.",
+        "Until then, another memory system you use keeps talking to the agent as before, \
+         and may tell it to use that system first. That is expected: the skill only reads \
+         from it."
+    )
+}
+
+/// The tree has captures, none of them this lane's own: `f678`/`d683`'s own
+/// argument was for the tree, which a join finds already there and may
+/// already carry content for -- true, and beside the point. This folder's
+/// own instruction files, the harness's memory and its documents came
+/// with the folder, not the tree, and joining a tree never reads any of
+/// that.
+fn join_migrate_next_block() -> String {
+    format!(
+        "{}\n\n{}\n\n{}\n",
+        migrate_next_heading(),
+        "This folder's own knowledge is not in the tree. Instruction files, the harness's \
+         memory and the documents that live here came with the folder, and joining a tree \
+         does not read them.",
+        "The tree already has content, and the skill expects that: it looks at what is \
+         there before writing, and proposes a note on the node that already says it \
+         rather than a duplicate."
+    )
 }
 
 /// The paragraph about the tree itself: `tree_kept_paragraph` when none of
@@ -1100,60 +1259,26 @@ pub(super) fn tree_paragraph(
     // the list, and none of them can be read as belonging to this run
     // rather than to the tree.
     format!(
-        "\n{}",
-        wrapped(&format!(
-            "The tree was already there, and {actor} wrote in it: {}.",
-            join_with_and(&clauses)
-        ))
+        "The tree was already there, and {actor} wrote in it: {}.",
+        join_with_and(&clauses)
     )
 }
 
-/// `text`, wrapped to the same width every other paragraph in this file
-/// already wraps to by hand, each line indented by two spaces. A plain
-/// greedy word wrap is all this needs: nothing it ever wraps runs past a
-/// short sentence naming one to three clauses.
-///
-/// `pub(super)`: `codex.rs` wraps its own one-sentence refusals the same
-/// way, rather than hand-wrapping each one to the same width again.
-pub(super) fn wrapped(text: &str) -> String {
-    const WIDTH: usize = 76;
-    let mut out = String::new();
-    let mut line = String::from("  ");
-    for word in text.split_whitespace() {
-        if line.len() + word.len() + 1 > WIDTH && line.trim() != "" {
-            out.push_str(line.trim_end());
-            out.push('\n');
-            line = String::from("  ");
-        }
-        line.push_str(word);
-        line.push(' ');
-    }
-    out.push_str(line.trim_end());
-    out.push('\n');
-    out
-}
-
 /// `name`'s own collision paragraph (`t640`, point 10 bis): `name` already
-/// names another project on this machine, wrapped through [`wrapped`]
-/// rather than split by hand the way this used to be written twice, once
-/// here and once in `init.rs` (`f724`). A product's own name runs up to
+/// names another project on this machine. A product's own name runs up to
 /// `tree::NAME_MAX_LEN` characters, none of them this run's to shorten, so
-/// a break placed by hand before it was ever typed could not promise to
-/// still land under the width once it was in -- measured: sixty-one fixed
-/// characters ahead of the break this used to have, so any name sixteen
-/// characters or longer already ran past it.
+/// this is never wrapped by hand (`d792`): the terminal wraps it if it has
+/// to.
 ///
 /// `pub(super)`: `init.rs`'s own plan reads this (`d723` piece A) -- `--name`
 /// moved there with the rest of the tree side in piece B, so `init` is this
 /// function's only caller left.
 pub(super) fn name_collision_paragraph(name: &str) -> String {
     format!(
-        "{}\n",
-        wrapped(&format!(
-            "\"{name}\" already names another project on this machine. With both \
-             answering to it, --join will need a path instead of the name: two \
-             projects that share a name give it nothing to tell them apart by."
-        ))
+        "\"{name}\" already names another project on this machine. With both answering \
+         to it, {} will need a path instead of the name: two projects that share a name \
+         give it nothing to tell them apart by.\n\n",
+        style::bold(Stream::Out, "--join")
     )
 }
 
@@ -1174,7 +1299,7 @@ pub(super) fn join_with_and(items: &[&str]) -> String {
     }
 }
 
-const SESSION_PARAGRAPH: &str = "\n  Open a new Claude Code session in this folder. The brief arrives on its\n  own when it starts. If Claude Code asks whether to use the \"vivac\" server\n  from .mcp.json, say yes: it is what lets the agent write to the tree.\n";
+const SESSION_PARAGRAPH: &str = "Open a new Claude Code session in this folder. The brief arrives on its own when it starts. If Claude Code asks whether to use the \"vivac\" server from .mcp.json, say yes: it is what lets the agent write to the tree.";
 
 /// `f638`: before `setup` existed, the README told people to run
 /// `claude mcp add vivac -- vivac mcp`, which registers the server in
@@ -1192,49 +1317,49 @@ const SESSION_PARAGRAPH: &str = "\n  Open a new Claude Code session in this fold
 ///
 /// Each harness `setup` covers later says this in its own words and with
 /// its own command, at this same point in its closing message.
-const HAND_REGISTERED_PARAGRAPH: &str = "\n  The tree was here before this server was. If you once registered vivac\n  by hand with claude mcp add, Claude Code keeps using that registration\n  and not this one. To keep only this one, run from this folder:\n\n      claude mcp remove vivac -s local\n";
+/// A function rather than a constant: the command it names is code-ish
+/// prose (`d792`), on its own bold line rather than folded into the
+/// sentence around it.
+fn hand_registered_paragraph() -> String {
+    format!(
+        "The tree was here before this server was. If you once registered vivac by hand \
+         with claude mcp add, Claude Code keeps using that registration and not this one. \
+         To keep only this one, run from this folder:\n\n  {}",
+        style::bold(Stream::Out, "claude mcp remove vivac -s local")
+    )
+}
 
-const SKILL_PARAGRAPH: &str = "\n  The vivac-migrate skill is now the one this version of vivac ships.\n  Sessions opened from now on use it.\n";
-
-/// `pub(super)`: `init.rs` is this constant's only caller since `d723`
-/// piece B -- planting is `init`'s alone now, and this is what a fresh
-/// plant has always said about bringing in what the project already
-/// knows. The text is unchanged; only the module that shows it moved,
-/// with planting.
-pub(super) const MIGRATE_PARAGRAPHS: &str = "\n  Nothing has been brought in from anywhere yet. To bring in what this\n  project already knows, from another memory system, the harness's own\n  memory, instruction files or its documents, ask the agent:\n\n      Use the vivac-migrate skill to bring everything this project knows\n      into vivac.\n\n  It shows you a plan before writing anything, checks what it wrote, and\n  offers to retire the other maps one at a time, only if you say yes.\n\n  Until then, another memory system you use keeps talking to the agent as\n  before, and may tell it to use that system first. That is expected: the\n  skill only reads from it.\n";
-
-/// `f678`/`d683`: [`MIGRATE_PARAGRAPHS`]'s own argument was for the
-/// **tree**, which a join finds already there and may already carry
-/// content for -- true, and beside the point. This folder's own
-/// instruction files, the harness's memory and its documents came with
-/// the folder, not the tree, and joining a tree never reads any of that.
-///
-/// `pub(super)`: `init.rs` is this constant's only caller since `d723`
-/// piece B -- joining is `init`'s alone now, and this is what joining an
-/// existing tree has always said about this folder's own knowledge, apart
-/// from the tree's. The text is unchanged; only the module that shows it
-/// moved, with joining.
-pub(super) const JOIN_MIGRATE_PARAGRAPHS: &str = "\n  This folder's own knowledge is not in the tree. Instruction files, the\n  harness's memory and the documents that live here came with the folder,\n  and joining a tree does not read them. To bring them in, ask the agent:\n\n      Use the vivac-migrate skill to bring everything this project knows\n      into vivac.\n\n  The tree already has content, and the skill expects that: it looks at\n  what is there before writing, and proposes a note on the node that\n  already says it rather than a duplicate.\n";
+const SKILL_PARAGRAPH: &str =
+    "The vivac-migrate skill is now the one this version of vivac ships. Sessions opened \
+     from now on use it.";
 
 /// `tree_paragraph`'s own text for nothing changed, naming `actor` the same
 /// way its other sentence does.
 fn tree_kept_paragraph(actor: &str) -> String {
-    format!("\n  The tree was already there, and {actor} changed nothing in it.\n")
+    format!("The tree was already there, and {actor} changed nothing in it.")
 }
 
-const FILES_PARAGRAPH: &str = "\n  The hooks, the server and the skill are plain files in this project:\n  commit them if everyone who works here uses vivac, and keep them out of\n  version control if only you do. .vivac/ is never committed: it is this\n  machine's record, and a copy of it in every clone would diverge from the\n  others. Its own .gitignore keeps it out.\n";
+const FILES_PARAGRAPH: &str =
+    "The hooks, the server and the skill are plain files in this project: commit them if \
+     everyone who works here uses vivac, and keep them out of version control if only you \
+     do. .vivac/ is never committed: it is this machine's record, and a copy of it in \
+     every clone would diverge from the others. Its own .gitignore keeps it out.";
 
-const UNDO_LINE: &str = "\n  Undo:  vivac setup claude-code --undo\n";
+fn undo_line() -> String {
+    format!(
+        "{} {}",
+        style::bold(Stream::Out, "Undo:"),
+        style::bold(Stream::Out, "vivac setup claude-code --undo")
+    )
+}
 
-/// The words come from `anchor::EVENTS_TRACKED_WARNING` (`f619`), wrapped
-/// to this file's own paragraph width: `check` reads that very same
-/// constant, so the two can no longer drift the way they once did, and
-/// `check`'s copy never named a worktree at all.
-///
-/// `pub(super)`: `codex.rs` shows this same warning after a plant too
-/// (`t592` tranche 2, `d710`), rather than a copy of the wrapping.
+/// The words come from `anchor::EVENTS_TRACKED_WARNING` (`f619`): `check`
+/// reads that very same constant, so the two can no longer drift the way
+/// they once did, and `check`'s copy never named a worktree at all. Bare,
+/// with no newline of its own (`d792`): `init` joins it with whatever
+/// other paragraphs a run has to show, one blank line between each.
 pub(super) fn tracked_git_warning() -> String {
-    format!("\n{}", wrapped(crate::anchor::EVENTS_TRACKED_WARNING))
+    crate::anchor::EVENTS_TRACKED_WARNING.to_string()
 }
 
 /// `pub(super)`: `codex.rs` reports the same conflict for its own
@@ -1327,7 +1452,7 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
 
     let nothing_to_undo = !start_ours && !stop_ours && !prompt_ours && !mcp_ours && !skill_ours;
     if nothing_to_undo {
-        outln!("  Nothing to undo: none of what setup writes is here.");
+        outln!("Nothing to undo: none of what setup writes is here.");
         return Ok(0);
     }
 
@@ -1351,67 +1476,63 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
             .as_object()
             .is_some_and(|s: &[(String, Value)]| s.is_empty());
 
-    let settings_status: String = match (start_ours, stop_ours, prompt_ours) {
-        (true, true, true) if settings_becomes_empty => {
-            "remove the three hooks setup wrote; nothing else is left, so it goes".to_string()
-        }
-        (true, true, true) => "remove the three hooks setup wrote".to_string(),
-        (true, true, false) => "remove the two hooks setup wrote".to_string(),
-        (true, false, true) => "remove the two hooks setup wrote".to_string(),
-        (false, true, true) => "remove the two hooks setup wrote".to_string(),
-        (true, false, false) => "remove the SessionStart hook".to_string(),
-        (false, true, false) => "remove the Stop hook".to_string(),
-        (false, false, true) => "remove the UserPromptSubmit hook".to_string(),
-        (false, false, false) => "left as it is".to_string(),
-    };
-
-    let mut s = format!(
-        "  vivac setup claude-code --undo, in {}\n\n",
-        here.display()
-    );
-    s.push_str(&piece_line(SETTINGS_LABEL, &settings_status));
+    let (settings_verb, settings_what): (&'static str, &'static str) =
+        match (start_ours, stop_ours, prompt_ours) {
+            (true, true, true) if settings_becomes_empty => (
+                "remove",
+                "the three hooks setup wrote; nothing else is left, so it goes",
+            ),
+            (true, true, true) => ("remove", "the three hooks setup wrote"),
+            (true, true, false) | (true, false, true) | (false, true, true) => {
+                ("remove", "the two hooks setup wrote")
+            }
+            (true, false, false) => ("remove", "the SessionStart hook"),
+            (false, true, false) => ("remove", "the Stop hook"),
+            (false, false, true) => ("remove", "the UserPromptSubmit hook"),
+            (false, false, false) => ("keep", "left as it is"),
+        };
+    let mut settings_item = PlanItem::new(settings_verb, SETTINGS_LABEL, settings_what);
     if let HookState::Different(_) = &start_hook_state {
-        s.push_str(&sub_line(
-            "SessionStart",
-            "runs vivac another way; left as it is",
-        ));
+        settings_item =
+            settings_item.with_sub("SessionStart", "runs vivac another way; left as it is");
     }
     if let HookState::Different(_) = &stop_hook_state {
-        s.push_str(&sub_line("Stop", "runs vivac another way; left as it is"));
+        settings_item = settings_item.with_sub("Stop", "runs vivac another way; left as it is");
     }
     if let HookState::Different(_) = &prompt_hook_state {
-        s.push_str(&sub_line(
-            "UserPromptSubmit",
-            "runs vivac another way; left as it is",
-        ));
+        settings_item =
+            settings_item.with_sub("UserPromptSubmit", "runs vivac another way; left as it is");
     }
 
-    s.push_str(&piece_line(
-        MCP_LABEL,
-        if mcp_becomes_empty {
-            "remove the server \"vivac\"; nothing else is left, so it goes"
-        } else if mcp_ours {
-            "remove the server \"vivac\""
-        } else {
-            "left as it is"
-        },
-    ));
+    let (mcp_verb, mcp_what) = if mcp_becomes_empty {
+        (
+            "remove",
+            "the \"vivac\" server; nothing else is left, so it goes",
+        )
+    } else if mcp_ours {
+        ("remove", "the \"vivac\" server")
+    } else {
+        ("keep", "left as it is")
+    };
 
-    s.push_str(&piece_line(
-        SKILL_LABEL,
-        if skill_ours {
-            "remove"
-        } else if skill_raw.is_some() {
-            "changed since setup wrote it; left as it is"
-        } else {
-            "left as it is"
-        },
-    ));
+    let (skill_verb, skill_what) = if skill_ours {
+        ("remove", "the skill setup wrote")
+    } else if skill_raw.is_some() {
+        ("keep", "changed since setup wrote it; left as it is")
+    } else {
+        ("keep", "left as it is")
+    };
 
-    s.push('\n');
+    let items = vec![
+        settings_item,
+        PlanItem::new(mcp_verb, MCP_LABEL, mcp_what),
+        PlanItem::new(skill_verb, SKILL_LABEL, skill_what),
+    ];
+    let mut s = heading(Stream::Out, "vivac setup claude-code --undo", here);
+    s.push_str(&render_items(Stream::Out, &items));
 
     if a.has("dry-run") {
-        outln!("{s}  Nothing written: --dry-run.");
+        outln!("{}", close_with(&s, DRY_RUN_LINE));
         return Ok(0);
     }
 
@@ -1426,10 +1547,10 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
         )));
     }
 
-    print!("{s}");
-    let proceed = a.has("yes") || super::ask("  Undo it? [y/N] ");
+    print_plan(&s);
+    let proceed = a.has("yes") || super::ask("\nUndo it? [y/N] ");
     if !proceed {
-        outln!("\n  Nothing written.");
+        outln!("\nNothing written.");
         return Ok(0);
     }
 
@@ -1515,7 +1636,7 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
         remove_if_empty(paths.skill.parent());
     }
 
-    outln!("  Undone. The tree in .vivac/ is untouched.");
+    outln!("\nUndone. The tree in .vivac/ is untouched.");
     Ok(0)
 }
 
@@ -1544,17 +1665,19 @@ mod tests {
         assert!(!is_vivac_command("notvivac"));
     }
 
-    /// Every label that reaches `sub_line` keeps at least two spaces before
-    /// its value. The fixed column of 15 printed `UserPromptSubmitvivac
-    /// session prompt --hook` in 0.15.1.
+    /// Every sub label keeps at least two spaces before its value, however
+    /// wide the widest one in the same plan is. The fixed column of 15
+    /// printed `UserPromptSubmitvivac session prompt --hook` in 0.15.1.
     #[test]
-    fn every_sub_line_label_keeps_two_spaces_before_its_value() {
-        for label in SUB_LINE_LABELS {
-            let line = sub_line(label, "VALUE");
-            let gap = line.trim_start().trim_start_matches(label);
+    fn every_sub_label_keeps_two_spaces_before_its_value() {
+        for label in ["SessionStart", "UserPromptSubmit", "Stop", "in"] {
+            let item = PlanItem::new("add", "path", "what").with_sub(label, "VALUE");
+            let rendered = render_items(Stream::Out, &[item]);
+            let sub_line = rendered.lines().nth(1).unwrap();
+            let gap = sub_line.trim_start().trim_start_matches(label);
             assert!(
                 gap.starts_with("  "),
-                "{label} leaves {gap:?} before its value: {line:?}"
+                "{label} leaves {gap:?} before its value: {sub_line:?}"
             );
         }
     }

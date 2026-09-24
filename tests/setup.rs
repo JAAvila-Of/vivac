@@ -83,16 +83,25 @@ fn a_fresh_project_gets_the_three_harness_pieces() {
     c.ok(&["init", "--yes"]);
     let (out, code) = c.run(&["setup", "claude-code", "--yes"]);
     assert_eq!(code, 0, "{out}");
-    assert!(out.contains("vivac setup claude-code, in"), "{out}");
-    assert!(out.contains("create, with three hooks"), "{out}");
+    assert!(out.contains("vivac setup claude-code will, in"), "{out}");
+    assert!(
+        out.contains("create") && out.contains("three hooks"),
+        "{out}"
+    );
     assert!(out.contains(SESSION_START), "{out}");
     assert!(out.contains(SESSION_END), "{out}");
     assert!(out.contains(SESSION_PROMPT), "{out}");
-    assert!(out.contains("create, with the server \"vivac\""), "{out}");
-    assert!(out.contains("create: how an agent brings"), "{out}");
+    assert!(
+        out.contains("create") && out.contains("the \"vivac\" server"),
+        "{out}"
+    );
+    assert!(
+        out.contains("create") && out.contains("how an agent brings"),
+        "{out}"
+    );
     assert!(out.contains("Written."), "{out}");
     assert!(
-        out.contains("Undo:  vivac setup claude-code --undo"),
+        out.contains("Undo: vivac setup claude-code --undo"),
         "{out}"
     );
 
@@ -277,7 +286,10 @@ fn a_project_with_the_two_older_hooks_gains_only_the_third() {
 
     let (out, code) = c.run(&["setup", "claude-code", "--yes"]);
     assert_eq!(code, 0, "{out}");
-    assert!(out.contains("add the UserPromptSubmit hook"), "{out}");
+    assert!(
+        out.contains("add") && out.contains("the UserPromptSubmit hook"),
+        "{out}"
+    );
     assert!(!out.contains("already has all three hooks"), "{out}");
 
     let after: serde_json::Value = serde_json::from_str(&read(&settings_path(&c))).unwrap();
@@ -397,7 +409,8 @@ fn a_skill_an_earlier_vivac_wrote_is_replaced() {
     let (out, code) = c.run(&["setup", "claude-code", "--yes"]);
     assert_eq!(code, 0, "{out}");
     assert!(
-        plan_words(&out).contains("replace the copy an earlier vivac wrote"),
+        plan_words(&out).contains("replace")
+            && plan_words(&out).contains("the copy an earlier vivac wrote"),
         "{out}"
     );
     let after = read(&skill_path(&c));
@@ -504,7 +517,7 @@ fn no_terminal_and_no_yes_refuses_without_a_plan() {
     assert!(out.contains("vivac setup claude-code --dry-run"), "{out}");
     assert!(out.contains("vivac setup claude-code --yes"), "{out}");
     assert!(
-        !out.contains("vivac setup claude-code, in"),
+        !out.contains("vivac setup claude-code will, in"),
         "a plan was shown:\n{out}"
     );
     assert!(!c.0.join(".claude").exists());
@@ -515,36 +528,14 @@ fn no_terminal_and_no_yes_refuses_without_a_plan() {
 // brand new lane of the tree above it.
 // ---------------------------------------------------------------------------
 
-/// Where a wrapped status's continuation lines start: `f720`'s own
-/// `claude_code::PIECE_STATUS_COLUMN`, not reachable from here since an
-/// integration test only sees what the binary prints.
-const PLAN_STATUS_COLUMN: usize = 45;
-
-/// Whether the plan shows a line for `label` whose status contains
-/// `rest`, once a status `render::wrap` (`f720`) split across more than
-/// one line is put back together. Width wraps a long status now, not a
-/// hand-picked cut, so a test that cares about the words has to stop
-/// caring which line they landed on -- the same shift `tests/check.rs`'s
-/// own `words` already made for `copy_notice`'s prose.
+/// Whether the plan shows a line naming `label` whose own text also
+/// contains `rest`: `d792` never wraps a plan item across more than one
+/// line, so both the path and its "what" always sit on the very same
+/// line now, with no continuation to put back together.
 fn lane_line_containing(out: &str, label: &str, rest: &str) -> bool {
-    let lines: Vec<&str> = out.lines().collect();
-    lines.iter().enumerate().any(|(i, l)| {
-        if !l.trim_start().starts_with(label) {
-            return false;
-        }
-        let mut joined = l.trim_start().to_string();
-        for cont in &lines[i + 1..] {
-            if !cont.starts_with(&" ".repeat(PLAN_STATUS_COLUMN)) {
-                break;
-            }
-            joined.push(' ');
-            joined.push_str(cont.trim());
-        }
-        joined
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ")
-            .contains(rest)
+    out.lines().any(|l| {
+        let trimmed = l.trim_start();
+        trimmed.contains(label) && trimmed.contains(rest)
     })
 }
 
@@ -578,7 +569,7 @@ fn the_plan_for_a_new_lane_shows_the_three_lines_the_spec_gives() {
         lane_line_containing(
             &out,
             ".vivac/lane",
-            &format!("create: this folder becomes lane \"v2\" of \"{product}\""),
+            &format!("this folder becomes lane \"v2\" of \"{product}\""),
         ),
         "{out}"
     );
@@ -586,15 +577,15 @@ fn the_plan_for_a_new_lane_shows_the_three_lines_the_spec_gives() {
         lane_line_containing(
             &out,
             ".vivac/.gitignore",
-            "create: keeps .vivac/ out of version control",
+            "keeps .vivac/ out of version control"
         ),
         "{out}"
     );
     assert!(
         lane_line_containing(
             &out,
-            "config",
-            "lock: from now on this tree needs vivac 0.12 or newer",
+            ".vivac/config",
+            "the minimum version to open it: vivac 0.12"
         ),
         "{out}"
     );
@@ -615,8 +606,8 @@ fn the_lane_config_warning_shows_up_before_anything_is_written() {
     assert!(
         lane_line_containing(
             &out,
-            "config",
-            "lock: from now on this tree needs vivac 0.12 or newer",
+            ".vivac/config",
+            "the minimum version to open it: vivac 0.12"
         ),
         "{out}"
     );
@@ -681,8 +672,9 @@ fn undo_after_a_fresh_setup_leaves_only_the_tree() {
     let (out, code) = c.run(&["setup", "claude-code", "--undo", "--yes"]);
     assert_eq!(code, 0, "{out}");
     assert!(
-        plan_words(&out)
-            .contains("remove the three hooks setup wrote; nothing else is left, so it goes"),
+        plan_words(&out).contains("remove")
+            && plan_words(&out)
+                .contains("the three hooks setup wrote; nothing else is left, so it goes"),
         "{out}"
     );
     assert!(
@@ -798,6 +790,25 @@ fn hooks_is_a_tombstone() {
     assert!(!out.contains("Paste this into"), "{out}");
 }
 
+/// `d792`: the plainest door to `Failure::SetupNoTree` -- a folder with no
+/// `.vivac/` anywhere above it -- prints the new block on stderr and
+/// exits the same 4 it always has.
+#[test]
+fn setup_with_no_tree_at_all_prints_the_new_failure_and_keeps_its_exit_code() {
+    let c = Sandbox::new_empty("setup-no-tree-at-all");
+    let (out, code) = c.run(&["setup", "claude-code", "--yes"]);
+    assert_eq!(code, 4, "{out}");
+    assert!(
+        out.contains("There is no tree here for setup to connect, so nothing was written."),
+        "{out}"
+    );
+    assert!(
+        out.contains("Next:") && out.contains("vivac init --join"),
+        "{out}"
+    );
+    assert!(!c.0.join(".claude").exists());
+}
+
 // ---------------------------------------------------------------------------
 // 20. The registry's own folder. `d723` piece B: `setup` finds no tree to
 // resolve from inside the registry's own folder at all -- nothing marks it
@@ -826,7 +837,7 @@ fn setup_refuses_inside_the_registry_folder() {
         String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
     assert_eq!(out.status.code(), Some(4), "{text}");
     assert!(
-        text.contains("setup writes what an agent reads, and there is no tree here"),
+        text.contains("There is no tree here for setup to connect"),
         "{text}"
     );
 
@@ -930,7 +941,7 @@ fn an_existing_settings_file_with_no_hooks_says_add_not_create() {
     std::fs::write(settings_path(&c), "{\n  \"otherKey\": 1\n}\n").unwrap();
 
     let out = c.ok(&["setup", "claude-code", "--yes"]);
-    assert!(out.contains("add three hooks"), "{out}");
+    assert!(out.contains("add") && out.contains("three hooks"), "{out}");
     assert!(!out.contains("create, with three hooks"), "{out}");
 }
 
@@ -942,7 +953,10 @@ fn an_existing_mcp_file_with_no_server_says_add_not_create() {
     std::fs::write(mcp_path(&c), "{\n  \"mcpServers\": {}\n}\n").unwrap();
 
     let out = c.ok(&["setup", "claude-code", "--yes"]);
-    assert!(out.contains("add the server \"vivac\""), "{out}");
+    assert!(
+        out.contains("add") && out.contains("the \"vivac\" server"),
+        "{out}"
+    );
     assert!(!out.contains("create, with the server"), "{out}");
 }
 
@@ -956,7 +970,10 @@ fn undo_dry_run_shows_the_plan_and_writes_nothing() {
 
     let (out, code) = c.run(&["setup", "claude-code", "--undo", "--dry-run"]);
     assert_eq!(code, 0, "{out}");
-    assert!(out.contains("vivac setup claude-code --undo, in"), "{out}");
+    assert!(
+        out.contains("vivac setup claude-code --undo will, in"),
+        "{out}"
+    );
     assert!(out.contains("Nothing written: --dry-run."), "{out}");
     assert!(!out.contains("Undo it?"), "{out}");
     assert_eq!(before, read_bytes(&settings_path(&c)));
@@ -975,7 +992,8 @@ fn undo_plan_wraps_the_mcp_removal_when_the_file_would_empty_out() {
 
     let (out, _) = c.run(&["setup", "claude-code", "--undo", "--dry-run"]);
     assert!(
-        plan_words(&out).contains("remove the server \"vivac\"; nothing else is left, so it goes"),
+        plan_words(&out).contains("remove")
+            && plan_words(&out).contains("the \"vivac\" server; nothing else is left, so it goes"),
         "{out}"
     );
 }
@@ -1278,7 +1296,7 @@ fn setup_refuses_in_the_home_folder() {
     assert_eq!(code, 1, "{out}");
     assert!(out.contains(&home_folder_text(&printed(&c.0))), "{out}");
     assert!(
-        !out.contains("vivac setup claude-code, in"),
+        !out.contains("vivac setup claude-code will, in"),
         "a plan was shown:\n{out}"
     );
     assert!(!c.0.join(".claude").exists());
@@ -1325,7 +1343,7 @@ fn setup_refuses_when_the_trees_own_vivac_is_the_global_store() {
     );
     assert_eq!(code, 4, "{out}");
     assert!(
-        out.contains("setup writes what an agent reads, and there is no tree here"),
+        out.contains("There is no tree here for setup to connect"),
         "{out}"
     );
     assert!(!c.0.join(".claude").exists());
@@ -1371,7 +1389,8 @@ fn every_earlier_release_skill_is_replaced_by_the_new_one() {
         let (out, code) = c.run(&["setup", "claude-code", "--yes"]);
         assert_eq!(code, 0, "{release}: {out}");
         assert!(
-            plan_words(&out).contains("replace the copy an earlier vivac wrote"),
+            plan_words(&out).contains("replace")
+                && plan_words(&out).contains("the copy an earlier vivac wrote"),
             "{release}: {out}"
         );
         assert_eq!(read(&skill_path(&c)), expected, "{release}");
@@ -1552,13 +1571,13 @@ fn undo_in_the_home_folder_removes_only_the_hooks_setup_wrote() {
 }
 
 // ---------------------------------------------------------------------------
-// t579 §6, §14.3 and §15.5: the written message, golden, from "  Written."
+// t579 §6, §14.3 and §15.5: the written message, golden, from "Written."
 // to the end. It only says what is true of the run that printed it.
 // ---------------------------------------------------------------------------
 
 fn written_part(out: &str) -> &str {
     let idx = out
-        .find("  Written.")
+        .find("Written.")
         .unwrap_or_else(|| panic!("no \"Written.\" in the output:\n{out}"));
     &out[idx..]
 }
@@ -1568,7 +1587,7 @@ fn written_part(out: &str) -> &str {
 // follow it -- both moved to `init` with the rest of the tree's own
 // writes. Captured from a real run rather than hand-edited from the
 // pre-piece-B text, the same discipline this section always held itself to.
-const WRITTEN_MESSAGE: &str = "  Written.\n\n  Open a new Claude Code session in this folder. The brief arrives on its\n  own when it starts. If Claude Code asks whether to use the \"vivac\" server\n  from .mcp.json, say yes: it is what lets the agent write to the tree.\n\n  The tree was here before this server was. If you once registered vivac\n  by hand with claude mcp add, Claude Code keeps using that registration\n  and not this one. To keep only this one, run from this folder:\n\n      claude mcp remove vivac -s local\n\n  The hooks, the server and the skill are plain files in this project:\n  commit them if everyone who works here uses vivac, and keep them out of\n  version control if only you do. .vivac/ is never committed: it is this\n  machine's record, and a copy of it in every clone would diverge from the\n  others. Its own .gitignore keeps it out.\n\n  Undo:  vivac setup claude-code --undo\n";
+const WRITTEN_MESSAGE: &str = "Written.\n\nOpen a new Claude Code session in this folder. The brief arrives on its own when it starts. If Claude Code asks whether to use the \"vivac\" server from .mcp.json, say yes: it is what lets the agent write to the tree.\n\nThe hooks, the server and the skill are plain files in this project: commit them if everyone who works here uses vivac, and keep them out of version control if only you do. .vivac/ is never committed: it is this machine's record, and a copy of it in every clone would diverge from the others. Its own .gitignore keeps it out.\n\nUndo: vivac setup claude-code --undo\n\nNext: bring in what this project already knows. Ask the agent:\n\n  Use the vivac-migrate skill to bring everything this project knows into vivac.\n\nIt shows you a plan before writing anything, checks what it wrote, and offers to retire the other maps one at a time, only if you say yes.\n\nUntil then, another memory system you use keeps talking to the agent as before, and may tell it to use that system first. That is expected: the skill only reads from it.\n";
 
 #[test]
 fn a_fresh_setup_prints_the_written_message_verbatim() {
@@ -1584,17 +1603,16 @@ fn a_fresh_setup_prints_the_written_message_verbatim() {
 // `init --join`'s alone.
 
 /// (c): only the skill, which is what an upgrade writes.
-const SKILL_REPLACED_MESSAGE: &str = "  Written.\n\n  The vivac-migrate skill is now the one this version of vivac ships.\n  Sessions opened from now on use it.\n\n  The hooks, the server and the skill are plain files in this project:\n  commit them if everyone who works here uses vivac, and keep them out of\n  version control if only you do. .vivac/ is never committed: it is this\n  machine's record, and a copy of it in every clone would diverge from the\n  others. Its own .gitignore keeps it out.\n";
+const SKILL_REPLACED_MESSAGE: &str = "Written.\n\nThe vivac-migrate skill is now the one this version of vivac ships. Sessions opened from now on use it.\n\nThe hooks, the server and the skill are plain files in this project: commit them if everyone who works here uses vivac, and keep them out of version control if only you do. .vivac/ is never committed: it is this machine's record, and a copy of it in every clone would diverge from the others. Its own .gitignore keeps it out.\n\nNext: bring in what this project already knows. Ask the agent:\n\n  Use the vivac-migrate skill to bring everything this project knows into vivac.\n\nIt shows you a plan before writing anything, checks what it wrote, and offers to retire the other maps one at a time, only if you say yes.\n\nUntil then, another memory system you use keeps talking to the agent as before, and may tell it to use that system first. That is expected: the skill only reads from it.\n";
 
 /// (d): only the server. `--undo` would take the hooks and the skill as
 /// well, so it is not offered.
 ///
-/// `f638`, `d641`: every tree `setup` writes into already existed before
-/// this run, so `HAND_REGISTERED_PARAGRAPH` follows the session paragraph
-/// whenever the server is the one piece this run adds -- unconditionally
-/// now, since `d723` piece B took away the only case that used to exempt
-/// it (a plant, which `setup` no longer does).
-const SERVER_ADDED_MESSAGE: &str = "  Written.\n\n  Open a new Claude Code session in this folder. The brief arrives on its\n  own when it starts. If Claude Code asks whether to use the \"vivac\" server\n  from .mcp.json, say yes: it is what lets the agent write to the tree.\n\n  The tree was here before this server was. If you once registered vivac\n  by hand with claude mcp add, Claude Code keeps using that registration\n  and not this one. To keep only this one, run from this folder:\n\n      claude mcp remove vivac -s local\n\n  The hooks, the server and the skill are plain files in this project:\n  commit them if everyone who works here uses vivac, and keep them out of\n  version control if only you do. .vivac/ is never committed: it is this\n  machine's record, and a copy of it in every clone would diverge from the\n  others. Its own .gitignore keeps it out.\n";
+/// `f638`, `d641`, `t789`: the hand-registered paragraph follows the
+/// session paragraph only when the server is the one piece this run adds
+/// and the tree already holds work. This tree holds none, so the message
+/// carries no such paragraph.
+const SERVER_ADDED_MESSAGE: &str = "Written.\n\nOpen a new Claude Code session in this folder. The brief arrives on its own when it starts. If Claude Code asks whether to use the \"vivac\" server from .mcp.json, say yes: it is what lets the agent write to the tree.\n\nThe hooks, the server and the skill are plain files in this project: commit them if everyone who works here uses vivac, and keep them out of version control if only you do. .vivac/ is never committed: it is this machine's record, and a copy of it in every clone would diverge from the others. Its own .gitignore keeps it out.\n\nNext: bring in what this project already knows. Ask the agent:\n\n  Use the vivac-migrate skill to bring everything this project knows into vivac.\n\nIt shows you a plan before writing anything, checks what it wrote, and offers to retire the other maps one at a time, only if you say yes.\n\nUntil then, another memory system you use keeps talking to the agent as before, and may tell it to use that system first. That is expected: the skill only reads from it.\n";
 
 // (e) used to live here: a run that only plants the tree. `d723` piece B
 // removed it -- `setup` never plants, so there is no "only the tree" case
@@ -1610,6 +1628,39 @@ fn a_run_that_adds_only_the_server_offers_no_undo() {
     assert_eq!(written_part(&out), SERVER_ADDED_MESSAGE);
 }
 
+/// `f790`: `setup` on a fresh plant, before anything has ever been
+/// captured, ends with the migrate `Next:` block -- `init` itself no
+/// longer shows it.
+#[test]
+fn setup_on_a_fresh_plant_ends_with_the_migrate_next_block() {
+    let c = Sandbox::new_empty("setup-migrate-fresh");
+    c.ok(&["init", "--yes"]);
+    let out = c.ok(&["setup", "claude-code", "--yes"]);
+    assert!(
+        out.contains("Next: bring in what this project already knows"),
+        "{out}"
+    );
+    assert!(
+        out.contains("Use the vivac-migrate skill to bring everything this project knows"),
+        "{out}"
+    );
+}
+
+/// The other half: once this lane has captured something of its own, a
+/// later `setup` -- run to add a piece that was missing, the server here
+/// -- has nothing left to nudge about.
+#[test]
+fn setup_on_a_lane_that_already_captured_something_ends_with_no_migrate_block() {
+    let c = Sandbox::new_empty("setup-migrate-already-captured");
+    c.ok(&["init", "--yes"]);
+    c.ok(&["push", "Some real work", "--why", "seed"]);
+    let out = c.ok(&["setup", "claude-code", "--yes"]);
+    assert!(
+        !out.contains("bring in what this project already knows"),
+        "a lane with a capture of its own still got the migrate nudge:\n{out}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // `f638`, `d641`: the hand-registered-server paragraph.
 //
@@ -1623,8 +1674,8 @@ fn a_run_that_adds_only_the_server_offers_no_undo() {
 // `setup` never opens a harness's personal configuration to check for a
 // hand-made registration directly: for Claude Code that file also holds the
 // sign-in session, and the security pillar vetoes opening it. So this is
-// inferred from the project instead, and only when both hold: the tree was
-// already here before this run, and this run is the one adding the "vivac"
+// inferred from the project instead, and only when both hold: the tree
+// already holds work (`t789`), and this run is the one adding the "vivac"
 // server to `.mcp.json`.
 // ---------------------------------------------------------------------------
 
@@ -1633,7 +1684,7 @@ const HAND_REGISTERED_MARKER: &str = "The tree was here before this server was."
 /// The session paragraph's own last line, unique to it: the one text this
 /// paragraph is required to follow immediately.
 const SESSION_PARAGRAPH_END: &str =
-    "from .mcp.json, say yes: it is what lets the agent write to the tree.\n";
+    "from .mcp.json, say yes: it is what lets the agent write to the tree.";
 
 /// Whether `out` carries the hand-registered paragraph exactly once, right
 /// after the session paragraph and nowhere else.
@@ -1645,12 +1696,13 @@ fn hand_registered_paragraph_is_right_after_session(out: &str) -> bool {
         return false;
     };
     out[session_end + SESSION_PARAGRAPH_END.len()..]
-        .starts_with(&format!("\n  {HAND_REGISTERED_MARKER}"))
+        .starts_with(&format!("\n\n{HAND_REGISTERED_MARKER}"))
 }
 
 #[test]
 fn a_tree_planted_before_this_run_with_no_mcp_json_gets_the_hand_registered_paragraph() {
     let c = Sandbox::new_seeded("setup-hand-registered-fresh-mcp");
+    c.ok(&["push", "Some real work", "--why", "seed"]);
     let out = c.ok(&["setup", "claude-code", "--yes"]);
     assert!(
         hand_registered_paragraph_is_right_after_session(&out),
@@ -1661,6 +1713,7 @@ fn a_tree_planted_before_this_run_with_no_mcp_json_gets_the_hand_registered_para
 #[test]
 fn a_tree_planted_before_this_run_with_a_different_mcp_server_gets_the_hand_registered_paragraph() {
     let c = Sandbox::new_seeded("setup-hand-registered-other-server");
+    c.ok(&["push", "Some real work", "--why", "seed"]);
     std::fs::write(
         mcp_path(&c),
         "{\n  \"mcpServers\": {\n    \"other\": {\n      \"type\": \"stdio\",\n      \
@@ -1674,22 +1727,18 @@ fn a_tree_planted_before_this_run_with_a_different_mcp_server_gets_the_hand_regi
     );
 }
 
-/// `d723` piece B: every tree `setup` writes into already existed before
-/// this run, so there is no longer a "freshly planted, so no risk of a
-/// hand-made registration" case for it to stay quiet about -- `setup` on a
-/// tree `init` just planted a moment ago gets the paragraph exactly the
-/// same as one that has been there for years, since `setup` itself cannot
-/// tell the two apart any more (that information belonged to the plan of
-/// the tree side, which `setup` no longer builds).
+/// `t789`: since `init` plants on its own, every tree predates the server
+/// `setup` adds, so that alone no longer tells a hand registration apart
+/// from a fresh plant. A hand registration is something done to a tree in
+/// use, so a tree `init` just planted, with no work in it yet, does not get
+/// the paragraph: it would only warn a newcomer about something they never
+/// did.
 #[test]
-fn a_tree_init_just_planted_still_gets_the_hand_registered_paragraph() {
+fn a_tree_init_just_planted_does_not_get_the_hand_registered_paragraph() {
     let c = Sandbox::new_empty("setup-hand-registered-fresh-plant");
     c.ok(&["init", "--yes"]);
     let out = c.ok(&["setup", "claude-code", "--yes"]);
-    assert!(
-        hand_registered_paragraph_is_right_after_session(&out),
-        "{out}"
-    );
+    assert!(!out.contains(HAND_REGISTERED_MARKER), "{out}");
 }
 
 #[test]
