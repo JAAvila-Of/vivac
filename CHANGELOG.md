@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0](https://github.com/JAAvila-Of/vivac/compare/v0.14.2...v0.15.0) - 2026-09-24
+
+### Added
+
+- *(why)* [**breaking**] cap open siblings and children at eight, keep blockers
+
+### Fixed
+
+- *(cli)* answer an unknown command in three lines, before anything else
+
 ## [0.14.2](https://github.com/JAAvila-Of/vivac/compare/v0.14.1...v0.14.2) - 2026-09-23
 
 ### Added
