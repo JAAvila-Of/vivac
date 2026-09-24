@@ -173,18 +173,21 @@ server into the `.mcp.json` of the folder you open the agent in, and the first
 time it sees it, it may ask whether to use it: say yes. Any other MCP client
 runs `vivac mcp`.
 
-**Fourteen tools.** Five are reads: `vivac_brief`, `vivac_find`, `vivac_why`,
-`vivac_open` and `vivac_rules`. Nine are writes: `vivac_push`, `vivac_pop`,
-`vivac_add`, `vivac_decide`, `vivac_note`, `vivac_park`, `vivac_save`,
-`vivac_arm` and `vivac_declare`. The server speaks JSON-RPC over standard
-input and adds no dependency: it is the binary you already installed.
+**Fifteen tools.** Five are reads: `vivac_brief`, `vivac_find`, `vivac_why`,
+`vivac_open` and `vivac_rules`. Ten are writes: `vivac_push`, `vivac_pop`,
+`vivac_done`, `vivac_add`, `vivac_decide`, `vivac_note`, `vivac_park`,
+`vivac_save`, `vivac_arm` and `vivac_declare`. The server speaks JSON-RPC over
+standard input and adds no dependency: it is the binary you already installed.
 
-Fourteen and not more, because every tool costs context in every session the
-agent ever opens, so **the list is a budget and not a catalogue.** Seven of
-the writes are the seams of the work: opening something, closing it, parking
-it, noting it, deciding, and the safe stop. The other two are the seams of
-governance: arming a rule with the command that checks it, and declaring what
-a decision was judged against. Nothing else got in.
+Fifteen and not more, because every tool costs context in every session the
+agent ever opens, so **the list is a budget and not a catalogue.** Eight of
+the writes are the seams of the work: opening something, closing it, closing
+a record or something finished elsewhere, parking it, noting it, deciding, and
+the safe stop. The other two are the seams of governance: arming a rule with
+the command that checks it, and declaring what a decision was judged against.
+Nothing else got in. `vivac_done` never closes over open closure conditions,
+and nothing that discards a node is a tool: those stay at a terminal, where a
+person is looking.
 
 ### The same budget governs what comes back
 

@@ -117,12 +117,12 @@ fn initialize_answers_with_the_server_and_its_version() {
     assert!(r["result"]["capabilities"]["tools"].is_object(), "{r}");
 }
 
-/// Fourteen, and no more. Every tool costs context in every session the
+/// Fifteen, and no more. Every tool costs context in every session the
 /// agent ever opens, so the list is a budget and not a catalogue: five
-/// reads plus the nine writes `t118`, `t411` and `t426` add between them,
-/// and nothing past that.
+/// reads plus the ten writes `t118`, `t411`, `t426` and `d776` add between
+/// them, and nothing past that.
 #[test]
-fn the_tool_list_is_the_fourteen_and_only_the_fourteen() {
+fn the_tool_list_is_the_fifteen_and_only_the_fifteen() {
     let c = seeded("list");
     let mut s = hello(&c);
     let r = s.ask(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#);
@@ -137,6 +137,7 @@ fn the_tool_list_is_the_fourteen_and_only_the_fourteen() {
             "vivac_brief",
             "vivac_decide",
             "vivac_declare",
+            "vivac_done",
             "vivac_find",
             "vivac_note",
             "vivac_open",
@@ -178,6 +179,30 @@ fn vivac_rules_description_points_at_claude_md_when_nothing_governs() {
             "If it comes back with no pillar and no rule while the project keeps its \
              rules in files such as CLAUDE.md or AGENTS.md, propose which are pillars \
              and which are rules, let the person decide, and write them with vivac_add."
+        ),
+        "{description}"
+    );
+}
+
+/// `d776`: a finding that asks nothing of anyone is a record, and the
+/// description says to close it right away rather than leave it sitting
+/// open.
+#[test]
+fn vivac_add_description_points_a_record_at_vivac_done() {
+    let c = seeded("add-record-schema");
+    let mut s = hello(&c);
+    let r = s.ask(r#"{"jsonrpc":"2.0","id":51,"method":"tools/list"}"#);
+    let tools = r["result"]["tools"].as_array().unwrap().clone();
+    let add_tool = tools
+        .iter()
+        .find(|t| t["name"] == "vivac_add")
+        .expect("vivac_add is in the tool list");
+    let description = add_tool["description"].as_str().unwrap();
+    assert!(
+        description.ends_with(
+            "One that asks nothing of anyone -- a lesson, a measurement -- is a \
+             record: close it right away with vivac_done, its outcome starting \
+             with Record:."
         ),
         "{description}"
     );
@@ -1087,13 +1112,13 @@ fn tree_events(c: &Sandbox) -> Vec<Value> {
     events
 }
 
-/// What makes the seven parity tests above worth trusting: `tree_events`
+/// What makes the eight parity tests above worth trusting: `tree_events`
 /// has to be able to tell two trees apart when they differ only in which
 /// node a `parent` points at, or a `push` (or `add`, or `decide`) that
 /// latched onto the wrong node would compare equal to one that latched onto
-/// the right one, and none of the seven would ever notice. This is the one
+/// the right one, and none of the eight would ever notice. This is the one
 /// test in the file that proves nothing about the product on its own; it
-/// proves that the other seven are not proving nothing.
+/// proves that the other eight are not proving nothing.
 #[test]
 fn a_wrong_parent_is_not_the_same_event_as_the_right_one() {
     // `twin_of` first, so the only thing left free to differ between the
@@ -1125,7 +1150,7 @@ fn a_wrong_parent_is_not_the_same_event_as_the_right_one() {
 
 /// The criterion `t118` is built to: the same operation, done by MCP and
 /// done by the CLI on two identical trees, writes exactly the same events.
-/// Seven tests, one per tool, attack the real risk -- that a second write
+/// Eight tests, one per tool, attack the real risk -- that a second write
 /// path quietly diverges from the first one.
 #[test]
 fn push_by_mcp_writes_the_same_events_as_push_by_the_cli() {
@@ -1168,6 +1193,23 @@ fn pop_by_mcp_writes_the_same_events_as_pop_by_the_cli() {
     let mut s = hello(&via_mcp);
     let r = s.ask(
         r#"{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"vivac_pop","arguments":{"outcome":"the release went out","next":"watch the metrics"}}}"#,
+    );
+    assert_eq!(r["result"]["isError"], false, "{r}");
+    assert_eq!(tree_events(&cli), tree_events(&via_mcp));
+}
+
+/// `d776`: `done` closes a node that is not the focus, and without
+/// `force`, the same way the CLI does.
+#[test]
+fn done_by_mcp_writes_the_same_events_as_done_by_the_cli() {
+    let cli = Sandbox::new_seeded("done-cli");
+    cli.ok(&["add", "A finding", "--why", "noticed in passing"]);
+    let via_mcp = twin_of(&cli, "done-mcp");
+
+    cli.ok(&["done", "1", "Record: it holds"]);
+    let mut s = hello(&via_mcp);
+    let r = s.ask(
+        r#"{"jsonrpc":"2.0","id":50,"method":"tools/call","params":{"name":"vivac_done","arguments":{"id":"1","outcome":"Record: it holds"}}}"#,
     );
     assert_eq!(r["result"]["isError"], false, "{r}");
     assert_eq!(tree_events(&cli), tree_events(&via_mcp));
@@ -1985,6 +2027,7 @@ fn every_capture_seam_mcp_tool_is_in_the_tool_list() {
         "vivac_push",
         "vivac_decide",
         "vivac_add",
+        "vivac_done",
         "vivac_park",
         "vivac_pop",
     ] {
