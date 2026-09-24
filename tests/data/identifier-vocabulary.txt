@@ -655,6 +655,7 @@ fronts
 fs
 full
 gains
+gap
 garbage
 gate
 gates
@@ -845,6 +846,7 @@ knowledge
 known
 knows
 label
+labels
 lacks
 landing
 lands
@@ -1559,6 +1561,7 @@ sorted
 source
 sources
 space
+spaces
 span
 spanish
 spans
@@ -1892,6 +1895,7 @@ why3
 why4
 wide
 widen
+widest
 width
 windows
 wins
