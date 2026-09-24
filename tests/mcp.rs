@@ -469,6 +469,83 @@ fn why_with_project_returns_what_the_cli_returns() {
     );
 }
 
+/// `d771`: `full` is `vivac_why`'s own door to `why --full --json` -- with
+/// it, the tool has to answer exactly what the CLI does with the same flag,
+/// caps lifted and all three extra fields included.
+#[test]
+fn why_with_full_returns_what_why_full_json_returns() {
+    let c = seeded("why-full-mcp");
+    let cli_text = c.ok(&["why", "t2", "--full", "--json"]);
+    let cli: Value = serde_json::from_str(&cli_text).expect("the CLI payload is not JSON");
+    let mut s = hello(&c);
+    let r = s.ask(
+        r#"{"jsonrpc":"2.0","id":27,"method":"tools/call","params":{"name":"vivac_why","arguments":{"id":"t2","full":true}}}"#,
+    );
+    let t = text_of(&r);
+    let v: Value = serde_json::from_str(&t).expect("the payload is not JSON");
+    assert_eq!(
+        v, cli,
+        "the MCP tool with full and `why --full --json` disagree:\n{t}"
+    );
+}
+
+/// `d771`: `full` reads the whole log, and a foreign project's log is never
+/// read that way -- the same refusal the CLI gives `why --project --full`,
+/// so the two doors do not let through what the other refuses.
+#[test]
+fn why_with_project_and_full_together_is_refused() {
+    let a = seeded("why-project-full-a");
+    let name_a = a.0.file_name().unwrap().to_string_lossy().into_owned();
+    let b = Sandbox::new_seeded_in("why-project-full-b", a.global_home());
+
+    let (cli_text, cli_code) = b.run(&["why", "t2", "--project", &name_a, "--full"]);
+    assert_ne!(cli_code, 0, "the CLI should have refused this:\n{cli_text}");
+
+    let mut s = hello(&b);
+    let r = s.ask(&format!(
+        r#"{{"jsonrpc":"2.0","id":28,"method":"tools/call","params":{{"name":"vivac_why","arguments":{{"id":"t2","project":"{name_a}","full":true}}}}}}"#
+    ));
+    assert_eq!(
+        r["result"]["isError"], true,
+        "project and full together should be refused: {r}"
+    );
+    let t = text_of(&r);
+    assert!(
+        t.contains("does not take --full"),
+        "the refusal should read like the CLI's own: {t}"
+    );
+}
+
+/// `d771`: the schema is where an agent learns the tool takes `full` at
+/// all, and where the cap it lifts is spelled out.
+#[test]
+fn tools_list_announces_full_for_vivac_why() {
+    let c = seeded("why-full-schema");
+    let mut s = hello(&c);
+    let r = s.ask(r#"{"jsonrpc":"2.0","id":29,"method":"tools/list"}"#);
+    let tools = r["result"]["tools"].as_array().unwrap().clone();
+    let why_tool = tools
+        .iter()
+        .find(|t| t["name"] == "vivac_why")
+        .expect("vivac_why is in the tool list");
+    let full_property = &why_tool["inputSchema"]["properties"]["full"];
+    assert_eq!(full_property["type"], "boolean", "{why_tool}");
+    assert_eq!(
+        full_property["description"],
+        "Every sibling and every child still open, not only the eight the answer \
+         keeps, plus each step's anchor, standing decisions and what was open at \
+         the time: what vivac why --full prints. Refused together with project.",
+        "{why_tool}"
+    );
+    assert!(
+        why_tool["description"].as_str().unwrap().contains(
+            "Open siblings and children are capped at eight each, every \
+                 blocking one kept; full lists them all."
+        ),
+        "{why_tool}"
+    );
+}
+
 /// `t411` §13: a read that reaches into another project's log and finds a
 /// line only a newer vivac could have written comes back as the error, not
 /// a half-built answer.
