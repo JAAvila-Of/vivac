@@ -483,6 +483,7 @@ downwards
 doy
 drags
 drain
+drains
 drawn
 draws
 drop
@@ -1180,6 +1181,7 @@ pile
 pillar
 pillars
 pinned
+pipe
 piped
 place
 placed

@@ -641,6 +641,12 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
     // version cannot read -- everything downstream of this line reads the
     // same as "nothing to say", so none of it is allowed to become a
     // non-zero exit the way it would for every other command.
+    // Every hook drains its input first, whatever it does next: exiting
+    // with the harness's payload unread leaves the harness writing into a
+    // closed pipe.
+    if cmd == "session" && a.has("hook") {
+        session::hook_stdin();
+    }
     if cmd == "session" && a.positional(0) == Some("prompt") {
         session::prompt(&cwd, a);
         return Ok(0);

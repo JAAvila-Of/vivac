@@ -30,8 +30,15 @@ struct HookInput {
     session: Option<String>,
 }
 
-impl HookInput {
-    fn read() -> HookInput {
+/// The payload a harness writes to a hook's standard input, read whole once
+/// and kept. `main` calls this before anything else for every `session ...
+/// --hook`, including where there is no tree: a hook that exits without
+/// reading leaves the harness writing into a closed pipe, which is the
+/// broken pipe the test for "outside a tree" hit on a busy runner once
+/// `session prompt` learned to return before touching its input.
+pub fn hook_stdin() -> &'static str {
+    static RAW: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    RAW.get_or_init(|| {
         use std::io::IsTerminal;
         let mut raw = String::new();
         // A terminal has no payload to give, and reading one would hang the
@@ -40,7 +47,14 @@ impl HookInput {
             use std::io::Read;
             std::io::stdin().read_to_string(&mut raw).ok();
         }
-        let v: serde_json::Value = serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
+        raw
+    })
+}
+
+impl HookInput {
+    fn read() -> HookInput {
+        let v: serde_json::Value =
+            serde_json::from_str(hook_stdin()).unwrap_or(serde_json::Value::Null);
         HookInput {
             // `unknown` and not an empty string, so that reading it later tells
             // "it did not say" apart from "we did not look".
