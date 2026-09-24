@@ -756,46 +756,49 @@ const CAPTURE_SEAMS_HEAD: &[&str] = &[
 ];
 
 /// The capture seams (`d738`, `d757`): one row per place work is supposed to
-/// land, its label, the CLI shown for it, an optional second line for that
-/// row, and the MCP tool that does the same thing. `f737` measured the gap
-/// this closes -- an agent with no project doctrine of its own only wrote
-/// to the tree when the person asked, because nothing it received unasked
-/// said when to -- and `f755`/`f756` measured that once it does write
-/// there, it still does not look first or say where a new line of work
-/// hangs from.
+/// land, its label, the CLI shown for it, the hint lines under that row --
+/// zero, one or two of them -- and the MCP tool that does the same thing.
+/// `f737` measured the gap this closes -- an agent with no project doctrine
+/// of its own only wrote to the tree when the person asked, because nothing
+/// it received unasked said when to -- and `f755`/`f756` measured that once
+/// it does write there, it still does not look first or say where a new
+/// line of work hangs from.
 ///
 /// Single source: [`capture_seams_block`] renders every row of this table,
-/// so the label column, the command, the hint and the tool name can never
+/// so the label column, the command, the hints and the tool name can never
 /// drift out of step with each other.
-const CAPTURE_SEAMS: &[(&str, &str, Option<&str>, &str)] = &[
+const CAPTURE_SEAMS: &[(&str, &str, &[&str], &str)] = &[
     (
         "new line of work",
         "vivac push \"<title>\" --why \"<why>\" --parent <id>",
-        Some("or --root, when it continues nothing in the tree"),
+        &["or --root, when it continues nothing in the tree"],
         "vivac_push",
     ),
     (
         "a choice is settled",
         "vivac decide \"<t>\" --reason \"<r>\" --alternative \"<x>\"",
-        None,
+        &[],
         "vivac_decide",
     ),
     (
         "you report findings",
         "vivac add \"<t>\" --type finding --why \"<where>\"",
-        Some("one for each thing found that you tell the person"),
+        &[
+            "as you tell the person, one for each thing found",
+            "asks nothing? close it: vivac done <id> \"Record: ...\"",
+        ],
         "vivac_add",
     ),
     (
         "told \"not now\"",
         "vivac park <id> \"<their words>\"",
-        Some("nothing to park yet? vivac add it, then park it"),
+        &["nothing to park yet? vivac add it, then park it"],
         "vivac_park",
     ),
     (
         "the work is done",
         "vivac pop \"<outcome>\"",
-        Some("and again if that settles the node it returns to"),
+        &["and again if that settles the node it returns to"],
         "vivac_pop",
     ),
 ];
@@ -814,9 +817,9 @@ fn capture_seams_block() -> Vec<String> {
         .unwrap_or(0)
         + 2;
     let mut body: Vec<String> = CAPTURE_SEAMS_HEAD.iter().map(|l| l.to_string()).collect();
-    for (label, command, hint, _) in CAPTURE_SEAMS {
+    for (label, command, hints, _) in CAPTURE_SEAMS {
         body.push(format!("  {label:<width$}{command}"));
-        if let Some(hint) = hint {
+        for hint in hints.iter() {
             body.push(format!("{}{hint}", " ".repeat(2 + width)));
         }
     }

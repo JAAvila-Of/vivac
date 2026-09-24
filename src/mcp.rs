@@ -25,11 +25,11 @@
 //! and taking its place means being reachable through the same door, in the
 //! tool list, with a schema.
 //!
-//! **Five reads, nine writes, fourteen tools.** The reads answer `brief`,
+//! **Five reads, ten writes, fifteen tools.** The reads answer `brief`,
 //! `find`, `why`, `open` and `rules` -- the last one `t411`'s own pull,
 //! since a rule nobody pulls on is a rule that might as well not be there.
-//! The writes are `push`, `pop`, `add`, `decide`, `note`, `park`, `save`,
-//! `arm` and `declare` -- the first seven `t106` already turned into
+//! The writes are `push`, `pop`, `done`, `add`, `decide`, `note`, `park`,
+//! `save`, `arm` and `declare` -- the first eight `t106` already turned into
 //! functions that hand back an `Outcome` instead of printing one, so this
 //! is the second caller that reads the same answer the CLI does.
 //!
@@ -37,8 +37,10 @@
 //! descendant it has; reachable from a tool call, that would happen with
 //! nobody watching a terminal, and the security pillar vetoes it outright.
 //! `restore` rewrites the stack and sits on the same side of that line.
-//! `done`, `block`, `flag`, `promote` and `focus` are maintainer surgery, and
-//! the maintainer has a terminal.
+//! `block`, `flag`, `promote` and `focus` are maintainer surgery, and the
+//! maintainer has a terminal. `done` is here without `force` (`d776`): it
+//! closes a node the same way the CLI does, but closing over an open
+//! closure condition stays the terminal's own call, not a tool's.
 
 use crate::args::Args;
 use crate::failure::{Failure, R};
@@ -102,9 +104,9 @@ struct Tool {
     args: &'static [Arg],
 }
 
-/// Fourteen, and the number is a budget rather than a stage of growth: every
+/// Fifteen, and the number is a budget rather than a stage of growth: every
 /// tool here costs context in every session the agent ever opens. The other
-/// seven write ops -- `done`, `block`, `promote`, `abandon`, `focus`, `flag`,
+/// six write ops -- `block`, `promote`, `abandon`, `focus`, `flag`,
 /// `restore` -- stay off this list on purpose; see the module doc.
 const TOOLS: &[Tool] = &[
     Tool {
@@ -333,6 +335,30 @@ const TOOLS: &[Tool] = &[
         ],
     },
     Tool {
+        name: "vivac_done",
+        description: "Close a node that is not the focus, recording what came of it. \
+                      Call it right after writing a lesson or a measurement that asks \
+                      nothing of anyone -- a record, whose outcome starts with Record: \
+                      -- and for work that was finished somewhere else. It never closes \
+                      over open closure conditions; that takes vivac done --force at a \
+                      terminal, with a person looking. vivac_pop closes the focus.",
+        args: &[
+            Arg {
+                name: "id",
+                kind: ArgKind::Str,
+                required: true,
+                description: "The node to close, as the tree names it: f12, t4.",
+            },
+            Arg {
+                name: "outcome",
+                kind: ArgKind::Str,
+                required: false,
+                description: "What came of it. For a record, what it records, starting \
+                              with Record:.",
+            },
+        ],
+    },
+    Tool {
         name: "vivac_add",
         description: "File a node without touching the stack: the focus stays exactly \
                       where it was. Use it for something that belongs in the tree but is \
@@ -342,7 +368,9 @@ const TOOLS: &[Tool] = &[
                       comes next; this is for what was just noticed. Look first with \
                       `vivac_find`: what the tree already holds is not filed twice. A \
                       finding is one node for each thing found that you tell the person, \
-                      written when you tell them.",
+                      written when you tell them. One that asks nothing of anyone -- a \
+                      lesson, a measurement -- is a record: close it right away with \
+                      vivac_done, its outcome starting with Record:.",
         args: &[
             Arg {
                 name: "title",
@@ -906,6 +934,15 @@ fn call(project: &mut Project, params: &Value) -> Result<String, Failure> {
                 force: a.bool("force"),
             };
             outcome_text(project.write(|ctx| ops::pop(ctx, p))?)
+        }
+        "vivac_done" => {
+            let id = a.str("id").ok_or_else(|| missing("id"))?.to_string();
+            let p = params::Done {
+                id,
+                outcome: a.str("outcome").unwrap_or("").to_string(),
+                force: false,
+            };
+            outcome_text(project.write(|ctx| ops::done(ctx, p))?)
         }
         "vivac_add" => {
             let title = a.str("title").ok_or_else(|| missing("title"))?.to_string();

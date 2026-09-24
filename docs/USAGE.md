@@ -53,6 +53,18 @@ vivac park 2 "waiting on the corpus run"
 the decision it replaces, so a reversal reads from either end. `block` marks a
 node as something its parent cannot close over, and `--off` takes it back.
 
+A finding that asks nothing of anyone, a lesson or a measurement, is a record:
+write it and close it straight away, with an outcome that starts with
+`Record:`. `find` and `why` still bring it back, and `open` keeps answering
+what is actually left to do. Left open, records pile up until `open` stops
+saying anything. A lesson that should change how work is done is not a record
+either: it goes in as a rule, where it reaches the agent.
+
+```sh
+vivac add "Cold builds take 4 min on CI" --type finding --why "measured on main"
+vivac done 7 "Record: 4 min cold, 40 s warm, on the default runner"
+```
+
 A node is born under the focus, which is what makes the edge free. But the
 focus is wherever work was left, perhaps by another session and about
 something else, so the focus is not always where new work belongs. `--parent`
