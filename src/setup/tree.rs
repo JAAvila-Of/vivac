@@ -355,12 +355,12 @@ fn second_map_hint(here: &Path) -> Option<String> {
     if !crate::registry::sharing_repos(&store_dir, &root_commits).is_empty() {
         return None;
     }
-    Some(
-        "  This plants a new product. Nothing here shares a repository with the\n  \
-         projects vivac already tracks, so it cannot tell whether this is one of\n  \
-         them. If it is, stop and use --join <name> instead.\n\n"
-            .to_string(),
-    )
+    Some(format!(
+        "{} Nothing here shares a repository with the projects vivac already tracks, so \
+         it cannot tell whether this is one of them. If it is, stop and use {} instead.",
+        crate::style::warn(crate::style::Stream::Out, "This plants a new product."),
+        crate::style::bold(crate::style::Stream::Out, "--join <name>")
+    ))
 }
 
 /// §6.5: this folder's own tree -- freshly planted, or the closer one it
@@ -383,8 +383,8 @@ fn tree_root_above(tree_root: &Path) -> Option<PathBuf> {
 fn tree_above_warning(name: Option<&str>) -> String {
     let label = crate::registry::label_for(name);
     format!(
-        "\n  This tree sits inside another one, in folder {label}. Sessions opened\n  \
-         above this folder use that one: keep one tree per product.\n"
+        "This tree sits inside another one, in folder {label}. Sessions opened above \
+         this folder use that one: keep one tree per product."
     )
 }
 
@@ -1281,46 +1281,50 @@ pub(super) fn plan_join(
 // it, and what the run then records about it comes last.
 // ---------------------------------------------------------------------------
 
-/// The `.vivac/` line itself, and the tree's own `.gitignore` line when a
-/// tree that already exists still lacks one: the two tree lines
-/// `claude_code.rs`'s own plan shows *before* the harness's own pieces.
-pub(super) fn opening_lines(plan: &TreePlan) -> String {
-    let mut s = String::new();
-    let vivac_status = if plan.vivac_missing {
-        "plant the tree"
+/// The `.vivac/` item itself, and the tree's own `.gitignore` item when a
+/// tree that already exists still lacks one: the tree items `init`'s own
+/// plan shows first, ahead of the lane's own (`closing_items`). `d792`:
+/// data first, one `PlanItem` per row, rendered together with
+/// `closing_items` so every column lines up across both halves.
+pub(super) fn opening_items(plan: &TreePlan) -> Vec<super::claude_code::PlanItem> {
+    use super::claude_code::PlanItem;
+    let mut items = Vec::new();
+
+    let mut vivac_item = if plan.vivac_missing {
+        PlanItem::new("plant", VIVAC_LABEL, "the tree")
     } else {
-        "already there"
+        PlanItem::new("keep", VIVAC_LABEL, "already there")
     };
-    s.push_str(&super::claude_code::piece_line(VIVAC_LABEL, vivac_status));
-    // The status is prose and wraps (`f720`); where the tree actually
-    // lives is not prose, the same reason a `sub_line`'s own value never
-    // wraps, so a tree found above this folder gets its path on a line
-    // of its own rather than riding inside the status that does.
+    // Where the tree actually lives is not prose and never wraps, so a
+    // tree found above this folder gets its path on a line of its own
+    // rather than riding inside the status that does.
     if !plan.vivac_missing && plan.tree != plan.here {
-        let path = plan.tree.display().to_string();
-        s.push_str(&super::claude_code::sub_line("in", &path));
+        vivac_item = vivac_item.with_sub("in", plan.tree.display().to_string());
     }
+    items.push(vivac_item);
+
     if plan.gitignore_missing {
         // Two different files, in two different folders, can both need
-        // this line in the same run -- the tree's own, from before `t594`
-        // §4.9, and a brand new lane's own (`closing_lines`). Only then
+        // this item in the same run -- the tree's own, from before `t594`
+        // §4.9, and a brand new lane's own (`closing_items`). Only then
         // does the tree's own copy say whose it is; on its own it reads
         // exactly as it always has (`t594`).
-        let status = if plan.lane.is_new {
-            "create: keeps the tree's .vivac/ out of version control"
+        let what = if plan.lane.is_new {
+            "keeps the tree's .vivac/ out of version control"
         } else {
-            "create: keeps .vivac/ out of version control"
+            "keeps .vivac/ out of version control"
         };
-        s.push_str(&super::claude_code::piece_line(GITIGNORE_LABEL, status));
+        items.push(PlanItem::new("create", GITIGNORE_LABEL, what));
     }
-    s
+    items
 }
 
-/// The lane's own lines, the stale-worktree and excluded-repository lines,
-/// and the version lock: the tree lines `claude_code.rs`'s own plan shows
-/// *after* the harness's own pieces.
-pub(super) fn closing_lines(plan: &TreePlan) -> String {
-    let mut s = String::new();
+/// The lane's own items, the stale-worktree and excluded-repository ones,
+/// and the version lock: the tree items `init`'s own plan shows *after*
+/// the tree's own (`opening_items`).
+pub(super) fn closing_items(plan: &TreePlan) -> Vec<super::claude_code::PlanItem> {
+    use super::claude_code::PlanItem;
+    let mut items = Vec::new();
     let lane = &plan.lane;
     if !lane.unchanged {
         // `t640`, point 9: the plan names the product on this same line,
@@ -1328,26 +1332,26 @@ pub(super) fn closing_lines(plan: &TreePlan) -> String {
         // one alike.
         let product = product_label(plan.product_name.as_deref());
         if lane.is_new {
-            s.push_str(&super::claude_code::piece_line(
+            items.push(PlanItem::new(
+                "create",
                 LANE_LABEL,
-                &format!(
-                    "create: this folder becomes lane \"{}\" of {product}",
-                    lane.name
-                ),
+                format!("this folder becomes lane \"{}\" of {product}", lane.name),
             ));
-            s.push_str(&super::claude_code::piece_line(
+            items.push(PlanItem::new(
+                "create",
                 GITIGNORE_LABEL,
-                "create: keeps .vivac/ out of version control",
+                "keeps .vivac/ out of version control",
             ));
         } else {
             // One sentence for both: declaring `main` on the tree's own
             // folder and redeclaring a lane that already existed are the
             // same write, and neither creates a file the way a brand new
             // lane does above -- it is the log that changes.
-            s.push_str(&super::claude_code::piece_line(
+            items.push(PlanItem::new(
+                "write",
                 ".vivac/events",
-                &format!(
-                    "record: this folder is lane \"{}\" of {product}, with its repositories",
+                format!(
+                    "its log, with this folder as part \"{}\" of {product}",
                     lane.name
                 ),
             ));
@@ -1360,35 +1364,41 @@ pub(super) fn closing_lines(plan: &TreePlan) -> String {
     if !lane.stale_worktrees.is_empty() {
         let count = lane.stale_worktrees.len();
         let noun = if count == 1 { "lane" } else { "lanes" };
-        s.push_str(&super::claude_code::piece_line(
+        items.push(PlanItem::new(
+            "redeclare",
             ".vivac/events",
-            &format!("redeclare {count} worktree {noun} with the repositories this run found"),
+            format!("{count} worktree {noun} with the repositories this run found"),
         ));
     }
     // What the redaction guard kept out is the folder's own state, not a
     // change: it is still true on a run that declares nothing new, so it
     // is said every time rather than only on the run that first found it
-    // (`t594`).
+    // (`t594`). Hangs off whichever item is already last in this plan, the
+    // same visual attachment the flat string this replaces always gave
+    // it; a run with nothing else to say about the lane still gets one of
+    // its own to hang it off.
     if let Some((count, rule)) = lane.excluded {
         let noun = if count == 1 {
             "repository"
         } else {
             "repositories"
         };
-        s.push_str(&super::claude_code::sub_line(
-            "kept out",
-            &format!("{count} {noun}, refused: {rule}"),
-        ));
+        let value = format!("{count} {noun}, refused: {rule}");
+        let last = items
+            .pop()
+            .unwrap_or_else(|| PlanItem::new("keep", ".vivac/events", ""));
+        items.push(last.with_sub("kept out", value));
     }
     // Independent of `unchanged`: the config can need the lock even when
     // nothing about the declaration itself changed (`t594`).
     if lane.needs_lock {
-        s.push_str(&super::claude_code::piece_line(
-            "config",
-            "lock: from now on this tree needs vivac 0.12 or newer",
+        items.push(PlanItem::new(
+            "lock",
+            ".vivac/config",
+            "the minimum version to open it: vivac 0.12",
         ));
     }
-    s
+    items
 }
 
 /// The exit-5 text for a lane declaration or a config relock that failed,
@@ -1629,38 +1639,52 @@ fn vivac_dir_holds_only_the_lane(vivac_dir: &Path) -> bool {
     true
 }
 
-/// The lane's own line(s) in `--undo`'s plan: nothing at all when this
-/// folder never had a lane file, a plain `piece_line` when it can go, and
-/// the wrapped explanation when it stays because its lane has written.
-pub(super) fn undo_lane_lines(lane: &UndoLane) -> String {
+/// The lane's own item in `--undo`'s plan: nothing at all when this folder
+/// never had a lane file, `remove` when it can go, and `keep` with why
+/// when it stays because its lane has written.
+pub(super) fn undo_lane_items(lane: &UndoLane) -> Vec<super::claude_code::PlanItem> {
+    use super::claude_code::PlanItem;
     if !lane.exists {
-        return String::new();
+        return Vec::new();
     }
     if lane.removable {
-        super::claude_code::piece_line(LANE_LABEL, "remove this folder's lane")
+        vec![PlanItem::new("remove", LANE_LABEL, "this folder's lane")]
     } else {
-        super::claude_code::piece_line(
+        vec![PlanItem::new(
+            "keep",
             LANE_LABEL,
-            "left as it is: this lane has written to the tree, and removing it would orphan \
-             what it wrote",
-        )
+            "this lane has written to the tree, and removing it would orphan what it wrote",
+        )]
     }
 }
 
-/// The `.vivac/` line itself, in `--undo`'s plan (`f719`, point B): the
+/// The `.vivac/` item itself, in `--undo`'s plan (`f719`, point B): the
 /// same reassurance it has always given once the tree lives in this
 /// folder -- unchanged, since the tree itself still stays out of `--undo`
 /// entirely -- or, once it does not, the decision this folder's own
 /// `.vivac/` earns for holding nothing a join did not write: gone along
 /// with the lane that justified it, or left in place and said why.
-pub(super) fn vivac_dir_lines(lane: &UndoLane) -> String {
+pub(super) fn vivac_dir_items(lane: &UndoLane) -> Vec<super::claude_code::PlanItem> {
+    use super::claude_code::PlanItem;
     if !lane.joined {
-        return super::claude_code::piece_line(VIVAC_LABEL, "kept: the tree is not setup's");
+        return vec![PlanItem::new(
+            "keep",
+            VIVAC_LABEL,
+            "the tree is not setup's",
+        )];
     }
     if lane.vivac_dir_removable {
-        super::claude_code::piece_line(VIVAC_LABEL, "remove: it holds nothing but this lane")
+        vec![PlanItem::new(
+            "remove",
+            VIVAC_LABEL,
+            "it holds nothing but this lane",
+        )]
     } else {
-        super::claude_code::piece_line(VIVAC_LABEL, "left as it is: it holds more than this lane")
+        vec![PlanItem::new(
+            "keep",
+            VIVAC_LABEL,
+            "it holds more than this lane",
+        )]
     }
 }
 

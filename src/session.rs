@@ -296,6 +296,18 @@ pub(crate) fn capture_count(events: &[crate::event::Event]) -> usize {
     events.iter().filter(|e| is_capture(&e.payload)).count()
 }
 
+/// [`capture_count`]'s own question, narrowed to one lane: `f790`'s own
+/// migrate advice, moved onto `setup`'s closing text, asks not whether the
+/// tree has ever captured anything but whether *this* lane has -- a lane
+/// that just joined a tree full of another lane's work still has nothing
+/// of its own brought in yet.
+pub(crate) fn lane_capture_count(events: &[crate::event::Event], lane: &str) -> usize {
+    events
+        .iter()
+        .filter(|e| e.lane == lane && is_capture(&e.payload))
+        .count()
+}
+
 /// The `ts` of the last event of this lane that `matches`, log order being
 /// what `Store::read_all` already hands back: the last match in the vector
 /// is the last one in time.

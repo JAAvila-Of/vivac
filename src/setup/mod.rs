@@ -58,24 +58,19 @@ const MOVED_TO_INIT: &[&str] = &["join", "new-tree", "lane-name", "name"];
 /// reason): `None` once none of the four are present, which is every
 /// ordinary run.
 ///
-/// The opening paragraph goes through [`claude_code::wrapped`] rather than
-/// a hand-picked line break: `--lane-name` is longer than the other three,
-/// and a break placed by hand for the shortest of them ran past 76 columns
-/// once the flag itself grew (`f724`'s own lesson, measured a second time
-/// here). The command line stays whole -- it is two commands to paste, not
-/// prose to wrap.
+/// Never hand-wrapped (`d792`): `--lane-name` is longer than the other
+/// three, and a break placed by hand for the shortest of them ran past 76
+/// columns once the flag itself grew (`f724`'s own lesson, measured a
+/// second time here). The command line stays whole either way -- it is
+/// two commands to paste, not prose.
 fn moved_to_init_tombstone(a: &Args, h: Harness) -> Option<Failure> {
     let flag = MOVED_TO_INIT.iter().find(|f| a.has(f))?;
-    let mut message = claude_code::wrapped(&format!(
-        "--{flag} is vivac init's, not setup's: which tree this folder belongs to \
-         reads the same wherever an agent is opened, so it is not a harness's \
-         question to answer."
-    ));
-    message.push('\n');
-    message.push_str(&format!(
-        "  Run vivac init --{flag} first, then vivac setup {} here.",
+    let message = format!(
+        "  --{flag} is vivac init's, not setup's: which tree this folder belongs to \
+         reads the same wherever an agent is opened, so it is not a harness's question \
+         to answer.\n\n  Run vivac init --{flag} first, then vivac setup {} here.",
         h.word()
-    ));
+    );
     Some(Failure::Usage(message))
 }
 

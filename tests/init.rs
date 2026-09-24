@@ -60,14 +60,12 @@ fn init_over_an_empty_vivac_directory_plants_a_tree() {
     let c = Sandbox::new_empty("init-empty-dir");
     std::fs::create_dir_all(c.0.join(".vivac")).unwrap();
     // `f721`: the old direct path's "vivac planted in" is gone with it --
-    // `setup::init::written_text` says "Written." and points at the
-    // first node instead, the same as any other fresh plant.
+    // `setup::init::written_text` says "Written." and points at setting up
+    // the agent, the same as any other fresh plant (`f790`).
     let out = c.ok(&["init", "--yes"]);
     assert!(out.contains("Written."), "{out}");
-    assert!(
-        out.contains("First node:  vivac push \"<title>\" --why \"<reason>\""),
-        "{out}"
-    );
+    assert!(out.contains("Next: set up the agent you use"), "{out}");
+    assert!(!out.contains("First node"), "{out}");
     assert!(c.0.join(".vivac").join("config").is_file());
     assert!(c.0.join(".vivac").join("events").is_file());
 }
@@ -94,7 +92,7 @@ fn init_writes_the_gitignore_a_tree_from_before_lacks() {
         lane_line_containing(
             &plan,
             ".vivac/.gitignore",
-            "create: keeps .vivac/ out of version control",
+            "keeps .vivac/ out of version control"
         ),
         "{plan}"
     );
@@ -228,33 +226,14 @@ fn home_folder_text(here: &Path) -> String {
     )
 }
 
-/// `claude_code::PIECE_STATUS_COLUMN`, not reachable from here since an
-/// integration test only sees what the binary prints. `init`'s own plan
-/// lines share the same column, through the same `piece_line`.
-const PLAN_STATUS_COLUMN: usize = 45;
-
-/// Whether the plan shows a line for `label` whose status contains `rest`,
-/// once a status `render::wrap` (`f720`) split across more than one line is
-/// put back together.
+/// Whether the plan shows a line naming `label` whose own text also
+/// contains `rest`: `d792` never wraps a plan item across more than one
+/// line, so both the path and its "what" always sit on the very same
+/// line now, with no continuation to put back together.
 fn lane_line_containing(out: &str, label: &str, rest: &str) -> bool {
-    let lines: Vec<&str> = out.lines().collect();
-    lines.iter().enumerate().any(|(i, l)| {
-        if !l.trim_start().starts_with(label) {
-            return false;
-        }
-        let mut joined = l.trim_start().to_string();
-        for cont in &lines[i + 1..] {
-            if !cont.starts_with(&" ".repeat(PLAN_STATUS_COLUMN)) {
-                break;
-            }
-            joined.push(' ');
-            joined.push_str(cont.trim());
-        }
-        joined
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ")
-            .contains(rest)
+    out.lines().any(|l| {
+        let trimmed = l.trim_start();
+        trimmed.contains(label) && trimmed.contains(rest)
     })
 }
 
@@ -285,7 +264,7 @@ fn already_planted(dir: &std::path::Path) -> bool {
 fn init_dry_run_plans_a_plant_and_writes_nothing() {
     let c = Sandbox::new_empty("init-dry-run");
     let out = c.ok(&["init", "--dry-run"]);
-    assert!(out.contains("plant the tree"), "{out}");
+    assert!(out.contains("plant") && out.contains("the tree"), "{out}");
     assert!(out.contains("Nothing written: --dry-run."), "{out}");
     assert!(!already_planted(&c.0), "a dry run must not plant");
 }
@@ -312,12 +291,13 @@ fn init_name_saves_the_product_to_the_registry() {
     assert!(registry.contains("\"name\": \"IQuorum\""), "{registry}");
 }
 
-/// `f724`: a message that splices in a name has to reach its width through
-/// `render::wrap`, never a break placed by hand before the name was ever
-/// typed. `--name` colliding with another project's is the one line of
+/// `d792`: a message that splices in a name is never hand-wrapped any
+/// more -- one line per paragraph, and the terminal wraps it if it has
+/// to. `--name` colliding with another project's is the one line of
 /// `init`'s own plan that carries one at all (`t640`, point 10 bis), so a
-/// name long enough to run past 76 columns on its own is what proves the
-/// break survives it.
+/// name long enough to have once run past 76 columns is what proves this
+/// paragraph is not split by hand: no line starts with the old 45-space
+/// continuation indent a hand-wrapped status used to land under.
 #[test]
 fn init_name_collision_wraps_a_long_name_rather_than_running_past_the_width() {
     let c = Sandbox::new_empty("init-name-collision-width");
@@ -335,21 +315,11 @@ fn init_name_collision_wraps_a_long_name_rather_than_running_past_the_width() {
     );
     assert_eq!(code, 0, "{out}");
     assert!(out.contains("already names another project"), "{out}");
-    // The header line names a path with no bound of its own, and a
-    // `sub_line` -- eight spaces in -- carries a path or a command that is
-    // not this test's to word-wrap either: `assert_no_plan_line_is_wider_than_the_block`
-    // in `tests/setup_scenarios.rs` skips the very same two shapes, by what
-    // they are rather than by their text.
-    const SUB_LINE_INDENT: usize = 8;
+    assert!(out.contains(long), "the name reads on one line: {out}");
     for line in out.lines() {
-        let trimmed = line.trim_start();
-        let indent = line.len() - trimmed.len();
-        if indent == SUB_LINE_INDENT || trimmed.starts_with("vivac init") {
-            continue;
-        }
         assert!(
-            line.chars().count() <= 76,
-            "a plan line ran past 76 columns: {line:?}\nfull output:\n{out}"
+            !line.starts_with(&" ".repeat(45)),
+            "a line still lands under the old hand-wrapped continuation indent: {line:?}\nfull output:\n{out}"
         );
     }
 }
@@ -366,10 +336,13 @@ fn init_lane_name_names_the_founding_lane() {
 
 /// `f720`, carried over from `tests/setup_scenarios.rs`'s own
 /// `no_plan_line_is_wider_than_the_block` (`d723` piece B: that test's own
-/// join step moved here with the rest of planting): the lane-declare line
-/// names this folder's own lane, which a long folder name can run past the
-/// width just as easily as `--name`'s own collision line can, and `--join`
-/// is the one path that reaches it without `--lane-name` shortening it.
+/// join step moved here with the rest of planting), and updated for
+/// `d792`: the lane-declare line names this folder's own lane, which a
+/// long folder name once ran past the width just as easily as `--name`'s
+/// own collision line could, and `--join` is the one path that reaches it
+/// without `--lane-name` shortening it. Neither line is wrapped by hand
+/// any more, so what this proves now is that one: no line lands under the
+/// old 45-space continuation indent a hand-wrapped status used to need.
 #[test]
 fn init_join_wraps_a_long_lane_name_rather_than_running_past_the_width() {
     let c = Sandbox::new_empty("init-join-lane-name-width");
@@ -388,16 +361,10 @@ fn init_join_wraps_a_long_lane_name_rather_than_running_past_the_width() {
     );
     assert_eq!(code, 0, "{out}");
     assert!(out.contains("becomes"), "{out}");
-    const SUB_LINE_INDENT: usize = 8;
     for line in out.lines() {
-        let trimmed = line.trim_start();
-        let indent = line.len() - trimmed.len();
-        if indent == SUB_LINE_INDENT || trimmed.starts_with("vivac init") {
-            continue;
-        }
         assert!(
-            line.chars().count() <= 76,
-            "a plan line ran past 76 columns: {line:?}\nfull output:\n{out}"
+            !line.starts_with(&" ".repeat(45)),
+            "a line still lands under the old hand-wrapped continuation indent: {line:?}\nfull output:\n{out}"
         );
     }
 }
@@ -737,33 +704,40 @@ fn joining_an_existing_tree_points_at_migrating_this_folders_own_knowledge() {
         &["init", "--yes", "--join", &target_str],
     );
     assert_eq!(code, 0, "{out}");
+    // `f790`: the migrate nudge moved off `init` and onto the first
+    // `setup` of a lane that has never captured anything -- `init` itself
+    // only ever ends with the `Next:` block naming the two harnesses.
     assert!(
-        out.contains("This folder's own knowledge is not in the tree"),
+        !out.contains("This folder's own knowledge is not in the tree"),
+        "the join's own migrate paragraph is setup's to show now:\n{out}"
+    );
+    assert!(
+        !out.contains("Use the vivac-migrate skill to bring everything this project knows"),
         "{out}"
     );
     assert!(
-        out.contains("Use the vivac-migrate skill to bring everything this project knows"),
+        out.contains("Next:") && out.contains("vivac setup claude-code"),
         "{out}"
-    );
-    assert!(
-        !out.contains("Nothing has been brought in from anywhere yet"),
-        "the plant's own paragraph showed up on a join:\n{out}"
     );
 }
 
-/// The same run's own plant, right next to it: still the plant's own
-/// paragraph, and none of the join's.
+/// The same run's own plant, right next to it: `init` never shows the
+/// migrate paragraph either, on a plant or a join alike (`f790`).
 #[test]
 fn planting_a_fresh_tree_still_carries_the_plants_own_migrate_paragraph() {
     let c = Sandbox::new_empty("init-plant-migrate");
     let (out, code) = c.run(&["init", "--yes"]);
     assert_eq!(code, 0, "{out}");
     assert!(
-        out.contains("Nothing has been brought in from anywhere yet"),
-        "{out}"
+        !out.contains("Nothing has been brought in from anywhere yet"),
+        "the plant's own migrate paragraph is setup's to show now:\n{out}"
     );
     assert!(
         !out.contains("This folder's own knowledge is not in the tree"),
+        "{out}"
+    );
+    assert!(
+        out.contains("Next:") && out.contains("vivac setup codex"),
         "{out}"
     );
 }
@@ -1148,7 +1122,7 @@ fn planting_beside_a_registered_product_that_shares_nothing_warns_in_the_plan() 
     assert_eq!(code, 0, "{out}");
     assert!(out.contains("This plants a new product."), "{out}");
     assert!(
-        out.contains("Nothing here shares a repository with the\n  projects vivac already tracks"),
+        out.contains("Nothing here shares a repository with the projects vivac already tracks"),
         "{out}"
     );
     assert!(
@@ -2773,10 +2747,7 @@ fn the_plan_names_the_product_when_planting_fresh() {
         lane_line_containing(
             &out,
             ".vivac/events",
-            &format!(
-                "record: this folder is lane \"{lane_name}\" of \"IQuorum\", with its \
-                 repositories"
-            ),
+            &format!("its log, with this folder as part \"{lane_name}\" of \"IQuorum\""),
         ),
         "{out}"
     );
@@ -2805,10 +2776,7 @@ fn the_plan_names_the_product_with_new_tree_and_name() {
         lane_line_containing(
             &out,
             ".vivac/events",
-            &format!(
-                "record: this folder is lane \"{lane_name}\" of \"Fork\", with its \
-                 repositories"
-            ),
+            &format!("its log, with this folder as part \"{lane_name}\" of \"Fork\""),
         ),
         "{out}"
     );
@@ -2864,14 +2832,14 @@ fn name_that_collides_with_another_project_warns_in_the_plan_and_still_writes() 
     );
 }
 
-/// `f724`: a message that splices in a name has to reach its width through
-/// `render::wrap`, never a break placed by hand before the name was ever
-/// typed. The collision line above is the one line of the plan that
+/// `f724`, updated for `d792`: a message that splices in a name is never
+/// hand-wrapped any more, so it reads on one line however long the name
+/// is. The collision paragraph above is the one line of the plan that
 /// carries one, and `--name` accepts up to `t640`'s own `NAME_MAX_LEN`
-/// (100) -- long enough on its own to run past 76 columns without any help
-/// from a long folder, which is what makes this the sibling of
-/// `tests/init.rs`'s own version of this same test rather than a repeat of
-/// it.
+/// (100) -- long enough on its own to have once run past 76 columns
+/// without any help from a long folder, which is what makes this the
+/// sibling of `tests/init.rs`'s own version of this same test rather than
+/// a repeat of it.
 #[test]
 fn setup_name_collision_wraps_a_long_name_rather_than_running_past_the_width() {
     let c = Sandbox::new_empty("setup-name-collision-width");
@@ -2889,21 +2857,11 @@ fn setup_name_collision_wraps_a_long_name_rather_than_running_past_the_width() {
     );
     assert_eq!(code, 0, "{out}");
     assert!(out.contains("already names another project"), "{out}");
-    // The header line names a path with no bound of its own, and a
-    // `sub_line` -- eight spaces in -- carries a path or a command that is
-    // not this test's to word-wrap either: the same two shapes
-    // `tests/setup_scenarios.rs`'s own `assert_no_plan_line_is_wider_than_the_block`
-    // skips, by what they are rather than by their text.
-    const SUB_LINE_INDENT: usize = 8;
+    assert!(out.contains(long), "the name reads on one line: {out}");
     for line in out.lines() {
-        let trimmed = line.trim_start();
-        let indent = line.len() - trimmed.len();
-        if indent == SUB_LINE_INDENT || trimmed.starts_with("vivac init") {
-            continue;
-        }
         assert!(
-            line.chars().count() <= 76,
-            "a plan line ran past 76 columns: {line:?}\nfull output:\n{out}"
+            !line.starts_with(&" ".repeat(45)),
+            "a line still lands under the old hand-wrapped continuation indent: {line:?}\nfull output:\n{out}"
         );
     }
 }
@@ -2987,7 +2945,10 @@ fn undo_after_a_join_that_wrote_nothing_removes_the_lane_file_and_unblocks_reloc
 
     let (out, code) = run_in(&here, c.global_home(), &["init", "--undo", "--yes"]);
     assert_eq!(code, 0, "{out}");
-    assert!(out.contains("remove this folder's lane"), "{out}");
+    assert!(
+        out.contains("remove") && out.contains("this folder's lane"),
+        "{out}"
+    );
     assert!(
         !here.join(".vivac").join("lane").exists(),
         "the lane file must be gone once its lane never wrote"
@@ -3027,13 +2988,11 @@ fn undo_after_a_join_that_wrote_something_keeps_the_lane_file() {
 
     let (out, code) = run_in(&here, c.global_home(), &["init", "--undo", "--yes"]);
     assert_eq!(code, 0, "{out}");
-    // Insensitive to where width wraps the sentence (`f720`); its own
-    // width is `no_plan_line_is_wider_than_the_block`'s to answer for,
-    // not this test's.
+    // `d792`: never wrapped by hand any more, so this reads the "what"
+    // whole, wherever the path column happened to end.
     assert!(
         plan_words(&out).contains(
-            "left as it is: this lane has written to the tree, and removing it would orphan \
-             what it wrote"
+            "this lane has written to the tree, and removing it would orphan what it wrote"
         ),
         "{out}"
     );
@@ -3070,11 +3029,11 @@ fn undo_leaves_a_vivac_dir_whose_gitignore_was_hand_edited() {
     let (out, code) = run_in(&here, c.global_home(), &["init", "--undo", "--yes"]);
     assert_eq!(code, 0, "{out}");
     assert!(
-        plan_words(&out).contains("remove this folder's lane"),
+        plan_words(&out).contains("remove") && plan_words(&out).contains("this folder's lane"),
         "{out}"
     );
     assert!(
-        plan_words(&out).contains("left as it is: it holds more than this lane"),
+        plan_words(&out).contains("it holds more than this lane"),
         "{out}"
     );
     assert!(
@@ -3217,12 +3176,16 @@ fn undo_of_a_bare_plant_with_no_work_removes_the_tree_and_forgets_it() {
     let (out, code) = c.run(&["init", "--undo", "--yes"]);
     assert_eq!(code, 0, "{out}");
     assert!(
-        plan_words(&out).contains("remove the tree init planted here: it holds no work yet"),
+        plan_words(&out).contains("remove")
+            && plan_words(&out).contains("the tree init planted here: it holds no work yet"),
         "{out}"
     );
-    assert!(plan_words(&out).contains("forget this project"), "{out}");
     assert!(
-        out.contains("  Undone. There is no tree here any more."),
+        plan_words(&out).contains("forget") && plan_words(&out).contains("this project"),
+        "{out}"
+    );
+    assert!(
+        out.contains("Undone. There is no tree here any more."),
         "{out}"
     );
     assert!(!c.0.join(".vivac").exists(), "the tree must be gone");
@@ -3259,7 +3222,7 @@ fn undo_of_a_bare_plant_that_already_holds_work_is_refused_and_touches_nothing()
     assert_eq!(code, 0, "{out}");
     assert!(
         out.contains(
-            "  Nothing to undo: the tree in .vivac/ already holds work (1 writes), and\n  \
+            "Nothing to undo: the tree in .vivac/ already holds work (1 writes), and \
              init --undo never removes a tree that does."
         ),
         "{out}"
@@ -3288,7 +3251,7 @@ fn undo_of_a_bare_plant_stays_available_after_a_session_started_hook() {
     let (out, code) = c.run(&["init", "--undo", "--yes"]);
     assert_eq!(code, 0, "{out}");
     assert!(
-        out.contains("  Undone. There is no tree here any more."),
+        out.contains("Undone. There is no tree here any more."),
         "{out}"
     );
     assert!(!c.0.join(".vivac").exists());
