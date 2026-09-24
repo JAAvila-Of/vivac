@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.2](https://github.com/JAAvila-Of/vivac/compare/v0.15.1...v0.15.2) - 2026-09-24
+
+### Fixed
+
+- *(session)* read a hook's whole input before anything else
+- *(setup)* undo only what was written, and let Codex ask for trust
+- *(declare)* replace the sentence of an against already declared
+- *(setup)* keep the hook name apart from its command in the plan
+
 ## [0.15.1](https://github.com/JAAvila-Of/vivac/compare/v0.15.0...v0.15.1) - 2026-09-24
 
 ### Added
