@@ -689,7 +689,20 @@ fn undo_after_a_fresh_setup_leaves_only_the_tree() {
         out.contains("Undone. The tree in .vivac/ is untouched."),
         "{out}"
     );
-    assert!(!c.0.join(".claude").exists(), "{:?}", list(&c.0));
+    // `d784`: `--undo` removes no file setup did not write, and no
+    // directory but `vivac-migrate` itself -- `.claude/` stays, empty or
+    // not, the same as it would have if setup had found it already there.
+    assert!(
+        c.0.join(".claude").exists(),
+        "setup must never remove .claude/ itself: {:?}",
+        list(&c.0)
+    );
+    assert!(!settings_path(&c).exists());
+    assert!(
+        !skill_path(&c).parent().unwrap().exists(),
+        "{:?}",
+        list(&c.0.join(".claude").join("skills"))
+    );
     assert!(!mcp_path(&c).exists());
     assert!(c.0.join(".vivac").exists());
     assert_eq!(
@@ -1154,7 +1167,11 @@ fn undo_in_a_subfolder_removes_only_that_folders_files() {
         &["setup", "claude-code", "--undo", "--yes"],
     );
     assert_eq!(code, 0, "{out}");
-    assert!(!sub.join(".claude").exists());
+    assert!(
+        sub.join(".claude").exists(),
+        "setup must never remove .claude/ itself"
+    );
+    assert!(!sub.join(".claude").join("settings.json").exists());
     assert!(!sub.join(".mcp.json").exists());
     assert!(
         sub.join(".vivac").join("lane").exists(),

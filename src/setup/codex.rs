@@ -831,24 +831,14 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
 
     // Best-effort, and only once the commit above is known to have
     // succeeded: an empty directory left behind costs nothing to leave for
-    // a later run, but is tidier gone.
+    // a later run, but is tidier gone. `d784`: only `vivac-migrate` itself
+    // -- the one folder this tool's own name marks as its to take back --
+    // not `.agents/skills` or `.agents` above it, and never `.codex`
+    // either: all three may have existed before setup ever ran, and are
+    // never setup's to remove for being empty.
     if skill_ours {
         super::claude_code::remove_if_empty(target.skill.parent());
-        super::claude_code::remove_if_empty(target.skill.parent().and_then(Path::parent));
-        super::claude_code::remove_if_empty(
-            target
-                .skill
-                .parent()
-                .and_then(Path::parent)
-                .and_then(Path::parent),
-        );
     }
-    // `.codex/` itself: the one folder `claude_code.rs` has no equivalent
-    // of, since `.codex/config.toml` and `.codex/hooks.json` are its only
-    // two files (`t592` tranche 2 §5). Attempted unconditionally, same as
-    // every `remove_if_empty` above: it costs nothing when the folder is
-    // not actually empty, or is already gone.
-    super::claude_code::remove_if_empty(target.config.parent());
 
     outln!("  Undone. The tree in .vivac/ is untouched.");
     Ok(0)
@@ -882,9 +872,9 @@ fn quoted_path(path: &str) -> String {
 
 fn trusted_paragraph(here: &Path) -> String {
     format!(
-        "\n  Codex will not read anything under .codex/ in this project until you\n  \
-         mark it trusted, which lives in your own configuration, not this\n  \
-         project's. Add to ~/.codex/config.toml:\n\n      \
+        "\n  Codex reads nothing under .codex/ in this project until the folder is\n  \
+         trusted. The first time Codex opens it, it asks: say yes. If it does not\n  \
+         ask, add this to ~/.codex/config.toml instead:\n\n      \
          [projects.{}]\n      \
          trust_level = \"trusted\"\n",
         quoted_path(&here.display().to_string())
