@@ -869,6 +869,38 @@ fn outside_a_tree_it_exits_zero_and_says_nothing() {
     assert_eq!(out, "");
 }
 
+/// Every hook reads the whole payload the harness writes, even where there
+/// is no tree and nothing to do. A payload larger than a pipe's buffer
+/// makes this deterministic: a hook that exits without reading leaves the
+/// write blocked until it dies and then failing with a broken pipe, which
+/// is what a harness would get.
+#[test]
+fn every_hook_drains_its_input_even_outside_a_tree() {
+    use std::io::Write;
+    let c = Sandbox::new_empty("hooks-drain-stdin");
+    let payload = format!(
+        "{{\"session_id\":\"s1\",\"source\":\"startup\",\"pad\":\"{}\"}}",
+        "x".repeat(256 * 1024)
+    );
+    for sub in ["start", "prompt", "end"] {
+        let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_vivac"))
+            .current_dir(&c.0)
+            .args(["session", sub, "--hook"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let wrote = child.stdin.take().unwrap().write_all(payload.as_bytes());
+        let o = child.wait_with_output().unwrap();
+        assert!(
+            wrote.is_ok(),
+            "session {sub} --hook left its input unread: {wrote:?}"
+        );
+        assert_eq!(o.status.code(), Some(0), "session {sub} --hook");
+    }
+}
+
 /// The one promise that matters most: whatever it decides to say, the hook
 /// never writes a byte to the log itself.
 #[test]

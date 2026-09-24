@@ -212,12 +212,14 @@ impl Sandbox {
             .stderr(std::process::Stdio::piped())
             .spawn()
             .unwrap();
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(stdin.as_bytes())
-            .unwrap();
+        // A child is free to exit before reading all of it; a broken pipe
+        // here is that race, not a failure, and what it printed and how it
+        // exited are still checked below.
+        match child.stdin.take().unwrap().write_all(stdin.as_bytes()) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {}
+            Err(e) => panic!("writing the payload to the child: {e}"),
+        }
         let o = child.wait_with_output().unwrap();
         (
             String::from_utf8_lossy(&o.stdout).into_owned() + &String::from_utf8_lossy(&o.stderr),
