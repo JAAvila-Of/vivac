@@ -694,17 +694,25 @@ fn every_capture_seam_command_dispatches_and_takes_its_flags() {
 }
 
 // ---------------------------------------------------------------------------
-// `d779`: `session prompt --hook`. Read-only, and always exits 0: the seams
-// tell an agent when to write, and this is the one that fires when nothing
-// did, on every message rather than at the two boundaries of a session.
+// `d779`: `session prompt --hook`. Read-only against the tree, and always
+// exits 0: the seams tell an agent when to write, and this is the one that
+// fires when nothing did, on every message rather than at the two
+// boundaries of a session.
+//
+// `d787`: what counts as "quiet" is minutes the agent spent working, not
+// wall-clock minutes since the last write -- the stretch a person takes to
+// answer no longer counts against it (`f786`). `prompt` opens a turn on
+// every call and `session end --hook` (the `Stop` hook) closes it, folding
+// the turn's length into a per-session accumulator kept outside the log;
+// `prompt` resets that accumulator the moment it sees a newer capture.
 // ---------------------------------------------------------------------------
 
-/// The exact two-line text, `{n}` filled in with the whole minutes elapsed
-/// since the last thing worth calling a reference point -- the session's own
-/// opening, or a capture since, whichever is more recent.
+/// The exact two-line text, `{n}` filled in with the whole minutes of work
+/// accumulated since the last thing worth calling a reference point -- the
+/// session's own opening, or a capture since, whichever is more recent.
 fn nudge_text(n: i64) -> String {
     format!(
-        "vivac: nothing written to the tree in the last {n} min of this session. If a seam\npassed since (a new line of work, a choice, a finding you told, a \"not now\", work done, a change outside the repo), write it now, before you answer.\n"
+        "vivac: nothing written to the tree in {n} min of work in this session. If a seam\npassed since (a new line of work, a choice, a finding you told, a \"not now\", work done, a change outside the repo), write it now, before you answer.\n"
     )
 }
 
@@ -743,6 +751,46 @@ fn run_prompt(c: &Sandbox, now: &str) -> (String, i32) {
     )
 }
 
+/// `session end --hook` (the `Stop` hook), with the same session payload
+/// `run_prompt` uses so the two resolve to the same turn/cooldown key, and
+/// the same explicit `--now`.
+fn run_stop(c: &Sandbox, now: &str) -> (String, i32) {
+    c.run_stdin(
+        &["session", "end", "--hook", "--now", now],
+        r#"{"session_id":"s1"}"#,
+    )
+}
+
+/// The FNV-1a 64-bit hash `cooldown_path` (`session.rs`) names the turn
+/// state file with, copied rather than exposed: this crate publishes only a
+/// binary, so the tests have nothing to link against and reach for a copy
+/// the same way `tests/setup.rs` already does for the same algorithm.
+fn fnv1a64(data: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for &b in data {
+        hash ^= u64::from(b);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
+/// Where `session.rs`'s own `cooldown_path` writes this sandbox's turn
+/// state, for the one test that needs to damage it by hand. Mirrors
+/// `state_key` exactly: the project's first event id (read off the log's
+/// own first line, the same field `first_event_id` reads), the lane, and
+/// the session id, hashed the same way.
+fn prompt_state_path(c: &Sandbox, lane: &str, session: &str) -> std::path::PathBuf {
+    let log = c.log();
+    let first_line = log.lines().next().expect("no first event to key by");
+    let v: serde_json::Value = serde_json::from_str(first_line).unwrap();
+    let project_id = v["id"].as_str().unwrap();
+    let key = format!("{project_id}\u{0}{lane}\u{0}{session}");
+    let hash = fnv1a64(key.as_bytes());
+    std::env::temp_dir()
+        .join("vivac")
+        .join(format!("prompt-{hash:016x}"))
+}
+
 #[test]
 fn with_no_session_started_it_says_nothing() {
     let c = Sandbox::new_seeded("prompt-no-session-start");
@@ -751,79 +799,185 @@ fn with_no_session_started_it_says_nothing() {
     assert_eq!(out, "");
 }
 
+/// `d787`: with no turn ever closed by a `Stop`, nothing has accumulated,
+/// no matter how much wall clock passed since the session opened. This
+/// replaces `a_three_minute_old_session_says_nothing`, which tested the
+/// wall-clock floor `PROMPT_SESSION_MIN` used to enforce -- dropped along
+/// with the constant, since active time already implies it.
 #[test]
-fn a_three_minute_old_session_says_nothing() {
-    let c = Sandbox::new_seeded("prompt-three-minutes");
+fn with_no_turn_closed_yet_it_says_nothing_no_matter_how_long() {
+    let c = Sandbox::new_seeded("prompt-no-turn-yet");
     c.append_raw_line(&raw_session_started(100, "2026-09-24T09:00:00Z", "main"));
-    let (out, code) = run_prompt(&c, "2026-09-24T09:03:00Z");
+    let (out, code) = run_prompt(&c, "2026-09-24T12:00:00Z");
     assert_eq!(code, 0, "{out}");
     assert_eq!(out, "");
 }
 
+/// `d787`'s central case: a prompt opens a turn, the `Stop` hook closes it
+/// eleven minutes later, and the next prompt speaks off that eleven minutes
+/// of work -- replacing `a_twenty_minute_session_with_no_capture_says_twenty`
+/// and `a_capture_four_minutes_ago_in_a_twenty_minute_session_says_nothing`,
+/// which both measured wall clock from the session's own opening rather
+/// than a turn a `Stop` actually closed.
 #[test]
-fn a_capture_four_minutes_ago_in_a_twenty_minute_session_says_nothing() {
-    let c = Sandbox::new_seeded("prompt-quiet-not-yet");
+fn a_turn_that_worked_past_ten_minutes_speaks_at_the_next_prompt() {
+    let c = Sandbox::new_seeded("prompt-turn-eleven");
     c.append_raw_line(&raw_session_started(100, "2026-09-24T09:00:00Z", "main"));
-    c.append_raw_line(&raw_capture(101, "2026-09-24T09:16:00Z", "main"));
-    let (out, code) = run_prompt(&c, "2026-09-24T09:20:00Z");
+    let (out, code) = run_prompt(&c, "2026-09-24T09:00:00Z");
     assert_eq!(code, 0, "{out}");
     assert_eq!(out, "");
-}
-
-#[test]
-fn a_twenty_minute_session_with_no_capture_says_twenty() {
-    let c = Sandbox::new_seeded("prompt-twenty-no-capture");
-    c.append_raw_line(&raw_session_started(100, "2026-09-24T09:00:00Z", "main"));
-    let (out, code) = run_prompt(&c, "2026-09-24T09:20:00Z");
+    let (out, code) = run_stop(&c, "2026-09-24T09:11:00Z");
     assert_eq!(code, 0, "{out}");
-    assert_eq!(out, nudge_text(20));
-}
-
-#[test]
-fn a_capture_twelve_minutes_ago_in_a_thirty_minute_session_says_twelve() {
-    let c = Sandbox::new_seeded("prompt-twelve");
-    c.append_raw_line(&raw_session_started(100, "2026-09-24T09:00:00Z", "main"));
-    c.append_raw_line(&raw_capture(101, "2026-09-24T09:18:00Z", "main"));
     let (out, code) = run_prompt(&c, "2026-09-24T09:30:00Z");
     assert_eq!(code, 0, "{out}");
-    assert_eq!(out, nudge_text(12));
+    assert_eq!(out, nudge_text(11));
+}
+
+/// `f786`'s own regression: the agent wrote at minute one, the person took
+/// thirty-nine minutes to answer, and none of that wait is work. Before
+/// `d787` this read as thirty-nine idle minutes and spoke; now the turn the
+/// `Stop` closed was one minute long, and the wait after it is wall clock,
+/// not work, so the next prompt stays quiet.
+#[test]
+fn a_long_wait_after_a_short_turn_says_nothing() {
+    let c = Sandbox::new_seeded("prompt-f786-wait");
+    c.append_raw_line(&raw_session_started(100, "2026-09-24T09:00:00Z", "main"));
+    let (out, code) = run_prompt(&c, "2026-09-24T09:00:00Z");
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(out, "");
+    let (out, code) = run_stop(&c, "2026-09-24T09:01:00Z");
+    assert_eq!(code, 0, "{out}");
+    let (out, code) = run_prompt(&c, "2026-09-24T09:40:00Z");
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(out, "", "a wait between turns was counted as work:\n{out}");
+}
+
+/// Work accumulates across turns rather than resetting with each one: three
+/// turns of four minutes each, none alone past `PROMPT_QUIET_MIN`, add up to
+/// twelve and the prompt right after the third speaks.
+#[test]
+fn three_four_minute_turns_add_up_to_twelve() {
+    let c = Sandbox::new_seeded("prompt-turns-add-up");
+    c.append_raw_line(&raw_session_started(100, "2026-09-24T09:00:00Z", "main"));
+
+    run_prompt(&c, "2026-09-24T09:00:00Z");
+    run_stop(&c, "2026-09-24T09:04:00Z");
+    let (out, code) = run_prompt(&c, "2026-09-24T09:04:00Z");
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(out, "", "spoke after only four minutes of work:\n{out}");
+
+    run_stop(&c, "2026-09-24T09:08:00Z");
+    let (out, code) = run_prompt(&c, "2026-09-24T09:08:00Z");
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(out, "", "spoke after only eight minutes of work:\n{out}");
+
+    run_stop(&c, "2026-09-24T09:12:00Z");
+    let (out, code) = run_prompt(&c, "2026-09-24T09:12:00Z");
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(
+        out,
+        nudge_text(12),
+        "three four-minute turns did not add up to twelve:\n{out}"
+    );
+}
+
+/// A capture landing after work has accumulated takes the count back to
+/// zero: the reference point moved, so what came before it stops counting.
+/// Replaces `a_capture_twelve_minutes_ago_in_a_thirty_minute_session_says_twelve`,
+/// which measured wall clock from a raw capture rather than from work a
+/// `Stop` had actually closed.
+#[test]
+fn a_capture_after_twelve_minutes_clears_the_active_minutes() {
+    let c = Sandbox::new_seeded("prompt-capture-clears");
+    c.append_raw_line(&raw_session_started(100, "2026-09-24T09:00:00Z", "main"));
+    run_prompt(&c, "2026-09-24T09:00:00Z");
+    run_stop(&c, "2026-09-24T09:12:00Z");
+    // Twelve minutes of work are on the books; a capture lands after them.
+    c.append_raw_line(&raw_capture(101, "2026-09-24T09:13:00Z", "main"));
+    let (out, code) = run_prompt(&c, "2026-09-24T09:20:00Z");
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(
+        out, "",
+        "the capture did not clear the active minutes:\n{out}"
+    );
 }
 
 /// An automatic stop from the `Stop` hook is not a capture: reading it as
-/// one would let a turn that only ever closed itself with `auto` silence
-/// the nudge forever.
+/// one would let a turn that only ever closed itself with `auto` clear the
+/// accumulated minutes it should be adding to.
 #[test]
-fn an_automatic_stop_does_not_count_as_a_capture() {
+fn an_automatic_stop_in_the_log_does_not_clear_the_active_minutes() {
     let c = Sandbox::new_seeded("prompt-auto-not-capture");
     c.append_raw_line(&raw_session_started(100, "2026-09-24T09:00:00Z", "main"));
-    c.append_raw_line(&raw_auto_vivac(101, "2026-09-24T09:15:00Z", "main"));
+    run_prompt(&c, "2026-09-24T09:00:00Z");
+    run_stop(&c, "2026-09-24T09:11:00Z");
+    c.append_raw_line(&raw_auto_vivac(101, "2026-09-24T09:11:30Z", "main"));
     let (out, code) = run_prompt(&c, "2026-09-24T09:20:00Z");
     assert_eq!(code, 0, "{out}");
-    assert_eq!(out, nudge_text(20));
+    assert_eq!(
+        out,
+        nudge_text(11),
+        "an automatic stop cleared the active minutes:\n{out}"
+    );
 }
 
-/// Having spoken once, the same session stays quiet for ten minutes; past
-/// that, the next call speaks again.
+/// Having spoken once, the same session stays quiet for ten minutes even
+/// though the accumulator keeps climbing underneath the silence; past the
+/// cooldown, with enough work still on the books, it speaks again.
 #[test]
-fn it_cools_down_for_ten_minutes_then_speaks_again() {
-    let c = Sandbox::new_seeded("prompt-cooldown");
+fn cooldown_still_holds_then_speaks_again_once_it_clears() {
+    let c = Sandbox::new_seeded("prompt-cooldown-active");
     c.append_raw_line(&raw_session_started(100, "2026-09-24T09:00:00Z", "main"));
 
-    let (first, code) = run_prompt(&c, "2026-09-24T09:20:00Z");
+    run_prompt(&c, "2026-09-24T09:00:00Z");
+    run_stop(&c, "2026-09-24T09:11:00Z");
+    let (first, code) = run_prompt(&c, "2026-09-24T09:11:00Z");
     assert_eq!(code, 0, "{first}");
-    assert_eq!(first, nudge_text(20));
+    assert_eq!(first, nudge_text(11));
 
-    let (second, code) = run_prompt(&c, "2026-09-24T09:22:00Z");
+    run_stop(&c, "2026-09-24T09:12:00Z");
+    let (second, code) = run_prompt(&c, "2026-09-24T09:12:00Z");
     assert_eq!(code, 0, "{second}");
-    assert_eq!(second, "", "spoke again inside the cooldown");
+    assert_eq!(second, "", "spoke again inside the cooldown:\n{second}");
 
-    let (third, code) = run_prompt(&c, "2026-09-24T09:31:00Z");
+    run_stop(&c, "2026-09-24T09:22:00Z");
+    let (third, code) = run_prompt(&c, "2026-09-24T09:22:00Z");
     assert_eq!(code, 0, "{third}");
-    assert_eq!(third, nudge_text(31), "stayed quiet past the cooldown");
+    assert_eq!(
+        third,
+        nudge_text(22),
+        "stayed quiet past the cooldown:\n{third}"
+    );
 }
 
+/// A state file from before `d787`, holding a bare last-nudge integer, or
+/// simply damaged, reads back as all zeros -- the same "never seen this
+/// session" as a missing file -- rather than taking the hook down.
 #[test]
-fn broken_stdin_still_exits_zero_and_says_nothing() {
+fn a_broken_state_file_reads_back_as_zero_and_does_not_crash() {
+    let c = Sandbox::new_seeded("prompt-broken-state");
+    c.append_raw_line(&raw_session_started(100, "2026-09-24T09:00:00Z", "main"));
+    run_prompt(&c, "2026-09-24T09:00:00Z");
+    run_stop(&c, "2026-09-24T09:11:00Z");
+    let path = prompt_state_path(&c, "main", "s1");
+
+    for broken in ["not a state file at all", "1758700800"] {
+        std::fs::write(&path, broken).unwrap();
+        let (out, code) = run_prompt(&c, "2026-09-24T09:30:00Z");
+        assert_eq!(code, 0, "{out}");
+        assert_eq!(
+            out, "",
+            "a broken state file ({broken:?}) did not read back as zeros:\n{out}"
+        );
+    }
+}
+
+/// Garbage on stdin only costs the turn/cooldown key its session id: the
+/// rest of the computation still runs off the log and the state file, so a
+/// turn opened and closed under the very same garbage still adds up to a
+/// real nudge, not an outright failure.
+#[test]
+fn broken_stdin_still_exits_zero_and_the_nudge_still_works() {
     let c = Sandbox::new_seeded("prompt-broken-stdin");
     c.append_raw_line(&raw_session_started(100, "2026-09-24T09:00:00Z", "main"));
     let (out, code) = c.run_stdin(
@@ -832,19 +986,34 @@ fn broken_stdin_still_exits_zero_and_says_nothing() {
             "prompt",
             "--hook",
             "--now",
-            "2026-09-24T09:20:00Z",
+            "2026-09-24T09:00:00Z",
         ],
         "not json at all",
     );
     assert_eq!(code, 0, "{out}");
-    // Garbage on stdin only costs the cooldown key its session id, and the
-    // rest of the computation still runs off the log: this stays a real
-    // nudge, not an outright failure, which is exactly the point.
-    assert_eq!(out, nudge_text(20));
+    assert_eq!(out, "");
+    let (out, code) = c.run_stdin(
+        &["session", "end", "--hook", "--now", "2026-09-24T09:11:00Z"],
+        "not json at all",
+    );
+    assert_eq!(code, 0, "{out}");
+    let (out, code) = c.run_stdin(
+        &[
+            "session",
+            "prompt",
+            "--hook",
+            "--now",
+            "2026-09-24T09:30:00Z",
+        ],
+        "not json at all",
+    );
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(out, nudge_text(11));
 }
 
+/// The same promise with no payload at all rather than a malformed one.
 #[test]
-fn empty_stdin_still_exits_zero() {
+fn empty_stdin_still_exits_zero_and_the_nudge_still_works() {
     let c = Sandbox::new_seeded("prompt-empty-stdin");
     c.append_raw_line(&raw_session_started(100, "2026-09-24T09:00:00Z", "main"));
     let (out, code) = c.run_stdin(
@@ -853,12 +1022,29 @@ fn empty_stdin_still_exits_zero() {
             "prompt",
             "--hook",
             "--now",
-            "2026-09-24T09:20:00Z",
+            "2026-09-24T09:00:00Z",
         ],
         "",
     );
     assert_eq!(code, 0, "{out}");
-    assert_eq!(out, nudge_text(20));
+    assert_eq!(out, "");
+    let (out, code) = c.run_stdin(
+        &["session", "end", "--hook", "--now", "2026-09-24T09:11:00Z"],
+        "",
+    );
+    assert_eq!(code, 0, "{out}");
+    let (out, code) = c.run_stdin(
+        &[
+            "session",
+            "prompt",
+            "--hook",
+            "--now",
+            "2026-09-24T09:30:00Z",
+        ],
+        "",
+    );
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(out, nudge_text(11));
 }
 
 #[test]
@@ -902,14 +1088,17 @@ fn every_hook_drains_its_input_even_outside_a_tree() {
 }
 
 /// The one promise that matters most: whatever it decides to say, the hook
-/// never writes a byte to the log itself.
+/// never writes a byte to the log itself -- its own bookkeeping lives in
+/// the state file `prompt_state_path` names, never in `.vivac/events`.
 #[test]
 fn the_log_never_grows_from_calling_it() {
     let c = Sandbox::new_seeded("prompt-log-unchanged");
     c.append_raw_line(&raw_session_started(100, "2026-09-24T09:00:00Z", "main"));
+    run_prompt(&c, "2026-09-24T09:00:00Z");
+    run_stop(&c, "2026-09-24T09:11:00Z");
     let before = c.log();
-    let (out, code) = run_prompt(&c, "2026-09-24T09:20:00Z");
+    let (out, code) = run_prompt(&c, "2026-09-24T09:30:00Z");
     assert_eq!(code, 0, "{out}");
-    assert_eq!(out, nudge_text(20), "the fixture stopped nudging");
+    assert_eq!(out, nudge_text(11), "the fixture stopped nudging");
     assert_eq!(before, c.log(), "session prompt wrote to the log");
 }

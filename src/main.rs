@@ -885,7 +885,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         "vivacs" => render::vivacs(&ctx.tree, a),
         "session" => {
             let project = project_name(&ctx);
-            session::dispatch(&mut ctx, a, &project)
+            session::dispatch(&mut ctx, a, &project, &located)
         }
         "tree" => render::tree(&ctx.tree, a),
         "open" => render::open(&ctx.tree, a),
