@@ -34,7 +34,6 @@ against
 age
 ages
 aggregates
-ago
 agree
 agrees
 al
@@ -347,7 +346,6 @@ control
 cookie
 cooldown
 cooled
-cools
 copied
 copies
 copy
@@ -1582,7 +1580,6 @@ spent
 spin
 spine
 split
-spoke
 spoken
 src
 ss
@@ -1698,7 +1695,6 @@ then
 there
 they
 third
-thirty
 this
 though
 thread
@@ -1768,7 +1764,6 @@ tt
 turn
 turns
 twelve
-twenty
 twice
 twin
 twins

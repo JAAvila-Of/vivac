@@ -158,12 +158,16 @@ changed since the previous one: a stop that repeats identically is not a stop,
 it is a log.
 
 `UserPromptSubmit` runs on every message you send, and almost always says
-nothing. It speaks only when the log says so: the session has been open at
-least five minutes and nothing has been written to the tree for at least ten.
-Then the agent reads one line saying how long it has been, and that anything
-that happened since, a choice, a finding, work done, goes in the tree before
-it answers. Having spoken, it keeps quiet for ten minutes. It never blocks
-your message and never writes to the log. Long sessions are where the seams
+nothing. It speaks only when the agent has worked ten minutes, added up
+across its turns, without writing anything to the tree. The time you take to
+answer does not count: `Stop` closes each turn's clock and the next message
+opens it again, so an agent that wrote something and then waited an hour for
+you is not told it has gone quiet. When it does speak, the agent reads one
+line saying how long it has worked, and that anything that happened since, a
+choice, a finding, work done, goes in the tree before it answers. Having
+spoken, it keeps quiet for ten minutes. It never blocks your message and
+never writes to the log; the clock lives in a small file under the system's
+temporary directory. Long sessions are where the seams
 fade: the brief arrives when a session opens, not in the turn where the work
 happens.
 

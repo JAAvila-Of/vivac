@@ -125,7 +125,13 @@ pub fn start(ctx: &mut crate::ops::Ctx, a: &Args, project: &str) -> R {
     Ok(())
 }
 
-pub fn end(ctx: &mut crate::ops::Ctx, a: &Args) -> R {
+pub fn end(ctx: &mut crate::ops::Ctx, a: &Args, located: &crate::store::Located) -> R {
+    // `d787`'s turn clock closes here, ahead of every check below: the
+    // turn happened whether or not this session leaves anything worth an
+    // automatic stop.
+    if a.has("hook") {
+        close_turn(located, a);
+    }
     // The cheap checks go first, against whatever this process already
     // loaded, so a turn with nothing to stop never asks for the lock at
     // all: a read-only tree or a filesystem with no lock support would
@@ -221,10 +227,15 @@ fn segment_label(t: &crate::model::Tree) -> String {
     parts.join(", ")
 }
 
-pub fn dispatch(ctx: &mut crate::ops::Ctx, a: &Args, project: &str) -> R {
+pub fn dispatch(
+    ctx: &mut crate::ops::Ctx,
+    a: &Args,
+    project: &str,
+    located: &crate::store::Located,
+) -> R {
     match a.positional(0) {
         Some("start") => start(ctx, a, project),
-        Some("end") => end(ctx, a),
+        Some("end") => end(ctx, a, located),
         // `prompt` is intercepted in `main.rs`, ahead of every tree lookup
         // this dispatch would otherwise make: `d779`'s whole point is that
         // it never fails the turn, and a `Ctx` that failed to load would
@@ -235,9 +246,13 @@ pub fn dispatch(ctx: &mut crate::ops::Ctx, a: &Args, project: &str) -> R {
     }
 }
 
-/// `d779`: the session has to have been open a while, and the thread quiet
-/// for a while within it, before the nudge is worth the tokens.
-const PROMPT_SESSION_MIN: i64 = 5;
+/// `d779`: the thread has to have gone quiet for a while before the nudge
+/// is worth the tokens. `d787` changes what "quiet" measures: minutes the
+/// agent spent working without a capture landing, never wall-clock minutes
+/// since the last write -- the stretch a person takes to answer does not
+/// count against it (`f786`). Active time already implies the session has
+/// been open a while, so the wall-clock floor this used to sit beside,
+/// `PROMPT_SESSION_MIN`, is gone with it.
 const PROMPT_QUIET_MIN: i64 = 10;
 const PROMPT_COOLDOWN_MIN: i64 = 10;
 
@@ -296,10 +311,13 @@ fn last_matching_ts<'a>(
         .map(|e| e.ts.as_str())
 }
 
-/// Where the cooldown for `key` lives: a file under `std::env::temp_dir()`,
-/// named from a hash rather than the key itself -- the key can carry a
-/// session identifier, and the security pillar keeps that out of a
-/// filename as much as out of the log.
+/// Where the turn/cooldown state for `key` lives: a file under
+/// `std::env::temp_dir()`, named from a hash rather than the key itself --
+/// the key can carry a session identifier, and the security pillar keeps
+/// that out of a filename as much as out of the log. `d787` grew what
+/// lives here from a bare last-nudge integer to [`TurnState`], and the
+/// `Stop` hook now writes here too, through the same key `state_key`
+/// builds for both.
 fn cooldown_path(key: &str) -> std::path::PathBuf {
     let hash = crate::setup::fnv1a64(key.as_bytes());
     std::env::temp_dir()
@@ -307,36 +325,139 @@ fn cooldown_path(key: &str) -> std::path::PathBuf {
         .join(format!("prompt-{hash:016x}"))
 }
 
-/// Whether the last nudge this same key saw was less than
-/// `PROMPT_COOLDOWN_MIN` ago. Unreadable, missing or garbled reads back as
-/// "never warned" rather than failing: `d779` -- a hook with an opinion
-/// about its own bookkeeping is a hook that can block on it.
-fn cooled_down(path: &std::path::Path, now_secs: i64) -> bool {
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return true;
-    };
-    let Ok(last) = text.trim().parse::<i64>() else {
-        return true;
-    };
-    now_secs - last >= PROMPT_COOLDOWN_MIN * 60
+/// The bookkeeping `cooldown_path` names, one line, versioned:
+/// `v1 <last_nudge_secs> <turn_start_secs> <active_secs> <reference_secs>`,
+/// every field epoch seconds and `0` meaning none -- never warned, no turn
+/// open, no work folded in yet, no reference point seen. `active_secs` is
+/// `d787`'s own addition: minutes the agent spent working, folded in one
+/// turn at a time by the `Stop` hook, never read off the clock alone.
+///
+/// A file this version cannot make sense of -- missing, unreadable, or
+/// left by whatever came before `d787` and held a bare integer -- reads
+/// back as all zeros rather than failing: `d779`'s own rule that a hook
+/// with an opinion about its own bookkeeping is a hook that can block on
+/// it.
+#[derive(Default)]
+struct TurnState {
+    last_nudge_secs: i64,
+    turn_start_secs: i64,
+    active_secs: i64,
+    reference_secs: i64,
 }
 
-/// Records that the nudge just spoke, for `cooled_down` to read back next
-/// time. Best effort: a failure here costs one extra nudge sooner than
-/// `PROMPT_COOLDOWN_MIN` would otherwise allow, never the turn itself.
-fn record_spoke(path: &std::path::Path, now_secs: i64) {
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).ok();
+impl TurnState {
+    fn read(path: &std::path::Path) -> TurnState {
+        let Ok(text) = std::fs::read_to_string(path) else {
+            return TurnState::default();
+        };
+        let mut words = text.split_whitespace();
+        if words.next() != Some("v1") {
+            return TurnState::default();
+        }
+        let mut field = || words.next().and_then(|w| w.parse::<i64>().ok());
+        match (field(), field(), field(), field()) {
+            (
+                Some(last_nudge_secs),
+                Some(turn_start_secs),
+                Some(active_secs),
+                Some(reference_secs),
+            ) => TurnState {
+                last_nudge_secs,
+                turn_start_secs,
+                active_secs,
+                reference_secs,
+            },
+            _ => TurnState::default(),
+        }
     }
-    std::fs::write(path, now_secs.to_string()).ok();
+
+    /// Best effort: a failure here costs the next read one lost update,
+    /// never the turn itself.
+    fn write(&self, path: &std::path::Path) {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).ok();
+        }
+        std::fs::write(
+            path,
+            format!(
+                "v1 {} {} {} {}",
+                self.last_nudge_secs, self.turn_start_secs, self.active_secs, self.reference_secs
+            ),
+        )
+        .ok();
+    }
+}
+
+/// The lane a `Located` resolves to, the one way every hook here reads it:
+/// the lane file's own id, or the implicit `main` of a folder with none.
+fn hook_lane(located: &crate::store::Located) -> String {
+    located
+        .lane
+        .as_ref()
+        .map(|l| l.id.clone())
+        .unwrap_or_else(|| crate::lane::MAIN.to_string())
+}
+
+/// The turn/cooldown key `prompt` and the `Stop` hook both index their
+/// state by, built the one way so the two can never resolve two different
+/// files for what is really the same thread: the project's own opaque
+/// first identifier, the lane, and the session id the harness sent on
+/// stdin.
+///
+/// The key never carries the project's own path: `first_event_id` is the
+/// log's own opaque first identifier, the same one the registry keys
+/// projects by.
+fn state_key(root: &std::path::Path, lane: &str, session: &Option<String>) -> String {
+    let project_id = crate::store::first_event_id(root).unwrap_or_default();
+    match session {
+        Some(s) => format!("{project_id}\u{0}{lane}\u{0}{s}"),
+        None => format!("{project_id}\u{0}{lane}"),
+    }
+}
+
+/// The `Stop` hook's half of `d787`'s turn clock: folds the turn that is
+/// closing into `active_secs`, and clears `turn_start_secs` so the next
+/// prompt does not double it. Best effort and silent, and called ahead of
+/// [`nothing_to_stop`]'s own early return -- the turn happened whether or
+/// not it leaves anything worth an automatic stop. A turn with no `Stop`
+/// at all -- an interrupted one -- just has its `turn_start_secs`
+/// overwritten by the next prompt: it undercounts, which is the safe
+/// direction.
+fn close_turn(located: &crate::store::Located, a: &Args) {
+    let lane = hook_lane(located);
+    let session = HookInput::read().session;
+    let key = state_key(&located.root, &lane, &session);
+    let path = cooldown_path(&key);
+    let mut state = TurnState::read(&path);
+    if state.turn_start_secs <= 0 {
+        return;
+    }
+    let now = a
+        .opt("now")
+        .map(str::to_string)
+        .unwrap_or_else(crate::clock::now_rfc3339);
+    let Some(now_secs) = crate::clock::epoch_seconds(&now) else {
+        return;
+    };
+    let worked_secs = (now_secs - state.turn_start_secs).max(0);
+    state.active_secs += worked_secs;
+    state.turn_start_secs = 0;
+    state.write(&path);
+}
+
+/// Whether the last nudge this key saw, `last_nudge_secs` (`0` meaning
+/// never), was more than `PROMPT_COOLDOWN_MIN` ago.
+fn cooled_down(last_nudge_secs: i64, now_secs: i64) -> bool {
+    last_nudge_secs == 0 || now_secs - last_nudge_secs >= PROMPT_COOLDOWN_MIN * 60
 }
 
 /// The text `prompt` prints when it decides to speak, `n` being the whole
-/// minutes since the reference point -- session start, or a capture since,
-/// whichever is more recent.
+/// minutes the agent has worked, across turns, since the reference point
+/// -- session start, or a capture since, whichever is more recent -- with
+/// the minutes a person spent answering left out (`d787`, `f786`).
 fn prompt_text(n: i64) -> String {
     format!(
-        "vivac: nothing written to the tree in the last {n} min of this session. If a seam\n\
+        "vivac: nothing written to the tree in {n} min of work in this session. If a seam\n\
          passed since (a new line of work, a choice, a finding you told, a \"not now\", \
          work done, a change outside the repo), write it now, before you answer.\n"
     )
@@ -369,11 +490,7 @@ fn prompt_text_for(cwd: &std::path::Path, a: &Args) -> Option<String> {
     let located = crate::store::locate(cwd).ok()??;
     let store = crate::store::Store::open(located.root.clone()).ok()?;
     let (events, _broken) = store.read_all().ok()?;
-    let lane = located
-        .lane
-        .as_ref()
-        .map(|l| l.id.clone())
-        .unwrap_or_else(|| crate::lane::MAIN.to_string());
+    let lane = hook_lane(&located);
 
     let session_start =
         last_matching_ts(&events, &lane, |b| matches!(b, Body::SessionStarted { .. }))?;
@@ -391,26 +508,30 @@ fn prompt_text_for(cwd: &std::path::Path, a: &Args) -> Option<String> {
         _ => session_start_secs,
     };
 
-    let session_elapsed_min = (now_secs - session_start_secs) / 60;
-    let reference_elapsed_min = (now_secs - reference_secs) / 60;
-    if session_elapsed_min < PROMPT_SESSION_MIN || reference_elapsed_min < PROMPT_QUIET_MIN {
-        return None;
-    }
-
-    // The cooldown key never carries the project's own path: `first_event_id`
-    // is the log's own opaque first identifier, the same one the registry
-    // keys projects by.
-    let project_id = crate::store::first_event_id(&located.root).unwrap_or_default();
-    let session_id = HookInput::read().session;
-    let key = match &session_id {
-        Some(s) => format!("{project_id}\u{0}{lane}\u{0}{s}"),
-        None => format!("{project_id}\u{0}{lane}"),
-    };
+    let session = HookInput::read().session;
+    let key = state_key(&located.root, &lane, &session);
     let path = cooldown_path(&key);
-    if !cooled_down(&path, now_secs) {
-        return None;
-    }
-    record_spoke(&path, now_secs);
+    let mut state = TurnState::read(&path);
 
-    Some(prompt_text(reference_elapsed_min))
+    // A newer reference point than the one this state was last built
+    // against: work already landed since, so the clock the agent's own
+    // turns had been filling starts over at zero.
+    if state.reference_secs != reference_secs {
+        state.active_secs = 0;
+        state.reference_secs = reference_secs;
+    }
+
+    let active_min = state.active_secs / 60;
+    let speaks = active_min >= PROMPT_QUIET_MIN && cooled_down(state.last_nudge_secs, now_secs);
+
+    // A turn opens here regardless of the decision above: the `Stop` hook
+    // is what closes it, and this is always written -- `turn_start_secs`
+    // changed even where nothing else did.
+    state.turn_start_secs = now_secs;
+    if speaks {
+        state.last_nudge_secs = now_secs;
+    }
+    state.write(&path);
+
+    speaks.then(|| prompt_text(active_min))
 }
