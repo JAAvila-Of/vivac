@@ -45,7 +45,7 @@ in:
 ```sh
 cargo install vivac
 vivac init
-vivac setup claude-code
+vivac setup claude-code    # or vivac setup codex, or both
 ```
 
 `init` plants the tree, `setup` gives the agent the hooks, the server and
@@ -64,12 +64,32 @@ memory, instruction files and internal documents, and asks which to bring in.
 It shows you a plan before writing anything, checks what it wrote, and then
 offers to retire the other maps, one at a time.
 
+A project with a long history takes a while. With hundreds of memories or
+more, the skill says so and works in batches: first the structure (the root
+goal, pillars, constraints, rules and decisions), then what was learned, each
+batch with its own plan and your own yes. Its working files stay in a
+temporary folder, never in your project.
+
 Until then, another record you use keeps talking to the agent as before, and
 may tell it to use that one first. That is expected: the skill only reads from
 it.
 
 **4.** Open a fresh session. The brief it starts with is what the tree now
 knows.
+
+---
+
+## How you know it worked
+
+**Counting what was written proves nothing.** A merged summary can match the
+plan node for node and still have lost the one detail that made a lesson worth
+keeping. So the skill checks every source, not a sample: it takes the few terms
+only that source would use, searches the tree for them, and does not finish
+while any source comes back with nothing and no reason why.
+
+Then it asks you for the three or four things the project learned the hard
+way, and searches for each in front of you. That is the check no machine can
+make, and the other maps are not retired until it passes.
 
 ---
 
@@ -82,6 +102,10 @@ Pillars and rules are read on demand, with `vivac rules`, when work is
 checked — not injected into every session, because a rule that arrives unasked
 in a thousand sessions costs a thousand times what it costs to fetch it in the
 one where it matters.
+
+A lesson or a measurement that asks nothing of anyone goes in closed, as a
+record: `vivac find` and `vivac why` still bring it back, and `vivac open`
+keeps answering what is actually left to do.
 
 Instruction files stay as they are for now. What they say still reaches every
 session from the file, and taking that away before the tree delivers it would

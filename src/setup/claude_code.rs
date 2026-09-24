@@ -1472,9 +1472,10 @@ mod tests {
         // Computed independently (Python's own FNV-1a/64) over the exact
         // frontmatter and body this file embeds. It moves whenever the
         // skill's text does, and moving it is meant to be deliberate: the
-        // last time was `d723`, which made the skill offer two commands in
-        // a second folder of one project rather than one.
-        assert_eq!(skill_fingerprint(), 0xbc570f48b5eb961d);
+        // last time was `t767`, which made the skill check every source can
+        // still be found, work in batches and close lessons as records,
+        // after the migration of a real project lost three sources in four.
+        assert_eq!(skill_fingerprint(), 0x0f51521030b6eafe);
     }
 
     #[test]
