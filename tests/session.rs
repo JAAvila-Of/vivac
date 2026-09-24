@@ -538,7 +538,7 @@ fn a_real_session_identifier_passes_through_untouched() {
 /// every line included, none over the 76-column ceiling that
 /// `capture_seams_lines_never_widen_past_76_columns`, below, checks against
 /// the real rendering rather than against this constant.
-const CAPTURE_SEAMS_BLOCK: &str = "\n WRITE AT THESE SEAMS\n  Look first: vivac find \"<words>\". Work the tree already holds goes under\n  its node, never into a second one. The focus above is where work was\n  left, maybe not by you: hang new work from what it continues.\n  new line of work     vivac push \"<title>\" --why \"<why>\" --parent <id>\n                       or --root, when it continues nothing in the tree\n  a choice is settled  vivac decide \"<t>\" --reason \"<r>\" --alternative \"<x>\"\n  you report findings  vivac add \"<t>\" --type finding --why \"<where>\"\n                       as you tell the person, one for each thing found\n                       asks nothing? close it: vivac done <id> \"Record: ...\"\n  told \"not now\"       vivac park <id> \"<their words>\"\n                       nothing to park yet? vivac add it, then park it\n  the work is done     vivac pop \"<outcome>\"\n                       and again if that settles the node it returns to\n  Or the same moves through the vivac_* tools.\n";
+const CAPTURE_SEAMS_BLOCK: &str = "\n WRITE AT THESE SEAMS\n  Look first: vivac find \"<words>\". Work the tree already holds goes under\n  its node, never into a second one. The focus above is where work was\n  left, maybe not by you: hang new work from what it continues.\n  Write before you answer: what you tell the person goes in the tree first.\n  new line of work     vivac push \"<title>\" --why \"<why>\" --parent <id>\n                       or --root, when it continues nothing in the tree\n  a choice is settled  vivac decide \"<t>\" --reason \"<r>\" --alternative \"<x>\"\n  you report findings  vivac add \"<t>\" --type finding --why \"<where>\"\n                       as you tell the person, one for each thing found\n                       asks nothing? close it: vivac done <id> \"Record: ...\"\n  told \"not now\"       vivac park <id> \"<their words>\"\n                       nothing to park yet? vivac add it, then park it\n  changed outside git  vivac note <id> \"<what changed, where>\"\n                       CI, a tracker, the cloud: the tree is its only record\n  the work is done     vivac pop \"<outcome>\"\n                       and again if that settles the node it returns to\n  Or the same moves through the vivac_* tools.\n";
 
 /// Test (a): the hook's own brief carries the block, exactly.
 #[test]
@@ -642,6 +642,7 @@ fn every_capture_seam_command_dispatches_and_takes_its_flags() {
         "vivac add \"<t>\" --type finding --why \"<where>\"",
         "vivac done <id> \"Record: ...\"",
         "vivac park <id> \"<their words>\"",
+        "vivac note <id> \"<what changed, where>\"",
         "vivac pop \"<outcome>\"",
     ];
     for row in rows {
@@ -666,7 +667,7 @@ fn every_capture_seam_command_dispatches_and_takes_its_flags() {
         // Every flag on the row is accepted: the row itself, run for real
         // with placeholders swapped for plain values, exits 0.
         let c = Sandbox::new_seeded(&format!("capture-seams-real-{verb}"));
-        if verb == "park" || verb == "pop" || verb == "push" || verb == "done" {
+        if verb == "park" || verb == "pop" || verb == "push" || verb == "done" || verb == "note" {
             c.ok(&["push", "a title to act on", "--why", "seed"]);
         }
         let real_args: Vec<String> = argv
@@ -690,4 +691,193 @@ fn every_capture_seam_command_dispatches_and_takes_its_flags() {
     // point at and still exits 0.
     let c = Sandbox::new_seeded("capture-seams-push-root");
     c.ok(&["push", "A goal", "--why", "a value", "--root"]);
+}
+
+// ---------------------------------------------------------------------------
+// `d779`: `session prompt --hook`. Read-only, and always exits 0: the seams
+// tell an agent when to write, and this is the one that fires when nothing
+// did, on every message rather than at the two boundaries of a session.
+// ---------------------------------------------------------------------------
+
+/// The exact two-line text, `{n}` filled in with the whole minutes elapsed
+/// since the last thing worth calling a reference point -- the session's own
+/// opening, or a capture since, whichever is more recent.
+fn nudge_text(n: i64) -> String {
+    format!(
+        "vivac: nothing written to the tree in the last {n} min of this session. If a seam\npassed since (a new line of work, a choice, a finding you told, a \"not now\", work done, a change outside the repo), write it now, before you answer.\n"
+    )
+}
+
+/// A raw `session.started` line, appended straight to `events` so its `ts`
+/// can be set by hand: the CLI itself only ever stamps the real clock, and
+/// this test needs a session that has been open for an exact, arbitrary
+/// stretch.
+fn raw_session_started(seq: u64, ts: &str, lane: &str) -> String {
+    format!(
+        r#"{{"seq":{seq},"id":"01PROMPTSTARTEDAAAAAAAAA{seq:02}","ts":"{ts}","actor":"a_test0000000","lane":"{lane}","payload":{{"type":"session.started","source":"test"}}}}"#
+    )
+}
+
+/// A raw capture event -- `node.noted`, chosen because it is on the list and
+/// needs no real node to name -- at a `ts` this test controls.
+fn raw_capture(seq: u64, ts: &str, lane: &str) -> String {
+    format!(
+        r#"{{"seq":{seq},"id":"01PROMPTCAPTUREAAAAAAAA{seq:02}","ts":"{ts}","actor":"a_test0000000","lane":"{lane}","payload":{{"type":"node.noted","node":"ghost","note":"synthetic capture"}}}}"#
+    )
+}
+
+/// A raw `vivac.created` of kind `auto` -- the automatic stop the `Stop`
+/// hook writes on an ordinary turn, never a capture in its own right.
+fn raw_auto_vivac(seq: u64, ts: &str, lane: &str) -> String {
+    format!(
+        r#"{{"seq":{seq},"id":"01PROMPTAUTOAAAAAAAAAAAA{seq:02}","ts":"{ts}","actor":"a_test0000000","lane":"{lane}","payload":{{"type":"vivac.created","vivac":"01PROMPTAUTOVIVACAAAAAAA{seq:02}","num":{seq},"kind":"auto","stack":[],"working_set":[],"next_intent":""}}}}"#
+    )
+}
+
+/// `session prompt --hook`, with a minimal stdin payload and an explicit
+/// `--now`, the way `brief`'s own tests pin the clock.
+fn run_prompt(c: &Sandbox, now: &str) -> (String, i32) {
+    c.run_stdin(
+        &["session", "prompt", "--hook", "--now", now],
+        r#"{"session_id":"s1"}"#,
+    )
+}
+
+#[test]
+fn with_no_session_started_it_says_nothing() {
+    let c = Sandbox::new_seeded("prompt-no-session-start");
+    let (out, code) = run_prompt(&c, "2026-09-24T09:20:00Z");
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(out, "");
+}
+
+#[test]
+fn a_three_minute_old_session_says_nothing() {
+    let c = Sandbox::new_seeded("prompt-three-minutes");
+    c.append_raw_line(&raw_session_started(100, "2026-09-24T09:00:00Z", "main"));
+    let (out, code) = run_prompt(&c, "2026-09-24T09:03:00Z");
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(out, "");
+}
+
+#[test]
+fn a_capture_four_minutes_ago_in_a_twenty_minute_session_says_nothing() {
+    let c = Sandbox::new_seeded("prompt-quiet-not-yet");
+    c.append_raw_line(&raw_session_started(100, "2026-09-24T09:00:00Z", "main"));
+    c.append_raw_line(&raw_capture(101, "2026-09-24T09:16:00Z", "main"));
+    let (out, code) = run_prompt(&c, "2026-09-24T09:20:00Z");
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(out, "");
+}
+
+#[test]
+fn a_twenty_minute_session_with_no_capture_says_twenty() {
+    let c = Sandbox::new_seeded("prompt-twenty-no-capture");
+    c.append_raw_line(&raw_session_started(100, "2026-09-24T09:00:00Z", "main"));
+    let (out, code) = run_prompt(&c, "2026-09-24T09:20:00Z");
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(out, nudge_text(20));
+}
+
+#[test]
+fn a_capture_twelve_minutes_ago_in_a_thirty_minute_session_says_twelve() {
+    let c = Sandbox::new_seeded("prompt-twelve");
+    c.append_raw_line(&raw_session_started(100, "2026-09-24T09:00:00Z", "main"));
+    c.append_raw_line(&raw_capture(101, "2026-09-24T09:18:00Z", "main"));
+    let (out, code) = run_prompt(&c, "2026-09-24T09:30:00Z");
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(out, nudge_text(12));
+}
+
+/// An automatic stop from the `Stop` hook is not a capture: reading it as
+/// one would let a turn that only ever closed itself with `auto` silence
+/// the nudge forever.
+#[test]
+fn an_automatic_stop_does_not_count_as_a_capture() {
+    let c = Sandbox::new_seeded("prompt-auto-not-capture");
+    c.append_raw_line(&raw_session_started(100, "2026-09-24T09:00:00Z", "main"));
+    c.append_raw_line(&raw_auto_vivac(101, "2026-09-24T09:15:00Z", "main"));
+    let (out, code) = run_prompt(&c, "2026-09-24T09:20:00Z");
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(out, nudge_text(20));
+}
+
+/// Having spoken once, the same session stays quiet for ten minutes; past
+/// that, the next call speaks again.
+#[test]
+fn it_cools_down_for_ten_minutes_then_speaks_again() {
+    let c = Sandbox::new_seeded("prompt-cooldown");
+    c.append_raw_line(&raw_session_started(100, "2026-09-24T09:00:00Z", "main"));
+
+    let (first, code) = run_prompt(&c, "2026-09-24T09:20:00Z");
+    assert_eq!(code, 0, "{first}");
+    assert_eq!(first, nudge_text(20));
+
+    let (second, code) = run_prompt(&c, "2026-09-24T09:22:00Z");
+    assert_eq!(code, 0, "{second}");
+    assert_eq!(second, "", "spoke again inside the cooldown");
+
+    let (third, code) = run_prompt(&c, "2026-09-24T09:31:00Z");
+    assert_eq!(code, 0, "{third}");
+    assert_eq!(third, nudge_text(31), "stayed quiet past the cooldown");
+}
+
+#[test]
+fn broken_stdin_still_exits_zero_and_says_nothing() {
+    let c = Sandbox::new_seeded("prompt-broken-stdin");
+    c.append_raw_line(&raw_session_started(100, "2026-09-24T09:00:00Z", "main"));
+    let (out, code) = c.run_stdin(
+        &[
+            "session",
+            "prompt",
+            "--hook",
+            "--now",
+            "2026-09-24T09:20:00Z",
+        ],
+        "not json at all",
+    );
+    assert_eq!(code, 0, "{out}");
+    // Garbage on stdin only costs the cooldown key its session id, and the
+    // rest of the computation still runs off the log: this stays a real
+    // nudge, not an outright failure, which is exactly the point.
+    assert_eq!(out, nudge_text(20));
+}
+
+#[test]
+fn empty_stdin_still_exits_zero() {
+    let c = Sandbox::new_seeded("prompt-empty-stdin");
+    c.append_raw_line(&raw_session_started(100, "2026-09-24T09:00:00Z", "main"));
+    let (out, code) = c.run_stdin(
+        &[
+            "session",
+            "prompt",
+            "--hook",
+            "--now",
+            "2026-09-24T09:20:00Z",
+        ],
+        "",
+    );
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(out, nudge_text(20));
+}
+
+#[test]
+fn outside_a_tree_it_exits_zero_and_says_nothing() {
+    let c = Sandbox::new_empty("prompt-no-tree");
+    let (out, code) = run_prompt(&c, "2026-09-24T09:20:00Z");
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(out, "");
+}
+
+/// The one promise that matters most: whatever it decides to say, the hook
+/// never writes a byte to the log itself.
+#[test]
+fn the_log_never_grows_from_calling_it() {
+    let c = Sandbox::new_seeded("prompt-log-unchanged");
+    c.append_raw_line(&raw_session_started(100, "2026-09-24T09:00:00Z", "main"));
+    let before = c.log();
+    let (out, code) = run_prompt(&c, "2026-09-24T09:20:00Z");
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(out, nudge_text(20), "the fixture stopped nudging");
+    assert_eq!(before, c.log(), "session prompt wrote to the log");
 }

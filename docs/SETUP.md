@@ -41,7 +41,7 @@ anything is written.
 
 | File | What it gets |
 |---|---|
-| `.claude/settings.json` | two hooks — `SessionStart` runs `vivac session start --hook`, which hands the agent the brief when a session opens and again after a compaction, ending with the seams where work is written down and the command for each; `Stop` runs `vivac session end --hook`, which leaves an automatic stop |
+| `.claude/settings.json` | three hooks — `SessionStart` runs `vivac session start --hook`, which hands the agent the brief when a session opens and again after a compaction, ending with the seams where work is written down and the command for each; `UserPromptSubmit` runs `vivac session prompt --hook`, which says one line when the session has gone a while without writing anything; `Stop` runs `vivac session end --hook`, which leaves an automatic stop |
 | `.mcp.json` | the server, which runs `vivac mcp` |
 | `.claude/skills/vivac-migrate/` | the skill an agent follows to bring another record into the tree — see [Migrating](MIGRATING.md) |
 
@@ -96,13 +96,13 @@ vivac setup codex
 ```
 
 The same pieces, in the three places Codex reads inside a project:
-`.codex/config.toml` gets the server, `.codex/hooks.json` gets `SessionStart`
-and `Stop` running the same two commands, and `.agents/skills/vivac-migrate/`
+`.codex/config.toml` gets the server, `.codex/hooks.json` gets `SessionStart`,
+`UserPromptSubmit` and `Stop` running the same three commands, and `.agents/skills/vivac-migrate/`
 gets the same skill file. Nothing goes in your own configuration directory.
 
 It refuses where there is no tree, and that refusal is the same argument
 that used to make setup plant one: a project with the three files and no
-tree has two hooks that exit 0 in silence for ever, and nobody finds out.
+tree has three hooks that exit 0 in silence for ever, and nobody finds out.
 Leaving that behind is not a cheaper setup, it is setup undone. So the
 requirement stands and only the means changed — it names the `vivac init`
 to run, and writes nothing until the tree is there.
@@ -147,16 +147,28 @@ See [where it is measured](../README.md#where-this-is-measured).
 `Stop` runs on every turn rather than once at the end, so the last stop does
 not depend on the session closing cleanly. The stop is only saved if the tree
 changed since the previous one: a stop that repeats identically is not a stop,
-it is a log. Both hooks stay quiet and exit 0 where there is no `.vivac/`.
+it is a log.
+
+`UserPromptSubmit` runs on every message you send, and almost always says
+nothing. It speaks only when the log says so: the session has been open at
+least five minutes and nothing has been written to the tree for at least ten.
+Then the agent reads one line saying how long it has been, and that anything
+that happened since, a choice, a finding, work done, goes in the tree before
+it answers. Having spoken, it keeps quiet for ten minutes. It never blocks
+your message and never writes to the log. Long sessions are where the seams
+fade: the brief arrives when a session opens, not in the turn where the work
+happens.
+
+All three hooks stay quiet and exit 0 where there is no `.vivac/`.
 
 ---
 
 ## Any other harness
 
-What the hooks call is `vivac session start` and `vivac session end`, which
-are commands like any other. `--hook` makes them speak to a harness instead of
+What the hooks call is `vivac session start`, `vivac session prompt` and
+`vivac session end`, which are commands like any other. `--hook` makes them speak to a harness instead of
 a person: the brief goes out as plain text, and what kind of start it was is
-read from what the harness passes in. So the pair can be run by hand to see
+read from what the harness passes in. So each can be run by hand to see
 exactly what a hook would do.
 
 **Any harness that can run a command when a session opens, and put its output

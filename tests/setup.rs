@@ -10,6 +10,7 @@ use std::path::Path;
 
 const SESSION_START: &str = "vivac session start --hook";
 const SESSION_END: &str = "vivac session end --hook";
+const SESSION_PROMPT: &str = "vivac session prompt --hook";
 
 fn settings_path(c: &Sandbox) -> std::path::PathBuf {
     c.0.join(".claude").join("settings.json")
@@ -83,9 +84,10 @@ fn a_fresh_project_gets_the_three_harness_pieces() {
     let (out, code) = c.run(&["setup", "claude-code", "--yes"]);
     assert_eq!(code, 0, "{out}");
     assert!(out.contains("vivac setup claude-code, in"), "{out}");
-    assert!(out.contains("create, with two hooks"), "{out}");
+    assert!(out.contains("create, with three hooks"), "{out}");
     assert!(out.contains(SESSION_START), "{out}");
     assert!(out.contains(SESSION_END), "{out}");
+    assert!(out.contains(SESSION_PROMPT), "{out}");
     assert!(out.contains("create, with the server \"vivac\""), "{out}");
     assert!(out.contains("create: how an agent brings"), "{out}");
     assert!(out.contains("Written."), "{out}");
@@ -104,6 +106,10 @@ fn a_fresh_project_gets_the_three_harness_pieces() {
     assert_eq!(
         settings["hooks"]["Stop"][0]["hooks"][0]["command"],
         SESSION_END
+    );
+    assert_eq!(
+        settings["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"],
+        SESSION_PROMPT
     );
 
     let mcp: serde_json::Value = serde_json::from_str(&read(&mcp_path(&c))).unwrap();
@@ -184,6 +190,7 @@ fn a_settings_file_with_its_own_content_keeps_it_and_gains_ours_at_the_end() {
     );
     assert!(after.contains(SESSION_START), "{after}");
     assert!(after.contains(SESSION_END), "{after}");
+    assert!(after.contains(SESSION_PROMPT), "{after}");
     assert!(after.contains("\r\n"), "CRLF was lost:\n{after:?}");
 }
 
@@ -239,6 +246,54 @@ fn a_differently_spelled_session_start_is_left_alone_and_copied_into_the_plan() 
         start.len(),
         1,
         "a second SessionStart entry was added:\n{after}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// `d779`: a project that already has the two older hooks gains only the
+// third, and neither of the first two is touched or duplicated.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_project_with_the_two_older_hooks_gains_only_the_third() {
+    let c = Sandbox::new_empty("setup-prompt-hook-add-third");
+    c.ok(&["init", "--yes"]);
+    std::fs::create_dir_all(c.0.join(".claude")).unwrap();
+    let settings = serde_json::json!({
+        "hooks": {
+            "SessionStart": [
+                { "hooks": [ { "type": "command", "command": SESSION_START } ] }
+            ],
+            "Stop": [
+                { "hooks": [ { "type": "command", "command": SESSION_END } ] }
+            ]
+        }
+    });
+    std::fs::write(
+        settings_path(&c),
+        serde_json::to_string_pretty(&settings).unwrap(),
+    )
+    .unwrap();
+
+    let (out, code) = c.run(&["setup", "claude-code", "--yes"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("add the UserPromptSubmit hook"), "{out}");
+    assert!(!out.contains("already has all three hooks"), "{out}");
+
+    let after: serde_json::Value = serde_json::from_str(&read(&settings_path(&c))).unwrap();
+    assert_eq!(
+        after["hooks"]["SessionStart"].as_array().unwrap().len(),
+        1,
+        "the existing SessionStart hook was duplicated:\n{after}"
+    );
+    assert_eq!(
+        after["hooks"]["Stop"].as_array().unwrap().len(),
+        1,
+        "the existing Stop hook was duplicated:\n{after}"
+    );
+    assert_eq!(
+        after["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"],
+        SESSION_PROMPT
     );
 }
 
@@ -626,6 +681,11 @@ fn undo_after_a_fresh_setup_leaves_only_the_tree() {
     let (out, code) = c.run(&["setup", "claude-code", "--undo", "--yes"]);
     assert_eq!(code, 0, "{out}");
     assert!(
+        plan_words(&out)
+            .contains("remove the three hooks setup wrote; nothing else is left, so it goes"),
+        "{out}"
+    );
+    assert!(
         out.contains("Undone. The tree in .vivac/ is untouched."),
         "{out}"
     );
@@ -857,8 +917,8 @@ fn an_existing_settings_file_with_no_hooks_says_add_not_create() {
     std::fs::write(settings_path(&c), "{\n  \"otherKey\": 1\n}\n").unwrap();
 
     let out = c.ok(&["setup", "claude-code", "--yes"]);
-    assert!(out.contains("add two hooks"), "{out}");
-    assert!(!out.contains("create, with two hooks"), "{out}");
+    assert!(out.contains("add three hooks"), "{out}");
+    assert!(!out.contains("create, with three hooks"), "{out}");
 }
 
 /// C: the same for `.mcp.json` with no server of ours.

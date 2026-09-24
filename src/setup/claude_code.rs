@@ -29,6 +29,7 @@ const SKILL_LABEL: &str = ".claude/skills/vivac-migrate/SKILL.md";
 
 const SESSION_START_COMMAND: &str = "vivac session start --hook";
 const SESSION_END_COMMAND: &str = "vivac session end --hook";
+const SESSION_PROMPT_COMMAND: &str = "vivac session prompt --hook";
 
 const FRONTMATTER: &str = include_str!("skill-frontmatter.md");
 const BODY: &str = include_str!("skill-body.md");
@@ -733,17 +734,27 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         SESSION_START_COMMAND,
     );
     let stop_hook_state = hook_state(&settings_root, "Stop", "end", SESSION_END_COMMAND);
+    let prompt_hook_state = hook_state(
+        &settings_root,
+        "UserPromptSubmit",
+        "prompt",
+        SESSION_PROMPT_COMMAND,
+    );
 
     let start_missing = matches!(start_hook_state, HookState::Missing);
     let stop_missing = matches!(stop_hook_state, HookState::Missing);
+    let prompt_missing = matches!(prompt_hook_state, HookState::Missing);
     let mcp_missing = matches!(mcp_server_state, McpState::Missing);
     let skill_missing_or_replaceable = matches!(
         skill_file_state,
         SkillState::Missing | SkillState::Replaceable
     );
 
-    let nothing_to_write =
-        !start_missing && !stop_missing && !mcp_missing && !skill_missing_or_replaceable;
+    let nothing_to_write = !start_missing
+        && !stop_missing
+        && !prompt_missing
+        && !mcp_missing
+        && !skill_missing_or_replaceable;
 
     let piece_block = render_piece_block(
         here,
@@ -751,8 +762,10 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         mcp.exists,
         &start_hook_state,
         &stop_hook_state,
+        &prompt_hook_state,
         start_missing,
         stop_missing,
+        prompt_missing,
         &mcp_server_state,
         &skill_file_state,
     );
@@ -798,7 +811,7 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     // planting, the lane, the version lock and `.gitignore` are `init`'s
     // alone now, and this run never reaches any of them.
     let mut writes = Vec::new();
-    if start_missing || stop_missing {
+    if start_missing || stop_missing || prompt_missing {
         let mut new_settings = settings_root.clone();
         if start_missing {
             append_hook(
@@ -810,6 +823,14 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         }
         if stop_missing {
             append_hook(&mut new_settings, "Stop", SESSION_END_COMMAND, None);
+        }
+        if prompt_missing {
+            append_hook(
+                &mut new_settings,
+                "UserPromptSubmit",
+                SESSION_PROMPT_COMMAND,
+                None,
+            );
         }
         let rendered = json::finalize(
             &json::render(&new_settings, &settings.indent),
@@ -862,7 +883,7 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     // the rest of what `tree::commit` used to report are `init`'s to say
     // now, not `setup`'s.
     let written = Written {
-        connection: start_missing || stop_missing || mcp_missing,
+        connection: start_missing || stop_missing || prompt_missing || mcp_missing,
         // `f638`, `d641`: every tree `setup` writes into already existed
         // before this run, so the one question left is whether this run
         // is the one adding the "vivac" server to it.
@@ -870,6 +891,7 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         skill: skill_missing_or_replaceable,
         undoable: start_missing
             && stop_missing
+            && prompt_missing
             && mcp_missing
             && matches!(skill_file_state, SkillState::Missing),
     };
@@ -887,8 +909,10 @@ fn render_piece_block(
     mcp_exists: bool,
     start_hook_state: &HookState,
     stop_hook_state: &HookState,
+    prompt_hook_state: &HookState,
     start_missing: bool,
     stop_missing: bool,
+    prompt_missing: bool,
     mcp_server_state: &McpState,
     skill_file_state: &SkillState,
 ) -> String {
@@ -909,12 +933,14 @@ fn render_piece_block(
         }
     }
 
-    let settings_status = match (settings_exists, start_missing, stop_missing) {
-        (_, false, false) => "already has both hooks",
-        (_, true, false) => "add the SessionStart hook",
-        (_, false, true) => "add the Stop hook",
-        (false, true, true) => "create, with two hooks",
-        (true, true, true) => "add two hooks",
+    let settings_status = match (settings_exists, start_missing, stop_missing, prompt_missing) {
+        (_, false, false, false) => "already has all three hooks",
+        (_, true, false, false) => "add the SessionStart hook",
+        (_, false, true, false) => "add the Stop hook",
+        (_, false, false, true) => "add the UserPromptSubmit hook",
+        (_, true, true, false) | (_, true, false, true) | (_, false, true, true) => "add two hooks",
+        (false, true, true, true) => "create, with three hooks",
+        (true, true, true, true) => "add three hooks",
     };
     s.push_str(&piece_line(SETTINGS_LABEL, settings_status));
     match start_hook_state {
@@ -927,6 +953,14 @@ fn render_piece_block(
     match stop_hook_state {
         HookState::Missing => s.push_str(&sub_line("Stop", SESSION_END_COMMAND)),
         HookState::Different(cmd) => s.push_str(&sub_line("Stop", &format!("already runs  {cmd}"))),
+        HookState::Exact => {}
+    }
+    match prompt_hook_state {
+        HookState::Missing => s.push_str(&sub_line("UserPromptSubmit", SESSION_PROMPT_COMMAND)),
+        HookState::Different(cmd) => s.push_str(&sub_line(
+            "UserPromptSubmit",
+            &format!("already runs  {cmd}"),
+        )),
         HookState::Exact => {}
     }
 
@@ -1255,15 +1289,22 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
         SESSION_START_COMMAND,
     );
     let stop_hook_state = hook_state(&settings_root, "Stop", "end", SESSION_END_COMMAND);
+    let prompt_hook_state = hook_state(
+        &settings_root,
+        "UserPromptSubmit",
+        "prompt",
+        SESSION_PROMPT_COMMAND,
+    );
     let mcp_root = mcp.value.clone().unwrap();
     let mcp_server_state = mcp_state(&mcp_root);
     let skill_ours = skill_raw.as_deref().is_some_and(skill_fingerprint_intact);
 
     let start_ours = matches!(start_hook_state, HookState::Exact);
     let stop_ours = matches!(stop_hook_state, HookState::Exact);
+    let prompt_ours = matches!(prompt_hook_state, HookState::Exact);
     let mcp_ours = matches!(mcp_server_state, McpState::Ours);
 
-    let nothing_to_undo = !start_ours && !stop_ours && !mcp_ours && !skill_ours;
+    let nothing_to_undo = !start_ours && !stop_ours && !prompt_ours && !mcp_ours && !skill_ours;
     if nothing_to_undo {
         outln!("  Nothing to undo: none of what setup writes is here.");
         return Ok(0);
@@ -1277,6 +1318,9 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
     if stop_ours {
         remove_hook(&mut preview, "Stop", SESSION_END_COMMAND);
     }
+    if prompt_ours {
+        remove_hook(&mut preview, "UserPromptSubmit", SESSION_PROMPT_COMMAND);
+    }
     let settings_becomes_empty = preview
         .as_object()
         .is_some_and(|s: &[(String, Value)]| s.is_empty());
@@ -1286,14 +1330,18 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
             .as_object()
             .is_some_and(|s: &[(String, Value)]| s.is_empty());
 
-    let settings_status: String = match (start_ours, stop_ours) {
-        (true, true) if settings_becomes_empty => {
-            "remove the two hooks setup wrote; nothing else is left, so it goes".to_string()
+    let settings_status: String = match (start_ours, stop_ours, prompt_ours) {
+        (true, true, true) if settings_becomes_empty => {
+            "remove the three hooks setup wrote; nothing else is left, so it goes".to_string()
         }
-        (true, true) => "remove the two hooks setup wrote".to_string(),
-        (true, false) => "remove the SessionStart hook".to_string(),
-        (false, true) => "remove the Stop hook".to_string(),
-        (false, false) => "left as it is".to_string(),
+        (true, true, true) => "remove the three hooks setup wrote".to_string(),
+        (true, true, false) => "remove the two hooks setup wrote".to_string(),
+        (true, false, true) => "remove the two hooks setup wrote".to_string(),
+        (false, true, true) => "remove the two hooks setup wrote".to_string(),
+        (true, false, false) => "remove the SessionStart hook".to_string(),
+        (false, true, false) => "remove the Stop hook".to_string(),
+        (false, false, true) => "remove the UserPromptSubmit hook".to_string(),
+        (false, false, false) => "left as it is".to_string(),
     };
 
     let mut s = format!(
@@ -1309,6 +1357,12 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
     }
     if let HookState::Different(_) = &stop_hook_state {
         s.push_str(&sub_line("Stop", "runs vivac another way; left as it is"));
+    }
+    if let HookState::Different(_) = &prompt_hook_state {
+        s.push_str(&sub_line(
+            "UserPromptSubmit",
+            "runs vivac another way; left as it is",
+        ));
     }
 
     s.push_str(&piece_line(
@@ -1361,7 +1415,7 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
     // Every change -- a rewrite or a removal -- is one commit, the same
     // all-or-nothing guarantee `apply` gives (`t565` §7.6).
     let mut writes = Vec::new();
-    if start_ours || stop_ours {
+    if start_ours || stop_ours || prompt_ours {
         let original = settings.raw.clone().into_bytes();
         if settings_becomes_empty {
             writes.push(super::PlannedWrite::delete(
@@ -1375,6 +1429,13 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
             }
             if stop_ours {
                 remove_hook(&mut new_settings, "Stop", SESSION_END_COMMAND);
+            }
+            if prompt_ours {
+                remove_hook(
+                    &mut new_settings,
+                    "UserPromptSubmit",
+                    SESSION_PROMPT_COMMAND,
+                );
             }
             let rendered = json::finalize(
                 &json::render(&new_settings, &settings.indent),
