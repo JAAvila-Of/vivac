@@ -1426,6 +1426,62 @@ mod resident_write_tests {
         cleanup(&root);
     }
 
+    /// `d783`: a second `vivac_declare` on the same target substitutes the
+    /// sentence rather than being refused, and the reply's `against` entry
+    /// carries what it replaced.
+    #[test]
+    fn declare_reports_the_sentence_it_substituted() {
+        let (root, mut project) = temp_project("declare-substitute");
+        call_tool(
+            &mut project,
+            "vivac_add",
+            json!({"title": "Security", "type": "pillar", "why": "vetoes on the spot"}),
+        );
+        call_tool(
+            &mut project,
+            "vivac_add",
+            json!({
+                "title": "Keep the write path local",
+                "parent": "1",
+                "type": "rule",
+                "why": "guard",
+            }),
+        );
+        call_tool(
+            &mut project,
+            "vivac_decide",
+            json!({"title": "Keep it local", "reason": "because"}),
+        );
+        call_tool(
+            &mut project,
+            "vivac_declare",
+            json!({
+                "id": "d3",
+                "against": ["r2: nothing on the write path calls the network"],
+            }),
+        );
+        let reply = call_tool(
+            &mut project,
+            "vivac_declare",
+            json!({"id": "d3", "against": ["r2: a second sentence"]}),
+        );
+        assert_eq!(reply["against"][0]["node"], "r2", "{reply}");
+        assert_eq!(reply["against"][0]["why"], "a second sentence", "{reply}");
+        assert_eq!(
+            reply["against"][0]["before"], "nothing on the write path calls the network",
+            "{reply}"
+        );
+        assert!(
+            reply["text"]
+                .as_str()
+                .unwrap()
+                .contains("before: nothing on the write path calls the network"),
+            "{reply}"
+        );
+        assert_resident_matches_fresh_fold(&root, &mut project);
+        cleanup(&root);
+    }
+
     /// The other half of `LOADING.md` §4's rule: `load_for_write` exists so
     /// that a write never pays to rewrite the derived index, and the
     /// resident path replacing it must not quietly start doing that.

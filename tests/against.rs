@@ -470,7 +470,7 @@ fn a_refusal_names_the_kind_with_its_own_article() {
 }
 
 #[test]
-fn declare_repeating_a_declaration_made_at_birth_is_refused() {
+fn declare_substitutes_a_declaration_made_at_birth() {
     let c = with_open_rule("declare-e8-birth");
     c.ok(&[
         "decide",
@@ -480,15 +480,31 @@ fn declare_repeating_a_declaration_made_at_birth_is_refused() {
         "--against",
         "r2: nothing on the write path calls the network",
     ]);
-    let before = c.log();
     let (out, code) = c.run(&["declare", "3", "--against", "r2: a second sentence"]);
-    assert_eq!(code, 2, "{out}");
-    assert!(out.contains("d3 already declares r2"), "{out}");
-    assert_eq!(before, c.log());
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.contains("d3  judged against r2: a second sentence"),
+        "{out}"
+    );
+    assert!(
+        out.contains("before: nothing on the write path calls the network"),
+        "{out}"
+    );
+
+    // The birth declaration lives on `node.created`, not on `against.added`:
+    // this `declare` call is the only one to write that event type.
+    let log = c.log();
+    assert_eq!(log.matches("\"against.added\"").count(), 1, "{log}");
+
+    let v = why_json(&c, "3");
+    let against = v["node"]["against"].as_array().unwrap();
+    assert_eq!(against.len(), 1, "{v}");
+    assert_eq!(against[0]["node"], "r2");
+    assert_eq!(against[0]["why"], "a second sentence");
 }
 
 #[test]
-fn declare_repeating_an_earlier_late_declaration_is_refused() {
+fn declare_substitutes_an_earlier_late_declaration() {
     let c = with_open_rule("declare-e8-late");
     c.ok(&["decide", "A call", "--reason", "because"]);
     c.ok(&[
@@ -497,11 +513,59 @@ fn declare_repeating_an_earlier_late_declaration_is_refused() {
         "--against",
         "r2: nothing on the write path calls the network",
     ]);
-    let before = c.log();
     let (out, code) = c.run(&["declare", "3", "--against", "r2: a second sentence"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.contains("d3  judged against r2: a second sentence"),
+        "{out}"
+    );
+    assert!(
+        out.contains("before: nothing on the write path calls the network"),
+        "{out}"
+    );
+
+    let log = c.log();
+    assert_eq!(log.matches("\"against.added\"").count(), 2, "{log}");
+
+    let v = why_json(&c, "3");
+    let against = v["node"]["against"].as_array().unwrap();
+    assert_eq!(against.len(), 1, "{v}");
+    assert_eq!(against[0]["node"], "r2");
+    assert_eq!(against[0]["why"], "a second sentence");
+}
+
+#[test]
+fn declare_repeating_a_pillar_within_the_same_call_is_refused() {
+    let c = with_open_rule("declare-e8-same-call");
+    c.ok(&["decide", "A call", "--reason", "because"]);
+    let before = c.log();
+    let (out, code) = c.run(&[
+        "declare",
+        "3",
+        "--against",
+        "r2: first sentence",
+        "--against",
+        "r2: second sentence",
+    ]);
     assert_eq!(code, 2, "{out}");
-    assert!(out.contains("d3 already declares r2"), "{out}");
+    assert!(out.contains("--against names r2 twice"), "{out}");
     assert_eq!(before, c.log());
+}
+
+#[test]
+fn check_exits_zero_after_declare_substitutes_a_sentence() {
+    let c = with_open_rule("declare-e8-check-clean");
+    c.ok(&[
+        "decide",
+        "A call",
+        "--reason",
+        "because",
+        "--against",
+        "r2: nothing on the write path calls the network",
+    ]);
+    c.ok(&["declare", "3", "--against", "r2: a second sentence"]);
+    let (out, code) = c.run(&["check"]);
+    assert_eq!(code, 0, "{out}");
 }
 
 #[test]

@@ -749,7 +749,18 @@ impl Tree {
                     .collect();
                 let num = self.resolve_ulid(node);
                 if let Some(n) = self.nodes.get_mut(&num) {
-                    n.against.extend(spans);
+                    // `d783`: a decision may declare the same pillar or rule
+                    // more than once over time. The log keeps every
+                    // `against.added`, but the tree only ever shows the
+                    // latest sentence for a given target -- this replaces
+                    // the existing entry in place rather than piling up a
+                    // second one beside it.
+                    for span in spans {
+                        match n.against.iter_mut().find(|e| e.node == span.node) {
+                            Some(existing) => *existing = span,
+                            None => n.against.push(span),
+                        }
+                    }
                 }
             }
             Body::VivacCreated {

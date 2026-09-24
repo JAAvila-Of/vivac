@@ -119,6 +119,7 @@ attribute
 authority
 auto
 automatic
+available
 away
 aws
 back
@@ -636,6 +637,9 @@ for
 force
 forced
 foreign
+forget
+forgets
+forgetting
 forked
 form
 format
@@ -1629,6 +1633,8 @@ subfolder
 submodule
 subsec
 subsequence
+substituted
+substitutes
 subtree
 success
 successor
@@ -1902,6 +1908,7 @@ wins
 with
 withheld
 withholds
+within
 without
 word
 words
