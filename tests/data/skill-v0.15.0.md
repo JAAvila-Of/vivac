@@ -1,3 +1,8 @@
+---
+name: vivac-migrate
+description: Bring everything a project already knows into the vivac tree, from another memory system, the harness's own memory, instruction files for any agent, decision records and internal documents; check it, and retire the other maps with the person's yes. Use when asked to migrate, import or move memories, notes, rules, decisions or documentation into vivac, or to bring what a project knows into it.
+---
+<!-- written by vivac setup; fingerprint bc570f48b5eb961d; setup removes it with --undo while the text is unchanged -->
 
 # Bringing what a project knows into vivac
 
@@ -8,10 +13,6 @@ the tree is your job, and the person decides what goes in.
 The tree's log only grows: what you write stays written. So nothing is written
 until the person has seen the plan and said yes. Everything you need to do this
 is on this page; you do not need to read vivac's source.
-
-A migration is judged by one thing: whether what each source knew can still be
-found in the tree afterwards. Counting what you wrote does not show that. Step 5
-measures it, source by source, and the work is not done until it passes.
 
 ## Ground rules
 
@@ -31,14 +32,10 @@ measures it, source by source, and the work is not done until it passes.
   after the person says yes to it.
 - Read other tools with their read and search commands. Do not guess their
   flags, and do not add one to a command that writes, not even --help: some
-  tools take it as an argument.
-- Anything you write to work with, such as an export, a plan too long for the
-  conversation, a script or a list of sources, goes in a temporary folder
-  outside the project and outside .vivac/. An export is a copy of everything
-  the tool holds, for every project. Delete the export before you ask the
-  person anything, since they may stop there, and delete the rest when the
-  migration ends. Nothing of yours stays behind in the project: a plan or an
-  inventory left there is one more map, and nobody keeps it current.
+  tools take it as an argument. An export is a copy of everything the tool
+  holds, for every project. If you need one, write it to a temporary folder
+  outside the project, and delete it before you ask the person anything:
+  they may stop there, and then nothing would delete it.
 - Do not use vivac import. It reads trees from vivac's own prototype, not
   memories, and it changes kinds on the way in.
 
@@ -59,19 +56,14 @@ it is, and ask which to bring in.
   the one that recalls what is current, the one that searches, and the one
   that fetches a single record whole, because search results usually come
   back truncated and the summary is not the record. If its tools are off in
-  this session, its command line reads the same memories. Keep only what
+  this project, its command line reads the same memories. Keep only what
   belongs to this project. Memory tools often file a project under the name
   of the folder a session was opened in, so look for it under every name it
   may have had, like a repository inside it, and for memories filed under
   another project by mistake.
 - The harness's own memory for this project. In Claude Code, that is the
   MEMORY.md it loads every session and the files it points to, and the
-  memory its subagents keep under .claude/agent-memory/. Claude Code keeps it
-  in the user's home, under a folder named after the project's path, and an
-  agent in another harness can read it there too. In Codex, memory is a
-  feature the user turns on, and it is kept for the user rather than for one
-  project, under the memories folder in Codex's home; if it is there, keep
-  only what belongs to this project.
+  memory its subagents keep under .claude/agent-memory/.
 - Instruction files for any agent, anywhere in the project, including the
   repositories inside it and their own .claude folders: CLAUDE.md,
   CLAUDE.local.md, AGENTS.md, GEMINI.md, .cursorrules, .cursor/rules/,
@@ -87,13 +79,6 @@ it is, and ask which to bring in.
 
 Read whole what the person picks. If a long document is mostly finished steps
 or code, say so and read its prose.
-
-Count what you found, in records, files and size, and tell the person. When it
-runs to hundreds of records or more, say that the migration will take a while
-and will go in batches: first the structure, meaning the root goal, pillars,
-constraints, rules and decisions, and then what was learned. Each batch has its
-own plan, its own yes, its own copy of the log and its own check. The second
-batch is not optional: it is where most of a large project's knowledge is.
 
 ## 2. Look at the tree
 
@@ -113,8 +98,7 @@ next agent on its own:
 | pillar | A criterion the project's design is judged against, titled with its name and what it rejects. | vivac rules, when work is checked. |
 | rule | A line a pillar draws that work can be checked against, with the command that checks it if there is one (--arm). | vivac rules, when work is checked. |
 | decision | A choice that was made, with its reason, the options it beat, and the pillar or rule it was judged against. | The brief shows a few that still stand; vivac why shows the rest. |
-| finding, still open | Something observed that still asks for work: a bug nobody fixed, a gap, a risk. | vivac open, and the brief. |
-| finding, closed as a record | A lesson or a measurement that asks nothing of anyone. Write it and close it at once, with an outcome that says it is a record. | vivac find and vivac why, which include closed nodes. |
+| finding | Something observed or learned that later work depends on. | vivac why and vivac find. |
 | question | Something still to decide, including whatever a source marks as proposed, draft or pending. | The brief shows the ones that block. |
 | goal or task | Work still open. | vivac open, and the brief. |
 | nothing | Status, superseded history, boilerplate, code, and descriptions of how the system works. | It stays in its source. |
@@ -122,33 +106,16 @@ next agent on its own:
 - What has to hold in every session, whatever the work, is a constraint under
   the root goal. How to work in the repository usually is. What is only
   judged when a piece of work is reviewed is a rule under its pillar.
-- A lesson that governs how work is done is a rule or a constraint, not a
-  finding: that is where it reaches the agent. A lesson that only records
-  what happened is a finding closed as a record. Leaving lessons open fills
-  vivac open with things that are not work, and then it stops saying what is.
 - A pillar comes from the person's own words, or from a document that calls it
   a pillar or a governing criterion. If you think something works as one but
-  nobody named it, propose it marked as inferred, and for each one show what
-  it would reject in practice and whether it holds for the whole project. One
-  that only holds for one part of the work is a rule under that part's goal.
-  Let the person decide.
+  nobody named it, propose it marked as inferred, and let the person decide.
 - A description of how the system works is not a rule, however important it
   is. A rule is a line that work can be checked against; the description stays
   in its document.
 - Every decision names the pillar or rule it was judged against, with a
-  sentence on how it holds (--against). That sentence is not the reason: it
-  says what the decision does to satisfy that pillar or rule. Once the tree
-  has pillars, vivac check flags a decision that does not name one. If none
-  applies, tell the person.
+  sentence on how it holds (--against). Once the tree has pillars, vivac check
+  flags a decision that does not. If none applies, tell the person.
 - When two sources disagree, ask which one holds before writing either.
-- Something that already has its own register in the project, like a list of
-  bugs or a coverage file per object, is referenced, not copied a node per
-  entry: group it the way the register does, with --ref to the register. A
-  copy in the tree would be a second register, and it would drift.
-- Several sources that say the same thing become one node. Merging must not
-  lose what made each source worth keeping: the concrete mechanism, the tool,
-  the object and the symptom. A lesson whose point is a mechanism gets a node
-  of its own, not a sentence inside a broader note.
 - Status and "where we are" do not move: the tree is the state, and vivac
   brief, vivac open and vivac parked answer that. Superseded history stays in
   its source. Links become --ref.
@@ -158,59 +125,43 @@ Decisions about the whole project hang from it, a pillar's rules hang from the
 pillar, and what belongs to one part of the work hangs from that part's goal.
 When unsure, ask.
 
-Show the person, for each source, how many nodes come out of it and what is
-left out and why. Then a table per kind, with the source, the title, the parent
-and, for each decision, its --against. Then the other maps you found in step
-1. Wait for their answer before writing.
+Show the person a table per kind, with the source, the title, the parent and,
+for each decision, its --against. Then a list of everything left out and why,
+and the other maps you found in step 1. Wait for their answer before writing.
 
 ## 4. Write
 
 1. Copy .vivac/events to .vivac/events.pre-migration, or to another name if
-   an earlier batch took that one, and check both are the same size. One copy
-   per batch. Putting that copy back, with every session that runs vivac mcp
-   closed, is how a batch is undone.
+   an earlier migration took that one, and check both are the same size.
+   Putting that copy back, with every session that runs vivac mcp closed, is
+   how a migration is undone.
 2. Write the root goal if it is new, then pillars and constraints, then rules
    under their pillar, then decisions, then findings and open work. Use vivac
    add and vivac decide on the command line, or vivac_add and vivac_decide
    over MCP. Give each decision the options it beat with --alternative, and
-   what it was judged against with --against. Close each record right after
-   writing it, with vivac done and its outcome on the command line.
+   what it was judged against with --against.
 3. Before giving a rule a command with --arm, run the command once. Attach it
    only if it passes and actually checks something, and tell the person which
    rules were left without one.
 
 ## 5. Check
 
-- For every source, not a sample, take two or three terms that only it would
-  use: the name of an object, a tool, a command or a symptom. Search each one
-  with vivac find, which ignores accents. List every source for which none of
-  its terms finds anything. For each one, write the node it was missing, or
-  write down why the tree already says it under other words. The migration is
-  not done while any source on that list has neither.
-- Compare what was written with the plan, not with itself: every title,
-  parent and --against sentence against the plan the person approved.
-  Explain every difference.
+- Count what was planned against what was written, and explain every
+  difference.
 - vivac check comes back clean.
 - vivac rules lists every pillar and rule you wrote.
 - vivac brief shows the constraints under the root goal.
-- vivac open shows work, not records.
+- vivac find finds a few distinctive words from each source. It matches
+  accents exactly, so search the way the source spells them.
 - Look through the sources for sentences that now send a reader to the old
   place, like "read X first" or "save this to Y", and for statements the tree
   now contradicts, and list them for the person. Do not edit them.
 - Delete any export you made.
 
-Then tell the person what was written, what was left out and why, and which
-copies of the log you made.
-
-Last, ask the person to name three or four things this project learned the
-hard way, the ones they would least like to lose, and search for each in front
-of them with vivac find. No automatic check tells you whether the tree answers
-what they remember. If one is missing or reads too thin to be recognised, fix
-that before going on.
+Then tell the person what was written, what was left out and why, and where the
+copy of the log is.
 
 ## 6. Retire the other maps
-
-Start this only when step 5 has passed, the person's own search included.
 
 Two maps collide: each one points the agent at what it holds, and sooner or
 later one settles something the other mapped differently. For each map you
@@ -227,9 +178,6 @@ it, and in a form that can be undone:
   to read it. Leave the files it pointed to where they are. If it has no
   MEMORY.md yet, write the note anyway: otherwise the first memory an agent
   saves there starts a new index.
-- Codex's memory belongs to the user, not to this project. Turning it off
-  changes every project they open in Codex, so say so and leave that choice
-  to them.
 - Lines that tell the agent to save or search somewhere other than vivac, in
   any instruction file: show them and say where they came from; an installer
   often marks its blocks. Keep a copy of the file beside it and remove only
@@ -255,7 +203,5 @@ the server and the skill.
 Never delete another system's data and never uninstall it: whether it keeps
 running for other projects is the person's call.
 
-When everything is done, check that nothing of yours is left in the project,
-remind the person of the copies of the log in .vivac/, and delete the ones
-they say to delete. Then ask them to open a new session: the brief it starts
-with is what the tree now knows.
+Last, ask the person to open a new session: the brief it starts with is what the
+tree now knows.
