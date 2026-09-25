@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.7](https://github.com/JAAvila-Of/vivac/compare/v0.15.6...v0.15.7) - 2026-09-25
+
+### Fixed
+
+- *(web)* start past dead registry entries and keep the index reachable ([#176](https://github.com/JAAvila-Of/vivac/pull/176))
+
 ## [0.15.6](https://github.com/JAAvila-Of/vivac/compare/v0.15.5...v0.15.6) - 2026-09-25
 
 ### Added
