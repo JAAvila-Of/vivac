@@ -20,6 +20,7 @@ fn run_stdin_split(c: &Sandbox, args: &[&str], stdin: &str) -> (String, String, 
     let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_vivac"))
         .current_dir(&c.0)
         .env("VIVAC_HOME", c.global_home())
+        .env("TZ", "UTC")
         .args(args)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())

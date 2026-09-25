@@ -21,7 +21,10 @@ fn run_with_env(
     env: &[(&str, &str)],
 ) -> (String, i32) {
     let mut cmd = std::process::Command::new(BIN);
-    cmd.current_dir(dir).env("VIVAC_HOME", home).args(args);
+    cmd.current_dir(dir)
+        .env("VIVAC_HOME", home)
+        .env("TZ", "UTC")
+        .args(args);
     for (k, v) in env {
         cmd.env(k, v);
     }

@@ -136,6 +136,7 @@ fn run_split(c: &Sandbox, args: &[&str]) -> (String, String, i32) {
     let o = std::process::Command::new(env!("CARGO_BIN_EXE_vivac"))
         .current_dir(&c.0)
         .env("VIVAC_HOME", c.global_home())
+        .env("TZ", "UTC")
         .args(args)
         .output()
         .unwrap();

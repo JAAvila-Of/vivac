@@ -29,6 +29,7 @@ impl Server {
         let mut child = Command::new(BIN)
             .current_dir(&c.0)
             .env("VIVAC_HOME", c.global_home())
+            .env("TZ", "UTC")
             .arg("mcp")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -284,6 +285,7 @@ fn a_resident_server_writing_from_a_copy_says_nothing_on_stderr() {
     let mut child = Command::new(BIN)
         .current_dir(&copy.0)
         .env("VIVAC_HOME", copy.global_home())
+        .env("TZ", "UTC")
         .arg("mcp")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -1928,6 +1930,7 @@ fn a_cli_writer_and_the_server_writing_at_once_never_share_a_number() {
             let o = Command::new(BIN)
                 .current_dir(&dir)
                 .env("VIVAC_HOME", &home)
+                .env("TZ", "UTC")
                 .args([
                     "add",
                     &format!("From the CLI {i}"),

@@ -40,6 +40,7 @@ fn eight_writers_at_once_never_share_a_number() {
                         let o = Command::new(BIN)
                             .current_dir(&dir)
                             .env("VIVAC_HOME", &home)
+                            .env("TZ", "UTC")
                             .args([
                                 "add",
                                 &format!("writer {w} node {i}"),

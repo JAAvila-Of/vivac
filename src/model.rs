@@ -589,7 +589,13 @@ impl Tree {
                         declared: None,
                     })
                     .collect();
-                let opened_span = self.intern(crate::clock::date_of(ts));
+                // `d797`: the full instant, not `clock::date_of`'s date --
+                // this span is what the index persists (`index.rs`'s node
+                // table), and a date already collapsed to UTC here could
+                // never be placed back in a reader's own zone later. The
+                // conversion to a local date happens once, at the point
+                // each of `opened`/`closed`/`declared` is actually printed.
+                let opened_span = self.intern(ts);
                 // Interned once here rather than read back off the event
                 // later: `why`'s "born in lane" line used to get this by
                 // walking the whole log, and it needs nothing this node does
@@ -643,8 +649,9 @@ impl Tree {
                 // `self`, and the borrow checker cannot see that it only
                 // touches `self.text`.
                 let outcome_span = (!outcome.is_empty()).then(|| self.intern(outcome));
-                let closed_span =
-                    (!state.is_open()).then(|| self.intern(crate::clock::date_of(ts)));
+                // `d797`: the full instant, same reason as `opened_span`
+                // above -- this is what the index persists.
+                let closed_span = (!state.is_open()).then(|| self.intern(ts));
                 let num = self.resolve_ulid(node);
                 if let Some(n) = self.nodes.get_mut(&num) {
                     n.state = *state;
@@ -738,7 +745,9 @@ impl Tree {
                 // Interned before the mutable borrow of `self.nodes` below,
                 // the same trap `StateChanged` avoids above: `intern` needs
                 // the whole `self`.
-                let declared_span = self.intern(crate::clock::date_of(ts));
+                // `d797`: the full instant, same reason as `opened_span`
+                // above.
+                let declared_span = self.intern(ts);
                 let spans: Vec<AgainstSpan> = against
                     .iter()
                     .map(|a| AgainstSpan {

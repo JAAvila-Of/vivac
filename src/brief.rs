@@ -845,7 +845,7 @@ fn other_lanes_rows(a: &Tree, rows: &[LaneFocus]) -> Vec<String> {
                 r.name,
                 r.focus.alias(),
                 r.focus.title(a),
-                r.focus.opened(a)
+                crate::clock::date_of(r.focus.opened(a))
             )
         })
         .collect()
@@ -984,7 +984,7 @@ pub fn to_text(
     } else {
         today
     };
-    let date = crate::clock::date_of(&today).to_string();
+    let date = crate::clock::date_of(&today);
     let budget: usize = args
         .opt("budget")
         .and_then(|s| s.parse().ok())

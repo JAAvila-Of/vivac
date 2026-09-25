@@ -25,6 +25,7 @@ fn run(dir: &Path, home: &Path, args: &[&str]) -> (String, i32) {
     let o = std::process::Command::new(BIN)
         .current_dir(dir)
         .env("VIVAC_HOME", home)
+        .env("TZ", "UTC")
         .args(args)
         .output()
         .unwrap();
@@ -42,6 +43,7 @@ fn run_stdin(dir: &Path, home: &Path, args: &[&str], stdin: &str) -> (String, i3
     let mut child = std::process::Command::new(BIN)
         .current_dir(dir)
         .env("VIVAC_HOME", home)
+        .env("TZ", "UTC")
         .args(args)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -1469,6 +1471,7 @@ fn mcp_joins_a_worktree_the_same_way_the_cli_does() {
     let mut child = std::process::Command::new(BIN)
         .current_dir(&mcp_feature)
         .env("VIVAC_HOME", &home)
+        .env("TZ", "UTC")
         .arg("mcp")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())

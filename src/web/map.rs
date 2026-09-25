@@ -888,8 +888,10 @@ fn payload(project: &str, tree: &Tree, map: &Map, ag: &Aggregates, fold: &Fold) 
                     .collect::<Vec<_>>(),
                 "rf": n.refs(tree),
                 "gv": n.governs(tree),
-                "op": n.opened(tree),
-                "cl": n.closed(tree),
+                // `d797`: the same local date the CLI and the other pages
+                // show, not the full UTC instant -- these were never one.
+                "op": crate::clock::date_of(n.opened(tree)),
+                "cl": n.closed(tree).map(crate::clock::date_of),
                 "fc": n.state == State::Done && ag.blockers(n.num) > 0,
                 "d": s.depth,
                 "p": s.parent,

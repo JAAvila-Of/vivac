@@ -156,6 +156,7 @@ fn run_in(dir: &Path, home: &Path, args: &[&str]) -> (String, i32) {
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_vivac"))
         .current_dir(dir)
         .env("VIVAC_HOME", home)
+        .env("TZ", "UTC")
         .args(args)
         .output()
         .unwrap();
@@ -204,6 +205,7 @@ fn run_with_home(dir: &Path, home: &Path, vivac_home: &Path, args: &[&str]) -> (
         .env("HOME", home)
         .env("USERPROFILE", home)
         .env("VIVAC_HOME", vivac_home)
+        .env("TZ", "UTC")
         .args(args)
         .output()
         .unwrap();
@@ -1423,6 +1425,7 @@ fn run_in_split(dir: &Path, home: &Path, args: &[&str]) -> (String, String, i32)
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_vivac"))
         .current_dir(dir)
         .env("VIVAC_HOME", home)
+        .env("TZ", "UTC")
         .args(args)
         .output()
         .unwrap();

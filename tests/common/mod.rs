@@ -184,6 +184,7 @@ impl Sandbox {
         let o = Command::new(BIN)
             .current_dir(&self.0)
             .env("VIVAC_HOME", &self.1)
+            .env("TZ", "UTC")
             .args(args)
             .output()
             .unwrap();
@@ -206,6 +207,7 @@ impl Sandbox {
         let mut child = Command::new(BIN)
             .current_dir(&self.0)
             .env("VIVAC_HOME", &self.1)
+            .env("TZ", "UTC")
             .args(args)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())

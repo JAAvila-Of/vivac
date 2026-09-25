@@ -343,6 +343,7 @@ impl Server {
         let mut child = Command::new(BIN)
             .current_dir(&c.0)
             .env("VIVAC_HOME", c.global_home())
+            .env("TZ", "UTC")
             .arg("mcp")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

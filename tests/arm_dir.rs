@@ -328,6 +328,7 @@ fn the_folder_resolves_against_the_tree_root_not_the_process_cwd() {
     let out = Command::new(BIN)
         .current_dir(&sub)
         .env("VIVAC_HOME", c.global_home())
+        .env("TZ", "UTC")
         .args(["arm", "1", "X", "--dir", "vivac"])
         .output()
         .unwrap();
@@ -541,6 +542,7 @@ impl Server {
         let mut child = Command::new(BIN)
             .current_dir(&c.0)
             .env("VIVAC_HOME", c.global_home())
+            .env("TZ", "UTC")
             .arg("mcp")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

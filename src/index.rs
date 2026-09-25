@@ -76,8 +76,18 @@ const MAGIC: u64 = u64::from_le_bytes(*b"vivacIDX");
 // which is exactly what a version bump exists to refuse instead.
 // `Header::parse` refuses any version but this one and `try_load_index`
 // falls back to folding the log, which is what the index is derived from --
-// so bumping this needs no migration and no command.
-const FORMAT_VERSION: u32 = 12;
+// so bumping this needs no migration and no command. Version 13 changes no
+// record's shape but what three spans inside it mean: `opened`, `closed`
+// and a decision's `declared` used to carry the ten-character UTC date
+// `clock::date_of` sliced at fold time, and now carry the full RFC 3339
+// stamp instead, so the local date can be taken in the reader's own zone
+// at print time rather than baked in as UTC when the index was written
+// (`d797`, `f731`). A version-12 index still parses byte for byte -- the
+// spans are still offsets into the same text arena -- but its text holds
+// the old ten-character dates, and `date_of` on one of those returns it
+// unchanged rather than reading it as an instant, so a reader would keep
+// showing UTC dates from a stale index forever without the refusal below.
+const FORMAT_VERSION: u32 = 13;
 const ULID_LEN: usize = 26;
 const SPAN_LEN: usize = 8;
 const FLAG_RECORD_LEN: usize = 1 + SPAN_LEN;
@@ -2893,6 +2903,44 @@ mod tests {
 
         let got = load(&store, false).unwrap();
         assert_eq!(snapshot(&want), snapshot(&got));
+
+        std::fs::remove_dir_all(&store.root).ok();
+    }
+
+    /// `d797`/`f731`: version 12 is not just *a* previous format, it is the
+    /// specific one whose `opened`/`closed`/`declared` spans held the
+    /// ten-character UTC date `clock::date_of` used to slice at fold time.
+    /// `Header::parse` bails out on the version field alone, before it ever
+    /// looks at what those spans point to, so this needs no body shaped
+    /// like a real version-12 record to prove the point -- the same
+    /// garbage-body trick `an_index_of_the_previous_format_is_rebuilt` uses
+    /// already demonstrates the refusal. What this test adds is the other
+    /// half: the fold this falls back to is `fold(&events, 0)`, which now
+    /// interns the full instant for those three spans, so `got` never
+    /// carries the old ten-character dates a version-12 file on disk would
+    /// have held -- a reader never gets stuck reading UTC out of it forever.
+    #[test]
+    fn a_version_12_index_is_rebuilt_with_full_instants_not_utc_dates() {
+        let store = tmp_store("version-12");
+        let events = a_varied_event_set();
+        write_raw_locked(&store, &events);
+        let want = fold(&events, 0);
+
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&MAGIC.to_le_bytes());
+        bytes.extend_from_slice(&12u32.to_le_bytes());
+        bytes.extend_from_slice(&[0u8; 200]);
+        fs::write(store.index_path(), &bytes).unwrap();
+
+        let got = load(&store, false).unwrap();
+        assert_eq!(snapshot(&want), snapshot(&got));
+        for n in got.nodes_sorted() {
+            assert!(
+                crate::clock::epoch_seconds(n.opened(&got)).is_some(),
+                "opened={:?} is not a full instant",
+                n.opened(&got)
+            );
+        }
 
         std::fs::remove_dir_all(&store.root).ok();
     }

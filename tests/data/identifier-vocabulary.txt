@@ -201,6 +201,7 @@ broken
 browser
 browsing
 btree
+bucket
 budget
 buf
 buffer
@@ -573,6 +574,7 @@ error
 escape
 escaped
 estimator
+euclid
 ev
 even
 event
@@ -631,6 +633,7 @@ fifteen
 file
 files
 fill
+filled
 filter
 filtered
 final
@@ -685,6 +688,7 @@ found
 founding
 four
 fp
+fractional
 fragment
 fragments
 fresh
@@ -789,6 +793,7 @@ home
 hook
 hooks
 host
+hour
 hours
 how
 however
@@ -829,6 +834,7 @@ indentation
 indented
 index
 indexed
+india
 indices
 info
 inherits
@@ -842,6 +848,7 @@ insert
 inserted
 inside
 instant
+instants
 instead
 int
 intact
@@ -944,6 +951,7 @@ live
 load
 loaded
 local
+localtime
 locate
 located
 location
@@ -1002,6 +1010,7 @@ maximum
 may
 mcp
 md
+mday
 me
 means
 measured
@@ -1015,9 +1024,11 @@ metadata
 method
 mid
 middle
+midnight
 migrate
 migrating
 millis
+milliseconds
 min
 mine
 mint
@@ -1031,6 +1042,7 @@ mod
 mode
 model
 modified
+mon
 month
 more
 most
@@ -1062,6 +1074,7 @@ needle
 needs
 negative
 neither
+nepal
 nested
 net
 never
@@ -1258,6 +1271,7 @@ pos
 position
 positional
 positionals
+positive
 power
 precision
 precomposed
@@ -1443,6 +1457,7 @@ rescue
 rescued
 rescuing
 reserve
+reserved
 reset
 resident
 resolve
@@ -1529,6 +1544,7 @@ seams
 search
 searchable
 searched
+sec
 second
 seconds
 secret
@@ -1637,6 +1653,7 @@ spawning
 speak
 speaks
 spec
+specific
 spelled
 spelling
 spellings
@@ -1781,6 +1798,7 @@ tiocgwinsz
 title
 titles
 tld
+tm
 tmp
 to
 today
@@ -1841,6 +1859,8 @@ twins
 two
 type
 typed
+tz
+tzset
 u128
 u16
 u32
@@ -1903,6 +1923,7 @@ userprofile
 uses
 using
 usize
+utc
 utf8
 uv
 v1
@@ -1955,7 +1976,9 @@ warns
 was
 way
 web
+week
 weight
+west
 what
 whatever
 when
@@ -2011,12 +2034,15 @@ wrong
 wrote
 ws
 x1b
+year
 yellow
 yes
 yet
 yield
+ymd
 yoe
 you
 your
 zero
 zip
+zone
