@@ -19,7 +19,8 @@ use crate::event::{Body, Event, Flag, State};
 use crate::failure::Failure;
 use crate::model::{Node, Tree, Vivac};
 use crate::output::outln;
-use crate::render::{print_json, wrap, WIDTH};
+use crate::render::{print_json, print_title_row, wrap, TitleSuffix, WIDTH};
+use crate::style::{self, Stream};
 use serde_json::json;
 
 /// Where a stretch is measured from, and how that place was chosen. Both live
@@ -393,37 +394,77 @@ fn foreign_mark(tree: &Tree, lane: &str) -> String {
     }
 }
 
+/// One group's alias-and-title row, styled the same way `open`'s own
+/// leaves are (`d795`): the alias coloured by kind, the title dimmed once
+/// the node is not open any more (whatever it moved to during this
+/// stretch, this reads its *current* state) and wrapped at the terminal's
+/// width when one is known. The foreign-lane mark, when there is one, is
+/// dimmed in step with it and counted into the lead every continuation
+/// line indents back to.
+fn print_changes_row(out: Stream, tree: &Tree, n: &Node, lane: &str, cap: Option<usize>) {
+    let alias = n.alias();
+    let alias_field = format!(
+        "{}{}",
+        style::kind_id(out, n.kind, &alias),
+        " ".repeat(6usize.saturating_sub(alias.chars().count()))
+    );
+    let mark = foreign_mark(tree, lane);
+    let mark_styled = if mark.is_empty() {
+        String::new()
+    } else {
+        style::dim(out, &mark)
+    };
+    let lead = 11 + mark.chars().count();
+    let closed = n.state != State::Active;
+    print_title_row(
+        &format!("    {alias_field} {mark_styled}"),
+        &" ".repeat(lead),
+        lead,
+        n.title(tree),
+        cap,
+        |chunk| {
+            if closed {
+                style::dim(out, chunk)
+            } else {
+                chunk.to_string()
+            }
+        },
+        TitleSuffix { text: "", len: 0 },
+    );
+}
+
 fn print_text(tree: &Tree, result: &Changed) {
+    let out = Stream::Out;
     outln!();
-    outln!("{}", header(&result.since, result.tail.stops));
+    outln!(
+        "{}",
+        style::bold(out, &header(&result.since, result.tail.stops))
+    );
 
     let mut said_something = false;
+    let cap = style::width(out).map(|w| w.saturating_sub(1));
 
     if !result.opened.is_empty() {
         said_something = true;
         outln!();
-        outln!("  OPENED ({})", result.opened.len());
+        outln!(
+            "  {}",
+            style::bold(out, &format!("OPENED ({})", result.opened.len()))
+        );
         for o in &result.opened {
-            outln!(
-                "    {:<6} {}{}",
-                o.node.alias(),
-                foreign_mark(tree, &o.lane),
-                o.node.title(tree)
-            );
+            print_changes_row(out, tree, o.node, &o.lane, cap);
         }
     }
 
     if !result.closed.is_empty() {
         said_something = true;
         outln!();
-        outln!("  CLOSED ({})", result.closed.len());
+        outln!(
+            "  {}",
+            style::bold(out, &format!("CLOSED ({})", result.closed.len()))
+        );
         for c in &result.closed {
-            outln!(
-                "    {:<6} {}{}",
-                c.node.alias(),
-                foreign_mark(tree, &c.lane),
-                c.node.title(tree)
-            );
+            print_changes_row(out, tree, c.node, &c.lane, cap);
             let line = if c.forced {
                 if c.outcome.is_empty() {
                     "forced".to_string()
@@ -434,7 +475,7 @@ fn print_text(tree: &Tree, result: &Changed) {
                 c.outcome.clone()
             };
             for l in wrap(&line, WIDTH, "           ") {
-                outln!("{l}");
+                outln!("{}", style::dim(out, &l));
             }
         }
     }
@@ -442,20 +483,18 @@ fn print_text(tree: &Tree, result: &Changed) {
     if !result.flagged.is_empty() {
         said_something = true;
         outln!();
-        outln!("  FLAGGED ({})", result.flagged.len());
+        outln!(
+            "  {}",
+            style::bold(out, &format!("FLAGGED ({})", result.flagged.len()))
+        );
         for f in &result.flagged {
-            outln!(
-                "    {:<6} {}{}",
-                f.node.alias(),
-                foreign_mark(tree, &f.lane),
-                f.node.title(tree)
-            );
+            print_changes_row(out, tree, f.node, &f.lane, cap);
             for l in wrap(
                 &format!("{}: {}", f.flag.word(), f.reason),
                 WIDTH,
                 "           ",
             ) {
-                outln!("{l}");
+                outln!("{}", style::dim(out, &l));
             }
         }
     }
@@ -463,21 +502,19 @@ fn print_text(tree: &Tree, result: &Changed) {
     if !result.moved.is_empty() {
         said_something = true;
         outln!();
-        outln!("  MOVED ({})", result.moved.len());
+        outln!(
+            "  {}",
+            style::bold(out, &format!("MOVED ({})", result.moved.len()))
+        );
         for m in &result.moved {
-            outln!(
-                "    {:<6} {}{}",
-                m.node.alias(),
-                foreign_mark(tree, &m.lane),
-                m.node.title(tree)
-            );
+            print_changes_row(out, tree, m.node, &m.lane, cap);
             let word = m.state.word(m.node.kind);
             for l in wrap(
                 &format!("{word}: {}", m.node.outcome(tree)),
                 WIDTH,
                 "           ",
             ) {
-                outln!("{l}");
+                outln!("{}", style::dim(out, &l));
             }
         }
     }
@@ -485,7 +522,7 @@ fn print_text(tree: &Tree, result: &Changed) {
     if let Some(t) = tail_phrase(&result.tail) {
         said_something = true;
         outln!();
-        outln!("  + {t}");
+        outln!("  {}", style::dim(out, &format!("+ {t}")));
     }
 
     if !said_something {

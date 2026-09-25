@@ -1106,6 +1106,11 @@ fn handle(project: &mut Project, line: &str) -> Option<String> {
 }
 
 pub fn serve(root: PathBuf, located: Option<store::Located>) -> R {
+    // Every reply on this channel is JSON-RPC read by a program, never a
+    // terminal a person is looking at, even where the harness that spawned
+    // this process exported `CLICOLOR_FORCE` or `COLUMNS` for its own
+    // reasons. First thing, ahead of anything this server ever writes.
+    crate::style::plain_only();
     // A resident server outlives every one of its own calls, and its own
     // `stderr` reaches nobody once it is running headless -- never a
     // terminal a person is reading, never the stream an agent parses

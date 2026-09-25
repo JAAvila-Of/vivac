@@ -19,6 +19,7 @@ use crate::args::Args;
 use crate::event::{Kind, State, WhereRepo};
 use crate::failure::R;
 use crate::model::{Node, Tree};
+use crate::style;
 use std::collections::HashSet;
 use std::path::Path;
 
@@ -351,8 +352,131 @@ fn no_focus_block(a: &Tree) -> Vec<String> {
 }
 
 pub fn brief(a: &Tree, root: &Path, lane_dir: &Path, args: &Args, project: &str) -> R {
-    print!("{}", to_text(a, root, lane_dir, args, project, false)?);
+    let text = to_text(a, root, lane_dir, args, project, false)?;
+    print!("{}", style_text(&text));
     Ok(())
+}
+
+/// The exact heading titles `to_text` prints on a line of their own -- a
+/// single leading space and nothing else, blank lines around it, built
+/// either by [`heading`] or, for the no-focus block's own `OPEN GOALS`, by
+/// hand in the same shape. Matched literally rather than by a pattern such
+/// as "all caps", which `BRANCH MOVED since this lane last wrote` and
+/// `REPEATED NUMBERS ...` also satisfy without being one of these: both
+/// carry more than a bare title on their own line, and neither is in this
+/// list.
+const BRIEF_HEADINGS: &[&str] = &[
+    "BORN FROM HERE",
+    "INVARIANTS",
+    "BLOCKS",
+    "FLAGGED",
+    "DO NOT TOUCH NOW",
+    "STANDING DECISIONS",
+    "LAST VIVAC",
+    "UNTOUCHED FOR A WHILE",
+    OTHER_LANES_TITLE,
+    "WRITE AT THESE SEAMS",
+    "OPEN GOALS",
+];
+
+/// The three branch markers [`spine`] opens a row with, each six columns
+/// wide: a goal has no line above it to draw from, and every step after it
+/// is either the last of the path or not.
+const SPINE_BRANCHES: [&str; 3] = [" GOAL ", "  `-- ", "  |-- "];
+
+/// The `Kind` an alias's own prefix letter names, the inverse of
+/// [`crate::event::Kind::prefix`]. Only [`style_spine_row`] needs this: it
+/// styles a spine row it can no longer ask a `Node` about, since `to_text`
+/// has already folded the whole brief down to plain lines by the time
+/// [`style_text`] ever sees one.
+fn kind_from_alias_prefix(alias: &str) -> Option<Kind> {
+    match alias.chars().next()? {
+        'g' => Some(Kind::Goal),
+        't' => Some(Kind::Task),
+        'd' => Some(Kind::Decision),
+        'q' => Some(Kind::Question),
+        'c' => Some(Kind::Constraint),
+        'f' => Some(Kind::Finding),
+        'a' => Some(Kind::Assumption),
+        'p' => Some(Kind::Pillar),
+        'r' => Some(Kind::Rule),
+        _ => None,
+    }
+}
+
+/// Colours a spine row's own alias by kind, the same nine colours `tree`,
+/// `open` and `why` already read one by (`d795`) -- `None` for a line that
+/// does not open with one of [`SPINE_BRANCHES`], which is every line here
+/// but the path from the root to the focus.
+fn style_spine_row(out: style::Stream, line: &str) -> Option<String> {
+    let branch = SPINE_BRANCHES.iter().find(|b| line.starts_with(*b))?;
+    let rest = &line[branch.len()..];
+    if rest.len() < 6 {
+        return None;
+    }
+    let (alias_field, tail) = rest.split_at(6);
+    let alias = alias_field.trim_end();
+    let kind = kind_from_alias_prefix(alias)?;
+    let coloured = style::kind_id(out, kind, alias);
+    let pad = &alias_field[alias.len()..];
+    Some(format!("{branch}{coloured}{pad}{tail}"))
+}
+
+/// One already-assembled line of [`to_text`]'s own output, styled for a
+/// person at a terminal. Never asked to decide whether it should: that is
+/// [`style_text`]'s call alone, made once for the whole text rather than
+/// once per line, so a plain run never even reaches this function.
+fn style_line(out: style::Stream, line: &str) -> String {
+    if line == RULE {
+        return style::dim(out, line);
+    }
+    if line.contains(" tokens \u{b7} depth ") {
+        return style::dim(out, line);
+    }
+    if let Some(rest) = line.strip_prefix(' ') {
+        if BRIEF_HEADINGS.contains(&rest) {
+            return style::bold(out, line);
+        }
+    }
+    let mut styled = style_spine_row(out, line).unwrap_or_else(|| line.to_string());
+    if styled.contains("<== HERE") {
+        styled = styled.replacen(
+            "<== HERE",
+            &style::bold(out, &style::warn(out, "<== HERE")),
+            1,
+        );
+    }
+    styled
+}
+
+/// Styles the brief's already-finished plain text for a person reading
+/// `vivac brief` at a terminal -- never for `to_text`'s own two other
+/// readers, a hook and the MCP server, which print or return its plain
+/// return value directly and never reach this function at all.
+///
+/// A pure pass over the string `to_text` already decided every byte of:
+/// the budget, the truncation and the token count in the footer are all
+/// computed on the plain text before this ever runs, so styling a line can
+/// only ever add invisible bytes to it, never move where a cut landed.
+/// `to_text` keeps its own clipping rather than `style::wrap_title`'s, and
+/// this pass never wraps anything either -- the same rows the plain read
+/// prints, on the same lines, with an escape code added on top of some of
+/// them.
+fn style_text(text: &str) -> String {
+    let out = style::Stream::Out;
+    if !style::enabled(out) {
+        return text.to_string();
+    }
+    let mut styled = String::with_capacity(text.len());
+    for line in text.split_inclusive('\n') {
+        let (body, newline) = match line.strip_suffix('\n') {
+            Some(b) => (b, "\n"),
+            None => (line, ""),
+        };
+        styled.push_str(&style_line(out, body));
+        styled.push_str(newline);
+    }
+    styled
 }
 
 /// Whether `root` is a copy of a tree living somewhere else on this

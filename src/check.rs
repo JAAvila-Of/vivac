@@ -25,6 +25,7 @@ use crate::args::Args;
 use crate::event::{Body, Kind, State};
 use crate::model::Tree;
 use crate::output::outln;
+use crate::style::{self, Stream};
 use std::path::Path;
 
 pub fn check(a: &Tree, root: &Path, args: &Args) -> Result<i32, crate::failure::Failure> {
@@ -234,9 +235,13 @@ pub fn check(a: &Tree, root: &Path, args: &Args) -> Result<i32, crate::failure::
             serde_json::to_string_pretty(&payload).map_err(std::io::Error::other)?
         );
     } else {
+        let out = Stream::Out;
         outln!();
         if ok {
-            outln!("  No findings. {} nodes checked.", a.total());
+            outln!(
+                "  {}",
+                style::good(out, &format!("No findings. {} nodes checked.", a.total()))
+            );
             outln!();
         }
         if let Some((first, rest)) = &copy {
@@ -250,48 +255,96 @@ pub fn check(a: &Tree, root: &Path, args: &Args) -> Result<i32, crate::failure::
         }
         if !store.is_empty() {
             outln!(
-                "  STORE ({})  <- the tool is lying; it needs fixing",
-                store.len()
+                "  {}",
+                style::gone(
+                    out,
+                    &format!(
+                        "STORE ({})  <- the tool is lying; it needs fixing",
+                        store.len()
+                    )
+                )
             );
             outln!();
             for m in &store {
-                outln!("      {m}");
+                outln!("      {}", style::gone(out, m));
             }
             outln!();
         }
         if !project.is_empty() {
             outln!(
-                "  PROJECT ({})  <- the store is fine; the work is not",
-                project.len()
+                "  {}",
+                style::change(
+                    out,
+                    &format!(
+                        "PROJECT ({})  <- the store is fine; the work is not",
+                        project.len()
+                    )
+                )
             );
             outln!();
             for m in &project {
-                outln!("      {m}");
+                outln!("      {}", style::change(out, m));
             }
             outln!();
             if false_close_count > 0 {
-                outln!("  A false close is not repaired by editing the tree: reopen what");
-                outln!("  stayed open, or close it deliberately with --force.");
+                outln!(
+                    "  {}",
+                    style::dim(
+                        out,
+                        "A false close is not repaired by editing the tree: reopen what"
+                    )
+                );
+                outln!(
+                    "  {}",
+                    style::dim(out, "stayed open, or close it deliberately with --force.")
+                );
                 outln!();
             }
             if undeclared_count > 0 {
-                outln!("  A decision that declared nothing stays as it was written: vivac declare");
-                outln!("  adds what it was judged against, and why shows it as late.");
+                outln!(
+                    "  {}",
+                    style::dim(
+                        out,
+                        "A decision that declared nothing stays as it was written: vivac declare"
+                    )
+                );
+                outln!(
+                    "  {}",
+                    style::dim(
+                        out,
+                        "adds what it was judged against, and why shows it as late."
+                    )
+                );
                 outln!();
             }
         }
         if !gates.is_empty() {
             outln!(
-                "  GATES ({})  <- the store is fine; nothing delivers it",
-                gates.len()
+                "  {}",
+                style::change(
+                    out,
+                    &format!(
+                        "GATES ({})  <- the store is fine; nothing delivers it",
+                        gates.len()
+                    )
+                )
             );
             outln!();
             for m in &gates {
-                outln!("      {m}");
+                outln!("      {}", style::change(out, m));
             }
             outln!();
-            outln!("  A tree nobody opens is a tree nobody reads. Run  vivac hooks  inside");
-            outln!("  that project and paste what it prints.");
+            outln!(
+                "  {}",
+                style::dim(
+                    out,
+                    "A tree nobody opens is a tree nobody reads. Run  vivac hooks  inside"
+                )
+            );
+            outln!(
+                "  {}",
+                style::dim(out, "that project and paste what it prints.")
+            );
             outln!();
         }
     }
