@@ -168,7 +168,7 @@ dependencies = [
 
 [[package]]
 name = "vivac"
-version = "0.15.3"
+version = "0.15.4"
 dependencies = [
  "getrandom",
  "serde",
