@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.8](https://github.com/JAAvila-Of/vivac/compare/v0.15.7...v0.15.8) - 2026-09-25
+
+### Added
+
+- *(cli)* let vivac update install once the person says yes ([#179](https://github.com/JAAvila-Of/vivac/pull/179))
+
 ## [0.15.7](https://github.com/JAAvila-Of/vivac/compare/v0.15.6...v0.15.7) - 2026-09-25
 
 ### Fixed
