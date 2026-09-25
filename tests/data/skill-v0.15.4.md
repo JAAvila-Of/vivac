@@ -1,3 +1,8 @@
+---
+name: vivac-migrate
+description: Bring everything a project already knows into the vivac tree, from another memory system, the harness's own memory, instruction files for any agent, decision records and internal documents; check it, and retire the other maps with the person's yes. Use when asked to migrate, import or move memories, notes, rules, decisions or documentation into vivac, or to bring what a project knows into it.
+---
+<!-- written by vivac setup; fingerprint 1d86b0aa9ecb020d; setup removes it with --undo while the text is unchanged -->
 
 # Bringing what a project knows into vivac
 
@@ -94,20 +99,6 @@ and will go in batches: first the structure, meaning the root goal, pillars,
 constraints, rules and decisions, and then what was learned. Each batch has its
 own plan, its own yes, its own copy of the log and its own check. The second
 batch is not optional: it is where most of a large project's knowledge is.
-
-If your harness can start subagents, split the reading of that second batch
-among them, a share of the sources each, so thousands of records do not fill
-your context. The first batch is not split: the structure needs the whole
-project in view. Give each subagent its sources, step 3 of this page and the
-ground rules. It only reads: it writes nothing to the tree and changes nothing
-anywhere. It answers with one line for every source it was given, either the
-nodes that source would become, each with its kind, title, parent and why, and
-two or three terms only that source would use, for step 5; or that nothing
-comes out of it, and why. A summary instead of those lines is not an answer:
-whatever it left out is lost where nobody can see it. Before you use what comes
-back, check that every source you handed out has its line, and read again any
-source that does not. The plan, the person's yes and the writing stay with
-you. Without subagents, do the same reading yourself.
 
 ## 2. Look at the tree
 
