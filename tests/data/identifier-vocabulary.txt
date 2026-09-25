@@ -1,6 +1,7 @@
 abandon
 abandoned
 abandons
+abc
 about
 above
 abs
@@ -269,6 +270,7 @@ characters
 chars
 check
 checked
+checksum
 child
 children
 choice
@@ -408,6 +410,7 @@ css
 cst
 ctx
 cur
+curl
 current
 cursor
 custom
@@ -487,6 +490,7 @@ different
 differently
 differs
 diffing
+digest
 digit
 digits
 dim
@@ -519,6 +523,8 @@ dot
 dotdot
 double
 down
+download
+downloaded
 downwards
 doy
 drags
@@ -603,7 +609,9 @@ exact
 exactly
 exceeds
 except
+exclude
 excluded
+excluding
 exclusive
 excuse
 exe
@@ -617,16 +625,19 @@ expect
 expected
 expecting
 explicit
+ext
 extend
 extends
 extension
 extern
 extra
 extract
+extracted
 eye
 f32
 f64
 facts
+fail
 failed
 failing
 fails
@@ -762,14 +773,17 @@ had
 half
 hand
 handle
+handles
 hands
 hang
 hangs
+happened
 happens
 harness
 harnesses
 has
 hash
+hasher
 hashes
 have
 haystack
@@ -854,6 +868,7 @@ indexed
 india
 indices
 info
+inherit
 inherits
 init
 initial
@@ -865,6 +880,7 @@ insert
 inserted
 inside
 install
+installed
 installs
 instant
 instants
@@ -1058,6 +1074,7 @@ minted
 minus
 minute
 minutes
+mismatching
 missing
 mm
 mod
@@ -1102,6 +1119,7 @@ net
 never
 new
 newer
+newest
 newline
 next
 nfd
@@ -1250,6 +1268,7 @@ peekable
 pending
 per
 percent
+perm
 permanent
 permissions
 perms
@@ -1265,6 +1284,7 @@ pii
 pile
 pillar
 pillars
+pin
 pinned
 pipe
 piped
@@ -1321,6 +1341,7 @@ processing
 product
 products
 prog
+program
 progress
 proj
 project
@@ -1466,6 +1487,7 @@ replaceable
 replaced
 replacement
 replacen
+replaces
 replies
 reply
 repo
@@ -1614,6 +1636,8 @@ settings
 setup
 several
 sha
+sha2
+sha256
 shannon
 shape
 shaped
@@ -1689,6 +1713,7 @@ spent
 spin
 spine
 split
+splitn
 spoken
 src
 ss
@@ -1701,6 +1726,7 @@ stamp
 standard
 standing
 stands
+star
 stars
 start
 started
@@ -1754,6 +1780,7 @@ such
 suffix
 sum
 summary
+sums
 super
 superseded
 supersedes
@@ -1783,6 +1810,7 @@ take
 taken
 takes
 taking
+tar
 target
 targets
 task
@@ -1838,6 +1866,7 @@ tok
 token
 tokens
 told
+tolerates
 tombstone
 toml
 too
@@ -1855,6 +1884,7 @@ track
 tracked
 tracks
 trail
+trailer
 trailing
 trait
 transcript
@@ -1935,6 +1965,7 @@ unterminated
 until
 untouched
 unusable
+unused
 unwrap
 unwrapped
 unwritable
@@ -1967,10 +1998,12 @@ value
 values
 vanished
 var
+variables
 variant
 variants
 varied
 vec
+vector
 vectors
 verb
 verbatim

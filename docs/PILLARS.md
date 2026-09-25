@@ -248,6 +248,14 @@ tree is a map of where a system is weak and not yet fixed.**
   of having no escape hatch.
 - **No telemetry.** The binary does not phone home. Ever.
 
+  Phoning home is the binary reaching the network on its own account: to
+  report, to count, to check for a version nobody asked about. An install the
+  person asks for, is shown before it happens and confirms is not that.
+  `vivac update` names the exact command or address first, waits for a yes
+  typed at a terminal, and leaves the network to the system's own tools --
+  `cargo`, or `curl` and `tar` -- so the binary carries no network code of its
+  own. With no terminal there is no yes to give, and it installs nothing.
+
 ### Encryption
 
 - **Local**: optional encryption at rest.

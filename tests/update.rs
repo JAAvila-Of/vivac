@@ -111,7 +111,11 @@ fn a_crates_io_registry_key_is_reported_as_such() {
         out.contains("installed by cargo install from crates.io"),
         "{out}"
     );
-    assert!(out.lines().any(|l| l == "    cargo install vivac"), "{out}");
+    assert!(out.lines().any(|l| l == "  cargo install vivac"), "{out}");
+    assert!(
+        out.contains("In a terminal, vivac update asks and does this for you."),
+        "{out}"
+    );
 }
 
 #[test]
@@ -127,7 +131,7 @@ fn a_git_key_names_the_matching_command() {
     assert!(out.contains("from https://example.com/vivac.git"), "{out}");
     assert!(
         out.lines()
-            .any(|l| l == "    cargo install --git https://example.com/vivac.git vivac"),
+            .any(|l| l == "  cargo install --git https://example.com/vivac.git vivac"),
         "{out}"
     );
 }
@@ -153,7 +157,7 @@ fn a_path_key_names_the_matching_command() {
     assert!(out.contains("from a local folder"), "{out}");
     assert!(
         out.lines()
-            .any(|l| l == format!("    cargo install --path {expected}")),
+            .any(|l| l == format!("  cargo install --path {expected}")),
         "{out}"
     );
 }
@@ -194,6 +198,34 @@ fn with_no_cargo_install_it_names_the_platform_archive_or_says_there_is_none() {
             );
         }
     }
+}
+
+/// `d815`: with stdin not a terminal -- the default for every test in this
+/// file, `run` above pipes it from nowhere -- `update` only ever says what
+/// to do, never installs it: no plan, no question, no download, and no
+/// `*.download-*` work file left behind either.
+#[test]
+fn with_no_terminal_nothing_is_downloaded_or_run() {
+    let root = TempRoot::new("no-terminal");
+    let exe = root.exe_in("tools");
+    let dir = root.0.join("tools");
+
+    let (out, code) = run(&exe, &["update"]);
+    assert_eq!(code, 0, "{out}");
+    if expected_archive(std::env::consts::OS, std::env::consts::ARCH).is_some() {
+        assert!(out.contains("Next: download "), "{out}");
+    }
+    assert!(
+        out.contains("In a terminal, vivac update asks and does this for you."),
+        "{out}"
+    );
+    assert!(
+        std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .all(|e| !e.file_name().to_string_lossy().contains(".download-")),
+        "{out}"
+    );
 }
 
 #[cfg(not(windows))]

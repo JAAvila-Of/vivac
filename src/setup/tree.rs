@@ -21,6 +21,7 @@
 
 use crate::args::Args;
 use crate::failure::Failure;
+use crate::plan::PlanItem;
 use std::path::{Path, PathBuf};
 
 pub(super) const VIVAC_LABEL: &str = ".vivac/";
@@ -1286,8 +1287,7 @@ pub(super) fn plan_join(
 /// plan shows first, ahead of the lane's own (`closing_items`). `d792`:
 /// data first, one `PlanItem` per row, rendered together with
 /// `closing_items` so every column lines up across both halves.
-pub(super) fn opening_items(plan: &TreePlan) -> Vec<super::claude_code::PlanItem> {
-    use super::claude_code::PlanItem;
+pub(super) fn opening_items(plan: &TreePlan) -> Vec<PlanItem> {
     let mut items = Vec::new();
 
     let mut vivac_item = if plan.vivac_missing {
@@ -1322,8 +1322,7 @@ pub(super) fn opening_items(plan: &TreePlan) -> Vec<super::claude_code::PlanItem
 /// The lane's own items, the stale-worktree and excluded-repository ones,
 /// and the version lock: the tree items `init`'s own plan shows *after*
 /// the tree's own (`opening_items`).
-pub(super) fn closing_items(plan: &TreePlan) -> Vec<super::claude_code::PlanItem> {
-    use super::claude_code::PlanItem;
+pub(super) fn closing_items(plan: &TreePlan) -> Vec<PlanItem> {
     let mut items = Vec::new();
     let lane = &plan.lane;
     if !lane.unchanged {
@@ -1642,8 +1641,7 @@ fn vivac_dir_holds_only_the_lane(vivac_dir: &Path) -> bool {
 /// The lane's own item in `--undo`'s plan: nothing at all when this folder
 /// never had a lane file, `remove` when it can go, and `keep` with why
 /// when it stays because its lane has written.
-pub(super) fn undo_lane_items(lane: &UndoLane) -> Vec<super::claude_code::PlanItem> {
-    use super::claude_code::PlanItem;
+pub(super) fn undo_lane_items(lane: &UndoLane) -> Vec<PlanItem> {
     if !lane.exists {
         return Vec::new();
     }
@@ -1664,8 +1662,7 @@ pub(super) fn undo_lane_items(lane: &UndoLane) -> Vec<super::claude_code::PlanIt
 /// entirely -- or, once it does not, the decision this folder's own
 /// `.vivac/` earns for holding nothing a join did not write: gone along
 /// with the lane that justified it, or left in place and said why.
-pub(super) fn vivac_dir_items(lane: &UndoLane) -> Vec<super::claude_code::PlanItem> {
-    use super::claude_code::PlanItem;
+pub(super) fn vivac_dir_items(lane: &UndoLane) -> Vec<PlanItem> {
     if !lane.joined {
         return vec![PlanItem::new(
             "keep",

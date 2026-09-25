@@ -68,6 +68,6 @@ under `0.13.0` in the changelog, and `cargo install vivac` takes you there.
 or `vivac web` holds the executable open, and `cargo install` fails with
 *os error 5* while it does. `vivac update` sets that copy aside, so the install
 goes through with every session still open, and each session keeps the old
-version until it restarts. A vivac that answers `vivac update` with *unknown
+version until it restarts. In a terminal it offers to run the install as well. A vivac that answers `vivac update` with *unknown
 command* predates it: close every session and any `vivac web` before
 installing over that one.

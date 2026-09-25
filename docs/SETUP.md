@@ -283,9 +283,9 @@ for the opening.
 > holds the executable open, so `cargo install vivac` cannot replace it and
 > fails with an access-denied error — *os error 5* — that names neither MCP
 > nor this command, and so does not lead back to the cause. `vivac update`
-> sets the running copy aside and gives you the command to install with; the
-> sessions already open keep the old version until they restart. Linux and
-> macOS replace a running binary without complaining.
+> sets the running copy aside and, once you answer yes, installs the new
+> release itself; the sessions already open keep the old version until they
+> restart. Linux and macOS replace a running binary without complaining.
 
 ---
 

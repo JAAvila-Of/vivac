@@ -45,6 +45,7 @@ use super::tree;
 use crate::args::Args;
 use crate::failure::Failure;
 use crate::output::outln;
+use crate::plan::{heading, render_items, PlanItem};
 use crate::style::Stream;
 use std::path::{Path, PathBuf};
 
@@ -290,8 +291,8 @@ pub fn run(cwd: &Path, a: &Args) -> Result<i32, Failure> {
 
 /// Named after `t565` §7.8's own two-column plan, reused rather than
 /// refixed a second time (`d653`): `PlanItem` and `render_items` are
-/// `claude_code.rs`'s, and so is the paragraph beneath it -- true of
-/// these hooks and this server too, and it names neither harness.
+/// `crate::plan`'s, and the paragraph beneath it is `claude_code.rs`'s --
+/// true of these hooks and this server too, and it names neither harness.
 ///
 /// `d723` piece B took the tree's own fourth piece back out of this plan:
 /// `resolve_for_setup` has already confirmed this folder is either the
@@ -313,9 +314,7 @@ fn plan_items(
     stop_missing: bool,
     prompt_missing: bool,
     skill_file_state: &SkillState,
-) -> Vec<super::claude_code::PlanItem> {
-    use super::claude_code::PlanItem;
-
+) -> Vec<PlanItem> {
     let (config_verb, config_what) = match config_state {
         ConfigState::Create => ("create", "the \"vivac\" server"),
         ConfigState::Append => ("add", "the \"vivac\" server"),
@@ -465,8 +464,8 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
 
     let plan_block = format!(
         "{}{}",
-        super::claude_code::heading(Stream::Out, "vivac setup codex", here),
-        super::claude_code::render_items(
+        heading(Stream::Out, "vivac setup codex", here),
+        render_items(
             Stream::Out,
             &plan_items(
                 &config_state,
@@ -628,8 +627,6 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
 /// whatever an earlier setup wrote is always safe, regardless of what the
 /// tree above `here` is doing.
 fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
-    use super::claude_code::PlanItem;
-
     let target = paths(here);
     let config_raw = std::fs::read_to_string(&target.config).ok();
     let hooks = read_json(&target.hooks);
@@ -766,8 +763,8 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
         hooks_item,
         PlanItem::new(skill_verb, SKILL_LABEL, skill_what),
     ];
-    let mut s = super::claude_code::heading(Stream::Out, "vivac setup codex --undo", here);
-    s.push_str(&super::claude_code::render_items(Stream::Out, &items));
+    let mut s = heading(Stream::Out, "vivac setup codex --undo", here);
+    s.push_str(&render_items(Stream::Out, &items));
 
     if a.has("dry-run") {
         outln!(
