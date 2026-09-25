@@ -6,6 +6,7 @@
 //! without reading the prose.
 
 use crate::redact::Finding;
+use crate::style::Stream;
 
 #[derive(Debug)]
 pub enum Failure {
@@ -70,14 +71,14 @@ impl Failure {
             | Failure::Busy(m)
             | Failure::NotALane(m)
             | Failure::TreeNotFound(m) => eprintln!("{m}"),
-            Failure::Redaction(h) => eprintln!("{h}"),
+            Failure::Redaction(h) => eprintln!("{}", h.styled(Stream::Err)),
             Failure::NoStore => {
                 eprintln!("  No .vivac/ here or further up.");
                 eprintln!();
                 eprintln!("  Plant the tree:  vivac init");
             }
             Failure::SetupNoTree => {
-                use crate::style::{bold, Stream};
+                use crate::style::bold;
                 eprintln!("There is no tree here for setup to connect, so nothing was written.");
                 eprintln!();
                 eprintln!(
