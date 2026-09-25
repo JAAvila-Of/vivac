@@ -941,8 +941,9 @@ fn check_config_version(version: Option<&serde_json::Value>) -> Result<(), Failu
             Some(1) => Ok(()),
             Some(other) => Err(Failure::newer_vivac(format!(
                 "This tree was written by a newer vivac: its config has version {other}, \
-                 which this version does not know. Update vivac to read it. Nothing was \
-                 written."
+                 which this version does not know. Update vivac to read it. A session or \
+                 vivac web opened before an update keeps the old vivac until it restarts. \
+                 Nothing was written."
             ))),
             // Negative or non-integer: not one of the two known shapes, and
             // not a value worth a friendly message either. Falls through to
@@ -953,7 +954,8 @@ fn check_config_version(version: Option<&serde_json::Value>) -> Result<(), Failu
         Some(serde_json::Value::String(s)) if s == LANE_SENTENCE => Ok(()),
         Some(serde_json::Value::String(s)) => Err(Failure::newer_vivac(format!(
             "This tree was written by a newer vivac: its config says {s:?}. Update vivac \
-             to read it. Nothing was written."
+             to read it. A session or vivac web opened before an update keeps the old \
+             vivac until it restarts. Nothing was written."
         ))),
         _ => Ok(()),
     }
@@ -1373,7 +1375,8 @@ pub(crate) fn newer_vivac_failure(line_no: usize, reason: crate::event::UnknownR
     };
     Failure::newer_vivac(format!(
         "This tree was written by a newer vivac: line {line_no} of {path} {detail}. \
-         Update vivac to read it. Nothing was written."
+         Update vivac to read it. A session or vivac web opened before an update keeps \
+         the old vivac until it restarts. Nothing was written."
     ))
 }
 

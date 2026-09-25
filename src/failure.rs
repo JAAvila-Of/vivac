@@ -47,6 +47,15 @@ pub enum Failure {
     /// `NoStore`'s exit code: from the caller's side it is the same answer,
     /// there is no tree to work on from here.
     TreeNotFound(String),
+    /// `update`, Windows only: setting the running copy aside failed
+    /// partway through. Every step it takes rolls its own failure back
+    /// (`f773`), so this always follows a clean rollback rather than a
+    /// half-moved binary. Shares `Io`'s exit code: the executable's own
+    /// folder is what this process could not get to.
+    ///
+    /// Only Windows sets anything aside, so elsewhere nothing builds one.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    SetAside(String),
 }
 
 pub type R = Result<(), Failure>;
@@ -58,7 +67,7 @@ impl Failure {
             Failure::Usage(_) => 2,
             Failure::Redaction(_) => 3,
             Failure::NoStore | Failure::TreeNotFound(_) | Failure::SetupNoTree => 4,
-            Failure::Io(_) | Failure::NewerVivac(_) | Failure::Busy(_) => 5,
+            Failure::Io(_) | Failure::NewerVivac(_) | Failure::Busy(_) | Failure::SetAside(_) => 5,
         }
     }
 
@@ -70,7 +79,8 @@ impl Failure {
             | Failure::NewerVivac(m)
             | Failure::Busy(m)
             | Failure::NotALane(m)
-            | Failure::TreeNotFound(m) => eprintln!("{m}"),
+            | Failure::TreeNotFound(m)
+            | Failure::SetAside(m) => eprintln!("{m}"),
             Failure::Redaction(h) => eprintln!("{}", h.styled(Stream::Err)),
             Failure::NoStore => {
                 eprintln!("  No .vivac/ here or further up.");
@@ -110,7 +120,8 @@ impl Failure {
             | Failure::NewerVivac(m)
             | Failure::Busy(m)
             | Failure::NotALane(m)
-            | Failure::TreeNotFound(m) => m.trim().to_string(),
+            | Failure::TreeNotFound(m)
+            | Failure::SetAside(m) => m.trim().to_string(),
             Failure::Redaction(h) => h.to_string(),
             Failure::NoStore => "No .vivac/ here or further up. Plant one: vivac init".into(),
             Failure::SetupNoTree => {
@@ -129,6 +140,18 @@ impl Failure {
 
     pub fn newer_vivac(m: impl Into<String>) -> Failure {
         Failure::NewerVivac(format!("  {}", m.into()))
+    }
+
+    /// `update`, Windows only: one of the renames that sets the running
+    /// copy aside failed, after everything it had already done was rolled
+    /// back. `e` is that failure, so the person reads the same reason the
+    /// OS gave.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub fn set_aside(e: std::io::Error) -> Failure {
+        Failure::SetAside(format!(
+            "  Could not set the running vivac aside: {e}. Nothing was changed.\n  \
+             Close the sessions and vivac web that run it, then install."
+        ))
     }
 
     pub fn busy(deadline: std::time::Duration) -> Failure {

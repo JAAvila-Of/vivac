@@ -598,6 +598,51 @@ fn why_with_project_over_an_unknown_event_returns_the_error_not_a_half_answer() 
     );
 }
 
+/// `f800`: the gap the test above did not close -- a resident server that
+/// already answered fine, over its OWN log, finding on its next call that
+/// the log underneath it now holds a line only a newer vivac could have
+/// written. A read has to refuse instead of serving a half-built answer
+/// built before the reload; a write has to refuse before it ever appends,
+/// leaving the log's bytes untouched; and a further read still has to
+/// refuse, not silently forget what it just saw.
+#[test]
+fn a_resident_log_that_gains_an_unknown_event_refuses_every_call_after_it() {
+    let c = seeded("mcp-resident-nv");
+
+    let mut s = hello(&c);
+    let first = s.ask(
+        r#"{"jsonrpc":"2.0","id":40,"method":"tools/call","params":{"name":"vivac_open","arguments":{}}}"#,
+    );
+    assert_eq!(first["result"]["isError"], false, "{first}");
+
+    c.append_unknown_event_type();
+    let before = c.log();
+
+    let read = s.ask(
+        r#"{"jsonrpc":"2.0","id":41,"method":"tools/call","params":{"name":"vivac_open","arguments":{}}}"#,
+    );
+    assert_eq!(read["result"]["isError"], true, "{read}");
+    assert!(
+        text_of(&read).contains("This tree was written by a newer vivac"),
+        "{read}"
+    );
+
+    let write = s.ask(
+        r#"{"jsonrpc":"2.0","id":42,"method":"tools/call","params":{"name":"vivac_note","arguments":{"note":"trying to write past it"}}}"#,
+    );
+    assert_eq!(write["result"]["isError"], true, "{write}");
+    assert!(
+        text_of(&write).contains("This tree was written by a newer vivac"),
+        "{write}"
+    );
+    assert_eq!(before, c.log(), "a refused write still changed the log");
+
+    let again = s.ask(
+        r#"{"jsonrpc":"2.0","id":43,"method":"tools/call","params":{"name":"vivac_open","arguments":{}}}"#,
+    );
+    assert_eq!(again["result"]["isError"], true, "{again}");
+}
+
 #[test]
 fn open_lists_the_fronts() {
     let c = seeded("open");

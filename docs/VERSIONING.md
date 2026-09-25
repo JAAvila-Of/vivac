@@ -64,6 +64,10 @@ whose reason reads like an id, or a node you do not remember parking.
 patch number. If `vivac --version` says `0.12.6`, the notes you need are
 under `0.13.0` in the changelog, and `cargo install vivac` takes you there.
 
-**On Windows, close every session and any `vivac web` before installing.** A
-running `vivac mcp` or `vivac web` holds the executable open, and
-`cargo install` fails with *os error 5* until it is closed.
+**On Windows, run `vivac update` before installing.** A running `vivac mcp`
+or `vivac web` holds the executable open, and `cargo install` fails with
+*os error 5* while it does. `vivac update` sets that copy aside, so the install
+goes through with every session still open, and each session keeps the old
+version until it restarts. A vivac that answers `vivac update` with *unknown
+command* predates it: close every session and any `vivac web` before
+installing over that one.
