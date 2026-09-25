@@ -299,9 +299,10 @@ being able to move.
 ## Colour
 
 A person at a terminal gets bold, dim and colour on what `init` and `setup`
-print, on `tree`, `open` and `why`, and on a refusal from the redaction guard.
+print, on every read, on the help and on a refusal from the redaction guard.
 Anything else, an agent, a hook, a pipe, a file or `--json`, gets the same
-words as plain text, without a single escape code. `NO_COLOR` turns the
+words as plain text, without a single escape code, and the MCP server and
+the session hooks stay plain even when the environment asks for colour. `NO_COLOR` turns the
 styles off; `CLICOLOR_FORCE` turns them on where there is no terminal. The
 words always say what the colour does: a verb is written out, never only
 coloured, and a node's colour follows its kind, which the letter of its id
