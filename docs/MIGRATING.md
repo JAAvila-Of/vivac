@@ -68,7 +68,10 @@ A project with a long history takes a while. With hundreds of memories or
 more, the skill says so and works in batches: first the structure (the root
 goal, pillars, constraints, rules and decisions), then what was learned, each
 batch with its own plan and your own yes. Its working files stay in a
-temporary folder, never in your project.
+temporary folder, never in your project. If your agent can start subagents,
+the reading of that second batch is shared out among them, and each one
+answers for every source it was given, so nothing is dropped where you cannot
+see it; the plan and the writing stay with the agent you are talking to.
 
 Until then, another record you use keeps talking to the agent as before, and
 may tell it to use that one first. That is expected: the skill only reads from

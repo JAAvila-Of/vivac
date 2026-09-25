@@ -1687,10 +1687,10 @@ mod tests {
         // Computed independently (Python's own FNV-1a/64) over the exact
         // frontmatter and body this file embeds. It moves whenever the
         // skill's text does, and moving it is meant to be deliberate: the
-        // last time was `f793`/`f794`, after an unguided migration wrote a
-        // batch on a yes to its sources, never showed the nodes, and said
-        // nothing about pillars.
-        assert_eq!(skill_fingerprint(), 0x1d86b0aa9ecb020d);
+        // last time was `d798`, which shares the reading of a large batch
+        // among subagents after a migration's agent compacted five times
+        // reading its sources alone.
+        assert_eq!(skill_fingerprint(), 0xa6415fc3dfd585a8);
     }
 
     #[test]
