@@ -42,6 +42,11 @@ struct Server {
     port: u16,
     /// The URL printed at startup, key and all. Good for exactly one call.
     boot_url: String,
+    /// What is left of the child's stdout once `start_serving` has read the
+    /// two lines every boot prints. Kept rather than dropped so a test that
+    /// needs a line printed after those two -- `d810`'s unreachable-projects
+    /// sentence, the only one there is -- can still read it.
+    stdout: BufReader<std::process::ChildStdout>,
 }
 
 impl Server {
@@ -103,6 +108,7 @@ impl Server {
             child,
             port: port_of(&boot_url),
             boot_url,
+            stdout: reader,
         }
     }
 
@@ -119,6 +125,18 @@ impl Server {
 
     fn host(&self) -> String {
         format!("127.0.0.1:{}", self.port)
+    }
+
+    /// One more line of startup output, beyond the two `start_serving`
+    /// already consumed finding the boot url. Blocks until the child writes
+    /// one, so only a scenario that is guaranteed to print a third line --
+    /// `d810`'s unreachable-projects sentence -- may call this; anywhere
+    /// else, nothing after the boot url is ever printed, and this would
+    /// hang forever.
+    fn next_startup_line(&mut self) -> String {
+        let mut line = String::new();
+        self.stdout.read_line(&mut line).unwrap();
+        line.trim().to_string()
     }
 }
 
@@ -337,9 +355,8 @@ impl UpMany {
     }
 }
 
-/// Started from a directory that is not any of them, because since `d199`
-/// that is what reaches the index: from inside a project, `/` lands on that
-/// project instead of listing.
+/// Started from a directory that is not any of them, so spending the boot
+/// key lands on the index rather than on one of the projects (`d809`).
 fn up_many(names: &[&str]) -> UpMany {
     let sandboxes: Vec<Sandbox> = names.iter().map(|n| Sandbox::new_seeded(n)).collect();
     let roots: Vec<&std::path::Path> = sandboxes.iter().map(|s| s.0.as_path()).collect();
@@ -355,9 +372,17 @@ fn the_boot_key_hands_over_a_session_cookie_and_redirects() {
     let s = up("boot");
     let a = call(s.port(), &s.boot_path(), &[("Host", s.host())]);
     // `d190`: it lands you where the work is, instead of on a page whose
-    // whole content was "vivac is listening".
+    // whole content was "vivac is listening". `d809`: where the work is
+    // means the project the working directory sat inside when the server
+    // started -- `/` itself always answers the index now, landing or not.
     assert_eq!(a.status, 302, "{}", a.body);
-    assert_eq!(a.header("Location"), Some("/"), "{}", a.body);
+    let id = first_event_id(&s._sandbox.0);
+    assert_eq!(
+        a.header("Location"),
+        Some(format!("/p/{id}/")).as_deref(),
+        "{}",
+        a.body
+    );
     assert_eq!(token_from(&a).len(), 64, "{}", a.body);
     let jar = a.header("Set-Cookie").unwrap();
     // The flags are the defence, so they are asserted and not assumed.
@@ -384,9 +409,10 @@ fn the_same_boot_url_a_second_time_is_refused() {
     );
 }
 
-/// `d145`: the index with exactly one project redirects rather than
-/// serving a list nobody needs to read, so "serves" here means the gate let
-/// the request through to the router -- not that it came back as `200`.
+/// The gate is what this proves: a good token in the header, rather than
+/// the cookie a browser would carry, still reaches the router. `d809`
+/// changed what the router does with `/` -- a 302 before, a 200 now -- and
+/// not whether it does anything at all.
 #[test]
 fn a_good_token_in_the_header_serves() {
     let s = up("good-token");
@@ -397,13 +423,14 @@ fn a_good_token_in_the_header_serves() {
         "/",
         &[("Host", s.host()), ("X-Vivac-Token", token)],
     );
-    assert_eq!(a.status, 302, "{}", a.body);
+    assert_eq!(a.status, 200, "{}", a.body);
 }
 
-/// `d145`: with exactly one project, the index does not make anybody click
-/// through it.
+/// `d809`: `/` always answers the index, even with exactly one project --
+/// the index does not make anybody click through it any more either, since
+/// the boot key already landed them on it (`d190`).
 #[test]
-fn a_single_project_index_redirects_to_its_page() {
+fn a_single_project_index_lists_it_rather_than_redirecting() {
     let s = up("index-one");
     let boot = call(s.port(), &s.boot_path(), &[("Host", s.host())]);
     let token = token_from(&boot);
@@ -412,17 +439,55 @@ fn a_single_project_index_redirects_to_its_page() {
         "/",
         &[("Host", s.host()), ("X-Vivac-Token", token)],
     );
-    assert_eq!(a.status, 302, "{}", a.body);
+    assert_eq!(a.status, 200, "{}", a.body);
     // `f721`: `new_seeded` now plants with a founding lane declared, which
     // registers the project under its real first-event id (`d201`) at
     // plant time -- not the folder's own name, which only ever stood in
     // for an id the registry had none of.
     let id = first_event_id(&s._sandbox.0);
+    assert!(
+        a.body.contains(&format!("/p/{id}/")),
+        "the index does not link to the only project:\n{}",
+        a.body
+    );
+}
+
+/// `d809`, whole: the boot key still lands you on your own project, `/`
+/// still lists it once you go there on purpose, and the page it landed you
+/// on carries the way back -- watched as one session rather than as three
+/// separate claims about it.
+#[test]
+fn the_index_stays_reachable_after_the_boot_lands_on_a_project() {
+    let s = up("index-reachable");
+    let boot = call(s.port(), &s.boot_path(), &[("Host", s.host())]);
+    let id = first_event_id(&s._sandbox.0);
+    assert_eq!(boot.status, 302, "{}", boot.body);
     assert_eq!(
-        a.header("Location"),
+        boot.header("Location"),
         Some(format!("/p/{id}/")).as_deref(),
         "{:?}",
-        a.headers
+        boot.headers
+    );
+    let token = token_from(&boot);
+
+    let index = call(
+        s.port(),
+        "/",
+        &[("Host", s.host()), ("X-Vivac-Token", token.clone())],
+    );
+    assert_eq!(index.status, 200, "{}", index.body);
+    assert!(index.body.contains(&format!("/p/{id}/")), "{}", index.body);
+
+    let today = call(
+        s.port(),
+        &format!("/p/{id}/"),
+        &[("Host", s.host()), ("X-Vivac-Token", token)],
+    );
+    assert_eq!(today.status, 200, "{}", today.body);
+    assert!(
+        today.body.contains("href=\"/\""),
+        "no way back to the index:\n{}",
+        today.body
     );
 }
 
@@ -461,6 +526,25 @@ fn two_or_more_projects_list_with_a_link_each() {
             a.body
         );
     }
+}
+
+/// `f806`: a project row used to share the two-column layout an id like
+/// `f437` is meant for, so a name such as `FluentOperations` overflowed
+/// onto the focus text beside it. The new CSS targets `li.project`; this
+/// proves the markup carries it. The look itself is the owner's to check --
+/// there is no pixel test.
+#[test]
+fn a_project_row_carries_its_own_class() {
+    let s = up("project-row-class");
+    let boot = call(s.port(), &s.boot_path(), &[("Host", s.host())]);
+    let token = token_from(&boot);
+    let a = call(
+        s.port(),
+        "/",
+        &[("Host", s.host()), ("X-Vivac-Token", token)],
+    );
+    assert_eq!(a.status, 200, "{}", a.body);
+    assert!(a.body.contains("class=\"project\""), "{}", a.body);
 }
 
 /// `WEB.md` §3.1 over a real socket: the page a project's `id` routes to,
@@ -1386,6 +1470,76 @@ fn twins(name: &str) -> (std::path::PathBuf, std::path::PathBuf, std::path::Path
         roots.push(d);
     }
     (home, roots[0].clone(), roots[1].clone())
+}
+
+/// `f804`/`d810`: a project the machine's registry still names after its
+/// folder is gone must not stop every other project from being served.
+/// Before this decision, `Registry::open` tried that root the same as any
+/// other, and the whole server refused to start: `Input/output error ...
+/// os error 3`, exit 5.
+#[test]
+fn a_dead_registry_entry_does_not_stop_the_server() {
+    let live = Sandbox::new_seeded("dead-reg-live");
+    let dead = Sandbox::new_seeded_in("dead-reg-dead", live.global_home());
+    let dead_name = dead.0.file_name().unwrap().to_string_lossy().into_owned();
+    std::fs::remove_dir_all(&dead.0).unwrap();
+
+    // No `--project` and no tree above `temp_dir()`: every root here comes
+    // from the registry alone, which is what makes the dead one optional.
+    let mut server = Server::start_serving(&std::env::temp_dir(), live.global_home(), &[]);
+    assert_eq!(
+        server.next_startup_line(),
+        format!("1 project unreachable: {dead_name}")
+    );
+
+    let boot = call(server.port, &server.boot_path(), &[("Host", server.host())]);
+    let token = token_from(&boot);
+    let a = call(
+        server.port,
+        "/",
+        &[("Host", server.host()), ("X-Vivac-Token", token)],
+    );
+    assert_eq!(a.status, 200, "{}", a.body);
+    assert!(
+        a.body
+            .contains(&format!("1 project unreachable: {dead_name}")),
+        "{}",
+        a.body
+    );
+}
+
+/// `d810`: a root named with `--project` is required, so a failure to open
+/// it stays the error it always was -- only a root the registry alone
+/// named may be skipped.
+#[test]
+fn a_project_flag_naming_nothing_on_disk_still_fails() {
+    let sandbox = Sandbox::new_empty("bad-explicit-project");
+    let missing = sandbox.0.join("nowhere");
+    let output = Command::new(BIN)
+        .current_dir(std::env::temp_dir())
+        .env("VIVAC_HOME", sandbox.global_home())
+        .env("TZ", "UTC")
+        .args([
+            "web",
+            "--port",
+            "0",
+            "--no-open",
+            "--project",
+            missing.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_ne!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !String::from_utf8_lossy(&output.stdout).contains("http://"),
+        "printed a boot url despite a bad --project:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
 }
 
 /// `d199`: the server opens from a directory that is not a project at all.

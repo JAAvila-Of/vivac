@@ -122,7 +122,7 @@ fn project_row(l: &Line) -> String {
         format!(" &middot; {} blocked", l.blocked)
     };
     format!(
-        "<li><span class=\"alias\"><a href=\"/p/{href}/\">{name}</a></span>
+        "<li class=\"project\"><span class=\"alias\"><a href=\"/p/{href}/\">{name}</a></span>
          {focus}<p class=\"note\">{quiet}{blocked}</p></li>
 ",
         href = escape(&l.href),
@@ -131,8 +131,14 @@ fn project_row(l: &Line) -> String {
     )
 }
 
-/// The page shell both listings share.
-fn listing(title: &str, promise: &str, rows: String, footer: &str) -> String {
+/// The page shell both listings share. `note`, when there is one, sits right
+/// after the list, inside `<main>` -- `index_page`'s way of saying a root the
+/// registry named did not open (`d810`); `choose_page` never has one.
+fn listing(title: &str, promise: &str, rows: String, note: Option<&str>, footer: &str) -> String {
+    let note = match note {
+        Some(n) => format!("<p class=\"note\">{}</p>\n", escape(n)),
+        None => String::new(),
+    };
     format!(
         "<!doctype html>
          <html lang=\"en\"><head><meta charset=\"utf-8\">
@@ -144,7 +150,7 @@ fn listing(title: &str, promise: &str, rows: String, footer: &str) -> String {
          <header><h1>{t}</h1>
          <p class=\"promise\">{promise}</p></header>
          <main><ul class=\"nodes\">
-{rows}</ul></main>
+{rows}</ul>{note}</main>
          <footer>{footer}</footer>
          </div></body></html>
 ",
@@ -162,15 +168,26 @@ fn listing(title: &str, promise: &str, rows: String, footer: &str) -> String {
 /// reading but knowing where to look. Eight `cd` is what "being available is
 /// not arriving" looks like.
 ///
-/// Reached when the working directory is not inside a project (`d199`). It
-/// used to be a bare `<ul>` of links with no stylesheet, no title and no
+/// Reached when the working directory is not inside a project (`d199`), and
+/// now -- `d809` -- every other time too: `/` always answers this page.
+/// It used to be a bare `<ul>` of links with no stylesheet, no title and no
 /// viewport, which answered nothing a `cd` did not.
-pub(super) fn index_page(projects: &mut [crate::project::Project]) -> String {
+///
+/// `unreachable` names every root the machine's registry could not open
+/// (`d810`), fixed at startup: a note under the list when there is at least
+/// one, in the same words `find --everywhere` prints for the same shape of
+/// answer.
+pub(super) fn index_page(
+    projects: &mut [crate::project::Project],
+    unreachable: &[String],
+) -> String {
     let rows: String = projects.iter_mut().map(|p| project_row(&line(p))).collect();
+    let note = (!unreachable.is_empty()).then(|| super::unreachable_sentence(unreachable));
     listing(
         "Projects",
         "Which project moved, and which one has been sitting still.",
         rows,
+        note.as_deref(),
         "The same reading in a terminal, one project at a time:          <code>vivac open</code>",
     )
 }
@@ -192,6 +209,7 @@ pub(super) fn choose_page(projects: &mut [crate::project::Project], which: &[usi
         "Which one?",
         "More than one project goes by that name, so this page picks none of them.",
         rows,
+        None,
         "The link under each name is permanent: it carries the project's own          id, so it keeps opening this tree even when another of the same name          joins.",
     )
 }
@@ -375,7 +393,9 @@ fn stack_section(project: &str, tree: &Tree) -> String {
         .enumerate()
         .map(|(i, n)| {
             let here = if i == last {
-                format!("<span class=\"here-mark\">{}</span>", escape(&here_mark))
+                // `f807`: a leading space, or the mark reads glued to the
+                // title beside it -- "...Fix the cache adapteryou are here".
+                format!(" <span class=\"here-mark\">{}</span>", escape(&here_mark))
             } else {
                 String::new()
             };
@@ -463,6 +483,10 @@ fn parked_section(project: &str, tree: &Tree) -> String {
 ///
 /// Every one of the four is answered by a function the CLI calls too. This
 /// page picks no nodes of its own.
+///
+/// The crumb above the title is the way back to the index (`d809`): the
+/// same form `why` and `tree` already carry, pointed at `/` instead of at
+/// this project, since `/` is where every project is listed.
 pub(super) fn today_page(project: &str, name: &str, tree: &Tree, log: &[Event]) -> String {
     let boundary = changes::manual_boundary(tree);
     let mut changed = changes::collect(tree, log, boundary.seq());
@@ -475,7 +499,8 @@ pub(super) fn today_page(project: &str, name: &str, tree: &Tree, log: &[Event]) 
          <title>Today - {name_t}</title>\n\
          <style>\n{WEB_CSS}</style></head>\n\
          <body><div class=\"page\">\n\
-         <header><h1>{name_t}</h1>\n\
+         <header><p class=\"crumb\"><a href=\"/\">All projects</a></p>\n\
+         <h1>{name_t}</h1>\n\
          <p class=\"promise\">What moved while you were not looking.</p>\n\
          <p class=\"onward\"><a href=\"/p/{p}/tree\">The whole tree, as a map</a></p></header>\n\
          <main>\n{moved}{focus}{governs}{parked}</main>\n\
@@ -623,6 +648,43 @@ mod tests {
         assert!(page.contains("Do not touch now"), "{page}");
         assert!(page.contains("waiting on day 14"), "{page}");
         assert!(page.contains("parked"), "{page}");
+    }
+
+    /// `d809`: the page a project's own `id` routes to still carries a way
+    /// back to the index, in the same crumb `why` and `map` already use.
+    #[test]
+    fn the_header_carries_a_crumb_back_to_the_index() {
+        let events = vec![born(1, 1, "A goal", None)];
+        let tree = fold(&events, 0);
+        let page = today_page("demo", "demo", &tree, &events);
+        assert!(
+            page.contains("<p class=\"crumb\"><a href=\"/\">All projects</a></p>"),
+            "{page}"
+        );
+    }
+
+    /// `f807`: `why.rs`'s `step()` is not the only place `.here-mark` is
+    /// emitted -- this page's own stack section glued it to the title the
+    /// same way. A stack needs a push to show anything at all (`f156`'s
+    /// stack, not `stop`'s -- a stop's own `stack` field is `working_set`'s
+    /// counterpart, not what `tree.stack()` reads).
+    #[test]
+    fn the_here_mark_on_the_stack_is_set_off_from_the_title_by_a_space() {
+        let events = vec![
+            born(1, 1, "A goal", None),
+            ev(
+                2,
+                Body::Pushed {
+                    node: "n1".to_string(),
+                },
+            ),
+        ];
+        let tree = fold(&events, 0);
+        let page = today_page("demo", "demo", &tree, &events);
+        assert!(
+            page.contains(" <span class=\"here-mark\">"),
+            "the mark is glued to the title:\n{page}"
+        );
     }
 
     /// `WEB.md` §7.4: the page loads with no internet at all. Nothing here
