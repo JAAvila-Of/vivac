@@ -23,16 +23,18 @@ fn line_count(c: &Sandbox) -> usize {
 fn unknown_event_message(line_no: usize) -> String {
     format!(
         "This tree was written by a newer vivac: line {line_no} of .vivac/events is an \
-         event this version does not know (node.evolved). Update vivac to read it. \
-         Nothing was written."
+         event this version does not know (node.evolved). Update vivac to read it. A \
+         session or vivac web opened before an update keeps the old vivac until it \
+         restarts. Nothing was written."
     )
 }
 
 fn unknown_kind_message(line_no: usize) -> String {
     format!(
         "This tree was written by a newer vivac: line {line_no} of .vivac/events creates \
-         a node of a type this version does not know (epic). Update vivac to read it. \
-         Nothing was written."
+         a node of a type this version does not know (epic). Update vivac to read it. A \
+         session or vivac web opened before an update keeps the old vivac until it \
+         restarts. Nothing was written."
     )
 }
 
@@ -183,7 +185,8 @@ fn unreadable_known_event_message(line_no: usize) -> String {
     format!(
         "This tree was written by a newer vivac: line {line_no} of .vivac/events is a \
          flag.raised event whose fields this version cannot read. Update vivac to read \
-         it. Nothing was written."
+         it. A session or vivac web opened before an update keeps the old vivac until \
+         it restarts. Nothing was written."
     )
 }
 
@@ -236,7 +239,8 @@ fn unreadable_arm_added_message(line_no: usize) -> String {
     format!(
         "This tree was written by a newer vivac: line {line_no} of .vivac/events is a \
          arm.added event whose fields this version cannot read. Update vivac to read \
-         it. Nothing was written."
+         it. A session or vivac web opened before an update keeps the old vivac until \
+         it restarts. Nothing was written."
     )
 }
 
@@ -244,7 +248,8 @@ fn unreadable_old_arm_shape_message(line_no: usize) -> String {
     format!(
         "This tree was written by a newer vivac: line {line_no} of .vivac/events is a \
          node.created event whose fields this version cannot read. Update vivac to \
-         read it. Nothing was written."
+         read it. A session or vivac web opened before an update keeps the old vivac \
+         until it restarts. Nothing was written."
     )
 }
 

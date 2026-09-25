@@ -189,7 +189,9 @@ fn an_integer_version_this_release_does_not_know_refuses_everything() {
     assert!(
         out.contains(
             "This tree was written by a newer vivac: its config has version 2, which \
-             this version does not know. Update vivac to read it. Nothing was written."
+             this version does not know. Update vivac to read it. A session or vivac \
+             web opened before an update keeps the old vivac until it restarts. \
+             Nothing was written."
         ),
         "{out}"
     );
@@ -223,7 +225,9 @@ fn an_unrecognised_string_version_refuses_a_read_and_a_write() {
     assert!(
         out.contains(
             "This tree was written by a newer vivac: its config says \"some other \
-             sentence\". Update vivac to read it. Nothing was written."
+             sentence\". Update vivac to read it. A session or vivac web opened \
+             before an update keeps the old vivac until it restarts. Nothing was \
+             written."
         ),
         "{out}"
     );

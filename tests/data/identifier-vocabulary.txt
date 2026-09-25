@@ -85,6 +85,8 @@ appends
 applied
 applies
 apply
+arch
+archive
 are
 arena
 arg
@@ -101,6 +103,7 @@ arrives
 article
 as
 ascii
+aside
 ask
 asked
 asker
@@ -116,6 +119,7 @@ assumption
 at
 atomic
 atomically
+attr
 attribute
 attributes
 authority
@@ -238,6 +242,7 @@ capped
 caps
 capture
 captured
+cargo
 carried
 carries
 carry
@@ -280,6 +285,7 @@ claiming
 claims
 clamp
 class
+classify
 claude
 clause
 clauses
@@ -352,6 +358,7 @@ const
 constant
 constraint
 constraints
+consts
 cont
 contained
 container
@@ -385,6 +392,8 @@ covers
 cow
 crash
 crate
+crates
+crates2
 create
 created
 creates
@@ -429,7 +438,9 @@ declarations
 declare
 declared
 declares
+decode
 decoded
+decodes
 decomposed
 dedup
 deep
@@ -451,6 +462,7 @@ derive
 descend
 descendants
 describe
+described
 description
 deserialize
 deserializer
@@ -513,6 +525,7 @@ drain
 drains
 drawn
 draws
+drive
 drop
 drops
 dry
@@ -573,6 +586,7 @@ err
 error
 escape
 escaped
+escapes
 estimator
 euclid
 ev
@@ -691,6 +705,7 @@ fp
 fractional
 fragment
 fragments
+frees
 fresh
 from
 front
@@ -777,6 +792,7 @@ heuristic
 hex
 hexdigit
 hh
+hi
 hidden
 hides
 hiding
@@ -847,6 +863,8 @@ input
 insert
 inserted
 inside
+install
+installs
 instant
 instants
 instead
@@ -940,6 +958,7 @@ lines
 link
 linked
 links
+linux
 list
 listed
 listener
@@ -948,6 +967,7 @@ lists
 literal
 literals
 live
+lo
 load
 loaded
 local
@@ -978,6 +998,7 @@ lower
 lowercase
 lowered
 machine
+macos
 macro
 made
 magenta
@@ -1363,6 +1384,7 @@ rebased
 rebasing
 rebuilt
 recognise
+recognised
 recognized
 reconcile
 record
@@ -1648,6 +1670,7 @@ spaces
 span
 spanish
 spans
+sparse
 spawn
 spawning
 speak
@@ -1739,6 +1762,7 @@ suspended
 suspicious
 swallow
 swallowed
+sweep
 switch
 switches
 symlink
@@ -1894,6 +1918,7 @@ unlocked
 unreachable
 unreadable
 unrecognised
+unrelated
 unrestorable
 unrestored
 unsafe
@@ -1909,6 +1934,7 @@ unwrapped
 unwritable
 unwritten
 up
+update
 updated
 upper
 uppercase
@@ -2012,6 +2038,7 @@ word
 words
 work
 worked
+workflow
 working
 works
 workspace

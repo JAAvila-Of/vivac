@@ -282,6 +282,11 @@ cargo install vivac
 `cargo install` is not the fallback: it builds from the source published to
 crates.io, so it stays the auditable path for anyone who cares about the
 supply chain of a tool that reads their work.
+
+To move to a newer release, run `vivac update` first. It says how this vivac
+was installed and gives the command that replaces it, and on Windows it sets
+the running copy aside, so the install does not wait for your sessions to
+close.
 → [**Setting it up**](docs/SETUP.md)
 
 ---

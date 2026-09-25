@@ -40,6 +40,7 @@ mod session;
 mod setup;
 mod store;
 mod style;
+mod update;
 mod web;
 
 use args::Args;
@@ -159,6 +160,10 @@ const USAGE: &str = r#"vivac - provenance of work
                                               folder that holds it; this one
                                               stays a lane of it, with its own
                                               thread
+    vivac update                              how this vivac was installed
+                                              and the command to replace
+                                              it; on Windows, sets the
+                                              running copy aside first
     vivac import <tree.json>                  bring in a tree from the spike
 
   Exit codes
@@ -253,6 +258,7 @@ const COMMANDS: &[&str] = &[
     "init",
     "setup",
     "relocate",
+    "update",
     "import",
 ];
 
@@ -287,6 +293,10 @@ const COMMAND_HINTS: &[(&[&str], &str)] = &[
     (
         &["log", "history", "diff"],
         "  What moved since a stop:  vivac changes",
+    ),
+    (
+        &["upgrade", "self-update", "selfupdate"],
+        "  To install a new vivac:  vivac update",
     ),
 ];
 
@@ -535,6 +545,11 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
             "name",
         ],
         "relocate" => &["lane-name"],
+        // `update` takes no flags at all: it prepares installing a new
+        // vivac, not a node's own fields. Listed on its own so it reads
+        // next to its own dispatch further down, rather than folded into
+        // the shared `&[]` arm below.
+        "update" => &[],
         // The reads that speak JSON, spelled out. No shorthand: a shorthand
         // is what let the brief claim it for two releases.
         // `open` also takes `--all`, the same escape hatch `tree` gives the
@@ -560,6 +575,23 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         "park" | "promote" | "note" | "import" | "restore" => &[],
         _ => &[],
     };
+
+    // `update` needs no tree -- it prepares installing a new vivac -- so it
+    // dispatches before any store lookup, the same as `--version`, `init`
+    // and `setup` below. It also answers its own usage error rather than
+    // falling into the generic "does not take" one further down: an agent
+    // typing `vivac update t5 "..."` means "update a node", and the
+    // sentence below names that mistake instead of just listing flags.
+    if cmd == "update" {
+        if !a.positionals.is_empty() || !a.unknown(allowed).is_empty() {
+            return Err(Failure::usage(
+                "update takes no arguments: it prepares installing a new vivac.\n  \
+                 To add to a node:  vivac note <id> \"<note>\"",
+            ));
+        }
+        return update::run().map(|_| 0);
+    }
+
     let unknown = a.unknown(allowed);
     if !unknown.is_empty() {
         let takes = if allowed.is_empty() {
@@ -1098,6 +1130,7 @@ mod tests {
             Failure::busy(std::time::Duration::from_secs(5)),
             Failure::not_a_lane(),
             Failure::tree_not_found(),
+            Failure::set_aside(std::io::Error::other("disk full")),
         ];
         variants
             .into_iter()
@@ -1112,6 +1145,7 @@ mod tests {
                 Failure::Busy(_) => f.code(),
                 Failure::NotALane(_) => f.code(),
                 Failure::TreeNotFound(_) => f.code(),
+                Failure::SetAside(_) => f.code(),
             })
             .collect()
     }

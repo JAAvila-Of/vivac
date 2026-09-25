@@ -111,8 +111,9 @@ fn check_lane_version(version: Option<&serde_json::Value>) -> Result<(), Failure
         if other != VERSION as u64 {
             return Err(Failure::newer_vivac(format!(
                 "This tree was written by a newer vivac: .vivac/lane has version {other}, \
-                 which this version does not know. Update vivac to read it. Nothing was \
-                 written."
+                 which this version does not know. Update vivac to read it. A session or \
+                 vivac web opened before an update keeps the old vivac until it restarts. \
+                 Nothing was written."
             )));
         }
     }
