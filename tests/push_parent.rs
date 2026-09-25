@@ -110,6 +110,33 @@ fn push_parent_on_a_closed_node_is_refused() {
     assert_eq!(before, c.log(), "a refused push wrote to the log");
 }
 
+/// `d796`/`f758`: `--parent` rebuilds the stack to the chosen node's own
+/// path, so a push that lands four levels deep that way picked the depth on
+/// purpose. Measured twice: a push under a level-3 node came back with the
+/// depth advice although the node was exactly where it belonged.
+#[test]
+fn push_parent_reaching_four_levels_prints_no_depth_advice() {
+    let c = Sandbox::new_seeded("push-parent-depth");
+    c.ok(&["push", "Goal A", "--why", "first branch"]);
+    c.ok(&["push", "Task under A", "--why", "detail on A"]);
+    c.ok(&["push", "Deep step", "--why", "third step"]);
+    c.ok(&["push", "Goal B", "--why", "second branch", "--root"]);
+
+    let out = c.ok(&[
+        "push",
+        "Continue the deep step",
+        "--why",
+        "it continues t3",
+        "--parent",
+        "3",
+    ]);
+    assert_eq!(stack_aliases(&c), vec!["g1", "t2", "t3", "t5"]);
+    assert!(
+        !out.contains("levels away"),
+        "a --parent push warned about depth it chose on purpose:\n{out}"
+    );
+}
+
 /// `--parent` on a parked node: refused with its own wording, and the node
 /// is left parked -- `focus` revives a parked node without asking, and
 /// `push --parent` must not do that in silence.

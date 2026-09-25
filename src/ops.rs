@@ -1304,8 +1304,12 @@ pub fn push(ctx: &mut Ctx, p: params::Push) -> Result<Outcome, Failure> {
     let depth_of = ctx.tree.stack_depth();
     // §6.1: intervene, never block. A deep stack is almost never lack of
     // discipline: the root goal moved and nobody re-rooted. `--root` always
-    // leaves the stack one level deep, so this never fires for it.
-    let advice = if depth_of >= 4 {
+    // leaves the stack one level deep, so this never fires for it, and
+    // `--parent` rebuilds the stack to the node the agent chose, so a depth
+    // reached that way was picked on purpose, not drifted into -- measured
+    // twice, a push under a level-3 node came back with this advice although
+    // the node was exactly where it belonged (`d796`, `f758`).
+    let advice = if depth_of >= 4 && target.is_none() {
         // The node named is the **bottom of this stack**, never the tree's
         // first root: the number measures the stack (`f156`), so taking the
         // number from one place and the node from another gives a true count

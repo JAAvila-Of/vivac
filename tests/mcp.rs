@@ -1866,6 +1866,37 @@ fn push_past_four_levels_carries_the_depth_advice_in_its_text() {
     assert_eq!(text, expected);
 }
 
+/// `vivac_push` with `parent` set, landing four levels deep by the stack it
+/// rebuilds to: `text` carries no depth advice, since `--parent` (`d757`)
+/// picked that depth on purpose (`d796`, `f758`), the same as the CLI's
+/// `--parent`.
+#[test]
+fn push_parent_reaching_four_levels_carries_no_depth_advice_in_its_text() {
+    let c = Sandbox::new_seeded("push-parent-depth-text");
+    c.ok(&["push", "Goal A", "--why", "first branch"]);
+    c.ok(&["push", "Task under A", "--why", "detail on A"]);
+    c.ok(&["push", "Deep step", "--why", "third step"]);
+    c.ok(&["push", "Goal B", "--why", "second branch", "--root"]);
+    let via_mcp = twin_of(&c, "push-parent-depth-text-mcp");
+
+    let expected = c.ok(&[
+        "push",
+        "Continue the deep step",
+        "--why",
+        "it continues t3",
+        "--parent",
+        "3",
+    ]);
+    let mut s = hello(&via_mcp);
+    let r = s.ask(
+        r#"{"jsonrpc":"2.0","id":40,"method":"tools/call","params":{"name":"vivac_push","arguments":{"title":"Continue the deep step","why":"it continues t3","parent":"3"}}}"#,
+    );
+    assert_eq!(r["result"]["isError"], false, "{r}");
+    let text = mcp_write_text(&r);
+    assert!(!text.contains("levels away from"), "{text}");
+    assert_eq!(text, expected);
+}
+
 /// `vivac_save` with no `next`: `text` carries the `no --next` line the CLI
 /// prints for the same call.
 #[test]
