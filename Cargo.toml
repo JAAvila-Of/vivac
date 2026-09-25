@@ -26,6 +26,12 @@ tiny_http = "0.12"
 # twice. +2 crates: this one and `tinyvec`.
 unicode-normalization = "0.1"
 
+# `d815`: `vivac update` checks a downloaded release archive against its
+# published SHA-256 before it ever runs or installs it, and a hash that
+# guards a security decision is exactly the code `d138` refuses to hand-roll
+# a second time. RustCrypto's own, +1 crate.
+sha2 = "0.10"
+
 # The same `serde_json` the crate already links, so the tree gains nothing.
 # The MCP tests read JSON-RPC replies, and asserting on substrings of a
 # protocol is how a suite ends up green over malformed output.

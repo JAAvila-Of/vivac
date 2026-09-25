@@ -283,10 +283,12 @@ cargo install vivac
 crates.io, so it stays the auditable path for anyone who cares about the
 supply chain of a tool that reads their work.
 
-To move to a newer release, run `vivac update` first. It says how this vivac
-was installed and gives the command that replaces it, and on Windows it sets
-the running copy aside, so the install does not wait for your sessions to
-close.
+To move to a newer release, run `vivac update`. It shows how this vivac was
+installed and what replacing it takes — the `cargo install` that built it, or
+the release archive it came from, checked against `SHA256SUMS` — and does it
+once you answer yes. On Windows it sets the running copy aside first, so the
+install does not wait for your sessions to close. With no terminal to answer
+in, it only says what to type.
 → [**Setting it up**](docs/SETUP.md)
 
 ---

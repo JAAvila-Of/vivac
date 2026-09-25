@@ -29,6 +29,7 @@ mod ops;
 mod outcome;
 mod output;
 mod params;
+mod plan;
 mod project;
 mod reconcile;
 mod redact;
@@ -1134,6 +1135,7 @@ mod tests {
             Failure::not_a_lane(),
             Failure::tree_not_found(),
             Failure::set_aside(std::io::Error::other("disk full")),
+            Failure::NotInstalled("cargo is not on this machine".into()),
         ];
         variants
             .into_iter()
@@ -1149,6 +1151,7 @@ mod tests {
                 Failure::NotALane(_) => f.code(),
                 Failure::TreeNotFound(_) => f.code(),
                 Failure::SetAside(_) => f.code(),
+                Failure::NotInstalled(_) => f.code(),
             })
             .collect()
     }

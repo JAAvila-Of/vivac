@@ -26,6 +26,7 @@ use super::tree;
 use crate::args::Args;
 use crate::failure::Failure;
 use crate::output::outln;
+use crate::plan::{heading, render_items, PlanItem};
 use crate::style::Stream;
 
 pub(super) fn run(cwd: &std::path::Path, a: &Args) -> Result<i32, Failure> {
@@ -72,7 +73,7 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
 /// across both, with nothing of a harness's own between them -- `init`
 /// writes none.
 fn full_plan(here: &std::path::Path, plan: &tree::TreePlan) -> String {
-    let mut s = super::claude_code::heading(Stream::Out, "vivac init", here);
+    let mut s = heading(Stream::Out, "vivac init", here);
     // `t640`, point 10 bis: said before anything is written, the same
     // sentence `setup`'s own plan shows for the same reason --
     // `name_collision` is only ever `Some` once `--name`'s own value
@@ -85,7 +86,7 @@ fn full_plan(here: &std::path::Path, plan: &tree::TreePlan) -> String {
     }
     let mut items = tree::opening_items(plan);
     items.extend(tree::closing_items(plan));
-    s.push_str(&super::claude_code::render_items(Stream::Out, &items));
+    s.push_str(&render_items(Stream::Out, &items));
     s
 }
 
@@ -244,8 +245,8 @@ fn undo(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
 
     let mut items = tree::vivac_dir_items(&undo_lane);
     items.extend(tree::undo_lane_items(&undo_lane));
-    let mut s = super::claude_code::heading(Stream::Out, "vivac init --undo", here);
-    s.push_str(&super::claude_code::render_items(Stream::Out, &items));
+    let mut s = heading(Stream::Out, "vivac init --undo", here);
+    s.push_str(&render_items(Stream::Out, &items));
 
     if a.has("dry-run") {
         outln!(
@@ -330,15 +331,15 @@ fn undo_bare_tree(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     }
 
     let items = vec![
-        super::claude_code::PlanItem::new(
+        PlanItem::new(
             "remove",
             tree::VIVAC_LABEL,
             "the tree init planted here: it holds no work yet",
         ),
-        super::claude_code::PlanItem::new("forget", "~/.vivac/projects", "this project"),
+        PlanItem::new("forget", "~/.vivac/projects", "this project"),
     ];
-    let mut s = super::claude_code::heading(Stream::Out, "vivac init --undo", here);
-    s.push_str(&super::claude_code::render_items(Stream::Out, &items));
+    let mut s = heading(Stream::Out, "vivac init --undo", here);
+    s.push_str(&render_items(Stream::Out, &items));
 
     if a.has("dry-run") {
         outln!(

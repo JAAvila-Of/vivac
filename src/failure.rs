@@ -56,6 +56,13 @@ pub enum Failure {
     /// Only Windows sets anything aside, so elsewhere nothing builds one.
     #[cfg_attr(not(windows), allow(dead_code))]
     SetAside(String),
+    /// `update`, after a confirmed yes: the cargo command or the release
+    /// archive install did not finish (`d815`). Shares `SetAside`'s exit
+    /// code -- the executable's own folder is again what this process
+    /// could not finish putting a new binary into -- but names the actual
+    /// remedy to run by hand, since there is nothing here left to retry
+    /// automatically the way a set-aside failure alone can be.
+    NotInstalled(String),
 }
 
 pub type R = Result<(), Failure>;
@@ -67,7 +74,11 @@ impl Failure {
             Failure::Usage(_) => 2,
             Failure::Redaction(_) => 3,
             Failure::NoStore | Failure::TreeNotFound(_) | Failure::SetupNoTree => 4,
-            Failure::Io(_) | Failure::NewerVivac(_) | Failure::Busy(_) | Failure::SetAside(_) => 5,
+            Failure::Io(_)
+            | Failure::NewerVivac(_)
+            | Failure::Busy(_)
+            | Failure::SetAside(_)
+            | Failure::NotInstalled(_) => 5,
         }
     }
 
@@ -80,7 +91,8 @@ impl Failure {
             | Failure::Busy(m)
             | Failure::NotALane(m)
             | Failure::TreeNotFound(m)
-            | Failure::SetAside(m) => eprintln!("{m}"),
+            | Failure::SetAside(m)
+            | Failure::NotInstalled(m) => eprintln!("{m}"),
             Failure::Redaction(h) => eprintln!("{}", h.styled(Stream::Err)),
             Failure::NoStore => {
                 eprintln!("  No .vivac/ here or further up.");
@@ -121,7 +133,8 @@ impl Failure {
             | Failure::Busy(m)
             | Failure::NotALane(m)
             | Failure::TreeNotFound(m)
-            | Failure::SetAside(m) => m.trim().to_string(),
+            | Failure::SetAside(m)
+            | Failure::NotInstalled(m) => m.trim().to_string(),
             Failure::Redaction(h) => h.to_string(),
             Failure::NoStore => "No .vivac/ here or further up. Plant one: vivac init".into(),
             Failure::SetupNoTree => {

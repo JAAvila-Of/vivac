@@ -21,6 +21,7 @@ use super::tree;
 use crate::args::Args;
 use crate::failure::Failure;
 use crate::output::outln;
+use crate::plan::{heading, render_items, PlanItem};
 use crate::style::{self, Stream};
 use std::path::{Path, PathBuf};
 
@@ -621,97 +622,6 @@ fn guarded_relative(base: &Path, path: &Path) -> Option<String> {
         }
     }
     Some(parts.join("/"))
-}
-
-// ---------------------------------------------------------------------------
-// Formatting (`d792`, `t789`): a plan is data first -- one `PlanItem` per
-// row, its verb and its "what" already apart -- and rendered second, so
-// every column's width comes from the items actually in this plan rather
-// than a fixed guess (`t565` §7.8's old 41 named no file at all once a
-// label like `.vivac/config` grew past it). `codex.rs` and `tree.rs` build
-// the same `PlanItem`s and render them through the same two functions,
-// rather than fixing the columns a second time (`d653`).
-// ---------------------------------------------------------------------------
-
-/// One row of a plan: a verb, the path or label it acts on, what it does
-/// in plain words, and the value lines (a hook's command, a tree's own
-/// path) that sit under it, dim and indented to the path column.
-pub(super) struct PlanItem {
-    pub(super) verb: &'static str,
-    pub(super) path: String,
-    pub(super) what: String,
-    pub(super) sub: Vec<(String, String)>,
-}
-
-impl PlanItem {
-    pub(super) fn new(
-        verb: &'static str,
-        path: impl Into<String>,
-        what: impl Into<String>,
-    ) -> PlanItem {
-        PlanItem {
-            verb,
-            path: path.into(),
-            what: what.into(),
-            sub: Vec::new(),
-        }
-    }
-
-    pub(super) fn with_sub(
-        mut self,
-        label: impl Into<String>,
-        value: impl Into<String>,
-    ) -> PlanItem {
-        self.sub.push((label.into(), value.into()));
-        self
-    }
-}
-
-/// The line every plan opens with: the command in bold, the folder it acts
-/// on dim, never a verb of its own -- each row below names its own.
-pub(super) fn heading(stream: Stream, cmd: &str, here: &std::path::Path) -> String {
-    format!(
-        "{} will, in {}:\n\n",
-        style::bold(stream, cmd),
-        style::dim(stream, &here.display().to_string())
-    )
-}
-
-/// `items`, rendered: every column padded to the widest plain text in that
-/// column across the whole plan, two spaces of gap after each, so a run
-/// with one long path never drags every other row's own width up with it
-/// column by column but *does* keep its own row's columns lined up with
-/// the rest. Never wrapped (`d792`): a plan item is one line, and the
-/// terminal is what wraps it if it has to.
-pub(super) fn render_items(stream: Stream, items: &[PlanItem]) -> String {
-    let verb_width = items.iter().map(|i| i.verb.len()).max().unwrap_or(0);
-    let path_width = items.iter().map(|i| i.path.len()).max().unwrap_or(0);
-    let sub_label_width = items
-        .iter()
-        .flat_map(|i| i.sub.iter().map(|(label, _)| label.len()))
-        .max()
-        .unwrap_or(0);
-    let sub_indent = " ".repeat(2 + verb_width + 2);
-    let mut s = String::new();
-    for item in items {
-        s.push_str("  ");
-        s.push_str(&style::verb(stream, item.verb));
-        s.push_str(&" ".repeat(verb_width - item.verb.len() + 2));
-        s.push_str(&style::path(stream, &item.path));
-        s.push_str(&" ".repeat(path_width - item.path.len() + 2));
-        s.push_str(&item.what);
-        s.push('\n');
-        for (label, value) in &item.sub {
-            let line = format!(
-                "{label}{}  {value}",
-                " ".repeat(sub_label_width - label.len())
-            );
-            s.push_str(&sub_indent);
-            s.push_str(&style::dim(stream, &line));
-            s.push('\n');
-        }
-    }
-    s
 }
 
 // ---------------------------------------------------------------------------
