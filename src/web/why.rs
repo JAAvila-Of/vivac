@@ -117,7 +117,7 @@ fn weight(
             if notes.len() > 1 {
                 body.push_str(&format!(
                     "<p class=\"note\"><span class=\"when\">{}</span> {}</p>\n",
-                    escape(crate::clock::date_of(at)),
+                    escape(&crate::clock::date_of(at)),
                     escape(text)
                 ));
             } else {
@@ -149,7 +149,7 @@ fn facts(tree: &Tree, ag: &Aggregates, n: &Node) -> String {
         format!("<span class=\"word\">{}</span>", n.state.word(n.kind)),
         format!(
             "<span class=\"when\">opened {}</span>",
-            escape(n.opened(tree))
+            escape(&crate::clock::date_of(n.opened(tree)))
         ),
     ];
     let anchor = anchor_of(tree, n);

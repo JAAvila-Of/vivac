@@ -15,6 +15,7 @@ fn run_in(dir: &Path, home: &Path, args: &[&str]) -> (String, i32) {
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_vivac"))
         .current_dir(dir)
         .env("VIVAC_HOME", home)
+        .env("TZ", "UTC")
         .args(args)
         .output()
         .unwrap();

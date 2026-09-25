@@ -73,6 +73,7 @@ fn run(dir: &Path, home: &Path, args: &[&str]) -> (String, i32) {
     let o = std::process::Command::new(BIN)
         .current_dir(dir)
         .env("VIVAC_HOME", home)
+        .env("TZ", "UTC")
         .args(args)
         .output()
         .unwrap();
@@ -306,6 +307,7 @@ fn the_iquorum_scenario_moves_joins_and_shares_one_tree_across_five_roots() {
                 std::process::Command::new(BIN)
                     .current_dir(&c1)
                     .env("VIVAC_HOME", &home)
+                    .env("TZ", "UTC")
                     .args(["push", &title_a, "--why", "seed a"])
                     .spawn()
                     .unwrap(),
@@ -314,6 +316,7 @@ fn the_iquorum_scenario_moves_joins_and_shares_one_tree_across_five_roots() {
                 std::process::Command::new(BIN)
                     .current_dir(&c2)
                     .env("VIVAC_HOME", &home)
+                    .env("TZ", "UTC")
                     .args(["push", &title_b, "--why", "seed b"])
                     .spawn()
                     .unwrap(),

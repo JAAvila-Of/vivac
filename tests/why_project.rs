@@ -100,6 +100,7 @@ fn run(dir: &std::path::Path, home: &std::path::Path, args: &[&str]) -> (String,
     let o = std::process::Command::new(BIN)
         .current_dir(dir)
         .env("VIVAC_HOME", home)
+        .env("TZ", "UTC")
         .args(args)
         .output()
         .unwrap();

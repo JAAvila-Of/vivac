@@ -312,6 +312,7 @@ fn check_says_when_it_could_not_ask_git() {
     let o = std::process::Command::new(env!("CARGO_BIN_EXE_vivac"))
         .current_dir(&c.0)
         .env("VIVAC_HOME", c.global_home())
+        .env("TZ", "UTC")
         .env("PATH", c.0.join("no-such-dir"))
         .args(["check"])
         .output()
@@ -363,6 +364,7 @@ fn run_bin(dir: &std::path::Path, home: &std::path::Path, args: &[&str]) -> (Str
     let o = std::process::Command::new(env!("CARGO_BIN_EXE_vivac"))
         .current_dir(dir)
         .env("VIVAC_HOME", home)
+        .env("TZ", "UTC")
         .args(args)
         .output()
         .unwrap();

@@ -183,8 +183,11 @@ fn json_node(a: &Tree, ag: &Aggregates, n: &Node) -> serde_json::Value {
         "outcome": n.outcome(a),
         "refs": n.refs(a),
         "governs": n.governs(a),
-        "opened": n.opened(a),
-        "closed": n.closed(a),
+        // `d797`: `opened`/`closed` carry a date, not a full instant --
+        // they always have -- so this is the same local date the text
+        // shows, not the UTC instant `notes`'s own `at` above stays.
+        "opened": crate::clock::date_of(n.opened(a)),
+        "closed": n.closed(a).map(crate::clock::date_of),
         "false_close": n.state == State::Done && ag.blockers(n.num) > 0,
         "open_below": r.open_count,
         "total_below": r.total,
@@ -1648,7 +1651,9 @@ fn print_against(a: &Tree, n: &Node, indent: &str) {
             _ => String::new(),
         };
         let suffix = match e.declared {
-            Some(date) => format!("  (declared {date})"),
+            // `d797`: `declared` is a date, not a full instant -- the local
+            // one, the same as everywhere else a bare date is shown.
+            Some(ts) => format!("  (declared {})", crate::clock::date_of(ts)),
             None => String::new(),
         };
         let line = format!("judged against {}{mark}: {}{suffix}", e.alias, e.why);
@@ -1672,7 +1677,9 @@ fn against_json(a: &Tree, n: &Node) -> serde_json::Value {
             "node": e.alias,
             "state": e.target.map(|(_, state)| state),
             "why": e.why,
-            "declared": e.declared,
+            // `d797`: the same local date `print_against` shows, not the
+            // full UTC instant -- `declared` was never a full instant.
+            "declared": e.declared.map(crate::clock::date_of),
         }))
         .collect::<Vec<_>>())
 }
@@ -2232,7 +2239,7 @@ fn stack_lanes(a: &Tree, root: &Path, args: &Args, ag: &Aggregates) -> R {
                     "  {:<11} {alias_field} {:<45} {}{tail}",
                     r.name,
                     focus.title(a),
-                    focus.opened(a)
+                    crate::clock::date_of(focus.opened(a))
                 )
             }
             None => outln!(

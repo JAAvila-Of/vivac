@@ -830,6 +830,7 @@ fn setup_refuses_inside_the_registry_folder() {
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_vivac"))
         .current_dir(c.global_home())
         .env("VIVAC_HOME", c.global_home())
+        .env("TZ", "UTC")
         .args(["setup", "claude-code", "--yes"])
         .output()
         .unwrap();
@@ -844,6 +845,7 @@ fn setup_refuses_inside_the_registry_folder() {
     let init_out = std::process::Command::new(env!("CARGO_BIN_EXE_vivac"))
         .current_dir(c.global_home())
         .env("VIVAC_HOME", c.global_home())
+        .env("TZ", "UTC")
         .args(["init", "--yes"])
         .output()
         .unwrap();
@@ -1032,6 +1034,7 @@ fn run_in(dir: &Path, home: &Path, args: &[&str]) -> (String, i32) {
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_vivac"))
         .current_dir(dir)
         .env("VIVAC_HOME", home)
+        .env("TZ", "UTC")
         .args(args)
         .output()
         .unwrap();
@@ -1260,6 +1263,7 @@ fn run_with_home(dir: &Path, home: &Path, vivac_home: &Path, args: &[&str]) -> (
         .env("HOME", home)
         .env("USERPROFILE", home)
         .env("VIVAC_HOME", vivac_home)
+        .env("TZ", "UTC")
         .args(args)
         .output()
         .unwrap();
@@ -1433,6 +1437,7 @@ fn mcp_tool_names(c: &Sandbox) -> std::collections::BTreeSet<String> {
     let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_vivac"))
         .current_dir(&c.0)
         .env("VIVAC_HOME", c.global_home())
+        .env("TZ", "UTC")
         .arg("mcp")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
