@@ -15,10 +15,11 @@
 //! satisfied, which is what makes the missing `Access-Control-Allow-*`
 //! actually matter.
 //!
-//! **The index is routing, not a surface.** It only ever redirects to one
-//! project or lists which ones there are; the real page -- `WEB.md` §3.1,
-//! the Today page a project's `id` routes to -- comes once this layer is in
-//! place and proven.
+//! **`/` always answers the index** (`d809`). Where a session starts is
+//! decided once, when the boot key is spent: on the Today page of the
+//! project the server was started in, or on the index when it was started
+//! anywhere else. After that the index is one link away from every Today
+//! page, so no working directory can take it out of reach.
 
 mod gate;
 mod map;
@@ -173,14 +174,13 @@ fn respond(request: tiny_http::Request, status: u16, content_type: &str, body: S
     let _ = request.respond(response);
 }
 
-/// `302` to a project's Today page. `d145`: an index with exactly one
-/// project does not make anybody click through it.
-fn redirect(request: tiny_http::Request, location: &str) {
-    redirect_with(request, location, None)
-}
-
 /// Spending the boot key: hand over the session cookie and land the browser
-/// where the work is (`d190`).
+/// on the landing project's Today page when there is one, `/` when there is
+/// none (`d809`, refining `d190`/`d145`: `/` itself always answers the
+/// index now -- see `Route::Index` below -- so this is the one place left
+/// that skips the click-through an index of a single project never needed,
+/// and the only way a working directory inside a project still lands you on
+/// it rather than on the list).
 ///
 /// The flags are the defence and every one of them is load-bearing.
 /// `SameSite=Strict` is what keeps another page in the same browser --
@@ -190,12 +190,16 @@ fn redirect(request: tiny_http::Request, location: &str) {
 /// with the browser, and the token it carries dies with this process
 /// anyway. There is no `Secure`, because this is `http://127.0.0.1` and
 /// `Secure` would stop the cookie being sent at all.
-fn boot_redirect(request: tiny_http::Request, token: &str) {
+fn boot_redirect(request: tiny_http::Request, token: &str, landing: Option<&str>) {
     let jar = format!(
         "{}={token}; Path=/; HttpOnly; SameSite=Strict",
         SESSION_COOKIE
     );
-    redirect_with(request, "/", Some(header("Set-Cookie", &jar)))
+    let location = match landing {
+        Some(id) => format!("/p/{id}/"),
+        None => "/".to_string(),
+    };
+    redirect_with(request, &location, Some(header("Set-Cookie", &jar)))
 }
 
 fn redirect_with(request: tiny_http::Request, location: &str, extra: Option<tiny_http::Header>) {
@@ -209,6 +213,19 @@ fn redirect_with(request: tiny_http::Request, location: &str, extra: Option<tiny
         response = response.with_header(h);
     }
     let _ = request.respond(response);
+}
+
+/// `d810`: the same sentence `find --everywhere` prints for the same shape
+/// of answer (`render.rs`'s own `find_everywhere`), so a person who meets
+/// both surfaces reads one wording rather than two for "a root the registry
+/// named did not open".
+pub(crate) fn unreachable_sentence(names: &[String]) -> String {
+    format!(
+        "{} project{} unreachable: {}",
+        names.len(),
+        if names.len() == 1 { "" } else { "s" },
+        names.join(", ")
+    )
 }
 
 /// The two answers that are not "one project", shared by the three routes
@@ -257,21 +274,21 @@ fn handle(
         cookie: cookie.as_deref(),
     };
     match gate.admit(&incoming) {
-        Verdict::Boot => boot_redirect(request, gate.token()),
+        Verdict::Boot => boot_redirect(request, gate.token(), landing),
         Verdict::Serve => match route(&path) {
-            // `d199`: `/` is still the index, and what changed is where the
-            // redirect goes -- from "the only project" to "the one the
-            // working directory is inside, if it is inside one". Started
-            // from anywhere else, the index is the answer even with a single
-            // project, because then the reader did not come here from a
-            // project and has not said which one they meant.
-            Route::Index => match landing {
-                Some(id) => redirect(request, &format!("/p/{}/", id)),
-                None => {
-                    let page = today::index_page(registry.all());
-                    respond(request, 200, HTML, page)
-                }
-            },
+            // `d809`: `/` always answers the index -- with a landing project
+            // or without one, with one project or with many. It used to hand
+            // out `d199`'s redirect instead, whenever the working directory
+            // sat inside a project, and that made the index unreachable for
+            // the rest of the session: there was no page left that linked to
+            // it. The redirect a landing project earns did not go away; it
+            // moved to `boot_redirect` above, which is spent once per
+            // session rather than run on every request.
+            Route::Index => {
+                let unreachable = registry.unreachable().to_vec();
+                let page = today::index_page(registry.all(), &unreachable);
+                respond(request, 200, HTML, page)
+            }
             Route::Today(id) => match registry.named(id) {
                 Named::One(i) => {
                     let project = registry.at(i);
@@ -390,17 +407,21 @@ fn open_browser(url: &str) {
 }
 
 /// Binds `127.0.0.1` -- and nothing else; there is no flag for another
-/// address -- serves `roots`, and blocks until the process is killed.
-/// `cwd_located` is what `store::locate` answered for the working
-/// directory, if it sits inside a project at all. Its `root` is where `/`
-/// lands (`d199`); `None` means the server was started from somewhere that
-/// is not a project, which is the case the whole decision exists for, and
-/// then `/` is the index. Handed to `Registry::open` whole, which is what
-/// lets it sign as that lane only for that one project, never for the
-/// others `roots` may also name (`t594`, twice: the second time before
-/// `Registry::open` reached this far).
+/// address -- serves `required` and `optional` (`d810`: the same kind of
+/// root, told apart only by what a failure to open one costs), and blocks
+/// until the process is killed. `cwd_located` is what `store::locate`
+/// answered for the working directory, if it sits inside a project at all.
+/// Its `root` decides where the boot key lands you (`d809`, refining
+/// `d199`) -- `/p/<id>/` for the project it names, `/` when there is none --
+/// and nothing else: `/` itself always answers the index now, so a working
+/// directory inside a project no longer costs the rest of the session its
+/// way back to it. Handed to `Registry::open` whole, which is what lets it
+/// sign as that lane only for that one project, never for the others
+/// `required`/`optional` may also name (`t594`, twice: the second time
+/// before `Registry::open` reached this far).
 pub fn serve(
-    roots: Vec<PathBuf>,
+    required: Vec<PathBuf>,
+    optional: Vec<PathBuf>,
     cwd_located: Option<Located>,
     port: Option<u16>,
     open: bool,
@@ -421,7 +442,7 @@ pub fn serve(
         let root = l.root.clone();
         (root, l)
     });
-    let mut registry = Registry::open(roots, here)?;
+    let mut registry = Registry::open(required, optional, here)?;
 
     // Resolved once: the registry does not change while the server is up,
     // and canonicalizing per request would put a filesystem call on the one
@@ -443,6 +464,12 @@ pub fn serve(
     let url = gate.boot_url();
     outln!("  vivac web listening on http://127.0.0.1:{bound_port}");
     outln!("  open this to start a session: {url}");
+    // `d810`: the set is fixed at startup -- the registry does not change
+    // while the server runs -- so there is nothing to say again later.
+    let unreachable = registry.unreachable();
+    if !unreachable.is_empty() {
+        outln!("  {}", unreachable_sentence(unreachable));
+    }
     // This is the one line the person starting the server needs before the
     // loop below blocks for good, so it cannot wait in `output`'s buffer for
     // a `main` that will not run again until the process is killed.

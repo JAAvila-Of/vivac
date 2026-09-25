@@ -687,19 +687,22 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
             .collect();
         let located_here = store::locate(&cwd)?;
         let cwd_root = located_here.as_ref().map(|l| l.root.clone());
-        let roots = if explicit.is_empty() {
-            // The registry is where "every project on this machine" is
-            // written down. The one underfoot can still be missing from it --
-            // a tree whose first use since the registry existed is this very
-            // command -- so it goes in unconditionally; `Registry::open`
-            // collapses the duplicate by canonical path.
-            let mut from_registry = store::store_dir()
+        // `d810`: a root named with `--project`, or the one the working
+        // directory sits in, is required -- a failure there stays the error
+        // it always was. Every other root the machine's registry names is
+        // optional: it can be missing from the registry too (a tree whose
+        // first use since the registry existed is this very command), and
+        // it can also have moved or been deleted since the registry last
+        // heard, which is the case `optional` exists to survive. Either way
+        // `Registry::open` collapses a root named twice by canonical path,
+        // and keeps it required if either naming of it was.
+        let (required, optional) = if explicit.is_empty() {
+            let from_registry = store::store_dir()
                 .map(|d| registry::roots(&d))
                 .unwrap_or_default();
-            from_registry.extend(cwd_root.clone());
-            from_registry
+            (cwd_root.clone().into_iter().collect(), from_registry)
         } else {
-            explicit
+            (explicit, Vec::new())
         };
         let port =
             match a.opt("port") {
@@ -708,7 +711,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
                     Failure::usage(format!("--port needs a port number, not \"{p}\""))
                 })?),
             };
-        return web::serve(roots, located_here, port, !a.has("no-open")).map(|_| 0);
+        return web::serve(required, optional, located_here, port, !a.has("no-open")).map(|_| 0);
     }
 
     // `session prompt` (`d779`) is intercepted here, ahead of `store::locate`'s

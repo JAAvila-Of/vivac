@@ -190,7 +190,9 @@ ol.stack > li.here .title {
   font-weight: 600;
 }
 
-ol.stack > li.here .here-mark {
+/* `f807`: not scoped to `ol.stack > li.here` -- `why.rs`'s spine is an
+   `ol.spine`, not an `ol.stack`, and the mark it carries went unstyled. */
+.here-mark {
   font-family: var(--mono);
   font-size: 0.76rem;
   letter-spacing: 0.06em;
@@ -200,15 +202,27 @@ ol.stack > li.here .here-mark {
 
 /* ---- the index of projects ------------------------------------------ */
 
-ul.projects {
-  list-style: none;
-  margin: 0;
-  padding: 0;
+/* `f806`: a project row shares `ul.nodes > li`'s two columns with every
+   other row on the site, and a name is not an id -- `FluentOperations`
+   overflowed onto the focus text, and `vivac-project` broke at its own
+   hyphen onto two lines. `li.project` stacks the row into one column
+   instead: the name on its own line, the focus under it, the quiet or
+   blocked note under that. `choose_page` shares `project_row`, so it gets
+   the fix for free. */
+ul.nodes > li.project {
+  grid-template-columns: 1fr;
 }
 
-ul.projects > li {
-  padding: 0.45rem 0;
-  border-bottom: 1px solid var(--rule-soft);
+ul.nodes > li.project .alias {
+  font-family: var(--prose);
+  font-size: 1rem;
+  overflow-wrap: anywhere;
+}
+
+/* The base `.note` rule forces `grid-column: 2`, which a single-column
+   row does not have. */
+ul.nodes > li.project .note {
+  grid-column: 1;
 }
 
 a {

@@ -175,8 +175,10 @@ fn facts(tree: &Tree, ag: &Aggregates, n: &Node) -> String {
 /// drawing is also how you walk up the path. The step you are on does not:
 /// a link back to the page you are reading teaches nothing.
 fn step(project: &str, tree: &Tree, ag: &Aggregates, full: &Full, n: &Node, here: bool) -> String {
+    // `f807`: a leading space, or the mark reads glued to the title beside
+    // it -- "...diagramas de usoyou are here".
     let mark = if here {
-        "<span class=\"here-mark\">you are here</span>"
+        " <span class=\"here-mark\">you are here</span>"
     } else {
         ""
     };
@@ -365,6 +367,20 @@ mod tests {
         let page = why_page("vivac", "vivac", &tree, &events, "f4").unwrap();
         assert!(page.contains("you are here"));
         assert!(page.contains("class=\"here\""));
+    }
+
+    /// `f807`: the mark used to butt straight against the title with no
+    /// space between them, so a real title read "...diagramas de
+    /// usoyou are here" once the markup came back as text.
+    #[test]
+    fn the_here_mark_is_set_off_from_the_title_by_a_space() {
+        let events = lineage();
+        let tree = fold(&events, 0);
+        let page = why_page("vivac", "vivac", &tree, &events, "f4").unwrap();
+        assert!(
+            page.contains(" <span class=\"here-mark\">"),
+            "the mark is glued to the title:\n{page}"
+        );
     }
 
     /// The same rule the whole surface rests on: a title is prose somebody

@@ -309,6 +309,11 @@ impl Project {
 /// Every root the process was asked to serve, each folded once.
 pub struct Registry {
     projects: Vec<Project>,
+    /// The name of every root that could not be opened, sorted (`d810`).
+    /// Only a root that came from the machine's registry alone can end up
+    /// here -- see [`Self::open_in`] -- so this is always empty for
+    /// `vivac mcp`, whose one root is required.
+    unreachable: Vec<String>,
 }
 
 impl Registry {
@@ -316,20 +321,32 @@ impl Registry {
     /// started in, paired with the tree root it belongs to (`Located.root`)
     /// -- `None` when the caller has nothing to resolve, or the starting
     /// folder is not inside any tree at all. Given to the one project among
-    /// `roots` whose own root is that root, as `Whose::Resolved`, and to no
-    /// other: `web` can serve several roots at once, and a folder is a lane
-    /// of at most one of them. Every other project answers -- and, through
-    /// `Project::write`, signs -- as `Whose::Founding`, the same as any
-    /// tree nobody ran `setup` in. Getting this wrong made the resident
-    /// server read `main` from a joined folder and, worse, write events
-    /// signed `main` from it (`t594`, twice: the second time because
-    /// `Ctx::from_events` had not caught up to `Whose` yet).
+    /// `required` and `optional` whose own root is that root, as
+    /// `Whose::Resolved`, and to no other: `web` can serve several roots at
+    /// once, and a folder is a lane of at most one of them. Every other
+    /// project answers -- and, through `Project::write`, signs -- as
+    /// `Whose::Founding`, the same as any tree nobody ran `setup` in.
+    /// Getting this wrong made the resident server read `main` from a
+    /// joined folder and, worse, write events signed `main` from it
+    /// (`t594`, twice: the second time because `Ctx::from_events` had not
+    /// caught up to `Whose` yet).
+    ///
+    /// `required` and `optional` are the same kind of root, told apart only
+    /// by what a failure to open one costs (`d810`): a root in `required`
+    /// -- named with `--project`, or the one the working directory sits in
+    /// -- fails the whole call the way every root used to. A root in
+    /// `optional` -- one the machine's registry alone named -- is skipped
+    /// instead, and [`Self::unreachable`] remembers it by name. A root that
+    /// is in both, compared by canonical path the way [`dedup_by_target`]
+    /// already does, is required: `optional` never downgrades a root
+    /// `required` already named.
     pub fn open(
-        roots: Vec<PathBuf>,
+        required: Vec<PathBuf>,
+        optional: Vec<PathBuf>,
         here: Option<(PathBuf, store::Located)>,
     ) -> Result<Registry, Failure> {
         let store_dir = store::store_dir();
-        Registry::open_in(roots, here, store_dir.as_deref())
+        Registry::open_in(required, optional, here, store_dir.as_deref())
     }
 
     /// [`Self::open`], pointed at a store directory the caller already
@@ -341,18 +358,29 @@ impl Registry {
     /// resolves the store the one way there is, and the one way there is
     /// refuses to run under `cfg(test)` without `VIVAC_HOME` -- on purpose,
     /// since a test that reached it would read this machine's own registry.
+    ///
+    /// A root in `optional` that fails to open is skipped rather than
+    /// failing the call (`d810`, `f804`): a folder the registry still names
+    /// after it moved or was deleted must not stop every other root from
+    /// being served, and `vivac web` was the one caller that ever had more
+    /// than one root to lose the rest over. It is remembered by name, never
+    /// by path -- [`Self::unreachable`] -- and only by the name
+    /// [`assign_names_and_slugs`] would have shown for it anyway. A root in
+    /// `required` fails the call exactly as every root used to.
     pub fn open_in(
-        roots: Vec<PathBuf>,
+        required: Vec<PathBuf>,
+        optional: Vec<PathBuf>,
         here: Option<(PathBuf, store::Located)>,
         store_dir: Option<&Path>,
     ) -> Result<Registry, Failure> {
-        if roots.is_empty() {
+        if required.is_empty() && optional.is_empty() {
             return Err(Failure::usage(
                 "vivac needs at least one root to serve.".to_string(),
             ));
         }
-        let unique = dedup_by_target(roots);
-        let pairs = assign_names_and_slugs(&unique, store_dir);
+        let asks = dedup_by_target(required, optional);
+        let roots: Vec<PathBuf> = asks.iter().map(|a| a.root.clone()).collect();
+        let pairs = assign_names_and_slugs(&roots, store_dir);
         let here_key = here
             .as_ref()
             .map(|(root, _)| std::fs::canonicalize(root).unwrap_or_else(|_| root.clone()));
@@ -360,9 +388,10 @@ impl Registry {
         // this is taken out of `here_located` exactly once, the moment the
         // matching root is found -- `Whose::Founding` for every other.
         let (_, mut here_located) = here.map_or((None, None), |(r, l)| (Some(r), Some(l)));
-        let mut projects = Vec::with_capacity(unique.len());
-        for (root, (name, id)) in unique.into_iter().zip(pairs) {
-            let key = std::fs::canonicalize(&root).unwrap_or_else(|_| root.clone());
+        let mut projects = Vec::with_capacity(asks.len());
+        let mut unreachable: Vec<String> = Vec::new();
+        for (ask, (name, id)) in asks.into_iter().zip(pairs) {
+            let key = std::fs::canonicalize(&ask.root).unwrap_or_else(|_| ask.root.clone());
             let located_here = if here_key.as_ref() == Some(&key) {
                 here_located.take()
             } else {
@@ -372,15 +401,34 @@ impl Registry {
                 Some(l) => ops::Whose::Resolved(l),
                 None => ops::Whose::Founding,
             };
-            projects.push(Project::open(root, name, id, whose)?);
+            match Project::open(ask.root, name.clone(), id, whose) {
+                Ok(p) => projects.push(p),
+                Err(e) if ask.required => return Err(e),
+                Err(_) => unreachable.push(name),
+            }
         }
-        Ok(Registry { projects })
+        unreachable.sort();
+        if projects.is_empty() {
+            return Err(Failure::usage(none_reachable_message(&unreachable)));
+        }
+        Ok(Registry {
+            projects,
+            unreachable,
+        })
     }
 
     /// The first root the process was given. `open` refuses an empty list, so
-    /// there is always one.
+    /// there is always one -- once every optional root that failed to open
+    /// has already been skipped, so this is never one of those.
     pub fn first(&mut self) -> &mut Project {
         &mut self.projects[0]
+    }
+
+    /// The name of every optional root that failed to open, sorted (`d810`).
+    /// Fixed at the moment [`Self::open_in`] returned: the registry a
+    /// server reads from does not change while it runs.
+    pub fn unreachable(&self) -> &[String] {
+        &self.unreachable
     }
 
     /// What a URL's `<id>` names here. The `id` is compared against what the
@@ -419,22 +467,58 @@ impl Registry {
     }
 }
 
-/// Collapses roots that point at the same place, keeping the first spelling
-/// they arrived with. Two entries are the same place when `canonicalize`
-/// agrees on both, and a root `canonicalize` cannot resolve is compared as
-/// written instead of dropped.
-fn dedup_by_target(roots: Vec<PathBuf>) -> Vec<PathBuf> {
+/// One root as [`Registry::open_in`] was asked to serve it, with whether a
+/// failure to open it stays today's error (`d810`).
+struct Ask {
+    root: PathBuf,
+    required: bool,
+}
+
+/// Collapses `required` and `optional` together into one list with no root
+/// served twice, keeping the first spelling each one arrived with. Two
+/// entries are the same place when `canonicalize` agrees on both, and a root
+/// `canonicalize` cannot resolve is compared as written instead of dropped.
+///
+/// `required` is walked first, so a root that appears in both keeps its
+/// required spelling and position: the rule `d810` states as "the cwd root,
+/// if it is also in the registry, is required" is this ordering, not a
+/// second pass over the result.
+fn dedup_by_target(required: Vec<PathBuf>, optional: Vec<PathBuf>) -> Vec<Ask> {
     let mut keys: Vec<PathBuf> = Vec::new();
-    let mut out: Vec<PathBuf> = Vec::new();
-    for root in roots {
+    let mut out: Vec<Ask> = Vec::new();
+    let asked = required
+        .into_iter()
+        .map(|r| (r, true))
+        .chain(optional.into_iter().map(|r| (r, false)));
+    for (root, required) in asked {
         let key = std::fs::canonicalize(&root).unwrap_or_else(|_| root.clone());
-        if keys.contains(&key) {
+        if let Some(pos) = keys.iter().position(|k| *k == key) {
+            if required {
+                out[pos].required = true;
+            }
             continue;
         }
         keys.push(key);
-        out.push(root);
+        out.push(Ask { root, required });
     }
     out
+}
+
+/// [`Registry::open_in`]'s refusal once every optional root has failed to
+/// open and nothing is left to serve (`d810`). Same exit code as an empty
+/// `roots` list -- the caller asked for at least one root and none of them
+/// answered, which is the same failure by the time it reaches a script.
+fn none_reachable_message(names: &[String]) -> String {
+    match names.len() {
+        1 => format!(
+            "The only project this machine knows could not be opened: {}.",
+            names[0]
+        ),
+        n => format!(
+            "None of the {n} projects this machine knows could be opened: {}.",
+            names.join(", ")
+        ),
+    }
 }
 
 /// The URL-safe form of a directory's bare name: every run of characters
@@ -704,10 +788,99 @@ mod tests {
         std::fs::create_dir_all(&tmp).unwrap();
         store::Store::create(&tmp).unwrap();
         let want = tmp.file_name().unwrap().to_string_lossy().into_owned();
-        let mut registry = Registry::open_in(vec![tmp.clone(), tmp.clone()], None, None)
+        let mut registry = Registry::open_in(vec![tmp.clone(), tmp.clone()], vec![], None, None)
             .unwrap_or_else(|e| panic!("{}", e.message()));
         assert_eq!(registry.first().slug, want);
         std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// `d810`, `f804`: a dead entry in the registry -- the case seen was a
+    /// deleted folder -- must not stop `vivac web` from serving everything
+    /// else. Only a root that came from the registry alone may be skipped
+    /// this way, so it is `optional` here and nowhere near `required`.
+    #[test]
+    fn an_optional_root_that_fails_to_open_is_skipped_and_named() {
+        let live = std::env::temp_dir().join(format!("vivac-project-live-{}", crate::id::ulid()));
+        std::fs::create_dir_all(&live).unwrap();
+        store::Store::create(&live).unwrap();
+        let dead = std::env::temp_dir().join(format!("vivac-project-dead-{}", crate::id::ulid()));
+        let dead_name = dead.file_name().unwrap().to_string_lossy().into_owned();
+
+        let mut registry = Registry::open_in(vec![live.clone()], vec![dead], None, None)
+            .unwrap_or_else(|e| panic!("{}", e.message()));
+        assert_eq!(registry.all().len(), 1, "the live root was dropped too");
+        assert_eq!(registry.unreachable().to_vec(), vec![dead_name]);
+        std::fs::remove_dir_all(&live).ok();
+    }
+
+    /// The other half of `d810`: a root named with `--project`, or the one
+    /// the working directory sits in, is required, and a failure there
+    /// stays the error it was before this decision.
+    #[test]
+    fn a_required_root_that_fails_to_open_still_fails_the_whole_call() {
+        let dead =
+            std::env::temp_dir().join(format!("vivac-project-req-dead-{}", crate::id::ulid()));
+        let err = Registry::open_in(vec![dead], vec![], None, None);
+        assert!(
+            matches!(err, Err(Failure::Io(_))),
+            "a required root's own failure must reach the caller untouched"
+        );
+    }
+
+    /// A root canonicalizing to the same place as a required one is still
+    /// required even when it also arrives through `optional` -- the rule
+    /// `d810` states as "if the cwd root is also in the registry, it is
+    /// required".
+    #[test]
+    fn a_root_repeated_as_optional_stays_required() {
+        let dead =
+            std::env::temp_dir().join(format!("vivac-project-repeat-dead-{}", crate::id::ulid()));
+        let err = Registry::open_in(vec![dead.clone()], vec![dead], None, None);
+        assert!(
+            matches!(err, Err(Failure::Io(_))),
+            "the required copy must not be softened by the optional one"
+        );
+    }
+
+    /// `d810`: once every optional root has failed and nothing is left to
+    /// serve, the refusal says why instead of repeating the empty-`roots`
+    /// message this shares its exit code with.
+    #[test]
+    fn one_unreachable_project_and_nothing_else_names_it_in_the_singular() {
+        let dead =
+            std::env::temp_dir().join(format!("vivac-project-only-dead-{}", crate::id::ulid()));
+        let name = dead.file_name().unwrap().to_string_lossy().into_owned();
+        let err = match Registry::open_in(vec![], vec![dead], None, None) {
+            Err(e) => e,
+            Ok(_) => panic!("a wholly unreachable root must not open"),
+        };
+        assert_eq!(
+            err.message(),
+            format!("The only project this machine knows could not be opened: {name}.")
+        );
+    }
+
+    #[test]
+    fn several_unreachable_projects_and_nothing_else_names_them_all() {
+        let a = std::env::temp_dir().join(format!("vivac-project-none-a-{}", crate::id::ulid()));
+        let b = std::env::temp_dir().join(format!("vivac-project-none-b-{}", crate::id::ulid()));
+        let (name_a, name_b) = (
+            a.file_name().unwrap().to_string_lossy().into_owned(),
+            b.file_name().unwrap().to_string_lossy().into_owned(),
+        );
+        let err = match Registry::open_in(vec![], vec![a, b], None, None) {
+            Err(e) => e,
+            Ok(_) => panic!("two wholly unreachable roots must not open"),
+        };
+        let mut names = [name_a, name_b];
+        names.sort();
+        assert_eq!(
+            err.message(),
+            format!(
+                "None of the 2 projects this machine knows could be opened: {}.",
+                names.join(", ")
+            )
+        );
     }
 
     #[test]
@@ -720,7 +893,7 @@ mod tests {
         let tmp = std::env::temp_dir().join(format!("vivac-project-u-{}", crate::id::ulid()));
         std::fs::create_dir_all(&tmp).unwrap();
         store::Store::create(&tmp).unwrap();
-        let mut registry = Registry::open_in(vec![tmp.clone()], None, None)
+        let mut registry = Registry::open_in(vec![tmp.clone()], vec![], None, None)
             .unwrap_or_else(|e| panic!("{}", e.message()));
         assert_eq!(registry.first().ulid(), None);
         std::fs::remove_dir_all(&tmp).ok();
@@ -750,6 +923,7 @@ mod tests {
         };
         let mut registry = Registry::open_in(
             vec![a.clone(), b.clone()],
+            vec![],
             Some((a.clone(), located_a)),
             None,
         )

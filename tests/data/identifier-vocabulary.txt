@@ -402,6 +402,7 @@ credential
 crockford
 cross
 crosses
+crumb
 csp
 css
 cst
@@ -1166,6 +1167,7 @@ operations
 ops
 opt
 option
+optional
 options
 opts
 or
@@ -1368,6 +1370,7 @@ raw
 rc
 rd
 reach
+reachable
 reached
 reaches
 reaching
@@ -1398,6 +1401,7 @@ redact
 redaction
 redeclare
 redirect
+redirecting
 redirects
 ref
 reference
@@ -1637,6 +1641,7 @@ signs
 silence
 since
 single
+singular
 sites
 sits
 six
@@ -1701,6 +1706,7 @@ start
 started
 starting
 starts
+startup
 state
 static
 station

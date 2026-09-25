@@ -1121,7 +1121,7 @@ pub fn serve(root: PathBuf, located: Option<store::Located>) -> R {
     // every `vivac_brief` call for as long as it lives, not a one-shot
     // echo made for a process that runs once and is gone (`t594`).
     store::mark_resident();
-    let mut registry = Registry::open(vec![root.clone()], located.map(|l| (root, l)))?;
+    let mut registry = Registry::open(vec![root.clone()], vec![], located.map(|l| (root, l)))?;
     let project = registry.first();
     let input = std::io::stdin();
     let mut output = std::io::stdout();
