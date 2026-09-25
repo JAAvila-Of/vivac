@@ -61,20 +61,14 @@ pub(crate) fn wrap(text: &str, width: usize, indent: &str) -> Vec<String> {
     lines
 }
 
-/// The `  [state]` suffix `label` appends behind a title once it is not
-/// open any more -- empty for `State::Active`, since there is nothing to
-/// say about a node still open. Split out of `label` so `why`'s styled
-/// row can colour this half without touching the word `label` itself
-/// still hands `rules` unstyled.
+/// The `  [state]` suffix a title carries once it is not open any more --
+/// empty for `State::Active`, since there is nothing to say about a node
+/// still open.
 fn state_suffix(n: &Node) -> String {
     match n.state {
         State::Active => String::new(),
         e => format!("  [{}]", e.word(n.kind)),
     }
-}
-
-fn label(a: &Tree, n: &Node) -> String {
-    format!("{}{}", n.title(a), state_suffix(n))
 }
 
 /// `state_suffix`, coloured by state (`d795`): done green, parked yellow,
@@ -100,9 +94,9 @@ fn state_suffix_styled(stream: Stream, n: &Node) -> String {
 /// otherwise. `len` is `text`'s plain width, since an escape code must
 /// never count toward it. Empty for a row with nothing to say after the
 /// title, `open`'s and most of `why`'s own rows among them.
-struct TitleSuffix<'a> {
-    text: &'a str,
-    len: usize,
+pub(crate) struct TitleSuffix<'a> {
+    pub(crate) text: &'a str,
+    pub(crate) len: usize,
 }
 
 /// Prints an alias-and-title row that wraps `title` at the terminal's
@@ -115,7 +109,7 @@ struct TitleSuffix<'a> {
 /// continuation line -- spaces for `open` and `why`, a dim tree connector
 /// for `tree`. `style_chunk` colours each wrapped piece of `title` itself
 /// once wrapping has already decided where the breaks fall.
-fn print_title_row(
+pub(crate) fn print_title_row(
     first_line: &str,
     cont_prefix: &str,
     lead: usize,
@@ -979,7 +973,7 @@ pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
         // `t411` §6: a rule shows its arms, in the same words `rules` prints
         // them with.
         if p.kind == Kind::Rule {
-            print_arms(a, p, "        ", true);
+            print_arms(a, p, "        ", true, false);
         }
         // `t426` §3.1: a decision shows its declarations right where a rule
         // shows its arms -- behind the alias line, ahead of the body.
@@ -1598,15 +1592,30 @@ pub fn rules_data(a: &Tree) -> serde_json::Value {
 /// rule's absent `armed:` lines already say by not being there, and `why`
 /// (`t411` §6) passes `true`, because there it is the only line and it does
 /// inform.
-fn print_arms(a: &Tree, r: &Node, indent: &str, show_judged: bool) {
+///
+/// `dim` styles every line here as secondary text: `rules` passes `true`,
+/// since its own aliases already carry the eye with `kind_id`; `why`
+/// passes `false`, so its own already-styled prose stays exactly what
+/// `d795` left it.
+fn print_arms(a: &Tree, r: &Node, indent: &str, show_judged: bool, dim: bool) {
+    let line = |s: String| {
+        if dim {
+            style::dim(Stream::Out, &s)
+        } else {
+            s
+        }
+    };
     let arms = r.arms(a);
     if arms.is_empty() {
         if show_judged {
-            outln!("{indent}judged: no command verifies it");
+            outln!(
+                "{}",
+                line(format!("{indent}judged: no command verifies it"))
+            );
         }
     } else {
         for (dir, command) in arms {
-            outln!("{indent}armed in {dir}/: {command}");
+            outln!("{}", line(format!("{indent}armed in {dir}/: {command}")));
         }
     }
 }
@@ -1673,8 +1682,34 @@ fn against_json(a: &Tree, n: &Node) -> serde_json::Value {
 /// `rules`'s two shapes just ran, and only when there was no open pillar and
 /// no open rule for it to find.
 fn print_second_map_hint() {
-    outln!("  Rules kept in CLAUDE.md, AGENTS.md or a memory file are a second map, and");
-    outln!("  vivac never reads them: bring them in with vivac add --type pillar|rule.");
+    let out = Stream::Out;
+    outln!(
+        "  {}",
+        style::dim(
+            out,
+            "Rules kept in CLAUDE.md, AGENTS.md or a memory file are a second map, and"
+        )
+    );
+    outln!(
+        "  {}",
+        style::dim(
+            out,
+            "vivac never reads them: bring them in with vivac add --type pillar|rule."
+        )
+    );
+}
+
+/// An alias, coloured by kind and padded to six columns -- the pillar and
+/// rule field `rules` prints ahead of a title, on its own since `rules`
+/// carries no trailing suffix or wrapped title to share `print_title_row`'s
+/// machinery with.
+fn rules_alias_field(out: Stream, n: &Node) -> String {
+    let alias = n.alias();
+    format!(
+        "{}{}",
+        style::kind_id(out, n.kind, &alias),
+        " ".repeat(6usize.saturating_sub(alias.chars().count()))
+    )
 }
 
 /// `rules` — the pull: everything that governs this project, read whether
@@ -1705,43 +1740,61 @@ pub fn rules(a: &Tree, args: &Args) -> R {
         return Ok(());
     }
 
+    let out = Stream::Out;
     outln!();
     if !view.pillars.is_empty() {
-        outln!("  PILLARS");
+        outln!("  {}", style::bold(out, "PILLARS"));
         for s in &view.pillars {
-            outln!("  {:<6}{}", s.pillar.alias(), label(a, s.pillar));
+            let closed = s.pillar.state != State::Active;
+            let title = if closed {
+                style::dim(out, s.pillar.title(a))
+            } else {
+                s.pillar.title(a).to_string()
+            };
+            outln!(
+                "  {}{}{}",
+                rules_alias_field(out, s.pillar),
+                title,
+                state_suffix_styled(out, s.pillar)
+            );
             for r in &s.rules {
-                outln!("    {:<6}{}", r.alias(), r.title(a));
-                print_arms(a, r, "          ", false);
+                outln!("    {}{}", rules_alias_field(out, r), r.title(a));
+                print_arms(a, r, "          ", false, true);
             }
         }
     }
     if !view.orphan_rules.is_empty() {
         outln!();
-        outln!("  RULES WITHOUT A PILLAR");
+        outln!("  {}", style::bold(out, "RULES WITHOUT A PILLAR"));
         for r in &view.orphan_rules {
-            outln!("  {:<6}{}", r.alias(), r.title(a));
-            print_arms(a, r, "        ", false);
+            outln!("  {}{}", rules_alias_field(out, r), r.title(a));
+            print_arms(a, r, "        ", false, true);
         }
     }
     if !view.invariants.is_empty() {
         outln!();
-        outln!("  INVARIANTS");
+        outln!("  {}", style::bold(out, "INVARIANTS"));
         for n in &view.invariants {
-            outln!("  {:<6}{}", n.alias(), n.title(a));
+            outln!("  {}{}", rules_alias_field(out, n), n.title(a));
         }
     }
     outln!();
     outln!(
-        "  {} pillar{} \u{b7} {} rule{}: {} armed, {} judged \u{b7} {} invariant{}",
-        view.pillars.len(),
-        if view.pillars.len() == 1 { "" } else { "s" },
-        total_rules,
-        if total_rules == 1 { "" } else { "s" },
-        armed_rules,
-        judged_rules,
-        view.invariants.len(),
-        if view.invariants.len() == 1 { "" } else { "s" },
+        "  {}",
+        style::dim(
+            out,
+            &format!(
+                "{} pillar{} \u{b7} {} rule{}: {} armed, {} judged \u{b7} {} invariant{}",
+                view.pillars.len(),
+                if view.pillars.len() == 1 { "" } else { "s" },
+                total_rules,
+                if total_rules == 1 { "" } else { "s" },
+                armed_rules,
+                judged_rules,
+                view.invariants.len(),
+                if view.invariants.len() == 1 { "" } else { "s" },
+            )
+        )
     );
     outln!();
     if nothing_governs {
@@ -1832,82 +1885,141 @@ pub fn triage(a: &Tree, args: &Args) -> R {
         outln!("  Nothing to prune.");
         return Ok(());
     }
+    let out = Stream::Out;
+    let cap = style::width(out).map(|w| w.saturating_sub(1));
     outln!();
-    outln!("  TRIAGE - {total} thing(s) to look at");
+    outln!(
+        "  {}",
+        style::bold(out, &format!("TRIAGE - {total} thing(s) to look at"))
+    );
 
     if !parked_nodes.is_empty() {
         outln!();
-        outln!(
-            "  PARKED ({})                       focus <id>  |  abandon <id>",
-            parked_nodes.len()
+        print_triage_heading(
+            out,
+            &format!("PARKED ({})", parked_nodes.len()),
+            "focus <id>  |  abandon <id>",
         );
         for n in &parked_nodes {
-            outln!("    {:<6} {}", n.alias(), n.title(a));
+            let alias = n.alias();
+            let alias_field = format!(
+                "{}{}",
+                style::kind_id(out, n.kind, &alias),
+                " ".repeat(6usize.saturating_sub(alias.chars().count()))
+            );
+            print_title_row(
+                &format!("    {alias_field} "),
+                &" ".repeat(11),
+                11,
+                n.title(a),
+                cap,
+                |chunk| chunk.to_string(),
+                TitleSuffix { text: "", len: 0 },
+            );
             for l in wrap(n.outcome(a), WIDTH, "           ") {
-                outln!("{l}");
+                outln!("{}", style::dim(out, &l));
             }
         }
     }
 
     if !deep.is_empty() {
         outln!();
-        outln!(
-            "  6 OR MORE FROM ITS GOAL ({})      promote <id>",
-            deep.len()
+        print_triage_heading(
+            out,
+            &format!("6 OR MORE FROM ITS GOAL ({})", deep.len()),
+            "promote <id>",
         );
         for (n, d) in &deep {
+            let alias = n.alias();
             outln!(
-                "    {:<6} {:<40} depth {d}",
-                n.alias(),
+                "    {}{} {:<40} depth {d}",
+                style::kind_id(out, n.kind, &alias),
+                " ".repeat(6usize.saturating_sub(alias.chars().count())),
                 clip(n.title(a), 40)
             );
             // The lineage starts where the number does. Drawing it from the
             // root beside a distance to the goal would say two things at once.
-            let v: Vec<String> = a
-                .under_goal(n.num)
+            let path = a.under_goal(n.num);
+            let sep = style::dim(out, " > ");
+            let v: Vec<String> = path[..path.len().saturating_sub(1)]
                 .iter()
-                .rev()
-                .skip(1)
-                .rev()
-                .map(|p| p.alias())
+                .map(|p| style::kind_id(out, p.kind, &p.alias()))
                 .collect();
-            outln!("           via {}", v.join(" > "));
+            outln!("           {} {}", style::dim(out, "via"), v.join(&sep));
         }
     }
 
     if !orphaned.is_empty() {
         outln!();
-        outln!(
-            "  SURVIVED A DISCARD ({})           abandon <id>  |  promote <id>",
-            orphaned.len()
+        print_triage_heading(
+            out,
+            &format!("SURVIVED A DISCARD ({})", orphaned.len()),
+            "abandon <id>  |  promote <id>",
         );
         for (n, p) in &orphaned {
-            outln!("    {:<6} {}", n.alias(), n.title(a));
+            let alias = n.alias();
+            let alias_field = format!(
+                "{}{}",
+                style::kind_id(out, n.kind, &alias),
+                " ".repeat(6usize.saturating_sub(alias.chars().count()))
+            );
+            print_title_row(
+                &format!("    {alias_field} "),
+                &" ".repeat(11),
+                11,
+                n.title(a),
+                cap,
+                |chunk| chunk.to_string(),
+                TitleSuffix { text: "", len: 0 },
+            );
             outln!(
-                "           born from {}, discarded: {}",
-                p.alias(),
-                clip(p.outcome(a), 36)
+                "{}",
+                style::dim(
+                    out,
+                    &format!(
+                        "           born from {}, discarded: {}",
+                        p.alias(),
+                        clip(p.outcome(a), 36)
+                    )
+                )
             );
         }
     }
 
     if !false_closes.is_empty() {
         outln!();
-        outln!(
-            "  FALSE CLOSES ({})                 close what is left, or --force",
-            false_closes.len()
+        print_triage_heading(
+            out,
+            &format!("FALSE CLOSES ({})", false_closes.len()),
+            "close what is left, or --force",
         );
         for n in &false_closes {
+            let alias = n.alias();
             outln!(
-                "    {:<6} {:<40} {} blocker(s)",
-                n.alias(),
-                clip(n.title(a), 40),
-                ag.blockers(n.num)
+                "    {}{} {} {}",
+                style::kind_id(out, n.kind, &alias),
+                " ".repeat(6usize.saturating_sub(alias.chars().count())),
+                style::dim(out, &format!("{:<40}", clip(n.title(a), 40))),
+                style::bold(
+                    out,
+                    &style::gone(out, &format!("{} blocker(s)", ag.blockers(n.num)))
+                )
             );
         }
     }
     outln!();
     Ok(())
+}
+
+/// One triage section's heading: a bold label, padded to the column every
+/// heading's own hint starts at in the plain text (36, the widest label
+/// plus its own gap), then the hint dimmed. The padding is measured on
+/// `label` alone, never on the styled span, so an escape code never counts
+/// toward it.
+fn print_triage_heading(out: Stream, label: &str, hint: &str) {
+    let left = format!("  {label}");
+    let pad = " ".repeat(36usize.saturating_sub(left.chars().count()));
+    outln!("{}{pad}{}", style::bold(out, &left), style::dim(out, hint));
 }
 
 /// `parked` — DO NOT TOUCH NOW. It is the section no other tool emits: every
@@ -1930,13 +2042,32 @@ pub fn parked(a: &Tree, args: &Args) -> R {
         outln!("  Nothing parked.");
         return Ok(());
     }
+    let out = Stream::Out;
     outln!();
-    outln!("  DO NOT TOUCH NOW ({})", ps.len());
+    outln!(
+        "  {}",
+        style::bold(out, &format!("DO NOT TOUCH NOW ({})", ps.len()))
+    );
     outln!();
+    let cap = style::width(out).map(|w| w.saturating_sub(1));
     for n in ps {
-        outln!("  {:<6} {}", n.alias(), n.title(a));
+        let alias = n.alias();
+        let alias_field = format!(
+            "{}{}",
+            style::kind_id(out, n.kind, &alias),
+            " ".repeat(6usize.saturating_sub(alias.chars().count()))
+        );
+        print_title_row(
+            &format!("  {alias_field} "),
+            &" ".repeat(9),
+            9,
+            n.title(a),
+            cap,
+            |chunk| chunk.to_string(),
+            TitleSuffix { text: "", len: 0 },
+        );
         for l in wrap(n.outcome(a), WIDTH, "         ") {
-            outln!("{l}");
+            outln!("{}", style::dim(out, &l));
         }
     }
     outln!();
@@ -1966,22 +2097,57 @@ pub fn stack(a: &Tree, root: &Path, args: &Args) -> R {
         outln!("  Empty stack.  vivac push \"<title>\" --why \"<reason>\"");
         return Ok(());
     }
+    let out = Stream::Out;
     outln!();
+    let cap = style::width(out).map(|w| w.saturating_sub(1));
     for (i, n) in stack.iter().enumerate() {
-        let focus = if i == stack.len() - 1 {
-            "   <- focus"
+        let is_focus = i == stack.len() - 1;
+        let margin = format!("  {}", "  ".repeat(i));
+        let lead = margin.chars().count() + 7;
+        let alias = n.alias();
+        let alias_field = format!(
+            "{}{}",
+            style::kind_id(out, n.kind, &alias),
+            " ".repeat(6usize.saturating_sub(alias.chars().count()))
+        );
+        let suffix_plain = if is_focus { "   <- focus" } else { "" };
+        let suffix_styled = if is_focus {
+            style::bold(out, &style::warn(out, suffix_plain))
         } else {
-            ""
+            String::new()
         };
-        outln!("  {}{:<6} {}{focus}", "  ".repeat(i), n.alias(), n.title(a));
+        print_title_row(
+            &format!("{margin}{alias_field} "),
+            &" ".repeat(lead),
+            lead,
+            n.title(a),
+            cap,
+            |chunk| chunk.to_string(),
+            TitleSuffix {
+                text: &suffix_styled,
+                len: suffix_plain.chars().count(),
+            },
+        );
     }
     outln!();
     if stack.len() >= 6 {
         outln!(
-            "  Stack {} levels deep. Almost never lack of discipline: usually",
-            stack.len()
+            "  {}",
+            style::dim(
+                out,
+                &format!(
+                    "Stack {} levels deep. Almost never lack of discipline: usually",
+                    stack.len()
+                )
+            )
         );
-        outln!("  the root goal moved and nobody re-rooted.  vivac promote");
+        outln!(
+            "  {}",
+            style::dim(
+                out,
+                "the root goal moved and nobody re-rooted.  vivac promote"
+            )
+        );
         outln!();
     }
     Ok(())
@@ -2040,22 +2206,40 @@ fn stack_lanes(a: &Tree, root: &Path, args: &Args, ag: &Aggregates) -> R {
         outln!("  No lanes yet.  vivac init plants one.");
         return Ok(());
     }
+    let out = Stream::Out;
     outln!();
+    // A fixed-column table, name/alias/title/date each in its own field: a
+    // title wrapped at the terminal's width would have to drag the date
+    // along with it onto whichever line the wrap left it on, and that is a
+    // second table underneath this one, not a styled version of it. What
+    // stays fixed still gains the alias's own kind colour, and the two
+    // tails that are not a lane's own data.
     for r in &rows {
         let tail = if gone.iter().any(|g| g == r.id) {
-            "  (folder gone)"
+            style::dim(out, "  (folder gone)")
         } else {
-            ""
+            String::new()
         };
         match r.focus {
-            Some(focus) => outln!(
-                "  {:<11} {:<6} {:<45} {}{tail}",
+            Some(focus) => {
+                let alias = focus.alias();
+                let alias_field = format!(
+                    "{}{}",
+                    style::kind_id(out, focus.kind, &alias),
+                    " ".repeat(6usize.saturating_sub(alias.chars().count()))
+                );
+                outln!(
+                    "  {:<11} {alias_field} {:<45} {}{tail}",
+                    r.name,
+                    focus.title(a),
+                    focus.opened(a)
+                )
+            }
+            None => outln!(
+                "  {:<11} {}{tail}",
                 r.name,
-                focus.alias(),
-                focus.title(a),
-                focus.opened(a)
+                style::dim(out, "(nothing pushed yet)")
             ),
-            None => outln!("  {:<11} (nothing pushed yet){tail}", r.name),
         }
     }
     outln!();
@@ -2090,25 +2274,53 @@ pub fn stats(a: &Tree, args: &Args) -> R {
             "false_closes": false_closes.iter().map(|n| json_node(a, ag, n)).collect::<Vec<_>>(),
         }));
     }
+    let out = Stream::Out;
     outln!();
-    outln!("  nodes          {}", a.total());
+    outln!(
+        "  nodes          {}",
+        style::bold(out, &a.total().to_string())
+    );
     for (k, v) in &by_state {
-        outln!("  {k:<14} {v}");
+        outln!("  {k:<14} {}", style::bold(out, &v.to_string()));
     }
-    outln!("  depth          {depth_of}");
-    outln!("  roots          {}", a.roots().len());
-    outln!("  stack          {}", a.stack_depth());
+    outln!(
+        "  depth          {}",
+        style::bold(out, &depth_of.to_string())
+    );
+    outln!(
+        "  roots          {}",
+        style::bold(out, &a.roots().len().to_string())
+    );
+    outln!(
+        "  stack          {}",
+        style::bold(out, &a.stack_depth().to_string())
+    );
     if orphans > 0 {
-        outln!("  ORPHANS        {orphans}  <- broken provenance");
+        outln!(
+            "  ORPHANS        {}  <- broken provenance",
+            style::bold(out, &orphans.to_string())
+        );
     }
     if a.broken_lines > 0 {
-        outln!("  broken lines   {}  <- in .vivac/events", a.broken_lines);
+        outln!(
+            "  broken lines   {}  <- in .vivac/events",
+            style::bold(out, &a.broken_lines.to_string())
+        );
     }
     if !false_closes.is_empty() {
         outln!();
-        outln!("  FALSE CLOSES ({})", false_closes.len());
+        outln!(
+            "  {}",
+            style::bold(out, &format!("FALSE CLOSES ({})", false_closes.len()))
+        );
         for n in false_closes {
-            outln!("      {:<6} {}", n.alias(), n.title(a));
+            let alias = n.alias();
+            outln!(
+                "      {}{}{}",
+                style::kind_id(out, n.kind, &alias),
+                " ".repeat(6usize.saturating_sub(alias.chars().count())),
+                style::dim(out, n.title(a))
+            );
         }
     }
     outln!();
@@ -2150,6 +2362,8 @@ pub fn vivacs(a: &Tree, args: &Args) -> R {
         outln!("  No stops yet.  vivac save \"<label>\"");
         return Ok(());
     }
+    let out = Stream::Out;
+    let cap = style::width(out).map(|w| w.saturating_sub(1));
     outln!();
     // The whole tree's catalogue, on purpose: `restore`/`--since` accept
     // any vivac by `num` (`model.rs`'s own `Tree::vivac`), not only the
@@ -2160,28 +2374,54 @@ pub fn vivacs(a: &Tree, args: &Args) -> R {
     // not fixed here, only written down so it is not forgotten by omission
     // (`t594`).
     for v in a.vivacs.iter().rev().take(20) {
-        let top = v
-            .stack
-            .last()
-            .map(|(al, t)| format!("{al}  {t}"))
-            .unwrap_or_else(|| "empty stack".into());
-        outln!(
-            "  {:<5} {:<7} {}  {}",
-            v.alias(),
-            v.kind.word(),
-            crate::clock::date_of(&v.ts),
-            top
-        );
+        let alias_field = format!("{:<5}", v.alias());
+        let kind_field = format!("{:<7}", v.kind.word());
+        let date = crate::clock::date_of(&v.ts);
+        // Measured on the plain fields, never on `style::bold`'s own
+        // escape codes: the same rule every wrapped row in this file
+        // follows so a line that wraps still wraps at the right column.
+        let plain_prefix_len = format!("  {alias_field} {kind_field} {date}  ")
+            .chars()
+            .count();
+        let styled_prefix = format!("  {} {kind_field} {date}  ", style::bold(out, &alias_field));
+        match v.stack.last() {
+            Some((focus_alias, focus_title)) => {
+                let lead = plain_prefix_len + focus_alias.chars().count() + 2;
+                print_title_row(
+                    &format!("{styled_prefix}{focus_alias}  "),
+                    &" ".repeat(lead),
+                    lead,
+                    focus_title,
+                    cap,
+                    |chunk| chunk.to_string(),
+                    TitleSuffix { text: "", len: 0 },
+                );
+            }
+            None => outln!("{styled_prefix}empty stack"),
+        }
         if !v.label.is_empty() {
             outln!("           {}", v.label);
         }
         if !v.next_intent.is_empty() {
-            outln!("           you were about to: {}", v.next_intent);
+            const INTENT_PREFIX: &str = "you were about to: ";
+            let lead = 11 + INTENT_PREFIX.chars().count();
+            print_title_row(
+                &format!("           {}", style::dim(out, INTENT_PREFIX)),
+                &" ".repeat(lead),
+                lead,
+                &v.next_intent,
+                cap,
+                |chunk| style::dim(out, chunk),
+                TitleSuffix { text: "", len: 0 },
+            );
         }
     }
     if a.vivacs.len() > 20 {
         outln!();
-        outln!("  ... and {} more", a.vivacs.len() - 20);
+        outln!(
+            "  {}",
+            style::dim(out, &format!("... and {} more", a.vivacs.len() - 20))
+        );
     }
     outln!();
     Ok(())
@@ -2554,6 +2794,54 @@ pub fn find_data(a: &Tree, query: &str) -> Result<serde_json::Value, Failure> {
         .collect::<Vec<_>>()))
 }
 
+/// One hit's alias-and-title row, styled the same way `open`'s own leaves
+/// are (`d795`): the alias coloured by kind, the title dimmed once the node
+/// is not open any more and wrapped at the terminal's width when one is
+/// known. `lead_spaces` is the row's own left margin -- two for `find`,
+/// four for `find --everywhere`, which indents once more for the project
+/// name above it.
+fn print_find_row(out: Stream, n: &Node, a: &Tree, cap: Option<usize>, lead_spaces: usize) {
+    let alias = n.alias();
+    let alias_field = format!(
+        "{}{}",
+        style::kind_id(out, n.kind, &alias),
+        " ".repeat(6usize.saturating_sub(alias.chars().count()))
+    );
+    let closed = n.state != State::Active;
+    let margin = " ".repeat(lead_spaces);
+    print_title_row(
+        &format!("{margin}{alias_field} "),
+        &" ".repeat(lead_spaces + 7),
+        lead_spaces + 7,
+        n.title(a),
+        cap,
+        |chunk| {
+            if closed {
+                style::dim(out, chunk)
+            } else {
+                chunk.to_string()
+            }
+        },
+        TitleSuffix { text: "", len: 0 },
+    );
+}
+
+/// The `via <lineage>` line under a hit, each ancestor's alias coloured by
+/// its own kind the same way `open`'s own via-line already is. `[]` when
+/// `n` is a root, the same as `lineage_of` answers for the JSON twin.
+fn print_find_lineage(out: Stream, a: &Tree, n: &Node, lead_spaces: usize) {
+    let lineage = a.ancestors(n.num);
+    if lineage.len() > 1 {
+        let sep = style::dim(out, " > ");
+        let v: Vec<String> = lineage[..lineage.len() - 1]
+            .iter()
+            .map(|p| style::kind_id(out, p.kind, &p.alias()))
+            .collect();
+        let margin = " ".repeat(lead_spaces + 7);
+        outln!("{margin}{} {}", style::dim(out, "via"), v.join(&sep));
+    }
+}
+
 pub fn find(a: &Tree, args: &Args) -> R {
     let query = args
         .positional(0)
@@ -2569,20 +2857,25 @@ pub fn find(a: &Tree, args: &Args) -> R {
         outln!("  Nothing matches \"{query}\".");
         return Ok(());
     }
+    let out = Stream::Out;
     outln!();
     outln!(
-        "  {} match{} for \"{}\"",
-        hits.len(),
-        if hits.len() == 1 { "" } else { "es" },
-        query,
+        "  {}",
+        style::bold(
+            out,
+            &format!(
+                "{} match{} for \"{}\"",
+                hits.len(),
+                if hits.len() == 1 { "" } else { "es" },
+                query,
+            )
+        )
     );
     outln!();
+    let cap = style::width(out).map(|w| w.saturating_sub(1));
     for (n, matched) in hits.iter().take(20) {
-        outln!("  {:<6} {}", n.alias(), n.title(a));
-        let lineage = lineage_of(a, n);
-        if !lineage.is_empty() {
-            outln!("         via {}", lineage.join(" > "));
-        }
+        print_find_row(out, n, a, cap, 2);
+        print_find_lineage(out, a, n, 2);
         // The title is already on the line above it. Repeating it as the
         // reason the hit came back would say nothing.
         for field in matched.iter().filter(|f| **f != "title") {
@@ -2591,14 +2884,23 @@ pub fn find(a: &Tree, args: &Args) -> R {
                 .find(|(k, _)| k == field)
                 .map(|(_, v)| *v)
                 .unwrap_or_default();
-            outln!("         {}: {}", field, snippet(text, &terms, WIDTH));
+            outln!(
+                "         {}",
+                style::dim(out, &format!("{}: {}", field, snippet(text, &terms, WIDTH)))
+            );
         }
     }
     if hits.len() > 20 {
         outln!();
         outln!(
-            "  ... and {} more   vivac find \"...\" --json",
-            hits.len() - 20
+            "  {}",
+            style::dim(
+                out,
+                &format!(
+                    "... and {} more   vivac find \"...\" --json",
+                    hits.len() - 20
+                )
+            )
         );
     }
     outln!();
@@ -2715,40 +3017,54 @@ pub fn find_everywhere(a: &Args) -> R {
         .collect();
     let total: usize = sections.iter().map(|(_, _, hits)| hits.len()).sum();
 
+    let out = Stream::Out;
     if total == 0 {
         outln!("  Nothing matches \"{query}\".");
     } else {
         outln!();
         outln!(
-            "  {} match{} for \"{}\" across {} project{}",
-            total,
-            if total == 1 { "" } else { "es" },
-            query,
-            sections.len(),
-            if sections.len() == 1 { "" } else { "s" },
+            "  {}",
+            style::bold(
+                out,
+                &format!(
+                    "{} match{} for \"{}\" across {} project{}",
+                    total,
+                    if total == 1 { "" } else { "es" },
+                    query,
+                    sections.len(),
+                    if sections.len() == 1 { "" } else { "s" },
+                )
+            )
         );
+        let cap = style::width(out).map(|w| w.saturating_sub(1));
         for (name, tree, hits) in &sections {
             outln!();
-            outln!("  {name}");
+            outln!("  {}", style::bold(out, name));
             for (n, matched) in hits.iter().take(20) {
-                outln!("    {:<6} {}", n.alias(), n.title(tree));
-                let lineage = lineage_of(tree, n);
-                if !lineage.is_empty() {
-                    outln!("           via {}", lineage.join(" > "));
-                }
+                print_find_row(out, n, tree, cap, 4);
+                print_find_lineage(out, tree, n, 4);
                 for field in matched.iter().filter(|f| **f != "title") {
                     let text = searchable(tree, n)
                         .iter()
                         .find(|(k, _)| k == field)
                         .map(|(_, v)| *v)
                         .unwrap_or_default();
-                    outln!("           {}: {}", field, snippet(text, &terms, WIDTH));
+                    outln!(
+                        "           {}",
+                        style::dim(out, &format!("{}: {}", field, snippet(text, &terms, WIDTH)))
+                    );
                 }
             }
             if hits.len() > 20 {
                 outln!(
-                    "    ... and {} more   vivac find \"...\" --everywhere --json",
-                    hits.len() - 20
+                    "    {}",
+                    style::dim(
+                        out,
+                        &format!(
+                            "... and {} more   vivac find \"...\" --everywhere --json",
+                            hits.len() - 20
+                        )
+                    )
                 );
             }
         }
@@ -2757,10 +3073,16 @@ pub fn find_everywhere(a: &Args) -> R {
 
     if !unreachable.is_empty() {
         outln!(
-            "  {} project{} unreachable: {}",
-            unreachable.len(),
-            if unreachable.len() == 1 { "" } else { "s" },
-            unreachable.join(", ")
+            "  {}",
+            style::dim(
+                out,
+                &format!(
+                    "{} project{} unreachable: {}",
+                    unreachable.len(),
+                    if unreachable.len() == 1 { "" } else { "s" },
+                    unreachable.join(", ")
+                )
+            )
         );
         outln!();
     }

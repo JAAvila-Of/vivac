@@ -17,6 +17,7 @@
 
 use crate::event::{Kind, State};
 use std::io::IsTerminal;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 
 /// Which stream a message is about to go out on. `Out` is every plan,
@@ -199,11 +200,37 @@ mod windows_vt {
     }
 }
 
+/// Set once, by [`plain_only`], and never cleared: the MCP server and every
+/// `session ... --hook` path read this ahead of `CLICOLOR_FORCE` and the
+/// terminal check, so neither [`enabled`] nor [`width`] can answer anything
+/// but plain for the rest of the process once it is set.
+static FORCE_PLAIN: AtomicBool = AtomicBool::new(false);
+
+/// Forces every styled read for the rest of this process onto its plain
+/// path: [`enabled`] answers `false` and [`width`] answers `None`, for
+/// both streams, from here on.
+///
+/// Styles and wrapping exist only for a person at a terminal. An agent
+/// harness can still export `CLICOLOR_FORCE` and `COLUMNS` into a hook's or
+/// an MCP server's own environment -- they are not lying about a terminal
+/// that is not there, they are passing along what their own shell carries --
+/// and escape codes cost tokens on a channel that never renders them
+/// (measured: styled `open` is +49% bytes, `tree` +26%). The mcp and hook
+/// entry points call this first, ahead of any other line of their own, so
+/// the override is in place before anything downstream ever asks
+/// [`enabled`] or [`width`] a first question to cache a wrong answer to.
+pub fn plain_only() {
+    FORCE_PLAIN.store(true, Ordering::SeqCst);
+}
+
 /// Whether `stream` accepts styled text right now, computed once per
 /// stream and cached: two `OnceLock`s rather than one, since `Out` and
 /// `Err` can answer differently (output piped, errors still to a terminal,
 /// or the reverse).
 pub fn enabled(stream: Stream) -> bool {
+    if FORCE_PLAIN.load(Ordering::SeqCst) {
+        return false;
+    }
     static OUT: OnceLock<bool> = OnceLock::new();
     static ERR: OnceLock<bool> = OnceLock::new();
     let cell = match stream {
@@ -437,6 +464,9 @@ fn compute_width(stream: Stream) -> Option<usize> {
 /// like [`enabled`] and for the same reason: two tests must never race
 /// each other over the same process environment.
 pub fn width(stream: Stream) -> Option<usize> {
+    if FORCE_PLAIN.load(Ordering::SeqCst) {
+        return None;
+    }
     static OUT: OnceLock<Option<usize>> = OnceLock::new();
     static ERR: OnceLock<Option<usize>> = OnceLock::new();
     let cell = match stream {

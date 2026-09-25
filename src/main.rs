@@ -61,9 +61,11 @@ const USAGE: &str = r#"vivac - provenance of work
           [--arm "<command>"]  what verifies a rule; vivac never runs it
           [--arm-dir <dir>]    where it runs, relative to where .vivac lives
           [--against "r12: <why>"]  on a decision: what it was judged against
-    vivac pop ["<outcome>"] [--next "<...>"]  close the focus, back to the parent
+    vivac pop ["<outcome>"] [--next "<...>"]  close the focus, back to the
+                                              parent
     vivac park [<id>] ["<reason>"]            park it: feeds DO NOT TOUCH NOW
-    vivac promote [<id>]                      the focus becomes a goal of its own
+    vivac promote [<id>]                      the focus becomes a goal of its
+                                              own
     vivac abandon [<id>] ["<reason>"] [--cascade]
           [--rescue <id>]    saves it and its own; it still hangs where it
                              was born, nothing is reparented
@@ -97,7 +99,8 @@ const USAGE: &str = r#"vivac - provenance of work
   The maintainer reads          (--json on all of them but the brief)
 
     vivac brief [--budget 1500] [--now <date>]
-                                              where you are and what NOT to touch
+                                              where you are and what NOT to
+                                              touch
     vivac why <id> [--full]                   WHY WE ARE HERE
                                               --full: anchor, standing
                                               decisions and open siblings,
@@ -163,6 +166,46 @@ const USAGE: &str = r#"vivac - provenance of work
     5 input/output error, a tree written by a newer vivac, or a tree
       another process kept locked
 "#;
+
+/// `USAGE`'s own section headings, exactly as they read with their leading
+/// two spaces stripped: the lines `print_usage` bolds on a terminal, and
+/// nothing else in the help ever is. Kept as a literal list rather than a
+/// pattern -- these seven read in ordinary sentence case, not upper case,
+/// so there is no shape to guess one from other than naming them.
+const USAGE_HEADINGS: &[&str] = &[
+    "The agent writes (the stack carries the tree on its own)",
+    "Without touching the stack",
+    "Safe stops",
+    "The maintainer reads          (--json on all of them but the brief)",
+    "Session",
+    "Getting started",
+    "Exit codes",
+];
+
+/// `USAGE`, as printed: unchanged without a terminal or `CLICOLOR_FORCE`
+/// behind stdout, and with each of `USAGE_HEADINGS` bold on one. Styles and
+/// wrapping exist only for a person at a terminal, and `USAGE` never wraps
+/// by width regardless -- it is fixed prose, laid out by hand.
+fn print_usage() {
+    if !style::enabled(style::Stream::Out) {
+        print!("{USAGE}");
+        return;
+    }
+    let mut styled = String::with_capacity(USAGE.len());
+    for line in USAGE.split_inclusive('\n') {
+        let (body, newline) = match line.strip_suffix('\n') {
+            Some(b) => (b, "\n"),
+            None => (line, ""),
+        };
+        if USAGE_HEADINGS.contains(&body.strip_prefix("  ").unwrap_or(body)) {
+            styled.push_str(&style::bold(style::Stream::Out, body));
+        } else {
+            styled.push_str(body);
+        }
+        styled.push_str(newline);
+    }
+    print!("{styled}");
+}
 
 /// Every command the CLI actually dispatches, exactly as `USAGE` names
 /// them: `commands_and_usage_stay_in_sync` keeps the two from drifting
@@ -367,11 +410,11 @@ fn note_late() {
 fn run() -> i32 {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let Some(cmd) = argv.first().cloned() else {
-        print!("{USAGE}");
+        print_usage();
         return 0;
     };
     if matches!(cmd.as_str(), "-h" | "--help" | "help") {
-        print!("{USAGE}");
+        print_usage();
         return 0;
     }
     if matches!(cmd.as_str(), "-V" | "--version" | "version") {
@@ -645,7 +688,13 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
     // Every hook drains its input first, whatever it does next: exiting
     // with the harness's payload unread leaves the harness writing into a
     // closed pipe.
+    //
+    // `style::plain_only()` runs ahead of that read: a harness that exports
+    // `CLICOLOR_FORCE` and `COLUMNS` into a hook's own environment is not
+    // lying about a terminal that is not there, and an escape code on this
+    // channel is a token nobody renders.
     if cmd == "session" && a.has("hook") {
+        style::plain_only();
         session::hook_stdin();
     }
     if cmd == "session" && a.positional(0) == Some("prompt") {
@@ -898,7 +947,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         "reconcile" => reconcile::reconcile(&ctx.tree, &ctx.store.root, &ctx.lane_dir, a),
         "stats" => render::stats(&ctx.tree, a),
         other => {
-            print!("{USAGE}");
+            print_usage();
             return Err(Failure::usage(format!("unknown command: {other}")));
         }
     };
