@@ -16,6 +16,7 @@ use crate::event::{Body, Event, Kind, State, WhereRepo};
 use crate::failure::{Failure, R};
 use crate::model::{Aggregates, Node, Tree, Vivac, Where};
 use crate::output::outln;
+use crate::style::{self, Stream};
 use serde_json::json;
 use std::collections::HashMap;
 use std::path::Path;
@@ -60,10 +61,111 @@ pub(crate) fn wrap(text: &str, width: usize, indent: &str) -> Vec<String> {
     lines
 }
 
-fn label(a: &Tree, n: &Node) -> String {
+/// The `  [state]` suffix `label` appends behind a title once it is not
+/// open any more -- empty for `State::Active`, since there is nothing to
+/// say about a node still open. Split out of `label` so `why`'s styled
+/// row can colour this half without touching the word `label` itself
+/// still hands `rules` unstyled.
+fn state_suffix(n: &Node) -> String {
     match n.state {
-        State::Active => n.title(a).to_string(),
-        e => format!("{}  [{}]", n.title(a), e.word(n.kind)),
+        State::Active => String::new(),
+        e => format!("  [{}]", e.word(n.kind)),
+    }
+}
+
+fn label(a: &Tree, n: &Node) -> String {
+    format!("{}{}", n.title(a), state_suffix(n))
+}
+
+/// `state_suffix`, coloured by state (`d795`): done green, parked yellow,
+/// abandoned red, anything else -- today only superseded -- dim. Empty
+/// for a node still open, the same as the text it colours.
+fn state_suffix_styled(stream: Stream, n: &Node) -> String {
+    let suffix = state_suffix(n);
+    if suffix.is_empty() {
+        return suffix;
+    }
+    match n.state {
+        State::Active => suffix,
+        State::Done => style::good(stream, &suffix),
+        State::Suspended => style::change(stream, &suffix),
+        State::Abandoned => style::gone(stream, &suffix),
+        State::Superseded => style::dim(stream, &suffix),
+    }
+}
+
+/// Already fully styled text that comes after a wrapped title -- on the
+/// same line when `lead` plus the last chunk plus `len` still fits under
+/// [`print_title_row`]'s own `cap`, on a continuation line of its own
+/// otherwise. `len` is `text`'s plain width, since an escape code must
+/// never count toward it. Empty for a row with nothing to say after the
+/// title, `open`'s and most of `why`'s own rows among them.
+struct TitleSuffix<'a> {
+    text: &'a str,
+    len: usize,
+}
+
+/// Prints an alias-and-title row that wraps `title` at the terminal's
+/// width when one is known (`d795`), with every continuation line
+/// indented back to the column the title started at. `first_line` is
+/// everything already printed ahead of the title on line one -- already
+/// styled, if at all -- and `lead` is its width in plain columns, since an
+/// escape code must never count toward it. `cont_prefix` is the same
+/// width in plain columns and printed literally ahead of every
+/// continuation line -- spaces for `open` and `why`, a dim tree connector
+/// for `tree`. `style_chunk` colours each wrapped piece of `title` itself
+/// once wrapping has already decided where the breaks fall.
+fn print_title_row(
+    first_line: &str,
+    cont_prefix: &str,
+    lead: usize,
+    title: &str,
+    cap: Option<usize>,
+    style_chunk: impl Fn(&str) -> String,
+    suffix: TitleSuffix,
+) {
+    let mut chunks: Vec<String> = match cap {
+        Some(w) => style::wrap_title(lead, title, w),
+        None => vec![title.to_string()],
+    };
+    if chunks.is_empty() {
+        chunks.push(String::new());
+    }
+    let suffix_own_line = match cap {
+        None => false,
+        Some(w) => {
+            let last_len = chunks.last().unwrap().chars().count();
+            !suffix.text.is_empty() && lead + last_len + suffix.len > w
+        }
+    };
+    let last = chunks.len() - 1;
+    for (i, chunk) in chunks.iter().enumerate() {
+        let styled = style_chunk(chunk);
+        let mut line = if i == 0 {
+            format!("{first_line}{styled}")
+        } else {
+            format!("{cont_prefix}{styled}")
+        };
+        if i == last && !suffix_own_line {
+            line.push_str(suffix.text);
+        }
+        outln!("{line}");
+    }
+    if suffix_own_line {
+        outln!("{cont_prefix}{}", suffix.text);
+    }
+}
+
+/// Colours the single leading `marker` character of a `why` note or
+/// outcome line -- `!` or `=` -- leaving the rest of an already-wrapped
+/// line untouched. Only the first line of a wrapped note or outcome
+/// carries the marker at all; every other line is passed through as it
+/// is, so calling this on those is harmless.
+fn style_marker(line: &str, indent: &str, marker: char, styled: impl Fn(&str) -> String) -> String {
+    let needle = format!("{indent}{marker}");
+    match line.strip_prefix(&needle) {
+        Some(rest) => format!("{indent}{}{rest}", styled(&marker.to_string())),
+        None => line.to_string(),
     }
 }
 
@@ -692,6 +794,7 @@ fn print_full_of(a: &Tree, full: &Full, n: &Node) {
     } else {
         outln!("        anchor: {} ({})", anchor.short(), anchor.kind);
     }
+    let out = Stream::Out;
     let standing = standing_of(a, n);
     if !standing.is_empty() {
         outln!(
@@ -699,7 +802,7 @@ fn print_full_of(a: &Tree, full: &Full, n: &Node) {
             standing.len(),
             standing
                 .iter()
-                .map(|d| d.alias())
+                .map(|d| style::kind_id(out, d.kind, &d.alias()))
                 .collect::<Vec<_>>()
                 .join(", ")
         );
@@ -711,7 +814,7 @@ fn print_full_of(a: &Tree, full: &Full, n: &Node) {
             open_then.len(),
             open_then
                 .iter()
-                .map(|d| d.alias())
+                .map(|d| style::kind_id(out, d.kind, &d.alias()))
                 .collect::<Vec<_>>()
                 .join(", ")
         );
@@ -805,9 +908,15 @@ pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
         return print_json(why_data_impl(a, &full_data, full_extra, s)?);
     }
 
+    let out = Stream::Out;
     outln!();
-    outln!("  Why we are here  ->  {}", n.alias());
-    outln!("  {}", "-".repeat(66));
+    outln!(
+        "  {}  {}  {}",
+        style::bold(out, "Why we are here"),
+        style::dim(out, "->"),
+        style::kind_id(out, n.kind, &n.alias())
+    );
+    outln!("  {}", style::dim(out, &"-".repeat(66)));
     // A hand-edited log can hand the same `num` to more than two claimants;
     // every one but the first is hidden the same way, so all of them are
     // named here, not just whichever the fold met second.
@@ -830,6 +939,7 @@ pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
         );
     }
     outln!();
+    let cap = style::width(out).map(|w| w.saturating_sub(1));
     for (i, p) in lineage.iter().enumerate() {
         let is_last = i == lineage.len() - 1;
         // The node actually asked about prints whole either way; an
@@ -846,7 +956,26 @@ pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
                 text.to_string()
             }
         };
-        outln!("  {:<6}{}", p.alias(), label(a, p));
+        let alias = p.alias();
+        let alias_field = format!(
+            "{}{}",
+            style::kind_id(out, p.kind, &alias),
+            " ".repeat(6usize.saturating_sub(alias.chars().count()))
+        );
+        let suffix = state_suffix_styled(out, p);
+        let suffix_len = state_suffix(p).chars().count();
+        print_title_row(
+            &format!("  {alias_field}"),
+            &" ".repeat(8),
+            8,
+            p.title(a),
+            cap,
+            |chunk| style::bold(out, chunk),
+            TitleSuffix {
+                text: &suffix,
+                len: suffix_len,
+            },
+        );
         // `t411` §6: a rule shows its arms, in the same words `rules` prints
         // them with.
         if p.kind == Kind::Rule {
@@ -873,42 +1002,81 @@ pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
                 let date = crate::clock::date_of(at);
                 let prefix = format!("! [{date}] ");
                 let prefix_len = prefix.chars().count();
-                for l in wrap(
+                for (li, l) in wrap(
                     &format!("{prefix}{}", body(text, prefix_len)),
                     WIDTH,
                     "        ",
-                ) {
-                    outln!("{l}");
+                )
+                .iter()
+                .enumerate()
+                {
+                    if li == 0 {
+                        outln!(
+                            "{}",
+                            style_marker(l, "        ", '!', |s| style::bold(
+                                out,
+                                &style::warn(out, s)
+                            ))
+                        );
+                    } else {
+                        outln!("{l}");
+                    }
                 }
             }
         } else {
             let note = p.note(a);
             let prefix = "! ";
-            for l in wrap(
+            for (li, l) in wrap(
                 &format!("{prefix}{}", body(note, prefix.chars().count())),
                 WIDTH,
                 "        ",
-            ) {
+            )
+            .iter()
+            .enumerate()
+            {
                 if !note.is_empty() {
-                    outln!("{l}");
+                    if li == 0 {
+                        outln!(
+                            "{}",
+                            style_marker(l, "        ", '!', |s| style::bold(
+                                out,
+                                &style::warn(out, s)
+                            ))
+                        );
+                    } else {
+                        outln!("{l}");
+                    }
                 }
             }
         }
         let outcome = p.outcome(a);
         let prefix = "= ";
-        for l in wrap(
+        for (li, l) in wrap(
             &format!("{prefix}{}", body(outcome, prefix.chars().count())),
             WIDTH,
             "        ",
-        ) {
+        )
+        .iter()
+        .enumerate()
+        {
             if !outcome.is_empty() {
-                outln!("{l}");
+                if li == 0 {
+                    outln!(
+                        "{}",
+                        style_marker(l, "        ", '=', |s| style::bold(
+                            out,
+                            &style::good(out, s)
+                        ))
+                    );
+                } else {
+                    outln!("{l}");
+                }
             }
         }
         // `t594` §5.4: prints with or without `--full`, unlike the rest of
         // `print_full_of` below it.
         if let Some(line) = born_line(a, p) {
-            outln!("        {line}");
+            outln!("        {}", style::dim(out, &line));
         }
         if full_extra {
             print_full_of(a, &full_data, p);
@@ -916,13 +1084,16 @@ pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
         if !is_last {
             let f = ag.counts(p.num).phrase();
             if !f.is_empty() {
-                outln!("        ({f} below)");
+                outln!("        {}", style::dim(out, &format!("({f} below)")));
             }
-            outln!("        |");
-            outln!("        v");
+            outln!("        {}", style::dim(out, "|"));
+            outln!("        {}", style::dim(out, "v"));
         } else {
             outln!();
-            outln!("        ^^^ you are here");
+            outln!(
+                "        {}",
+                style::bold(out, &style::warn(out, "^^^ you are here"))
+            );
         }
     }
     outln!();
@@ -935,16 +1106,28 @@ pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
             .filter(|c| c.id != n.id && c.state.is_open())
             .collect();
         if !siblings.is_empty() {
-            outln!("  In parallel, still open ({}):", siblings.len());
+            outln!(
+                "  {}",
+                style::bold(
+                    out,
+                    &format!("In parallel, still open ({}):", siblings.len())
+                )
+            );
             let (shown, more) = cap_open(siblings, full_extra);
             for c in shown {
-                outln!("      {:<6} {}", c.alias(), c.title(a));
+                print_why_list_row(out, "      ", c, a, cap);
             }
             // `d771`: never silent about what the cap left out -- the same
             // rule `open --all` and `tree --all` already give their own cut
             // lists, spelled out for this one instead of assumed.
             if more > 0 {
-                outln!("      + {more} more:  vivac why {} --full", n.alias());
+                outln!(
+                    "      {}",
+                    style::dim(
+                        out,
+                        &format!("+ {more} more:  vivac why {} --full", n.alias())
+                    )
+                );
             }
             outln!();
         }
@@ -956,18 +1139,27 @@ pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
         .filter(|c| c.state.is_open())
         .collect();
     if !kids.is_empty() {
-        outln!("  Born here and still open ({}):", kids.len());
+        outln!(
+            "  {}",
+            style::bold(out, &format!("Born here and still open ({}):", kids.len()))
+        );
         let (shown, more) = cap_open(kids, full_extra);
         for c in shown {
-            outln!(
-                "    {} {:<6} {}",
-                if c.blocks { '*' } else { ' ' },
-                c.alias(),
-                c.title(a)
-            );
+            let marker = if c.blocks {
+                style::bold(out, &style::gone(out, "*"))
+            } else {
+                " ".to_string()
+            };
+            print_why_list_row(out, &format!("    {marker} "), c, a, cap);
         }
         if more > 0 {
-            outln!("      + {more} more:  vivac why {} --full", n.alias());
+            outln!(
+                "      {}",
+                style::dim(
+                    out,
+                    &format!("+ {more} more:  vivac why {} --full", n.alias())
+                )
+            );
         }
         outln!();
     }
@@ -976,12 +1168,18 @@ pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
         let pending_count = blocking_of(a, p);
         if !pending_count.is_empty() {
             outln!(
-                "  {} does not close until these close ({}):",
-                p.alias(),
-                pending_count.len()
+                "  {}",
+                style::bold(
+                    out,
+                    &format!(
+                        "{} does not close until these close ({}):",
+                        p.alias(),
+                        pending_count.len()
+                    )
+                )
             );
             for c in pending_count {
-                outln!("      {:<6} {}", c.alias(), c.title(a));
+                print_why_list_row(out, "      ", c, a, cap);
             }
             outln!();
         }
@@ -989,33 +1187,118 @@ pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
     Ok(())
 }
 
+/// One row of `why`'s three closing lists: `In parallel`, `Born here` and
+/// `X does not close until these close`. `row_prefix` is everything
+/// printed ahead of the alias, already styled if at all -- six plain
+/// columns either way, whether that is six bare spaces or four spaces, a
+/// blocks marker and one more.
+fn print_why_list_row(out: Stream, row_prefix: &str, c: &Node, a: &Tree, cap: Option<usize>) {
+    const LEAD: usize = 13;
+    let alias = c.alias();
+    let alias_field = format!(
+        "{}{}",
+        style::kind_id(out, c.kind, &alias),
+        " ".repeat(6usize.saturating_sub(alias.chars().count()))
+    );
+    let first_line = format!("{row_prefix}{alias_field} ");
+    print_title_row(
+        &first_line,
+        &" ".repeat(LEAD),
+        LEAD,
+        c.title(a),
+        cap,
+        |chunk| chunk.to_string(),
+        TitleSuffix { text: "", len: 0 },
+    );
+}
+
 fn branch(a: &Tree, ag: &Aggregates, n: &Node, prefix: &str, is_last: bool, show_all: bool) {
+    let out = Stream::Out;
     let f = ag.counts(n.num).phrase();
-    let mut tail = if f.is_empty() {
+    let pending_count = ag.blockers(n.num);
+    let false_close = n.state == State::Done && pending_count > 0;
+    let mut tail_plain = if f.is_empty() {
         String::new()
     } else {
         format!("   ({f})")
     };
-    let pending_count = ag.blockers(n.num);
-    if n.state == State::Done && pending_count > 0 {
-        tail.push_str(&format!(
+    if false_close {
+        tail_plain.push_str(&format!(
             "   <== FALSE CLOSE: {pending_count} open condition(s)"
         ));
     }
-    let mark = if n.blocks { "* " } else { "" };
-    outln!(
-        "{prefix}{}[{}] {:<6} {mark}{}{tail}",
-        if is_last { "`-- " } else { "|-- " },
-        n.state.mark(),
-        n.alias(),
-        n.title(a)
+    let mut tail_styled = String::new();
+    if !f.is_empty() {
+        tail_styled.push_str(&style::dim(out, &format!("   ({f})")));
+    }
+    if false_close {
+        tail_styled.push_str(&style::bold(
+            out,
+            &style::gone(
+                out,
+                &format!("   <== FALSE CLOSE: {pending_count} open condition(s)"),
+            ),
+        ));
+    }
+
+    let blocks_marker = if n.blocks { "* " } else { "" };
+    let marker_styled = if n.blocks {
+        style::bold(out, &style::gone(out, blocks_marker))
+    } else {
+        String::new()
+    };
+    let connector = if is_last { "`-- " } else { "|-- " };
+    let alias = n.alias();
+    let closed = n.state != State::Active;
+
+    // Everything printed ahead of the title on line one: `prefix`,
+    // `connector`, `[<mark>] `, the alias padded to six columns, then the
+    // blocks marker. `15` is `connector`'s own four columns plus
+    // `[X] ` (four) plus the alias field's trailing space (one), plus the
+    // six the alias itself always takes.
+    let lead = prefix.chars().count() + 15 + blocks_marker.chars().count();
+    let alias_field = format!(
+        "{}{}",
+        style::kind_id(out, n.kind, &alias),
+        " ".repeat(6usize.saturating_sub(alias.chars().count()))
     );
+    let first_line = format!(
+        "{}{}{} {alias_field} {marker_styled}",
+        style::dim(out, prefix),
+        style::dim(out, connector),
+        style::mark(out, n.state),
+    );
+
     let sig = format!("{prefix}{}", if is_last { "    " } else { "|   " });
     let children: Vec<_> = a
         .children(n.num)
         .into_iter()
         .filter(|h| show_all || h.state.is_open() || ag.counts(h.num).open_count > 0)
         .collect();
+    let cont_char = if children.is_empty() { " " } else { "|" };
+    let cont_prefix = style::dim(out, &format!("{sig}{cont_char}"));
+    let cont_pad = " ".repeat(10 + blocks_marker.chars().count());
+    let cont_line = format!("{cont_prefix}{cont_pad}");
+
+    print_title_row(
+        &first_line,
+        &cont_line,
+        lead,
+        n.title(a),
+        style::width(out).map(|w| w.saturating_sub(1)),
+        |chunk| {
+            if closed {
+                style::dim(out, chunk)
+            } else {
+                chunk.to_string()
+            }
+        },
+        TitleSuffix {
+            text: &tail_styled,
+            len: tail_plain.chars().count(),
+        },
+    );
+
     for (i, h) in children.iter().enumerate() {
         branch(a, ag, h, &sig, i == children.len() - 1, show_all);
     }
@@ -1077,7 +1360,13 @@ pub fn tree(a: &Tree, args: &Args) -> R {
         outln!();
     }
     if !show_all {
-        outln!("  (closed nodes with no open descendants hidden; --all shows them)");
+        outln!(
+            "  {}",
+            style::dim(
+                Stream::Out,
+                "(closed nodes with no open descendants hidden; --all shows them)"
+            )
+        );
         outln!();
     }
     Ok(())
@@ -1123,11 +1412,18 @@ pub fn open(a: &Tree, args: &Args) -> R {
         outln!("  Nothing open.");
         return Ok(());
     }
+    let out = Stream::Out;
     outln!();
     outln!(
-        "  {} open front{}",
-        leaves.len(),
-        if leaves.len() == 1 { "" } else { "s" },
+        "  {}",
+        style::bold(
+            out,
+            &format!(
+                "{} open front{}",
+                leaves.len(),
+                if leaves.len() == 1 { "" } else { "s" },
+            )
+        )
     );
     outln!();
     let show_all = args.has("all");
@@ -1136,15 +1432,31 @@ pub fn open(a: &Tree, args: &Args) -> R {
     } else {
         leaves.len().min(MAX_FRONTS_SHOWN)
     };
+    let cap = style::width(out).map(|w| w.saturating_sub(1));
     for n in &leaves[..shown] {
-        outln!("  {:<6} {}", n.alias(), n.title(a));
+        let alias = n.alias();
+        let alias_field = format!(
+            "{}{}",
+            style::kind_id(out, n.kind, &alias),
+            " ".repeat(6usize.saturating_sub(alias.chars().count()))
+        );
+        print_title_row(
+            &format!("  {alias_field} "),
+            &" ".repeat(9),
+            9,
+            n.title(a),
+            cap,
+            |chunk| chunk.to_string(),
+            TitleSuffix { text: "", len: 0 },
+        );
         let lineage = a.ancestors(n.num);
         if lineage.len() > 1 {
+            let sep = style::dim(out, " > ");
             let v: Vec<String> = lineage[..lineage.len() - 1]
                 .iter()
-                .map(|p| p.alias())
+                .map(|p| style::kind_id(out, p.kind, &p.alias()))
                 .collect();
-            outln!("         via {}", v.join(" > "));
+            outln!("         {} {}", style::dim(out, "via"), v.join(&sep));
         }
     }
     let hidden = leaves.len() - shown;
@@ -1179,7 +1491,10 @@ pub fn open(a: &Tree, args: &Args) -> R {
             format!("{standing} standing decisions, which are not work")
         };
         outln!();
-        outln!("  + {phrase}   vivac brief");
+        outln!(
+            "  {}",
+            style::dim(out, &format!("+ {phrase}   vivac brief"))
+        );
     }
     outln!();
     Ok(())

@@ -358,6 +358,28 @@ impl std::fmt::Display for Finding {
     }
 }
 
+impl Finding {
+    /// `Display` above, styled for a terminal: the same words, in the
+    /// same places, with `print_to_stderr`'s own colours added on top
+    /// (`d795`). `Display` stays plain on purpose -- this crate's own unit
+    /// tests build a `Finding` directly, with no process environment
+    /// behind them to drive `style::enabled`, and keeping the styling in
+    /// a function of its own is what lets them stay that way.
+    pub fn styled(&self, stream: crate::style::Stream) -> String {
+        use crate::style::{bold, dim, gone, path, warn};
+        format!(
+            "  {} {}\n\n      {}   {}\n      {}   {}\n\n  {}",
+            bold(stream, &gone(stream, "Refused:")),
+            bold(stream, self.rule),
+            dim(stream, "field"),
+            path(stream, &self.field),
+            dim(stream, "found"),
+            warn(stream, &self.sample),
+            self.advice
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

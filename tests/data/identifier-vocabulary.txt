@@ -41,6 +41,7 @@ al
 alane
 alias
 aliases
+aligns
 all
 allow
 allowed
@@ -116,6 +117,7 @@ at
 atomic
 atomically
 attribute
+attributes
 authority
 auto
 automatic
@@ -167,6 +169,7 @@ blocker
 blockers
 blocking
 blocks
+blue
 bodies
 body
 bogus
@@ -180,10 +183,12 @@ borrowed
 both
 bottom
 bound
+boundaries
 boundary
 bounded
 bounds
 box
+brackets
 branch
 branched
 branching
@@ -196,6 +201,7 @@ browsing
 btree
 budget
 buf
+buffer
 build
 built
 busy
@@ -261,6 +267,7 @@ choice
 choose
 chunk
 chunked
+chunks
 civil
 claim
 claimant
@@ -308,6 +315,7 @@ collision
 colon
 color
 colour
+coloured
 colours
 column
 columns
@@ -335,6 +343,7 @@ conflict
 conflicts
 connect
 connection
+connector
 console
 const
 constant
@@ -348,12 +357,14 @@ contains
 content
 contents
 contexts
+continuation
 continue
 continues
 control
 cookie
 cooldown
 cooled
+coord
 copied
 copies
 copy
@@ -499,6 +510,7 @@ draws
 drop
 drops
 dry
+dual
 dumb
 dump
 duration
@@ -567,6 +579,7 @@ everywhere
 evs
 exact
 exactly
+exceeds
 except
 excluded
 exclusive
@@ -601,6 +614,7 @@ falling
 falls
 false
 fan
+fd
 feature
 fence
 fenced
@@ -660,6 +674,7 @@ forked
 form
 format
 formatter
+forty
 forward
 found
 founding
@@ -674,6 +689,7 @@ frontmatter
 fronts
 fs
 full
+g1
 gains
 gap
 garbage
@@ -779,6 +795,7 @@ html
 http
 hub
 hunts
+i16
 i32
 i64
 id
@@ -820,6 +837,7 @@ inserted
 inside
 instant
 instead
+int
 intact
 integer
 intent
@@ -831,6 +849,7 @@ invariant
 invariants
 invents
 io
+ioctl
 ip
 iquorum
 is
@@ -880,6 +899,7 @@ launched
 lc
 le
 lead
+leading
 leaf
 leap
 learn
@@ -896,6 +916,7 @@ letter
 level
 levels
 lexically
+li
 lifts
 light
 like
@@ -945,6 +966,7 @@ lowered
 machine
 macro
 made
+magenta
 magic
 main
 make
@@ -969,6 +991,7 @@ matches
 matching
 matter
 max
+maximum
 may
 mcp
 md
@@ -1133,6 +1156,7 @@ outside
 ov
 over
 overall
+overlong
 overwrites
 overwritten
 own
@@ -1145,6 +1169,7 @@ p7
 p8
 pa
 packed
+pad
 padding
 page
 pages
@@ -1199,6 +1224,7 @@ pillars
 pinned
 pipe
 piped
+pixel
 place
 placed
 placeholder
@@ -1227,6 +1253,7 @@ positionals
 power
 precision
 precomposed
+prefers
 prefix
 prefixes
 present
@@ -1267,6 +1294,7 @@ prune
 pruned
 ps
 pt
+ptr
 pub
 public
 push
@@ -1294,6 +1322,7 @@ ranges
 rank
 rather
 raw
+rc
 rd
 reach
 reached
@@ -1318,6 +1347,7 @@ record
 recorded
 records
 recreates
+rect
 recv
 red
 redact
@@ -1482,6 +1512,7 @@ schemas
 scheme
 scope
 scratch
+screen
 script
 seam
 seams
@@ -1507,6 +1538,7 @@ selected
 self
 sense
 sentence
+sep
 separator
 separators
 seq
@@ -1648,6 +1680,7 @@ stripped
 strips
 struct
 style
+styled
 styles
 sub
 subdirs
@@ -1683,6 +1716,7 @@ switches
 symlink
 sync
 system
+t2
 table
 tables
 tag
@@ -1732,6 +1766,7 @@ time
 timeout
 times
 tiny
+tiocgwinsz
 title
 titles
 tld
@@ -1766,6 +1801,7 @@ trait
 transcript
 travels
 treat
+treated
 tree
 trees
 triage
@@ -1802,6 +1838,7 @@ u8
 uk
 ulid
 ulids
+ulong
 unambiguous
 unblocks
 unchanged
@@ -1835,6 +1872,7 @@ untagged
 unterminated
 until
 untouched
+unusable
 unwrap
 unwrapped
 unwritable
@@ -1927,6 +1965,8 @@ why4
 wide
 widen
 width
+win
+window
 windows
 wins
 with
@@ -1958,6 +1998,7 @@ writing
 written
 wrong
 wrote
+ws
 x1b
 yellow
 yes

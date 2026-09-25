@@ -299,11 +299,19 @@ being able to move.
 ## Colour
 
 A person at a terminal gets bold, dim and colour on what `init` and `setup`
-print. Anything else, an agent, a hook, a pipe, a file or `--json`, gets the
-same words as plain text, without a single escape code. `NO_COLOR` turns the
+print, on `tree`, `open` and `why`, and on a refusal from the redaction guard.
+Anything else, an agent, a hook, a pipe, a file or `--json`, gets the same
+words as plain text, without a single escape code. `NO_COLOR` turns the
 styles off; `CLICOLOR_FORCE` turns them on where there is no terminal. The
 words always say what the colour does: a verb is written out, never only
-coloured.
+coloured, and a node's colour follows its kind, which the letter of its id
+already names.
+
+At a terminal, a title too long for the window is broken at the window's own
+width, and what follows lines up under the title instead of starting back at
+the left edge and cutting through the drawing of the tree. `COLUMNS` sets that
+width by hand. Without a terminal nothing is broken: every title stays on its
+one line.
 
 ---
 
