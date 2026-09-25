@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.4](https://github.com/JAAvila-Of/vivac/compare/v0.15.3...v0.15.4) - 2026-09-25
+
+### Added
+
+- *(render)* style the rest of the reads and keep agent paths plain ([#170](https://github.com/JAAvila-Of/vivac/pull/170))
+- *(render)* style tree, open and why, and wrap long titles at a tty ([#167](https://github.com/JAAvila-Of/vivac/pull/167))
+
+### Fixed
+
+- *(clock)* print dates on the reader's calendar, not Greenwich's ([#171](https://github.com/JAAvila-Of/vivac/pull/171))
+- *(push)* skip the depth advice when the push names its parent ([#169](https://github.com/JAAvila-Of/vivac/pull/169))
+
 ## [0.15.3](https://github.com/JAAvila-Of/vivac/compare/v0.15.2...v0.15.3) - 2026-09-24
 
 ### Added
