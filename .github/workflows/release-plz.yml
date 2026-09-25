@@ -27,15 +27,22 @@
 
 name: release-plz
 
+# By hand as well, for the push GitHub never turns into a run: the merge of
+# #176 reached `main` and started nothing, and with no way to start this by
+# hand the only way to wake it was another commit. A dispatch from any other
+# branch is refused by the `if:` on each job below -- releasing is `main`'s
+# alone, whoever asks and from wherever.
 on:
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
   pr:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -56,6 +63,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   release:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: write
