@@ -1,9 +1,13 @@
 name: ci
 
+# `workflow_dispatch` is for the push GitHub never turns into a run, as the
+# merge of #176 did not: without it, the only way to check `main` again is
+# another commit.
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
