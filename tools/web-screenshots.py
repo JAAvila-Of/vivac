@@ -19,12 +19,20 @@ writing, every event of a stretch has the same number of days taken off its
 not the JSON lines this expects the script stops rather than guess: the log
 format is not a promise (`docs/USAGE.md`), and this script is not either.
 
+The one-time link `vivac web` prints only ever lands on the index or on a
+project's page, and the session it opens lives in a cookie that dies with the
+browser. So the script spends the link itself, asks the server for each page
+with that cookie, and points the browser at the page saved exactly as the
+binary served it: every page inlines its style and script, so nothing else is
+needed to draw it.
+
 A pair per page, light and dark, for the README's `<picture>`. Needs Chrome
 or Edge; no other dependency, for the reason `check-commits.py` gives.
 """
 
 import argparse
 import datetime as dt
+import http.client
 import json
 import os
 import re
@@ -119,13 +127,13 @@ PROJECTS = {
     ],
 }
 
-# The project whose page is shown, and each page: the folder `vivac web` is
-# started from (its project is where the link lands, and anywhere else lands
-# on the index) and how tall a window it needs.
+# The project whose pages are shown, and each page: its path on the server
+# and how tall a window it needs.
 FEATURED = "billing-api"
 PAGES = [
-    ("index", None, 500),
-    ("today", FEATURED, 1250),
+    ("index", "/", 500),
+    ("today", f"/p/{FEATURED}/", 1250),
+    ("tree", f"/p/{FEATURED}/tree", 900),
 ]
 
 SCHEMES = {"light": 1, "dark": 0}
@@ -189,28 +197,50 @@ def plant(vivac, base, env):
         shift_dates(root, marks)
 
 
-def serve(vivac, cwd, env, port):
-    server = subprocess.Popen([vivac, "web", "--no-open", "--port", str(port)],
+def serve(vivac, cwd, env):
+    """Start `vivac web` and return it, its port, and the session cookie."""
+    server = subprocess.Popen([vivac, "web", "--no-open", "--port", "0"],
                               cwd=cwd, env=env, stdout=subprocess.PIPE,
                               stderr=subprocess.STDOUT, text=True)
     deadline = time.time() + 10
     while time.time() < deadline:
         line = server.stdout.readline()
-        found = re.search(r"http://127\.0\.0\.1:\d+/\?k=[0-9a-f]+", line)
+        found = re.search(r"http://127\.0\.0\.1:(\d+)(/\?k=[0-9a-f]+)", line)
         if found:
-            return server, found.group(0)
+            port = int(found.group(1))
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+            conn.request("GET", found.group(2))
+            answer = conn.getresponse()
+            jar = answer.getheader("Set-Cookie") or ""
+            conn.close()
+            if answer.status != 302 or not jar:
+                server.terminate()
+                sys.exit(f"the link was not taken: {answer.status}")
+            return server, port, jar.split(";")[0]
     server.terminate()
     sys.exit("vivac web never printed its link")
 
 
-def shoot(chrome, url, scheme, height, profile, target):
+def fetch(port, path, cookie):
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    conn.request("GET", path, headers={"Cookie": cookie})
+    answer = conn.getresponse()
+    body = answer.read()
+    conn.close()
+    if answer.status != 200:
+        sys.exit(f"{path} answered {answer.status}")
+    return body
+
+
+def shoot(chrome, page, scheme, height, profile, target):
     subprocess.run([
         chrome, "--headless=new", "--disable-gpu", "--hide-scrollbars",
         f"--user-data-dir={profile}",
         f"--blink-settings=preferredColorScheme={SCHEMES[scheme]}",
         f"--window-size={WIDTH},{height}",
         f"--force-device-scale-factor={SCALE}",
-        f"--screenshot={target}", url,
+        "--virtual-time-budget=3000",
+        f"--screenshot={target}", "file:///" + page.replace(os.sep, "/"),
     ], check=True, capture_output=True)
 
 
@@ -244,21 +274,21 @@ def main():
     try:
         env = dict(os.environ, VIVAC_HOME=os.path.join(base, ".home"))
         plant(a.vivac, os.path.join(base, "projects"), env)
-        for n, (page, project, height) in enumerate(PAGES):
-            cwd = os.path.join(base, "projects", project) if project else base
-            for scheme in SCHEMES:
-                # The link is spent on first use, so each picture gets a
-                # server of its own and a browser profile of its own.
-                server, url = serve(a.vivac, cwd, env, 7900 + n)
-                try:
+        server, port, cookie = serve(a.vivac, base, env)
+        try:
+            for page, path, height in PAGES:
+                saved = os.path.join(base, f"{page}.html")
+                with open(saved, "wb") as f:
+                    f.write(fetch(port, path, cookie))
+                for scheme in SCHEMES:
                     target = os.path.abspath(
                         os.path.join(a.out, f"web-{page}-{scheme}.png"))
                     profile = os.path.join(base, f".chrome-{page}-{scheme}")
-                    shoot(chrome, url, scheme, height, profile, target)
+                    shoot(chrome, saved, scheme, height, profile, target)
                     print(f"  {target}")
-                finally:
-                    server.terminate()
-                    server.wait()
+        finally:
+            server.terminate()
+            server.wait()
         print(f"  taken with {version}")
     finally:
         shutil.rmtree(base, ignore_errors=True)
