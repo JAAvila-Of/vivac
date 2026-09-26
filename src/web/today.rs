@@ -252,8 +252,8 @@ fn listing(title: &str, promise: &str, rows: String, note: Option<&str>, footer:
          <style>
 {WEB_CSS}</style></head>
          <body><div class=\"page\">
-         <header><h1>{t}</h1>
-         <p class=\"promise\">{promise}</p></header>
+         <header><h1>{t}</h1></header>
+         <p class=\"promise\">{promise}</p>
          <main><ul class=\"projects\">
 {rows}</ul>{note}</main>
          <footer>{footer}</footer>
@@ -604,10 +604,10 @@ pub(super) fn today_page(project: &str, name: &str, tree: &Tree, log: &[Event]) 
          <title>Today - {name_t}</title>\n\
          <style>\n{WEB_CSS}</style></head>\n\
          <body><div class=\"page\">\n\
-         <header><p class=\"crumb\"><a href=\"/\">All projects</a></p>\n\
-         <h1>{name_t}</h1>\n\
+         <p class=\"crumb\"><a href=\"/\">All projects</a></p>\n\
+         <header><h1>{name_t}</h1></header>\n\
          <p class=\"promise\">What moved while you were not looking.</p>\n\
-         <p class=\"onward\"><a href=\"/p/{p}/tree\">The whole tree, as a map</a></p></header>\n\
+         <p class=\"onward\"><a href=\"/p/{p}/tree\">The whole tree, as a map</a></p>\n\
          <main>\n{moved}{focus}{governs}{parked}</main>\n\
          <footer>The same reading in a terminal: \
          <code>vivac changes --since manual</code></footer>\n\

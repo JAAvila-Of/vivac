@@ -235,10 +235,10 @@ pub(super) fn why_page(
          <title>Why {alias} - {name_t}</title>\n\
          <style>\n{css}</style></head>\n\
          <body><div class=\"page\">\n\
-         <header><p class=\"crumb\"><a href=\"/p/{p}/\">{name_t}</a></p>\n\
-         <h1>Why we are here</h1>\n\
+         <p class=\"crumb\"><a href=\"/p/{p}/\">{name_t}</a></p>\n\
+         <header><h1>Why we are here</h1></header>\n\
          <p class=\"promise\">The shape of the path at a glance: how deep it goes, \
-         where it branched, and what was still open at each step.</p></header>\n\
+         where it branched, and what was still open at each step.</p>\n\
          <main>\n<ol class=\"spine\">\n{spine}</ol>\n</main>\n\
          <footer>The same reading in a terminal: \
          <code>vivac why {alias} --full</code></footer>\n\

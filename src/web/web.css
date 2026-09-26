@@ -63,6 +63,7 @@ body {
 .page {
   max-width: 54rem;
   margin: 0 auto;
+  padding-top: 2.4rem;
 }
 
 /* ---- masthead ------------------------------------------------------- */
@@ -73,10 +74,16 @@ html {
   overflow-x: clip;
 }
 
+/* The header is the bar the title folds into, and holds the title alone.
+   Its room above and below the title is padding its margins take back, so
+   the bar has space to sit in without the page moving by it; 0.4rem is the
+   gap the crumb leaves, so the bar never lies over the crumb's link. The
+   bar's bottom rule is a shadow for the same reason: a border would take a
+   pixel of layout. */
 header {
-  border-bottom: 1px solid transparent;
-  margin: 0 calc(50% - 50vw) 1.4rem;
-  padding: 2.4rem calc(50vw - 50%) 1rem;
+  box-shadow: inset 0 -1px 0 transparent;
+  margin: -0.4rem calc(50% - 50vw);
+  padding: 0.4rem calc(50vw - 50%);
 }
 
 header h1 {
@@ -89,7 +96,7 @@ header h1 {
   transform-origin: left center;
 }
 
-header .promise {
+.page > .promise {
   margin: 0.35rem 0 0;
   color: var(--ink-soft);
   font-size: 1rem;
@@ -98,13 +105,18 @@ header .promise {
 /* The large title folds into a translucent bar as the page scrolls, the
    way a macOS window's title does. Only where the browser can tie it to
    the scroll without script; elsewhere the title just scrolls away, and
-   nothing is lost but the effect. The map is left out: its header is tall
-   and pinned it would sit on the drawing. */
+   nothing is lost but the effect. The map is left out: its detail panel is
+   already pinned to the top of the window, and the bar would sit over it.
+
+   Only paint is animated: transform, background, blur, a shadow. The first
+   version also folded the header's size, which moved the page under the
+   reader while the scroll drove it; the browser's scroll anchoring pulled
+   the scroll back to hold its place, and the page bounced (`f819`). */
 @supports (animation-timeline: scroll()) {
   @media (prefers-reduced-motion: no-preference) {
     body:not(.wide-page) header {
       position: sticky;
-      top: -2.4rem;
+      top: 0;
       z-index: 5;
       animation: bar linear both;
       animation-timeline: scroll();
@@ -116,13 +128,6 @@ header .promise {
       animation-timeline: scroll();
       animation-range: 0 90px;
     }
-
-    body:not(.wide-page) header .promise,
-    body:not(.wide-page) header .onward {
-      animation: fade linear both;
-      animation-timeline: scroll();
-      animation-range: 0 60px;
-    }
   }
 }
 
@@ -131,8 +136,7 @@ header .promise {
     background: color-mix(in srgb, var(--ground) 72%, transparent);
     -webkit-backdrop-filter: saturate(180%) blur(20px);
     backdrop-filter: saturate(180%) blur(20px);
-    border-bottom-color: var(--rule);
-    padding-bottom: 0.6rem;
+    box-shadow: inset 0 -1px 0 var(--rule);
   }
 }
 
@@ -142,13 +146,9 @@ header .promise {
   }
 }
 
-@keyframes fade {
-  to {
-    opacity: 0;
-    height: 0;
-    margin: 0;
-    overflow: hidden;
-  }
+/* The gap under the masthead lives on what follows it, not on the bar. */
+main {
+  margin-top: calc(2.4rem + 1px);
 }
 
 /* ---- sections ------------------------------------------------------- */
@@ -493,14 +493,14 @@ footer code {
    do not need a drawing surface, the text stays selectable and copyable,
    and nothing has to be measured in JS. `d187`. */
 
-header .crumb {
+.page > .crumb {
   margin: 0 0 0.4rem;
   font-size: 0.85rem;
 }
 
 /* The way onward, not the way back: it hangs under the promise, so it
    carries its margin on the other side. */
-header .onward {
+.page > .onward {
   margin: 0.55rem 0 0;
   font-size: 0.85rem;
 }
@@ -715,8 +715,10 @@ body.wide-page .page {
   max-width: none;
 }
 
-body.wide-page header {
-  margin-bottom: 1.2rem;
+/* The map's masthead ends in its tools rather than a line of prose, and
+   sits a little closer to the drawing. */
+body.wide-page main {
+  margin-top: calc(2.2rem + 1px);
 }
 
 .stats {

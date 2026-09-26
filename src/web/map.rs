@@ -1228,11 +1228,11 @@ fn shell(
          <title>Map - {name_t}</title>\n\
          <style>\n{css}</style></head>\n\
          <body class=\"wide-page\"><div class=\"page\">\n\
-         <header><p class=\"crumb\"><a href=\"/p/{p}/\">{name_t}</a></p>\n\
-         <h1>The map</h1>\n\
+         <p class=\"crumb\"><a href=\"/p/{p}/\">{name_t}</a></p>\n\
+         <header><h1>The map</h1></header>\n\
          <p class=\"promise\">Why a node exists, read without letting go of the \
          tree you found it in -- and how much of what surrounds it is already \
-         closed, at a glance.</p>\n{head}</header>\n\
+         closed, at a glance.</p>\n{head}\n\
          <main>\n{body}</main>\n\
          <footer>The same readings in a terminal: <code>vivac tree --all</code> \
          and <code>vivac why &lt;id&gt;</code></footer>\n\
@@ -1490,6 +1490,102 @@ mod tests {
             !super::super::WEB_CSS.contains("svg.rails"),
             "selecting the gutter by element is what broke it the first time"
         );
+    }
+
+    /// `f819`: a scroll-driven animation may only ever touch paint --
+    /// `transform`, `opacity`, `background`/`background-color`,
+    /// `backdrop-filter`/`-webkit-backdrop-filter`, `border-*-color`,
+    /// `box-shadow`, `color`. Animating anything else moves content in the
+    /// flow while the scroll drives it, and the browser's scroll anchoring
+    /// fights back: that is the bounce `f819` found.
+    ///
+    /// Plain string parsing, because the file is ours: walk every
+    /// brace-delimited block by depth (`css` never nests a block inside a
+    /// declaration, so a stack of the positions after each `{` finds each
+    /// block's own body when its `}` pops it), collect the keyframes name
+    /// off every block whose body sets `animation-timeline`, then check
+    /// every declaration inside each of those `@keyframes` against the
+    /// paint-only list above.
+    #[test]
+    fn scroll_driven_animations_only_paint() {
+        let css = super::super::WEB_CSS;
+
+        let mut driven: Vec<&str> = Vec::new();
+        let mut starts: Vec<usize> = Vec::new();
+        for (i, c) in css.char_indices() {
+            match c {
+                '{' => starts.push(i + 1),
+                '}' => {
+                    if let Some(start) = starts.pop() {
+                        let body = &css[start..i];
+                        if body.contains("animation-timeline") {
+                            if let Some(at) = body.find("animation:") {
+                                if let Some(name) =
+                                    body[at + "animation:".len()..].split_whitespace().next()
+                                {
+                                    if !driven.contains(&name) {
+                                        driven.push(name);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        assert!(
+            !driven.is_empty(),
+            "no rule sets animation-timeline -- the parser or the CSS moved"
+        );
+
+        let paint_only = |prop: &str| {
+            matches!(
+                prop,
+                "transform"
+                    | "opacity"
+                    | "background"
+                    | "background-color"
+                    | "backdrop-filter"
+                    | "-webkit-backdrop-filter"
+                    | "box-shadow"
+                    | "color"
+            ) || (prop.starts_with("border-") && prop.ends_with("-color"))
+        };
+
+        for name in driven {
+            let marker = format!("@keyframes {name} {{");
+            let marker_start = css
+                .find(&marker)
+                .unwrap_or_else(|| panic!("no @keyframes {name} in WEB_CSS"));
+            let bytes = css.as_bytes();
+            let body_start = marker_start + marker.len();
+            let mut depth = 1usize;
+            let mut idx = body_start;
+            while depth > 0 {
+                match bytes[idx] {
+                    b'{' => depth += 1,
+                    b'}' => depth -= 1,
+                    _ => {}
+                }
+                idx += 1;
+            }
+            let body = &css[body_start..idx - 1];
+            for line in body.lines() {
+                let line = line.trim();
+                if line.is_empty() || line.ends_with('{') || line == "}" {
+                    continue;
+                }
+                let Some((prop, _)) = line.split_once(':') else {
+                    continue;
+                };
+                let prop = prop.trim();
+                assert!(
+                    paint_only(prop),
+                    "`{name}` animates `{prop}`, which is not paint-only (f819)"
+                );
+            }
+        }
     }
 
     /// Every stop belongs to exactly one line, and a line is a walk down
