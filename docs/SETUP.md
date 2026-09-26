@@ -250,8 +250,9 @@ and nobody has asked for it.
 `abandon` discards a node and everything below it, and through a tool that
 would happen without anybody seeing a command. It stays on the command line,
 where somebody is looking. So do the operations that reshape a tree rather
-than record work — closing another node, blocking, flagging, restoring a safe
-point. Those belong to whoever maintains the tree, and they have a terminal.
+than record work — closing over open closure conditions, blocking, flagging,
+restoring a safe point. Those belong to whoever maintains the tree, and
+they have a terminal.
 
 ### Why the writes are here at all
 
