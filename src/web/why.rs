@@ -17,7 +17,7 @@
 //! draws per step comes from the same function `why --full` calls
 //! (`WEB.md` §2).
 
-use super::{alias_link, escape};
+use super::{alias_link, escape, FAVICON};
 use crate::event::Event;
 use crate::model::{Aggregates, Node, Tree};
 use crate::render::{anchor_of, blocking_of, open_then_of, standing_of, Full};
@@ -233,6 +233,7 @@ pub(super) fn why_page(
          <html lang=\"en\"><head><meta charset=\"utf-8\">\n\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
          <title>Why {alias} - {name_t}</title>\n\
+         {FAVICON}\n\
          <style>\n{css}</style></head>\n\
          <body><div class=\"page\">\n\
          <p class=\"crumb\"><a href=\"/p/{p}/\">{name_t}</a></p>\n\
