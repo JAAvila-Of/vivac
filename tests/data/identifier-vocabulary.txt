@@ -36,6 +36,7 @@ age
 agent
 ages
 aggregates
+ago
 agree
 agrees
 al
@@ -243,6 +244,7 @@ capped
 caps
 capture
 captured
+card
 cargo
 carried
 carries
@@ -696,6 +698,7 @@ folder
 folders
 folding
 folds
+followed
 footer
 for
 force
@@ -1214,6 +1217,7 @@ outcome
 outer
 outln
 output
+outputs
 outside
 ov
 over
@@ -1612,6 +1616,7 @@ selected
 self
 sense
 sentence
+sentences
 sep
 separator
 separators
@@ -2050,6 +2055,7 @@ when
 where
 wheres
 wherever
+whether
 which
 while
 whitespace

@@ -216,6 +216,22 @@ impl Boundary<'_> {
     }
 }
 
+impl Changed<'_> {
+    /// Whether the stretch moved nothing: no group has an entry and the tail
+    /// names nothing. Stops do not count -- the tail never prints them -- so
+    /// a stretch the hook only stopped in reads as still. Today's What moved
+    /// block and the index card (`d817`) both ask this, and asking one
+    /// function is what keeps the card from disagreeing with the page it
+    /// opens.
+    pub(crate) fn nothing_moved(&self) -> bool {
+        self.opened.is_empty()
+            && self.closed.is_empty()
+            && self.flagged.is_empty()
+            && self.moved.is_empty()
+            && tail_phrase(&self.tail).is_none()
+    }
+}
+
 /// The boundary `--since manual` measures from: the last stop somebody sat
 /// down and made, or the whole log if there has never been one.
 ///
@@ -914,5 +930,35 @@ mod tests {
         let result = collect(&tree, &events, 0);
         let v = as_json(&tree, &result);
         assert!(v["opened"][0].get("lane").is_none(), "{v}");
+    }
+
+    /// An empty stretch moved nothing: every group is empty and the tail
+    /// names nothing either.
+    #[test]
+    fn nothing_moved_is_true_on_an_empty_stretch() {
+        let events = vec![node_created(1, "n1", 1, "Node")];
+        let tree = fold(&events, 0);
+        let result = collect(&tree, &events, 1);
+        assert!(result.nothing_moved());
+    }
+
+    /// One opened node is work: `nothing_moved` says so.
+    #[test]
+    fn nothing_moved_is_false_with_one_opened_node() {
+        let events = vec![node_created(1, "n1", 1, "Node")];
+        let tree = fold(&events, 0);
+        let result = collect(&tree, &events, 0);
+        assert!(!result.nothing_moved());
+    }
+
+    /// A focus move touches no group, but the tail names it -- so the
+    /// stretch did not move nothing, and `nothing_moved` must not say it
+    /// did.
+    #[test]
+    fn nothing_moved_is_false_with_only_a_focus_move() {
+        let events = vec![node_created(1, "n1", 1, "Node"), pushed(2, "n1")];
+        let tree = fold(&events, 0);
+        let result = collect(&tree, &events, 1);
+        assert!(!result.nothing_moved());
     }
 }

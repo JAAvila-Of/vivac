@@ -340,43 +340,128 @@ ol.stack > li.here .title {
 
 /* ---- the index of projects ------------------------------------------ */
 
-/* `f806`: a project row shares `ul.nodes > li`'s two columns with every
-   other row on the site, and a name is not an id -- `FluentOperations`
-   overflowed onto the focus text, and `vivac-project` broke at its own
-   hyphen onto two lines. `li.project` stacks the row into one column
-   instead: the name on its own line, the focus under it, the quiet or
-   blocked note under that. `choose_page` shares `project_row`, so it gets
-   the fix for free. */
-ul.nodes > li.project {
-  grid-template-columns: 1fr;
+/* A project is a card of its own (`d817`): the index is the one page
+   where the rows are not nodes of one tree, and the card is what says
+   so. The card is the link, so its text cannot be selected with the
+   mouse -- the cost `d817` accepted, since every word on it is on the
+   page it opens. */
+ul.projects {
+  list-style: none;
+  margin: 0.4rem 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr));
+  gap: 0.9rem;
 }
 
-ul.nodes > li.project .alias {
-  font-family: var(--prose);
-  font-size: 1rem;
+li.project {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  background: var(--panel);
+  border: 1px solid var(--card-edge);
+  border-radius: 12px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  padding: 0.85rem 2.2rem 0.9rem 1rem;
+  transition: box-shadow 140ms ease-out, background-color 120ms ease-out;
+}
+
+li.project::after {
+  content: "\203A";
+  position: absolute;
+  right: 0.9rem;
+  top: 0.8rem;
+  color: var(--ink-faint);
+  font-size: 1.25rem;
+  line-height: 1.3;
+}
+
+li.project:hover {
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
+}
+
+li.project:active {
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+}
+
+li.project:has(a:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+li.project p {
+  margin: 0;
+}
+
+li.project .name {
+  font-family: var(--display);
+  font-size: 1.15rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
   overflow-wrap: anywhere;
 }
 
-/* The base `.note` rule forces `grid-column: 2`, which a single-column
-   row does not have. */
-ul.nodes > li.project .note {
-  grid-column: 1;
-}
-
-ul.nodes > li.project + li.project::before {
-  left: 0.9rem;
-}
-
-/* The index: a project's name is a name, not an id. */
-main > ul.nodes {
-  margin-top: 0.4rem;
-}
-
-ul.nodes > li.project .alias a {
-  background: none;
-  padding: 0;
+li.project .name a {
   color: var(--ink);
-  font-size: 1.02rem;
+  text-decoration: none;
+  outline: none;
+}
+
+li.project .name a::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+}
+
+li.project .focus {
+  font-size: 0.92rem;
+}
+
+li.project .focus .alias {
+  display: inline-block;
+  margin-right: 0.3rem;
+  padding: 0.02rem 0.38rem;
+  border-radius: 6px;
+  background: var(--chip);
+  color: var(--ink-soft);
+  font-family: var(--mono);
+  font-size: 0.76rem;
+}
+
+li.project .focus.none {
+  color: var(--ink-soft);
+  font-style: italic;
+}
+
+li.project .lane {
+  color: var(--ink-soft);
+  font-size: 0.85rem;
+}
+
+li.project .state {
+  margin-top: auto;
+  padding-top: 0.55rem;
+  border-top: 1px solid var(--sep);
+  /* The rule runs as far right as it starts in from the left, past the
+     column the chevron keeps clear. */
+  margin-right: -1.2rem;
+  color: var(--ink-soft);
+  font-size: 0.85rem;
+}
+
+/* "work since" and "no stop made by hand" are the same news, work past
+   the last save point, and the words already say it: the colour only
+   repeats them. */
+li.project .stop.work,
+li.project .stop.never {
+  color: var(--warn);
+}
+
+main > p.note {
+  margin: 1rem 0 0 0.9rem;
 }
 
 a {
@@ -1351,6 +1436,7 @@ details > .detail {
   .detail,
   ul.nodes > li,
   ol.stack > li,
+  li.project,
   li.stop,
   details > .detail {
     transition: none;

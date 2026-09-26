@@ -1613,6 +1613,44 @@ fn the_index_is_a_page_and_carries_what_d200_admitted() {
     assert!(a.body.contains("no focus"), "{}", a.body);
 }
 
+/// `d817`: the card's last-stop line reads the same tree `changes --since
+/// manual` does, and moves with it -- a stop made by hand with nothing
+/// after it, then a node born after that stop.
+#[test]
+fn the_index_card_says_whether_work_followed_the_stop_you_made() {
+    let s = up("index-card-stop-since");
+    s._sandbox.ok(&[
+        "add",
+        "Something",
+        "--why",
+        "so the stop has work behind it",
+    ]);
+    s._sandbox.ok(&["save", "checkpoint"]);
+    let boot = call(s.port(), &s.boot_path(), &[("Host", s.host())]);
+    let token = token_from(&boot);
+    let a = call(
+        s.port(),
+        "/",
+        &[("Host", s.host()), ("X-Vivac-Token", token.clone())],
+    );
+    assert_eq!(a.status, 200, "{}", a.body);
+    assert!(a.body.contains("nothing since"), "{}", a.body);
+
+    s._sandbox.ok(&[
+        "add",
+        "After the stop",
+        "--why",
+        "so the hook has something to see",
+    ]);
+    let b = call(
+        s.port(),
+        "/",
+        &[("Host", s.host()), ("X-Vivac-Token", token)],
+    );
+    assert_eq!(b.status, 200, "{}", b.body);
+    assert!(b.body.contains("work since"), "{}", b.body);
+}
+
 /// `d374`: the permanent form of the URL opens the project.
 #[test]
 fn a_project_opens_by_its_permanent_id() {
