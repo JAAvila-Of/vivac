@@ -111,7 +111,7 @@
 //! still twelve thousand pixels when nothing is folded, which is what the
 //! page is for.
 
-use super::escape;
+use super::{escape, FAVICON};
 use crate::event::State;
 use crate::model::{Aggregates, Node, Tree};
 use serde_json::json;
@@ -1226,6 +1226,7 @@ fn shell(
          <html lang=\"en\"><head><meta charset=\"utf-8\">\n\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
          <title>Map - {name_t}</title>\n\
+         {FAVICON}\n\
          <style>\n{css}</style></head>\n\
          <body class=\"wide-page\"><div class=\"page\">\n\
          <p class=\"crumb\"><a href=\"/p/{p}/\">{name_t}</a></p>\n\
