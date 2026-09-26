@@ -1,7 +1,8 @@
 # Using it
 
 Every command, grouped by who runs it. The [README](../README.md) says what the
-tool is and why; this says how it is driven.
+tool is and why; this says how it is driven, and
+[When each command runs](SEAMS.md) says at which moment of the work.
 
 Nothing here has to be memorised. `vivac` on its own prints the same list, and
 that printout is the one that cannot go stale.

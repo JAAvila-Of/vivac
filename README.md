@@ -1,14 +1,19 @@
 <div align="center">
 
-# vivac
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/img/logo-dark.svg">
+    <img alt="vivac™" src="docs/img/logo-light.svg" width="320">
+  </picture>
+</h1>
 
 **A tree where every node knows which node it was born from.**
 
 *So that months later something can still answer “why are we here?”*
 
 [![ci](https://github.com/JAAvila-Of/vivac/actions/workflows/ci.yml/badge.svg)](https://github.com/JAAvila-Of/vivac/actions/workflows/ci.yml)
-[![crates.io](https://img.shields.io/crates/v/vivac?color=bc4c00&labelColor=24292f)](https://crates.io/crates/vivac)
-[![msrv](https://img.shields.io/badge/msrv-1.89-bc4c00?labelColor=24292f)](rust-toolchain.toml)
+[![crates.io](https://img.shields.io/crates/v/vivac?color=2f5d50&labelColor=24292f)](https://crates.io/crates/vivac)
+[![msrv](https://img.shields.io/badge/msrv-1.89-2f5d50?labelColor=24292f)](rust-toolchain.toml)
 [![licence](https://img.shields.io/badge/licence-MIT%20OR%20Apache--2.0-24292f)](#licence)
 
 </div>
@@ -47,7 +52,7 @@ $ vivac why 4
 
 <div align="center">
 
-**[What you get](#what-you-get)** · **[Install](#install)** · **[First five minutes](#the-first-five-minutes)** · **[Why one map](#one-map)** · **[Bring a project in](docs/MIGRATING.md)**
+**[What you get](#what-you-get)** · **[See it](#see-it)** · **[Install](#install)** · **[First five minutes](#the-first-five-minutes)** · **[Why one map](#one-map)** · **[Bring a project in](docs/MIGRATING.md)**
 
 </div>
 
@@ -55,11 +60,19 @@ $ vivac why 4
 
 ## Built for one person's own work
 
-One person wrote this for their own projects, and it is still measured on
-them. That is the whole of its pedigree, and it shows in what got built:
-every mechanism here came out of a defect that had already cost its author
-days, and every number on this page came off a real tree rather than a
-benchmark written to make a README look good.
+I run eight projects in parallel — open source, work and my own — and five
+of them are large. Every time I came back to one I had to piece together what
+had been decided in it, and more than once I watched the agent change
+something we had already settled, because both of us had forgotten we had.
+What I had against that was manual: ending each stretch of work by asking
+the model for *a safepoint, so we can pick this up later*, or keeping a
+`where_are_we.txt` at the root of the project.
+
+vivac is what replaced them, and it is still measured on those projects. That
+is the whole of its pedigree, and it shows in what got built: every mechanism
+here came out of a defect that had already cost me days, and every number on
+this page came off a real tree rather than a benchmark written to make a
+README look good.
 
 The tree this project keeps of itself, 23 days in: **695 nodes, 315 of them
 closed, 176 standing decisions, 16 levels deep.**
@@ -74,6 +87,12 @@ Three of those defects, and what each one turned into:
 - **Three claims shipped to crates.io that the binary beside them
   contradicted.** Now a test runs every command this page shows and holds its
   lists against `--help`.
+
+What I would not give up now is no single feature. It is looking at the tree
+of what was decided and why; picking a project back up with whichever model
+is at hand and having it know what the last one settled; and knowing where
+the work stands at any moment. In my experience that is worth more than
+anything else here, and I hope it serves you as well.
 
 There are no issues and no pull requests yet; [`CONTRIBUTING.md`](CONTRIBUTING.md)
 says why.
@@ -166,12 +185,6 @@ what it reverses, and `--against` records the rule or pillar that decided it —
 so a decision can be argued with a year later instead of guessed at. This
 project's own tree carries 176 of them.
 
-**And you can look at the whole thing.** `vivac web` draws the tree in a
-browser: which project moved and which has been sitting still, one node's
-lineage, and what changed under you while you were not asking. A server you
-start and that dies when you close it, bound to `127.0.0.1`, reachable
-through a one-time key it prints.
-
 **An assumption that falls does not take its children with it.** `abandon`
 marks the premise refuted and everything under it goes with it, except what
 you rescue — and what is rescued **still hangs where it was born**, because
@@ -179,13 +192,80 @@ being born somewhere is not undone by that place turning out to be wrong.
 
 ---
 
+## What it does not promise
+
+**It saves tokens, not all of them.** Picking a project up took the tree 100
+tokens where a hand-written plan took 9,252, and that difference comes back
+every time a session opens. The agent still reads files, still reasons and
+still explains itself, and none of that gets cheaper.
+
+**It does not make sure nothing is ever forgotten.** No memory system can,
+this one included, because every one of them still runs on the model's
+judgement: *should I save this? is this a finding? do I need to read the tree
+again before I answer?* The best skill in the world, a hundred subagents or a
+hundred daemons move where that judgement happens, and none of them removes
+it. vivac hangs capture off the seams of the work rather than off that
+judgement, and still [measures where it slips](docs/SEAMS.md#where-it-slipped-and-what-changed).
+
+What is left over after that is why the tree is built to be looked at.
+
+---
+
+## See it
+
+```sh
+vivac web
+```
+
+The agent writes the tree, and you can read it at any moment without asking
+the agent anything. `vivac web` opens every project on this machine in a
+browser: which one moved and which has been sitting still, what changed in
+one while you were away, a node's whole lineage, and the whole tree. It is
+where you see the state of each item for yourself, and where you catch what
+the agent let pass.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/web-index-dark.png">
+  <img alt="The index of vivac web with four example projects as cards. billing-api moved today, and its last stop made by hand was yesterday, with work since. field-app moved two days ago and nothing since its last stop. ci-costs moved yesterday, six days after its last stop. docs-site has not moved in thirteen days and has no stop made by hand. Each card names the node where its work was left." src="docs/img/web-index-light.png">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/web-today-dark.png">
+  <img alt="The page of one example project, billing-api. What moved since the last stop you made: four nodes opened, among them a finding and a decision, and one closed with its outcome. Where you are: the goal, the task under it, and the task you are on, marked you are here. What governs this point: two standing decisions. Do not touch now: one parked node, with the words it was parked with." src="docs/img/web-today-light.png">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/web-tree-dark.png">
+  <img alt="The map of the same project: all eleven nodes, each on a rail drawn from the node it was born from. The goal carries the cache adapter task, which carries a closed finding, the retry decision and the task of migrating the callers, with its own finding, decision and closed sub-task under it. The parked rate-limiting node hangs from the goal, and the security pillar stands as a second root with its rule under it. Closed nodes are hollow and struck out. A panel beside the map says how to read it." src="docs/img/web-tree-light.png">
+</picture>
+
+<sub>Four example projects, written by real vivac commands with
+[`tools/web-screenshots.py`](tools/web-screenshots.py), which takes these
+pictures again whenever the pages change.</sub>
+
+A server you start and that dies when you close it, bound to `127.0.0.1`,
+reachable through a one-time key it prints. It has no functions of its own:
+anything a page needs is built on the command line first.
+→ [**What the web is, and is not**](docs/USAGE.md#the-maintainer-looks)
+
+---
+
 ## One map
 
-**Do not run vivac beside another memory or learning system in the same
-project.** Not because they compete — because **two maps collide.** Each one
-points the agent at the context it holds, and sooner or later one settles
-something the other mapped differently, with nobody noticing which of the two
-oriented the decision.
+**vivac was not built to compete with memory systems.** I have used
+[engram](https://github.com/Gentleman-Programming/engram), by Alan Buscaglia,
+and I contribute to it. What I set out to build was a record of decisions, and
+the road there turned out to need a memory; that is how vivac came to work as
+one, kept in a file in the project so that whichever harness or model you
+open it with reads the same thing. It is not a better memory system than
+engram or any other. It was built for something else.
+
+That is why the advice runs both ways. **If you already use a memory system
+and it serves you, do not add vivac. If you want vivac for the tree, do not
+keep another one beside it** — any one. Each system injects its own context
+into the model, and **two maps collide**: each points the agent at what it
+holds, and sooner or later one settles something the other mapped
+differently, with nobody noticing which of the two oriented the decision.
 
 That is observed, not assumed:
 
@@ -322,7 +402,8 @@ vivac open         what is waiting on you, and what has been sitting
 vivac web          the whole tree in a browser, on this machine only
 ```
 
-That is the loop. → [**Every command**](docs/USAGE.md)
+That is the loop. → [**When each one runs**](docs/SEAMS.md), and what to say
+when your agent skips one · [**Every command**](docs/USAGE.md)
 
 ---
 
@@ -412,6 +493,7 @@ Not there yet: team mode. The project is in `0.x` and
 
 | | |
 |---|---|
+| [**When each command runs**](docs/SEAMS.md) | the moments of a session, who acts at each, and what to say if the agent skips one |
 | [**Using it**](docs/USAGE.md) | every command, grouped by who runs it |
 | [**Setting it up**](docs/SETUP.md) | what setup writes, Codex, the MCP server, where things are stored |
 | [**Bringing a project in**](docs/MIGRATING.md) | the migration, and why it is a migration and not an addition |
@@ -425,3 +507,8 @@ Not there yet: team mode. The project is in `0.x` and
 
 `MIT OR Apache-2.0`, at the option of whoever uses it. The text of each is in
 [`LICENSE-MIT`](LICENSE-MIT) and [`LICENSE-APACHE`](LICENSE-APACHE).
+
+The licence covers the code and not the name: a fork is free, and it goes out
+under a name of its own. [`TRADEMARKS.md`](TRADEMARKS.md) says what the name
+and the logo can be used for. A security flaw goes privately, as
+[`SECURITY.md`](SECURITY.md) says.
