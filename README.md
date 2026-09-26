@@ -322,7 +322,8 @@ vivac open         what is waiting on you, and what has been sitting
 vivac web          the whole tree in a browser, on this machine only
 ```
 
-That is the loop. → [**Every command**](docs/USAGE.md)
+That is the loop. → [**When each one runs**](docs/SEAMS.md), and what to say
+when your agent skips one · [**Every command**](docs/USAGE.md)
 
 ---
 
@@ -412,6 +413,7 @@ Not there yet: team mode. The project is in `0.x` and
 
 | | |
 |---|---|
+| [**When each command runs**](docs/SEAMS.md) | the moments of a session, who acts at each, and what to say if the agent skips one |
 | [**Using it**](docs/USAGE.md) | every command, grouped by who runs it |
 | [**Setting it up**](docs/SETUP.md) | what setup writes, Codex, the MCP server, where things are stored |
 | [**Bringing a project in**](docs/MIGRATING.md) | the migration, and why it is a migration and not an addition |
