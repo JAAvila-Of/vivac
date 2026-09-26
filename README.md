@@ -219,6 +219,20 @@ one while you were away, a node's whole lineage, and the whole tree. It is
 where you see the state of each item for yourself, and where you catch what
 the agent let pass.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/web-index-dark.png">
+  <img alt="The index of vivac web with four example projects as cards. billing-api moved today, and its last stop made by hand was yesterday, with work since. field-app moved two days ago and nothing since its last stop. ci-costs moved yesterday, six days after its last stop. docs-site has not moved in thirteen days and has no stop made by hand. Each card names the node where its work was left." src="docs/img/web-index-light.png">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/web-today-dark.png">
+  <img alt="The page of one example project, billing-api. What moved since the last stop you made: four nodes opened, among them a finding and a decision, and one closed with its outcome. Where you are: the goal, the task under it, and the task you are on, marked you are here. What governs this point: two standing decisions. Do not touch now: one parked node, with the words it was parked with." src="docs/img/web-today-light.png">
+</picture>
+
+<sub>Four example projects, written by real vivac commands with
+[`tools/web-screenshots.py`](tools/web-screenshots.py), which takes these
+pictures again whenever the pages change.</sub>
+
 A server you start and that dies when you close it, bound to `127.0.0.1`,
 reachable through a one-time key it prints. It has no functions of its own:
 anything a page needs is built on the command line first.
