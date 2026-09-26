@@ -1,6 +1,11 @@
 <div align="center">
 
-# vivac™
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/img/logo-dark.svg">
+    <img alt="vivac™" src="docs/img/logo-light.svg" width="320">
+  </picture>
+</h1>
 
 **A tree where every node knows which node it was born from.**
 
