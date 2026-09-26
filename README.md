@@ -229,6 +229,11 @@ the agent let pass.
   <img alt="The page of one example project, billing-api. What moved since the last stop you made: four nodes opened, among them a finding and a decision, and one closed with its outcome. Where you are: the goal, the task under it, and the task you are on, marked you are here. What governs this point: two standing decisions. Do not touch now: one parked node, with the words it was parked with." src="docs/img/web-today-light.png">
 </picture>
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/web-tree-dark.png">
+  <img alt="The map of the same project: all eleven nodes, each on a rail drawn from the node it was born from. The goal carries the cache adapter task, which carries a closed finding, the retry decision and the task of migrating the callers, with its own finding, decision and closed sub-task under it. The parked rate-limiting node hangs from the goal, and the security pillar stands as a second root with its rule under it. Closed nodes are hollow and struck out. A panel beside the map says how to read it." src="docs/img/web-tree-light.png">
+</picture>
+
 <sub>Four example projects, written by real vivac commands with
 [`tools/web-screenshots.py`](tools/web-screenshots.py), which takes these
 pictures again whenever the pages change.</sub>
