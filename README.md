@@ -47,7 +47,7 @@ $ vivac why 4
 
 <div align="center">
 
-**[What you get](#what-you-get)** · **[Install](#install)** · **[First five minutes](#the-first-five-minutes)** · **[Why one map](#one-map)** · **[Bring a project in](docs/MIGRATING.md)**
+**[What you get](#what-you-get)** · **[See it](#see-it)** · **[Install](#install)** · **[First five minutes](#the-first-five-minutes)** · **[Why one map](#one-map)** · **[Bring a project in](docs/MIGRATING.md)**
 
 </div>
 
@@ -55,11 +55,19 @@ $ vivac why 4
 
 ## Built for one person's own work
 
-One person wrote this for their own projects, and it is still measured on
-them. That is the whole of its pedigree, and it shows in what got built:
-every mechanism here came out of a defect that had already cost its author
-days, and every number on this page came off a real tree rather than a
-benchmark written to make a README look good.
+I run eight projects in parallel — open source, work and my own — and five
+of them are large. Every time I came back to one I had to piece together what
+had been decided in it, and more than once I watched the agent change
+something we had already settled, because both of us had forgotten we had.
+What I had against that was manual: ending each stretch of work by asking
+the model for *a safepoint, so we can pick this up later*, or keeping a
+`where_are_we.txt` at the root of the project.
+
+vivac is what replaced them, and it is still measured on those projects. That
+is the whole of its pedigree, and it shows in what got built: every mechanism
+here came out of a defect that had already cost me days, and every number on
+this page came off a real tree rather than a benchmark written to make a
+README look good.
 
 The tree this project keeps of itself, 23 days in: **695 nodes, 315 of them
 closed, 176 standing decisions, 16 levels deep.**
@@ -74,6 +82,12 @@ Three of those defects, and what each one turned into:
 - **Three claims shipped to crates.io that the binary beside them
   contradicted.** Now a test runs every command this page shows and holds its
   lists against `--help`.
+
+What I would not give up now is no single feature. It is looking at the tree
+of what was decided and why; picking a project back up with whichever model
+is at hand and having it know what the last one settled; and knowing where
+the work stands at any moment. In my experience that is worth more than
+anything else here, and I hope it serves you as well.
 
 There are no issues and no pull requests yet; [`CONTRIBUTING.md`](CONTRIBUTING.md)
 says why.
@@ -166,12 +180,6 @@ what it reverses, and `--against` records the rule or pillar that decided it —
 so a decision can be argued with a year later instead of guessed at. This
 project's own tree carries 176 of them.
 
-**And you can look at the whole thing.** `vivac web` draws the tree in a
-browser: which project moved and which has been sitting still, one node's
-lineage, and what changed under you while you were not asking. A server you
-start and that dies when you close it, bound to `127.0.0.1`, reachable
-through a one-time key it prints.
-
 **An assumption that falls does not take its children with it.** `abandon`
 marks the premise refuted and everything under it goes with it, except what
 you rescue — and what is rescued **still hangs where it was born**, because
@@ -179,13 +187,61 @@ being born somewhere is not undone by that place turning out to be wrong.
 
 ---
 
+## What it does not promise
+
+**It saves tokens, not all of them.** Picking a project up took the tree 100
+tokens where a hand-written plan took 9,252, and that difference comes back
+every time a session opens. The agent still reads files, still reasons and
+still explains itself, and none of that gets cheaper.
+
+**It does not make sure nothing is ever forgotten.** No memory system can,
+this one included, because every one of them still runs on the model's
+judgement: *should I save this? is this a finding? do I need to read the tree
+again before I answer?* The best skill in the world, a hundred subagents or a
+hundred daemons move where that judgement happens, and none of them removes
+it. vivac hangs capture off the seams of the work rather than off that
+judgement, and still [measures where it slips](docs/SEAMS.md#where-it-slipped-and-what-changed).
+
+What is left over after that is why the tree is built to be looked at.
+
+---
+
+## See it
+
+```sh
+vivac web
+```
+
+The agent writes the tree, and you can read it at any moment without asking
+the agent anything. `vivac web` opens every project on this machine in a
+browser: which one moved and which has been sitting still, what changed in
+one while you were away, a node's whole lineage, and the whole tree. It is
+where you see the state of each item for yourself, and where you catch what
+the agent let pass.
+
+A server you start and that dies when you close it, bound to `127.0.0.1`,
+reachable through a one-time key it prints. It has no functions of its own:
+anything a page needs is built on the command line first.
+→ [**What the web is, and is not**](docs/USAGE.md#the-maintainer-looks)
+
+---
+
 ## One map
 
-**Do not run vivac beside another memory or learning system in the same
-project.** Not because they compete — because **two maps collide.** Each one
-points the agent at the context it holds, and sooner or later one settles
-something the other mapped differently, with nobody noticing which of the two
-oriented the decision.
+**vivac was not built to compete with memory systems.** I have used
+[engram](https://github.com/Gentleman-Programming/engram), by Alan Buscaglia,
+and I contribute to it. What I set out to build was a record of decisions, and
+the road there turned out to need a memory; that is how vivac came to work as
+one, kept in a file in the project so that whichever harness or model you
+open it with reads the same thing. It is not a better memory system than
+engram or any other. It was built for something else.
+
+That is why the advice runs both ways. **If you already use a memory system
+and it serves you, do not add vivac. If you want vivac for the tree, do not
+keep another one beside it** — any one. Each system injects its own context
+into the model, and **two maps collide**: each points the agent at what it
+holds, and sooner or later one settles something the other mapped
+differently, with nobody noticing which of the two oriented the decision.
 
 That is observed, not assumed:
 
