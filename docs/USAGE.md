@@ -61,8 +61,10 @@ A finding that asks nothing of anyone, a lesson or a measurement, is a record:
 write it and close it straight away, with an outcome that starts with
 `Record:`. `find` and `why` still bring it back, and `open` keeps answering
 what is actually left to do. Left open, records pile up until `open` stops
-saying anything. A lesson that should change how work is done is not a record
-either: it goes in as a rule, where it reaches the agent.
+saying anything. A lesson learned the hard way is a record too, titled with
+its mechanism and its symptom, which are the words someone will search for.
+It becomes a rule only when it draws a line any piece of work can be checked
+against, and then the lessons that taught it hang under the rule.
 
 ```sh
 vivac add "Cold builds take 4 min on CI" --type finding --why "measured on main"
