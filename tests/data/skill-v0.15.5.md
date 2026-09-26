@@ -1,3 +1,8 @@
+---
+name: vivac-migrate
+description: Bring everything a project already knows into the vivac tree, from another memory system, the harness's own memory, instruction files for any agent, decision records and internal documents; check it, and retire the other maps with the person's yes. Use when asked to migrate, import or move memories, notes, rules, decisions or documentation into vivac, or to bring what a project knows into it.
+---
+<!-- written by vivac setup; fingerprint a6415fc3dfd585a8; setup removes it with --undo while the text is unchanged -->
 
 # Bringing what a project knows into vivac
 
@@ -100,26 +105,14 @@ among them, a share of the sources each, so thousands of records do not fill
 your context. The first batch is not split: the structure needs the whole
 project in view. Give each subagent its sources, step 3 of this page and the
 ground rules. It only reads: it writes nothing to the tree and changes nothing
-anywhere, and its answer to you is the only thing it produces. It publishes
-nothing, shares nothing, opens no page, document or message anywhere, calls no
-service, and writes no file outside the temporary folder. Tell it so in those
-words: a subagent that compiled the others' answers once published them as a
-page nobody had asked for. It answers with one line for every source it was
-given, either the nodes that source would become, each with its kind, title,
-parent and why, and two or three terms only that source would use, for step
-5; or that nothing comes out of it, and why. A summary instead of those lines
-is not an answer: whatever it left out is lost where nobody can see it. Before
-you use what comes back, check that every source you handed out has its line,
-and read again any source that does not. The plan, the person's yes and the
-writing stay with you. Without subagents, do the same reading yourself, and
-keep the same line per source: those terms are what step 5 checks.
-
-Every source the person chose is read and answered for, including one they
-told you to use only to fill what the others miss. Filling gaps means reading
-it and comparing it with the rest, then bringing in what the others do not
-say; it does not mean leaving it for later. If a source is not finished when
-the batch ends, say so in the plan and in the summary, with how much of it is
-left.
+anywhere. It answers with one line for every source it was given, either the
+nodes that source would become, each with its kind, title, parent and why, and
+two or three terms only that source would use, for step 5; or that nothing
+comes out of it, and why. A summary instead of those lines is not an answer:
+whatever it left out is lost where nobody can see it. Before you use what comes
+back, check that every source you handed out has its line, and read again any
+source that does not. The plan, the person's yes and the writing stay with
+you. Without subagents, do the same reading yourself.
 
 ## 2. Look at the tree
 
@@ -137,10 +130,10 @@ next agent on its own:
 |---|---|---|
 | constraint | Something that has to stay true. | Under the root goal: in the brief, every session. Under another node: only while the work is inside it. |
 | pillar | A criterion the project's design is judged against, titled with its name and what it rejects. | vivac rules, when work is checked. |
-| rule | A line a pillar draws that any piece of work can be checked against, beyond the incident that taught it, with the command that checks it if there is one (--arm). | vivac rules, when work is checked. |
+| rule | A line a pillar draws that work can be checked against, with the command that checks it if there is one (--arm). | vivac rules, when work is checked. |
 | decision | A choice that was made, with its reason, the options it beat, and the pillar or rule it was judged against. | The brief shows a few that still stand; vivac why shows the rest. |
 | finding, still open | Something observed that still asks for work: a bug nobody fixed, a gap, a risk. | vivac open, and the brief. |
-| finding, closed as a record | A lesson learned the hard way, or a measurement, that asks nothing of anyone. Its title keeps the mechanism, the object and the symptom. Write it and close it at once, with an outcome that says it is a record. | vivac find and vivac why, which include closed nodes. |
+| finding, closed as a record | A lesson or a measurement that asks nothing of anyone. Write it and close it at once, with an outcome that says it is a record. | vivac find and vivac why, which include closed nodes. |
 | question | Something still to decide, including whatever a source marks as proposed, draft or pending. | The brief shows the ones that block. |
 | goal or task | Work still open. | vivac open, and the brief. |
 | nothing | Status, superseded history, boilerplate, code, and descriptions of how the system works. | It stays in its source. |
@@ -148,18 +141,10 @@ next agent on its own:
 - What has to hold in every session, whatever the work, is a constraint under
   the root goal. How to work in the repository usually is. What is only
   judged when a piece of work is reviewed is a rule under its pillar.
-- A lesson learned the hard way is a finding closed as a record. Its title
-  says the mechanism, the object and the symptom, in the source's own words:
-  those are the words someone will search for, and a lesson rewritten as a
-  general rule loses them. It is a rule only when it draws a line that any
-  piece of work can be checked against, beyond the incident that taught it.
-  When several lessons teach the same line, write the rule once and hang each
-  lesson under it as a record, so vivac why shows where the rule came from.
-  A large project has tens of rules, not hundreds: vivac rules is read whole
-  when work is reviewed, and a list nobody can read reaches nobody.
-- What has to hold in every session is a constraint, as above. Leaving lessons
-  open fills vivac open with things that are not work, and then it stops
-  saying what is.
+- A lesson that governs how work is done is a rule or a constraint, not a
+  finding: that is where it reaches the agent. A lesson that only records
+  what happened is a finding closed as a record. Leaving lessons open fills
+  vivac open with things that are not work, and then it stops saying what is.
 - A pillar comes from the person's own words, or from a document that calls it
   a pillar or a governing criterion. If you think something works as one but
   nobody named it, propose it marked as inferred, and for each one show what
@@ -195,11 +180,9 @@ pillar, and what belongs to one part of the work hangs from that part's goal.
 When unsure, ask.
 
 Show the person, for each source, how many nodes come out of it and what is
-left out and why, and how many nodes of each kind the batch writes. If rules
-outnumber records, look at the rules again before showing them: most of what
-a project learns is lessons, and a lesson is a record. Then a table per kind,
-with the source, the title, the parent and, for each decision, its --against.
-Then the other maps you found in step 1. Wait for their answer before writing.
+left out and why. Then a table per kind, with the source, the title, the parent
+and, for each decision, its --against. Then the other maps you found in step
+1. Wait for their answer before writing.
 
 A yes to the sources and how you will treat them is not a yes to the nodes.
 Each batch shows its own tables, title by title, and waits for its own yes,
@@ -212,8 +195,7 @@ even when the person already approved the plan or asked for only one batch.
    per batch. Putting that copy back, with every session that runs vivac mcp
    closed, is how a batch is undone.
 2. Write the root goal if it is new, then pillars and constraints, then rules
-   under their pillar, then decisions, then findings and open work, each
-   lesson that taught a rule with that rule as its parent. Use vivac
+   under their pillar, then decisions, then findings and open work. Use vivac
    add and vivac decide on the command line, or vivac_add and vivac_decide
    over MCP. Give each decision the options it beat with --alternative, and
    what it was judged against with --against. Close each record right after
@@ -225,15 +207,11 @@ even when the person already approved the plan or asked for only one batch.
 ## 5. Check
 
 - For every source, not a sample, take two or three terms that only it would
-  use: the name of an object, a tool, a command or a symptom. They are the
-  terms the reading gave you for each source in step 1. Search each one with
-  vivac find, which ignores accents. Twenty searches spread over a batch are
-  a sample, however well chosen, and a sample is not this check. If you wrote
-  the batch with a script, run the check with a script too, over every source.
-- Show the person the result as a list with every source on it: its terms and
-  whether they found the node. For every source whose terms find nothing,
-  write the node it was missing, or write down why the tree already says it
-  under other words. The migration is not done while any source has neither.
+  use: the name of an object, a tool, a command or a symptom. Search each one
+  with vivac find, which ignores accents. List every source for which none of
+  its terms finds anything. For each one, write the node it was missing, or
+  write down why the tree already says it under other words. The migration is
+  not done while any source on that list has neither.
 - Compare what was written with the plan, not with itself: every title,
   parent and --against sentence against the plan the person approved.
   Explain every difference.
@@ -246,9 +224,8 @@ even when the person already approved the plan or asked for only one batch.
   now contradicts, and list them for the person. Do not edit them.
 - Delete any export you made.
 
-Then tell the person what was written, what was left out and why, whether
-each source they chose is finished or how much of it is left, and which copies
-of the log you made.
+Then tell the person what was written, what was left out and why, and which
+copies of the log you made.
 
 Last, ask the person to name three or four things this project learned the
 hard way, the ones they would least like to lose, and search for each in front

@@ -1597,10 +1597,10 @@ mod tests {
         // Computed independently (Python's own FNV-1a/64) over the exact
         // frontmatter and body this file embeds. It moves whenever the
         // skill's text does, and moving it is meant to be deliberate: the
-        // last time was `d798`, which shares the reading of a large batch
-        // among subagents after a migration's agent compacted five times
-        // reading its sources alone.
-        assert_eq!(skill_fingerprint(), 0xa6415fc3dfd585a8);
+        // last time was `d850`, which migrates a lesson as a record that
+        // keeps its mechanism instead of a rule, after a migration turned
+        // 296 of 303 lessons into rules and a quarter of them left no trace.
+        assert_eq!(skill_fingerprint(), 0x03c124454c171c1f);
     }
 
     #[test]

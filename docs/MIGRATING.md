@@ -108,7 +108,12 @@ one where it matters.
 
 A lesson or a measurement that asks nothing of anyone goes in closed, as a
 record: `vivac find` and `vivac why` still bring it back, and `vivac open`
-keeps answering what is actually left to do.
+keeps answering what is actually left to do. That includes most of what a
+project learned the hard way. A lesson keeps its mechanism and its symptom in
+its title, and becomes a rule only when it draws a line that any piece of work
+can be checked against; the lessons that taught a rule hang under it. A
+migration that turns every lesson into a rule leaves a rule list nobody reads
+at review, and loses the words the lessons would be found by.
 
 Instruction files stay as they are for now. What they say still reaches every
 session from the file, and taking that away before the tree delivers it would
