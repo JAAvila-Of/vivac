@@ -13,27 +13,33 @@
   --ink: #16181d;
   --ink-soft: #5c626e;
   --ink-faint: #878d99;
-  --ground: #fbfaf8;
+  --ground: #f5f5f7;
   --panel: #ffffff;
-  --rule: #e2e0db;
-  --rule-soft: #eeece8;
+  --sep: #e3e3e8;
+  --card-edge: rgba(0, 0, 0, 0.05);
+  --chip: #eeeef0;
+  --rule: #d9d9de;
+  --rule-soft: #e9e9ed;
   --accent: #2f5d50;
   --warn: #8a4b1f;
   --mono: ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono", Menlo,
     Consolas, monospace;
-  --prose: ui-sans-serif, system-ui, "Segoe UI", Inter, Helvetica, Arial,
-    sans-serif;
+  --prose: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --display: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
     --ink: #e6e5e1;
-    --ink-soft: #a2a7b2;
-    --ink-faint: #767c88;
-    --ground: #14161a;
-    --panel: #1b1e23;
-    --rule: #2c3037;
-    --rule-soft: #23272d;
+    --ink-soft: #a7a7ad;
+    --ink-faint: #7c7c83;
+    --ground: #1c1c1e;
+    --panel: #2a2a2d;
+    --sep: #3a3a3d;
+    --card-edge: rgba(255, 255, 255, 0.05);
+    --chip: #38383b;
+    --rule: #3a3a3d;
+    --rule-soft: #333336;
     --accent: #7fbfa9;
     --warn: #d79a63;
   }
@@ -45,11 +51,11 @@
 
 body {
   margin: 0;
-  padding: 2.5rem 1.5rem 5rem;
+  padding: 0 1.5rem 5rem;
   background: var(--ground);
   color: var(--ink);
   font-family: var(--prose);
-  font-size: 15px;
+  font-size: 15.5px;
   line-height: 1.55;
   -webkit-text-size-adjust: 100%;
 }
@@ -57,55 +63,120 @@ body {
 .page {
   max-width: 54rem;
   margin: 0 auto;
+  padding-top: 2.4rem;
 }
 
 /* ---- masthead ------------------------------------------------------- */
 
+/* The bar runs the width of the window, as a toolbar does, while its
+   content stays on the page's column. */
+html {
+  overflow-x: clip;
+}
+
+/* The header is the bar the title folds into, and holds the title alone.
+   Its room above and below the title is padding its margins take back, so
+   the bar has space to sit in without the page moving by it; 0.4rem is the
+   gap the crumb leaves, so the bar never lies over the crumb's link. The
+   bar's bottom rule is a shadow for the same reason: a border would take a
+   pixel of layout. */
 header {
-  border-bottom: 1px solid var(--rule);
-  padding-bottom: 1.1rem;
-  margin-bottom: 2.2rem;
+  box-shadow: inset 0 -1px 0 transparent;
+  margin: -0.4rem calc(50% - 50vw);
+  padding: 0.4rem calc(50vw - 50%);
 }
 
 header h1 {
   margin: 0;
-  font-size: 1.35rem;
-  font-weight: 600;
-  letter-spacing: -0.01em;
+  font-family: var(--display);
+  font-size: 2rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  transform-origin: left center;
 }
 
-header .promise {
-  margin: 0.3rem 0 0;
+.page > .promise {
+  margin: 0.35rem 0 0;
   color: var(--ink-soft);
-  font-size: 0.9rem;
+  font-size: 1rem;
+}
+
+/* The large title folds into a translucent bar as the page scrolls, the
+   way a macOS window's title does. Only where the browser can tie it to
+   the scroll without script; elsewhere the title just scrolls away, and
+   nothing is lost but the effect. The map is left out: its detail panel is
+   already pinned to the top of the window, and the bar would sit over it.
+
+   Only paint is animated: transform, background, blur, a shadow. The first
+   version also folded the header's size, which moved the page under the
+   reader while the scroll drove it; the browser's scroll anchoring pulled
+   the scroll back to hold its place, and the page bounced (`f819`). */
+@supports (animation-timeline: scroll()) {
+  @media (prefers-reduced-motion: no-preference) {
+    body:not(.wide-page) header {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      animation: bar linear both;
+      animation-timeline: scroll();
+      animation-range: 0 90px;
+    }
+
+    body:not(.wide-page) header h1 {
+      animation: shrink linear both;
+      animation-timeline: scroll();
+      animation-range: 0 90px;
+    }
+  }
+}
+
+@keyframes bar {
+  to {
+    background: color-mix(in srgb, var(--ground) 72%, transparent);
+    -webkit-backdrop-filter: saturate(180%) blur(20px);
+    backdrop-filter: saturate(180%) blur(20px);
+    box-shadow: inset 0 -1px 0 var(--rule);
+  }
+}
+
+@keyframes shrink {
+  to {
+    transform: scale(0.6);
+  }
+}
+
+/* The gap under the masthead lives on what follows it, not on the bar. */
+main {
+  margin-top: calc(2.4rem + 1px);
 }
 
 /* ---- sections ------------------------------------------------------- */
 
 section {
-  margin-bottom: 2.6rem;
+  margin-bottom: 1.8rem;
 }
 
 section > h2 {
-  margin: 0 0 0.2rem;
+  margin: 0 0 0.45rem 0.9rem;
   font-size: 0.78rem;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.09em;
-  color: var(--ink-soft);
+  letter-spacing: 0.02em;
+  color: var(--ink-faint);
 }
 
 section > .since {
-  margin: 0 0 1rem;
+  margin: 0 0 1rem 0.9rem;
   color: var(--ink-faint);
   font-size: 0.85rem;
 }
 
 section > h3 {
-  margin: 1.4rem 0 0.5rem;
-  font-size: 0.85rem;
-  font-weight: 600;
-  color: var(--ink-soft);
+  margin: 1.1rem 0 0.4rem 0.9rem;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--ink-faint);
 }
 
 .empty {
@@ -116,19 +187,80 @@ section > h3 {
 
 /* ---- node lists ----------------------------------------------------- */
 
+/* `d811`: rows sit in a card with inset separators, the way macOS insets a
+   settings list past a row's icon, and a row that leads somewhere carries
+   a chevron and is a link across its whole width. */
 ul.nodes {
   list-style: none;
   margin: 0;
-  padding: 0;
-  border-top: 1px solid var(--rule-soft);
+  padding: 0.2rem 0;
+  background: var(--panel);
+  border: 1px solid var(--card-edge);
+  border-radius: 12px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  overflow: hidden;
 }
 
 ul.nodes > li {
+  position: relative;
   display: grid;
   grid-template-columns: 4.5rem 1fr;
   gap: 0 0.9rem;
-  padding: 0.55rem 0;
-  border-bottom: 1px solid var(--rule-soft);
+  padding: 0.55rem 2.2rem 0.55rem 0.9rem;
+  transition: background-color 120ms ease-out;
+}
+
+/* The separator is inset to where the title starts, the way macOS insets
+   it past a row's icon: here the id chip plays the icon. */
+ul.nodes > li + li::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 6.3rem;
+  right: 0;
+  border-top: 1px solid var(--sep);
+}
+
+/* The whole row is the link, so the chevron is not a promise the row
+   breaks: the id's link is stretched over it. */
+ul.nodes > li .alias a::after,
+ol.stack > li .alias a::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+
+ul.nodes > li:has(.alias a)::after,
+ol.stack > li:has(.alias a)::after {
+  content: "\203A";
+  position: absolute;
+  right: 0.9rem;
+  top: 50%;
+  transform: translateY(-52%);
+  color: var(--ink-faint);
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+ul.nodes > li:hover,
+ol.stack > li:hover {
+  background: color-mix(in srgb, var(--ink) 5%, transparent);
+}
+
+ul.nodes > li:active,
+ol.stack > li:active {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+ul.nodes .alias a,
+ol.stack .alias a {
+  display: inline-block;
+  background: var(--chip);
+  border-radius: 6px;
+  padding: 0.02rem 0.38rem;
+  text-decoration: none;
+  color: var(--ink-soft);
+  font-size: 0.78rem;
 }
 
 .alias {
@@ -170,59 +302,166 @@ ul.nodes > li {
 ol.stack {
   list-style: none;
   margin: 0;
-  padding: 0;
+  padding: 0.2rem 0;
+  background: var(--panel);
+  border: 1px solid var(--card-edge);
+  border-radius: 12px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  overflow: hidden;
 }
 
 ol.stack > li {
-  padding: 0.3rem 0 0.3rem 0;
+  position: relative;
+  padding: 0.55rem 2.2rem 0.55rem 0.9rem;
   display: grid;
   grid-template-columns: 4.5rem 1fr;
   gap: 0 0.9rem;
-}
-
-ol.stack > li .title {
-  border-left: 1px solid var(--rule);
-  padding-left: 0.9rem;
+  transition: background-color 120ms ease-out;
 }
 
 ol.stack > li.here .title {
-  border-left: 2px solid var(--accent);
   font-weight: 600;
 }
 
 /* `f807`: not scoped to `ol.stack > li.here` -- `why.rs`'s spine is an
    `ol.spine`, not an `ol.stack`, and the mark it carries went unstyled. */
 .here-mark {
+  display: inline-block;
   font-family: var(--mono);
-  font-size: 0.76rem;
+  font-size: 0.7rem;
   letter-spacing: 0.06em;
   color: var(--accent);
-  margin-left: 0.5rem;
+  margin-left: 0.55rem;
+  padding: 0.02rem 0.5rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  vertical-align: 0.1em;
 }
 
 /* ---- the index of projects ------------------------------------------ */
 
-/* `f806`: a project row shares `ul.nodes > li`'s two columns with every
-   other row on the site, and a name is not an id -- `FluentOperations`
-   overflowed onto the focus text, and `vivac-project` broke at its own
-   hyphen onto two lines. `li.project` stacks the row into one column
-   instead: the name on its own line, the focus under it, the quiet or
-   blocked note under that. `choose_page` shares `project_row`, so it gets
-   the fix for free. */
-ul.nodes > li.project {
-  grid-template-columns: 1fr;
+/* A project is a card of its own (`d817`): the index is the one page
+   where the rows are not nodes of one tree, and the card is what says
+   so. The card is the link, so its text cannot be selected with the
+   mouse -- the cost `d817` accepted, since every word on it is on the
+   page it opens. */
+ul.projects {
+  list-style: none;
+  margin: 0.4rem 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr));
+  gap: 0.9rem;
 }
 
-ul.nodes > li.project .alias {
-  font-family: var(--prose);
-  font-size: 1rem;
+li.project {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  background: var(--panel);
+  border: 1px solid var(--card-edge);
+  border-radius: 12px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  padding: 0.85rem 2.2rem 0.9rem 1rem;
+  transition: box-shadow 140ms ease-out, background-color 120ms ease-out;
+}
+
+li.project::after {
+  content: "\203A";
+  position: absolute;
+  right: 0.9rem;
+  top: 0.8rem;
+  color: var(--ink-faint);
+  font-size: 1.25rem;
+  line-height: 1.3;
+}
+
+li.project:hover {
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
+}
+
+li.project:active {
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+}
+
+li.project:has(a:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+li.project p {
+  margin: 0;
+}
+
+li.project .name {
+  font-family: var(--display);
+  font-size: 1.15rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
   overflow-wrap: anywhere;
 }
 
-/* The base `.note` rule forces `grid-column: 2`, which a single-column
-   row does not have. */
-ul.nodes > li.project .note {
-  grid-column: 1;
+li.project .name a {
+  color: var(--ink);
+  text-decoration: none;
+  outline: none;
+}
+
+li.project .name a::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+}
+
+li.project .focus {
+  font-size: 0.92rem;
+}
+
+li.project .focus .alias {
+  display: inline-block;
+  margin-right: 0.3rem;
+  padding: 0.02rem 0.38rem;
+  border-radius: 6px;
+  background: var(--chip);
+  color: var(--ink-soft);
+  font-family: var(--mono);
+  font-size: 0.76rem;
+}
+
+li.project .focus.none {
+  color: var(--ink-soft);
+  font-style: italic;
+}
+
+li.project .lane {
+  color: var(--ink-soft);
+  font-size: 0.85rem;
+}
+
+li.project .state {
+  margin-top: auto;
+  padding-top: 0.55rem;
+  border-top: 1px solid var(--sep);
+  /* The rule runs as far right as it starts in from the left, past the
+     column the chevron keeps clear. */
+  margin-right: -1.2rem;
+  color: var(--ink-soft);
+  font-size: 0.85rem;
+}
+
+/* "work since" and "no stop made by hand" are the same news, work past
+   the last save point, and the words already say it: the colour only
+   repeats them. */
+li.project .stop.work,
+li.project .stop.never {
+  color: var(--warn);
+}
+
+main > p.note {
+  margin: 1rem 0 0 0.9rem;
 }
 
 a {
@@ -240,7 +479,6 @@ a:hover {
 footer {
   margin-top: 3rem;
   padding-top: 1rem;
-  border-top: 1px solid var(--rule);
   color: var(--ink-faint);
   font-size: 0.82rem;
 }
@@ -255,14 +493,14 @@ footer code {
    do not need a drawing surface, the text stays selectable and copyable,
    and nothing has to be measured in JS. `d187`. */
 
-header .crumb {
+.page > .crumb {
   margin: 0 0 0.4rem;
   font-size: 0.85rem;
 }
 
 /* The way onward, not the way back: it hangs under the promise, so it
    carries its margin on the other side. */
-header .onward {
+.page > .onward {
   margin: 0.55rem 0 0;
   font-size: 0.85rem;
 }
@@ -283,9 +521,19 @@ ol.spine > li > .alias {
   padding-top: 0.1rem;
 }
 
+ol.spine > li > .alias a {
+  display: inline-block;
+  background: var(--chip);
+  border-radius: 6px;
+  padding: 0.02rem 0.38rem;
+  text-decoration: none;
+  color: var(--ink-soft);
+  font-size: 0.78rem;
+}
+
 ol.spine > li > .what {
   position: relative;
-  border-left: 1px solid var(--rule);
+  border-left: 2px solid var(--sep);
   padding: 0 0 1.6rem 1.2rem;
 }
 
@@ -301,21 +549,22 @@ ol.spine > li:last-child > .what {
 ol.spine > li > .what::before {
   content: "";
   position: absolute;
-  left: -0.29rem;
+  left: -0.4rem;
   top: 0.42rem;
-  width: 0.5rem;
-  height: 0.5rem;
+  width: 0.62rem;
+  height: 0.62rem;
   border-radius: 50%;
   background: var(--ground);
-  border: 1px solid var(--rule);
+  border: 2px solid var(--rule);
 }
 
 ol.spine > li.here > .what::before {
   background: var(--accent);
   border-color: var(--accent);
-  width: 0.62rem;
-  height: 0.62rem;
-  left: -0.35rem;
+  width: 0.8rem;
+  height: 0.8rem;
+  left: -0.5rem;
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 20%, transparent);
 }
 
 ol.spine > li.here .title {
@@ -389,7 +638,22 @@ ol.spine .detail h3 {
 
 ol.spine .detail ul.nodes > li {
   grid-template-columns: 3.6rem 1fr;
-  padding: 0.35rem 0;
+  padding: 0.35rem 0.9rem 0.35rem 0;
+}
+
+/* Inside the spine the lists are the detail of one step: no chevron, no
+   stretched link, the titles stay selectable. */
+ol.spine .detail ul.nodes {
+  box-shadow: none;
+}
+
+ol.spine .detail ul.nodes > li + li::before {
+  left: 5.4rem;
+}
+
+ol.spine .detail ul.nodes > li::after,
+ol.spine .detail ul.nodes .alias a::after {
+  content: none;
 }
 /* ---- the map (WEB.md 3.6, d391) -------------------------------------- */
 
@@ -451,8 +715,10 @@ body.wide-page .page {
   max-width: none;
 }
 
-body.wide-page header {
-  margin-bottom: 1.2rem;
+/* The map's masthead ends in its tools rather than a line of prose, and
+   sits a little closer to the drawing. */
+body.wide-page main {
+  margin-top: calc(2.2rem + 1px);
 }
 
 .stats {
@@ -473,9 +739,10 @@ body.wide-page header {
 
 .legend .line,
 .tools .tool {
-  background: none;
+  background: var(--panel);
   border: 1px solid var(--rule);
-  border-radius: 999px;
+  border-radius: 7px;
+  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.06);
   color: var(--ink-soft);
   font-family: var(--mono);
   font-size: 0.72rem;
@@ -516,23 +783,25 @@ a.tool {
   gap: 0.4rem;
   margin-top: 0.6rem;
   padding-top: 0.6rem;
-  border-top: 1px solid var(--rule);
 }
 
 .tools #find {
-  background: var(--panel);
-  border: 1px solid var(--rule);
-  border-radius: 999px;
+  background: color-mix(in srgb, var(--ink) 6%, var(--panel));
+  background-image: radial-gradient(circle at 0.72rem 50%, transparent 0.23rem,
+      var(--ink-faint) 0.24rem, var(--ink-faint) 0.3rem, transparent 0.31rem);
+  border: 1px solid transparent;
+  border-radius: 8px;
   color: var(--ink);
   font-family: inherit;
   font-size: 0.78rem;
-  padding: 0.2rem 0.7rem;
+  padding: 0.2rem 0.7rem 0.2rem 1.7rem;
   width: 16rem;
 }
 
 .tools #find:focus {
   outline: none;
   border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
 }
 
 .tools .hits {
@@ -765,6 +1034,7 @@ li.stop {
   padding-right: 1rem;
   border-bottom: 1px solid var(--rule-soft);
   cursor: pointer;
+  transition: background-color 100ms ease-out;
 }
 
 li.stop:hover {
@@ -943,6 +1213,14 @@ li.stop.faded {
   border-left: 1px solid var(--rule);
   background: var(--panel);
   padding: 1rem 1.1rem 3rem;
+}
+
+.map > .detail {
+  border-left: none;
+  border: 1px solid var(--card-edge);
+  border-radius: 12px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.08);
+  margin-left: 0.8rem;
 }
 
 .detail .code {
@@ -1144,9 +1422,25 @@ li.stop.faded {
   }
 }
 
+@starting-style {
+  details[open] > .detail {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+details > .detail {
+  transition: opacity 180ms ease-out, transform 180ms ease-out;
+}
+
 /* Somebody reading this with motion turned down asked for that. */
 @media (prefers-reduced-motion: reduce) {
-  .detail {
+  .detail,
+  ul.nodes > li,
+  ol.stack > li,
+  li.project,
+  li.stop,
+  details > .detail {
     transition: none;
   }
 }

@@ -12,21 +12,50 @@ use crate::event::Kind;
 use crate::event::{Event, State};
 use crate::model::{Node, Tree};
 
-/// One project as the index sees it: the four fields `d200` admitted, and
-/// the link to reach it by.
+/// One project as the index sees it: the four fields `d200` admitted, the
+/// one `d817` did, and the link to reach it by.
 ///
-/// Four and no more, and each one was argued against the promise: the name
-/// so you know which it is, the focus so you know what it was doing, the
-/// blocked count because a blocked front is the commonest reason a project
-/// stops without anyone noticing, and the silence because that is the whole
-/// question. `d200` says a counter that cannot answer the promise does not
-/// get in, so nothing else does.
+/// Each was argued against the promise: the name so you know which it is,
+/// the focus so you know what it was doing, the blocked count because a
+/// blocked front is the commonest reason a project stops without anyone
+/// noticing, and the silence because that is the whole question. `d817`
+/// added the last stop you made and whether anything moved after it: a
+/// project left with work past its last save point is where picking up
+/// costs the most, and `changes --since manual` already answered it one
+/// project at a time. `d200` says a counter that cannot answer the promise
+/// does not get in, so nothing else does.
 struct Line {
     href: String,
     name: String,
-    focus: Option<String>,
+    focus: Option<Focus>,
     blocked: usize,
     quiet: Option<i64>,
+    stop: Option<LastStop>,
+}
+
+/// What a project's focus is, and where: `lane` carries the multi-lane
+/// sentence `line` used to glue onto the title with two spaces, now a line
+/// of its own.
+struct Focus {
+    alias: String,
+    title: String,
+    lane: Option<String>,
+}
+
+/// The last stop made by hand, and whether the stretch since it moved
+/// anything (`d817`). Distinct from `Boundary`: this is the shape a page
+/// prints, not the shape `changes` measures from.
+enum LastStop {
+    /// The log holds work and no stop in it was made by hand.
+    NeverByHand,
+    /// The last stop made by hand: how many days ago (`None` if its date
+    /// does not parse), its date as a fallback, and whether anything moved
+    /// after it.
+    Made {
+        days: Option<i64>,
+        date: String,
+        work_since: bool,
+    },
 }
 
 /// Reads one project into a [`Line`], re-folding it if the log moved.
@@ -50,6 +79,7 @@ fn line(p: &mut crate::project::Project) -> Line {
             focus: None,
             blocked: 0,
             quiet: None,
+            stop: None,
         };
     };
     let href = log.first().map(|e| e.id.clone()).unwrap_or(href);
@@ -61,18 +91,17 @@ fn line(p: &mut crate::project::Project) -> Line {
     // something to name, the lane that wrote most recently is worth more
     // than whichever one the guess landed on.
     let focus = if lanes.len() > 1 {
-        crate::brief::last_writer(tree).map(|w| {
-            format!(
-                "{}  {}  in lane {}, 1 of {} lanes",
-                w.focus.alias(),
-                w.focus.title(tree),
-                w.name,
-                lanes.len()
-            )
+        crate::brief::last_writer(tree).map(|w| Focus {
+            alias: w.focus.alias(),
+            title: w.focus.title(tree).to_string(),
+            lane: Some(format!("in lane {}, 1 of {} lanes", w.name, lanes.len())),
         })
     } else {
-        tree.focus()
-            .map(|n| format!("{}  {}", n.alias(), n.title(tree)))
+        tree.focus().map(|n| Focus {
+            alias: n.alias(),
+            title: n.title(tree).to_string(),
+            lane: None,
+        })
     };
     let blocked = tree
         .nodes_iter()
@@ -81,12 +110,43 @@ fn line(p: &mut crate::project::Project) -> Line {
     let quiet = log
         .last()
         .and_then(|e| crate::clock::days_between(&e.ts, &crate::clock::now_rfc3339()));
+    let stop = last_stop(tree, log);
     Line {
         href,
         name,
         focus,
         blocked,
         quiet,
+        stop,
+    }
+}
+
+/// The last stop made by hand, and whether the stretch since it moved
+/// anything (`d817`). `None` for a project whose log has nothing in it yet
+/// -- there is no "since" to measure on a project that never wrote.
+fn last_stop(tree: &Tree, log: &[Event]) -> Option<LastStop> {
+    if log.is_empty() {
+        return None;
+    }
+    Some(match changes::manual_boundary(tree) {
+        Boundary::Beginning { .. } => LastStop::NeverByHand,
+        Boundary::Stop { vivac, .. } => LastStop::Made {
+            days: crate::clock::days_between(&vivac.ts, &crate::clock::now_rfc3339()),
+            date: crate::clock::date_of(&vivac.ts),
+            work_since: !changes::collect(tree, log, vivac.seq).nothing_moved(),
+        },
+    })
+}
+
+/// How long ago a day count reads: `today`, `yesterday`, or a count of days.
+/// Shared by `silence`, about the whole project, and `stop_line`, about the
+/// one stop made by hand -- the same distance read the same way twice would
+/// drift the moment only one of them changed.
+fn ago(days: i64) -> String {
+    match days {
+        d if d <= 0 => "today".to_string(),
+        1 => "yesterday".to_string(),
+        d => format!("{d} days ago"),
     }
 }
 
@@ -96,20 +156,52 @@ fn line(p: &mut crate::project::Project) -> Line {
 fn silence(days: Option<i64>) -> String {
     match days {
         None => "never written to".to_string(),
-        Some(d) if d <= 0 => "moved today".to_string(),
-        Some(1) => "moved yesterday".to_string(),
-        Some(d) => format!("moved {d} days ago"),
+        Some(d) => format!("moved {}", ago(d)),
     }
 }
 
-/// One row, shared by the index and by the page that asks which of two
+/// The last-stop line the state block prints (`d817`): a project a person
+/// has never sat down and stopped, or the last time they did and whether
+/// the tree moved after it.
+fn stop_line(s: &LastStop) -> String {
+    match s {
+        LastStop::NeverByHand => "no stop made by hand".to_string(),
+        LastStop::Made {
+            days,
+            date,
+            work_since,
+        } => {
+            let when = days.map(ago).unwrap_or_else(|| date.clone());
+            if *work_since {
+                format!("last stop you made: {when}, work since")
+            } else {
+                format!("last stop you made: {when}, nothing since")
+            }
+        }
+    }
+}
+
+/// One card, shared by the index and by the page that asks which of two
 /// projects you meant. **No path ever appears here.** The security pillar
 /// allows a project's name across this boundary and nothing else, and a real
 /// path carries the name of whoever owns the machine.
 fn project_row(l: &Line) -> String {
-    let focus = match &l.focus {
-        Some(f) => format!("<p class=\"title\">{}</p>", escape(f)),
-        None => "<p class=\"note\">no focus</p>".to_string(),
+    let (focus, lane) = match &l.focus {
+        Some(f) => (
+            format!(
+                "<p class=\"focus\"><span class=\"alias\">{}</span> {}</p>",
+                escape(&f.alias),
+                escape(&f.title)
+            ),
+            match &f.lane {
+                Some(lane) => format!("<p class=\"lane\">{}</p>", escape(lane)),
+                None => String::new(),
+            },
+        ),
+        None => (
+            "<p class=\"focus none\">no focus</p>".to_string(),
+            String::new(),
+        ),
     };
     // Zero blocked fronts is said by not saying it. The count earns its
     // place on the row when it is the reason a project stopped; printed as
@@ -121,9 +213,22 @@ fn project_row(l: &Line) -> String {
     } else {
         format!(" &middot; {} blocked", l.blocked)
     };
+    let stop = match &l.stop {
+        Some(s) => {
+            let class = match s {
+                LastStop::NeverByHand => "never",
+                LastStop::Made { work_since, .. } if *work_since => "work",
+                LastStop::Made { .. } => "still",
+            };
+            format!("<p class=\"stop {class}\">{}</p>", escape(&stop_line(s)))
+        }
+        None => String::new(),
+    };
     format!(
-        "<li class=\"project\"><span class=\"alias\"><a href=\"/p/{href}/\">{name}</a></span>
-         {focus}<p class=\"note\">{quiet}{blocked}</p></li>
+        "<li class=\"project\"><p class=\"name\"><a href=\"/p/{href}/\">{name}</a></p>
+         {focus}
+         {lane}<div class=\"state\"><p class=\"quiet\">{quiet}{blocked}</p>
+         {stop}</div></li>
 ",
         href = escape(&l.href),
         name = escape(&l.name),
@@ -147,9 +252,9 @@ fn listing(title: &str, promise: &str, rows: String, note: Option<&str>, footer:
          <style>
 {WEB_CSS}</style></head>
          <body><div class=\"page\">
-         <header><h1>{t}</h1>
-         <p class=\"promise\">{promise}</p></header>
-         <main><ul class=\"nodes\">
+         <header><h1>{t}</h1></header>
+         <p class=\"promise\">{promise}</p>
+         <main><ul class=\"projects\">
 {rows}</ul>{note}</main>
          <footer>{footer}</footer>
          </div></body></html>
@@ -339,7 +444,7 @@ fn moved_section(project: &str, tree: &Tree, changed: &Changed) -> String {
     if let Some(tail) = changes::tail_phrase(&changed.tail) {
         body.push_str(&format!("<p class=\"note\">{}</p>\n", escape(&tail)));
     }
-    if body.is_empty() {
+    if changed.nothing_moved() {
         body.push_str("<p class=\"empty\">Nothing has moved.</p>\n");
     }
 
@@ -499,10 +604,10 @@ pub(super) fn today_page(project: &str, name: &str, tree: &Tree, log: &[Event]) 
          <title>Today - {name_t}</title>\n\
          <style>\n{WEB_CSS}</style></head>\n\
          <body><div class=\"page\">\n\
-         <header><p class=\"crumb\"><a href=\"/\">All projects</a></p>\n\
-         <h1>{name_t}</h1>\n\
+         <p class=\"crumb\"><a href=\"/\">All projects</a></p>\n\
+         <header><h1>{name_t}</h1></header>\n\
          <p class=\"promise\">What moved while you were not looking.</p>\n\
-         <p class=\"onward\"><a href=\"/p/{p}/tree\">The whole tree, as a map</a></p></header>\n\
+         <p class=\"onward\"><a href=\"/p/{p}/tree\">The whole tree, as a map</a></p>\n\
          <main>\n{moved}{focus}{governs}{parked}</main>\n\
          <footer>The same reading in a terminal: \
          <code>vivac changes --since manual</code></footer>\n\
@@ -518,7 +623,7 @@ pub(super) fn today_page(project: &str, name: &str, tree: &Tree, log: &[Event]) 
 
 #[cfg(test)]
 mod tests {
-    use super::today_page;
+    use super::{last_stop, silence, stop_line, today_page, LastStop};
     use crate::event::{Body, Event, Kind, VivacKind};
     use crate::model::fold;
 
@@ -698,5 +803,108 @@ mod tests {
         assert!(!page.contains("http://"), "{page}");
         assert!(!page.contains("https://"), "{page}");
         assert!(!page.contains("//fonts."), "{page}");
+    }
+
+    /// A project with nothing in its log yet has no last stop to report.
+    #[test]
+    fn last_stop_on_an_empty_log_is_none() {
+        let events: Vec<Event> = vec![];
+        let tree = fold(&events, 0);
+        assert!(last_stop(&tree, &events).is_none());
+    }
+
+    /// A log where every stop was written by the hook has never been
+    /// stopped by hand.
+    #[test]
+    fn a_log_with_only_hook_stops_is_never_by_hand() {
+        let events = vec![born(1, 1, "A goal", None), stop(2, 1, VivacKind::Auto)];
+        let tree = fold(&events, 0);
+        assert!(matches!(
+            last_stop(&tree, &events),
+            Some(LastStop::NeverByHand)
+        ));
+    }
+
+    /// A node born after the stop made by hand is work since it.
+    #[test]
+    fn a_node_born_after_the_manual_stop_reads_work_since() {
+        let events = vec![
+            born(1, 1, "A goal", None),
+            stop(2, 1, VivacKind::Manual),
+            born(3, 2, "Born after the stop", Some("n1")),
+        ];
+        let tree = fold(&events, 0);
+        match last_stop(&tree, &events) {
+            Some(LastStop::Made { work_since, .. }) => assert!(work_since),
+            _ => panic!("expected Made with work since"),
+        }
+    }
+
+    /// A stop made by hand with nothing after it reads nothing since.
+    #[test]
+    fn the_manual_stop_as_the_last_event_reads_nothing_since() {
+        let events = vec![born(1, 1, "A goal", None), stop(2, 1, VivacKind::Manual)];
+        let tree = fold(&events, 0);
+        match last_stop(&tree, &events) {
+            Some(LastStop::Made { work_since, .. }) => assert!(!work_since),
+            _ => panic!("expected Made with nothing since"),
+        }
+    }
+
+    /// A stop the hook wrote after the one made by hand is still not work:
+    /// a stop is not a change to the tree.
+    #[test]
+    fn a_hook_stop_after_the_manual_one_is_still_nothing_since() {
+        let events = vec![
+            born(1, 1, "A goal", None),
+            stop(2, 1, VivacKind::Manual),
+            stop(3, 2, VivacKind::Auto),
+        ];
+        let tree = fold(&events, 0);
+        match last_stop(&tree, &events) {
+            Some(LastStop::Made { work_since, .. }) => assert!(!work_since),
+            _ => panic!("expected Made with nothing since"),
+        }
+    }
+
+    /// The three sentences `stop_line` can read, and the fallback to the
+    /// bare date when `days` does not parse.
+    #[test]
+    fn stop_line_reads_the_three_sentences_and_the_date_fallback() {
+        assert_eq!(stop_line(&LastStop::NeverByHand), "no stop made by hand");
+        assert_eq!(
+            stop_line(&LastStop::Made {
+                days: Some(0),
+                date: "2026-09-03".to_string(),
+                work_since: true,
+            }),
+            "last stop you made: today, work since"
+        );
+        assert_eq!(
+            stop_line(&LastStop::Made {
+                days: Some(3),
+                date: "2026-09-03".to_string(),
+                work_since: false,
+            }),
+            "last stop you made: 3 days ago, nothing since"
+        );
+        assert_eq!(
+            stop_line(&LastStop::Made {
+                days: None,
+                date: "2026-09-03".to_string(),
+                work_since: true,
+            }),
+            "last stop you made: 2026-09-03, work since"
+        );
+    }
+
+    /// `silence` is `ago` with "moved" in front, and its four outputs must
+    /// not change now that it is built on top of it.
+    #[test]
+    fn silence_keeps_its_four_outputs() {
+        assert_eq!(silence(None), "never written to");
+        assert_eq!(silence(Some(0)), "moved today");
+        assert_eq!(silence(Some(1)), "moved yesterday");
+        assert_eq!(silence(Some(5)), "moved 5 days ago");
     }
 }
