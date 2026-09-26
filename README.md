@@ -12,8 +12,8 @@
 *So that months later something can still answer “why are we here?”*
 
 [![ci](https://github.com/JAAvila-Of/vivac/actions/workflows/ci.yml/badge.svg)](https://github.com/JAAvila-Of/vivac/actions/workflows/ci.yml)
-[![crates.io](https://img.shields.io/crates/v/vivac?color=bc4c00&labelColor=24292f)](https://crates.io/crates/vivac)
-[![msrv](https://img.shields.io/badge/msrv-1.89-bc4c00?labelColor=24292f)](rust-toolchain.toml)
+[![crates.io](https://img.shields.io/crates/v/vivac?color=2f5d50&labelColor=24292f)](https://crates.io/crates/vivac)
+[![msrv](https://img.shields.io/badge/msrv-1.89-2f5d50?labelColor=24292f)](rust-toolchain.toml)
 [![licence](https://img.shields.io/badge/licence-MIT%20OR%20Apache--2.0-24292f)](#licence)
 
 </div>
