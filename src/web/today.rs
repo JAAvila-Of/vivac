@@ -6,7 +6,7 @@
 //! reads the tree with. This module knows nothing about a socket; `mod.rs`
 //! is what turns its output into a response.
 
-use super::{alias_link, escape};
+use super::{alias_link, escape, FAVICON};
 use crate::changes::{self, Boundary, Changed};
 use crate::event::Kind;
 use crate::event::{Event, State};
@@ -249,6 +249,7 @@ fn listing(title: &str, promise: &str, rows: String, note: Option<&str>, footer:
          <html lang=\"en\"><head><meta charset=\"utf-8\">
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
          <title>{t}</title>
+         {FAVICON}
          <style>
 {WEB_CSS}</style></head>
          <body><div class=\"page\">
@@ -602,6 +603,7 @@ pub(super) fn today_page(project: &str, name: &str, tree: &Tree, log: &[Event]) 
          <html lang=\"en\"><head><meta charset=\"utf-8\">\n\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
          <title>Today - {name_t}</title>\n\
+         {FAVICON}\n\
          <style>\n{WEB_CSS}</style></head>\n\
          <body><div class=\"page\">\n\
          <p class=\"crumb\"><a href=\"/\">All projects</a></p>\n\

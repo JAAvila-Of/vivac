@@ -25,6 +25,7 @@ additions
 addr
 adds
 admit
+admits
 admitted
 adopt
 advice
@@ -139,6 +140,7 @@ backwards
 bad
 bare
 base
+base64
 based
 basic
 basis
@@ -167,6 +169,7 @@ bind
 binding
 birth
 births
+bits
 bk
 blank
 blessed
@@ -350,6 +353,7 @@ completes
 component
 components
 compute
+concat
 condition
 config
 confirms
@@ -651,6 +655,7 @@ falling
 falls
 false
 fan
+favicon
 fd
 feature
 fence
@@ -844,6 +849,7 @@ hunts
 i16
 i32
 i64
+icons
 id
 id2
 idempotent
@@ -856,6 +862,7 @@ if
 ignore
 ignored
 ignores
+image
 impl
 implicit
 import
@@ -1803,6 +1810,7 @@ survivor
 suspect
 suspended
 suspicious
+svg
 swallow
 swallowed
 sweep
