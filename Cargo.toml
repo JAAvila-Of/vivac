@@ -8,6 +8,9 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/JAAvila-Of/vivac"
 keywords = ["provenance", "agentic", "cli", "context"]
 categories = ["command-line-utilities", "development-tools"]
+# The web's screenshots are for the README on GitHub, and crates.io reads them
+# from the repository; nobody who installs the crate needs them downloaded.
+exclude = ["docs/img/*.png"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
