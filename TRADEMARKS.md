@@ -49,7 +49,13 @@ Written permission from Jóse Angel Avila, asked for through the
 
 ## The logo
 
-The logo is not under the code's licence. Shown unchanged, it may be used to
+The logo is the rail of the web's map running from a parent to its child,
+beside the name: [`docs/img/logo-light.svg`](docs/img/logo-light.svg), its
+dark and single-colour versions next to it, and the mark alone in
+`docs/img/mark-light.svg` and `mark-dark.svg`. The name is set in IBM Plex
+Mono, drawn as outlines under the SIL Open Font License.
+
+It is not under the code's licence. Shown unchanged, it may be used to
 refer to this project. It may not be used as your own branding, altered in a
 way that confuses, or placed where it suggests a relationship that does not
 exist.
