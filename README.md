@@ -1,6 +1,6 @@
 <div align="center">
 
-# vivac
+# vivac™
 
 **A tree where every node knows which node it was born from.**
 
@@ -502,3 +502,8 @@ Not there yet: team mode. The project is in `0.x` and
 
 `MIT OR Apache-2.0`, at the option of whoever uses it. The text of each is in
 [`LICENSE-MIT`](LICENSE-MIT) and [`LICENSE-APACHE`](LICENSE-APACHE).
+
+The licence covers the code and not the name: a fork is free, and it goes out
+under a name of its own. [`TRADEMARKS.md`](TRADEMARKS.md) says what the name
+and the logo can be used for. A security flaw goes privately, as
+[`SECURITY.md`](SECURITY.md) says.
