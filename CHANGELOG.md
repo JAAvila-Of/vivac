@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.9](https://github.com/JAAvila-Of/vivac/compare/v0.15.8...v0.15.9) - 2026-09-26
+
+### Added
+
+- *(web)* restyle after a macOS settings window, with project cards ([#181](https://github.com/JAAvila-Of/vivac/pull/181))
+
 ## [0.15.8](https://github.com/JAAvila-Of/vivac/compare/v0.15.7...v0.15.8) - 2026-09-25
 
 ### Added
