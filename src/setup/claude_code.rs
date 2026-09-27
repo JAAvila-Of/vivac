@@ -1600,7 +1600,7 @@ mod tests {
         // last time was `d850`, which migrates a lesson as a record that
         // keeps its mechanism instead of a rule, after a migration turned
         // 296 of 303 lessons into rules and a quarter of them left no trace.
-        assert_eq!(skill_fingerprint(), 0x03c124454c171c1f);
+        assert_eq!(skill_fingerprint(), 0x1208cad7c6c7671d);
     }
 
     #[test]

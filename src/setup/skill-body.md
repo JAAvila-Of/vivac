@@ -46,7 +46,11 @@ measures it, source by source, and the work is not done until it passes.
 
 Find every place this project's knowledge lives before proposing anything.
 Then show the person what you found, with what each source holds and how big
-it is, and ask which to bring in.
+it is, and ask which to bring in. Ask about every source, including one you
+think holds only a log of work rather than knowledge: say why you think so,
+and let them decide. Count a size from what you actually read, in records or
+files, never from an id or a sequence number. A source nobody chose is named
+in the final summary among what was left out, with the reason.
 
 - What the harness gave you when this session opened. Your context says where
   each part came from: instruction files for this project or for the user,
@@ -204,6 +208,11 @@ Then the other maps you found in step 1. Wait for their answer before writing.
 A yes to the sources and how you will treat them is not a yes to the nodes.
 Each batch shows its own tables, title by title, and waits for its own yes,
 even when the person already approved the plan or asked for only one batch.
+When a batch has more titles than a conversation can show, write the full
+tables to a file in the temporary folder, give the person its path, and show
+in the conversation how many nodes of each kind come from each source. The
+yes waits until they have had the chance to read it. Never put those tables
+anywhere else.
 
 ## 4. Write
 
@@ -254,7 +263,10 @@ Last, ask the person to name three or four things this project learned the
 hard way, the ones they would least like to lose, and search for each in front
 of them with vivac find. No automatic check tells you whether the tree answers
 what they remember. If one is missing or reads too thin to be recognised, fix
-that before going on.
+that before going on. If they ask you to choose them yourself, tell them why
+the choice has to be theirs: you can only pick what you already know is in the
+tree, so your picks will always be found. If they still would rather not, go
+on, and say in the summary that this check was not made.
 
 ## 6. Retire the other maps
 
