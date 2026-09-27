@@ -32,9 +32,11 @@ LIMIT = 72
 
 # `era`, `doe`, `yoe`, `doy` and `mp` are Howard Hinnant's names in the
 # `civil_from_days` algorithm that `clock.rs` implements; `era` is the one the
-# Spanish vocabulary happens to contain. The same exception the identifier
-# guard carries, for the same reason.
-KNOWN_ENGLISH = {"era"}
+# Spanish vocabulary happens to contain. `base` is ordinary English -- base64,
+# a database, the base name of a path -- that also spells the Spanish word; a
+# message about an encoded icon was stopped for it. Both are exceptions the
+# identifier guard carries too, for the same reasons.
+KNOWN_ENGLISH = {"era", "base"}
 
 GOOD = [
     "fix(cli): refuse an id that names nothing instead of hitting the focus",
@@ -48,6 +50,8 @@ GOOD = [
     # never noticed: nothing here depended on the filter doing anything.
     "fix(cli): refuse the option the parser used to drop\n\n"
     "I typed --tipo instead of --kind and escribir_crudo moved with it.\n",
+    # `base` is English as well: this one was stopped once for base64.
+    "feat(web): show the icon\n\nThe SVG goes in as base64, not as text.\n",
 ]
 
 BAD = [
