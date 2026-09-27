@@ -319,7 +319,11 @@ fn hrefs_in(body: &str) -> Vec<String> {
         let Some(end) = after.find('"') else {
             break;
         };
-        out.push(after[..end].to_string());
+        // The tab's icon rides in the head as a `data:` image, and it is
+        // not a link anybody follows.
+        if !after[..end].starts_with("data:") {
+            out.push(after[..end].to_string());
+        }
         rest = &after[end + 1..];
     }
     out

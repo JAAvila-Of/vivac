@@ -61,6 +61,30 @@ fn header_value<'a>(headers: &'a [tiny_http::Header], name: &'static str) -> Opt
 /// page: two stylesheets for one visual language are two places to diverge.
 pub(crate) const WEB_CSS: &str = include_str!("web.css");
 
+/// The tab's icon: the logo's mark, the map's rail from a parent to its
+/// child, in a heavier cut than `docs/img/mark-light.svg` because a tab
+/// draws it at sixteen pixels. It rides inside every page as a `data:`
+/// image, which the CSP already admits, so there is no route to serve it
+/// and no second request behind the gate. The colours are the skin's ink
+/// and accent, and the SVG switches them itself with the tab's theme.
+///
+/// Base64 and not the SVG as text: an SVG has to name its namespace, and
+/// the namespace is a URL. Nothing is ever fetched from it, but the tests
+/// that hold every page to reaching for nothing off this machine read
+/// `http://` as exactly that, and they should stay that strict. The text
+/// this decodes to is `FAVICON_SVG` in the tests below, which check it.
+pub(crate) const FAVICON: &str = concat!(
+    "<link rel=\"icon\" type=\"image/svg+xml\" href=\"data:image/svg+xml;base64,",
+    "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjUgNSA1",
+    "NCA1NCI+PHN0eWxlPi5pe2ZpbGw6IzE2MTgxZH0ucntzdHJva2U6IzJmNWQ1MH1AbWVkaWEg",
+    "KHByZWZlcnMtY29sb3Itc2NoZW1lOmRhcmspey5pe2ZpbGw6I2U2ZTVlMX0ucntzdHJva2U6",
+    "IzdmYmZhOX19PC9zdHlsZT48cGF0aCBjbGFzcz0iciIgZD0iTTE3IDE3VjM2UTE3IDQ3IDI4",
+    "IDQ3SDQ2IiBmaWxsPSJub25lIiBzdHJva2Utd2lkdGg9IjcuNSIgc3Ryb2tlLWxpbmVjYXA9",
+    "InJvdW5kIi8+PGNpcmNsZSBjbGFzcz0iaSIgY3g9IjE3IiBjeT0iMTYiIHI9IjguNSIvPjxj",
+    "aXJjbGUgY2xhc3M9ImkiIGN4PSI0OCIgY3k9IjQ3IiByPSI4LjUiLz48L3N2Zz4=",
+    "\">"
+);
+
 /// Everything that reaches a page goes through here first.
 ///
 /// Not a nicety for this page's list of directory names: every surface that
@@ -489,6 +513,90 @@ pub fn serve(
 
 #[cfg(test)]
 mod tests {
+    /// What `FAVICON` carries, as text. It lives here and not beside the
+    /// constant because only the tests read it: the page gets the base64.
+    const FAVICON_SVG: &str = concat!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"5 5 54 54\"><style",
+        ">.i{fill:#16181d}.r{stroke:#2f5d50}@media (prefers-color-scheme:dark){",
+        ".i{fill:#e6e5e1}.r{stroke:#7fbfa9}}</style><path class=\"r\" d=\"M17 1",
+        "7V36Q17 47 28 47H46\" fill=\"none\" stroke-width=\"7.5\" stroke-lineca",
+        "p=\"round\"/><circle class=\"i\" cx=\"17\" cy=\"16\" r=\"8.5\"/><circl",
+        "e class=\"i\" cx=\"48\" cy=\"47\" r=\"8.5\"/></svg>",
+    );
+
+    fn from_base64(text: &str) -> Vec<u8> {
+        let table = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut bits = 0u32;
+        let mut count = 0;
+        let mut out = Vec::new();
+        for c in text.bytes().filter(|&c| c != b'=') {
+            let v = table.iter().position(|&t| t == c).expect("a base64 digit") as u32;
+            bits = bits << 6 | v;
+            count += 6;
+            if count >= 8 {
+                count -= 8;
+                out.push((bits >> count) as u8);
+                bits &= (1 << count) - 1;
+            }
+        }
+        out
+    }
+
+    /// The icon travels inside the page, so it has to be something the
+    /// page's own policy lets it load, and the base64 has to be exactly
+    /// the SVG above, which names no address but its own namespace.
+    #[test]
+    fn the_favicon_is_the_mark_as_an_image_the_csp_admits() {
+        assert!(super::CSP.contains("img-src data:"), "{}", super::CSP);
+        let marker = "href=\"data:image/svg+xml;base64,";
+        let at = super::FAVICON
+            .find(marker)
+            .expect("a base64 SVG in the link");
+        let payload = &super::FAVICON[at + marker.len()..];
+        let payload = &payload[..payload.find('"').expect("the attribute closes")];
+        let decoded = String::from_utf8(from_base64(payload)).expect("UTF-8");
+        assert_eq!(decoded, FAVICON_SVG);
+        let rest = decoded.replace("xmlns=\"http://www.w3.org/2000/svg\"", "");
+        for reach in ["http", "href", "url("] {
+            assert!(
+                !rest.contains(reach),
+                "the icon reaches out with {reach}: {rest}"
+            );
+        }
+    }
+
+    /// Every page that writes a head carries the icon. Read off the source,
+    /// like the routes: a page added tomorrow with no icon fails here
+    /// rather than showing a blank tab.
+    #[test]
+    fn every_page_head_carries_the_favicon() {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("web");
+        let mut heads = 0;
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            // Split, so this test's own source counts as neither.
+            let opened = text.matches(concat!("<he", "ad>")).count();
+            let icons = text.matches(concat!("{FAV", "ICON}")).count();
+            assert_eq!(
+                opened,
+                icons,
+                "{} writes {opened} heads and {icons} icons",
+                path.display()
+            );
+            heads += opened;
+        }
+        assert!(
+            heads >= 4,
+            "only {heads} heads found: the search broke, not the pages"
+        );
+    }
+
     use super::{escape, route, Route};
 
     #[test]
