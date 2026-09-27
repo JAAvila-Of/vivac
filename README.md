@@ -430,7 +430,9 @@ maps, one at a time. **That last step is the point, not the tidying up:** a
 full tree with the old records still talking to the agent is
 [two maps](#one-map), which is the state this gets you out of.
 
-→ [**Bringing a project in**](docs/MIGRATING.md)
+→ [**Bringing a project in**](docs/MIGRATING.md), and [**what happened on real
+projects**](docs/MIGRATING.md#what-happened-on-real-projects): eight migrations,
+two measured source by source, and what each failure changed.
 
 ---
 
