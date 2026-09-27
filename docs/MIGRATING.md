@@ -136,9 +136,8 @@ duplicate.
 ## What happened on real projects
 
 Everything above came out of bringing real projects in, eight times between
-7 and 26 September 2026, all of them projects the author works on. They are
-named by letter: the point is what the migration did, not what the projects
-are.
+7 and 26 September 2026, all of them projects I work on. They are named by
+letter: the point is what the migration did, not what the projects are.
 
 | | When | Harness, version | What came in | What the tree ended with |
 |---|---|---|---|---|
@@ -159,8 +158,8 @@ looking like a secret. That is the case against an importer in one number.
 
 **The two tests ran on the largest of these projects**, on purpose: a large
 project is where a migration loses things. The smaller ones were shorter, and
-in the author's experience they held up better, but nobody checked them
-source by source, so there is no number for them here.
+in my experience they held up better, but I did not check them source by
+source, so there is no number for them here.
 
 ### The two measured tests
 

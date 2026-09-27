@@ -279,10 +279,10 @@ screen, who does not yet know what to ask.**
 
 ### What it costs when it fails, measured
 
-On 2026-09-02 the owner of this project learned in a single day about three
-decisions that had been written down for days. Nothing had been lost. The tree
-held them, the documents held them, and none of it had arrived. The words that
-day were *"we should know it at the same time"*.
+On 2026-09-02 I learned in a single day about three decisions that had been
+written down for days. Nothing had been lost. The tree held them, the
+documents held them, and none of it had reached me. What I said that day was
+*"we should know it at the same time"*.
 
 That is not a memory failure and it is not a capture failure -- both of those
 worked exactly as designed. It is the thing this pillar exists to prevent: **the

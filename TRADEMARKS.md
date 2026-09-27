@@ -1,12 +1,12 @@
 # Trademarks
 
-The name **vivac** and its logo identify this project and the releases its
-maintainer publishes. This page says how they may be used. It does not change
-the licence of the code.
+The name **vivac** and its logo identify this project and the releases I
+publish. This page says how they may be used. It does not change the licence
+of the code.
 
 ## What is covered
 
-Jóse Angel Avila owns the name **vivac** where it names software — a
+I, Jóse Angel Avila, own the name **vivac** where it names software — a
 command-line tool, a package, a project — and the logo that goes with it.
 
 The ordinary word is not claimed: a vivac is Spanish for a bivouac, and
@@ -39,8 +39,8 @@ official.
 
 ## What needs permission
 
-Written permission from Jóse Angel Avila, asked for through the
-[maintainer's GitHub profile](https://github.com/JAAvila-Of), is needed to:
+You need my written permission, asked for through
+[my GitHub profile](https://github.com/JAAvila-Of), to:
 
 - use the name or the logo in a way that suggests this project endorses,
   sponsors, certifies or partners with you;

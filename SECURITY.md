@@ -5,7 +5,7 @@ privately:
 
 **<https://github.com/JAAvila-Of/vivac/security/advisories/new>**
 
-That form opens a draft advisory only you and the maintainer can read.
+That form opens a draft advisory only you and I can read.
 
 The report that matters most is a way past the redaction guard — the check
 that refuses to write keys, personal data or file contents into the tree. It
@@ -25,5 +25,5 @@ Only the latest release. The project is in `0.x` and
 next release rather than back into older ones, and `vivac update` is how you
 get it.
 
-There is one maintainer, so there is no promised response time. A report is
-read, answered in the advisory, and disclosed together with its fix.
+I maintain this alone, so there is no promised response time. I read every
+report, answer it in the advisory, and disclose it together with its fix.
