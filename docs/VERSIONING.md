@@ -7,7 +7,7 @@ does.
 Every release opens with what it changes on disk and what to run — see the
 [changelog](../CHANGELOG.md).
 
-## The rule has been spent twelve times
+## The rule has been spent fourteen times
 
 | | |
 |---|---|
@@ -23,6 +23,8 @@ Every release opens with what it changes on disk and what to run — see the
 | `0.12.0` | stops a version older than itself reading a tree once that tree holds lanes |
 | `0.13.0` | took planting the tree away from `vivac setup`, which now refuses where there is none |
 | `0.14.0` | made a bare `vivac init` ask before planting, and refuse with no terminal and no `--yes` |
+| `0.15.0` | made `why` hand back at most eight open siblings and eight open children, every blocker kept |
+| `0.16.0` | began refusing an import whose dates it cannot place, rather than stamping them with today |
 
 Each went out as a minor for that reason, and counting them here is cheaper
 than counting them once and letting the sentence go stale.

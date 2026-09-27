@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.16.0](https://github.com/JAAvila-Of/vivac/compare/v0.15.11...v0.16.0) - 2026-09-27
 
+### Upgrading
+
+- **`vivac import` refuses a `tree.json` whose dates it cannot place, where it
+  used to stamp them with today.** A real `YYYY-MM-DD` still lands at noon
+  UTC, and a full RFC 3339 date-time now keeps its own instant, in UTC.
+  Anything else, an empty `opened` included, exits `2` and writes nothing,
+  and the refusal names every node, field and value at fault. Only a tree
+  kept in the Python prototype's format is affected: `import` reads nothing
+  else, and `vivac tree --json` was never a way back in.
+
 ### Documentation
 
 - *(usage)* stop presenting import as the way back from tree --json ([#192](https://github.com/JAAvila-Of/vivac/pull/192))
