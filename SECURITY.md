@@ -1,6 +1,6 @@
 # Security
 
-A security flaw is the one report this repository will take, and it goes
+A security flaw is the one report that does not go in an issue. It goes
 privately:
 
 **<https://github.com/JAAvila-Of/vivac/security/advisories/new>**

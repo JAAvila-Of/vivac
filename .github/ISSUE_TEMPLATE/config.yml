@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security flaw
+    url: https://github.com/JAAvila-Of/vivac/security/advisories/new
+    about: Privately, never in an issue. SECURITY.md says why.
+  - name: Read how it is used
+    url: https://github.com/JAAvila-Of/vivac/blob/main/docs/USAGE.md
+    about: Every command, grouped by who runs it.

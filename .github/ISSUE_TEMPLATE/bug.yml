@@ -1,0 +1,77 @@
+name: Something does not work
+description: A command fails, or does something the docs say it does not.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Do not paste your tree.** A tree is prose about your project, and this issue is public. The command and the error it printed are enough; reword anything that names what you are working on.
+
+        A security flaw does not go here: [SECURITY.md](https://github.com/JAAvila-Of/vivac/blob/main/SECURITY.md) says where it goes.
+  - type: textarea
+    id: happened
+    attributes:
+      label: What happened
+      description: The command you ran and what it printed.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      description: And where that came from, if it was the docs or the help.
+    validations:
+      required: true
+  - type: textarea
+    id: again
+    attributes:
+      label: How to make it happen again
+      description: From an empty folder, if you can. Leave it empty if you cannot.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: What `vivac --version` prints.
+      placeholder: vivac 0.x.y
+    validations:
+      required: true
+  - type: dropdown
+    id: harness
+    attributes:
+      label: Harness
+      options:
+        - Claude Code
+        - Codex
+        - Both
+        - Neither, the command line only
+    validations:
+      required: true
+  - type: dropdown
+    id: system
+    attributes:
+      label: System
+      options:
+        - Windows
+        - macOS
+        - Linux
+    validations:
+      required: true
+  - type: dropdown
+    id: installed
+    attributes:
+      label: Installed with
+      options:
+        - cargo install
+        - A release archive
+        - vivac update
+        - Built from source
+    validations:
+      required: true
+  - type: checkboxes
+    id: private
+    attributes:
+      label: Before sending
+      options:
+        - label: Nothing above names my project, a person, a path in my home folder, or a secret.
+          required: true

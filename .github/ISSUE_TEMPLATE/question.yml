@@ -1,0 +1,37 @@
+name: A question or a proposal
+description: How something is meant to work, or something you would like it to do.
+labels: [question]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Do not paste your tree.** A tree is prose about your project, and this issue is public.
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question or proposal
+      description: For a proposal, say what it would let you do that you cannot do now.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: What `vivac --version` prints, if it matters here.
+      placeholder: vivac 0.x.y
+  - type: dropdown
+    id: harness
+    attributes:
+      label: Harness
+      options:
+        - Claude Code
+        - Codex
+        - Both
+        - Neither, the command line only
+  - type: checkboxes
+    id: private
+    attributes:
+      label: Before sending
+      options:
+        - label: Nothing above names my project, a person, a path in my home folder, or a secret.
+          required: true
