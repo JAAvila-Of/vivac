@@ -903,8 +903,10 @@ a.tool {
   opacity: 0.9;
 }
 
-/* Solid is open and hollow is closed, and the row says the same thing in
-   words and in a strike through the title. */
+/* Solid is open and hollow is closed or parked, and the row says the same
+   thing in words: a strike through the title for closed, italics for
+   parked. Closed and parked also part ways in the ring itself -- parked
+   stays hollow but dashed, because it is not finished, only set aside. */
 .station {
   stroke: var(--c);
   stroke-width: 1.7;
@@ -917,6 +919,15 @@ a.tool {
 
 .station.shut {
   fill: var(--ground);
+}
+
+.station.parked {
+  fill: var(--ground);
+  /* At the smallest station this map draws (`radius(0)`, r = 2.4), the ring
+     is about 15 px around; a dash of 1.8 px and a gap of 1.4 px land close
+     to five of each, so the interruption reads as a dash even there, and
+     larger stations only get more of them. */
+  stroke-dasharray: 1.8 1.4;
 }
 
 .waits {
@@ -1065,7 +1076,9 @@ li.stop.hub .title {
 }
 
 /* Closed is struck through as well as hollow in the drawing: two ways of
-   saying it, neither of them a colour. */
+   saying it, neither of them a colour. Parked never gets this class: it is
+   set aside, not finished, so its title stays upright and at normal ink --
+   only italic, and only dashed in the drawing. */
 li.stop.shut {
   color: var(--ink-faint);
 }

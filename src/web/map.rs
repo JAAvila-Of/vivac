@@ -675,6 +675,8 @@ fn gutter(tree: &Tree, map: &Map, lane: &Lane, fold: &Fold) -> String {
             c = map.colour(s.line),
             state = if s.node.state.is_open() {
                 " open"
+            } else if s.node.state == State::Suspended {
+                " parked"
             } else {
                 " shut"
             },
@@ -772,11 +774,10 @@ fn rows(project: &str, tree: &Tree, map: &Map, ag: &Aggregates, fold: &Fold) -> 
         let n = s.node;
         let alias = n.alias();
         let mut class = String::from("stop");
-        if !n.state.is_open() {
-            class.push_str(" shut");
-        }
         if n.state == State::Suspended {
             class.push_str(" parked");
+        } else if !n.state.is_open() {
+            class.push_str(" shut");
         }
         if s.fan >= HUB {
             class.push_str(" hub");
@@ -960,11 +961,13 @@ fn key(tree: &Tree) -> String {
          <h3>How to read it</h3>\n<dl>\n\
          <dt>size</dt><dd>direct children: the biggest circles are the places \
          nearly all the work hangs from</dd>\n\
-         <dt>fill</dt><dd>solid is open, hollow is closed</dd>\n\
+         <dt>fill</dt><dd>solid is open, hollow is closed or parked</dd>\n\
          <dt>ring</dt><dd>blocks its parent, which cannot close until this \
          one does</dd>\n\
          <dt>cap</dt><dd>the end of a line. Provenance is a tree, so no line \
          ever rejoins another</dd>\n\
+         <dt>dashed</dt><dd>parked: set aside unfinished, not to be touched \
+         now. Its title is in italics and never struck out</dd>\n\
          <dt>struck out</dt><dd>closed</dd>\n\
          <dt>triangle</dt><dd>folds everything under that node, so its \
          neighbours come within reach</dd>\n\
@@ -1430,6 +1433,43 @@ mod tests {
         tree
     }
 
+    /// A root left open and two children in the two states the map's fill
+    /// and strike-through have to keep apart from open: closed and parked.
+    /// `f830`.
+    fn parked_shape() -> Tree {
+        let mut tree = Tree::default();
+        let (mut seq, mut num) = (0u64, 0u64);
+        let root = fixture_node(&mut tree, &mut seq, &mut num, None);
+        let closed = fixture_node(&mut tree, &mut seq, &mut num, Some(&root));
+        let parked = fixture_node(&mut tree, &mut seq, &mut num, Some(&root));
+        seq += 1;
+        tree.apply(
+            seq,
+            "2026-09-26T10:00:00Z",
+            "main",
+            &Body::StateChanged {
+                node: closed,
+                state: State::Done,
+                outcome: "finished".to_string(),
+                forced: false,
+            },
+        );
+        seq += 1;
+        tree.apply(
+            seq,
+            "2026-09-26T11:00:00Z",
+            "main",
+            &Body::StateChanged {
+                node: parked,
+                state: State::Suspended,
+                outcome: "waiting on day 14".to_string(),
+                forced: false,
+            },
+        );
+        tree.sort_nodes();
+        tree
+    }
+
     /// The maximum depth under `tree`'s roots, root itself at 0.
     fn max_depth(tree: &Tree) -> usize {
         fn under(tree: &Tree, n: &Node, depth: usize) -> usize {
@@ -1751,6 +1791,88 @@ mod tests {
         let page = map_page("vivac", "vivac", &blocked_shape(), "");
         assert!(page.contains("false-close"), "{page}");
         assert!(page.contains("\"fc\":true"), "and it travels in the detail");
+    }
+
+    /// The class strings on every `station` circle, in draw order: two per
+    /// node, one per gutter.
+    fn station_classes(page: &str) -> Vec<&str> {
+        page.match_indices("class=\"station ")
+            .map(|(i, m)| {
+                let start = i + m.len();
+                let end = start + page[start..].find('"').expect("class attribute closes");
+                &page[start..end]
+            })
+            .collect()
+    }
+
+    /// `f830` / `d868`: a parked node used to draw exactly like a closed
+    /// one, hollow and struck through, with nothing telling them apart. A
+    /// parked station stays hollow but gets its own class, not `shut`, so it
+    /// can carry a dashed ring instead of a solid one.
+    #[test]
+    fn a_parked_station_is_hollow_but_not_shut() {
+        let page = map_page("vivac", "vivac", &parked_shape(), "");
+        let classes = station_classes(&page);
+        assert_eq!(
+            classes.iter().filter(|c| c.ends_with("open")).count(),
+            2,
+            "the root's station stays open, in both gutters:\n{page}"
+        );
+        assert_eq!(
+            classes.iter().filter(|c| c.ends_with("shut")).count(),
+            2,
+            "the closed child keeps `shut`, in both gutters:\n{page}"
+        );
+        assert_eq!(
+            classes.iter().filter(|c| c.ends_with("parked")).count(),
+            2,
+            "the parked child gets `parked`, in both gutters:\n{page}"
+        );
+        assert!(
+            !classes
+                .iter()
+                .any(|c| c.contains("shut") && c.contains("parked")),
+            "no station is both at once:\n{page}"
+        );
+    }
+
+    /// The row half of the same bug: a parked row was struck through with
+    /// `shut` on top of its own `parked` italics, which is what made it read
+    /// as finished. Now it carries `parked` alone.
+    #[test]
+    fn a_parked_row_carries_parked_and_not_shut() {
+        let page = map_page("vivac", "vivac", &parked_shape(), "");
+        assert!(
+            page.contains("<li class=\"stop parked\""),
+            "the parked row must not also carry shut:\n{page}"
+        );
+        assert!(
+            page.contains("<li class=\"stop shut\""),
+            "the closed row still carries shut:\n{page}"
+        );
+        assert!(!page.contains("<li class=\"stop shut parked\""), "{page}");
+    }
+
+    /// The legend has to say what the dash means, or a reader who spots it
+    /// has no way to know. `d868` fixes the exact wording.
+    #[test]
+    fn the_legend_explains_parked_next_to_struck_out() {
+        let page = map_page("vivac", "vivac", &parked_shape(), "");
+        assert!(
+            page.contains("<dt>fill</dt><dd>solid is open, hollow is closed or parked</dd>"),
+            "{page}"
+        );
+        assert!(
+            page.contains(
+                "<dt>dashed</dt><dd>parked: set aside unfinished, not to be touched now. \
+                 Its title is in italics and never struck out</dd>"
+            ),
+            "{page}"
+        );
+        assert!(
+            page.contains("<dt>struck out</dt><dd>closed</dd>"),
+            "{page}"
+        );
     }
 
     /// Nothing is selected when the page lands. The first version arrived
