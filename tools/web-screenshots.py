@@ -10,8 +10,10 @@ knows. So this plants four made-up projects in a throwaway directory, with
 written, and photographs what the installed binary serves for them.
 
 Every node is written by a real `vivac` command. The one thing done by hand
-is the dates. `init` stamps today and `import` keeps only a bare date, so no
-command can plant a project that has been sitting still for a week, and an
+is the dates. `init` stamps today, and `import` keeps a node's own date but
+reads only the prototype's format, which has no pillars and no rules, so no
+command can plant a project like these that has been sitting still for a
+week, and an
 index where everything moved today does not show which project moved and
 which did not. Each project is therefore written in stretches, and after
 writing, every event of a stretch has the same number of days taken off its
