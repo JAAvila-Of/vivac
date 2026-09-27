@@ -231,6 +231,7 @@ c3
 c4
 cache
 cached
+calendar
 call
 caller
 calling
@@ -411,6 +412,7 @@ credential
 crockford
 cross
 crosses
+crossing
 crumb
 csp
 css
@@ -752,6 +754,7 @@ gives
 glob
 global
 glyph
+go
 goal
 goals
 goes
@@ -1143,6 +1146,7 @@ non
 none
 nonexistent
 nonzero
+noon
 nor
 normalization
 normalize
@@ -1252,6 +1256,7 @@ paint
 pair
 pairs
 panic
+panicking
 panics
 paragraph
 paragraphs
@@ -1399,6 +1404,7 @@ ralias
 ran
 rand
 random
+range
 ranges
 rank
 rather

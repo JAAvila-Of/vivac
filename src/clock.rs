@@ -164,8 +164,21 @@ pub fn epoch_seconds(ts: &str) -> Option<i64> {
     Some(days_from_civil((y, m, d)) * 86_400 + hh * 3600 + mm * 60 + ss)
 }
 
+/// Whether `(y, m, d)` is a real Gregorian date -- `m` in `1..=12` and `d`
+/// within that month's own length, leap years included. `import`'s pre-pass
+/// (`d866`) is the caller: it has to tell a real `2026-02-29` from a
+/// `2026-02-30` nobody typed on purpose, without a table of month lengths
+/// to keep in step with the arithmetic below. [`days_from_civil`] and
+/// [`civil_from_days`] are exact inverses for any date that survives the
+/// round trip, so a date that does not is not one: `(2026, 2, 30)` becomes
+/// thirty days into a twenty-eight-day February, which lands on
+/// `(2026, 3, 2)`, and the mismatch is the whole check.
+pub(crate) fn is_valid_civil_date(y: i64, m: u32, d: u32) -> bool {
+    (1..=12).contains(&m) && civil_from_days(days_from_civil((y, m, d))) == (y, m, d)
+}
+
 /// The inverse of [`civil_from_days`], same source.
-fn days_from_civil((y, m, d): (i64, u32, u32)) -> i64 {
+pub(crate) fn days_from_civil((y, m, d): (i64, u32, u32)) -> i64 {
     let y = if m <= 2 { y - 1 } else { y };
     let era = if y >= 0 { y } else { y - 399 } / 400;
     let yoe = y - era * 400;
@@ -177,7 +190,7 @@ fn days_from_civil((y, m, d): (i64, u32, u32)) -> i64 {
 
 /// Howard Hinnant's algorithm: days since epoch to proleptic Gregorian civil
 /// date. Valid for any date, not just the 32-bit range.
-fn civil_from_days(z: i64) -> (i64, u32, u32) {
+pub(crate) fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let z = z + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
     let doe = z - era * 146_097;

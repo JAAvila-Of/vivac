@@ -1580,7 +1580,7 @@ fn import_continues_the_logs_seq_rather_than_assuming_it_is_empty() {
     let tree_json = c.0.join("tree.json");
     std::fs::write(
         &tree_json,
-        r#"{"nodes":{"1":{"id":1,"title":"Imported","kind":"goal","status":"active"}}}"#,
+        r#"{"nodes":{"1":{"id":1,"title":"Imported","kind":"goal","status":"active","opened":"2026-01-01"}}}"#,
     )
     .unwrap();
 
@@ -1621,7 +1621,7 @@ fn import_signs_the_contexts_own_lane_not_always_main() {
     let tree_json = second.join("tree.json");
     std::fs::write(
         &tree_json,
-        r#"{"nodes":{"1":{"id":1,"title":"Imported from v2","kind":"goal","status":"active"}}}"#,
+        r#"{"nodes":{"1":{"id":1,"title":"Imported from v2","kind":"goal","status":"active","opened":"2026-01-01"}}}"#,
     )
     .unwrap();
 

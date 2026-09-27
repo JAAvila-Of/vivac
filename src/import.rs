@@ -6,8 +6,12 @@
 //!
 //! Two things are preserved on purpose: **the node number** --the design
 //! documents cite `#8` and `#11`, and if the number changed those references
-//! would stop resolving-- and **the original date**, written into the event's
-//! `ts`. The alternative was flattening the whole timeline onto today.
+//! would stop resolving-- and **the original date**, carried into the
+//! event's `ts` rather than flattened onto today. A bare `YYYY-MM-DD` lands
+//! at noon UTC; a full RFC 3339 stamp keeps its own instant, only reshaped
+//! to the log's own `YYYY-MM-DDTHH:MM:SSZ`. Anything else refuses the whole
+//! import, before a single event is written (`d866`) -- the date is never
+//! silently replaced by whatever "now" happened to be when `import` ran.
 
 use crate::args::Args;
 use crate::event::{Body, Event, Kind, State};
@@ -67,12 +71,114 @@ fn state_of(status: &str) -> State {
     }
 }
 
-fn instant(date: &str) -> String {
-    if date.len() == 10 {
-        format!("{date}T12:00:00Z")
-    } else {
-        crate::clock::now_rfc3339()
+/// Whether every byte in each of `ranges` is an ASCII digit. Integer
+/// parsing alone is not that check: it takes a leading `+`, so `+026` would
+/// read as the year 26.
+fn digits(b: &[u8], ranges: &[std::ops::Range<usize>]) -> bool {
+    ranges.iter().all(|r| {
+        b.get(r.clone())
+            .is_some_and(|d| d.iter().all(u8::is_ascii_digit))
+    })
+}
+
+/// `s`, a ten-byte `YYYY-MM-DD`, as `(year, month, day)` if it is a real
+/// Gregorian date. `crate::clock::is_valid_civil_date` does the calendar
+/// check, leap years included; this only checks that the punctuation and
+/// the digits are there to check at all.
+fn parse_calendar(s: &str) -> Option<(i64, u32, u32)> {
+    let b = s.as_bytes();
+    if b.len() != 10 || b[4] != b'-' || b[7] != b'-' || !digits(b, &[0..4, 5..7, 8..10]) {
+        return None;
     }
+    let y: i64 = s[0..4].parse().ok()?;
+    let m: u32 = s[5..7].parse().ok()?;
+    let d: u32 = s[8..10].parse().ok()?;
+    crate::clock::is_valid_civil_date(y, m, d).then_some((y, m, d))
+}
+
+/// The date or date-time `date` names, as the log's own `ts` shape --
+/// `YYYY-MM-DDTHH:MM:SSZ`, UTC, to the second -- or `None` if `date` is
+/// neither of the two shapes this reads.
+///
+/// A bare `YYYY-MM-DD` (a real calendar date, checked above) lands at noon
+/// UTC, same as always. A full RFC 3339 stamp -- a `T` separator, optional
+/// fractional seconds (truncated, never rounded), and a `Z` or
+/// `+HH:MM`/`-HH:MM` offset -- keeps its own instant, converted to UTC,
+/// which can move the calendar date across a day boundary (`d866`).
+///
+/// Anything else is `None`. `import`'s pre-pass turns every `None` into a
+/// refusal before this is ever asked for a `ts` it did not already check,
+/// so every call here after the pre-pass is expected to succeed.
+fn instant(date: &str) -> Option<String> {
+    if date.len() == 10 {
+        parse_calendar(date)?;
+        return Some(format!("{date}T12:00:00Z"));
+    }
+    // Every slice below is by byte, which only lands on character
+    // boundaries if every character is one byte: a stamp with anything
+    // wider in it is not one this reads, and has to be refused before a
+    // slice can land inside that character and panic.
+    let b = date.as_bytes();
+    if b.len() < 20 || !date.is_ascii() {
+        return None;
+    }
+    let (y, m, d) = parse_calendar(&date[0..10])?;
+    if b[10] != b'T' || b[13] != b':' || b[16] != b':' || !digits(b, &[11..13, 14..16, 17..19]) {
+        return None;
+    }
+    let hh: i64 = date[11..13].parse().ok()?;
+    let mm: i64 = date[14..16].parse().ok()?;
+    let ss: i64 = date[17..19].parse().ok()?;
+    if hh >= 24 || mm >= 60 || ss >= 60 {
+        return None;
+    }
+
+    // Optional fractional seconds: consumed, never read -- truncating is
+    // not rounding, and the event log has never carried sub-second
+    // precision.
+    let mut idx = 19;
+    if b.get(idx).copied() == Some(b'.') {
+        idx += 1;
+        let start = idx;
+        while b.get(idx).copied().is_some_and(|c| c.is_ascii_digit()) {
+            idx += 1;
+        }
+        if idx == start {
+            return None;
+        }
+    }
+
+    let offset_secs: i64 = match b.get(idx).copied() {
+        Some(b'Z') if idx + 1 == b.len() => 0,
+        Some(b'+') | Some(b'-') => {
+            let sign = if b[idx] == b'-' { -1 } else { 1 };
+            let rest = &date[idx + 1..];
+            if rest.len() != 5
+                || rest.as_bytes()[2] != b':'
+                || !digits(rest.as_bytes(), &[0..2, 3..5])
+            {
+                return None;
+            }
+            let offset_hh: i64 = rest[0..2].parse().ok()?;
+            let offset_mm: i64 = rest[3..5].parse().ok()?;
+            if offset_hh > 23 || offset_mm > 59 {
+                return None;
+            }
+            sign * (offset_hh * 3_600 + offset_mm * 60)
+        }
+        _ => return None,
+    };
+
+    let local_secs = crate::clock::days_from_civil((y, m, d)) * 86_400 + hh * 3_600 + mm * 60 + ss;
+    let utc_secs = local_secs - offset_secs;
+    let (utc_year, utc_month, utc_day) = crate::clock::civil_from_days(utc_secs.div_euclid(86_400));
+    let rem = utc_secs.rem_euclid(86_400);
+    Some(format!(
+        "{utc_year:04}-{utc_month:02}-{utc_day:02}T{:02}:{:02}:{:02}Z",
+        rem / 3_600,
+        (rem % 3_600) / 60,
+        rem % 60
+    ))
 }
 
 pub fn import(ctx: &mut Ctx, args: &Args) -> R {
@@ -110,6 +216,33 @@ pub fn import(ctx: &mut Ctx, args: &Args) -> R {
             h.field = format!("node #{} (ref)", n.id);
             return Err(Failure::Redaction(Box::new(h)));
         }
+    }
+
+    // `d866`: every date on every node has to resolve before anything is
+    // written, exactly like the redaction guard just above -- an import
+    // that writes some events and then refuses partway through is worse
+    // than one that never started. Every offending date is named, not just
+    // the first: a person fixing a spike tree by hand wants the whole list
+    // in one pass, not one refusal per re-run.
+    let mut bad_dates: Vec<String> = Vec::new();
+    for n in &nodes {
+        if instant(&n.opened).is_none() {
+            bad_dates.push(format!("#{} opened {:?}", n.id, n.opened));
+        }
+        if let Some(closed) = &n.closed {
+            if instant(closed).is_none() {
+                bad_dates.push(format!("#{} closed {:?}", n.id, closed));
+            }
+        }
+    }
+    if !bad_dates.is_empty() {
+        return Err(Failure::usage(format!(
+            "import cannot place these dates on the timeline, so nothing was\n  \
+             written:\n\n  {}\n\n  \
+             Accepted: a real YYYY-MM-DD date, or a full RFC 3339 date-time -- a T\n  \
+             separator, optional fractional seconds, and a Z or +HH:MM/-HH:MM offset.",
+            bad_dates.join("\n  ")
+        )));
     }
 
     let ulids: BTreeMap<u64, String> = nodes.iter().map(|n| (n.id, id::ulid())).collect();
@@ -172,7 +305,7 @@ pub fn import(ctx: &mut Ctx, args: &Args) -> R {
                 arms: vec![],
                 against: None,
             },
-            instant(&n.opened),
+            instant(&n.opened).expect("validated in the pre-pass above"),
         );
     }
     for n in &nodes {
@@ -182,7 +315,7 @@ pub fn import(ctx: &mut Ctx, args: &Args) -> R {
                     node: ulids[&n.id].clone(),
                     note: n.note.clone(),
                 },
-                instant(&n.opened),
+                instant(&n.opened).expect("validated in the pre-pass above"),
             );
         }
         let state = state_of(&n.status);
@@ -198,7 +331,8 @@ pub fn import(ctx: &mut Ctx, args: &Args) -> R {
                     // in `check`, which is exactly what needs to be seen.
                     forced: false,
                 },
-                instant(n.closed.as_deref().unwrap_or(&n.opened)),
+                instant(n.closed.as_deref().unwrap_or(&n.opened))
+                    .expect("validated in the pre-pass above"),
             );
         }
     }
