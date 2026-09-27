@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.11](https://github.com/JAAvila-Of/vivac/compare/v0.15.10...v0.15.11) - 2026-09-27
+
+### Documentation
+
+- open issues with forms and keep pull requests closed ([#190](https://github.com/JAAvila-Of/vivac/pull/190))
+
 ## [0.15.10](https://github.com/JAAvila-Of/vivac/compare/v0.15.9...v0.15.10) - 2026-09-27
 
 ### Added
