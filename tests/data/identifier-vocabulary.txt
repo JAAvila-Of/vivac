@@ -294,6 +294,7 @@ claiming
 claims
 clamp
 class
+classes
 classify
 claude
 clause
@@ -634,6 +635,7 @@ expand
 expect
 expected
 expecting
+explains
 explicit
 ext
 extend
@@ -1784,6 +1786,7 @@ string
 strip
 stripped
 strips
+struck
 struct
 style
 styled
