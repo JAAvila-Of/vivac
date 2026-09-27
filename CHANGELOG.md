@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0](https://github.com/JAAvila-Of/vivac/compare/v0.15.11...v0.16.0) - 2026-09-27
+
+### Documentation
+
+- *(usage)* stop presenting import as the way back from tree --json ([#192](https://github.com/JAAvila-Of/vivac/pull/192))
+
+### Fixed
+
+- *(web)* stop drawing a parked node as a closed one ([#194](https://github.com/JAAvila-Of/vivac/pull/194))
+- *(import)* [**breaking**] keep each node's own date or refuse the import ([#193](https://github.com/JAAvila-Of/vivac/pull/193))
+
 ## [0.15.11](https://github.com/JAAvila-Of/vivac/compare/v0.15.10...v0.15.11) - 2026-09-27
 
 ### Documentation
