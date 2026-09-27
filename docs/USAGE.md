@@ -287,9 +287,14 @@ filtered view `tree` shows a person — the JSON ignores `--all` and carries the
 closed and the parked as well, because an export that quietly drops what
 finished is not one.
 
-`vivac import <tree.json>` is the way back in, and it is how the trees that
-predate this binary got here: it reads a tree in that JSON shape and writes
-the log a tree of that shape would have written.
+That JSON is for reading a tree somewhere else, and there is no way back in
+from it. It leaves out the [lane](LANES.md) each node was written in, the
+commits each one was anchored to and the safepoints, so a tree rebuilt from
+it would be a different tree with the same titles.
+
+`vivac import <tree.json>` is not that way back. It reads only the
+`tree.json` of the Python prototype vivac grew out of, which is how the
+trees that predate this binary got here, and it refuses any other file.
 
 The log underneath, `.vivac/events`, is plain JSON lines and nothing stops you
 reading it. What is not written down anywhere is what a line means, and that
