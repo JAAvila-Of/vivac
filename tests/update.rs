@@ -39,6 +39,7 @@ impl TempRoot {
         let dir = self.0.join(sub);
         std::fs::create_dir_all(&dir).unwrap();
         let exe = dir.join(Path::new(BIN).file_name().unwrap());
+        let _held = copy_or_spawn();
         std::fs::copy(BIN, &exe).unwrap();
         exe
     }
@@ -54,8 +55,30 @@ impl Drop for TempRoot {
     }
 }
 
+/// Held while a copy of the binary is written and while a child is
+/// started, never both at once. A child forked while another test still
+/// has its copy open for writing inherits that descriptor until it execs,
+/// and Linux refuses to run a file somebody holds open for writing: that
+/// test's own start then fails with "Text file busy". `spawn` returns only
+/// once the child has exec'd, so no fork is ever half done while a copy is
+/// being written.
+fn copy_or_spawn() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 fn run(exe: &Path, args: &[&str]) -> (String, i32) {
-    let o = Command::new(exe).args(args).output().unwrap();
+    let child = {
+        let _held = copy_or_spawn();
+        Command::new(exe)
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap()
+    };
+    let o = child.wait_with_output().unwrap();
     (
         String::from_utf8_lossy(&o.stdout).into_owned() + &String::from_utf8_lossy(&o.stderr),
         o.status.code().unwrap_or(-1),
