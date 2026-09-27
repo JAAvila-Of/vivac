@@ -1,0 +1,47 @@
+name: A proposal
+description: Something you would like vivac to do that it does not.
+labels: [proposal, triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Do not paste your tree.** A tree is prose about your project, and this issue is public.
+
+        Every change here is judged against the [pillars](https://github.com/JAAvila-Of/vivac/blob/main/docs/PILLARS.md), so the problem matters more than the solution: a proposal that says what it would let you do gets further than one that says how.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you cannot do now
+      description: The moment in your work where it falls short, and what that costs you.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like
+      description: What it should do. How it would work is optional.
+    validations:
+      required: true
+  - type: textarea
+    id: instead
+    attributes:
+      label: What you do instead today
+      description: A workaround, another tool, or nothing.
+  - type: dropdown
+    id: harness
+    attributes:
+      label: Harness
+      options:
+        - Claude Code
+        - Codex
+        - Both
+        - Neither, the command line only
+  - type: checkboxes
+    id: private
+    attributes:
+      label: Before sending
+      options:
+        - label: I searched the open and the closed issues, and this is not one of them.
+          required: true
+        - label: Nothing above names my project, a person, a path in my home folder, or a secret.
+          required: true

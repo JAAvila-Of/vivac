@@ -94,8 +94,8 @@ is at hand and having it know what the last one settled; and knowing where
 the work stands at any moment. In my experience that is worth more than
 anything else here, and I hope it serves you as well.
 
-There are no issues and no pull requests yet; [`CONTRIBUTING.md`](CONTRIBUTING.md)
-says why.
+Issues are open, and I want to hear where it fails you. Pull requests are not
+open yet; [`CONTRIBUTING.md`](CONTRIBUTING.md) says why.
 
 ---
 

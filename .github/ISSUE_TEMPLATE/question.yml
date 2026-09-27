@@ -1,0 +1,39 @@
+name: A question
+description: How something is meant to work, or why it works the way it does.
+labels: [question, triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Do not paste your tree.** A tree is prose about your project, and this issue is public.
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+      description: And what you read before asking, if it was the docs or the help.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: What `vivac --version` prints, if it matters here.
+      placeholder: vivac 0.x.y
+  - type: dropdown
+    id: harness
+    attributes:
+      label: Harness
+      options:
+        - Claude Code
+        - Codex
+        - Both
+        - Neither, the command line only
+  - type: checkboxes
+    id: private
+    attributes:
+      label: Before sending
+      options:
+        - label: I searched the open and the closed issues, and this is not one of them.
+          required: true
+        - label: Nothing above names my project, a person, a path in my home folder, or a secret.
+          required: true
