@@ -19,7 +19,10 @@ A question is welcome, and so is a proposal, as long as it says what it would
 let you do that you cannot do now.
 
 I maintain this alone, so there is no promised response time. Every issue is
-read, and every one gets an answer, even when the answer is no.
+read, and every one gets an answer, even when the answer is no. A new issue
+carries the `triage` label until it has one, so what is still waiting is
+never a matter of trust: it is
+[a search](https://github.com/JAAvila-Of/vivac/issues?q=is%3Aopen+label%3Atriage).
 
 ## Pull requests
 

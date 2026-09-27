@@ -1,6 +1,6 @@
-name: A question or a proposal
-description: How something is meant to work, or something you would like it to do.
-labels: [question]
+name: A question
+description: How something is meant to work, or why it works the way it does.
+labels: [question, triage]
 body:
   - type: markdown
     attributes:
@@ -9,8 +9,8 @@ body:
   - type: textarea
     id: question
     attributes:
-      label: Your question or proposal
-      description: For a proposal, say what it would let you do that you cannot do now.
+      label: Your question
+      description: And what you read before asking, if it was the docs or the help.
     validations:
       required: true
   - type: input
@@ -33,5 +33,7 @@ body:
     attributes:
       label: Before sending
       options:
+        - label: I searched the open and the closed issues, and this is not one of them.
+          required: true
         - label: Nothing above names my project, a person, a path in my home folder, or a secret.
           required: true

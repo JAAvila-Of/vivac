@@ -1,6 +1,6 @@
 name: Something does not work
 description: A command fails, or does something the docs say it does not.
-labels: [bug]
+labels: [bug, triage]
 body:
   - type: markdown
     attributes:
@@ -55,6 +55,7 @@ body:
         - Windows
         - macOS
         - Linux
+        - Other
     validations:
       required: true
   - type: dropdown
@@ -73,5 +74,7 @@ body:
     attributes:
       label: Before sending
       options:
+        - label: I searched the open and the closed issues, and this is not one of them.
+          required: true
         - label: Nothing above names my project, a person, a path in my home folder, or a secret.
           required: true
