@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.10](https://github.com/JAAvila-Of/vivac/compare/v0.15.9...v0.15.10) - 2026-09-27
+
+### Added
+
+- *(web)* show the logo's mark as the tab's icon ([#185](https://github.com/JAAvila-Of/vivac/pull/185))
+
+### Changed
+
+- *(release)* ship the notices of every linked crate in each archive ([#184](https://github.com/JAAvila-Of/vivac/pull/184))
+
+### Documentation
+
+- rework the public face, from the seams to the logo ([#183](https://github.com/JAAvila-Of/vivac/pull/183))
+
+### Fixed
+
+- *(migrate)* keep lessons as records and check every source for real ([#187](https://github.com/JAAvila-Of/vivac/pull/187))
+
+### Internal
+
+- *(commits)* accept base, which is English as well as Spanish ([#186](https://github.com/JAAvila-Of/vivac/pull/186))
+- *(update)* keep copying the binary and starting a child apart ([#189](https://github.com/JAAvila-Of/vivac/pull/189))
+
 ## [0.15.9](https://github.com/JAAvila-Of/vivac/compare/v0.15.8...v0.15.9) - 2026-09-26
 
 ### Added
