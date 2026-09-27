@@ -924,10 +924,11 @@ a.tool {
 .station.parked {
   fill: var(--ground);
   /* At the smallest station this map draws (`radius(0)`, r = 2.4), the ring
-     is about 15 px around; a dash of 1.8 px and a gap of 1.4 px land close
-     to five of each, so the interruption reads as a dash even there, and
-     larger stations only get more of them. */
-  stroke-dasharray: 1.8 1.4;
+     is about 15 px around, which a dash of 3 px and a gap of 2 px cut into
+     three. Shorter ones were tried first: 1.8 and 1.4 cut it into five, and
+     with a 1.7 px stroke the gaps blurred shut and the leaf read as a smudge
+     rather than as a broken ring. Larger stations only get more dashes. */
+  stroke-dasharray: 3 2;
 }
 
 .waits {
