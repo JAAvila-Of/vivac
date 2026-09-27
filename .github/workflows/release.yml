@@ -45,17 +45,18 @@ on:
         type: string
   # A release is the worst place to find out that a target stopped building,
   # and it is the only place that would find out. So the build inputs bring
-  # the five targets with them: change this file, the manifest, the lockfile
-  # or the toolchain, and the matrix runs on the pull request. It is scoped to
-  # those paths because the release profile is slow on purpose -- `lto` and
-  # `codegen-units = 1` -- and every other pull request already gets the three
-  # operating systems from ci.yml.
+  # the five targets with them: change this file, the manifest, the lockfile,
+  # the toolchain or the script that writes the notices, and the matrix runs
+  # on the pull request. It is scoped to those paths because the release
+  # profile is slow on purpose -- `lto` and `codegen-units = 1` -- and every
+  # other pull request already gets the three operating systems from ci.yml.
   pull_request:
     paths:
       - .github/workflows/release.yml
       - Cargo.toml
       - Cargo.lock
       - rust-toolchain.toml
+      - tools/third-party-notices.py
 
 permissions:
   contents: read
@@ -108,6 +109,21 @@ jobs:
             cp "target/$TARGET/release/vivac" "dist/$name/"
           fi
           cp LICENSE-MIT LICENSE-APACHE README.md "dist/$name/"
+          # The binary carries its dependencies compiled in, and their
+          # licences ask for their notices to go with every copy.
+          # On Windows `python3` can be the store's placeholder, which prints
+          # a hint and exits 0; it would leave an empty file and no error.
+          python=""
+          for candidate in python3 python; do
+            if "$candidate" -c "import sys" > /dev/null 2>&1; then
+              python="$candidate"
+              break
+            fi
+          done
+          [ -n "$python" ] || { echo "no Python to write the notices"; exit 1; }
+          notices="dist/$name/THIRD-PARTY-NOTICES"
+          "$python" tools/third-party-notices.py --target "$TARGET" > "$notices"
+          [ -s "$notices" ] || { echo "the notices came out empty"; exit 1; }
           cd dist
           if [ "$RUNNER_OS" = "Windows" ]; then
             7z a "$name.zip" "$name" > /dev/null
