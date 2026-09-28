@@ -300,6 +300,7 @@ claude
 clause
 clauses
 clean
+cleanly
 cleanup
 clear
 cleared

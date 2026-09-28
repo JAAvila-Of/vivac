@@ -324,6 +324,81 @@ fn a_resident_server_writing_from_a_copy_says_nothing_on_stderr() {
     );
 }
 
+/// `f882`, `d883`: the old loop read lines with `lines()`, which turns a
+/// chunk of bytes that is not valid UTF-8 into an `InvalidData` error
+/// indistinguishable from a broken pipe, and that ended the server outright.
+/// A bad line now gets the same JSON-RPC error a non-JSON line already gets,
+/// and the request right after it still gets its normal reply.
+#[test]
+fn a_line_that_is_not_utf8_gets_an_rpc_error_and_the_server_keeps_going() {
+    let c = seeded("mcp-bad-utf8");
+    let mut s = Server::start(&c);
+    s.input.write_all(&[0xff, 0xfe, b'\n']).unwrap();
+    s.input.flush().unwrap();
+    let mut buf = String::new();
+    s.output.read_line(&mut buf).unwrap();
+    let bad: Value =
+        serde_json::from_str(&buf).unwrap_or_else(|e| panic!("not JSON-RPC: {e}\n{buf}"));
+    assert_eq!(bad["error"]["code"], -32700, "{bad}");
+    assert_eq!(bad["error"]["message"], "that line is not UTF-8", "{bad}");
+
+    let r = s.ask(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#);
+    assert!(
+        r["result"]["tools"].is_array(),
+        "the request right after the bad line should still get its own reply: {r}"
+    );
+}
+
+/// `f882`, `d883`: a non-JSON line already answered with a JSON-RPC error
+/// and kept the server running before this fix -- pinned here so the
+/// rewrite of the read loop does not quietly change that.
+#[test]
+fn a_line_that_is_not_json_still_answers_with_an_rpc_error_and_the_server_keeps_going() {
+    let c = seeded("mcp-bad-json");
+    let mut s = Server::start(&c);
+    let bad = s.ask("not json at all");
+    assert_eq!(bad["error"]["code"], -32700, "{bad}");
+    assert!(
+        bad["error"]["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("that line is not JSON:"),
+        "{bad}"
+    );
+
+    let r = s.ask(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#);
+    assert!(
+        r["result"]["tools"].is_array(),
+        "the request right after the bad line should still get its own reply: {r}"
+    );
+}
+
+/// `f882`, `d883`: the client closing its end of the pipe is how this loop
+/// is meant to end, and it used to end silently. Now the server's own exit
+/// says why, on the one stream that reaches the client's own log.
+#[test]
+fn closing_stdin_ends_the_server_cleanly_with_its_own_line_on_stderr() {
+    let c = seeded("mcp-stdin-close");
+    let mut child = Command::new(BIN)
+        .current_dir(&c.0)
+        .env("VIVAC_HOME", c.global_home())
+        .env("TZ", "UTC")
+        .arg("mcp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    drop(child.stdin.take().unwrap());
+    let finished = child.wait_with_output().unwrap();
+    assert!(
+        finished.status.success(),
+        "closing stdin should exit cleanly: {finished:?}"
+    );
+    let stderr = String::from_utf8_lossy(&finished.stderr).into_owned();
+    assert_eq!(stderr, "vivac mcp: the client closed its end, stopping.\n");
+}
+
 #[test]
 fn find_comes_back_as_the_json_the_cli_would_print() {
     let c = seeded("find");
