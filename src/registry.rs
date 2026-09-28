@@ -146,12 +146,13 @@ pub enum Noted {
 /// so `s.root` is recorded into `copies` instead, the first time it is
 /// seen -- steady state for a copy already known is a no-write read too.
 ///
-/// Never fails. The registry serves a surface that does not exist yet, so a
-/// missing or unwritable `store_dir`, a `projects` file that will not
-/// parse, or one written by a newer vivac than this, all leave the
-/// caller's own result untouched -- and answer `Noted::Fine`, the same as
-/// nothing worth telling. A file that will not parse is replaced wholesale
-/// on the next successful write, not repaired.
+/// Never fails. The registry serves `vivac web` and `find --everywhere`,
+/// and it is re-noted on every write, so a note that could not be taken
+/// heals on the next one: a missing or unwritable `store_dir`, a `projects`
+/// file that will not parse, or one written by a newer vivac than this, all
+/// leave the caller's own result untouched -- and answer `Noted::Fine`, the
+/// same as nothing worth telling. A file that will not parse is replaced
+/// wholesale on the next successful write, not repaired.
 pub fn note(store_dir: &Path, project_id: &str, s: Sighting<'_>) -> Noted {
     try_note(store_dir, project_id, &s).unwrap_or(Noted::Fine)
 }
@@ -1154,6 +1155,36 @@ mod tests {
         (root, id)
     }
 
+    /// One more write to an already-seeded tree, the same kind of append a
+    /// real command makes (`ops.rs`'s own call, `self.tree.seq` in place of
+    /// the fixed `from_seq` here). Takes this tree's own lock, never the
+    /// registry's, so it stands in for "the writer's own write" in
+    /// `each_writer_lands_its_own_write_and_the_registry_heals_after_contention`.
+    fn append_one(root: &Path, from_seq: u64) {
+        let mut s = store::Store::open(root.to_path_buf()).unwrap();
+        let lock = s.lock_for_write().unwrap();
+        s.append(
+            &lock,
+            crate::lane::MAIN,
+            vec![crate::event::Body::NodeNoted {
+                node: "t1".into(),
+                note: "another write".into(),
+            }],
+            from_seq,
+            false,
+        )
+        .unwrap();
+    }
+
+    /// How many event lines `root`'s own log holds.
+    fn event_count(root: &Path) -> usize {
+        std::fs::read_to_string(root.join(store::DIR).join(store::LOG))
+            .unwrap()
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .count()
+    }
+
     /// A directory removed when this value is dropped, whether the test
     /// passed or panicked: a trailing `remove_dir_all(...).ok()` only runs
     /// on the way past an assertion that held, so a failing test used to
@@ -1417,8 +1448,22 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
+    /// `f722`/`d881`: this was `two_writers_do_not_lose_a_project`, and it
+    /// demanded that all eight threads land in the registry while still
+    /// racing for its lock -- a guarantee `note` never gave. `note` gives up
+    /// on `LOCK_WAIT` (one second) on purpose, because the registry is a
+    /// comfort re-noted on every command (`main.rs` calls it once at the
+    /// start of nearly every one), so a note missed under contention heals
+    /// on that project's own next write. Eight threads fighting over one
+    /// lock file can pass a second on a loaded machine, and the old test
+    /// failed there occasionally, pointing at a loss that was never real.
+    /// What this checks instead is the guarantee the design does make: a
+    /// writer's own write to its own tree never waits on the registry's
+    /// lock and always lands, and once the contention is over, one more
+    /// write per project -- run here sequentially, the way a following
+    /// command would run it for real -- always leaves it noted.
     #[test]
-    fn two_writers_do_not_lose_a_project() {
+    fn each_writer_lands_its_own_write_and_the_registry_heals_after_contention() {
         let store_dir = temp_dir("reg-race");
         std::fs::create_dir_all(&store_dir).unwrap();
         let projects: Vec<(std::path::PathBuf, String)> = (0..8)
@@ -1427,14 +1472,31 @@ mod tests {
         std::thread::scope(|s| {
             for (root, id) in &projects {
                 let dir = store_dir.clone();
-                s.spawn(move || note(&dir, id, sighting(root)));
+                s.spawn(move || {
+                    // The write itself: contended only on its own tree's
+                    // lock, never on the registry's.
+                    append_one(root, 1);
+                    // The registry note a real command makes right after,
+                    // which is what is allowed to be lost under load.
+                    note(&dir, id, sighting(root));
+                });
             }
         });
+        for (root, id) in &projects {
+            assert_eq!(
+                event_count(root),
+                2,
+                "writer for {id} lost its own write under registry contention"
+            );
+        }
+        for (root, id) in &projects {
+            note(&store_dir, id, sighting(root));
+        }
         let noted = read(&store_dir.join(FILE)).unwrap();
         assert_eq!(
             noted.len(),
             8,
-            "a concurrent write dropped a project the registry already had"
+            "a project never healed into the registry once the contention was over"
         );
         std::fs::remove_dir_all(&store_dir).ok();
         for (root, _) in &projects {
