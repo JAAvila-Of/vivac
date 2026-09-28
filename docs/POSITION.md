@@ -42,6 +42,17 @@ parent is a link, a label, a field somebody has to remember to fill in, and
 **an edge that depends on somebody remembering is an edge that is absent most
 of the time.** The hierarchy lives in the schema rather than in the data.
 
+Some trackers are now built for agents first, and they close most of that gap.
+They put a short brief into the agent's context when a session opens, refuse
+to close an item over children still open, set work aside with a reason, and
+some carry a link type for *discovered from*. That is the nearest anything
+comes to this, and it is near. What stays different is where the edge lives.
+There it is one link type among many, added when the agent remembers to, and
+walked together with every other dependency. Here it is part of making a node
+at all: `push` and `add` hang the new node from the focus, or from the parent
+they are given, and `why` walks nothing else. The difference does not show on the day the link is added. It
+shows months later, on the node where nobody added it.
+
 ### Version control history
 
 It stores the change and its order with a fidelity nothing else comes close
@@ -127,6 +138,12 @@ some are things it owes.
 - **Noticing that a record went stale.** Some memory stores attach a review
   date to each record by type and surface what is due. Here that is
   `vivac flag <id> stale`, by hand — which is worse, and known to be worse.
+- **One record for several machines and people.** Trackers built for agents
+  let several agents on several machines write into one store and sync it the
+  way a repository syncs. Here a tree lives on one machine: lanes let its
+  folders share one, and team mode is not built. Before it is, it needs an
+  answer to the question the [pillars](PILLARS.md#encryption) put first — who
+  holds the key.
 
 Nothing in that second list is a shrug. Each item still open is a reason to
 keep a second record running, and the next section is about why that is the
@@ -157,7 +174,7 @@ debts.
 What did not change is the reason any of this is worth having. Everything on
 that list gets rebuilt **hanging off where it was born**. A search that
 returns records is a search; a search that returns records along with the path
-that leads to each one is the thing nothing else on your disk can do. The
+that leads to each one is what the edge is there for. The
 rejection criterion is used to say no in the same sense as the
 [pillars](PILLARS.md) — and now it is also used to say *not yet, and here is
 what is missing.*
