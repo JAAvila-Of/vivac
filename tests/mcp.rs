@@ -1086,6 +1086,57 @@ fn every_tool_answers_a_call_built_from_only_its_own_schema() {
     }
 }
 
+/// `f438`/`d880`: MCP used to read arguments by name and ignore anything
+/// else, so `vivac_add` with a `power` it does not declare created the node
+/// anyway and answered `isError: false`. The mirror on the CLI side is
+/// `tests/pillars_and_rules.rs`'s `power_is_an_unknown_flag_on_add_and_writes_nothing`;
+/// the two doors now refuse the same argument the same way.
+#[test]
+fn power_is_an_unknown_argument_on_vivac_add_and_writes_nothing() {
+    let c = seeded("mcp-power-unknown-add");
+    let mut s = hello(&c);
+    let before = c.log();
+    let r = s.ask(
+        r#"{"jsonrpc":"2.0","id":50,"method":"tools/call","params":{"name":"vivac_add","arguments":{"title":"Security","why":"arbiter","power":"veto"}}}"#,
+    );
+    assert_eq!(r["result"]["isError"], true, "{r}");
+    let text = text_of(&r);
+    assert_eq!(
+        text,
+        "vivac_add does not take power.\n\n  \
+         It takes: title parent why type blocks ref governs arm arm_dir against root"
+    );
+    assert_eq!(before, c.log(), "a refused vivac_add still wrote:\n{text}");
+}
+
+/// The refusal is not a write-only thing: a read tool answers an argument
+/// its schema does not declare the same way a write tool does.
+#[test]
+fn an_unknown_argument_on_vivac_why_is_refused_the_same_way() {
+    let c = seeded("mcp-power-unknown-why");
+    let mut s = hello(&c);
+    let r = s.ask(
+        r#"{"jsonrpc":"2.0","id":51,"method":"tools/call","params":{"name":"vivac_why","arguments":{"id":"t2","power":"veto"}}}"#,
+    );
+    assert_eq!(r["result"]["isError"], true, "{r}");
+    assert_eq!(
+        text_of(&r),
+        "vivac_why does not take power.\n\n  It takes: id project full"
+    );
+}
+
+/// The refusal only fires on what a schema does not list: a call built
+/// from arguments a tool actually declares still goes through.
+#[test]
+fn a_call_with_only_arguments_its_schema_declares_still_works() {
+    let c = seeded("mcp-known-args-add");
+    let mut s = hello(&c);
+    let r = s.ask(
+        r#"{"jsonrpc":"2.0","id":52,"method":"tools/call","params":{"name":"vivac_add","arguments":{"title":"Security","why":"arbiter"}}}"#,
+    );
+    assert_eq!(r["result"]["isError"], false, "{r}");
+}
+
 /// `arm` and `arm_dir` are the pair an agent following `vivac_add`'s own
 /// schema has to be able to send (`f452`).
 #[test]
