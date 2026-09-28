@@ -835,6 +835,25 @@ fn outcome_text(o: outcome::Outcome) -> Result<String, Failure> {
     pretty(v)
 }
 
+/// Argument names the call sent that this tool's own schema does not list,
+/// sorted the way `Args::unknown` sorts the CLI's, so the two doors answer
+/// an unlisted argument with the same shape of refusal (`f438`, `d880`).
+/// Reads `tool.args`, the very slice `schema` turns into
+/// `inputSchema.properties`, so there is no second hand-kept list for the
+/// two to drift apart on.
+fn unknown_arguments(tool: &Tool, arguments: &Value) -> Vec<String> {
+    let Some(map) = arguments.as_object() else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = map
+        .keys()
+        .filter(|k| !tool.args.iter().any(|a| &a.name == k))
+        .cloned()
+        .collect();
+    names.sort_unstable();
+    names
+}
+
 fn call(project: &mut Project, params: &Value) -> Result<String, Failure> {
     let name = params["name"].as_str().unwrap_or_default();
     let Some(tool) = TOOLS.iter().find(|t| t.name == name) else {
@@ -843,6 +862,26 @@ fn call(project: &mut Project, params: &Value) -> Result<String, Failure> {
             TOOLS.iter().map(|t| t.name).collect::<Vec<_>>().join(", ")
         )));
     };
+    // `f438`/`d880`: refused before anything is read or written, the same
+    // point the CLI refuses an unknown flag at. `arguments` is the only
+    // place a caller's own keys live -- `_meta` sits beside it in `params`,
+    // never inside it, so a protocol-level field never reaches this check.
+    let unknown = unknown_arguments(tool, &params["arguments"]);
+    if !unknown.is_empty() {
+        let takes = if tool.args.is_empty() {
+            "none".to_string()
+        } else {
+            tool.args
+                .iter()
+                .map(|a| a.name)
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        return Err(Failure::usage(format!(
+            "{name} does not take {}.\n\n  It takes: {takes}",
+            unknown.join(" ")
+        )));
+    }
     let a = Reader::new(tool, params);
     let missing = |what: &str| Failure::usage(format!("{name} needs a {what}."));
     match name {
@@ -1055,6 +1094,37 @@ fn call(project: &mut Project, params: &Value) -> Result<String, Failure> {
             outcome_text(project.write(|ctx| ops::save(ctx, p))?)
         }
         other => unreachable!("{other} passed the tool lookup but no arm here handles it"),
+    }
+}
+
+/// `f438`/`d880`: the set `unknown_arguments` checks a call against is
+/// `tool.args`, the same slice `schema` reads to build `inputSchema`'s
+/// `properties` -- one definition, read twice, rather than a second
+/// hand-kept list that could say something else. Walks every tool and
+/// checks the two readings still agree, name for name.
+#[cfg(test)]
+mod unknown_argument_tests {
+    use super::*;
+
+    #[test]
+    fn every_tools_allowed_arguments_match_its_advertised_schema() {
+        for t in TOOLS {
+            let advertised_schema = schema(t);
+            let mut advertised: Vec<&str> = advertised_schema["inputSchema"]["properties"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect();
+            advertised.sort_unstable();
+            let mut declared: Vec<&str> = t.args.iter().map(|a| a.name).collect();
+            declared.sort_unstable();
+            assert_eq!(
+                advertised, declared,
+                "{} advertises a schema that does not match its own args",
+                t.name
+            );
+        }
     }
 }
 
