@@ -1105,6 +1105,14 @@ fn handle(project: &mut Project, line: &str) -> Option<String> {
     }
 }
 
+/// Writes one reply and flushes it, the two calls `serve` used to make
+/// inline. Pulled out only so the two call sites below share one place to
+/// turn a write failure into the `stderr` line `d883` asks for.
+fn write_reply(output: &mut impl Write, reply: &str) -> std::io::Result<()> {
+    writeln!(output, "{reply}")?;
+    output.flush()
+}
+
 pub fn serve(root: PathBuf, located: Option<store::Located>) -> R {
     // Every reply on this channel is JSON-RPC read by a program, never a
     // terminal a person is looking at, even where the harness that spawned
@@ -1123,19 +1131,61 @@ pub fn serve(root: PathBuf, located: Option<store::Located>) -> R {
     store::mark_resident();
     let mut registry = Registry::open(vec![root.clone()], vec![], located.map(|l| (root, l)))?;
     let project = registry.first();
-    let input = std::io::stdin();
+    let stdin = std::io::stdin();
+    let mut input = stdin.lock();
     let mut output = std::io::stdout();
-    for line in input.lock().lines() {
-        let line = line.map_err(Failure::Io)?;
+    // `read_until` instead of `lines()`: `lines()` turns a chunk of bytes
+    // that is not valid UTF-8 into an `InvalidData` error indistinguishable
+    // from a broken pipe, and the old loop let that one bad line end the
+    // whole server (`f882`). A line that fails to parse as JSON already gets
+    // a JSON-RPC error and the loop keeps going in `handle` above; a line
+    // that fails to parse as UTF-8 at all gets the same treatment here
+    // instead of taking the server down with it (`d883`).
+    let mut buf = Vec::new();
+    loop {
+        buf.clear();
+        let read = match input.read_until(b'\n', &mut buf) {
+            Ok(n) => n,
+            Err(e) => {
+                // The reason this server stopped exists nowhere else: this
+                // process is headless, so its own `stderr` is the only place
+                // left where anyone could ever read why, and the client
+                // keeps exactly that stream in its own log (`f882`).
+                eprintln!("vivac mcp: reading from the client failed ({e}), stopping.");
+                return Err(Failure::Io(e));
+            }
+        };
+        if read == 0 {
+            // The client closing its end of the pipe is how this loop is
+            // meant to end, not a failure -- but silence about it is what
+            // `f882` found in a real session, so it gets a line too.
+            eprintln!("vivac mcp: the client closed its end, stopping.");
+            return Ok(());
+        }
+        while matches!(buf.last(), Some(b'\n' | b'\r')) {
+            buf.pop();
+        }
+        let line = match std::str::from_utf8(&buf) {
+            Ok(s) => s,
+            Err(_) => {
+                let reply = rpc_error(&Value::Null, -32700, "that line is not UTF-8");
+                if let Err(e) = write_reply(&mut output, &reply) {
+                    eprintln!("vivac mcp: writing to the client failed ({e}), stopping.");
+                    return Err(Failure::Io(e));
+                }
+                continue;
+            }
+        };
         if line.trim().is_empty() {
             continue;
         }
-        if let Some(reply) = handle(project, &line) {
-            writeln!(output, "{reply}").map_err(Failure::Io)?;
-            output.flush().map_err(Failure::Io)?;
+        if let Some(reply) = handle(project, line) {
+            if let Err(e) = write_reply(&mut output, &reply) {
+                eprintln!("vivac mcp: writing to the client failed ({e}), stopping.");
+                return Err(Failure::Io(e));
+            }
         }
     }
-    Ok(())
 }
 
 /// `t192`: a write used to build a brand new `Ctx` -- store reopened, index
