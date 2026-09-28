@@ -124,3 +124,59 @@ fn force_does_not_reopen_a_node_that_is_not_open() {
         "done --force on a closed node wrote to the log"
     );
 }
+
+/// `done` on a decision still in force (`f177`, `d879`): a decision does not
+/// close by being carried out, it stops standing when another one
+/// supersedes it. `done` refuses, names the way out, and writes nothing.
+#[test]
+fn done_refuses_an_active_decision() {
+    let c = Sandbox::new_seeded("done-active-decision");
+    c.ok(&[
+        "decide",
+        "Keys never live in the tree",
+        "--reason",
+        "a leaked log must not leak a secret",
+        "--root",
+    ]);
+    let log_before = c.log();
+
+    let (out, code) = c.run(&["done", "1", "carried out"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        out.contains(
+            "  d1 is a decision, and a decision stays in force once it is carried\n  \
+             out: done would take it off the decisions every session starts with.\n  \
+             It stops standing when another decision replaces it:\n    \
+             vivac decide \"<what replaces it>\" --reason \"<why>\" --supersedes d1"
+        ),
+        "{out}"
+    );
+    assert_eq!(c.log(), log_before, "the refusal wrote to the log");
+    assert_eq!(why_json(&c, "1")["node"]["state"], "active");
+
+    let brief = c.ok(&["brief"]);
+    assert!(
+        brief.contains("Keys never live in the tree"),
+        "the decision dropped out of STANDING DECISIONS:\n{brief}"
+    );
+}
+
+/// `--force` is for closure conditions, not for this: it does not let
+/// `done` carry an active decision off the standing list either.
+#[test]
+fn force_does_not_let_done_close_an_active_decision() {
+    let c = Sandbox::new_seeded("done-active-decision-forced");
+    c.ok(&[
+        "decide",
+        "Keys never live in the tree",
+        "--reason",
+        "a leaked log must not leak a secret",
+        "--root",
+    ]);
+    let log_before = c.log();
+
+    let (out, code) = c.run(&["done", "1", "carried out", "--force"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("d1 is a decision"), "{out}");
+    assert_eq!(c.log(), log_before, "the refusal wrote to the log");
+}
