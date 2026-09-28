@@ -1497,6 +1497,21 @@ fn close_node(
     force: bool,
     unstack: bool,
 ) -> Result<crate::outcome::Closed, Failure> {
+    // `f562`/`d878`: a node that is not open already has its outcome
+    // recorded, and closing it again would stamp a new one over that. `pop`
+    // never reaches this branch -- it only calls in when the focus is open
+    // -- so this only guards `done`, the other door onto `close_node`.
+    // `--force` is for the closure conditions checked below, not for this:
+    // there is nothing to force, so nothing is written, the same answer
+    // `pop` has given since `d554`.
+    if !n.state.is_open() {
+        return Ok(crate::outcome::Closed {
+            alias: n.alias(),
+            title: n.title(&ctx.tree).to_string(),
+            force,
+            already: Some(n.state.word(n.kind).to_string()),
+        });
+    }
     if !force {
         let pending_count = ctx.tree.open_blockers(n.num);
         if !pending_count.is_empty() {
@@ -1536,6 +1551,11 @@ fn close_node(
     })
 }
 
+/// `done` — close a node, through the closure rule in `close_node`.
+///
+/// `f562`/`d878`: a node that is not open already answers `already <word>,
+/// left as it was` and nothing is written, the check `close_node` itself
+/// makes before touching anything.
 pub fn done(ctx: &mut Ctx, p: params::Done) -> Result<Outcome, Failure> {
     let n = ctx.resolve(&p.id)?.clone();
     guard_text(&[("outcome", &p.outcome)])?;
