@@ -1348,6 +1348,16 @@ pub fn push(ctx: &mut Ctx, p: params::Push) -> Result<Outcome, Failure> {
 /// that: nothing is open to close, so no `state.changed` is written, the
 /// closure rule is never consulted, and `--force` changes nothing. The
 /// `stack.popped` and the vivac are written exactly as they always are.
+///
+/// `f884`/`d885`: a decision still in force is a different case from either
+/// of those, and comes first -- an ACTIVE decision pushed as the focus does
+/// not close on `pop` either, the same rule `d879` gave `done`, applied to
+/// the other door. The stack still steps back, so `pop` is never refused;
+/// only `Body::Popped` is written, no `Body::StateChanged`, and `--force`
+/// changes nothing here either, for the same reason it changes nothing in
+/// `f552`'s branch: there is no closure condition to force past. An outcome
+/// text handed to `pop` would otherwise be silently dropped, so it is kept,
+/// as a note on the decision, in the same `emit` as the `Popped`.
 pub fn pop(ctx: &mut Ctx, p: params::Pop) -> Result<Outcome, Failure> {
     let focus = ctx
         .tree
@@ -1363,10 +1373,29 @@ pub fn pop(ctx: &mut Ctx, p: params::Pop) -> Result<Outcome, Failure> {
     guard_text(&[("outcome", outcome_text), ("next", next)])?;
     let v = vivac(ctx, VivacKind::Pop, next, Some(focus.id.clone()), "");
     // Trap: two separate `emit`s in a row, not one lot like `push` -- one
-    // inside `close_node` (or the bare pop below), one here for the vivac --
-    // and the parent's counts below have to be read only after both, or the
-    // number comes out wrong.
-    let closed = if focus.state.is_open() {
+    // inside `close_node` (or one of the two bare branches below), one here
+    // for the vivac -- and the parent's counts below have to be read only
+    // after both, or the number comes out wrong.
+    let closed = if focus.kind == Kind::Decision && focus.state.is_open() {
+        let note_kept = !outcome_text.is_empty();
+        let mut evs = vec![Body::Popped {
+            node: focus.id.clone(),
+        }];
+        if note_kept {
+            evs.push(Body::NodeNoted {
+                node: focus.id.clone(),
+                note: outcome_text.to_string(),
+            });
+        }
+        ctx.emit(evs)?;
+        outcome::Closed {
+            alias: focus.alias(),
+            title: focus.title(&ctx.tree).to_string(),
+            force: p.force,
+            already: None,
+            still_standing: Some(note_kept),
+        }
+    } else if focus.state.is_open() {
         close_node(ctx, &focus, outcome_text, p.force, true)?
     } else {
         ctx.emit(vec![Body::Popped {
@@ -1377,6 +1406,7 @@ pub fn pop(ctx: &mut Ctx, p: params::Pop) -> Result<Outcome, Failure> {
             title: focus.title(&ctx.tree).to_string(),
             force: p.force,
             already: Some(focus.state.word(focus.kind).to_string()),
+            still_standing: None,
         }
     };
     ctx.emit(vec![v])?;
@@ -1510,6 +1540,7 @@ fn close_node(
             title: n.title(&ctx.tree).to_string(),
             force,
             already: Some(n.state.word(n.kind).to_string()),
+            still_standing: None,
         });
     }
     if !force {
@@ -1548,6 +1579,7 @@ fn close_node(
         title: n.title(&ctx.tree).to_string(),
         force,
         already: None,
+        still_standing: None,
     })
 }
 
