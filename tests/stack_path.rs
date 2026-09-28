@@ -144,6 +144,113 @@ fn a_pop_into_a_superseded_focus_leaves_it_as_it_was() {
     );
 }
 
+/// `f884`/`d885`: `pop` on an ACTIVE decision does not close it either --
+/// the same rule `d879` gave `done`, at the other door. The stack still
+/// steps back, the decision stays `active`, still standing in the brief,
+/// and the log gains a `stack.popped` with no `state.changed` beside it.
+#[test]
+fn pop_on_an_active_decision_leaves_it_standing_off_the_stack() {
+    let c = Sandbox::new_seeded("stack-pop-active-decision");
+    c.ok(&["push", "Base goal", "--why", "root of the branch"]);
+    c.ok(&[
+        "push",
+        "Use short-lived tokens",
+        "--why",
+        "the leak surface is smaller",
+        "--type",
+        "decision",
+    ]);
+    assert_eq!(stack_aliases(&c), vec!["g1", "d2"]);
+    let log_before = c.log();
+
+    let out = c.ok(&["pop"]);
+    assert!(
+        out.contains("d2  Use short-lived tokens  -> off the stack, still standing"),
+        "{out}"
+    );
+    assert!(!out.contains("kept as a note"), "{out}");
+    assert_eq!(stack_aliases(&c), vec!["g1"]);
+
+    let v = why_json(&c, "d2");
+    assert_eq!(v["node"]["state"], "active");
+    assert_eq!(v["node"]["notes"].as_array().unwrap().len(), 0, "{v}");
+
+    let new_log = &c.log()[log_before.len()..];
+    assert!(
+        new_log.contains(r#""type":"stack.popped""#),
+        "no stack.popped event was written:\n{new_log}"
+    );
+    assert!(
+        !new_log.contains(r#""type":"state.changed""#),
+        "pop closed the decision instead of stepping back:\n{new_log}"
+    );
+
+    let brief = c.ok(&["brief"]);
+    assert!(
+        brief.contains("Use short-lived tokens"),
+        "the decision dropped out of STANDING DECISIONS:\n{brief}"
+    );
+}
+
+/// The outcome text `pop` is given would otherwise be dropped on the floor:
+/// it is kept as a note on the decision instead, in the same write.
+#[test]
+fn pop_on_an_active_decision_keeps_the_outcome_as_a_note() {
+    let c = Sandbox::new_seeded("stack-pop-active-decision-note");
+    c.ok(&["push", "Base goal", "--why", "root of the branch"]);
+    c.ok(&[
+        "push",
+        "Use short-lived tokens",
+        "--why",
+        "the leak surface is smaller",
+        "--type",
+        "decision",
+    ]);
+
+    let out = c.ok(&["pop", "rolled out to every service"]);
+    assert!(
+        out.contains(
+            "d2  Use short-lived tokens  -> off the stack, still standing; the outcome is kept as a note"
+        ),
+        "{out}"
+    );
+
+    let v = why_json(&c, "d2");
+    assert_eq!(v["node"]["state"], "active");
+    let notes = v["node"]["notes"].as_array().expect("notes is an array");
+    assert_eq!(notes.len(), 1, "{v}");
+    assert_eq!(notes[0]["note"], "rolled out to every service", "{v}");
+
+    let new_log = &c.log()[..];
+    assert!(new_log.contains(r#""type":"node.noted""#), "{new_log}");
+    assert!(!new_log.contains(r#""type":"state.changed""#), "{new_log}");
+}
+
+/// `--force` is for closure conditions; there is nothing to force past
+/// here, so it changes nothing about how `pop` treats an active decision.
+#[test]
+fn force_does_not_change_pop_on_an_active_decision() {
+    let c = Sandbox::new_seeded("stack-pop-active-decision-forced");
+    c.ok(&["push", "Base goal", "--why", "root of the branch"]);
+    c.ok(&[
+        "push",
+        "Use short-lived tokens",
+        "--why",
+        "the leak surface is smaller",
+        "--type",
+        "decision",
+    ]);
+
+    let out = c.ok(&["pop", "carried out", "--force"]);
+    assert!(
+        out.contains(
+            "d2  Use short-lived tokens  -> off the stack, still standing; the outcome is kept as a note"
+        ),
+        "{out}"
+    );
+    assert_eq!(why_json(&c, "d2")["node"]["state"], "active");
+}
+
 /// `restore` rebuilds a contiguous path from the point's frozen stack: it
 /// starts at the saved node nearest the root that is the deepest still-open
 /// node or one of its ancestors, and reports every closed node still on that

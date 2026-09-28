@@ -1245,6 +1245,38 @@ fn pop_by_mcp_writes_the_same_events_as_pop_by_the_cli() {
     assert_eq!(tree_events(&cli), tree_events(&via_mcp));
 }
 
+/// `f884`/`d885`: `vivac_pop`'s JSON tells a reader this apart from an
+/// ordinary close -- `closed.still_standing` names it, the same shape
+/// `closed.already` already uses for a focus that was not open.
+#[test]
+fn pop_by_mcp_on_an_active_decision_shows_it_did_not_close() {
+    let c = Sandbox::new_seeded("pop-mcp-active-decision");
+    c.ok(&[
+        "push",
+        "Use short-lived tokens",
+        "--why",
+        "the leak surface is smaller",
+        "--type",
+        "decision",
+    ]);
+
+    let mut s = hello(&c);
+    let r = s.ask(
+        r#"{"jsonrpc":"2.0","id":52,"method":"tools/call","params":{"name":"vivac_pop","arguments":{"outcome":"rolled out to every service"}}}"#,
+    );
+    assert_eq!(r["result"]["isError"], false, "{r}");
+    let body: Value = serde_json::from_str(&text_of(&r)).unwrap();
+    assert_eq!(body["closed"]["still_standing"], true, "{body}");
+    assert_eq!(body["closed"]["already"], Value::Null, "{body}");
+    assert!(
+        body["text"]
+            .as_str()
+            .unwrap()
+            .contains("off the stack, still standing; the outcome is kept as a note"),
+        "{body}"
+    );
+}
+
 /// `d776`: `done` closes a node that is not the focus, and without
 /// `force`, the same way the CLI does.
 #[test]

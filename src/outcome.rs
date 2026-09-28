@@ -37,6 +37,13 @@ pub struct Closed {
     /// Always present; `None` for an ordinary close, on both `pop` and
     /// `done`.
     pub already: Option<String>,
+    /// `f884`/`d885`: `pop` reaching an ACTIVE decision does not close it
+    /// either -- only the stack steps back. `Some(note_kept)` marks that
+    /// case, where `note_kept` says whether the outcome text `pop` was given
+    /// survived as a note on the decision instead of being dropped. `None`
+    /// for every other close, on both `pop` and `done`, the same shape as
+    /// `already`.
+    pub still_standing: Option<bool>,
 }
 
 /// `push`'s advice to reconsider the root, past a stack four deep. `MODEL.md`
@@ -316,6 +323,18 @@ fn no_against_lines(out: &mut Vec<String>, alias: &str) {
 }
 
 fn closed_lines(out: &mut Vec<String>, c: &Closed) {
+    if let Some(note_kept) = c.still_standing {
+        // `f884`/`d885`: `pop` on an ACTIVE decision, which never closes it.
+        let mut line = format!(
+            "  {}  {}  -> off the stack, still standing",
+            c.alias, c.title
+        );
+        if note_kept {
+            line.push_str("; the outcome is kept as a note");
+        }
+        out.push(line);
+        return;
+    }
     if let Some(word) = &c.already {
         // `f552` (`t533` §2.2): nothing closed here, so there is nothing to
         // say about `--force` either.
