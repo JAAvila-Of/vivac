@@ -353,15 +353,61 @@ pub fn run(
     );
     outln!("  This folder stays one of its lanes, with its own thread.");
     outln!("  The old log is kept here as .vivac/{RELOCATED_LOG}.");
+    // `f717`/`d874`: the harness to name comes from files already on
+    // `cwd`'s own disk, not from a guess -- a person set up for Codex used
+    // to be told to run `vivac setup claude-code` regardless, sent to
+    // hooks that were never theirs. Read at `cwd`, the origin's own
+    // folder (step 1 already pinned it there), never at `destination`:
+    // the origin is what a harness was actually set up against, and the
+    // destination has nothing of its own yet. When neither marker is
+    // found both commands are still offered, as a choice rather than a
+    // guess at which one applies.
+    let found = detected_setup_words(cwd);
+    let advice_words: Vec<&str> = if found.is_empty() {
+        vec!["claude-code", "codex"]
+    } else {
+        found.clone()
+    };
     outln!("  The new folder holds the tree and answers as a lane of its own. To give");
-    outln!("  it the hooks, the server and the skill:");
-    outln!("    vivac setup claude-code");
+    if found.is_empty() {
+        outln!("  it the hooks, the server and the skill, run the one for your harness:");
+    } else {
+        outln!("  it the hooks, the server and the skill:");
+    }
+    for word in &advice_words {
+        outln!("    vivac setup {word}");
+    }
     outln!("  Restart any session open on this tree.");
     if !marked {
-        outln!("  The moved tree could not be marked from here. Run this in it:");
-        outln!("    vivac setup claude-code");
+        if advice_words.len() == 1 {
+            outln!("  The moved tree could not be marked from here. Run this in it:");
+        } else {
+            outln!("  The moved tree could not be marked from here. Run one of these in it:");
+        }
+        for word in &advice_words {
+            outln!("    vivac setup {word}");
+        }
     }
     Ok(0)
+}
+
+/// `f717`/`d874`: which harness's setup command step 10 names, read from
+/// files a harness itself already wrote at `dir` -- never guessed from
+/// which one happens to be running this process, since `relocate` is a
+/// binary that any harness can invoke the same way. Two independent
+/// checks rather than one, because a folder can carry both, and neither
+/// crowds the other out. Claude Code first, then Codex, when both are
+/// found (`d874`'s own order); an empty list means neither is, and `run`
+/// falls back to naming both as a choice.
+fn detected_setup_words(dir: &Path) -> Vec<&'static str> {
+    let mut words = Vec::new();
+    if dir.join(".claude").join("settings.json").is_file() {
+        words.push("claude-code");
+    }
+    if dir.join(".codex").join("hooks.json").is_file() {
+        words.push("codex");
+    }
+    words
 }
 
 /// The refusal step 4 raises for a move made from a copy: this folder

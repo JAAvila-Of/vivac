@@ -733,6 +733,9 @@ fn relocate_into_a_subfolder_of_the_origin_is_refused() {
 /// lane of its own -- `relocate` gives it that identity itself, rather
 /// than leaving it in the no-lane-file limbo that used to fall to the
 /// implicit `main` rule -- and the success text has to say so up front.
+/// This sandbox carries no harness marker at all, which is `f717`/`d874`'s
+/// "neither detected" case: both commands are named, and the lead line
+/// asks the reader to pick their own instead of naming one for them.
 #[test]
 fn the_success_text_says_the_new_folder_answers_as_a_lane_of_its_own() {
     let c = Sandbox::new_seeded("reloc-print");
@@ -745,8 +748,67 @@ fn the_success_text_says_the_new_folder_answers_as_a_lane_of_its_own() {
         &out,
         "The new folder holds the tree and answers as a lane of its own. To give"
     ));
-    assert!(says(&out, "it the hooks, the server and the skill:"));
+    assert!(says(
+        &out,
+        "it the hooks, the server and the skill, run the one for your harness:"
+    ));
+    assert!(says(&out, "vivac setup claude-code vivac setup codex"));
+
+    std::fs::remove_dir_all(&dest).ok();
+}
+
+/// `f717`/`d874`: the harness named in the advice comes from what is
+/// actually on disk at the origin, not a hardcoded guess. Only a Claude
+/// Code marker here, so only `vivac setup claude-code` is named.
+#[test]
+fn a_claude_code_marker_at_the_origin_names_only_that_harness() {
+    let c = Sandbox::new_seeded("reloc-harness-claude");
+    c.ok(&["push", "a goal", "--why", "seed"]);
+    std::fs::create_dir_all(c.0.join(".claude")).unwrap();
+    std::fs::write(c.0.join(".claude").join("settings.json"), "{}").unwrap();
+    let dest = sibling_dir(&c, "harness-claude");
+
+    let (out, code) = c.run(&["relocate", dest.to_str().unwrap()]);
+    assert_eq!(code, 0, "{out}");
     assert!(says(&out, "vivac setup claude-code"));
+    assert!(!says(&out, "vivac setup codex"));
+
+    std::fs::remove_dir_all(&dest).ok();
+}
+
+/// `f717`/`d874`'s other harness: only a Codex marker here, so only
+/// `vivac setup codex` is named and `claude-code` is not.
+#[test]
+fn a_codex_marker_at_the_origin_names_only_that_harness() {
+    let c = Sandbox::new_seeded("reloc-harness-codex");
+    c.ok(&["push", "a goal", "--why", "seed"]);
+    std::fs::create_dir_all(c.0.join(".codex")).unwrap();
+    std::fs::write(c.0.join(".codex").join("hooks.json"), "{}").unwrap();
+    let dest = sibling_dir(&c, "harness-codex");
+
+    let (out, code) = c.run(&["relocate", dest.to_str().unwrap()]);
+    assert_eq!(code, 0, "{out}");
+    assert!(says(&out, "vivac setup codex"));
+    assert!(!says(&out, "vivac setup claude-code"));
+
+    std::fs::remove_dir_all(&dest).ok();
+}
+
+/// Both markers at the origin: both commands are named, claude-code
+/// first (`d874`'s own order).
+#[test]
+fn both_harness_markers_at_the_origin_name_both_with_claude_code_first() {
+    let c = Sandbox::new_seeded("reloc-harness-both");
+    c.ok(&["push", "a goal", "--why", "seed"]);
+    std::fs::create_dir_all(c.0.join(".claude")).unwrap();
+    std::fs::write(c.0.join(".claude").join("settings.json"), "{}").unwrap();
+    std::fs::create_dir_all(c.0.join(".codex")).unwrap();
+    std::fs::write(c.0.join(".codex").join("hooks.json"), "{}").unwrap();
+    let dest = sibling_dir(&c, "harness-both");
+
+    let (out, code) = c.run(&["relocate", dest.to_str().unwrap()]);
+    assert_eq!(code, 0, "{out}");
+    assert!(says(&out, "vivac setup claude-code vivac setup codex"));
 
     std::fs::remove_dir_all(&dest).ok();
 }
