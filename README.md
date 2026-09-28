@@ -120,9 +120,10 @@ are.
 </picture>
 
 Logbooks, decision records, issue trackers and session memory for agents all
-store the **node**. None of them stores the **edge**.
-[Where it sits](docs/POSITION.md) goes through them category by category, and
-says where each one is better than this.
+store the **node**. Where one of them stores the **edge** as well, it is a link
+somebody has to remember to add — so it is missing on exactly the node where
+nobody thought it would matter. [Where it sits](docs/POSITION.md) goes through
+them category by category, and says where each one is better than this.
 
 ---
 
