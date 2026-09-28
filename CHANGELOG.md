@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.1](https://github.com/JAAvila-Of/vivac/compare/v0.16.0...v0.16.1) - 2026-09-28
+
+### Fixed
+
+- *(relocate)* name the setup for the harness the folder already uses ([#197](https://github.com/JAAvila-Of/vivac/pull/197))
+
 ## [0.16.0](https://github.com/JAAvila-Of/vivac/compare/v0.15.11...v0.16.0) - 2026-09-27
 
 ### Upgrading
