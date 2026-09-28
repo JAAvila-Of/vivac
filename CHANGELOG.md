@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.17.0](https://github.com/JAAvila-Of/vivac/compare/v0.16.1...v0.17.0) - 2026-09-28
 
+### Upgrading
+
+- **`vivac done` refuses a decision that is still in force.** A decision keeps
+  governing once it is carried out, and `done` used to take it off the
+  standing decisions every session starts with, without a word. It now exits
+  `1`, writes nothing, and names `vivac decide ... --supersedes <id>`, which
+  is how a decision stops standing. `--force` does not change this. A script
+  that closed decisions with `done` has to supersede them instead.
+- **`vivac pop` on a decision still in force takes it off the stack without
+  closing it.** The stack steps back to the parent as before, the decision
+  stays standing, the line says `off the stack, still standing`, and an
+  outcome given to `pop` is kept as a note on it. The MCP `vivac_pop` result
+  carries `still_standing`.
+- **An MCP tool call with an argument the tool does not take is refused**,
+  with `isError` and nothing written, where it used to be ignored. The
+  refusal names the argument and lists the ones the tool takes, the way the
+  CLI answers an unknown flag.
+
 ### Fixed
 
 - *(mcp)* [**breaking**] refuse an argument a tool does not take ([#200](https://github.com/JAAvila-Of/vivac/pull/200))
