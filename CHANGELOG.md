@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0](https://github.com/JAAvila-Of/vivac/compare/v0.16.1...v0.17.0) - 2026-09-28
+
+### Fixed
+
+- *(mcp)* [**breaking**] refuse an argument a tool does not take ([#200](https://github.com/JAAvila-Of/vivac/pull/200))
+- *(mcp)* survive a line that is not UTF-8, and say why the server stops ([#201](https://github.com/JAAvila-Of/vivac/pull/201))
+- *(pop)* [**breaking**] take a standing decision off the stack without closing it
+- *(done)* [**breaking**] refuse to close a decision that is still in force
+- *(done)* leave a node that is already closed as it was
+
+### Internal
+
+- *(registry)* assert what the registry promises under contention ([#202](https://github.com/JAAvila-Of/vivac/pull/202))
+
 ## [0.16.1](https://github.com/JAAvila-Of/vivac/compare/v0.16.0...v0.16.1) - 2026-09-28
 
 ### Fixed
