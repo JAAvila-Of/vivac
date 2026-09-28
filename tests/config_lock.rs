@@ -91,7 +91,12 @@ fn ordinary_writes_never_change_the_config() {
     c.ok(&["decide", "A call", "--reason", "because"]);
     c.ok(&["note", "a note on the focus"]);
     c.ok(&["park", "2", "parked for later"]);
-    c.ok(&["done", "3", "wrapped up"]);
+    // `f177`/`d879`: `done` on a decision still in force is refused rather
+    // than run, so this closes the finding it added above instead of `3`,
+    // the decision -- the sequence still touches every op, and the decision
+    // stays open the way it now must.
+    c.ok(&["add", "A task to close", "--why", "needs doing"]);
+    c.ok(&["done", "4", "wrapped up"]);
     c.ok(&["pop", "closing the run"]);
     assert_eq!(
         before,

@@ -1262,6 +1262,32 @@ fn done_by_mcp_writes_the_same_events_as_done_by_the_cli() {
     assert_eq!(tree_events(&cli), tree_events(&via_mcp));
 }
 
+/// `f177`/`d879`: `vivac_done` refuses a decision still in force the same
+/// way the CLI does, with the same text, and writes nothing.
+#[test]
+fn done_by_mcp_refuses_an_active_decision() {
+    let c = Sandbox::new_seeded("done-mcp-active-decision");
+    c.ok(&[
+        "decide",
+        "Keys never live in the tree",
+        "--reason",
+        "a leaked log must not leak a secret",
+        "--root",
+    ]);
+    let log_before = c.log();
+
+    let mut s = hello(&c);
+    let r = s.ask(
+        r#"{"jsonrpc":"2.0","id":51,"method":"tools/call","params":{"name":"vivac_done","arguments":{"id":"1","outcome":"carried out"}}}"#,
+    );
+    assert_eq!(r["result"]["isError"], true, "{r}");
+    assert!(
+        text_of(&r).contains("d1 is a decision, and a decision stays in force once it is carried"),
+        "{r}"
+    );
+    assert_eq!(c.log(), log_before, "the refusal wrote to the log");
+}
+
 #[test]
 fn add_by_mcp_writes_the_same_events_as_add_by_the_cli() {
     let cli = Sandbox::new_seeded("add-cli");

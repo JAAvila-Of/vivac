@@ -1556,9 +1556,27 @@ fn close_node(
 /// `f562`/`d878`: a node that is not open already answers `already <word>,
 /// left as it was` and nothing is written, the check `close_node` itself
 /// makes before touching anything.
+///
+/// `f177`/`d879`: a decision still in force is a second, earlier refusal,
+/// and lives here rather than in `close_node` -- it is `done`'s own rule,
+/// not the closure rule `pop` also runs. A decision does not close by being
+/// carried out; it keeps standing until another one names it in
+/// `--supersedes`. Closing it here would drop it from the standing list the
+/// brief hands every session without anyone asking for that, the way it did
+/// before this was caught. `--force` does not reach this either: there is no
+/// closure condition to force past, only a state that never closes this way.
 pub fn done(ctx: &mut Ctx, p: params::Done) -> Result<Outcome, Failure> {
     let n = ctx.resolve(&p.id)?.clone();
     guard_text(&[("outcome", &p.outcome)])?;
+    if n.kind == Kind::Decision && n.state.is_open() {
+        let alias = n.alias();
+        return Err(Failure::Model(format!(
+            "  {alias} is a decision, and a decision stays in force once it is carried\n  \
+             out: done would take it off the decisions every session starts with.\n  \
+             It stops standing when another decision replaces it:\n    \
+             vivac decide \"<what replaces it>\" --reason \"<why>\" --supersedes {alias}"
+        )));
+    }
     let closed = close_node(ctx, &n, &p.outcome, p.force, true)?;
     Ok(Outcome::Done { closed })
 }
