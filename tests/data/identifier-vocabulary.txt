@@ -378,6 +378,7 @@ container
 containing
 contains
 content
+contention
 contents
 contexts
 continuation
@@ -810,6 +811,7 @@ headers
 heading
 headings
 heads
+heals
 healthy
 heard
 heaviest
@@ -1026,7 +1028,6 @@ looks
 loop
 loopback
 loose
-lose
 lossy
 lost
 low
