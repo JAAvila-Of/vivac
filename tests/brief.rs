@@ -196,6 +196,31 @@ fn initial_state() {
     assert!(b.contains("OPEN GOALS") || b.contains("focus"), "{b}");
 }
 
+/// `f911`: a freshly planted tree tells the agent it does not yet hold what
+/// the project knows, and names the skill that brings it in -- in the
+/// brief the agent reads before its first write, not only in the terminal
+/// `setup` closed in. Once anything is in the tree the lines go: by then
+/// they are noise.
+#[test]
+fn an_empty_tree_names_the_migrate_skill_until_something_lands() {
+    let c = Sandbox::new_seeded("empty-tree-migrate");
+    let lines = " Empty tree: it does not yet hold what this project already knows.\n The vivac-migrate skill brings that in, after the person says yes.\n Start with:  vivac push \"<title>\" --why \"<reason>\"";
+    let b = c.ok(&["brief"]);
+    assert!(b.contains(lines), "{b}");
+    let (h, code) = c.run_stdin(&["session", "start", "--hook"], "{}");
+    assert_eq!(code, 0, "{h}");
+    assert!(h.contains(lines), "the hook brief lost them:\n{h}");
+
+    c.ok(&["push", "A goal", "--why", "it is needed"]);
+    let b = c.ok(&["brief"]);
+    assert!(!b.contains("vivac-migrate"), "{b}");
+
+    c.ok(&["park", "unfinished"]);
+    let b = c.ok(&["brief"]);
+    assert!(b.contains("No active focus."), "{b}");
+    assert!(!b.contains("vivac-migrate"), "{b}");
+}
+
 /// §10.8 — No empty section emits a heading.
 #[test]
 fn no_hollow_headings() {

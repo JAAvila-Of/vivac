@@ -541,10 +541,13 @@ fn a_real_session_identifier_passes_through_untouched() {
 /// the real rendering rather than against this constant.
 const CAPTURE_SEAMS_BLOCK: &str = "\n WRITE AT THESE SEAMS\n  Look first: vivac find \"<words>\". Work the tree already holds goes under\n  its node, never into a second one. The focus above is where work was\n  left, maybe not by you: hang new work from what it continues.\n  Write before you answer: what you tell the person goes in the tree first.\n  new line of work     vivac push \"<title>\" --why \"<why>\" --parent <id>\n                       or --root, when it continues nothing in the tree\n  a choice is settled  vivac decide \"<t>\" --reason \"<r>\" --alternative \"<x>\"\n  you report findings  vivac add \"<t>\" --type finding --why \"<where>\"\n                       as you tell the person, one for each thing found\n                       asks nothing? close it: vivac done <id> \"Record: ...\"\n  told \"not now\"       vivac park <id> \"<their words>\"\n                       nothing to park yet? vivac add it, then park it\n  changed outside git  vivac note <id> \"<what changed, where>\"\n                       CI, a tracker, the cloud: the tree is its only record\n  the work is done     vivac pop \"<outcome>\"\n                       and again if that settles the node it returns to\n  Or the same moves through the vivac_* tools.\n";
 
-/// Test (a): the hook's own brief carries the block, exactly.
+/// Test (a): the hook's own brief carries the block, exactly. With a focus:
+/// the block's head speaks of the focus above, and `f912` keeps that
+/// sentence for a brief that has one.
 #[test]
 fn the_hook_brief_names_the_capture_seams() {
     let c = Sandbox::new_seeded("capture-seams-hook");
+    c.ok(&["push", "A goal", "--why", "it is needed"]);
     let (s, code) = c.run_stdin(&["session", "start", "--hook"], "{}");
     assert_eq!(code, 0, "{s}");
     assert!(
@@ -558,6 +561,25 @@ fn the_hook_brief_names_the_capture_seams() {
     assert!(
         block_at < footer_at,
         "the block did not land ahead of the footer:\n{s}"
+    );
+}
+
+/// `f912`: with no focus there is no focus above, so the head leaves out
+/// the sentence about it and keeps the rest, byte for byte.
+#[test]
+fn with_no_focus_the_capture_seams_leave_out_the_focus_above() {
+    let c = Sandbox::new_seeded("capture-seams-no-focus");
+    let (s, code) = c.run_stdin(&["session", "start", "--hook"], "{}");
+    assert_eq!(code, 0, "{s}");
+    assert!(s.contains("No active focus."), "{s}");
+    assert!(
+        !s.contains("focus above"),
+        "a brief with no focus spoke of the focus above:\n{s}"
+    );
+    let head = "\n WRITE AT THESE SEAMS\n  Look first: vivac find \"<words>\". Work the tree already holds goes under\n  its node, never into a second one.\n  Write before you answer: what you tell the person goes in the tree first.\n  new line of work     vivac push";
+    assert!(
+        s.contains(head),
+        "the head without its focus sentence is not the approved text:\n{s}"
     );
 }
 
