@@ -100,6 +100,13 @@ struct Tool {
     /// audience outside it, which the DX pillar refuses by name. The test
     /// `every_tool_is_a_command_the_cli_already_has` keeps the two honest.
     name: &'static str,
+    /// What a client shows a person in place of `name` (MCP `title`).
+    title: &'static str,
+    /// Whether it only reads. Every other tool appends to the log, so
+    /// `schema` derives the rest of the annotations from this one bit: none
+    /// destroys anything, none is safe to repeat, and none leaves the
+    /// machine (`f897`).
+    read_only: bool,
     description: &'static str,
     args: &'static [Arg],
 }
@@ -111,6 +118,8 @@ struct Tool {
 const TOOLS: &[Tool] = &[
     Tool {
         name: "vivac_brief",
+        title: "Brief: where you are and what not to touch",
+        read_only: true,
         description: "Where you are in this project and what NOT to touch right now: \
                       the focus with its lineage, the parked nodes with the reason each \
                       was parked for, the decisions that still govern, and the last safe \
@@ -120,6 +129,8 @@ const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "vivac_find",
+        title: "Find nodes by their words",
+        read_only: true,
         description: "Search the provenance tree. Returns every node whose title, reason, \
                       note or outcome contains all of the terms, best first, each with \
                       the lineage it hangs from. Ranking is not recency: a hit in the \
@@ -144,6 +155,8 @@ const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "vivac_why",
+        title: "Why a node exists",
+        read_only: true,
         description: "Why a node exists: the chain from the goal down to it, what is open \
                       in parallel, what was born from it, and what blocks it from closing. \
                       This is the question the whole tool exists to answer. Open siblings \
@@ -177,13 +190,21 @@ const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "vivac_open",
-        description: "The open fronts of this project, each with its lineage: what is \
-                      actually unfinished, rather than everything that was ever written \
-                      down.",
+        title: "List the open fronts",
+        read_only: true,
+        description: "List what is still unfinished in this project: every open node \
+                      with nothing open under it, the ones that block their parent first, \
+                      then those holding up the most tree, then the newest. Each comes \
+                      back as its alias, kind, state, title and the aliases above it; \
+                      vivac_why on an alias brings the rest. Use it to answer what is \
+                      left or what is waiting. For where this session stands, read \
+                      vivac_brief; to look for something by its words, vivac_find.",
         args: &[],
     },
     Tool {
         name: "vivac_rules",
+        title: "Pillars, rules and invariants",
+        read_only: true,
         description: "What governs this project: every pillar, the rules under each \
                       pillar and those without one, and the invariants. A pillar's \
                       title names it and says what it rejects, in the project's own \
@@ -202,6 +223,8 @@ const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "vivac_push",
+        title: "Open a node and step into it",
+        read_only: false,
         description: "Open a node and step into it: it becomes the focus, and everything \
                       captured next hangs from it until a matching pop. Call it the moment \
                       a new line of work starts or forks away from the current one -- a \
@@ -303,6 +326,8 @@ const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "vivac_pop",
+        title: "Close the focus and step back",
+        read_only: false,
         description: "Close the current focus and step back to its parent, recording what \
                       came of it. Call it once the work `vivac_push` opened is actually \
                       finished, not on a whim to clear the stack: a node with open closure \
@@ -336,6 +361,8 @@ const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "vivac_done",
+        title: "Close a node that is not the focus",
+        read_only: false,
         description: "Close a node that is not the focus, recording what came of it. \
                       Call it right after writing a lesson or a measurement that asks \
                       nothing of anyone -- a record, whose outcome starts with Record: \
@@ -360,6 +387,8 @@ const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "vivac_add",
+        title: "File a node without moving the focus",
+        read_only: false,
         description: "File a node without touching the stack: the focus stays exactly \
                       where it was. Use it for something that belongs in the tree but is \
                       not the next thing about to happen -- a finding surfaced while \
@@ -454,6 +483,8 @@ const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "vivac_decide",
+        title: "Record a decision",
+        read_only: false,
         description: "Record a decision, with the reason it was made and every alternative \
                       that lost. Call it the moment a choice is actually settled, not \
                       before and not long after: the alternatives are optional in the \
@@ -533,10 +564,14 @@ const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "vivac_note",
+        title: "Attach a fact to a node",
+        read_only: false,
         description: "Attach a fact to a node without changing its state or the stack: \
                       something worth keeping that is not itself a new node. Call it \
                       beside `vivac_push` and `vivac_pop` for anything that would otherwise \
-                      only live in a chat transcript nobody rereads.",
+                      only live in a chat transcript nobody rereads. When the fact deserves \
+                      to be found on its own -- a finding, a measurement -- file it as a \
+                      node with `vivac_add` instead.",
         args: &[
             Arg {
                 name: "note",
@@ -554,6 +589,8 @@ const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "vivac_park",
+        title: "Park a node: not now",
+        read_only: false,
         description: "Suspend a node without abandoning it: it drops off the stack and \
                       becomes something a later session is told not to touch. Call it \
                       when the person says not now, or when work is stuck on something \
@@ -579,10 +616,17 @@ const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "vivac_save",
-        description: "A deliberate safe stop: a label for this point and what was about to \
-                      happen next, so a session that picks the thread back up -- this one \
-                      later, or someone else's -- starts exactly where this one left off \
-                      instead of guessing from the log.",
+        title: "Record a safe stop",
+        read_only: false,
+        description: "Record a safe stop: a label for this point and what was about to \
+                      happen next. Each call adds a new stop and never replaces an earlier \
+                      one, and it neither moves the focus nor closes anything. The latest \
+                      stop is what vivac_brief shows as the last one, so a session that \
+                      picks the thread back up -- this one later, or someone else's -- \
+                      starts where this one left off instead of guessing from the log. \
+                      Call it at a clean seam: before the session ends, before a long \
+                      pause or a handoff, or when the person asks for a safe point. To \
+                      set a node aside, vivac_park; to keep a fact on one, vivac_note.",
         args: &[
             Arg {
                 name: "label",
@@ -600,6 +644,8 @@ const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "vivac_arm",
+        title: "Record the command that verifies a rule",
+        read_only: false,
         description: "Record a command that verifies a rule and the folder it runs in, or \
                       with off, remove one. vivac never runs it: it hands it to whoever \
                       checks the rule. Call it the moment a test for a rule exists, \
@@ -637,11 +683,17 @@ const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "vivac_declare",
+        title: "Record what a decision was judged against",
+        read_only: false,
         description: "Record, after the fact, the pillars or rules a decision was judged \
                       against, each with a sentence. Call it the moment the judging \
                       happens -- someone asks whether a decision holds against a rule, \
                       and it gets checked -- because when a decision was judged is part \
-                      of its history, and this one shows as late.",
+                      of its history, and this one shows as late. It only adds to a \
+                      decision that already exists, and declaring the same rule again \
+                      replaces its sentence. A new decision takes what it was judged \
+                      against when it is recorded, through `vivac_decide`; `vivac_rules` \
+                      lists the pillars and rules there are.",
         args: &[
             Arg {
                 name: "id",
@@ -684,14 +736,24 @@ fn schema(t: &Tool) -> Value {
             required.push(a.name);
         }
     }
+    let mut annotations = json!({
+        "readOnlyHint": t.read_only,
+        "destructiveHint": false,
+        "openWorldHint": false,
+    });
+    if !t.read_only {
+        annotations["idempotentHint"] = json!(false);
+    }
     json!({
         "name": t.name,
+        "title": t.title,
         "description": t.description,
         "inputSchema": {
             "type": "object",
             "properties": Value::Object(properties),
             "required": required,
         },
+        "annotations": annotations,
     })
 }
 
