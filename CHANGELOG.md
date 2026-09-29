@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.2](https://github.com/JAAvila-Of/vivac/compare/v0.17.1...v0.17.2) - 2026-09-29
+
+### Added
+
+- *(mcp)* say what each tool does to the tree, and when to reach for it ([#209](https://github.com/JAAvila-Of/vivac/pull/209))
+
+### Internal
+
+- *(release)* publish each release to the MCP Registry ([#207](https://github.com/JAAvila-Of/vivac/pull/207))
+
 ## [0.17.1](https://github.com/JAAvila-Of/vivac/compare/v0.17.0...v0.17.1) - 2026-09-28
 
 ### Documentation
