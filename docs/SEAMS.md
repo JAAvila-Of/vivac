@@ -38,6 +38,9 @@ point, what not to touch. It ends with the seams, one line each with the
 command for it, and that block is printed by the binary, so it cannot fall
 behind the version you have installed. It arrives again after a compaction,
 which is when whatever the agent was told earlier has just been thrown away.
+While the tree is still empty, the brief also tells the agent that the tree
+does not yet hold what the project knows, and names the skill that
+[brings it in](MIGRATING.md) once you say yes.
 
 You see none of it and nothing is asked of you. `vivac brief` shows you what
 it read.

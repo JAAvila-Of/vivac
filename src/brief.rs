@@ -327,6 +327,11 @@ fn no_focus_block(a: &Tree) -> Vec<String> {
 
     v.push(String::new());
     if a.is_empty_tree() {
+        // `f911`: `setup` gives this advice to the person, once, in the
+        // terminal it closes in; the agent's first brief is the one place
+        // it reaches the agent before its first write empties the case.
+        v.push(" Empty tree: it does not yet hold what this project already knows.".to_string());
+        v.push(" The vivac-migrate skill brings that in, after the person says yes.".to_string());
         v.push(" Start with:  vivac push \"<title>\" --why \"<reason>\"".to_string());
     } else if let Some(first) = goals.first() {
         v.push(format!(" Pick up with:  vivac focus {}", first.alias()));
@@ -884,6 +889,15 @@ const CAPTURE_SEAMS_HEAD: &[&str] = &[
     "  Write before you answer: what you tell the person goes in the tree first.",
 ];
 
+/// [`CAPTURE_SEAMS_HEAD`] for a brief with no focus (`f912`): there is no
+/// focus above to hang from, so the sentence about it goes and the rest
+/// stays word for word.
+const CAPTURE_SEAMS_HEAD_NO_FOCUS: &[&str] = &[
+    "  Look first: vivac find \"<words>\". Work the tree already holds goes under",
+    "  its node, never into a second one.",
+    "  Write before you answer: what you tell the person goes in the tree first.",
+];
+
 /// The capture seams (`d738`, `d757`): one row per place work is supposed to
 /// land, its label, the CLI shown for it, the hint lines under that row --
 /// zero, one or two of them -- and the MCP tool that does the same thing.
@@ -943,15 +957,21 @@ const CAPTURE_SEAMS: &[(&str, &str, &[&str], &str)] = &[
 /// two spaces, from the table itself, so a longer label added later keeps
 /// the columns lined up rather than needing a hand-picked width kept in
 /// step by hand; a row's own hint, when it has one, is indented to that
-/// same column.
-fn capture_seams_block() -> Vec<String> {
+/// same column. `has_focus` picks the head: [`CAPTURE_SEAMS_HEAD`] speaks
+/// of the focus above, which only a brief with a focus has.
+fn capture_seams_block(has_focus: bool) -> Vec<String> {
     let width = CAPTURE_SEAMS
         .iter()
         .map(|(label, _, _, _)| label.chars().count())
         .max()
         .unwrap_or(0)
         + 2;
-    let mut body: Vec<String> = CAPTURE_SEAMS_HEAD.iter().map(|l| l.to_string()).collect();
+    let head = if has_focus {
+        CAPTURE_SEAMS_HEAD
+    } else {
+        CAPTURE_SEAMS_HEAD_NO_FOCUS
+    };
+    let mut body: Vec<String> = head.iter().map(|l| l.to_string()).collect();
     for (label, command, hints, _) in CAPTURE_SEAMS {
         body.push(format!("  {label:<width$}{command}"));
         for hint in hints.iter() {
@@ -1380,7 +1400,7 @@ pub fn to_text(
     // block that tells an agent when to write would be worse than the
     // brief running long.
     if for_hook {
-        s.push(Section::fixed(capture_seams_block()));
+        s.push(Section::fixed(capture_seams_block(focus.is_some())));
     }
 
     emit(s, budget, a)
