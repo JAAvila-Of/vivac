@@ -12,7 +12,7 @@
 use crate::anchor::AnchorRef;
 use crate::args::Args;
 use crate::brief::clip;
-use crate::event::{Body, Event, Kind, State, WhereRepo};
+use crate::event::{Body, Event, Flag, Kind, State, WhereRepo};
 use crate::failure::{Failure, R};
 use crate::model::{Aggregates, Node, Tree, Vivac, Where};
 use crate::output::outln;
@@ -2098,6 +2098,141 @@ pub fn parked(a: &Tree, args: &Args) -> R {
             outln!("{}", style::dim(out, &marker));
         }
     }
+    outln!();
+    Ok(())
+}
+
+/// `flagged` — every flag on open work, and the reviews still to come. `d909`:
+/// the one place that lists them, since `why` does not show flags and the
+/// brief only reaches the ones near the path.
+///
+/// Three groups, each headed the way `parked` heads its own and left out
+/// when empty: what is flagged now, the reviews whose day has come, and the
+/// ones still asleep. A node with a due review and a `suspect` appears in
+/// both of the first two, once per group, with only its own marks under
+/// each. Against the real local date, like `parked` and for the same
+/// reason -- there is no `--now` on a plain read (`d906`).
+pub fn flagged(a: &Tree, args: &Args) -> R {
+    let ag = &a.aggregates();
+    let mut flagged_nodes: Vec<&Node> = a
+        .nodes_iter()
+        .filter(|n| n.state.is_open() && !n.flags.is_empty())
+        .collect();
+    flagged_nodes.sort_by_key(|n| n.num);
+    let today = crate::clock::today_local();
+    if args.has("json") {
+        return print_json(json!(flagged_nodes
+            .iter()
+            .map(|n| {
+                let mut v = json_node(a, ag, n);
+                v["flags"] = json!(n
+                    .flags
+                    .iter()
+                    .map(|(&flag, &reason)| {
+                        let on = if flag == Flag::Review {
+                            n.review_on(a)
+                        } else {
+                            None
+                        };
+                        json!({
+                            "flag": flag.word(),
+                            "reason": a.text(reason),
+                            "on": on,
+                            "due": flag == Flag::Review && n.review_due(a, &today),
+                        })
+                    })
+                    .collect::<Vec<_>>());
+                v
+            })
+            .collect::<Vec<_>>()));
+    }
+    if flagged_nodes.is_empty() {
+        outln!("  Nothing flagged.");
+        return Ok(());
+    }
+    let out = Stream::Out;
+    let cap = style::width(out).map(|w| w.saturating_sub(1));
+    let indent = " ".repeat(9);
+    // One group: its heading and count, then per node the title row and
+    // whatever lines `lines` gives it. `lines` returns nothing for a node
+    // that has no marks in this group, and that node is not listed.
+    let group = |heading: &str, lines: &dyn Fn(&Node) -> Vec<String>| {
+        let rows: Vec<(&Node, Vec<String>)> = flagged_nodes
+            .iter()
+            .map(|&n| (n, lines(n)))
+            .filter(|(_, l)| !l.is_empty())
+            .collect();
+        if rows.is_empty() {
+            return;
+        }
+        outln!();
+        outln!(
+            "  {}",
+            style::bold(out, &format!("{heading} ({})", rows.len()))
+        );
+        outln!();
+        for (n, lines) in rows {
+            let alias = n.alias();
+            let alias_field = format!(
+                "{}{}",
+                style::kind_id(out, n.kind, &alias),
+                " ".repeat(6usize.saturating_sub(alias.chars().count()))
+            );
+            print_title_row(
+                &format!("  {alias_field} "),
+                &indent,
+                9,
+                n.title(a),
+                cap,
+                |chunk| chunk.to_string(),
+                TitleSuffix { text: "", len: 0 },
+            );
+            for l in lines {
+                outln!("{}", style::dim(out, &l));
+            }
+        }
+    };
+    group("FLAGGED", &|n| {
+        let due = n.review_due(a, &today);
+        n.live_flags(a, &today)
+            .filter(|(flag, _)| !(due && *flag == Flag::Review))
+            .flat_map(|(flag, reason)| {
+                wrap(
+                    &format!("{}: {}", flag.word(), a.text(reason)),
+                    WIDTH,
+                    "         ",
+                )
+            })
+            .collect()
+    });
+    group("DUE FOR REVIEW", &|n| {
+        if !n.review_due(a, &today) {
+            return Vec::new();
+        }
+        let mut v = match n.flags.get(&Flag::Review) {
+            Some(&reason) => wrap(a.text(reason), WIDTH, "         "),
+            None => Vec::new(),
+        };
+        v.push(format!(
+            "         since {}",
+            n.review_on(a).unwrap_or_default()
+        ));
+        v
+    });
+    group("REVIEW LATER", &|n| {
+        if !n.review_asleep(a, &today) {
+            return Vec::new();
+        }
+        let mut v = match n.flags.get(&Flag::Review) {
+            Some(&reason) => wrap(a.text(reason), WIDTH, "         "),
+            None => Vec::new(),
+        };
+        v.push(format!(
+            "         on {}",
+            n.review_on(a).unwrap_or_default()
+        ));
+        v
+    });
     outln!();
     Ok(())
 }

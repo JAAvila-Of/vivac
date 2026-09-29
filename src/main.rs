@@ -94,6 +94,7 @@ const USAGE: &str = r#"vivac - provenance of work
           [--ref R] [--governs G]
           [--against "r12: <why>"]  what it was judged against; repeat it
     vivac flag <id> suspect|review|stale --why "<reason>"  [--off]
+          [--on YYYY-MM-DD]  review only: it sleeps until that date
 
   Safe stops
 
@@ -119,6 +120,7 @@ const USAGE: &str = r#"vivac - provenance of work
                                               --lanes: every folder of this
                                               product, and what it is on
     vivac parked                              DO NOT TOUCH NOW
+    vivac flagged                             every flag, and the reviews to come
     vivac rules                               the pillars, rules and invariants
                                               that govern this project
     vivac triage                              what can be pruned, and with what
@@ -250,6 +252,7 @@ const COMMANDS: &[&str] = &[
     "find",
     "stack",
     "parked",
+    "flagged",
     "rules",
     "triage",
     "reconcile",
@@ -512,7 +515,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
             "against",
             "root",
         ],
-        "flag" => &["why", "off"],
+        "flag" => &["why", "off", "on"],
         "save" => &["next"],
         // The brief does not speak JSON, and that is a decision and not a
         // gap: the shape would have to be designed, it has no consumer
@@ -563,7 +566,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         // stack, not only this folder's, is nothing the other reads in
         // this arm take.
         "stack" => &["json", "lanes"],
-        "parked" | "triage" | "stats" | "vivacs" | "rules" => &["json"],
+        "parked" | "flagged" | "triage" | "stats" | "vivacs" | "rules" => &["json"],
         // `--gates` is its own on top of `--json`: the machine-wide scan
         // `d351` adds is nothing the other reads in this arm take.
         "check" => &["json", "gates"],
@@ -983,6 +986,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         "find" => render::find(&ctx.tree, a),
         "stack" => render::stack(&ctx.tree, &ctx.store.root, a),
         "parked" => render::parked(&ctx.tree, a),
+        "flagged" => render::flagged(&ctx.tree, a),
         "triage" => render::triage(&ctx.tree, a),
         "reconcile" => reconcile::reconcile(&ctx.tree, &ctx.store.root, &ctx.lane_dir, a),
         "stats" => render::stats(&ctx.tree, a),

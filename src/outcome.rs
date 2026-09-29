@@ -105,7 +105,13 @@ pub struct SupersededNode {
 #[serde(tag = "change")]
 pub enum FlagChange {
     Off,
-    Raised { title: String, reason: String },
+    /// `on` is `flag --on`'s review date, when the flag came with one.
+    /// `d906`.
+    Raised {
+        title: String,
+        reason: String,
+        on: Option<String>,
+    },
 }
 
 /// The two shapes `arm` can leave, mirroring `FlagChange`: `d415`.
@@ -511,9 +517,15 @@ pub fn to_text(o: &Outcome) -> String {
             change,
         } => match change {
             FlagChange::Off => lines.push(format!("  {alias}  is no longer {flag}")),
-            FlagChange::Raised { title, reason } => {
-                lines.push(format!("  {alias}  {title}  -> {flag}"));
+            FlagChange::Raised { title, reason, on } => {
+                match on {
+                    Some(on) => lines.push(format!("  {alias}  {title}  -> {flag} on {on}")),
+                    None => lines.push(format!("  {alias}  {title}  -> {flag}")),
+                }
                 lines.push(format!("        {reason}"));
+                if on.is_some() {
+                    lines.push("        shows up in:  vivac flagged".to_string());
+                }
             }
         },
         Outcome::Armed {

@@ -16,7 +16,7 @@
 //!   question 1, and without it the brief has no reason to exist.
 
 use crate::args::Args;
-use crate::event::{Kind, State, WhereRepo};
+use crate::event::{Flag, Kind, State, WhereRepo};
 use crate::failure::R;
 use crate::model::{Node, Tree};
 use crate::style;
@@ -113,7 +113,7 @@ fn heading(title: &str, body: Vec<String>) -> Vec<String> {
 /// **By `spawns` only.** Inheriting through `depends_on` as well would turn
 /// the computation from O(depth) into O(graph), and would lose the property
 /// that inheritance is legible by looking at the stack on screen.
-pub(crate) fn constraints<'a>(a: &'a Tree, lineage: &[&Node]) -> Vec<&'a Node> {
+pub(crate) fn constraints<'a>(a: &'a Tree, lineage: &[&Node], date: &str) -> Vec<&'a Node> {
     let on_lineage: HashSet<u64> = lineage.iter().map(|n| n.num).collect();
     let mut v: Vec<&Node> = a
         .nodes_iter()
@@ -133,8 +133,9 @@ pub(crate) fn constraints<'a>(a: &'a Tree, lineage: &[&Node]) -> Vec<&'a Node> {
                     .any(|p| on_lineage.contains(&p.num))
         })
         .collect();
-    // At risk first --the ones carrying a flag-- and then by alias.
-    v.sort_by_key(|n| (n.flags.is_empty(), n.num));
+    // At risk first --the ones carrying a flag that is live on `date`, so a
+    // review still asleep does not count (`d906`)-- and then by alias.
+    v.sort_by_key(|n| (n.live_flags(a, date).next().is_none(), n.num));
     v
 }
 
@@ -153,7 +154,7 @@ fn spine_label(a: &Tree, n: &Node) -> String {
     format!("{}{mark}", clip(n.title(a), budget))
 }
 
-fn spine(a: &Tree, lineage: &[&Node]) -> Vec<String> {
+fn spine(a: &Tree, lineage: &[&Node], date: &str) -> Vec<String> {
     let mut v = Vec::new();
     for (i, n) in lineage.iter().enumerate() {
         let first = i == 0;
@@ -168,7 +169,7 @@ fn spine(a: &Tree, lineage: &[&Node]) -> Vec<String> {
         } else {
             "  |-- ".to_string()
         };
-        let flags: Vec<&str> = n.flags.keys().map(|b| b.word()).collect();
+        let flags: Vec<&str> = n.live_flags(a, date).map(|(b, _)| b.word()).collect();
         let flag = if flags.is_empty() {
             String::new()
         } else {
@@ -370,6 +371,7 @@ const BRIEF_HEADINGS: &[&str] = &[
     "INVARIANTS",
     "BLOCKS",
     "FLAGGED",
+    "DUE FOR REVIEW",
     "BACK FROM PARKED",
     "DO NOT TOUCH NOW",
     "STANDING DECISIONS",
@@ -1059,7 +1061,7 @@ pub fn to_text(
         ]));
     }
     s.push(Section::fixed(match focus {
-        Some(_) => spine(a, &lineage),
+        Some(_) => spine(a, &lineage, &date),
         None => no_focus_block(a),
     }));
 
@@ -1071,10 +1073,14 @@ pub fn to_text(
     s.push(Section::fixed(heading("BORN FROM HERE", born)));
 
     // 4. Invariants.
-    let invariants: Vec<String> = constraints(a, &lineage)
+    let invariants: Vec<String> = constraints(a, &lineage, &date)
         .iter()
         .map(|c| {
-            let risk = if c.flags.is_empty() { "" } else { "   AT RISK" };
+            let risk = if c.live_flags(a, &date).next().is_none() {
+                ""
+            } else {
+                "   AT RISK"
+            };
             format!("  {:<6} {}{risk}", c.alias(), c.title(a))
         })
         .collect();
@@ -1104,29 +1110,87 @@ pub fn to_text(
     // 6. Flags on the path, or one hop off it.
     let mut flagged: Vec<&Node> = a
         .nodes_iter()
-        .filter(|n| !n.flags.is_empty())
+        .filter(|n| n.live_flags(a, &date).next().is_some())
         .filter(|n| {
             on_lineage.contains(&n.num) || n.parent.is_some_and(|p| on_lineage.contains(&p))
         })
         .collect();
     flagged.sort_by_key(|n| n.num);
+    // `d906`: a review whose day has come is in DUE FOR REVIEW below, so its
+    // own row is left out here; a sleeping one is not a live flag at all.
     let flag_groups: Vec<Vec<String>> = flagged
         .iter()
         .flat_map(|n| {
-            n.flags.iter().map(move |(b, reason)| {
-                vec![format!(
-                    "  {:<6} {:<10} {}",
-                    n.alias(),
-                    b.word(),
-                    clip(a.text(*reason), 44)
-                )]
-            })
+            let review_is_due = n.review_due(a, &date);
+            n.live_flags(a, &date)
+                .filter(move |(b, _)| !(review_is_due && *b == Flag::Review))
+                .map(move |(b, reason)| {
+                    vec![format!(
+                        "  {:<6} {:<10} {}",
+                        n.alias(),
+                        b.word(),
+                        clip(a.text(reason), 44)
+                    )]
+                })
         })
         .collect();
     s.push(Section::loose(heading(
         "FLAGGED",
-        trim_list(flag_groups, 3, "stats"),
+        trim_list(flag_groups, 3, "flagged"),
     )));
+
+    // 6b. Reviews whose day has come, across the whole tree and not only the
+    // path (`d906`): a date is a promise to look again, kept wherever the
+    // node hangs. The decisions made below are counted only for the rows
+    // that are due -- it is the walk down a subtree, and a sleeping review
+    // never needs it. Pushed straight after FLAGGED, so it renders there.
+    let mut due_review_nodes: Vec<&Node> = a
+        .nodes_iter()
+        .filter(|n| n.state.is_open() && n.review_due(a, &date))
+        .collect();
+    due_review_nodes.sort_by_key(|n| n.num);
+    let due_review_groups: Vec<Vec<String>> = due_review_nodes
+        .iter()
+        .map(|n| {
+            let mut v = vec![format!("  {:<6} {}", n.alias(), clip(n.title(a), 52))];
+            if let Some(&reason) = n.flags.get(&Flag::Review) {
+                let reason = a.text(reason);
+                if !reason.is_empty() {
+                    v.push(format!("         \"{}\"", clip(reason, 56)));
+                }
+            }
+            let mut decided: Vec<&Node> = a
+                .descendants(n.num)
+                .into_iter()
+                .filter(|d| d.kind == Kind::Decision && d.state.is_open())
+                .collect();
+            decided.sort_by_key(|d| d.num);
+            let since = n.review_on(a).unwrap_or_default();
+            if decided.is_empty() {
+                v.push(format!("         since {since}"));
+            } else {
+                let mut aliases: Vec<String> = decided.iter().take(3).map(|d| d.alias()).collect();
+                if decided.len() > 3 {
+                    aliases.push(format!("+{}", decided.len() - 3));
+                }
+                v.push(format!(
+                    "         since {since} · decided below: {}",
+                    aliases.join(" ")
+                ));
+            }
+            v
+        })
+        .collect();
+    let mut due_review_body = trim_list(due_review_groups, 6, "flagged");
+    if !due_review_body.is_empty() {
+        due_review_body.push(String::new());
+        due_review_body.push("  Reviewed:        vivac flag <id> review --off".to_string());
+        due_review_body.push(
+            "  Look again on:   vivac flag <id> review --why \"<what to look at>\" --on <date>"
+                .to_string(),
+        );
+    }
+    s.push(Section::loose(heading("DUE FOR REVIEW", due_review_body)));
 
     // 7. Out of scope: every parked node of the project, regardless of the
     // focus (`d536`) -- so this section and `parked`'s own count agree

@@ -137,6 +137,13 @@ pub struct Node {
     /// clears it too -- `MODEL.md` never un-parks on its own, only the
     /// presentation of it changes once this date is reached. `d899`.
     pub parked_until: Option<Span>,
+    /// `flag review --on`'s own review date, interned: `Some` only while the
+    /// node carries `Flag::Review`, and only for the latest raise that named
+    /// one. Clearing the flag clears it, and a review raised with no date
+    /// clears it too -- the latest always wins. The date passing never
+    /// removes the flag; it only changes whether it counts as raised yet
+    /// (`Node::live_flags`). `d906`.
+    pub review_on: Option<Span>,
     /// The `seq` of this node's own `node.created`. `why`'s "born in lane"
     /// line used to get this by walking the whole log through
     /// `Full::from_log` on every call (`t164`): that was free while only
@@ -183,6 +190,38 @@ impl Node {
     /// has since changed state. `d899`.
     pub fn parked_until<'t>(&self, tree: &'t Tree) -> Option<&'t str> {
         self.parked_until.map(|s| tree.text(s))
+    }
+    /// The review date of the latest `review` that named one, or `None` for
+    /// a node with no review, one raised without a date, or one whose review
+    /// has since been cleared. `d906`.
+    pub fn review_on<'t>(&self, tree: &'t Tree) -> Option<&'t str> {
+        self.review_on.map(|s| tree.text(s))
+    }
+    /// Whether this node carries a review whose date has come: `today` is a
+    /// civil date `YYYY-MM-DD`, and a review dated today or earlier is due.
+    /// A review with no date is never due, it is simply raised. `d906`.
+    pub fn review_due(&self, tree: &Tree, today: &str) -> bool {
+        self.flags.contains_key(&Flag::Review) && self.review_on(tree).is_some_and(|d| d <= today)
+    }
+    /// Whether this node carries a review still asleep: dated after `today`.
+    /// `d906`.
+    pub fn review_asleep(&self, tree: &Tree, today: &str) -> bool {
+        self.flags.contains_key(&Flag::Review) && self.review_on(tree).is_some_and(|d| d > today)
+    }
+    /// The flags that count as raised on `today`: all of `flags`, minus a
+    /// review still asleep. A sleeping review is not a flag yet, so every
+    /// reader that asks whether something is flagged asks this and not
+    /// `flags` itself. `d906`.
+    pub fn live_flags<'n>(
+        &'n self,
+        tree: &Tree,
+        today: &str,
+    ) -> impl Iterator<Item = (Flag, Span)> + 'n {
+        let asleep = self.review_asleep(tree, today);
+        self.flags
+            .iter()
+            .map(|(&flag, &span)| (flag, span))
+            .filter(move |(flag, _)| !(asleep && *flag == Flag::Review))
     }
     /// The lane this node was born in, resolved to text.
     pub fn born_lane<'t>(&self, tree: &'t Tree) -> &'t str {
@@ -639,6 +678,7 @@ impl Tree {
                         born_seq: seq,
                         born_lane: born_lane_span,
                         parked_until: None,
+                        review_on: None,
                     },
                 );
                 self.ulid_index.insert(node.clone(), *num);
@@ -721,17 +761,31 @@ impl Tree {
                     .retain(|&x| x != num);
                 self.record_focus_candidates(seq, lane);
             }
-            Body::FlagRaised { node, flag, reason } => {
+            Body::FlagRaised {
+                node,
+                flag,
+                reason,
+                on,
+            } => {
                 let reason_span = self.intern(reason);
+                let on_span = on.as_deref().map(|d| self.intern(d));
                 let num = self.resolve_ulid(node);
                 if let Some(n) = self.nodes.get_mut(&num) {
                     n.flags.insert(*flag, reason_span);
+                    // `d906`: only a review carries a date, and the latest
+                    // raise always wins -- one with no date wakes it.
+                    if *flag == Flag::Review {
+                        n.review_on = on_span;
+                    }
                 }
             }
             Body::FlagCleared { node, flag } => {
                 let num = self.resolve_ulid(node);
                 if let Some(n) = self.nodes.get_mut(&num) {
                     n.flags.remove(flag);
+                    if *flag == Flag::Review {
+                        n.review_on = None;
+                    }
                 }
             }
             Body::ArmAdded { node, dir, command } => {
@@ -2481,6 +2535,169 @@ mod tests {
         ];
         let tree = fold(&events, 0);
         assert_eq!(tree.node_by_num(1).unwrap().parked_until(&tree), None);
+    }
+
+    /// Raises `flag` on the node minted under `num`, with or without a
+    /// review date. `d906`.
+    fn flagged(seq: u64, num: u64, flag: Flag, on: Option<&str>) -> Event {
+        Event {
+            seq,
+            id: format!("e{seq}"),
+            ts: "2026-09-03T10:06:00Z".to_string(),
+            actor: "a".to_string(),
+            lane: "main".to_string(),
+            payload: Body::FlagRaised {
+                node: format!("n{num}"),
+                flag,
+                reason: "look again".to_string(),
+                on: on.map(str::to_string),
+            },
+        }
+    }
+
+    /// Clears `flag` on the node minted under `num`. `d906`.
+    fn flag_cleared(seq: u64, num: u64, flag: Flag) -> Event {
+        Event {
+            seq,
+            id: format!("e{seq}"),
+            ts: "2026-09-03T10:07:00Z".to_string(),
+            actor: "a".to_string(),
+            lane: "main".to_string(),
+            payload: Body::FlagCleared {
+                node: format!("n{num}"),
+                flag,
+            },
+        }
+    }
+
+    /// `d906`: a review's date is what the node carries, and the review
+    /// raised last decides it -- a later date replaces an earlier one, and
+    /// one with no date wakes it.
+    #[test]
+    fn the_latest_review_decides_its_date() {
+        let events = vec![
+            node(1, 1, Kind::Task, None),
+            flagged(2, 1, Flag::Review, Some("2026-12-01")),
+        ];
+        let tree = fold(&events, 0);
+        assert_eq!(
+            tree.node_by_num(1).unwrap().review_on(&tree),
+            Some("2026-12-01")
+        );
+
+        let mut events = events;
+        events.push(flagged(3, 1, Flag::Review, Some("2027-01-01")));
+        let tree = fold(&events, 0);
+        assert_eq!(
+            tree.node_by_num(1).unwrap().review_on(&tree),
+            Some("2027-01-01")
+        );
+
+        events.push(flagged(4, 1, Flag::Review, None));
+        let tree = fold(&events, 0);
+        let n = tree.node_by_num(1).unwrap();
+        assert_eq!(n.review_on(&tree), None);
+        assert!(n.flags.contains_key(&Flag::Review), "still flagged");
+    }
+
+    #[test]
+    fn a_cleared_review_has_no_date() {
+        let events = vec![
+            node(1, 1, Kind::Task, None),
+            flagged(2, 1, Flag::Review, Some("2026-12-01")),
+            flag_cleared(3, 1, Flag::Review),
+        ];
+        let tree = fold(&events, 0);
+        let n = tree.node_by_num(1).unwrap();
+        assert_eq!(n.review_on(&tree), None);
+        assert!(n.flags.is_empty());
+    }
+
+    /// The other flags neither carry a date nor touch the review's.
+    #[test]
+    fn the_other_flags_leave_the_review_date_alone() {
+        let events = vec![
+            node(1, 1, Kind::Task, None),
+            flagged(2, 1, Flag::Review, Some("2026-12-01")),
+            flagged(3, 1, Flag::Suspect, None),
+            flag_cleared(4, 1, Flag::Stale),
+        ];
+        let tree = fold(&events, 0);
+        assert_eq!(
+            tree.node_by_num(1).unwrap().review_on(&tree),
+            Some("2026-12-01")
+        );
+        let events = vec![
+            events[0].clone(),
+            events[1].clone(),
+            events[2].clone(),
+            flag_cleared(4, 1, Flag::Suspect),
+        ];
+        let tree = fold(&events, 0);
+        assert_eq!(
+            tree.node_by_num(1).unwrap().review_on(&tree),
+            Some("2026-12-01")
+        );
+    }
+
+    /// The day itself counts as due, and the day before as asleep: `today`
+    /// is compared as text, the way `parked_until` is. `d906`.
+    #[test]
+    fn a_review_is_asleep_before_its_day_and_due_from_it() {
+        let events = vec![
+            node(1, 1, Kind::Task, None),
+            flagged(2, 1, Flag::Review, Some("2026-12-01")),
+        ];
+        let tree = fold(&events, 0);
+        let n = tree.node_by_num(1).unwrap();
+        assert!(n.review_asleep(&tree, "2026-11-30"));
+        assert!(!n.review_due(&tree, "2026-11-30"));
+        assert!(!n.review_asleep(&tree, "2026-12-01"));
+        assert!(n.review_due(&tree, "2026-12-01"));
+        assert!(n.review_due(&tree, "2027-03-01"));
+    }
+
+    #[test]
+    fn a_review_with_no_date_is_neither_asleep_nor_due() {
+        let events = vec![
+            node(1, 1, Kind::Task, None),
+            flagged(2, 1, Flag::Review, None),
+        ];
+        let tree = fold(&events, 0);
+        let n = tree.node_by_num(1).unwrap();
+        assert!(!n.review_asleep(&tree, "2026-11-30"));
+        assert!(!n.review_due(&tree, "2026-11-30"));
+    }
+
+    /// A node with no review is never due or asleep, whatever the date.
+    #[test]
+    fn a_node_with_no_review_is_neither_asleep_nor_due() {
+        let events = vec![
+            node(1, 1, Kind::Task, None),
+            flagged(2, 1, Flag::Suspect, None),
+        ];
+        let tree = fold(&events, 0);
+        let n = tree.node_by_num(1).unwrap();
+        assert!(!n.review_asleep(&tree, "2026-11-30"));
+        assert!(!n.review_due(&tree, "2026-11-30"));
+    }
+
+    /// `d906`: a sleeping review is not a flag, and nothing else is hidden
+    /// with it.
+    #[test]
+    fn live_flags_skips_only_a_review_asleep() {
+        let events = vec![
+            node(1, 1, Kind::Task, None),
+            flagged(2, 1, Flag::Review, Some("2026-12-01")),
+            flagged(3, 1, Flag::Suspect, None),
+        ];
+        let tree = fold(&events, 0);
+        let n = tree.node_by_num(1).unwrap();
+        let live = |today: &str| -> Vec<Flag> {
+            n.live_flags(&tree, today).map(|(flag, _)| flag).collect()
+        };
+        assert_eq!(live("2026-11-30"), vec![Flag::Suspect]);
+        assert_eq!(live("2026-12-01"), vec![Flag::Suspect, Flag::Review]);
     }
 
     /// `f237`: `open_blockers` used to walk every descendant and filter by

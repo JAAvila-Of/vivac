@@ -69,6 +69,8 @@ pub struct Flagged<'a> {
     pub node: &'a Node,
     pub flag: Flag,
     pub reason: String,
+    /// The review date `flag --on` gave, when it gave one. `d906`.
+    pub on: Option<String>,
     pub lane: String,
 }
 
@@ -157,11 +159,17 @@ pub fn collect<'a>(tree: &'a Tree, log: &[Event], since_seq: u64) -> Changed<'a>
                 }),
                 None => result.tail.unreadable += 1,
             },
-            Body::FlagRaised { node, flag, reason } => match tree.node(node) {
+            Body::FlagRaised {
+                node,
+                flag,
+                reason,
+                on,
+            } => match tree.node(node) {
                 Some(n) => result.flagged.push(Flagged {
                     node: n,
                     flag: *flag,
                     reason: reason.clone(),
+                    on: on.clone(),
                     lane: e.lane.clone(),
                 }),
                 None => result.tail.unreadable += 1,
@@ -697,6 +705,7 @@ mod tests {
                 node: node.to_string(),
                 flag,
                 reason: reason.to_string(),
+                on: None,
             },
         )
     }
@@ -857,6 +866,7 @@ mod tests {
                     node: "n1".to_string(),
                     flag: Flag::Suspect,
                     reason: "from over there".to_string(),
+                    on: None,
                 },
             ),
         ];

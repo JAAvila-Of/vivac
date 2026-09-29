@@ -1371,7 +1371,8 @@ mod resident_write_tests {
         format!(
             "node num={} id={} kind={:?} state={:?} parent={:?} blocks={} \
              forced_close={} title={:?} why={:?} note={:?} outcome={:?} \
-             opened={:?} closed={:?} refs={:?} governs={:?} flags={:?}\n",
+             opened={:?} closed={:?} refs={:?} governs={:?} flags={:?} \
+             review_on={:?}\n",
             n.num,
             n.id,
             n.kind,
@@ -1388,6 +1389,7 @@ mod resident_write_tests {
             n.refs(tree),
             n.governs(tree),
             n.flags,
+            n.review_on(tree),
         )
     }
 

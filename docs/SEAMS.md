@@ -104,13 +104,31 @@ valid. Mark it the moment you find out, not when you get round to tidying:
 vivac flag 7 suspect --why "profiled again: the time is in I/O"
 ```
 
-The node keeps its state, and every brief lists it under **FLAGGED** until
-the mark comes off. When you are sure it is wrong, abandoning it and rescuing
+The node keeps its state, and the brief lists it under **FLAGGED** while
+the work is near it, until the mark comes off; `vivac flagged` lists every
+mark in the tree. When you are sure it is wrong, abandoning it and rescuing
 what outlived it is [its own section](USAGE.md#when-a-premise-turns-out-false).
 
 Both are yours. The agent will tell you it found the premise false, and that
 is a finding; marking and discarding reshape the tree rather than record work,
 so they are not among its tools over MCP.
+
+---
+
+## Something will not hold forever — you
+
+Some records are true today and will not stay true: a workaround until an
+upstream fix ships, a limit measured on this year's hardware. You usually know
+when to look again the moment you write them down. Give the mark that day:
+
+```sh
+vivac flag 12 review --why "does 2.0 ship the upstream fix?" --on 2027-01-15
+```
+
+It sleeps until then. On that day the brief lists it under **DUE FOR
+REVIEW**, wherever it sits in the tree, with the decisions made below it,
+since those are what go stale with it. `--off` takes the mark away once you
+have looked.
 
 ---
 

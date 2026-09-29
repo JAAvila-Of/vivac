@@ -136,8 +136,12 @@ some are things it owes.
   true is narrower. A tree is read whole into memory, and nothing here has been
   asked to hold a hundred thousand nodes.
 - **Noticing that a record went stale.** Some memory stores attach a review
-  date to each record by type and surface what is due. Here that is
-  `vivac flag <id> stale`, by hand — which is worse, and known to be worse.
+  date to each record by type and surface what is due. Here the date comes
+  from whoever writes the record — `vivac flag <id> review --on <date>` — and
+  the brief brings it back on that day with what was decided below it. What
+  is narrower is the rest: a record nobody dated is noticed only by hand,
+  because the age of a record is no reason to doubt it and nothing here
+  guesses one.
 - **One record for several machines and people.** Trackers built for agents
   let several agents on several machines write into one store and sync it the
   way a repository syncs. Here a tree lives on one machine: lanes let its
