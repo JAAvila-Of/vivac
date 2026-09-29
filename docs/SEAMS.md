@@ -150,6 +150,10 @@ What goes after `--next` is what the next brief says you were about to do.
 Leave it out and the brief says nothing is waiting, rather than reaching
 back for an older stop's intent. `pop` takes the same `--next`: its outcome
 is what was finished, and it is never read back as what comes next.
+When automatic stops have landed since, the brief names the stop that said
+it and how long before the last stop it was said, so an intent that
+several hours of work went past reads as old:
+`v12, 14 h earlier, was about to: extract the validator`.
 
 ---
 

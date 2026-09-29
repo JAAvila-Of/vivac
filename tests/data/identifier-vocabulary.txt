@@ -1559,6 +1559,7 @@ respects
 respond
 response
 rest
+restamp
 restore
 restored
 result
@@ -1749,6 +1750,7 @@ sparse
 spawn
 spawning
 speak
+speaking
 speaks
 spec
 specific

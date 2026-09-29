@@ -210,6 +210,21 @@ pub(crate) fn clip(s: &str, n: usize) -> String {
     }
 }
 
+/// How long `from` came before `to`, in the coarsest unit that still
+/// tells stops apart: minutes under an hour, hours under two days, days
+/// after that. `None` under a minute, where there is nothing to warn about,
+/// and for a stamp `clock::epoch_seconds` cannot read -- no age beats a
+/// wrong one.
+fn earlier(from: &str, to: &str) -> Option<String> {
+    let secs = crate::clock::epoch_seconds(to)? - crate::clock::epoch_seconds(from)?;
+    Some(match secs {
+        ..60 => return None,
+        60..3600 => format!("{} min", secs / 60),
+        3600..172_800 => format!("{} h", secs / 3600),
+        _ => format!("{} days", secs / 86_400),
+    })
+}
+
 /// Project level: hanging off nothing, or off a node that itself hangs off
 /// nothing. `MODEL.md` §9.5 blesses `parent: PROJECT`, and a node with no
 /// parent at all is the strongest form of that, not a weaker one.
@@ -1359,10 +1374,20 @@ pub fn to_text(
                 l.push(if s.num == v.num {
                     format!("         you were about to: {}", clip(&s.next_intent, 52))
                 } else {
+                    // How long before the last stop this intent was
+                    // spoken (`q752`, `d923`): the work that went by with
+                    // nobody renewing it is what says it may be stale.
+                    // Measured against `v`, not the clock, so the brief
+                    // still reads the same whenever it is read. The intent
+                    // gives up the width the age takes, so the line is no
+                    // wider than before.
+                    let age = earlier(&s.ts, &v.ts)
+                        .map(|e| format!(", {e} earlier,"))
+                        .unwrap_or_default();
                     format!(
-                        "         {} was about to: {}",
+                        "         {}{age} was about to: {}",
                         s.alias(),
-                        clip(&s.next_intent, 52)
+                        clip(&s.next_intent, 52 - age.chars().count())
                     )
                 });
             }
@@ -1464,6 +1489,35 @@ fn emit(mut s: Vec<Section>, budget: usize, a: &Tree) -> Result<String, crate::f
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `d923`: the unit is the coarsest one that still tells stops apart,
+    /// and under a minute there is no age at all.
+    #[test]
+    fn earlier_picks_the_unit_and_stays_quiet_under_a_minute() {
+        let at = |t: &str| format!("2026-09-29T{t}Z");
+        assert_eq!(earlier(&at("10:00:00"), &at("10:00:59")), None);
+        assert_eq!(
+            earlier(&at("10:00:00"), &at("10:01:00")).as_deref(),
+            Some("1 min")
+        );
+        assert_eq!(
+            earlier(&at("10:00:00"), &at("10:59:59")).as_deref(),
+            Some("59 min")
+        );
+        assert_eq!(
+            earlier(&at("00:00:00"), &at("14:30:00")).as_deref(),
+            Some("14 h")
+        );
+        assert_eq!(
+            earlier("2026-09-27T10:00:00Z", "2026-09-29T09:59:59Z").as_deref(),
+            Some("47 h")
+        );
+        assert_eq!(
+            earlier("2026-09-26T10:00:00Z", "2026-09-29T10:00:00Z").as_deref(),
+            Some("3 days")
+        );
+        assert_eq!(earlier("not a stamp", &at("10:00:00")), None);
+    }
 
     /// The trace OTHER LANES leaves behind is public prose, and one lane
     /// reaches it as easily as several (`tests/brief.rs`'s own budget test

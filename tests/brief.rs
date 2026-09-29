@@ -1620,3 +1620,57 @@ fn flagged_points_at_the_command_that_lists_the_rest() {
     let b = c.ok(&["brief", "--now", "2026-09-10T00:00:00Z"]);
     assert!(b.contains("and 1 more (vivac flagged)"), "{b}");
 }
+
+/// Sets the `ts` of the `vivac.created` line for stop `num`, so a test can
+/// put hours between two stops without waiting for them.
+fn restamp_stop(c: &Sandbox, num: u64, ts: &str) {
+    let path = c.0.join(".vivac").join("events");
+    let raw = std::fs::read_to_string(&path).unwrap();
+    let marker = format!("\"num\":{num},");
+    let mut done = false;
+    let out: Vec<String> = raw
+        .lines()
+        .map(|l| {
+            if !done && l.contains("\"type\":\"vivac.created\"") && l.contains(&marker) {
+                let at = l.find("\"ts\":\"").unwrap() + 6;
+                let end = at + l[at..].find('"').unwrap();
+                done = true;
+                format!("{}{}{}", &l[..at], ts, &l[end..])
+            } else {
+                l.to_string()
+            }
+        })
+        .collect();
+    assert!(done, "no vivac.created line found for v{num}");
+    std::fs::write(&path, out.join("\n") + "\n").unwrap();
+}
+
+/// `q752`, `d923`: an intent quoted from an earlier stop says how long
+/// before the last stop it was spoken, and gives up that much of its own
+/// width so the line grows no wider.
+#[test]
+fn an_intent_from_an_earlier_stop_says_how_long_before_it_was_spoken() {
+    let c = Sandbox::new_seeded("vivac-stop-age");
+    c.ok(&["push", "Root", "--why", "seed"]);
+    c.ok(&["save", "packing up", "--next", "ship it"]);
+    c.ok(&["note", "1", "something happened"]);
+    c.ok(&["session", "end", "--hook"]);
+    restamp_stop(&c, 2, "2026-09-28T20:00:00Z");
+    restamp_stop(&c, 3, "2026-09-29T10:30:00Z");
+
+    let b = c.ok(&["brief"]);
+    assert!(b.contains("v2, 14 h earlier, was about to: ship it"), "{b}");
+}
+
+/// The age is only for a stop other than the last: when the last stop is
+/// the one that spoke, there is nothing between them to measure.
+#[test]
+fn the_last_stop_speaking_for_itself_carries_no_age() {
+    let c = Sandbox::new_seeded("vivac-stop-no-age");
+    c.ok(&["push", "Root", "--why", "seed"]);
+    c.ok(&["save", "packing up", "--next", "ship it"]);
+
+    let b = c.ok(&["brief"]);
+    assert!(b.contains("you were about to: ship it"), "{b}");
+    assert!(!b.contains("earlier"), "{b}");
+}
