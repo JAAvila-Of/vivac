@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.8](https://github.com/JAAvila-Of/vivac/compare/v0.17.7...v0.17.8) - 2026-09-29
+
+### Fixed
+
+- *(cli)* name the attached form when a value is read as a flag ([#220](https://github.com/JAAvila-Of/vivac/pull/220))
+
 ## [0.17.7](https://github.com/JAAvila-Of/vivac/compare/v0.17.6...v0.17.7) - 2026-09-29
 
 ### Added
