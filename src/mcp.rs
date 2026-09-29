@@ -149,7 +149,7 @@ const TOOLS: &[Tool] = &[
                 name: "everywhere",
                 kind: ArgKind::Bool,
                 required: false,
-                description: "Searches every project on the machine rather than this one.",
+                description: "Searches every project on the machine rather than this one, except those that keep what they know to themselves. Say which project anything you use comes from.",
             },
         ],
     },
@@ -975,7 +975,9 @@ fn call(project: &mut Project, params: &Value) -> Result<String, Failure> {
         "vivac_find" => {
             let query = a.str("query").ok_or_else(|| missing("query"))?.to_string();
             if a.bool("everywhere") {
-                pretty(render::find_everywhere_data(&query)?)
+                // `d916`: the project this server serves is the one asking.
+                let own = project.current()?.store.config.project_id.clone();
+                pretty(render::find_everywhere_data(&query, Some(&own))?)
             } else {
                 pretty(render::find_data(&project.current()?.tree, &query)?)
             }
@@ -1006,7 +1008,17 @@ fn call(project: &mut Project, params: &Value) -> Result<String, Failure> {
                     // No log either, for the same reason `--project` never
                     // reads one on the CLI: `lane` and `where` (`t594`
                     // §5.4) simply have nothing to answer from here.
-                    let tree = index::load(&store::Store::open(foreign_root)?, false)?;
+                    let foreign = store::Store::open(foreign_root)?;
+                    // `d916`: closed to every project but its own, the same
+                    // refusal the CLI gives.
+                    let own = project.current()?.store.config.project_id.clone();
+                    if foreign.config.closed_to(Some(&own)) {
+                        return Err(Failure::Model(format!(
+                            "  {} keeps what it knows to itself: other projects cannot read it.",
+                            render::project_name(&foreign.root)
+                        )));
+                    }
+                    let tree = index::load(&foreign, false)?;
                     pretty(render::why_data(&tree, &[], &id, false)?)
                 }
                 // The resident log, kept for exactly this (`Project::log`'s

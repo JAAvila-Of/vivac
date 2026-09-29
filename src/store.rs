@@ -264,6 +264,13 @@ pub struct Config {
     /// Opaque identifier for this install. **It carries no email and no name**:
     /// the security pillar forbids it, and vetoes `MODEL.md` §3.4.
     pub actor: String,
+    /// `d916`: whether the other projects on this machine may read this
+    /// tree. `None` and `Some(true)` are open; only `Some(false)` closes it.
+    /// A tree planted today does not write the field, and reopening removes
+    /// it, so an open config is byte for byte what it was before this
+    /// existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub share: Option<bool>,
 }
 
 impl Config {
@@ -272,8 +279,30 @@ impl Config {
             version: ConfigVersion::One,
             project_id: id::ulid(),
             actor: format!("a_{}", &id::ulid()[..12]),
+            share: None,
         }
     }
+
+    pub fn shares(&self) -> bool {
+        self.share != Some(false)
+    }
+
+    /// Whether a read that comes from the project `own` (its `project_id`,
+    /// or `None` from a directory with no tree) has to leave this tree
+    /// alone (`d916`). Compared by `project_id`, never by path, and a closed
+    /// tree only ever closes to *other* projects.
+    pub fn closed_to(&self, own: Option<&str>) -> bool {
+        !self.shares() && own != Some(self.project_id.as_str())
+    }
+}
+
+/// The `project_id` of the tree at `root`, read from its config alone: no
+/// fold, and unlike `Store::open` it never writes a config that is missing.
+/// `None` for anything it cannot read, which callers take as "no project of
+/// my own" and so as the stricter answer (`d916`).
+pub fn project_id_of(root: &Path) -> Option<String> {
+    let raw = fs::read_to_string(root.join(DIR).join(CONFIG)).ok()?;
+    read_config(&raw).ok().map(|c| c.project_id)
 }
 
 pub struct Store {
@@ -891,6 +920,22 @@ impl Store {
     pub fn lock_for_write(&self) -> Result<WriteLock, Failure> {
         lock_with_deadline(&self.lock_path(), LOCK_DEADLINE)
     }
+
+    /// Opens (`true`) or closes (`false`) this tree to other projects
+    /// (`d916`). Under the write lock, and from the config as it is on disk
+    /// now rather than the one this store opened with, so a `version` another
+    /// process just raised is not written back over. Closing writes
+    /// `share: false`; opening removes the field. Neither touches the log or
+    /// the index.
+    pub fn set_sharing(&mut self, shares: bool) -> Result<(), Failure> {
+        let _lock = self.lock_for_write()?;
+        let raw = fs::read_to_string(self.root.join(DIR).join(CONFIG))?;
+        let mut fresh = read_config(&raw)?;
+        fresh.share = if shares { None } else { Some(false) };
+        write_config_atomic(&self.root, &fresh)?;
+        self.config = fresh;
+        Ok(())
+    }
 }
 
 fn write_config(root: &Path, c: &Config) -> std::io::Result<()> {
@@ -1181,6 +1226,7 @@ impl Store {
             version: ConfigVersion::Locked,
             project_id: self.config.project_id.clone(),
             actor: self.config.actor.clone(),
+            share: self.config.share,
         };
         write_config_atomic(&self.root, &locked)?;
         self.config = locked;
@@ -1207,6 +1253,7 @@ impl Store {
             version: ConfigVersion::Lanes,
             project_id: self.config.project_id.clone(),
             actor: self.config.actor.clone(),
+            share: self.config.share,
         };
         write_config_atomic(&self.root, &locked)?;
         self.config = locked;
@@ -2273,5 +2320,55 @@ mod tests {
                 "a reader observed a hollow .vivac/ on round {round} of {ROUNDS}"
             );
         }
+    }
+    #[test]
+    fn closing_and_reopening_leaves_the_config_byte_for_byte_as_it_was() {
+        let tmp = std::env::temp_dir().join(format!("vivac-t-{}", id::ulid()));
+        fs::create_dir_all(&tmp).unwrap();
+        let mut s = Store::create(&tmp).unwrap();
+        let path = tmp.join(DIR).join(CONFIG);
+        let before = fs::read(&path).unwrap();
+        assert!(s.config.shares());
+        assert!(!String::from_utf8_lossy(&before).contains("share"));
+
+        s.set_sharing(false).unwrap();
+        assert!(!s.config.shares());
+        assert!(fs::read_to_string(&path)
+            .unwrap()
+            .contains("\"share\": false"));
+
+        s.set_sharing(true).unwrap();
+        assert!(s.config.shares());
+        assert_eq!(before, fs::read(&path).unwrap());
+        fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn a_closed_tree_stays_closed_when_the_config_is_locked() {
+        let tmp = std::env::temp_dir().join(format!("vivac-t-{}", id::ulid()));
+        fs::create_dir_all(&tmp).unwrap();
+        let mut s = Store::create(&tmp).unwrap();
+        s.set_sharing(false).unwrap();
+        let lock = s.lock_for_write().unwrap();
+        s.lock_lanes_in_config(&lock).unwrap();
+        drop(lock);
+        assert_eq!(s.config.version, ConfigVersion::Lanes);
+        let on_disk = Store::open(tmp.clone()).unwrap();
+        assert_eq!(on_disk.config.share, Some(false));
+        fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn a_closed_tree_closes_to_every_project_but_its_own() {
+        let mut c = Config::new_seeded();
+        assert!(!c.closed_to(None));
+        assert!(!c.closed_to(Some("another")));
+        c.share = Some(true);
+        assert!(!c.closed_to(Some("another")));
+        c.share = Some(false);
+        assert!(c.closed_to(None));
+        assert!(c.closed_to(Some("another")));
+        let own = c.project_id.clone();
+        assert!(!c.closed_to(Some(&own)));
     }
 }

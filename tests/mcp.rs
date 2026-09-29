@@ -2468,3 +2468,77 @@ fn every_capture_seam_mcp_tool_is_in_the_tool_list() {
         );
     }
 }
+
+/// `d916`: a project that keeps what it knows to itself is skipped by
+/// `vivac_find` with `everywhere` and refused by `vivac_why` with `project`,
+/// the same two doors the CLI closes -- and `share` itself is no tool, so an
+/// agent cannot reopen what a person closed.
+#[test]
+fn a_closed_project_is_neither_searched_nor_opened_from_another_over_mcp() {
+    let a = seeded("mcp-share-a");
+    let b = Sandbox::new_seeded_in("mcp-share-b", a.global_home());
+    b.ok(&[
+        "push",
+        "Guard the quokka habitat",
+        "--why",
+        "nobody else looks after it",
+    ]);
+    b.ok(&["stack"]);
+    a.ok(&["stack"]);
+    let name_b = b.0.file_name().unwrap().to_string_lossy().into_owned();
+
+    let mut open = hello(&a);
+    let r = open.ask(
+        r#"{"jsonrpc":"2.0","id":50,"method":"tools/call","params":{"name":"vivac_find","arguments":{"query":"quokka","everywhere":true}}}"#,
+    );
+    assert!(text_of(&r).contains("quokka"), "setup: {r}");
+
+    b.ok(&["share", "off"]);
+
+    let mut s = hello(&a);
+    let r = s.ask(
+        r#"{"jsonrpc":"2.0","id":51,"method":"tools/call","params":{"name":"vivac_find","arguments":{"query":"quokka","everywhere":true}}}"#,
+    );
+    let t = text_of(&r);
+    assert!(!t.contains("quokka"), "{t}");
+    let v: Value = serde_json::from_str(&t).expect("the payload is not JSON");
+    assert_eq!(v, json!([]), "{t}");
+
+    let r = s.ask(&format!(
+        r#"{{"jsonrpc":"2.0","id":52,"method":"tools/call","params":{{"name":"vivac_why","arguments":{{"id":"1","project":"{name_b}"}}}}}}"#
+    ));
+    assert_eq!(r["result"]["isError"], true, "{r}");
+    let t = text_of(&r);
+    assert!(
+        t.contains(&format!(
+            "{name_b} keeps what it knows to itself: other projects cannot read it."
+        )),
+        "{t}"
+    );
+    assert!(!t.contains("quokka"), "{t}");
+
+    let r = s.ask(r#"{"jsonrpc":"2.0","id":53,"method":"tools/list"}"#);
+    let tools = r["result"]["tools"].as_array().unwrap().clone();
+    assert!(
+        tools
+            .iter()
+            .all(|t| !t["name"].as_str().unwrap().contains("share")),
+        "{tools:?}"
+    );
+}
+
+/// `d916`: the description of `everywhere` says the search leaves out what
+/// a project keeps to itself, and asks the agent to say where anything it
+/// uses came from.
+#[test]
+fn the_everywhere_description_names_the_projects_that_keep_to_themselves() {
+    let c = seeded("mcp-share-desc");
+    let mut s = hello(&c);
+    let r = s.ask(r#"{"jsonrpc":"2.0","id":54,"method":"tools/list"}"#);
+    let tools = r["result"]["tools"].as_array().unwrap().clone();
+    let find = tools.iter().find(|t| t["name"] == "vivac_find").unwrap();
+    assert_eq!(
+        find["inputSchema"]["properties"]["everywhere"]["description"],
+        "Searches every project on the machine rather than this one, except those that keep what they know to themselves. Say which project anything you use comes from."
+    );
+}

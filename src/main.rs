@@ -154,6 +154,8 @@ const USAGE: &str = r#"vivac - provenance of work
     vivac init --new-tree                     plant here even if this
                                               folder's repositories already
                                               belong to a tracked product
+    vivac share [on|off]                      whether other projects can find
+                                              what this one knows
     vivac setup claude-code [--dry-run] [--yes] [--undo]
                                               write what Claude Code needs here:
                                               hooks, the MCP server, a skill
@@ -250,6 +252,7 @@ const COMMANDS: &[&str] = &[
     "tree",
     "open",
     "find",
+    "share",
     "stack",
     "parked",
     "flagged",
@@ -268,6 +271,60 @@ const COMMANDS: &[&str] = &[
     "update",
     "import",
 ];
+
+/// `vivac share [on|off]` (`d916`). Closing needs no terminal and no
+/// question: it can only keep more to itself. Reopening does both, so that
+/// what a person closed is only ever reopened by a person.
+fn share(root: &std::path::Path, a: &Args) -> Result<i32, Failure> {
+    let word = a.positional(0);
+    if let Some(w) = word {
+        if !matches!(w, "on" | "off") || !a.extra(1).is_empty() {
+            return Err(Failure::usage("usage: vivac share [on|off]"));
+        }
+    }
+    let mut tree = store::Store::open(root.to_path_buf())?;
+    let name = render::project_name(root);
+    match word {
+        None if tree.config.shares() => {
+            outln!("  {name} shares what it knows with the other projects on this machine.");
+            outln!("  To keep it to itself:  vivac share off");
+        }
+        None => {
+            outln!("  {name} keeps what it knows to itself.");
+            outln!("  To share it again, from a terminal:  vivac share on");
+        }
+        Some("off") if !tree.config.shares() => {
+            outln!("  {name} already keeps what it knows to itself.");
+        }
+        Some("off") => {
+            tree.set_sharing(false)?;
+            outln!("  {name} now keeps what it knows to itself: other projects on this machine no longer find it.");
+            outln!("  To share it again, from a terminal:  vivac share on");
+        }
+        Some(_) if tree.config.shares() => {
+            outln!("  {name} already shares what it knows.");
+        }
+        Some(_) => {
+            if !setup::stdin_is_terminal() {
+                return Err(Failure::Model(
+                    "  Sharing again needs a person at a terminal, and there is none here.\n  \
+                     An agent cannot reopen a project that was closed: type  vivac share on  in a terminal."
+                        .to_string(),
+                ));
+            }
+            let prompt = format!(
+                "Other projects on this machine will find what {name} knows. Share it? [y/N] "
+            );
+            if setup::ask(&prompt) {
+                tree.set_sharing(true)?;
+                outln!("  {name} shares what it knows again.");
+            } else {
+                outln!("  Nothing changed.");
+            }
+        }
+    }
+    Ok(0)
+}
 
 /// A synonym typed for a command that does exist, paired with the second
 /// line `unknown_command` gives instead of guessing which flags it takes:
@@ -579,6 +636,9 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         // `--everywhere` is `find`'s own for the same reason: the registry
         // fan-out (`d273`) is not something any other read takes.
         "find" => &["json", "everywhere"],
+        // `share` (`d916`) takes one word and no flag: `--yes` is exactly
+        // what must stay unknown, since reopening asks a person.
+        "share" => &[],
         "park" => &["until"],
         "promote" | "note" | "import" | "restore" => &[],
         _ => &[],
@@ -675,8 +735,15 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
     // it has to work with no root at all -- the same reason `init` and
     // `setup` return up here rather than past the check below. `d273`,
     // first half.
+    //
+    // `d916`: the project asking is whichever tree this directory resolves
+    // to, if any; a closed tree is skipped for every other one.
     if cmd == "find" && a.has("everywhere") {
-        return render::find_everywhere(a).map(|_| 0);
+        let own = store::locate(&cwd)
+            .ok()
+            .flatten()
+            .and_then(|l| store::project_id_of(&l.root));
+        return render::find_everywhere(a, own.as_deref()).map(|_| 0);
     }
 
     // `web` opens from any directory (`d199`), so it returns up here for the
@@ -793,6 +860,13 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
             }
         }
     }
+    // `share` (`d916`) writes one field of the tree's own config, under the
+    // tree's own write lock, and no event: it is not an operation on the
+    // tree the way the commands below are, and it stays out of MCP -- an
+    // agent cannot reopen what a person closed.
+    if cmd == "share" {
+        return share(&root, a);
+    }
     // `relocate` moves data outright rather than updating or undoing a
     // step, the shapes the rest of this dispatch is built around, so it
     // manages its own store and its own lock instead of going through
@@ -879,7 +953,19 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
             // any tree nobody ran `setup` in. Defensible and not a lie
             // today; it stops being one the day a foreign tree has a
             // second lane (`t594`).
-            let tree = index::load(&store::Store::open(foreign_root)?, false)?;
+            let foreign = store::Store::open(foreign_root)?;
+            // `d916`: a tree that keeps what it knows to itself is closed
+            // to every project but its own.
+            if foreign
+                .config
+                .closed_to(store::project_id_of(&root).as_deref())
+            {
+                return Err(Failure::Model(format!(
+                    "  {} keeps what it knows to itself: other projects cannot read it.",
+                    render::project_name(&foreign.root)
+                )));
+            }
+            let tree = index::load(&foreign, false)?;
             extra_word(a)?;
             if a.has("full") {
                 return Err(Failure::usage(

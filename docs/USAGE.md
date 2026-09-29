@@ -226,6 +226,22 @@ invariants from this tree to every tree on the machine that nobody has opened,
 because a tree nobody opens is where an invariant goes to break quietly. And
 `open --all` drops the cap, for the times you do want the whole wall.
 
+`find --everywhere` asks every project on the machine, grouped by the project
+each answer comes from, and `why <id> --project <name>` opens one of those
+answers. It is how something already worked out in one project reaches
+another. A project that should not be read from the others — work for a
+client, say — closes itself:
+
+```sh
+vivac share         whether other projects can find what this one knows
+vivac share off     keep it to this project
+vivac share on      share it again; asks you, at a terminal
+```
+
+A closed project is left out of every read made from another one, and still
+reads as always from inside. [Setting it up](SETUP.md#what-crosses-projects-and-what-does-not)
+says what that guards and what it does not.
+
 ### `open` answers one sentence, and the order is that sentence
 
 What is waiting on you right now, and what has been open so long you are not
