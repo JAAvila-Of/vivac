@@ -1048,6 +1048,100 @@ fn the_add_and_push_schemas_offer_no_power() {
 /// call that reads anything else depends on an argument nobody can see
 /// (`f452`); a debug build stops on that read, and the server dies here
 /// instead of answering.
+/// The five tools that only read, by name. Everything else writes.
+const READS: [&str; 5] = [
+    "vivac_brief",
+    "vivac_find",
+    "vivac_why",
+    "vivac_open",
+    "vivac_rules",
+];
+
+/// `f897`: none of the fifteen said what it does to the tree, so a client
+/// deciding what to run unasked could not tell a read from a write except by
+/// the name. MCP has fields for it, and here every answer is plain: five
+/// tools only read, the other ten append to a log that never loses anything,
+/// and none of them leaves the machine.
+#[test]
+fn every_tool_carries_a_title_and_says_what_it_does_to_the_tree() {
+    let c = seeded("annotations");
+    let mut s = hello(&c);
+    let r = s.ask(r#"{"jsonrpc":"2.0","id":40,"method":"tools/list"}"#);
+    for t in r["result"]["tools"].as_array().unwrap() {
+        let name = t["name"].as_str().unwrap();
+        let title = t["title"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{name} has no title"));
+        assert!(!title.trim().is_empty(), "{name} has an empty title");
+        let a = &t["annotations"];
+        let read = READS.contains(&name);
+        assert_eq!(a["readOnlyHint"], json!(read), "{name}: readOnlyHint");
+        assert_eq!(
+            a["destructiveHint"],
+            json!(false),
+            "{name}: destructiveHint"
+        );
+        assert_eq!(a["openWorldHint"], json!(false), "{name}: openWorldHint");
+        if !read {
+            assert_eq!(a["idempotentHint"], json!(false), "{name}: idempotentHint");
+        }
+    }
+}
+
+/// What keeps `readOnlyHint` a fact rather than a claim: every tool that
+/// declares it is called, with only what it requires, and the log comes out
+/// the same bytes it went in.
+#[test]
+fn a_tool_that_says_it_only_reads_leaves_the_log_as_it_was() {
+    let c = seeded("read-only-reads");
+    let mut s = hello(&c);
+    let open = s.ask(
+        r#"{"jsonrpc":"2.0","id":41,"method":"tools/call","params":{"name":"vivac_open","arguments":{}}}"#,
+    );
+    let fronts: Value = serde_json::from_str(&text_of(&open)).unwrap();
+    let alias = fronts[0]["alias"].as_str().unwrap().to_string();
+    let r = s.ask(r#"{"jsonrpc":"2.0","id":42,"method":"tools/list"}"#);
+    let before = c.log();
+    let mut called = 0;
+    for (i, t) in r["result"]["tools"].as_array().unwrap().iter().enumerate() {
+        if t["annotations"]["readOnlyHint"] != json!(true) {
+            continue;
+        }
+        let name = t["name"].as_str().unwrap();
+        let mut arguments = serde_json::Map::new();
+        for required in t["inputSchema"]["required"].as_array().unwrap() {
+            let required = required.as_str().unwrap();
+            let value = match required {
+                "id" => json!(alias),
+                "query" => json!("release"),
+                other => panic!("{name} requires {other}, which this test does not know"),
+            };
+            arguments.insert(required.to_string(), value);
+        }
+        let reply = s.ask(
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 300 + i as i64,
+                "method": "tools/call",
+                "params": { "name": name, "arguments": arguments },
+            })
+            .to_string(),
+        );
+        assert_ne!(
+            reply["result"]["isError"],
+            json!(true),
+            "{name} failed, so it proves nothing about what it writes: {reply}"
+        );
+        called += 1;
+    }
+    assert_eq!(called, READS.len(), "every read was called");
+    assert_eq!(
+        c.log(),
+        before,
+        "a tool that says it only reads wrote to the log"
+    );
+}
+
 #[test]
 fn every_tool_answers_a_call_built_from_only_its_own_schema() {
     let c = seeded("schema-reads");

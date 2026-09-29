@@ -69,6 +69,7 @@ anchoring
 anchors
 and
 animations
+annotations
 announces
 another
 answer
@@ -234,6 +235,7 @@ cache
 cached
 calendar
 call
+called
 caller
 calling
 came
