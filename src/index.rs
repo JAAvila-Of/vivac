@@ -92,7 +92,11 @@ const MAGIC: u64 = u64::from_le_bytes(*b"vivacIDX");
 // span, the same shape `closed` above already uses for an optional one. A
 // version-13 index has no bytes for it at all, so it has to be refused
 // rather than misread as a present-but-empty span.
-const FORMAT_VERSION: u32 = 14;
+// Version 15 widens it again with `review_on`, the same optional span for
+// `flag review --on`'s own review date (`d906`), written right behind
+// `parked_until` in the same shape. A version-14 index is missing those
+// bytes, and is refused for the same reason.
+const FORMAT_VERSION: u32 = 15;
 const ULID_LEN: usize = 26;
 const SPAN_LEN: usize = 8;
 const FLAG_RECORD_LEN: usize = 1 + SPAN_LEN;
@@ -130,7 +134,9 @@ const NODE_RECORD_LEN: usize = ULID_LEN
     + 4
     + 1
     + 1 // parked_until presence
-    + SPAN_LEN; // parked_until span
+    + SPAN_LEN // parked_until span
+    + 1 // review_on presence
+    + SPAN_LEN; // review_on span
 
 /// `LOADING.md` §4 "El umbral, con su número": a stale index is left alone
 /// below this many pending events, because applying them in memory is cheap
@@ -1015,6 +1021,7 @@ struct NodeRaw {
     against_count: u32,
     against_recorded: bool,
     parked_until: Option<Span>,
+    review_on: Option<Span>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1113,6 +1120,16 @@ fn write_node_record(
             write_span(buf, Span::default());
         }
     }
+    match n.review_on {
+        Some(s) => {
+            write_bool(buf, true);
+            write_span(buf, s);
+        }
+        None => {
+            write_bool(buf, false);
+            write_span(buf, Span::default());
+        }
+    }
     debug_assert_eq!(buf.len() - start, NODE_RECORD_LEN);
 }
 
@@ -1148,6 +1165,9 @@ fn read_node_record(c: &mut Cursor) -> Option<NodeRaw> {
     let parked_until_present = c.bool_()?;
     let parked_until_span = c.span()?;
     let parked_until = parked_until_present.then_some(parked_until_span);
+    let review_on_present = c.bool_()?;
+    let review_on_span = c.span()?;
+    let review_on = review_on_present.then_some(review_on_span);
     Some(NodeRaw {
         id,
         num,
@@ -1175,6 +1195,7 @@ fn read_node_record(c: &mut Cursor) -> Option<NodeRaw> {
         against_count,
         against_recorded,
         parked_until,
+        review_on,
     })
 }
 
@@ -1226,6 +1247,7 @@ fn assemble_nodes(
             born_seq: r.born_seq,
             born_lane: r.born_lane,
             parked_until: r.parked_until,
+            review_on: r.review_on,
         });
     }
     Some(out)
@@ -2000,6 +2022,7 @@ mod tests {
                 node: ulid.to_string(),
                 flag,
                 reason: reason.to_string(),
+                on: None,
             },
         }
     }
@@ -2101,7 +2124,7 @@ mod tests {
                  born_seq={} born_lane={:?} \
                  title={:?} why={:?} note={:?} outcome={:?} opened={:?} closed={:?} \
                  refs={:?} governs={:?} flags={:?} arms={:?} against={:?} \
-                 against_recorded={} parked_until={:?}\n",
+                 against_recorded={} parked_until={:?} review_on={:?}\n",
                 n.num,
                 n.id,
                 n.kind,
@@ -2127,6 +2150,7 @@ mod tests {
                 n.against(tree),
                 n.against_recorded,
                 n.parked_until(tree),
+                n.review_on(tree),
             ));
         }
         for v in &tree.vivacs {
@@ -2514,6 +2538,83 @@ mod tests {
 
         let loaded_again = load(&store, false).expect("load should succeed");
         assert_eq!(snapshot(&fresh), snapshot(&loaded_again));
+
+        std::fs::remove_dir_all(&store.root).ok();
+    }
+
+    /// `d906`: `review_on` is new to the node record, right behind
+    /// `parked_until`, and guarded the same way -- a round trip that only
+    /// compared fields that already existed would pass even if
+    /// `write_node_record`/`read_node_record` dropped this one on the floor.
+    #[test]
+    fn a_review_on_survives_the_round_trip() {
+        let a_node = fixed_id(1);
+        let events = vec![
+            created(
+                1,
+                &a_node,
+                1,
+                Kind::Task,
+                None,
+                "Something to look at again",
+                vec![],
+                vec![],
+            ),
+            Event {
+                seq: 2,
+                id: fixed_id(2),
+                ts: "2026-09-05T10:03:00Z".to_string(),
+                actor: "a_test".to_string(),
+                lane: "main".to_string(),
+                payload: Body::FlagRaised {
+                    node: a_node.clone(),
+                    flag: Flag::Review,
+                    reason: "look at it again".to_string(),
+                    on: Some("2026-12-01".to_string()),
+                },
+            },
+        ];
+        let fresh = fold(&events, 0);
+        assert_eq!(
+            fresh.node(&a_node).unwrap().review_on(&fresh),
+            Some("2026-12-01")
+        );
+
+        let store = tmp_store("review-on-roundtrip");
+        write_raw_locked(&store, &events);
+
+        let loaded = load(&store, true).expect("load should succeed");
+        assert_eq!(
+            loaded.node(&a_node).unwrap().review_on(&loaded),
+            Some("2026-12-01")
+        );
+        assert_eq!(snapshot(&fresh), snapshot(&loaded));
+
+        let loaded_again = load(&store, false).expect("load should succeed");
+        assert_eq!(snapshot(&fresh), snapshot(&loaded_again));
+
+        std::fs::remove_dir_all(&store.root).ok();
+    }
+
+    /// `d906`: a version-14 index has no `review_on` bytes in its node
+    /// records, so it is refused on the version field alone and the tree
+    /// comes from the log -- the same garbage-body trick as the other
+    /// previous-format tests above.
+    #[test]
+    fn a_version_14_index_is_rebuilt() {
+        let store = tmp_store("version-14");
+        let events = a_varied_event_set();
+        write_raw_locked(&store, &events);
+        let want = fold(&events, 0);
+
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&MAGIC.to_le_bytes());
+        bytes.extend_from_slice(&14u32.to_le_bytes());
+        bytes.extend_from_slice(&[0u8; 200]);
+        fs::write(store.index_path(), &bytes).unwrap();
+
+        let got = load(&store, false).unwrap();
+        assert_eq!(snapshot(&want), snapshot(&got));
 
         std::fs::remove_dir_all(&store.root).ok();
     }

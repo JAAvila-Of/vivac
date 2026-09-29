@@ -1332,3 +1332,218 @@ fn back_from_parked_outlives_do_not_touch_now_under_a_tight_budget() {
         "the due node should have outlived DO NOT TOUCH NOW:\n{tight}"
     );
 }
+
+// `d906`: `DUE FOR REVIEW` -- a review with a date sleeps until that day, and
+// from it on the brief brings it back with the decisions made below it. As
+// with `park --until`, a date in a fixture pinned to 2026 has to be written
+// straight into the log: `flag --on` only takes a day still ahead of the
+// real clock.
+
+/// Raises `flag` on `num` with `on`, straight in the log rather than through
+/// the CLI -- see above.
+fn flag_with_on(c: &Sandbox, seq: u64, num: u64, flag: &str, on: Option<&str>) {
+    let node = node_id_of(c, num);
+    let on = on.map(|d| format!(r#","on":"{d}""#)).unwrap_or_default();
+    c.append_raw_line(&format!(
+        r#"{{"seq":{seq},"id":"01REVIEWSLEEPS{seq:012}","ts":"2026-09-10T10:00:00Z","actor":"a_test0000000","lane":"main","payload":{{"type":"flag.raised","node":"{node}","flag":"{flag}","reason":"the {flag} reason"{on}}}}}"#
+    ));
+}
+
+/// The section that opens with `title`, its heading line to the line before
+/// the next heading. A heading is the one thing in the brief indented by a
+/// single space.
+fn block_of(brief: &str, title: &str) -> String {
+    let mut out = String::new();
+    let mut inside = false;
+    for l in brief.lines() {
+        if inside {
+            if l.starts_with(' ') && !l.starts_with("  ") {
+                break;
+            }
+        } else if l.trim() == title && !l.starts_with("  ") {
+            inside = true;
+        }
+        if inside {
+            out.push_str(l);
+            out.push('\n');
+        }
+    }
+    assert!(inside, "no {title} in:\n{brief}");
+    out
+}
+
+/// `g1` on the stack, a constraint `c2` under it, a task `t3`, and `t4`
+/// under that -- two hops from the path, off the lineage.
+fn review_tree(name: &str) -> Sandbox {
+    let c = Sandbox::new_seeded(name);
+    c.ok(&["push", "Ship the release", "--why", "seed"]);
+    c.ok(&[
+        "add",
+        "Never ship on a Friday",
+        "--parent",
+        "1",
+        "--type",
+        "constraint",
+        "--why",
+        "seed",
+    ]);
+    c.ok(&["add", "Write the notes", "--parent", "1", "--why", "seed"]);
+    c.ok(&["add", "Proofread them", "--parent", "3", "--why", "seed"]);
+    c
+}
+
+#[test]
+fn a_review_asleep_is_not_a_flag_before_its_day() {
+    let c = review_tree("review-sleeps");
+    flag_with_on(&c, 900, 1, "review", Some("2026-09-14"));
+    flag_with_on(&c, 901, 2, "review", Some("2026-09-14"));
+
+    let b = c.ok(&["brief", "--now", "2026-09-10T00:00:00Z"]);
+    assert!(!section(&b, "FLAGGED"), "{b}");
+    assert!(!section(&b, "DUE FOR REVIEW"), "{b}");
+    assert!(!b.contains("! review"), "the spine marks it:\n{b}");
+    assert!(!b.contains("AT RISK"), "the invariant is at risk:\n{b}");
+}
+
+#[test]
+fn a_review_with_no_date_is_still_a_flag() {
+    let c = review_tree("review-awake");
+    flag_with_on(&c, 900, 1, "review", None);
+    flag_with_on(&c, 901, 2, "review", None);
+
+    let b = c.ok(&["brief", "--now", "2026-09-10T00:00:00Z"]);
+    assert!(section(&b, "FLAGGED"), "{b}");
+    assert!(b.contains("! review"), "{b}");
+    assert!(b.contains("AT RISK"), "{b}");
+    assert!(!section(&b, "DUE FOR REVIEW"), "{b}");
+}
+
+#[test]
+fn a_review_comes_due_on_its_day_and_stays_due_after() {
+    let c = review_tree("review-due");
+    flag_with_on(&c, 900, 3, "review", Some("2026-09-14"));
+
+    for now in ["2026-09-14T00:00:00Z", "2026-09-20T00:00:00Z"] {
+        let b = c.ok(&["brief", "--now", now]);
+        assert!(section(&b, "DUE FOR REVIEW"), "{b}");
+        let block = block_of(&b, "DUE FOR REVIEW");
+        assert!(block.contains("t3"), "{block}");
+        assert!(block.contains("Write the notes"), "{block}");
+        assert!(block.contains("\"the review reason\""), "{block}");
+        assert!(block.contains("since 2026-09-14\n"), "{block}");
+        assert!(!block.contains("decided below"), "{block}");
+    }
+}
+
+/// `t4` is neither on the path nor one hop off it: the section covers the
+/// whole tree, not what the focus can reach.
+#[test]
+fn a_due_review_shows_even_outside_the_lineage() {
+    let c = review_tree("review-due-far");
+    flag_with_on(&c, 900, 4, "review", Some("2026-09-14"));
+
+    let b = c.ok(&["brief", "--now", "2026-09-14T00:00:00Z"]);
+    let block = block_of(&b, "DUE FOR REVIEW");
+    assert!(block.contains("Proofread them"), "{block}");
+}
+
+#[test]
+fn a_due_review_lists_the_open_decisions_made_below_it() {
+    let c = review_tree("review-decided-below");
+    for title in ["First call", "Second call", "Third call", "Fourth call"] {
+        c.ok(&[
+            "add", title, "--parent", "3", "--type", "decision", "--why", "seed",
+        ]);
+    }
+    flag_with_on(&c, 900, 3, "review", Some("2026-09-14"));
+
+    let b = c.ok(&["brief", "--now", "2026-09-14T00:00:00Z"]);
+    let block = block_of(&b, "DUE FOR REVIEW");
+    assert!(
+        block.contains("since 2026-09-14 · decided below: d5 d6 d7 +1"),
+        "three aliases and the rest counted:\n{block}"
+    );
+}
+
+#[test]
+fn a_decision_below_a_due_review_is_listed_only_while_open() {
+    let c = review_tree("review-decided-open");
+    for title in ["First call", "Second call"] {
+        c.ok(&[
+            "add", title, "--parent", "3", "--type", "decision", "--why", "seed",
+        ]);
+    }
+    c.ok(&["abandon", "d5", "changed my mind"]);
+    flag_with_on(&c, 900, 3, "review", Some("2026-09-14"));
+
+    let b = c.ok(&["brief", "--now", "2026-09-14T00:00:00Z"]);
+    let block = block_of(&b, "DUE FOR REVIEW");
+    assert!(
+        block.contains("since 2026-09-14 · decided below: d6\n"),
+        "{block}"
+    );
+}
+
+#[test]
+fn a_due_review_offers_the_two_commands() {
+    let c = review_tree("review-due-footer");
+    flag_with_on(&c, 900, 3, "review", Some("2026-09-14"));
+
+    let b = c.ok(&["brief", "--now", "2026-09-14T00:00:00Z"]);
+    assert!(
+        b.contains("  Reviewed:        vivac flag <id> review --off"),
+        "{b}"
+    );
+    assert!(
+        b.contains(
+            "  Look again on:   vivac flag <id> review --why \"<what to look at>\" --on <date>"
+        ),
+        "{b}"
+    );
+    let before = c.ok(&["brief", "--now", "2026-09-10T00:00:00Z"]);
+    assert!(!before.contains("Reviewed:"), "{before}");
+}
+
+/// The due review is in DUE FOR REVIEW, so its own FLAGGED row goes; any
+/// other flag on the same node stays.
+#[test]
+fn a_due_review_is_not_repeated_in_flagged() {
+    let c = review_tree("review-due-not-twice");
+    flag_with_on(&c, 900, 3, "review", Some("2026-09-14"));
+    flag_with_on(&c, 901, 3, "suspect", None);
+
+    let b = c.ok(&["brief", "--now", "2026-09-14T00:00:00Z"]);
+    let flagged = block_of(&b, "FLAGGED");
+    assert!(flagged.contains("suspect"), "{flagged}");
+    assert!(!flagged.contains("review"), "{flagged}");
+    assert!(section(&b, "DUE FOR REVIEW"), "{b}");
+}
+
+#[test]
+fn due_for_review_renders_after_flagged_and_before_back_from_parked() {
+    let c = review_tree("review-order");
+    flag_with_on(&c, 900, 3, "review", Some("2026-09-14"));
+    flag_with_on(&c, 901, 1, "suspect", None);
+    park_with_until(&c, 902, 4, "2026-09-14");
+
+    let b = c.ok(&["brief", "--now", "2026-09-14T00:00:00Z"]);
+    let flagged = b.find("\n FLAGGED").expect("{b}");
+    let due = b.find("\n DUE FOR REVIEW").expect("{b}");
+    let back = b.find("\n BACK FROM PARKED").expect("{b}");
+    assert!(flagged < due && due < back, "{b}");
+}
+
+#[test]
+fn flagged_points_at_the_command_that_lists_the_rest() {
+    let c = Sandbox::new_seeded("review-pointer");
+    c.ok(&["push", "Ship the release", "--why", "seed"]);
+    for title in ["One", "Two", "Three", "Four"] {
+        c.ok(&["add", title, "--parent", "1", "--why", "seed"]);
+    }
+    for (i, num) in [2u64, 3, 4, 5].iter().enumerate() {
+        flag_with_on(&c, 900 + i as u64, *num, "suspect", None);
+    }
+
+    let b = c.ok(&["brief", "--now", "2026-09-10T00:00:00Z"]);
+    assert!(b.contains("and 1 more (vivac flagged)"), "{b}");
+}

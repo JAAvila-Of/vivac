@@ -424,10 +424,14 @@ fn moved_section(project: &str, tree: &Tree, changed: &Changed) -> String {
             .flagged
             .iter()
             .map(|f| {
+                let word = match &f.on {
+                    Some(on) => format!("{} on {on}", f.flag.word()),
+                    None => f.flag.word().to_string(),
+                };
                 let note = if f.reason.is_empty() {
-                    f.flag.word().to_string()
+                    word
                 } else {
-                    format!("{}: {}", f.flag.word(), f.reason)
+                    format!("{word}: {}", f.reason)
                 };
                 row(project, tree, f.node, &note, "flag")
             })
@@ -535,14 +539,21 @@ fn governs_section(project: &str, tree: &Tree) -> String {
         // already carry. The brief answers the same way.
         None => String::new(),
     };
-    let invariants: String = crate::brief::constraints(tree, &lineage)
+    // `d906`: a review still asleep is not at risk yet, against the real
+    // local date like every other read that has no `--now`.
+    let today = crate::clock::today_local();
+    let invariants: String = crate::brief::constraints(tree, &lineage, &today)
         .iter()
         .map(|n| {
             row(
                 project,
                 tree,
                 n,
-                if n.flags.is_empty() { "" } else { "at risk" },
+                if n.live_flags(tree, &today).next().is_none() {
+                    ""
+                } else {
+                    "at risk"
+                },
                 "flag",
             )
         })

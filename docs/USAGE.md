@@ -49,6 +49,7 @@ vivac flag 2 review --why "measured on one file, never on the corpus"
 vivac promote 2
 vivac park 2 "waiting on the corpus run"
 vivac park 3 "waiting on the license renewal" --until 2026-11-01
+vivac flag 4 review --why "does 2.0 ship the upstream fix?" --on 2027-01-15
 ```
 
 `park` takes `--until` when the day it comes back is already known: the brief
@@ -56,6 +57,13 @@ keeps the node under DO NOT TOUCH NOW until then, and moves it to BACK FROM
 PARKED on its own once that day arrives — nobody has to remember to look. The
 date passing does not take it back: it stays parked until somebody does, with
 `vivac focus <id> --reopen`, or parks it again with another day.
+
+`flag` takes `--on` the same way, for a review only. A record that holds
+today and will not hold forever — a workaround until an upstream fix ships, a
+limit measured on this year's hardware — gets a review that sleeps until that
+day. Then the brief lists it under DUE FOR REVIEW, wherever it sits in the
+tree, with the decisions made below it: looking at one again means looking at
+what was built on it. `--off` clears it once it has been looked at.
 
 `decide` takes `--alternative` for what was turned down and `--supersedes` for
 the decision it replaces, so a reversal reads from either end. `declare`
@@ -197,6 +205,7 @@ vivac open          what is waiting on you, and what has been sitting
 vivac find cache    every node whose text holds all the words, best first
 vivac stack         the focus stack
 vivac parked        DO NOT TOUCH NOW
+vivac flagged       every mark, and the reviews still to come
 vivac rules         the pillars, rules and invariants that govern this project
 vivac triage        what can be pruned, and with which command
 vivac reconcile     files that changed with nothing in the tree claiming them

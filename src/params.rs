@@ -140,8 +140,24 @@ impl Park {
 /// re-implement the same check against `until` given as JSON instead of a
 /// flag. `d899`.
 pub(crate) fn validate_until(s: &str) -> Result<String, Failure> {
+    validate_day(s, "--until", "a park comes back on a day still ahead.")
+}
+
+/// `--on`'s own validation, the same check as [`validate_until`] under its
+/// own name and with its own closing sentence. `d906`.
+fn validate_on(s: &str) -> Result<String, Failure> {
+    validate_day(s, "--on", "a review is set for a day still ahead.")
+}
+
+/// What `--until` and `--on` share: a real civil date, written exactly as
+/// `YYYY-MM-DD`, strictly after today's local date. `flag` is the option's
+/// own name as the message quotes it, and `closing` the sentence that closes a
+/// refusal for a day that is not ahead.
+fn validate_day(s: &str, flag: &str, closing: &str) -> Result<String, Failure> {
     if !crate::clock::is_civil_date(s) {
-        return Err(Failure::usage("--until takes a date as YYYY-MM-DD."));
+        return Err(Failure::usage(format!(
+            "{flag} takes a date as YYYY-MM-DD."
+        )));
     }
     let today = crate::clock::today_local();
     if s <= today.as_str() {
@@ -150,9 +166,7 @@ pub(crate) fn validate_until(s: &str) -> Result<String, Failure> {
         } else {
             "has already passed"
         };
-        return Err(Failure::usage(format!(
-            "--until {s} {why}; a park comes back on a day still ahead."
-        )));
+        return Err(Failure::usage(format!("{flag} {s} {why}; {closing}")));
     }
     Ok(s.to_string())
 }
@@ -292,21 +306,36 @@ pub struct Flag {
     /// command line, so it stays validated in the operation, next to the
     /// rest of what `BRIEF-SPEC.md` §10 requires of a flag.
     pub why: Option<String>,
+    /// `--on`'s own review date, already validated: real, strictly
+    /// `YYYY-MM-DD`, strictly after today's local date, and never beside
+    /// `--off`. That it goes with `review` alone is checked in the
+    /// operation, next to where the flag is interpreted. `d906`.
+    pub on: Option<String>,
 }
 
 impl Flag {
     pub fn from_args(a: &Args) -> Result<Flag, Failure> {
         let (Some(sid), Some(sb)) = (a.positional(0), a.positional(1)) else {
             return Err(Failure::usage(
-                "usage: vivac flag <id> <flag> --why \"<reason>\"  |  --off\n\n  \
+                "usage: vivac flag <id> <flag> --why \"<reason>\" [--on YYYY-MM-DD]  |  --off\n\n  \
                  Flags: suspect, review, stale",
             ));
         };
+        let on = match a.opt("on") {
+            Some(s) => Some(validate_on(s)?),
+            None => None,
+        };
+        if on.is_some() && a.has("off") {
+            return Err(Failure::usage(
+                "--on and --off do not go together: --off clears the flag.",
+            ));
+        }
         Ok(Flag {
             id: sid.to_string(),
             flag: sb.to_string(),
             off: a.has("off"),
             why: a.opt("why").map(str::to_string),
+            on,
         })
     }
 }
@@ -515,5 +544,96 @@ mod tests {
             "t1", "waiting", "--until", "tomorrow",
         ])));
         assert!(m.contains("YYYY-MM-DD"), "{m}");
+    }
+
+    // `d906`: `flag --on`, the same check `--until` gets under its own name.
+
+    /// [`refusal`] for `Flag`, which is not `Debug` either.
+    fn flag_refusal(r: Result<Flag, Failure>) -> String {
+        match r {
+            Ok(_) => panic!("expected a refusal, got Ok"),
+            Err(Failure::Usage(m)) => m,
+            Err(other) => panic!("expected a usage failure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn no_on_is_none() {
+        let p = Flag::from_args(&args(&["t1", "review", "--why", "look again"])).unwrap();
+        assert_eq!(p.on, None);
+    }
+
+    #[test]
+    fn an_on_date_strictly_after_today_is_accepted() {
+        let _t = today_is_2026_08_31();
+        let p = Flag::from_args(&args(&[
+            "t1",
+            "review",
+            "--why",
+            "look again",
+            "--on",
+            "2026-09-01",
+        ]))
+        .unwrap();
+        assert_eq!(p.on, Some("2026-09-01".to_string()));
+    }
+
+    #[test]
+    fn an_on_date_that_has_passed_is_refused_in_its_own_words() {
+        let _t = today_is_2026_08_31();
+        let m = flag_refusal(Flag::from_args(&args(&[
+            "t1",
+            "review",
+            "--why",
+            "x",
+            "--on",
+            "2026-08-30",
+        ])));
+        assert_eq!(
+            m.trim(),
+            "--on 2026-08-30 has already passed; a review is set for a day still ahead."
+        );
+    }
+
+    #[test]
+    fn an_on_date_of_today_is_refused_in_its_own_words() {
+        let _t = today_is_2026_08_31();
+        let m = flag_refusal(Flag::from_args(&args(&[
+            "t1",
+            "review",
+            "--why",
+            "x",
+            "--on",
+            "2026-08-31",
+        ])));
+        assert_eq!(
+            m.trim(),
+            "--on 2026-08-31 is today; a review is set for a day still ahead."
+        );
+    }
+
+    #[test]
+    fn a_malformed_on_date_is_refused() {
+        let _t = today_is_2026_08_31();
+        let m = flag_refusal(Flag::from_args(&args(&[
+            "t1", "review", "--why", "x", "--on", "2026-9-1",
+        ])));
+        assert_eq!(m.trim(), "--on takes a date as YYYY-MM-DD.");
+    }
+
+    #[test]
+    fn on_beside_off_is_refused() {
+        let _t = today_is_2026_08_31();
+        let m = flag_refusal(Flag::from_args(&args(&[
+            "t1",
+            "review",
+            "--off",
+            "--on",
+            "2026-09-01",
+        ])));
+        assert_eq!(
+            m.trim(),
+            "--on and --off do not go together: --off clears the flag."
+        );
     }
 }

@@ -1941,6 +1941,11 @@ pub fn focus(ctx: &mut Ctx, p: params::Focus) -> Result<Outcome, Failure> {
 /// The reason is **mandatory** when raising it. `BRIEF-SPEC.md` §10 tests it
 /// as a contract: a flag with no reason informs nobody, it only adds noise to
 /// the brief, and within a week they all get ignored.
+///
+/// `--on` (`d906`) carries a review date straight into `Body::FlagRaised` --
+/// `params::Flag::from_args` has already validated it against the clock, so
+/// this only has to refuse it on a flag it means nothing for. `Model::apply`
+/// is where the date actually takes hold.
 pub fn flag(ctx: &mut Ctx, p: params::Flag) -> Result<Outcome, Failure> {
     let n = ctx.resolve(&p.id)?.clone();
     let flag = Flag::parse(&p.flag).ok_or_else(|| {
@@ -1958,6 +1963,13 @@ pub fn flag(ctx: &mut Ctx, p: params::Flag) -> Result<Outcome, Failure> {
             change: outcome::FlagChange::Off,
         });
     }
+    // `d906`: a date only means something for a review -- the other two are
+    // about now, so a day to come has nothing to say about them.
+    if p.on.is_some() && flag != Flag::Review {
+        return Err(Failure::usage(
+            "--on goes with review only: suspect and stale are about now.",
+        ));
+    }
     let reason = p.why.ok_or_else(|| {
         Failure::usage(
             "Missing --why. A flag with no reason informs nobody: in two weeks\n  \
@@ -1969,6 +1981,7 @@ pub fn flag(ctx: &mut Ctx, p: params::Flag) -> Result<Outcome, Failure> {
         node: n.id.clone(),
         flag,
         reason: reason.clone(),
+        on: p.on.clone(),
     }])?;
     Ok(Outcome::Flagged {
         alias: n.alias(),
@@ -1976,6 +1989,7 @@ pub fn flag(ctx: &mut Ctx, p: params::Flag) -> Result<Outcome, Failure> {
         change: outcome::FlagChange::Raised {
             title: n.title(&ctx.tree).to_string(),
             reason,
+            on: p.on,
         },
     })
 }

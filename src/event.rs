@@ -414,6 +414,13 @@ pub enum Body {
         node: String,
         flag: Flag,
         reason: String,
+        /// `flag --on`'s own review date, the civil date exactly as given,
+        /// never an instant. Only a `Flag::Review` ever sets this; every
+        /// other write of this event carries `None`, and an old binary
+        /// reading a line before `d906` sees no key at all, which is the
+        /// same absence. `d906`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        on: Option<String>,
     },
     #[serde(rename = "flag.cleared")]
     FlagCleared { node: String, flag: Flag },
@@ -661,6 +668,7 @@ mod tests {
                 node: "n".into(),
                 flag: Flag::Review,
                 reason: "x".into(),
+                on: None,
             },
             Body::FlagCleared {
                 node: "n".into(),
@@ -941,6 +949,52 @@ mod tests {
                 outcome: "waiting on day 14".into(),
                 forced: false,
                 until: None,
+            }
+        );
+    }
+
+    // `d906`: `flag --on`'s own field on `flag.raised`.
+
+    #[test]
+    fn a_flag_with_no_on_omits_the_field() {
+        let e = Body::FlagRaised {
+            node: "n".into(),
+            flag: Flag::Review,
+            reason: "look again".into(),
+            on: None,
+        };
+        let s = serde_json::to_string(&e).unwrap();
+        assert!(!s.contains("\"on\""), "{s}");
+    }
+
+    #[test]
+    fn a_flag_with_on_round_trips() {
+        let e = Body::FlagRaised {
+            node: "n".into(),
+            flag: Flag::Review,
+            reason: "look again".into(),
+            on: Some("2026-12-01".into()),
+        };
+        let s = serde_json::to_string(&e).unwrap();
+        assert!(s.contains(r#""on":"2026-12-01""#), "{s}");
+        assert_eq!(serde_json::from_str::<Body>(&s).unwrap(), e);
+    }
+
+    #[test]
+    fn an_old_flag_raised_line_with_no_on_key_still_parses() {
+        // The shape every log written before `d906` has: no `on` key at
+        // all, not even `null`. `#[serde(default)]` is what keeps this
+        // reading rather than refusing.
+        let line =
+            r#"{"type":"flag.raised","node":"n","flag":"review","reason":"look at it again"}"#;
+        let b: Body = serde_json::from_str(line).unwrap();
+        assert_eq!(
+            b,
+            Body::FlagRaised {
+                node: "n".into(),
+                flag: Flag::Review,
+                reason: "look at it again".into(),
+                on: None,
             }
         );
     }
