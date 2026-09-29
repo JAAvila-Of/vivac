@@ -142,6 +142,7 @@ pub fn collect<'a>(tree: &'a Tree, log: &[Event], since_seq: u64) -> Changed<'a>
                 state,
                 outcome,
                 forced,
+                until: _,
             } => match tree.node(node) {
                 Some(n) if *state == State::Done => result.closed.push(Closed {
                     node: n,
@@ -662,6 +663,7 @@ mod tests {
                 state,
                 outcome: outcome.to_string(),
                 forced,
+                until: None,
             },
         )
     }
@@ -845,6 +847,7 @@ mod tests {
                     state: State::Done,
                     outcome: "shipped".to_string(),
                     forced: false,
+                    until: None,
                 },
             ),
             ev_lane(

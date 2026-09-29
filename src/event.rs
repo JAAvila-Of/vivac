@@ -389,6 +389,13 @@ pub enum Body {
         /// an oversight: that is why it leaves a trace here. `MODEL.md` §7.
         #[serde(default)]
         forced: bool,
+        /// `park`'s own return date, `--until`'s civil date exactly as
+        /// given, never an instant. Only a park to `State::Suspended` ever
+        /// sets this; every other write of this event carries `None`, and
+        /// an old binary reading a line before `d899` sees no key at all,
+        /// which is the same absence. `d899`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        until: Option<String>,
     },
     #[serde(rename = "node.noted")]
     NodeNoted { node: String, note: String },
@@ -637,6 +644,7 @@ mod tests {
                 state: State::Done,
                 outcome: String::new(),
                 forced: false,
+                until: None,
             },
             Body::NodeNoted {
                 node: "n".into(),
@@ -887,6 +895,54 @@ mod tests {
             "an absent branch is absent, not null"
         );
         assert_eq!(serde_json::from_str::<Body>(&s).unwrap(), w);
+    }
+
+    // `d899`: `park --until`'s own field on `state.changed`.
+
+    #[test]
+    fn a_park_with_no_until_omits_the_field() {
+        let e = Body::StateChanged {
+            node: "n".into(),
+            state: State::Suspended,
+            outcome: "waiting".into(),
+            forced: false,
+            until: None,
+        };
+        let s = serde_json::to_string(&e).unwrap();
+        assert!(!s.contains("until"), "{s}");
+    }
+
+    #[test]
+    fn a_park_with_until_round_trips() {
+        let e = Body::StateChanged {
+            node: "n".into(),
+            state: State::Suspended,
+            outcome: "waiting".into(),
+            forced: false,
+            until: Some("2026-09-14".into()),
+        };
+        let s = serde_json::to_string(&e).unwrap();
+        assert!(s.contains(r#""until":"2026-09-14""#), "{s}");
+        assert_eq!(serde_json::from_str::<Body>(&s).unwrap(), e);
+    }
+
+    #[test]
+    fn an_old_state_changed_line_with_no_until_key_still_parses() {
+        // The shape every log written before `d899` has: no `until` key at
+        // all, not even `null`. `#[serde(default)]` is what keeps this
+        // reading rather than refusing.
+        let line = r#"{"type":"state.changed","node":"n","state":"suspended","outcome":"waiting on day 14","forced":false}"#;
+        let b: Body = serde_json::from_str(line).unwrap();
+        assert_eq!(
+            b,
+            Body::StateChanged {
+                node: "n".into(),
+                state: State::Suspended,
+                outcome: "waiting on day 14".into(),
+                forced: false,
+                until: None,
+            }
+        );
     }
 
     #[test]

@@ -1421,9 +1421,6 @@ pub fn pop(ctx: &mut Ctx, p: params::Pop) -> Result<Outcome, Failure> {
     Ok(Outcome::Popped { closed, parent })
 }
 
-/// `park` — what produces DO NOT TOUCH NOW; without it that section always
-/// comes out empty. The closure rule does not stop it: parking claims nothing
-/// finished, and if parking cost more than ignoring, nobody would park.
 /// Whether a word is shaped like the name of a node.
 ///
 /// A bare number, or one character of type prefix and a number: `25`, `f25`.
@@ -1478,12 +1475,21 @@ fn named_or_focus(
     }
 }
 
+/// `park` — what produces DO NOT TOUCH NOW; without it that section always
+/// comes out empty. The closure rule does not stop it: parking claims nothing
+/// finished, and if parking cost more than ignoring, nobody would park.
+///
+/// `--until` (`d899`) carries a return date straight into `Body::StateChanged`
+/// -- `params::Park::from_args` has already validated it against the clock,
+/// so this only ever has to write what it was given. `Model::apply` is where
+/// the date actually takes hold, keyed off `State::Suspended` alone: this
+/// function does not need to know that.
 pub fn park(ctx: &mut Ctx, p: params::Park) -> Result<Outcome, Failure> {
     let (node, reason) = named_or_focus(
         ctx,
         p.node.as_deref(),
         p.reason.as_deref(),
-        "usage: vivac park [<id>] [\"<reason>\"]",
+        "usage: vivac park [<id>] [\"<reason>\"] [--until <date>]",
     )?;
     let reason = reason.as_str();
     guard_text(&[("reason", reason)])?;
@@ -1499,6 +1505,7 @@ pub fn park(ctx: &mut Ctx, p: params::Park) -> Result<Outcome, Failure> {
         state: State::Suspended,
         outcome: reason.to_string(),
         forced: false,
+        until: p.until.clone(),
     });
     // `t533` §2.1: only when it is the stack's own top. Anywhere else, the
     // path still runs through it and the spine marks it parked instead.
@@ -1567,6 +1574,7 @@ fn close_node(
         state: State::Done,
         outcome: outcome.to_string(),
         forced: force,
+        until: None,
     }];
     // `t533` §2.1: only when it is the stack's own top. Anywhere else, the
     // path still runs through it and the spine marks it closed instead.
@@ -1823,6 +1831,7 @@ pub fn abandon(ctx: &mut Ctx, p: params::Abandon) -> Result<Outcome, Failure> {
         state: State::Abandoned,
         outcome: reason.to_string(),
         forced: false,
+        until: None,
     }];
     let falling_count = falling.len();
     let saved_lines: Vec<(String, String)> = saved
@@ -1835,6 +1844,7 @@ pub fn abandon(ctx: &mut Ctx, p: params::Abandon) -> Result<Outcome, Failure> {
             state: State::Abandoned,
             outcome: format!("cascaded from {}", n.alias()),
             forced: false,
+            until: None,
         });
     }
     // The stack is the path to the focus and cannot cross an abandoned node,
@@ -1905,6 +1915,7 @@ pub fn focus(ctx: &mut Ctx, p: params::Focus) -> Result<Outcome, Failure> {
             state: State::Active,
             outcome: String::new(),
             forced: false,
+            until: None,
         });
     }
     evs.extend(
@@ -2084,6 +2095,7 @@ pub fn decide(ctx: &mut Ctx, p: params::Decide) -> Result<Outcome, Failure> {
             state: State::Superseded,
             outcome: format!("superseded by d{num}"),
             forced: false,
+            until: None,
         });
     }
     ctx.emit(evs)?;

@@ -242,6 +242,7 @@
       "<h2>" + esc(n.t) + "</h2>" +
       section("Why it was born", n.w) +
       section("Outcome", n.o) +
+      section("Return date", n.u ? (n.du ? "Back since " + n.u : "Until " + n.u) : "") +
       waiting(n) +
       notes(n) +
       around(i) +

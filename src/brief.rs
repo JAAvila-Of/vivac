@@ -370,6 +370,7 @@ const BRIEF_HEADINGS: &[&str] = &[
     "INVARIANTS",
     "BLOCKS",
     "FLAGGED",
+    "BACK FROM PARKED",
     "DO NOT TOUCH NOW",
     "STANDING DECISIONS",
     "LAST VIVAC",
@@ -1131,31 +1132,60 @@ pub fn to_text(
     // focus (`d536`) -- so this section and `parked`'s own count agree
     // (`f60`). **This is the product's differentiator**, and it only has
     // content if `park` costs the same as `pop`.
+    //
+    // `d899`: a park can carry a return date, and once local `date` reaches
+    // it the node is due -- it leaves DO NOT TOUCH NOW and surfaces in
+    // BACK FROM PARKED instead, pushed first so it renders above DO NOT
+    // TOUCH NOW and -- `Section`'s own doc, vector order is priority order
+    // too -- wins the budget when both are truncable and space is short.
     let mut parked_nodes: Vec<&Node> = a
         .nodes_iter()
         .filter(|n| n.state == State::Suspended)
         .collect();
     parked_nodes.sort_by_key(|n| n.num);
-    let out_of_scope: Vec<Vec<String>> = parked_nodes
-        .iter()
-        .map(|n| {
-            let hangs_off = n
-                .parent
-                .and_then(|p| a.node_by_num(p))
-                .map(|p| format!("hangs off {}", p.alias()))
-                .unwrap_or_default();
-            let mut v = vec![format!(
-                "  {:<6} {:<40} {hangs_off}",
-                n.alias(),
-                clip(n.title(a), 40)
-            )];
-            let outcome = n.outcome(a);
-            if !outcome.is_empty() {
-                v.push(format!("         \"{}\"", clip(outcome, 56)));
+    let is_due = |n: &&Node| n.parked_until(a).is_some_and(|u| u <= date.as_str());
+    let (due, not_due): (Vec<&Node>, Vec<&Node>) = parked_nodes.into_iter().partition(is_due);
+
+    // `show_until` is false for BACK FROM PARKED's own rows: the section
+    // already says it is due, and repeating the date on every row would
+    // say the same thing twice.
+    let park_row = |n: &&Node, show_until: bool| -> Vec<String> {
+        let mut tail: Vec<String> = Vec::new();
+        if let Some(p) = n.parent.and_then(|p| a.node_by_num(p)) {
+            tail.push(format!("hangs off {}", p.alias()));
+        }
+        if show_until {
+            if let Some(u) = n.parked_until(a) {
+                tail.push(format!("until {u}"));
             }
-            v
-        })
-        .collect();
+        }
+        let mut v = vec![format!(
+            "  {:<6} {:<40} {}",
+            n.alias(),
+            clip(n.title(a), 40),
+            tail.join("  ")
+        )];
+        let outcome = n.outcome(a);
+        if !outcome.is_empty() {
+            v.push(format!("         \"{}\"", clip(outcome, 56)));
+        }
+        v
+    };
+
+    let mut back_body = trim_list(
+        due.iter().map(|n| park_row(n, false)).collect(),
+        6,
+        "parked",
+    );
+    if !back_body.is_empty() {
+        back_body.push(String::new());
+        back_body.push("  Back in:          vivac focus <id> --reopen".to_string());
+        back_body
+            .push("  Set aside again:  vivac park <id> \"<reason>\" --until <date>".to_string());
+    }
+    s.push(Section::loose(heading("BACK FROM PARKED", back_body)));
+
+    let out_of_scope: Vec<Vec<String>> = not_due.iter().map(|n| park_row(n, true)).collect();
     s.push(Section::loose(heading(
         "DO NOT TOUCH NOW",
         trim_list(out_of_scope, 6, "parked"),

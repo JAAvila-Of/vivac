@@ -867,6 +867,7 @@ fn legend(map: &Map) -> String {
 /// end a `<script>` element, and a tree is allowed to hold a node called
 /// `</script>`.
 fn payload(project: &str, tree: &Tree, map: &Map, ag: &Aggregates, fold: &Fold) -> String {
+    let today = crate::clock::today_local();
     let stops: Vec<serde_json::Value> = map
         .stops
         .iter()
@@ -883,6 +884,12 @@ fn payload(project: &str, tree: &Tree, map: &Map, ag: &Aggregates, fold: &Fold) 
                 "b": n.blocks,
                 "w": n.why(tree),
                 "o": n.outcome(tree),
+                // `d899`: `park --until`'s own return date, and whether
+                // local `today` has reached it -- computed here, not in
+                // `map.js`, so the panel never has to know what "local"
+                // means on the machine `vivac web` runs on.
+                "u": n.parked_until(tree),
+                "du": n.parked_until(tree).is_some_and(|u| u <= today.as_str()),
                 "nt": n.notes(tree)
                     .iter()
                     .map(|(at, text)| json!({"at": at, "n": text}))
@@ -1427,6 +1434,7 @@ mod tests {
                 state: State::Done,
                 outcome: "closed with a condition still open".to_string(),
                 forced: true,
+                until: None,
             },
         );
         tree.sort_nodes();
@@ -1452,6 +1460,7 @@ mod tests {
                 state: State::Done,
                 outcome: "finished".to_string(),
                 forced: false,
+                until: None,
             },
         );
         seq += 1;
@@ -1464,6 +1473,7 @@ mod tests {
                 state: State::Suspended,
                 outcome: "waiting on day 14".to_string(),
                 forced: false,
+                until: None,
             },
         );
         tree.sort_nodes();
@@ -1760,6 +1770,63 @@ mod tests {
         assert!(page.contains("the first note"), "the covered note is here");
         assert!(page.contains("the correction"));
         assert!(page.contains("2 notes"), "and the row says there are two");
+    }
+
+    /// `d899`: a park's own `--until`, and whether local `today` has
+    /// reached it, travel with the page the same way `outcome` already
+    /// does -- `du` computed server-side, so the panel never has to know
+    /// what "local" means on the machine `vivac web` runs on.
+    #[test]
+    fn a_parks_return_date_and_whether_it_is_due_travels_with_the_page() {
+        let mut tree = Tree::default();
+        let (mut seq, mut num) = (0u64, 0u64);
+        let root = fixture_node(&mut tree, &mut seq, &mut num, None);
+        let overdue = fixture_node(&mut tree, &mut seq, &mut num, Some(&root));
+        let not_due = fixture_node(&mut tree, &mut seq, &mut num, Some(&root));
+        seq += 1;
+        tree.apply(
+            seq,
+            "2026-09-26T10:00:00Z",
+            "main",
+            &Body::StateChanged {
+                node: overdue,
+                state: State::Suspended,
+                outcome: "long overdue".to_string(),
+                forced: false,
+                until: Some("2020-01-01".to_string()),
+            },
+        );
+        seq += 1;
+        tree.apply(
+            seq,
+            "2026-09-26T11:00:00Z",
+            "main",
+            &Body::StateChanged {
+                node: not_due,
+                state: State::Suspended,
+                outcome: "waiting".to_string(),
+                forced: false,
+                until: Some("9999-12-31".to_string()),
+            },
+        );
+        tree.sort_nodes();
+
+        let ag = tree.aggregates();
+        let map = Map::of(&tree, &ag, &Fold::default());
+        let data = payload("vivac", &tree, &map, &ag, &Fold::default());
+        let parsed: serde_json::Value = serde_json::from_str(&data).expect("the payload is JSON");
+        let stops = parsed["stops"].as_array().expect("an array of stops");
+        let of_title = |title: &str| {
+            stops
+                .iter()
+                .find(|s| s["t"] == title)
+                .unwrap_or_else(|| panic!("no stop titled {title}"))
+        };
+        assert_eq!(of_title("node 2")["u"], "2020-01-01");
+        assert_eq!(of_title("node 2")["du"], true);
+        assert_eq!(of_title("node 3")["u"], "9999-12-31");
+        assert_eq!(of_title("node 3")["du"], false);
+        assert_eq!(of_title("node 1")["u"], serde_json::Value::Null);
     }
 
     /// The `*` is on the row, the word is in the `title`, and neither of

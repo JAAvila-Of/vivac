@@ -87,7 +87,12 @@ const MAGIC: u64 = u64::from_le_bytes(*b"vivacIDX");
 // the old ten-character dates, and `date_of` on one of those returns it
 // unchanged rather than reading it as an instant, so a reader would keep
 // showing UTC dates from a stale index forever without the refusal below.
-const FORMAT_VERSION: u32 = 13;
+// Version 14 widens each node record with `parked_until`, an optional span
+// for `park --until`'s own return date (`d899`): a presence byte then a
+// span, the same shape `closed` above already uses for an optional one. A
+// version-13 index has no bytes for it at all, so it has to be refused
+// rather than misread as a present-but-empty span.
+const FORMAT_VERSION: u32 = 14;
 const ULID_LEN: usize = 26;
 const SPAN_LEN: usize = 8;
 const FLAG_RECORD_LEN: usize = 1 + SPAN_LEN;
@@ -123,7 +128,9 @@ const NODE_RECORD_LEN: usize = ULID_LEN
     + 4
     + 4
     + 4
-    + 1;
+    + 1
+    + 1 // parked_until presence
+    + SPAN_LEN; // parked_until span
 
 /// `LOADING.md` §4 "El umbral, con su número": a stale index is left alone
 /// below this many pending events, because applying them in memory is cheap
@@ -1007,6 +1014,7 @@ struct NodeRaw {
     against_offset: u32,
     against_count: u32,
     against_recorded: bool,
+    parked_until: Option<Span>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1095,6 +1103,16 @@ fn write_node_record(
     write_u32(buf, against_offset);
     write_u32(buf, against_count);
     write_bool(buf, n.against_recorded);
+    match n.parked_until {
+        Some(s) => {
+            write_bool(buf, true);
+            write_span(buf, s);
+        }
+        None => {
+            write_bool(buf, false);
+            write_span(buf, Span::default());
+        }
+    }
     debug_assert_eq!(buf.len() - start, NODE_RECORD_LEN);
 }
 
@@ -1127,6 +1145,9 @@ fn read_node_record(c: &mut Cursor) -> Option<NodeRaw> {
     let against_offset = c.u32()?;
     let against_count = c.u32()?;
     let against_recorded = c.bool_()?;
+    let parked_until_present = c.bool_()?;
+    let parked_until_span = c.span()?;
+    let parked_until = parked_until_present.then_some(parked_until_span);
     Some(NodeRaw {
         id,
         num,
@@ -1153,6 +1174,7 @@ fn read_node_record(c: &mut Cursor) -> Option<NodeRaw> {
         against_offset,
         against_count,
         against_recorded,
+        parked_until,
     })
 }
 
@@ -1203,6 +1225,7 @@ fn assemble_nodes(
             against_recorded: r.against_recorded,
             born_seq: r.born_seq,
             born_lane: r.born_lane,
+            parked_until: r.parked_until,
         });
     }
     Some(out)
@@ -1993,6 +2016,7 @@ mod tests {
                 state: State::Done,
                 outcome: outcome.to_string(),
                 forced: false,
+                until: None,
             },
         }
     }
@@ -2077,7 +2101,7 @@ mod tests {
                  born_seq={} born_lane={:?} \
                  title={:?} why={:?} note={:?} outcome={:?} opened={:?} closed={:?} \
                  refs={:?} governs={:?} flags={:?} arms={:?} against={:?} \
-                 against_recorded={}\n",
+                 against_recorded={} parked_until={:?}\n",
                 n.num,
                 n.id,
                 n.kind,
@@ -2102,6 +2126,7 @@ mod tests {
                 n.arms(tree),
                 n.against(tree),
                 n.against_recorded,
+                n.parked_until(tree),
             ));
         }
         for v in &tree.vivacs {
@@ -2431,6 +2456,62 @@ mod tests {
         assert_eq!(snapshot(&fresh), snapshot(&loaded));
 
         // Purely from the index this time, with no tail to apply.
+        let loaded_again = load(&store, false).expect("load should succeed");
+        assert_eq!(snapshot(&fresh), snapshot(&loaded_again));
+
+        std::fs::remove_dir_all(&store.root).ok();
+    }
+
+    /// `d899`: `parked_until` is new to the node record, the same shape
+    /// `a_nodes_birth_seq_and_lane_survive_the_round_trip` above already
+    /// guards for `born_seq`/`born_lane` -- a round trip that only compared
+    /// fields that already existed would pass even if
+    /// `write_node_record`/`read_node_record` dropped this one on the floor.
+    #[test]
+    fn a_parked_until_survives_the_round_trip() {
+        let a_node = fixed_id(1);
+        let events = vec![
+            created(
+                1,
+                &a_node,
+                1,
+                Kind::Task,
+                None,
+                "Something for later",
+                vec![],
+                vec![],
+            ),
+            Event {
+                seq: 2,
+                id: fixed_id(2),
+                ts: "2026-09-05T10:03:00Z".to_string(),
+                actor: "a_test".to_string(),
+                lane: "main".to_string(),
+                payload: Body::StateChanged {
+                    node: a_node.clone(),
+                    state: State::Suspended,
+                    outcome: "waiting on day 14".to_string(),
+                    forced: false,
+                    until: Some("2026-09-14".to_string()),
+                },
+            },
+        ];
+        let fresh = fold(&events, 0);
+        assert_eq!(
+            fresh.node(&a_node).unwrap().parked_until(&fresh),
+            Some("2026-09-14")
+        );
+
+        let store = tmp_store("parked-until-roundtrip");
+        write_raw_locked(&store, &events);
+
+        let loaded = load(&store, true).expect("load should succeed");
+        assert_eq!(
+            loaded.node(&a_node).unwrap().parked_until(&loaded),
+            Some("2026-09-14")
+        );
+        assert_eq!(snapshot(&fresh), snapshot(&loaded));
+
         let loaded_again = load(&store, false).expect("load should succeed");
         assert_eq!(snapshot(&fresh), snapshot(&loaded_again));
 

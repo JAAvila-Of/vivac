@@ -48,7 +48,14 @@ vivac note "the corpus run is what settled it"
 vivac flag 2 review --why "measured on one file, never on the corpus"
 vivac promote 2
 vivac park 2 "waiting on the corpus run"
+vivac park 3 "waiting on the license renewal" --until 2026-11-01
 ```
+
+`park` takes `--until` when the day it comes back is already known: the brief
+keeps the node under DO NOT TOUCH NOW until then, and moves it to BACK FROM
+PARKED on its own once that day arrives — nobody has to remember to look. The
+date passing does not take it back: it stays parked until somebody does, with
+`vivac focus <id> --reopen`, or parks it again with another day.
 
 `decide` takes `--alternative` for what was turned down and `--supersedes` for
 the decision it replaces, so a reversal reads from either end. `declare`

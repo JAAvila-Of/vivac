@@ -2032,6 +2032,12 @@ fn print_triage_heading(out: Stream, label: &str, hint: &str) {
 /// `parked` — DO NOT TOUCH NOW. It is the section no other tool emits: every
 /// memory tool dumps what is relevant, and the problem in agentic development
 /// is the opposite one, bounding.
+///
+/// `d899`: a park can carry a return date, `--until`. Against the real local
+/// date -- not `--now`; `brief` is the one place that needs a fixed date for
+/// determinism, and `parked` is a plain read with none of `brief`'s budget
+/// logic to make deterministic in the first place -- a row past its own
+/// date is marked due, in words rather than colour alone (DX pillar).
 pub fn parked(a: &Tree, args: &Args) -> R {
     let ag = &a.aggregates();
     let mut ps: Vec<&Node> = a
@@ -2039,10 +2045,17 @@ pub fn parked(a: &Tree, args: &Args) -> R {
         .filter(|n| n.state == State::Suspended)
         .collect();
     ps.sort_by_key(|n| n.num);
+    let today = crate::clock::today_local();
+    let due = |n: &Node| n.parked_until(a).is_some_and(|u| u <= today.as_str());
     if args.has("json") {
         return print_json(json!(ps
             .iter()
-            .map(|n| json_node(a, ag, n))
+            .map(|n| {
+                let mut v = json_node(a, ag, n);
+                v["until"] = json!(n.parked_until(a));
+                v["due"] = json!(due(n));
+                v
+            })
             .collect::<Vec<_>>()));
     }
     if ps.is_empty() {
@@ -2075,6 +2088,14 @@ pub fn parked(a: &Tree, args: &Args) -> R {
         );
         for l in wrap(n.outcome(a), WIDTH, "         ") {
             outln!("{}", style::dim(out, &l));
+        }
+        if let Some(u) = n.parked_until(a) {
+            let marker = if due(n) {
+                format!("         back since {u}")
+            } else {
+                format!("         until {u}")
+            };
+            outln!("{}", style::dim(out, &marker));
         }
     }
     outln!();

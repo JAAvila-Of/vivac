@@ -330,6 +330,9 @@ pub fn import(ctx: &mut Ctx, args: &Args) -> R {
                     // unforced: the ones that turn out false have to show up
                     // in `check`, which is exactly what needs to be seen.
                     forced: false,
+                    // The spike predates `--until` entirely; nothing it
+                    // wrote can carry a return date (`d899`).
+                    until: None,
                 },
                 instant(n.closed.as_deref().unwrap_or(&n.opened))
                     .expect("validated in the pre-pass above"),

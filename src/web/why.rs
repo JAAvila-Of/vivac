@@ -297,6 +297,7 @@ mod tests {
                 state: State::Done,
                 outcome: String::new(),
                 forced: false,
+                until: None,
             },
         )
     }

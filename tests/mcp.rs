@@ -1632,6 +1632,80 @@ fn park_by_mcp_writes_the_same_events_as_park_by_the_cli() {
     assert_eq!(tree_events(&cli), tree_events(&via_mcp));
 }
 
+/// `d899`: `until` is optional on `vivac_park`, and when given it lands in
+/// the log the same way `park --until` does over the CLI.
+#[test]
+fn park_with_until_by_mcp_writes_the_same_events_as_the_cli() {
+    let cli = Sandbox::new_seeded("park-until-cli");
+    cli.ok(&[
+        "push",
+        "Ship the release apparatus",
+        "--why",
+        "the version was a hand edit",
+    ]);
+    let via_mcp = twin_of(&cli, "park-until-mcp");
+
+    cli.ok(&[
+        "park",
+        "waiting on the security review",
+        "--until",
+        "9999-12-31",
+    ]);
+    let mut s = hello(&via_mcp);
+    let r = s.ask(
+        r#"{"jsonrpc":"2.0","id":25,"method":"tools/call","params":{"name":"vivac_park","arguments":{"reason":"waiting on the security review","until":"9999-12-31"}}}"#,
+    );
+    assert_eq!(r["result"]["isError"], false, "{r}");
+    assert_eq!(tree_events(&cli), tree_events(&via_mcp));
+    assert!(
+        via_mcp.log().contains(r#""until":"9999-12-31""#),
+        "{}",
+        via_mcp.log()
+    );
+}
+
+/// The same refusal `park --until` gives the CLI for a date already past,
+/// surfaced as an MCP tool error rather than a crash.
+#[test]
+fn park_with_a_past_until_by_mcp_is_an_error_the_model_can_read() {
+    let c = seeded("park-until-past-mcp");
+    let mut s = hello(&c);
+    let r = s.ask(
+        r#"{"jsonrpc":"2.0","id":25,"method":"tools/call","params":{"name":"vivac_park","arguments":{"reason":"waiting","until":"2000-01-01"}}}"#,
+    );
+    assert_eq!(r["result"]["isError"], true, "{r}");
+    assert!(
+        text_of(&r).contains("has already passed"),
+        "{}",
+        text_of(&r)
+    );
+}
+
+/// `until` is declared but never required: a park with no return date is
+/// still the ordinary call.
+#[test]
+fn vivac_park_lists_until_as_an_optional_argument() {
+    let c = seeded("park-until-schema");
+    let mut s = hello(&c);
+    let r = s.ask(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#);
+    let tools = r["result"]["tools"].as_array().unwrap().clone();
+    let park_tool = tools
+        .iter()
+        .find(|t| t["name"] == "vivac_park")
+        .expect("vivac_park is in the tool list");
+    assert!(
+        park_tool["inputSchema"]["properties"]["until"].is_object(),
+        "{park_tool}"
+    );
+    let required: Vec<&str> = park_tool["inputSchema"]["required"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert!(!required.contains(&"until"), "{park_tool}");
+}
+
 #[test]
 fn save_by_mcp_writes_the_same_events_as_save_by_the_cli() {
     let cli = Sandbox::new_seeded("save-cli");
