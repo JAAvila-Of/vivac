@@ -96,3 +96,59 @@ fn an_empty_word_does_not_crash() {
     let (out, _) = c.run(&["park", ""]);
     assert!(!out.contains("panicked"), "it aborted the process:\n{out}");
 }
+
+// `d899`: `--until`, the return date a park can carry.
+
+#[test]
+fn until_accepts_a_future_date_and_writes_it_to_the_log() {
+    let c = tree("park-until-future");
+    c.ok(&["park", "waiting on the release", "--until", "9999-12-31"]);
+    assert!(c.log().contains(r#""until":"9999-12-31""#), "{}", c.log());
+}
+
+#[test]
+fn without_until_the_event_carries_none() {
+    let c = tree("park-until-none");
+    c.ok(&["park", "waiting on the release"]);
+    assert!(!c.log().contains("\"until\""), "{}", c.log());
+}
+
+#[test]
+fn until_refuses_a_date_that_has_already_passed() {
+    let c = tree("park-until-past");
+    let (out, code) = c.run(&["park", "waiting", "--until", "2000-01-01"]);
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("has already passed"), "{out}");
+    assert!(
+        !c.log().contains("\"until\""),
+        "a refused write must not land:\n{}",
+        c.log()
+    );
+}
+
+/// `TZ=UTC` on every `Sandbox::run` (`tests/common/mod.rs`) is what `--until`
+/// is checked against too, so today's own date, read off `brief`'s header,
+/// is exactly what a same-day `--until` has to be refused for.
+#[test]
+fn until_refuses_the_same_day_as_today() {
+    let c = tree("park-until-today");
+    let brief = c.ok(&["brief"]);
+    let today = brief
+        .lines()
+        .next()
+        .and_then(|l| l.split_whitespace().last())
+        .expect("the header line names today");
+    let (out, code) = c.run(&["park", "waiting", "--until", today]);
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("is today"), "{out}");
+}
+
+#[test]
+fn until_refuses_a_malformed_or_relative_date() {
+    let c = tree("park-until-malformed");
+    for bad in ["2026-9-1", "2026-02-30", "tomorrow", "+7d"] {
+        let (out, code) = c.run(&["park", "waiting", "--until", bad]);
+        assert_eq!(code, 2, "{bad}:\n{out}");
+        assert!(out.contains("YYYY-MM-DD"), "{bad}:\n{out}");
+    }
+}

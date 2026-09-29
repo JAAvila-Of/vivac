@@ -111,15 +111,50 @@ impl Done {
 pub struct Park {
     pub node: Option<String>,
     pub reason: Option<String>,
+    /// `--until`'s own civil date, already validated: real, strictly
+    /// `YYYY-MM-DD`, and strictly after today's local date. Validated here
+    /// rather than in the operation because it needs only the clock, never
+    /// the tree -- the same reason `Flag::from_args` above checks its own
+    /// `why` is given unless `--off`. `d899`.
+    pub until: Option<String>,
 }
 
 impl Park {
     pub fn from_args(a: &Args) -> Result<Park, Failure> {
+        let until = match a.opt("until") {
+            Some(s) => Some(validate_until(s)?),
+            None => None,
+        };
         Ok(Park {
             node: a.positional(0).map(str::to_string),
             reason: a.positional(1).map(str::to_string),
+            until,
         })
     }
+}
+
+/// `--until`'s own validation. Relative forms such as `+7d` or `tomorrow`
+/// are refused on purpose: a park is read back long after it is written, and
+/// a relative date only ever meant something at the moment it was typed.
+/// `pub(crate)` so `mcp.rs`'s own `vivac_park` can share it rather than
+/// re-implement the same check against `until` given as JSON instead of a
+/// flag. `d899`.
+pub(crate) fn validate_until(s: &str) -> Result<String, Failure> {
+    if !crate::clock::is_civil_date(s) {
+        return Err(Failure::usage("--until takes a date as YYYY-MM-DD."));
+    }
+    let today = crate::clock::today_local();
+    if s <= today.as_str() {
+        let why = if s == today {
+            "is today"
+        } else {
+            "has already passed"
+        };
+        return Err(Failure::usage(format!(
+            "--until {s} {why}; a park comes back on a day still ahead."
+        )));
+    }
+    Ok(s.to_string())
 }
 
 pub struct Add {
@@ -385,5 +420,100 @@ impl Arm {
             off: a.has("off"),
             via_mcp: false,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::clock::Ticking;
+
+    fn args(words: &[&str]) -> Args {
+        Args::parse(words.iter().map(|s| s.to_string())).unwrap()
+    }
+
+    /// `2026-08-31` is `20_696` days since the epoch (`clock::tests::known_dates`),
+    /// so a `Ticking` started there reads today as `2026-08-31` for the rest
+    /// of this test.
+    fn today_is_2026_08_31() -> Ticking {
+        Ticking::start(20_696 * 86_400)
+    }
+
+    #[test]
+    fn no_until_is_none() {
+        let p = Park::from_args(&args(&["t1", "waiting"])).unwrap();
+        assert_eq!(p.until, None);
+    }
+
+    #[test]
+    fn a_date_strictly_after_today_is_accepted() {
+        let _t = today_is_2026_08_31();
+        let p = Park::from_args(&args(&["t1", "waiting", "--until", "2026-09-01"])).unwrap();
+        assert_eq!(p.until, Some("2026-09-01".to_string()));
+    }
+
+    /// `Park::from_args`'s own refusal message, or a panic if it did not
+    /// refuse -- every refusal it raises is a usage error, and `Park` is not
+    /// `Debug`, so `unwrap_err` is not an option here.
+    fn refusal(r: Result<Park, Failure>) -> String {
+        match r {
+            Ok(_) => panic!("expected a refusal, got Ok"),
+            Err(Failure::Usage(m)) => m,
+            Err(other) => panic!("expected a usage failure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_past_date_is_refused() {
+        let _t = today_is_2026_08_31();
+        let m = refusal(Park::from_args(&args(&[
+            "t1",
+            "waiting",
+            "--until",
+            "2026-08-30",
+        ])));
+        assert!(m.contains("has already passed"), "{m}");
+    }
+
+    #[test]
+    fn a_same_day_date_is_refused() {
+        let _t = today_is_2026_08_31();
+        let m = refusal(Park::from_args(&args(&[
+            "t1",
+            "waiting",
+            "--until",
+            "2026-08-31",
+        ])));
+        assert!(m.contains("is today"), "{m}");
+    }
+
+    #[test]
+    fn a_short_form_is_refused() {
+        let _t = today_is_2026_08_31();
+        let m = refusal(Park::from_args(&args(&[
+            "t1", "waiting", "--until", "2026-9-1",
+        ])));
+        assert!(m.contains("YYYY-MM-DD"), "{m}");
+    }
+
+    #[test]
+    fn an_invalid_calendar_date_is_refused() {
+        let _t = today_is_2026_08_31();
+        let m = refusal(Park::from_args(&args(&[
+            "t1",
+            "waiting",
+            "--until",
+            "2026-02-30",
+        ])));
+        assert!(m.contains("YYYY-MM-DD"), "{m}");
+    }
+
+    #[test]
+    fn a_relative_form_is_refused() {
+        let _t = today_is_2026_08_31();
+        let m = refusal(Park::from_args(&args(&[
+            "t1", "waiting", "--until", "tomorrow",
+        ])));
+        assert!(m.contains("YYYY-MM-DD"), "{m}");
     }
 }

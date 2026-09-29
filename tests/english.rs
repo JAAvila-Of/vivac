@@ -226,7 +226,7 @@ fn the_refusals_read_as_english_too() {
     assert!(out.contains("does not take --bogus"), "{out}");
     assert_reads_as_english("push --bogus", &out);
     let (out, _) = c.run(&["park", "--bogus"]);
-    assert!(out.contains("It takes: none"), "{out}");
+    assert!(out.contains("It takes: --until"), "{out}");
     assert_reads_as_english("park --bogus", &out);
 
     let (out, _) = c.run(&["--help"]);

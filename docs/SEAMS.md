@@ -52,6 +52,7 @@ it read.
 | A choice gets made, by you or with you | a decision, with what was turned down — when it is made, not at the end |
 | It tells you something it found | a finding, one for each thing, as it tells you. One that asks nothing of anyone, a measurement or a lesson, is closed on the spot as a record |
 | You say *not now*, *later*, *leave that* | the node, parked with your words; the next brief lists it under **DO NOT TOUCH NOW**, so the next session does not pick it up |
+| You say *not now, but check back on the 14th* | the same park, with `--until` naming the day; the brief keeps it under DO NOT TOUCH NOW until then and moves it to **BACK FROM PARKED** on its own, without anyone asking |
 | Something changes where git cannot see it: CI settings, a tracker, a cloud console | a note on the node it belongs to. The tree is the only record that change will ever have |
 | The work is done | the node closes with its outcome, and so does the one it returns to, if that settles it too |
 

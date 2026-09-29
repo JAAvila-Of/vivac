@@ -65,7 +65,10 @@ const USAGE: &str = r#"vivac - provenance of work
           [--against "r12: <why>"]  on a decision: what it was judged against
     vivac pop ["<outcome>"] [--next "<...>"]  close the focus, back to the
                                               parent
-    vivac park [<id>] ["<reason>"]            park it: feeds DO NOT TOUCH NOW
+    vivac park [<id>] ["<reason>"] [--until <date>]
+                                              park it: feeds DO NOT TOUCH NOW
+          [--until YYYY-MM-DD]  back in the brief on that date, under BACK
+                                FROM PARKED
     vivac promote [<id>]                      the focus becomes a goal of its
                                               own
     vivac abandon [<id>] ["<reason>"] [--cascade]
@@ -573,7 +576,8 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         // `--everywhere` is `find`'s own for the same reason: the registry
         // fan-out (`d273`) is not something any other read takes.
         "find" => &["json", "everywhere"],
-        "park" | "promote" | "note" | "import" | "restore" => &[],
+        "park" => &["until"],
+        "promote" | "note" | "import" | "restore" => &[],
         _ => &[],
     };
 

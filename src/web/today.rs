@@ -565,17 +565,47 @@ fn parked_section(project: &str, tree: &Tree) -> String {
         .filter(|n| n.state == State::Suspended)
         .collect();
     ps.sort_by_key(|n| n.num);
+    let today = crate::clock::today_local();
     let body = if ps.is_empty() {
         "<p class=\"empty\">Nothing parked.</p>\n".to_string()
     } else {
         format!(
             "<ul class=\"nodes\">\n{}</ul>\n",
             ps.iter()
-                .map(|n| row(project, tree, n, n.outcome(tree), ""))
+                .map(|n| parked_row(project, tree, n, &today))
                 .collect::<String>()
         )
     };
     format!("<section id=\"parked\">\n<h2>Do not touch now</h2>\n{body}</section>\n")
+}
+
+/// `row`'s own shape, plus a second line for `--until`'s own return date
+/// when the park has one -- and, once local `today` reaches it, that it is
+/// due, in words rather than colour alone (DX pillar). `d899`. Not built on
+/// `row` itself: that helper's single `note` is shared by five other
+/// sections this field means nothing to.
+fn parked_row(project: &str, tree: &Tree, n: &Node, today: &str) -> String {
+    let mut s = format!(
+        "<li><span class=\"alias\">{}</span><p class=\"title\">{}</p>",
+        alias_link(project, &n.alias()),
+        escape(n.title(tree))
+    );
+    let outcome = n.outcome(tree);
+    if !outcome.is_empty() {
+        s.push_str(&format!("<p class=\"note\">{}</p>", escape(outcome)));
+    }
+    if let Some(u) = n.parked_until(tree) {
+        let due = u <= today;
+        let text = if due {
+            format!("Back since {u}")
+        } else {
+            format!("Until {u}")
+        };
+        let class = if due { "until due" } else { "until" };
+        s.push_str(&format!("<p class=\"{class}\">{}</p>", escape(&text)));
+    }
+    s.push_str("</li>\n");
+    s
 }
 
 /// `WEB.md` §3.1 -- Today.
@@ -747,6 +777,7 @@ mod tests {
                     state: crate::event::State::Suspended,
                     outcome: "waiting on day 14".to_string(),
                     forced: false,
+                    until: None,
                 },
             ),
         ];
@@ -755,6 +786,52 @@ mod tests {
         assert!(page.contains("Do not touch now"), "{page}");
         assert!(page.contains("waiting on day 14"), "{page}");
         assert!(page.contains("parked"), "{page}");
+    }
+
+    /// `d899`: a park's own return date, and whether it is due, in words --
+    /// never colour alone, the same DX rule the test above already covers
+    /// for state.
+    #[test]
+    fn a_return_date_shows_and_says_whether_it_is_due() {
+        // 2026-08-31, `clock::tests::known_dates`'s own day 20_696.
+        let _t = crate::clock::Ticking::start(20_696 * 86_400);
+        let events = vec![
+            born(1, 1, "A goal", None),
+            born(2, 2, "Not due yet", Some("n1")),
+            born(3, 3, "Already due", Some("n1")),
+            ev(
+                4,
+                Body::StateChanged {
+                    node: "n2".to_string(),
+                    state: crate::event::State::Suspended,
+                    outcome: "waiting".to_string(),
+                    forced: false,
+                    until: Some("2026-09-14".to_string()),
+                },
+            ),
+            ev(
+                5,
+                Body::StateChanged {
+                    node: "n3".to_string(),
+                    state: crate::event::State::Suspended,
+                    outcome: "waiting".to_string(),
+                    forced: false,
+                    until: Some("2026-08-20".to_string()),
+                },
+            ),
+        ];
+        let tree = fold(&events, 0);
+        let page = today_page("demo", "demo", &tree, &events);
+        assert!(page.contains("2026-09-14"), "{page}");
+        assert!(page.contains("2026-08-20"), "{page}");
+        assert!(
+            page.contains("Back since 2026-08-20"),
+            "the due one has to say so in words:\n{page}"
+        );
+        assert!(
+            !page.contains("Back since 2026-09-14"),
+            "the not-yet-due one was marked due:\n{page}"
+        );
     }
 
     /// `d809`: the page a project's own `id` routes to still carries a way

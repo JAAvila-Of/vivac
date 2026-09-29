@@ -592,12 +592,14 @@ const TOOLS: &[Tool] = &[
         title: "Park a node: not now",
         read_only: false,
         description: "Suspend a node without abandoning it: it drops off the stack and \
-                      becomes something a later session is told not to touch. Call it \
-                      when the person says not now, or when work is stuck on something \
-                      outside this session -- never as a substitute for `vivac_pop` on \
-                      something that is simply finished. What is put off has to be a \
-                      node first: if it is not in the tree yet, file it with `vivac_add` \
-                      and park that.",
+                      becomes something a later session is told not to touch. Given an \
+                      `until` day, the brief puts it back in front of whoever opens a \
+                      session on or after that day; it stays parked until somebody \
+                      takes it back. Call it when the person \
+                      says not now, or when work is stuck on something outside this \
+                      session -- never as a substitute for `vivac_pop` on something that \
+                      is simply finished. What is put off has to be a node first: if it \
+                      is not in the tree yet, file it with `vivac_add` and park that.",
         args: &[
             Arg {
                 name: "id",
@@ -611,6 +613,14 @@ const TOOLS: &[Tool] = &[
                 required: false,
                 description: "Why it waits: the person's own words when they said not \
                               now. Read back verbatim under DO NOT TOUCH NOW.",
+            },
+            Arg {
+                name: "until",
+                kind: ArgKind::Str,
+                required: false,
+                description: "YYYY-MM-DD, a day after today: the node comes back in \
+                              vivac_brief under BACK FROM PARKED on that day. Leave it \
+                              out to park with no return date.",
             },
         ],
     },
@@ -1105,23 +1115,20 @@ fn call(project: &mut Project, params: &Value) -> Result<String, Failure> {
         // of the single word `vivac park "<reason>"` would pass, and
         // `named_or_focus` is what resolves it against the focus.
         "vivac_park" => {
-            let p = match (a.str("id"), a.str("reason")) {
-                (Some(id), Some(reason)) => params::Park {
-                    node: Some(id.to_string()),
-                    reason: Some(reason.to_string()),
-                },
-                (Some(id), None) => params::Park {
-                    node: Some(id.to_string()),
-                    reason: None,
-                },
-                (None, Some(reason)) => params::Park {
-                    node: Some(reason.to_string()),
-                    reason: None,
-                },
-                (None, None) => params::Park {
-                    node: None,
-                    reason: None,
-                },
+            let until = match a.str("until") {
+                Some(u) => Some(params::validate_until(u)?),
+                None => None,
+            };
+            let (node, reason) = match (a.str("id"), a.str("reason")) {
+                (Some(id), Some(reason)) => (Some(id.to_string()), Some(reason.to_string())),
+                (Some(id), None) => (Some(id.to_string()), None),
+                (None, Some(reason)) => (Some(reason.to_string()), None),
+                (None, None) => (None, None),
+            };
+            let p = params::Park {
+                node,
+                reason,
+                until,
             };
             outcome_text(project.write(|ctx| ops::park(ctx, p))?)
         }

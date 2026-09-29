@@ -10,6 +10,7 @@ absolute
 accent
 accented
 accents
+accepted
 accepts
 access
 accessor
@@ -438,6 +439,7 @@ dash
 dashes
 data
 date
+dateless
 dates
 day
 days
@@ -553,6 +555,7 @@ drop
 drops
 dry
 dual
+due
 dumb
 dump
 duration
@@ -727,6 +730,7 @@ forked
 form
 format
 formatter
+formed
 forty
 forward
 found
@@ -744,6 +748,7 @@ frontmatter
 fronts
 fs
 full
+future
 g1
 gains
 gap
@@ -1235,6 +1240,7 @@ out2
 out3
 outcome
 outer
+outlives
 outln
 output
 outputs
@@ -1242,6 +1248,7 @@ outside
 ov
 over
 overall
+overdue
 overlong
 overwrites
 overwritten
@@ -1277,6 +1284,7 @@ parked
 parks
 parse
 parsed
+parses
 part
 partial
 partition
@@ -1502,8 +1510,10 @@ rename
 renames
 render
 rendered
+renders
 reopen
 reopened
+reopening
 reordered
 repaired
 repeat
@@ -1787,6 +1797,7 @@ store
 str
 stream
 stretch
+strictly
 string
 strip
 stripped
@@ -2075,6 +2086,7 @@ way
 web
 week
 weight
+well
 west
 what
 whatever

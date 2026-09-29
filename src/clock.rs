@@ -97,6 +97,26 @@ pub fn date_of(ts: &str) -> String {
     }
 }
 
+/// Today's civil date in this machine's own zone, as `YYYY-MM-DD` -- the
+/// same shape [`date_of`] already produces and `brief`'s own header date
+/// already is, so checking `--until` against it, or a parked node's own
+/// return date against it, is a plain string compare and not a second
+/// parse. `d899`.
+pub fn today_local() -> String {
+    date_of(&now_rfc3339())
+}
+
+/// Whether `s` is a real Gregorian date written as exactly `YYYY-MM-DD` --
+/// a four-digit year, a two-digit month and a two-digit day, nothing
+/// shorter and nothing longer. [`parse_date`], underneath, is looser on
+/// purpose: it reads whatever a log line's first ten bytes give it. `--until`
+/// is typed by a person, so a short form like `2026-9-1`, an invalid day
+/// like `2026-02-30`, or a relative word like `tomorrow` has to fail loudly
+/// rather than being read as some other day. `d899`.
+pub fn is_civil_date(s: &str) -> bool {
+    s.len() == 10 && parse_date(s).is_some_and(|(y, m, d)| is_valid_civil_date(y, m, d))
+}
+
 /// Whole days from `from` to `to`, both RFC 3339 stamps, or `None` if either
 /// is not one. Counted on the LOCAL date each stamp reads as, not the UTC
 /// one the log stores (`d797`): two stamps that fall on the same day where
@@ -575,6 +595,42 @@ mod tests {
     #[test]
     fn date_of_of_garbage_is_the_first_ten_bytes() {
         assert_eq!(date_of("not a timestamp"), "not a time");
+    }
+
+    // `d899`: `park --until` needs today's own date and a strict reading of
+    // what a person typed, neither of which `date_of`/`parse_date` alone
+    // give -- those are built to be tolerant of whatever a log line holds.
+
+    #[test]
+    fn today_local_reads_the_ticking_clock() {
+        // 20_696 days since the epoch is 2026-08-31 (`known_dates` above).
+        let _t = Ticking::start(20_696 * 86_400);
+        assert_eq!(today_local(), "2026-08-31");
+    }
+
+    #[test]
+    fn a_well_formed_date_is_civil() {
+        assert!(is_civil_date("2026-09-08"));
+    }
+
+    #[test]
+    fn a_short_form_is_not_civil() {
+        assert!(!is_civil_date("2026-9-8"), "no leading zeros omitted");
+    }
+
+    #[test]
+    fn a_day_that_does_not_exist_is_not_civil() {
+        assert!(!is_civil_date("2026-02-30"), "February never reaches 30");
+    }
+
+    #[test]
+    fn a_relative_word_is_not_civil() {
+        assert!(!is_civil_date("tomorrow"));
+    }
+
+    #[test]
+    fn trailing_bytes_are_not_civil() {
+        assert!(!is_civil_date("2026-09-08T"), "not exactly ten bytes");
     }
 
     // `d797`: `local_date_from` is the pure arithmetic a real offset from

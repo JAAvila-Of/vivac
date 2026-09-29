@@ -131,6 +131,12 @@ pub struct Node {
     /// late declaration has been folded in beside a birth that never had
     /// the key.
     pub against_recorded: bool,
+    /// `park --until`'s own return date, interned: `Some` only while
+    /// `state == State::Suspended` and only for the latest park that named
+    /// one. Any other state change clears it, and a park that names none
+    /// clears it too -- `MODEL.md` never un-parks on its own, only the
+    /// presentation of it changes once this date is reached. `d899`.
+    pub parked_until: Option<Span>,
     /// The `seq` of this node's own `node.created`. `why`'s "born in lane"
     /// line used to get this by walking the whole log through
     /// `Full::from_log` on every call (`t164`): that was free while only
@@ -171,6 +177,12 @@ impl Node {
     }
     pub fn outcome<'t>(&self, tree: &'t Tree) -> &'t str {
         tree.text(self.outcome)
+    }
+    /// The return date of the latest park that named one, or `None` for a
+    /// node never parked with `--until`, one parked without it, or one that
+    /// has since changed state. `d899`.
+    pub fn parked_until<'t>(&self, tree: &'t Tree) -> Option<&'t str> {
+        self.parked_until.map(|s| tree.text(s))
     }
     /// The lane this node was born in, resolved to text.
     pub fn born_lane<'t>(&self, tree: &'t Tree) -> &'t str {
@@ -626,6 +638,7 @@ impl Tree {
                         against_recorded,
                         born_seq: seq,
                         born_lane: born_lane_span,
+                        parked_until: None,
                     },
                 );
                 self.ulid_index.insert(node.clone(), *num);
@@ -643,6 +656,7 @@ impl Tree {
                 state,
                 outcome,
                 forced,
+                until,
             } => {
                 // Interned **before** the mutable borrow of `self.nodes`
                 // below, so the two never overlap: `intern` needs the whole
@@ -652,6 +666,7 @@ impl Tree {
                 // `d797`: the full instant, same reason as `opened_span`
                 // above -- this is what the index persists.
                 let closed_span = (!state.is_open()).then(|| self.intern(ts));
+                let until_span = until.as_deref().map(|u| self.intern(u));
                 let num = self.resolve_ulid(node);
                 if let Some(n) = self.nodes.get_mut(&num) {
                     n.state = *state;
@@ -660,6 +675,11 @@ impl Tree {
                     }
                     n.forced_close = *forced;
                     n.closed = closed_span;
+                    // `d899`: a dateless park clears it, and so does every
+                    // state that is not `Suspended` -- reopen, done,
+                    // abandon. Only a fresh `Suspended` with `--until` sets
+                    // it, and the latest one always wins.
+                    n.parked_until = (*state == State::Suspended).then_some(until_span).flatten();
                 }
             }
             Body::NodeNoted { node, note } => {
@@ -2353,8 +2373,114 @@ mod tests {
                 state: State::Done,
                 outcome: "done".to_string(),
                 forced: false,
+                until: None,
             },
         }
+    }
+
+    /// Parks the node minted by `node` under `num`, with or without a
+    /// return date. `d899`.
+    fn parked(seq: u64, num: u64, until: Option<&str>) -> Event {
+        Event {
+            seq,
+            id: format!("e{seq}"),
+            ts: "2026-09-03T10:05:00Z".to_string(),
+            actor: "a".to_string(),
+            lane: "main".to_string(),
+            payload: Body::StateChanged {
+                node: format!("n{num}"),
+                state: State::Suspended,
+                outcome: "waiting".to_string(),
+                forced: false,
+                until: until.map(str::to_string),
+            },
+        }
+    }
+
+    /// Reopens the node minted by `node` under `num` -- `focus <id>
+    /// --reopen`'s own event.
+    fn reopened(seq: u64, num: u64) -> Event {
+        Event {
+            seq,
+            id: format!("e{seq}"),
+            ts: "2026-09-03T10:05:00Z".to_string(),
+            actor: "a".to_string(),
+            lane: "main".to_string(),
+            payload: Body::StateChanged {
+                node: format!("n{num}"),
+                state: State::Active,
+                outcome: String::new(),
+                forced: false,
+                until: None,
+            },
+        }
+    }
+
+    /// `d899`: the latest park's own `--until` is what the node carries,
+    /// and it replaces an earlier one rather than sitting beside it.
+    #[test]
+    fn a_later_park_replaces_the_earlier_return_date() {
+        let events = vec![
+            node(1, 1, Kind::Task, None),
+            parked(2, 1, Some("2026-09-20")),
+        ];
+        let tree = fold(&events, 0);
+        assert_eq!(
+            tree.node_by_num(1).unwrap().parked_until(&tree),
+            Some("2026-09-20")
+        );
+
+        let events = vec![
+            events[0].clone(),
+            events[1].clone(),
+            parked(3, 1, Some("2026-10-01")),
+        ];
+        let tree = fold(&events, 0);
+        assert_eq!(
+            tree.node_by_num(1).unwrap().parked_until(&tree),
+            Some("2026-10-01")
+        );
+    }
+
+    /// A park with no `--until` clears whatever return date an earlier one
+    /// left -- it is still the latest park, it just names no date. `d899`.
+    #[test]
+    fn a_dateless_park_clears_an_earlier_return_date() {
+        let events = vec![
+            node(1, 1, Kind::Task, None),
+            parked(2, 1, Some("2026-09-20")),
+            parked(3, 1, None),
+        ];
+        let tree = fold(&events, 0);
+        assert_eq!(tree.node_by_num(1).unwrap().parked_until(&tree), None);
+    }
+
+    /// Reopening a parked node clears its return date: the clock never
+    /// un-parks on its own, but a person can, and once they have there is
+    /// nothing left to come back to. `d899`.
+    #[test]
+    fn reopening_clears_the_return_date() {
+        let events = vec![
+            node(1, 1, Kind::Task, None),
+            parked(2, 1, Some("2026-09-20")),
+            reopened(3, 1),
+        ];
+        let tree = fold(&events, 0);
+        assert_eq!(tree.node_by_num(1).unwrap().parked_until(&tree), None);
+    }
+
+    /// Closing a parked node -- `done <id> --force` on something still
+    /// suspended -- clears its return date the same way reopening does.
+    /// `d899`.
+    #[test]
+    fn closing_clears_the_return_date() {
+        let events = vec![
+            node(1, 1, Kind::Task, None),
+            parked(2, 1, Some("2026-09-20")),
+            closed(3, 1),
+        ];
+        let tree = fold(&events, 0);
+        assert_eq!(tree.node_by_num(1).unwrap().parked_until(&tree), None);
     }
 
     /// `f237`: `open_blockers` used to walk every descendant and filter by

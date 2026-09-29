@@ -1184,3 +1184,151 @@ fn the_capture_seams_block_is_hook_only() {
         "a person running `vivac brief` was told when to write:\n{out}"
     );
 }
+
+// `d899`: `BACK FROM PARKED` -- a park with a return date leaves DO NOT
+// TOUCH NOW once local `--now` reaches it. The date has to be written
+// straight into the log: `park --until` itself only ever accepts a date
+// still ahead of the real clock, which a fixture pinned to 2026 cannot stay
+// forever.
+
+/// The ULID `node.created` gave `num`, read back off the log -- what a raw
+/// `state.changed` line needs to name the node it acts on.
+fn node_id_of(c: &Sandbox, num: u64) -> String {
+    for line in c.log().lines() {
+        let v: serde_json::Value = serde_json::from_str(line).unwrap();
+        if v["payload"]["type"] == "node.created" && v["payload"]["num"] == num {
+            return v["payload"]["node"].as_str().unwrap().to_string();
+        }
+    }
+    panic!("no node.created for num {num} in:\n{}", c.log());
+}
+
+/// Parks `num` with `until`, straight in the log rather than through the
+/// CLI: `park --until` only takes a date still ahead of the real clock, and
+/// a fixed date in this fixture will not stay ahead of it forever.
+fn park_with_until(c: &Sandbox, seq: u64, num: u64, until: &str) {
+    let node = node_id_of(c, num);
+    c.append_raw_line(&format!(
+        r#"{{"seq":{seq},"id":"01BACKFROMPARKED{seq:09}","ts":"2026-09-10T10:00:00Z","actor":"a_test0000000","lane":"main","payload":{{"type":"state.changed","node":"{node}","state":"suspended","outcome":"waiting on day 14","forced":false,"until":"{until}"}}}}"#
+    ));
+}
+
+#[test]
+fn a_not_yet_due_park_shows_its_date_under_do_not_touch_now() {
+    let c = Sandbox::new_seeded("back-from-parked-before");
+    c.ok(&["push", "Ship the release", "--why", "seed"]);
+    park_with_until(&c, 900, 1, "2026-09-14");
+
+    let b = c.ok(&["brief", "--now", "2026-09-10T00:00:00Z"]);
+    assert!(section(&b, "DO NOT TOUCH NOW"), "{b}");
+    assert!(!section(&b, "BACK FROM PARKED"), "{b}");
+    let heading_at = b.find("DO NOT TOUCH NOW").unwrap();
+    let block = &b[heading_at..];
+    assert!(block.contains("Ship the release"), "{block}");
+    assert!(block.contains("until 2026-09-14"), "{block}");
+}
+
+#[test]
+fn a_due_park_moves_to_back_from_parked_and_leaves_do_not_touch_now() {
+    let c = Sandbox::new_seeded("back-from-parked-due");
+    c.ok(&["push", "Ship the release", "--why", "seed"]);
+    park_with_until(&c, 900, 1, "2026-09-14");
+
+    let b = c.ok(&["brief", "--now", "2026-09-14T00:00:00Z"]);
+    assert!(section(&b, "BACK FROM PARKED"), "{b}");
+    assert!(
+        !section(&b, "DO NOT TOUCH NOW"),
+        "nothing else is parked, so the section should vanish whole:\n{b}"
+    );
+    let heading_at = b.find("BACK FROM PARKED").unwrap();
+    let block = &b[heading_at..];
+    assert!(block.contains("Ship the release"), "{block}");
+    assert!(block.contains("vivac focus"), "no way back in:\n{block}");
+    assert!(
+        block.contains("--until"),
+        "no way to set it aside again:\n{block}"
+    );
+}
+
+#[test]
+fn a_park_stays_due_well_past_its_own_date() {
+    let c = Sandbox::new_seeded("back-from-parked-after");
+    c.ok(&["push", "Ship the release", "--why", "seed"]);
+    park_with_until(&c, 900, 1, "2026-09-14");
+
+    let b = c.ok(&["brief", "--now", "2026-09-20T00:00:00Z"]);
+    assert!(section(&b, "BACK FROM PARKED"), "{b}");
+    assert!(b.contains("Ship the release"), "{b}");
+}
+
+/// A due node leaves `DO NOT TOUCH NOW`, but a park with no date, or one
+/// not due yet, still shows there -- and `BACK FROM PARKED` renders above
+/// it.
+#[test]
+fn back_from_parked_renders_above_do_not_touch_now_and_only_the_due_one_moves() {
+    let c = Sandbox::new_seeded("back-from-parked-mixed");
+    c.ok(&["push", "Ship the release", "--why", "seed"]);
+    c.ok(&["add", "Write the notes", "--parent", "1", "--why", "seed"]);
+    park_with_until(&c, 900, 1, "2026-09-14");
+    c.ok(&["park", "2", "no date on this one"]);
+
+    let b = c.ok(&["brief", "--now", "2026-09-14T00:00:00Z"]);
+    let back_at = b.find("BACK FROM PARKED").expect("{b}");
+    let touch_at = b.find("DO NOT TOUCH NOW").expect("{b}");
+    assert!(
+        back_at < touch_at,
+        "BACK FROM PARKED must render first:\n{b}"
+    );
+
+    let back_block = &b[back_at..touch_at];
+    assert!(back_block.contains("Ship the release"), "{back_block}");
+    assert!(
+        !back_block.contains("Write the notes"),
+        "the still-parked node leaked into BACK FROM PARKED:\n{back_block}"
+    );
+
+    let touch_block = &b[touch_at..];
+    assert!(touch_block.contains("Write the notes"), "{touch_block}");
+    assert!(
+        !touch_block.contains("Ship the release"),
+        "the due node is still listed as untouchable:\n{touch_block}"
+    );
+}
+
+/// `d899`: when the budget cannot hold both, BACK FROM PARKED wins --
+/// pushed ahead of DO NOT TOUCH NOW in `to_text`, and truncation clears the
+/// last truncable section first.
+#[test]
+fn back_from_parked_outlives_do_not_touch_now_under_a_tight_budget() {
+    let c = Sandbox::new_seeded("back-from-parked-budget");
+    c.ok(&["push", "Ship the release", "--why", "seed"]);
+    c.ok(&["add", "Write the notes", "--parent", "1", "--why", "seed"]);
+    park_with_until(&c, 900, 1, "2026-09-14");
+    c.ok(&["park", "2", "no date on this one"]);
+
+    let whole = c.ok(&["brief", "--budget", "5000", "--now", "2026-09-14T00:00:00Z"]);
+    assert!(section(&whole, "BACK FROM PARKED"), "{whole}");
+    assert!(section(&whole, "DO NOT TOUCH NOW"), "{whole}");
+
+    // Ratchet the budget down one token at a time until DO NOT TOUCH NOW
+    // falls: `LAST VIVAC` sits behind it in `to_text`'s own vector order and
+    // so falls first, and the exact token cost of either is not this test's
+    // business -- only that BACK FROM PARKED outlives both.
+    let mut budget = spent_tokens(&whole);
+    let mut tight = whole;
+    while section(&tight, "DO NOT TOUCH NOW") {
+        budget -= 1;
+        assert!(budget > 0, "ran out of budget before DO NOT TOUCH NOW fell");
+        tight = c.ok(&[
+            "brief",
+            "--budget",
+            &budget.to_string(),
+            "--now",
+            "2026-09-14T00:00:00Z",
+        ]);
+    }
+    assert!(
+        section(&tight, "BACK FROM PARKED"),
+        "the due node should have outlived DO NOT TOUCH NOW:\n{tight}"
+    );
+}
