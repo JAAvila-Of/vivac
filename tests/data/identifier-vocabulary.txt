@@ -128,6 +128,7 @@ assumption
 at
 atomic
 atomically
+attached
 attr
 attribute
 attributes
@@ -438,6 +439,7 @@ cwd
 cyan
 d200
 dash
+dashed
 dashes
 data
 date
@@ -581,6 +583,7 @@ elsewhere
 email
 emisores
 emit
+emptied
 empty
 enable
 enabled

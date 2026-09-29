@@ -671,10 +671,27 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
                 .collect::<Vec<_>>()
                 .join(" ")
         };
+        // `d919`: a value that starts with `--` is read as a flag, and the
+        // flag before it goes empty. Say so, and how such a value is passed,
+        // rather than leave the reader wondering why prose became a flag.
+        // Only when the emptied flag is one this command takes: otherwise it
+        // is not the value that went astray.
+        let attached: String = unknown
+            .iter()
+            .filter_map(|u| a.emptied_by(u))
+            .filter(|(flag, _)| allowed.contains(flag))
+            .map(|(flag, word)| {
+                format!(
+                    "\n\n  --{flag} got no value: \"{word}\" came right after it and was read\n  \
+                     as a flag. A value that starts with -- goes attached to its flag:\n    \
+                     --{flag}=\"{word}\""
+                )
+            })
+            .collect();
         return Err(Failure::usage(format!(
             "{} does not take {}.
 
-  It takes: {takes}",
+  It takes: {takes}{attached}",
             cmd,
             unknown
                 .iter()

@@ -50,6 +50,12 @@ pub(crate) const SWITCHES: &[&str] = &[
 pub struct Args {
     pub positionals: Vec<String>,
     opts: HashMap<String, Vec<String>>,
+    /// A flag that wanted a value and got none because the next word
+    /// started with `--`, paired with that word as typed (`d919`). The
+    /// word is still read as a flag -- taking it as the value would turn a
+    /// forgotten one into a silent write -- but the refusal can then say
+    /// how a value that starts with `--` is passed.
+    emptied: Vec<(String, String)>,
 }
 
 impl Args {
@@ -77,6 +83,11 @@ impl Args {
                             n.clone()
                         })
                     });
+                    if val.is_none() {
+                        if let Some(next) = v.get(i + 1) {
+                            a.emptied.push((k.to_string(), next.clone()));
+                        }
+                    }
                     a.opts.entry(k.to_string()).or_default().extend(val);
                 }
             } else {
@@ -125,6 +136,18 @@ impl Args {
         v
     }
 
+    /// The flag left without a value by `word`, when `word` is the one
+    /// that came right after it and was read as the flag `unknown`.
+    pub fn emptied_by(&self, unknown: &str) -> Option<(&str, &str)> {
+        self.emptied
+            .iter()
+            .find(|(_, word)| {
+                let k = word.strip_prefix("--").unwrap_or(word);
+                k.split_once('=').map_or(k, |(k, _)| k) == unknown
+            })
+            .map(|(flag, word)| (flag.as_str(), word.as_str()))
+    }
+
     /// Positionals beyond the ones the command takes.
     ///
     /// The mirror of `unknown`, and it exists because that one only ever
@@ -169,6 +192,24 @@ mod tests {
         let a = p("x --kind finding --type task");
         assert_eq!(a.unknown(&["type", "why"]), vec!["kind"]);
         assert!(a.unknown(&["type", "kind"]).is_empty());
+    }
+
+    /// `d919`: the flag a `--` word left empty is remembered with that
+    /// word, so the refusal of the word can say how to pass it as a value.
+    #[test]
+    fn a_flag_left_empty_by_a_dashed_word_remembers_it() {
+        let a = Args::parse(
+            ["t", "--alternative", "--until later"]
+                .iter()
+                .map(|s| s.to_string()),
+        )
+        .unwrap();
+        assert_eq!(a.opt("alternative"), None);
+        assert_eq!(
+            a.emptied_by("until later"),
+            Some(("alternative", "--until later"))
+        );
+        assert_eq!(a.emptied_by("alternative"), None);
     }
 
     #[test]
