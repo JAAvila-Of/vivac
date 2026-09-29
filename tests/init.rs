@@ -3261,3 +3261,31 @@ fn undo_of_a_bare_plant_stays_available_after_a_session_started_hook() {
 }
 
 // ---------------------------------------------------------------------------
+
+/// `d916`: planting a tree says the other projects on this machine can find
+/// what it will know, and how to stop that -- after `Written.` and ahead of
+/// `Next:`. A join plants nothing, and a `--dry-run` writes nothing, so
+/// neither says it.
+#[test]
+fn planting_says_other_projects_can_find_the_tree_and_a_join_does_not() {
+    let target = Sandbox::new_empty("init-share-target");
+    let out = target.ok(&["init", "--yes"]);
+    let said = "Other projects on this machine can find what this tree knows.\nTo keep it to itself:  vivac share off";
+    assert!(out.contains(said), "{out}");
+    let written = out.find("Written.").unwrap();
+    let says = out.find(said).unwrap();
+    let next = out.find("Next:").unwrap();
+    assert!(written < says && says < next, "{out}");
+    assert!(
+        out.contains(&format!("Written.\n\n{said}\n\nNext:")),
+        "{out}"
+    );
+
+    let joiner = Sandbox::new_empty("init-share-joiner");
+    let out = joiner.ok(&["init", "--join", target.0.to_str().unwrap(), "--yes"]);
+    assert!(!out.contains("Other projects"), "{out}");
+
+    let dry = Sandbox::new_empty("init-share-dry");
+    let out = dry.ok(&["init", "--dry-run"]);
+    assert!(!out.contains("Other projects"), "{out}");
+}

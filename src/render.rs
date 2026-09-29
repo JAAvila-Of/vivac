@@ -3113,7 +3113,12 @@ fn find_data_everywhere(projects: &[(String, Tree)], terms: &[String]) -> serde_
 /// `vivac_find`'s `everywhere` argument calls through the MCP server. The
 /// same read `find --everywhere --json` runs, so the two can never drift
 /// apart -- `d172`'s tie, carried past one project.
-pub fn find_everywhere_data(query: &str) -> Result<serde_json::Value, Failure> {
+///
+/// `own` is the `project_id` of the project asking (`d916`): a tree that
+/// keeps what it knows to itself is left out unless it is that one. The
+/// shape of the answer does not change, and does not say how many were left
+/// out.
+pub fn find_everywhere_data(query: &str, own: Option<&str>) -> Result<serde_json::Value, Failure> {
     let terms = terms_of(query)?;
     let known_roots = crate::store::store_dir()
         .map(|d| crate::registry::roots(&d))
@@ -3121,10 +3126,13 @@ pub fn find_everywhere_data(query: &str) -> Result<serde_json::Value, Failure> {
     let mut projects: Vec<(String, Tree)> = Vec::new();
     for root in known_roots {
         let name = project_name(&root);
-        if let Ok(tree) =
-            crate::store::Store::open(root).and_then(|s| crate::index::load(&s, false))
-        {
-            projects.push((name, tree));
+        if let Ok(store) = crate::store::Store::open(root) {
+            if store.config.closed_to(own) {
+                continue;
+            }
+            if let Ok(tree) = crate::index::load(&store, false) {
+                projects.push((name, tree));
+            }
         }
     }
     projects.sort_by(|x, y| x.0.cmp(&y.0));
@@ -3143,7 +3151,11 @@ pub fn find_everywhere_data(query: &str) -> Result<serde_json::Value, Failure> {
 /// A bare alias means nothing across trees -- `d100` exists in three of them
 /// and names three different decisions -- so text output groups hits by
 /// project rather than running them together.
-pub fn find_everywhere(a: &Args) -> R {
+///
+/// A tree that keeps what it knows to itself (`d916`) is neither loaded nor
+/// searched unless it is the project asking, `own`; how many were left out is
+/// said once, at the end, with no names.
+pub fn find_everywhere(a: &Args, own: Option<&str>) -> R {
     let query = a
         .positional(0)
         .ok_or_else(|| Failure::usage("usage: vivac find \"<text>\"".to_string()))?;
@@ -3155,10 +3167,15 @@ pub fn find_everywhere(a: &Args) -> R {
 
     let mut projects: Vec<(String, Tree)> = Vec::new();
     let mut unreachable: Vec<String> = Vec::new();
+    let mut kept_to_themselves = 0usize;
     for root in known_roots {
         let name = project_name(&root);
-        match crate::store::Store::open(root).and_then(|s| crate::index::load(&s, false)) {
-            Ok(tree) => projects.push((name, tree)),
+        match crate::store::Store::open(root) {
+            Ok(store) if store.config.closed_to(own) => kept_to_themselves += 1,
+            Ok(store) => match crate::index::load(&store, false) {
+                Ok(tree) => projects.push((name, tree)),
+                Err(_) => unreachable.push(name),
+            },
             Err(_) => unreachable.push(name),
         }
     }
@@ -3247,6 +3264,16 @@ pub fn find_everywhere(a: &Args) -> R {
                 )
             )
         );
+        outln!();
+    }
+
+    if kept_to_themselves > 0 {
+        let line = if kept_to_themselves == 1 {
+            "1 project keeps what it knows to itself.".to_string()
+        } else {
+            format!("{kept_to_themselves} projects keep what they know to themselves.")
+        };
+        outln!("  {}", style::dim(out, &line));
         outln!();
     }
 

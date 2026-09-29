@@ -51,7 +51,7 @@ it read.
 
 | The moment, as you see it in the conversation | What goes in the tree |
 |---|---|
-| It starts on something, or you ask for something new | a node, opened under the one it continues, after looking whether the tree already holds it |
+| It starts on something, or you ask for something new | a node, opened under the one it continues, after looking whether the tree already holds it. It may look in your other projects too; what it brings from one, it names, and shows you before using it |
 | A choice gets made, by you or with you | a decision, with what was turned down — when it is made, not at the end |
 | It tells you something it found | a finding, one for each thing, as it tells you. One that asks nothing of anyone, a measurement or a lesson, is closed on the spot as a record |
 | You say *not now*, *later*, *leave that* | the node, parked with your words; the next brief lists it under **DO NOT TOUCH NOW**, so the next session does not pick it up |

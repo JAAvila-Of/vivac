@@ -184,6 +184,15 @@ fn apply_writes(roots: &super::Roots, a: &Args, plan: tree::TreePlan) -> Result<
 /// about writing, not about that.
 fn written_text(plan: &tree::TreePlan) -> String {
     let mut paragraphs = vec![crate::style::good(Stream::Out, "Written.")];
+    // `d916`: only a tree this run planted. A join or a redeclare finds one
+    // that was already there, and what it shares is already decided.
+    if plan.vivac_missing {
+        paragraphs.push(
+            "Other projects on this machine can find what this tree knows.\n\
+             To keep it to itself:  vivac share off"
+                .to_string(),
+        );
+    }
     if !plan.vivac_missing {
         let lane_declared = !plan.lane.unchanged || !plan.lane.stale_worktrees.is_empty();
         paragraphs.push(super::claude_code::tree_paragraph(

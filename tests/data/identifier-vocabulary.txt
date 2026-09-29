@@ -71,6 +71,7 @@ anchors
 and
 animations
 annotations
+announced
 announces
 another
 answer
@@ -1880,6 +1881,7 @@ that
 the
 their
 them
+themselves
 then
 there
 they

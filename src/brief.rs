@@ -886,6 +886,8 @@ const CAPTURE_SEAMS_HEAD: &[&str] = &[
     "  Look first: vivac find \"<words>\". Work the tree already holds goes under",
     "  its node, never into a second one. The focus above is where work was",
     "  left, maybe not by you: hang new work from what it continues.",
+    "  With --everywhere it looks in the person's other projects too: say which",
+    "  one anything you use comes from, and show it to them before applying it.",
     "  Write before you answer: what you tell the person goes in the tree first.",
 ];
 
@@ -895,6 +897,8 @@ const CAPTURE_SEAMS_HEAD: &[&str] = &[
 const CAPTURE_SEAMS_HEAD_NO_FOCUS: &[&str] = &[
     "  Look first: vivac find \"<words>\". Work the tree already holds goes under",
     "  its node, never into a second one.",
+    "  With --everywhere it looks in the person's other projects too: say which",
+    "  one anything you use comes from, and show it to them before applying it.",
     "  Write before you answer: what you tell the person goes in the tree first.",
 ];
 

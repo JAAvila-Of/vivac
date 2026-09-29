@@ -245,6 +245,21 @@ tool that lands in a model's context. No write tool takes a project: writing
 into a tree you are not standing in is a larger permission than reading one,
 and nobody has asked for it.
 
+**A project can keep what it knows to itself.** Work for one client has no
+business turning up in the session of another's. `vivac share off`, run in
+that project, closes it: from every other project, `find --everywhere` and
+`vivac_find` leave it out and say only how many they left out, and
+`--project` and `vivac_why` refuse to open it. From inside the project itself
+nothing changes. Projects start open; `init` says so when it plants a tree.
+
+Closing asks nothing, since it can only keep more in. Reopening, `vivac share
+on`, asks a person at a terminal and takes no `--yes`, so an agent running
+commands cannot reopen what somebody closed, and neither command is a tool.
+That guards the command, not the file: the mark is one field in
+`.vivac/config`, and whoever can edit that file can change it — or delete
+it, and the config comes back open. A vivac older than 0.17.7 does not know
+the field and reads a closed tree like any other.
+
 ### Nothing destructive is reachable from here
 
 `abandon` discards a node and everything below it, and through a tool that
