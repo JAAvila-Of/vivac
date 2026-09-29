@@ -1369,7 +1369,10 @@ pub fn pop(ctx: &mut Ctx, p: params::Pop) -> Result<Outcome, Failure> {
         })?
         .clone();
     let outcome_text = p.outcome.as_str();
-    let next = p.next.as_deref().unwrap_or(outcome_text);
+    // `d915`: the outcome is what was finished, and it lives on the node.
+    // Handed to the stop as its intent, the brief read it back as what was
+    // about to happen (`f910`), so without `--next` there is none.
+    let next = p.next.as_deref().unwrap_or("");
     guard_text(&[("outcome", outcome_text), ("next", next)])?;
     let v = vivac(ctx, VivacKind::Pop, next, Some(focus.id.clone()), "");
     // Trap: two separate `emit`s in a row, not one lot like `push` -- one

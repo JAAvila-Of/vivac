@@ -857,13 +857,61 @@ fn the_search_for_an_intent_does_not_cross_lanes() {
 
     let b = join_lane(&a, "vivac-lane-b", "other");
     b.ok(&["push", "Root B", "--why", "seed"]);
+    b.ok(&["save", "label B", "--next", "handle B"]);
 
-    a.ok(&["save", "wrap up"]);
+    // An automatic stop in lane A, so the search has to step back past it.
+    a.ok(&["note", "1", "something happened"]);
+    a.ok(&["session", "end", "--hook"]);
 
     let out = a.ok(&["brief"]);
     assert!(out.contains("\"label A\""), "{out}");
     assert!(out.contains("v2 was about to: handle A"), "{out}");
+    assert!(!out.contains("handle B"), "{out}");
     assert!(!out.contains("Root B"), "{out}");
+}
+
+/// `f914`, `d915`: a manual stop with no `--next` has said there is nothing
+/// to pick up -- `save` says so out loud -- so the brief does not reach
+/// back past it for an older intent. Only an automatic stop is stepped
+/// over.
+#[test]
+fn a_manual_stop_with_no_next_is_not_stepped_over() {
+    let c = Sandbox::new_seeded("vivac-manual-no-next");
+    c.ok(&["push", "Root", "--why", "seed"]);
+    c.ok(&["save", "one", "--next", "write the parser"]);
+    c.ok(&["save", "two"]);
+
+    let b = c.ok(&["brief"]);
+    let block = last_vivac_block(&b);
+    assert!(block[0].starts_with("  v3 "), "{block:?}");
+    assert!(block[1].contains("\"two\""), "{block:?}");
+    assert!(!b.contains("write the parser"), "{b}");
+    assert!(!b.contains("was about to"), "{b}");
+}
+
+/// `f910`, `d915`: a pop's outcome is what was finished, not what comes
+/// next. Without `--next` the pop leaves no intent, and the brief quotes
+/// neither the outcome nor the push that opened the node just closed.
+#[test]
+fn a_pop_with_no_next_leaves_nothing_to_pick_up() {
+    let c = Sandbox::new_seeded("vivac-pop-no-next");
+    c.ok(&["push", "Root", "--why", "seed"]);
+    c.ok(&["push", "Write the parser", "--why", "needed"]);
+    c.ok(&["pop", "Parser written and tested"]);
+
+    let b = c.ok(&["brief"]);
+    let block = last_vivac_block(&b);
+    assert!(block[0].contains("pop"), "{block:?}");
+    assert!(!b.contains("Parser written and tested"), "{b}");
+    assert!(!b.contains("was about to"), "{b}");
+
+    c.ok(&["push", "Write the lexer", "--why", "needed"]);
+    c.ok(&["pop", "Lexer written", "--next", "wire both into the CLI"]);
+    let b = c.ok(&["brief"]);
+    assert!(
+        b.contains("you were about to: wire both into the CLI"),
+        "{b}"
+    );
 }
 
 /// `t594` task 4, paso 5 (§4.4): a lone repository keeps the short sha it

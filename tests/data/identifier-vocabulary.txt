@@ -1312,6 +1312,7 @@ persists
 person
 personal
 phrase
+pick
 picked
 picks
 pieces
@@ -1789,6 +1790,7 @@ stdio
 stdout
 stem
 step
+stepped
 steps
 still
 stop

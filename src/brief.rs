@@ -16,7 +16,7 @@
 //!   question 1, and without it the brief has no reason to exist.
 
 use crate::args::Args;
-use crate::event::{Flag, Kind, State, WhereRepo};
+use crate::event::{Flag, Kind, State, VivacKind, WhereRepo};
 use crate::failure::R;
 use crate::model::{Node, Tree};
 use crate::style;
@@ -1330,18 +1330,20 @@ pub fn to_text(
                     None => String::new(),
                 }
             )];
-            // The last stop of this same lane that actually left an intent
-            // for the relief, searching backward from `v` itself (`f67`,
-            // `d652`). An automatic stop never carries one on purpose --
-            // asking would be exactly the judgement of relevance the DX
-            // pillar measured at zero uses -- so a hook's stop landing right
-            // behind a manual one must not blank out what the manual one
-            // said. May be `v` itself, an earlier stop, or nothing at all.
-            let spoken = a
-                .vivacs
-                .iter()
-                .rev()
-                .find(|s| s.lane == v.lane && !s.next_intent.is_empty());
+            // The last stop of this same lane that somebody wrote knowing
+            // what they were doing, searching backward from `v` itself
+            // (`f67`, `d652`, `d915`). An automatic stop never carries an
+            // intent on purpose -- asking would be exactly the judgement of
+            // relevance the DX pillar measured at zero uses -- so a hook's
+            // stop landing right behind a manual one must not blank out
+            // what the manual one said. It is the only kind stepped over:
+            // a save or a pop with no `--next` has said there is nothing to
+            // pick up (`f914`), and reaching past it would quote an intent
+            // that was already done. May be `v` itself, an earlier stop, or
+            // nothing at all.
+            let spoken = a.vivacs.iter().rev().find(|s| {
+                s.lane == v.lane && !(s.kind == VivacKind::Auto && s.next_intent.is_empty())
+            });
             // The label shown is always the one belonging to whichever stop
             // is being quoted: `spoken`'s own when there is one to quote,
             // `v`'s own otherwise (`f64`).
@@ -1349,7 +1351,7 @@ pub fn to_text(
             if !label.is_empty() {
                 l.push(format!("         \"{}\"", clip(label, 52)));
             }
-            if let Some(s) = spoken {
+            if let Some(s) = spoken.filter(|s| !s.next_intent.is_empty()) {
                 l.push(if s.num == v.num {
                     format!("         you were about to: {}", clip(&s.next_intent, 52))
                 } else {
