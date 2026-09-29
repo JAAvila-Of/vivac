@@ -348,7 +348,9 @@ const TOOLS: &[Tool] = &[
                 name: "next",
                 kind: ArgKind::Str,
                 required: false,
-                description: "What comes after, when it differs from the outcome.",
+                description: "What to pick up next, for whoever comes back. Without \
+                              it the stop leaves nothing to pick up: the outcome is what \
+                              was finished, not what comes next.",
             },
             Arg {
                 name: "force",

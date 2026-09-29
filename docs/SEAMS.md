@@ -147,6 +147,9 @@ vivac save "before touching the adapter" --next "extract the validator"
 ```
 
 What goes after `--next` is what the next brief says you were about to do.
+Leave it out and the brief says nothing is waiting, rather than reaching
+back for an older stop's intent. `pop` takes the same `--next`: its outcome
+is what was finished, and it is never read back as what comes next.
 
 ---
 
