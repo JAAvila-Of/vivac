@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.4](https://github.com/JAAvila-Of/vivac/compare/v0.17.3...v0.17.4) - 2026-09-29
+
+### Added
+
+- *(flag)* let a review sleep until a date, and list every flag ([#212](https://github.com/JAAvila-Of/vivac/pull/212))
+
 ## [0.17.3](https://github.com/JAAvila-Of/vivac/compare/v0.17.2...v0.17.3) - 2026-09-29
 
 ### Added
