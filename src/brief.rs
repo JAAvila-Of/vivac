@@ -979,27 +979,31 @@ fn other_lanes_fallback(n: usize) -> Vec<String> {
     )
 }
 
-/// The four lines ahead of the table (`d757`, `d779`): look at what the tree
-/// already holds before writing, hang new work from what it continues --
-/// the focus is wherever work was left, maybe by another session and about
-/// something else -- and, last, the rule the whole block exists to teach:
-/// what gets told out loud belongs in the tree before it belongs in the
-/// answer, not after.
+/// The lines ahead of the table (`d757`, `d779`, `d945`): look at what the
+/// tree already holds before writing; what turns up while working on work it
+/// already holds is a node under it and never a note (`d945`); hang new work
+/// from what it continues -- the focus is wherever work was left, maybe by
+/// another session and about something else -- and, last, the rule the whole
+/// block exists to teach: what gets told out loud belongs in the tree before
+/// it belongs in the answer, not after.
 const CAPTURE_SEAMS_HEAD: &[&str] = &[
-    "  Look first: vivac find \"<words>\". Work the tree already holds goes under",
-    "  its node, never into a second one. The focus above is where work was",
-    "  left, maybe not by you: hang new work from what it continues.",
+    "  Look first: vivac find \"<words>\". Work the tree already holds is never",
+    "  opened twice: what you find, settle or leave to do while on it is a node",
+    "  under it, not a note. The focus above is where work was left, maybe not",
+    "  by you: hang new work from what it continues.",
     "  With --everywhere it looks in the person's other projects too: say which",
     "  one anything you use comes from, and show it to them before applying it.",
     "  Write before you answer: what you tell the person goes in the tree first.",
 ];
 
 /// [`CAPTURE_SEAMS_HEAD`] for a brief with no focus (`f912`): there is no
-/// focus above to hang from, so the sentence about it goes and the rest
-/// stays word for word.
+/// focus above to hang from, so the sentence about it goes -- the one about
+/// a node under it, not a note, stays (`d945`) -- and the rest stays word for
+/// word.
 const CAPTURE_SEAMS_HEAD_NO_FOCUS: &[&str] = &[
-    "  Look first: vivac find \"<words>\". Work the tree already holds goes under",
-    "  its node, never into a second one.",
+    "  Look first: vivac find \"<words>\". Work the tree already holds is never",
+    "  opened twice: what you find, settle or leave to do while on it is a node",
+    "  under it, not a note.",
     "  With --everywhere it looks in the person's other projects too: say which",
     "  one anything you use comes from, and show it to them before applying it.",
     "  Write before you answer: what you tell the person goes in the tree first.",
@@ -1027,7 +1031,7 @@ const CAPTURE_SEAMS: &[(&str, &str, &[&str], &str)] = &[
     (
         "a choice is settled",
         "vivac decide \"<t>\" --reason \"<r>\" --alternative \"<x>\"",
-        &[],
+        &["yours or the person's"],
         "vivac_decide",
     ),
     (
@@ -1048,7 +1052,10 @@ const CAPTURE_SEAMS: &[(&str, &str, &[&str], &str)] = &[
     (
         "changed outside git",
         "vivac note <id> \"<what changed, where>\"",
-        &["CI, a tracker, the cloud: the tree is its only record"],
+        &[
+            "CI, a tracker, the cloud: the tree is its only record",
+            "never a finding, a choice or something left to do",
+        ],
         "vivac_note",
     ),
     (

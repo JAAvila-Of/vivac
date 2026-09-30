@@ -15,7 +15,7 @@
 use crate::anchor::{self, Anchor};
 use crate::event::{Against, Arm, Body, Event, Flag, Kind, State, VivacKind};
 use crate::failure::{Failure, R};
-use crate::model::{fold, Node, Tree};
+use crate::model::{fold, Node, Tree, NOTES_SINCE_CHILD_EVERY};
 use crate::outcome::{self, Outcome};
 use crate::params;
 use crate::store::Store;
@@ -889,6 +889,43 @@ fn open_parent(ctx: &Ctx, id: &str) -> Result<crate::model::Node, Failure> {
     Ok(n)
 }
 
+/// Refuses a title that is the id of a node that exists (`f943`): the alias
+/// every listing prints, or the node's ULID, once trimmed and nothing more.
+/// A title cannot be changed later, so one that only names where the work
+/// hangs from would stay wrong for good; `parent` is where that goes. Only
+/// those two shapes count -- `t99999` with no such node, `v2` or `t145
+/// follow-up` are titles, and a bare number or a prefix is not an id here --
+/// so this reads the tree directly instead of going through `Ctx::resolve`.
+///
+/// `command` is the verb's own line for hanging the node, with `<ALIAS>`
+/// standing for the node it names; the alias is the node's, even when the
+/// title was its ULID. Runs before anything is written, and fails the way
+/// `open_parent` does.
+fn refuse_id_as_title(ctx: &Ctx, title: &str, command: &str) -> Result<(), Failure> {
+    let shown = title.trim();
+    let by_alias = || {
+        let mut chars = shown.chars();
+        let letter = chars.next()?;
+        let digits = chars.as_str();
+        if !letter.is_ascii_alphabetic()
+            || digits.is_empty()
+            || !digits.bytes().all(|b| b.is_ascii_digit())
+        {
+            return None;
+        }
+        let node = ctx.tree.node_by_num(digits.parse().ok()?)?;
+        (node.alias() == shown).then_some(node)
+    };
+    let Some(node) = ctx.tree.node(shown).or_else(by_alias) else {
+        return Ok(());
+    };
+    Err(Failure::Model(format!(
+        "  \"{shown}\" is the id of a node, not a title, and a title cannot be changed later.\n  \
+         To hang the new node from it:  {}",
+        command.replace("<ALIAS>", &node.alias())
+    )))
+}
+
 /// The stack's own nodes not on `num`'s path, and that path's own nodes not
 /// yet on the stack -- each kept in its source's own order, so a caller
 /// decides for itself how a `Popped` or a `Pushed` per node reads in the
@@ -1220,6 +1257,11 @@ pub fn push(ctx: &mut Ctx, p: params::Push) -> Result<Outcome, Failure> {
     if p.root && p.parent.is_some() {
         return Err(root_and_parent_error());
     }
+    refuse_id_as_title(
+        ctx,
+        &p.title,
+        "vivac push \"<title>\" --why \"<why>\" --parent <ALIAS>",
+    )?;
     let target = match &p.parent {
         Some(id) => Some(open_parent(ctx, id)?),
         None => None,
@@ -1702,6 +1744,7 @@ pub fn add(ctx: &mut Ctx, p: params::Add) -> Result<Outcome, Failure> {
     if p.root && p.parent.is_some() {
         return Err(root_and_parent_error());
     }
+    refuse_id_as_title(ctx, &p.title, "vivac add \"<title>\" --parent <ALIAS>")?;
     let parent = if p.root {
         None
     } else {
@@ -1767,7 +1810,19 @@ pub fn note(ctx: &mut Ctx, p: params::Note) -> Result<Outcome, Failure> {
         node: n.id.clone(),
         note,
     }])?;
-    Ok(Outcome::Noted { alias: n.alias() })
+    // Read after the note is applied: the count the reminder speaks of
+    // includes this one (`d945`). `checked_rem` rather than `%`, which clippy
+    // wants as `is_multiple_of`, a name the identifier guard does not know.
+    let since_child = ctx
+        .tree
+        .node_by_num(n.num)
+        .map_or(0, |n| n.notes_since_child);
+    Ok(Outcome::Noted {
+        alias: n.alias(),
+        notes_since_child: (since_child > 0
+            && since_child.checked_rem(NOTES_SINCE_CHILD_EVERY) == Some(0))
+        .then_some(since_child),
+    })
 }
 
 pub fn block(ctx: &mut Ctx, p: params::Block) -> Result<Outcome, Failure> {
@@ -2143,6 +2198,11 @@ pub fn decide(ctx: &mut Ctx, p: params::Decide) -> Result<Outcome, Failure> {
     if p.root && p.parent.is_some() {
         return Err(root_and_parent_error());
     }
+    refuse_id_as_title(
+        ctx,
+        &p.title,
+        "vivac decide \"<title>\" --reason \"<why>\" --parent <ALIAS>",
+    )?;
     let superseded = match &p.supersedes {
         Some(s) => Some(ctx.resolve(s)?.clone()),
         None => None,
