@@ -13,8 +13,8 @@
 //! else.
 //!
 //! Keyed by the id of each project's first event (`d201`), not by
-//! `Config::project_id`: `Store::open` silently regenerates a missing
-//! `config`, which would mint a fresh id for a project that already has one.
+//! `Config::project_id`: `Store::open` regenerates a missing `config`,
+//! which would mint a fresh id for a project that already has one.
 //!
 //! Written as a side effect of using a project, never as its own command,
 //! and never allowed to turn a working command into a failing one: see

@@ -199,7 +199,8 @@ pub fn check(
     if args.has("gates") {
         if let Some(store_dir) = crate::store::store_dir() {
             for root in crate::registry::roots(&store_dir) {
-                let Ok(project_store) = crate::store::Store::open(root.clone()) else {
+                let Ok(project_store) = crate::store::Store::open_from_elsewhere(root.clone())
+                else {
                     continue;
                 };
                 let Ok((events, _)) = project_store.read_all() else {

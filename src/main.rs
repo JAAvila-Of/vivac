@@ -980,7 +980,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
             // any tree nobody ran `setup` in. Defensible and not a lie
             // today; it stops being one the day a foreign tree has a
             // second lane (`t594`).
-            let foreign = store::Store::open(foreign_root)?;
+            let foreign = store::Store::open_from_elsewhere(foreign_root)?;
             // `d916`: a tree that keeps what it knows to itself is closed
             // to every project but its own.
             if foreign

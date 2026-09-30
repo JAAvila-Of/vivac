@@ -3190,7 +3190,7 @@ pub fn find_everywhere_data(query: &str, own: Option<&str>) -> Result<serde_json
     let mut projects: Vec<(String, Tree)> = Vec::new();
     for root in known_roots {
         let name = project_name(&root);
-        if let Ok(store) = crate::store::Store::open(root) {
+        if let Ok(store) = crate::store::Store::open_from_elsewhere(root) {
             if store.config.closed_to(own) {
                 continue;
             }
@@ -3234,7 +3234,7 @@ pub fn find_everywhere(a: &Args, own: Option<&str>) -> R {
     let mut kept_to_themselves = 0usize;
     for root in known_roots {
         let name = project_name(&root);
-        match crate::store::Store::open(root) {
+        match crate::store::Store::open_from_elsewhere(root) {
             Ok(store) if store.config.closed_to(own) => kept_to_themselves += 1,
             Ok(store) => match crate::index::load(&store, false) {
                 Ok(tree) => projects.push((name, tree)),
