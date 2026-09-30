@@ -1674,3 +1674,60 @@ fn the_last_stop_speaking_for_itself_carries_no_age() {
     assert!(b.contains("you were about to: ship it"), "{b}");
     assert!(!b.contains("earlier"), "{b}");
 }
+
+/// `f261`, `d929`: a correction lives in a note, since neither the title
+/// nor the why ever changes, and the spine carries each node's newest note
+/// under its why -- the goal's too, which shows no why at all.
+#[test]
+fn the_spine_carries_each_nodes_newest_note() {
+    let c = Sandbox::new_seeded("spine-notes");
+    c.ok(&["push", "Goal", "--why", "the branch"]);
+    c.ok(&[
+        "push",
+        "Move the store to SQLite",
+        "--why",
+        "JSON cannot hold it",
+    ]);
+    c.ok(&["push", "Leaf", "--why", "one more level"]);
+    c.ok(&["note", "1", "renamed in spirit: the goal is the store"]);
+    c.ok(&["note", "2", "an older word"]);
+    c.ok(&["note", "2", "SQLite was ruled out by d9"]);
+
+    let b = c.ok(&["brief"]);
+    assert!(
+        b.contains(": renamed in spirit: the goal is the store"),
+        "{b}"
+    );
+    assert!(b.contains(": SQLite was ruled out by d9"), "{b}");
+    assert!(
+        !b.contains("an older word"),
+        "only the newest travels:\n{b}"
+    );
+    let leaf: Vec<&str> = b
+        .lines()
+        .skip_while(|l| !l.contains("Leaf"))
+        .take(3)
+        .collect();
+    assert!(
+        leaf.iter().all(|l| !l.contains("last note")),
+        "a node with no notes grew a line:\n{b}"
+    );
+}
+
+/// A node that closed after its last note says how it closed instead: the
+/// outcome is the later word, and the note it overrides may say the
+/// opposite.
+#[test]
+fn a_node_closed_after_its_note_shows_its_outcome() {
+    let c = Sandbox::new_seeded("spine-outcome");
+    c.ok(&["push", "Goal", "--why", "the branch"]);
+    c.ok(&["push", "Step", "--why", "work"]);
+    c.ok(&["push", "Leaf", "--why", "one more level"]);
+    c.ok(&["note", "2", "stale, kept open on purpose"]);
+    c.ok(&["done", "2", "shipped in 0.1 after all"]);
+
+    let b = c.ok(&["brief"]);
+    assert!(b.contains("closed "), "{b}");
+    assert!(b.contains(": shipped in 0.1 after all"), "{b}");
+    assert!(!b.contains("kept open on purpose"), "{b}");
+}

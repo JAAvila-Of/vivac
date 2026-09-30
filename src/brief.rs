@@ -185,6 +185,9 @@ fn spine(a: &Tree, lineage: &[&Node], date: &str) -> Vec<String> {
         if !first && !why.is_empty() {
             v.push(format!("{cont}why: {}", clip(why, 52)));
         }
+        if let Some(line) = latest_word(a, n) {
+            v.push(format!("{cont}{line}"));
+        }
         let governs = n.governs(a);
         if !governs.is_empty() {
             v.push(format!("{cont}governs: {}", governs.join(" ")));
@@ -194,6 +197,35 @@ fn spine(a: &Tree, lineage: &[&Node], date: &str) -> Vec<String> {
         }
     }
     v
+}
+
+/// `f261`, `d929`: the latest thing written about a node after it was born,
+/// dated, for its line in the spine.
+///
+/// A title never changes and a why never does either, so a correction lives
+/// in a note, and the spine is what every session starts from. Only the
+/// newest travels: which note corrects is not written anywhere, and the
+/// newest is the latest thing known. A node that closed after its last note
+/// says how it closed instead -- `g1`'s last note called it stale and kept
+/// open on purpose, and the outcome written twelve days later is what is
+/// true. The date is there so the line reads as later than the why.
+fn latest_word(a: &Tree, n: &Node) -> Option<String> {
+    let note = n.notes(a).pop();
+    let close = n
+        .closed(a)
+        .map(|at| (at, n.outcome(a)))
+        .filter(|(_, out)| !out.is_empty());
+    let (label, at, text) = match (note, close) {
+        (Some((noted_at, _)), Some((closed_at, out))) if closed_at >= noted_at => {
+            (n.state.word(n.kind), closed_at, out)
+        }
+        (None, Some((closed_at, out))) => (n.state.word(n.kind), closed_at, out),
+        (Some((noted_at, text)), _) => ("last note", noted_at, text),
+        (None, None) => return None,
+    };
+    let head = format!("{label} {}: ", at.get(..10).unwrap_or(at));
+    let room = 64usize.saturating_sub(head.chars().count());
+    Some(format!("{head}{}", clip(text, room)))
 }
 
 /// Cuts on a word boundary without exceeding `n`, **counting the ellipsis**.
