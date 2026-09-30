@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.15](https://github.com/JAAvila-Of/vivac/compare/v0.17.14...v0.17.15) - 2026-09-30
+
+### Added
+
+- *(save)* write the label and say what the stop left unfinished ([#235](https://github.com/JAAvila-Of/vivac/pull/235))
+
 ## [0.17.14](https://github.com/JAAvila-Of/vivac/compare/v0.17.13...v0.17.14) - 2026-09-30
 
 ### Added
