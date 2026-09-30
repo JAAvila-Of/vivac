@@ -8,6 +8,11 @@ It silently does not count, and the release goes out with the old number.
 
     python3 tools/check-commits.py --self-test
     git log --format='%B%x00' A..B | python3 tools/check-commits.py
+    printf '%s (#%s)' "$TITLE" "$NUMBER" | python3 tools/check-commits.py
+
+The third form is the subject a squash merge will write: the pull
+request's title with ` (#N)` after it, which the branch's own commits never
+show (`f925`).
 
 Messages arrive NUL separated so a body with blank lines stays one message.
 
