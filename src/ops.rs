@@ -1427,10 +1427,29 @@ pub fn pop(ctx: &mut Ctx, p: params::Pop) -> Result<Outcome, Failure> {
         }),
         None => None,
     };
+    // Read after both emits: the close and then the stop. A `--next` makes
+    // the stop a spoken one, which starts the count over.
+    let asks_for_next = asks_for_next(&ctx.tree, &closed);
     Ok(Outcome::Popped {
         closed,
         parent,
         left_open: left,
+        asks_for_next,
+    })
+}
+
+/// `d937`: what a close adds when the lane's latest close crossed a multiple
+/// of 25 changes since its last spoken stop. Only a command that wrote a close
+/// can show it: a node already closed, or a decision popped off the stack,
+/// wrote none, and the lane's flag would still be standing from the last one.
+fn asks_for_next(tree: &Tree, closed: &outcome::Closed) -> Option<outcome::AsksForNext> {
+    if closed.already.is_some() || closed.still_standing.is_some() {
+        return None;
+    }
+    let state = tree.state();
+    state.close_crossing.then(|| outcome::AsksForNext {
+        changes: state.since_spoken,
+        since: tree.last_spoken_vivac().map(|v| v.alias()),
     })
 }
 
@@ -1669,9 +1688,11 @@ pub fn done(ctx: &mut Ctx, p: params::Done) -> Result<Outcome, Failure> {
     }
     let left = left_open(&ctx.tree, Some(n.num), &n.refs(&ctx.tree), &p.outcome);
     let closed = close_node(ctx, &n, &p.outcome, p.force, true)?;
+    let asks_for_next = asks_for_next(&ctx.tree, &closed);
     Ok(Outcome::Done {
         closed,
         left_open: left,
+        asks_for_next,
     })
 }
 
