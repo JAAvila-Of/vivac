@@ -1,0 +1,31 @@
+name: pr-title
+
+# `f925`, `d928`: a squash merge writes the pull request's title as the
+# subject on `main` and appends ` (#N)`. The `commits` job in `ci.yml`
+# checks the branch's own commits and never sees that line, so thirteen
+# subjects past the limit reached `main` between 0.15.0 and 0.17.9. This
+# checks the line the squash will write. It lives apart from `ci.yml`
+# because it has to run again when the title is edited, and the tests in
+# three systems do not.
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+concurrency:
+  group: pr-title-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  squash-subject:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # The title goes through the environment and never into the script,
+      # so nothing typed in it runs as shell.
+      - env:
+          TITLE: ${{ github.event.pull_request.title }}
+          NUMBER: ${{ github.event.pull_request.number }}
+        run: printf '%s (#%s)' "$TITLE" "$NUMBER" | python3 tools/check-commits.py
