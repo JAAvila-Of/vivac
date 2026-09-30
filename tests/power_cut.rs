@@ -187,8 +187,8 @@ fn assert_config_refused(c: &Sandbox, config_bytes: &[u8], error: &str) {
     let sentence = format!(
         ".vivac/config cannot be read ({error}), so this tree cannot be opened. The log in \
          .vivac/events is untouched and nothing was written. Moving the file aside lets \
-         vivac rebuild it from the log, with a new project id; if this tree was closed \
-         with vivac share off, close it again afterwards."
+         vivac rebuild it from the log, with a new project id and closed to other \
+         projects: vivac share on opens it again."
     );
 
     for verb in [

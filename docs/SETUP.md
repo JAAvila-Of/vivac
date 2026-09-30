@@ -266,9 +266,15 @@ Closing asks nothing, since it can only keep more in. Reopening, `vivac share
 on`, asks a person at a terminal and takes no `--yes`, so an agent running
 commands cannot reopen what somebody closed, and neither command is a tool.
 That guards the command, not the file: the mark is one field in
-`.vivac/config`, and whoever can edit that file can change it — or delete
-it, and the config comes back open. A vivac older than 0.17.7 does not know
-the field and reads a closed tree like any other.
+`.vivac/config`, and whoever can edit that file can change it. Deleting it
+does not reopen the project. vivac rebuilds a missing config from the log
+closed, with a new project id, and says so, because whether the project
+shared lived only in the file that is gone: opening by mistake is a leak
+nobody can take back, and closing by mistake is one `vivac share on` away.
+Until the project itself rebuilds it, every other project reads it as
+closed, and a read from elsewhere never writes it. A vivac older than
+0.17.19 rebuilds it open, and one older than 0.17.7 does not know the field
+and reads a closed tree like any other.
 
 ### Nothing destructive is reachable from here
 

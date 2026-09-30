@@ -1030,7 +1030,7 @@ fn call(project: &mut Project, params: &Value) -> Result<String, Failure> {
                     // No log either, for the same reason `--project` never
                     // reads one on the CLI: `lane` and `where` (`t594`
                     // §5.4) simply have nothing to answer from here.
-                    let foreign = store::Store::open(foreign_root)?;
+                    let foreign = store::Store::open_from_elsewhere(foreign_root)?;
                     // `d916`: closed to every project but its own, the same
                     // refusal the CLI gives.
                     let own = project.current()?.store.config.project_id.clone();

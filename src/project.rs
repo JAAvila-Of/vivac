@@ -124,8 +124,8 @@ impl Project {
     /// linking to either.
     ///
     /// The first event and **not** `Config::project_id`, which `f266`
-    /// disqualified: `Store::open` silently regenerates a missing `config`,
-    /// so deleting one file mints a fresh id for a tree that already has one.
+    /// disqualified: `Store::open` regenerates a missing `config`, so
+    /// deleting one file mints a fresh id for a tree that already has one.
     /// The log is append-only and cannot do that.
     ///
     /// Read off the fold rather than kept in a field, and the difference is

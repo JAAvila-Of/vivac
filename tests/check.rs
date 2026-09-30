@@ -340,6 +340,11 @@ fn a_copy_of(original: &Sandbox, name: &str) -> Sandbox {
         copy.0.join(".vivac").join("events"),
     )
     .unwrap();
+    std::fs::copy(
+        original.0.join(".vivac").join("config"),
+        copy.0.join(".vivac").join("config"),
+    )
+    .unwrap();
     copy
 }
 
@@ -678,11 +683,13 @@ fn copy_json_carries_a_null_other_when_the_guard_withholds_the_name() {
 
     let copy_dir = temp_dir("copy-json-redacted-copy");
     std::fs::create_dir_all(copy_dir.join(".vivac")).unwrap();
-    std::fs::copy(
-        original_dir.join(".vivac").join("events"),
-        copy_dir.join(".vivac").join("events"),
-    )
-    .unwrap();
+    for file in ["events", "config"] {
+        std::fs::copy(
+            original_dir.join(".vivac").join(file),
+            copy_dir.join(".vivac").join(file),
+        )
+        .unwrap();
+    }
 
     let (s, code) = run_bin(&copy_dir, &home, &["check", "--json"]);
     assert_eq!(code, 1, "{s}");

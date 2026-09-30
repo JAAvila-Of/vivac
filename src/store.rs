@@ -909,17 +909,64 @@ impl Store {
                 // config is born locked to whichever of those sentences the
                 // log backs up -- deleting one file must never hand an older
                 // release a config that looks readable over a tree it is not.
+                //
+                // `d952`: and it is born closed to other projects. Whether
+                // the tree shared lives only in the file that is gone, and
+                // opening by mistake is a leak nobody can take back -- the
+                // other project has already read it -- while closing by
+                // mistake shows in `vivac share` and one `vivac share on`
+                // undoes it. It says so, since it is a change nobody asked
+                // for.
                 let c = Config {
                     version: regenerated_version(&root),
+                    share: Some(false),
                     ..Config::new_seeded()
                 };
                 write_config(&root, &c)?;
+                eprintln!(
+                    "  .vivac/config was missing, so vivac rebuilt it from the log, with a new
+  project id. A rebuilt config keeps what this project knows to itself:
+  other projects on this machine do not find it.
+  To share it again, from a terminal:  vivac share on"
+                );
                 c
             }
             // Any other read error -- invalid UTF-8, permission denied, a
             // directory in its place -- is a config that exists and cannot be
             // read, not a missing one: regenerating it would hand the tree a
             // new project id, so it fails and writes nothing (`f941`).
+            Err(e) => return Err(unreadable_config(Failure::Io(e))),
+        };
+        let log_present = root.join(DIR).join(LOG).is_file();
+        Ok(Store {
+            root,
+            config,
+            log_present,
+        })
+    }
+
+    /// Opens a tree to read it from a project that is not it (`d952`).
+    /// Unlike [`Store::open`] this never writes: a missing config is not
+    /// rebuilt inside a project nobody here is working in. Until that
+    /// project rebuilds its own, it reads as closed -- the same answer the
+    /// config it will rebuild gives -- so the caller's `closed_to` leaves
+    /// it alone. A folder with no `.vivac/` at all is not a tree that hides,
+    /// it is one that is gone, and fails as `open` always did. Every other
+    /// failure is `open`'s.
+    pub fn open_from_elsewhere(root: PathBuf) -> Result<Store, Failure> {
+        if !root.join(DIR).is_dir() {
+            return Err(Failure::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "there is no .vivac/ in that folder any more",
+            )));
+        }
+        let p = root.join(DIR).join(CONFIG);
+        let config = match fs::read_to_string(&p) {
+            Ok(s) => read_config(&s).map_err(unreadable_config)?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Config {
+                share: Some(false),
+                ..Config::new_seeded()
+            },
             Err(e) => return Err(unreadable_config(Failure::Io(e))),
         };
         let log_present = root.join(DIR).join(LOG).is_file();
@@ -1050,8 +1097,8 @@ fn unreadable_config(failure: Failure) -> Failure {
         Failure::Io(e) => Failure::Io(std::io::Error::other(format!(
             ".vivac/config cannot be read ({e}), so this tree cannot be opened. The log in \
              .vivac/events is untouched and nothing was written. Moving the file aside lets \
-             vivac rebuild it from the log, with a new project id; if this tree was closed \
-             with vivac share off, close it again afterwards."
+             vivac rebuild it from the log, with a new project id and closed to other \
+             projects: vivac share on opens it again."
         ))),
         other => other,
     }
@@ -2337,6 +2384,21 @@ mod tests {
 
         let reopened = Store::open(tmp.clone()).unwrap();
         assert_eq!(reopened.config.version, ConfigVersion::Lanes);
+        assert_eq!(reopened.config.share, Some(false));
+        fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// `d952`: a read from another project never writes the config it finds
+    /// missing, and the stand-in it reads is closed.
+    #[test]
+    fn open_from_elsewhere_never_writes_a_missing_config() {
+        let tmp = std::env::temp_dir().join(format!("vivac-elsewhere-{}", id::ulid()));
+        Store::create(&tmp).unwrap();
+        fs::remove_file(tmp.join(DIR).join(CONFIG)).unwrap();
+
+        let s = Store::open_from_elsewhere(tmp.clone()).unwrap();
+        assert!(s.config.closed_to(None));
+        assert!(!tmp.join(DIR).join(CONFIG).exists());
         fs::remove_dir_all(&tmp).ok();
     }
 

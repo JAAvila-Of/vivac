@@ -246,3 +246,86 @@ fn share_is_announced_in_the_help() {
     assert!(help.contains("whether other projects can find\n"), "{help}");
     assert!(help.contains("what this one knows\n"), "{help}");
 }
+
+// d952: a config that goes missing comes back closed.
+
+#[test]
+fn a_rebuilt_config_keeps_the_project_to_itself_and_says_so() {
+    let c = Sandbox::new_seeded("share-rebuilt");
+    c.ok(&["push", "Ship the release", "--why", "the tag is cut"]);
+    std::fs::remove_file(c.0.join(".vivac").join("config")).unwrap();
+
+    let s = c.ok(&["stack"]);
+    assert!(
+        s.contains("so vivac rebuilt it from the log, with a new"),
+        "{s}"
+    );
+    assert!(
+        s.contains("To share it again, from a terminal:  vivac share on"),
+        "{s}"
+    );
+    assert!(config(&c).contains("\"share\": false"), "{}", config(&c));
+
+    let again = c.ok(&["stack"]);
+    assert!(!again.contains("rebuilt"), "{again}");
+    let state = c.ok(&["share"]);
+    assert!(state.contains("keeps what it knows to itself."), "{state}");
+}
+
+#[test]
+fn the_rebuilt_config_notice_goes_to_stderr_and_leaves_json_alone() {
+    let c = Sandbox::new_seeded("share-rebuilt-json");
+    c.ok(&[
+        "push",
+        &format!("Guard the {WORD} habitat"),
+        "--why",
+        "a reason",
+    ]);
+    std::fs::remove_file(c.0.join(".vivac").join("config")).unwrap();
+
+    let o = std::process::Command::new(env!("CARGO_BIN_EXE_vivac"))
+        .current_dir(&c.0)
+        .env("VIVAC_HOME", c.global_home())
+        .env("TZ", "UTC")
+        .args(["find", WORD, "--json"])
+        .output()
+        .unwrap();
+    let out = String::from_utf8_lossy(&o.stdout).into_owned();
+    let err = String::from_utf8_lossy(&o.stderr).into_owned();
+    serde_json::from_str::<serde_json::Value>(&out).unwrap();
+    assert!(out.contains(WORD), "{out}");
+    assert!(err.contains("rebuilt it from the log"), "{err}");
+    assert!(!out.contains("rebuilt it from the log"), "{out}");
+}
+
+#[test]
+fn a_project_whose_config_is_missing_reads_as_closed_from_another_and_is_not_rebuilt() {
+    let (a, b) = pair("share-missing");
+    let gone = b.0.join(".vivac").join("config");
+    std::fs::remove_file(&gone).unwrap();
+
+    let s = a.ok(&["find", WORD, "--everywhere"]);
+    assert!(!s.contains(TITLE), "{s}");
+    assert!(
+        s.contains("1 project keeps what it knows to itself."),
+        "{s}"
+    );
+    assert!(!s.contains("rebuilt"), "{s}");
+
+    let (w, code) = a.run(&["why", "1", "--project", &project_name(&b)]);
+    assert_eq!(code, 1, "{w}");
+    assert_eq!(
+        w.trim(),
+        format!(
+            "{} keeps what it knows to itself: other projects cannot read it.",
+            project_name(&b)
+        ),
+        "{w}"
+    );
+    assert!(!w.contains("rebuilt"), "{w}");
+
+    let (g, _) = a.run(&["check", "--gates"]);
+    assert!(!g.contains("rebuilt"), "{g}");
+
+    assert!(!gone.exists(), "a read from elsewhere rebuilt the config");
+}

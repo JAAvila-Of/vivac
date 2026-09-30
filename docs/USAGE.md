@@ -263,7 +263,8 @@ vivac share on      share it again; asks you, at a terminal
 ```
 
 A closed project is left out of every read made from another one, and still
-reads as always from inside. [Setting it up](SETUP.md#what-crosses-projects-and-what-does-not)
+reads as always from inside. One whose `.vivac/config` goes missing comes
+back closed, and says so. [Setting it up](SETUP.md#what-crosses-projects-and-what-does-not)
 says what that guards and what it does not.
 
 ### `open` answers one sentence, and the order is that sentence
