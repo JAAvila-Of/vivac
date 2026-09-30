@@ -2241,10 +2241,64 @@ pub fn declare(ctx: &mut Ctx, p: params::Declare) -> Result<Outcome, Failure> {
     })
 }
 
+/// One group of a composed label: `2 closed (f355, f730)`. The ids are the
+/// aliases of the nodes kept, oldest first; when the count is larger than
+/// the ids that could be named, they go under `latest`. A number that no
+/// longer resolves is skipped, and a group with no ids left is the bare
+/// count.
+fn stretch_group(tree: &Tree, count: u64, word: &str, nums: &[u64]) -> Option<String> {
+    if count == 0 {
+        return None;
+    }
+    let ids: Vec<String> = nums
+        .iter()
+        .filter_map(|&num| tree.node_by_num(num))
+        .map(|n| n.alias())
+        .collect();
+    Some(match (ids.is_empty(), count > ids.len() as u64) {
+        (true, _) => format!("{count} {word}"),
+        (false, true) => format!("{count} {word} (latest {})", ids.join(", ")),
+        (false, false) => format!("{count} {word} ({})", ids.join(", ")),
+    })
+}
+
+/// What `save` writes when it is given no label (`d936`): the stretch since
+/// the lane's own last stop made by hand, as `1 new (d935), 2 closed (f355,
+/// f730), 9 notes`. Empty when the stretch held nothing of the three.
+fn stretch_label(tree: &Tree) -> String {
+    let stretch = &tree.state().stretch;
+    let mut groups: Vec<String> = Vec::new();
+    groups.extend(stretch_group(
+        tree,
+        stretch.created,
+        "new",
+        &stretch.newest_created,
+    ));
+    groups.extend(stretch_group(
+        tree,
+        stretch.closed,
+        "closed",
+        &stretch.newest_closed,
+    ));
+    match stretch.noted {
+        0 => {}
+        1 => groups.push("1 note".to_string()),
+        n => groups.push(format!("{n} notes")),
+    }
+    groups.join(", ")
+}
+
 /// `save [label]` — a safe stop on purpose.
 pub fn save(ctx: &mut Ctx, p: params::Save) -> Result<Outcome, Failure> {
     guard_text(&[("label", &p.label), ("next", &p.next)])?;
-    let v = vivac(ctx, VivacKind::Manual, &p.next, None, &p.label);
+    // Read under the lock, after any reload `lock_for_write` did, and kept
+    // in the event exactly as a given label would be.
+    let label = if p.label.is_empty() {
+        stretch_label(&ctx.tree)
+    } else {
+        p.label
+    };
+    let v = vivac(ctx, VivacKind::Manual, &p.next, None, &label);
     let num = ctx.tree.next_vivac_num.max(1);
     // Read off the event rather than resolved a second time: `vivac` has
     // already been to every repository's `HEAD`, and asking again would
@@ -2260,11 +2314,99 @@ pub fn save(ctx: &mut Ctx, p: params::Save) -> Result<Outcome, Failure> {
     let anchor = ctx.anchor.snapshot();
     Ok(Outcome::Saved {
         num,
-        label: p.label,
+        label,
         anchor,
         anchors,
         next: p.next,
+        found: outcome::StopFound::default(),
     })
+}
+
+/// What `save` adds to its answer once the stop is written (`d936`): what
+/// the stop cannot see from `HEAD` alone. The caller runs it **after** the
+/// tree's write lock is released, because it starts `git` and a slow `git`
+/// must not hold every other writer -- the CLI releases the lock it took in
+/// `main.rs`, and the MCP server calls it once `Project::write` has
+/// released its own, so the two share this one function and neither
+/// releases a lock it did not take (`f602`). Anything but a `Saved` passes
+/// through untouched.
+pub fn check_after_save(ctx: &Ctx, saved: &mut Outcome) {
+    let Outcome::Saved { num, found, .. } = saved else {
+        return;
+    };
+    *found = found_after(ctx, *num);
+}
+
+/// Per repository, the work not committed and the commits not pushed; and
+/// the files changed since the lane's previous stop made by hand that no
+/// node claims. Every `git` call of every repository is started at once.
+///
+/// The repositories are the ones the stop anchored: the lane's declared
+/// ones, or the single folder `ctx.anchor` was detected at when it declared
+/// none. Nothing here fetches, and nothing here fails: a repository git
+/// cannot be asked about simply has nothing to report.
+fn found_after(ctx: &Ctx, num: u64) -> outcome::StopFound {
+    let tree = &ctx.tree;
+    let lane_dir = ctx.lane_dir.as_path();
+    let lane = tree.lane();
+    let folders: Vec<(String, PathBuf)> = match tree.lanes.get(lane) {
+        Some(s) if !s.repos.is_empty() => s
+            .repos
+            .iter()
+            .map(|r| (r.path.clone(), lane_dir.join(&r.path)))
+            .collect(),
+        _ => vec![(String::new(), ctx.store.root.clone())],
+    };
+    let previous = tree
+        .vivacs
+        .iter()
+        .rev()
+        .find(|v| v.lane == lane && v.kind == VivacKind::Manual && v.num < num);
+    let (each_standing, unclaimed) = std::thread::scope(|scope| {
+        let each_standing: Vec<_> = folders
+            .iter()
+            .map(|(_, dir)| scope.spawn(move || anchor::standing_of(dir)))
+            .collect();
+        let unclaimed = previous.map(|since| {
+            scope.spawn(move || {
+                (
+                    since.alias(),
+                    crate::reconcile::unclaimed_since(tree, since, lane_dir),
+                )
+            })
+        });
+        (
+            each_standing
+                .into_iter()
+                .map(|handle| handle.join().ok().flatten())
+                .collect::<Vec<_>>(),
+            unclaimed.and_then(|handle| handle.join().ok()),
+        )
+    });
+    let repos = folders
+        .iter()
+        .zip(each_standing)
+        .filter_map(|((path, _), standing)| {
+            let standing = standing?;
+            let not_committed = standing
+                .paths
+                .iter()
+                .filter(|p| !crate::reconcile::in_store(p))
+                .count();
+            let not_pushed = standing.not_pushed.unwrap_or(0);
+            (not_committed > 0 || not_pushed > 0).then(|| outcome::RepoFound {
+                path: path.clone(),
+                not_committed,
+                not_pushed,
+            })
+        })
+        .collect();
+    outcome::StopFound {
+        repos,
+        unclaimed: unclaimed
+            .filter(|(_, count)| *count > 0)
+            .map(|(since, count)| outcome::UnclaimedFiles { count, since }),
+    }
 }
 
 /// A saved entry resolved against the live tree once, up front: `num`,

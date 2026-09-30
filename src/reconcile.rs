@@ -131,7 +131,7 @@ fn repo_changes(
     (changes, moved)
 }
 
-fn plural(n: usize, one: &str, many: &str) -> String {
+pub(crate) fn plural(n: usize, one: &str, many: &str) -> String {
     if n == 1 {
         format!("{n} {one}")
     } else {
@@ -146,7 +146,21 @@ fn plural(n: usize, one: &str, many: &str) -> String {
 fn without_store(changes: Vec<Change>) -> Vec<Change> {
     changes
         .into_iter()
-        .filter(|c| !c.file_path.replace('\\', "/").starts_with(".vivac/"))
+        .filter(|c| !in_store(&c.file_path))
+        .collect()
+}
+
+/// Whether `path` is under the tool's own store. Shared with the check
+/// `save` runs after a stop, which has to leave the same paths out.
+pub(crate) fn in_store(path: &str) -> bool {
+    path.replace('\\', "/").starts_with(".vivac/")
+}
+
+/// The nodes that declare what they govern: the only ones a file can be
+/// claimed by.
+fn governing_nodes(a: &Tree) -> Vec<&Node> {
+    a.nodes_iter()
+        .filter(|n| !n.governs(a).is_empty())
         .collect()
 }
 
@@ -343,6 +357,51 @@ fn print_other_lanes(others: &[OtherLane]) {
     outln!();
 }
 
+/// How many files changed since `since` that no node claims: the size of the
+/// NOBODY CLAIMS THESE basket `reconcile --since <that stop>` prints for this
+/// lane, from the same pieces (`repo_changes`, `without_store`,
+/// `verdicts_of`, `split_baskets`). A repository whose branch is not the one
+/// that stop anchored is left out, as `d596` has it. A tree where no node
+/// declares what it governs has no basket: `reconcile` says so once instead
+/// of listing files, and the count is the same zero.
+///
+/// The declared repositories are asked one thread each, so the slowest git
+/// call is the wait and not their sum.
+pub(crate) fn unclaimed_since(a: &Tree, since: &Vivac, lane_dir: &Path) -> usize {
+    let declared: &[Repo] = a
+        .lanes
+        .get(a.lane())
+        .map(|s| s.repos.as_slice())
+        .unwrap_or(&[]);
+    let changes: Vec<Change> = if declared.is_empty() {
+        if since.anchor.is_empty_tree() {
+            return 0;
+        }
+        anchor::detect(lane_dir).changed_since(&since.anchor)
+    } else {
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = declared
+                .iter()
+                .map(|repo| {
+                    scope.spawn(move || {
+                        repo_changes(std::slice::from_ref(repo), &since.anchors, lane_dir).0
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .flat_map(|handle| handle.join().unwrap_or_default())
+                .collect()
+        })
+    };
+    let governing = governing_nodes(a);
+    if governing.is_empty() {
+        return 0;
+    }
+    let verdicts = verdicts_of(&without_store(changes), &governing, a);
+    split_baskets(&verdicts).0.len()
+}
+
 pub fn reconcile(a: &Tree, root: &Path, lane_dir: &Path, args: &Args) -> R {
     let Some(since) = reference(a, args)? else {
         outln!();
@@ -382,10 +441,7 @@ pub fn reconcile(a: &Tree, root: &Path, lane_dir: &Path, args: &Args) -> R {
 
     let changes = without_store(changes);
 
-    let governing: Vec<&Node> = a
-        .nodes_iter()
-        .filter(|n| !n.governs(a).is_empty())
-        .collect();
+    let governing = governing_nodes(a);
 
     let verdicts = verdicts_of(&changes, &governing, a);
     let (unclaimed, stale, live) = split_baskets(&verdicts);

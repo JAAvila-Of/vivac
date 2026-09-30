@@ -323,6 +323,16 @@ vivac why v14       that one stop, whole: its label, what you were about to
                     do, and the stack it carried
 ```
 
+Leave the label out and `save` writes one from what this lane did since its
+last stop made by hand: `1 new (d935), 2 closed (f355, f730), 9 notes`,
+naming the three newest of each. Once the stop is written, `save` also says
+what a stop cannot see from `HEAD`: files not committed and commits not
+pushed in each repository, and how many files changed since the previous
+stop made by hand that no node claims, with the `reconcile` that lists
+them. When there is nothing to say it says nothing. It never fetches, so
+commits not pushed are counted against the upstream as git last saw it, and
+a branch with no upstream is not reported. The stop is written either way.
+
 `restore` **never touches the working tree**. Mixing context navigation with
 tree manipulation gives you a branch manager worse than git.
 

@@ -107,6 +107,9 @@ fn a_stop_from_another_lane_still_opens() {
 fn a_stop_with_no_label_and_no_intent_omits_both_lines() {
     let c = Sandbox::new_seeded("stop-bare");
     c.ok(&["push", "A goal", "--why", "it needs one"]);
+    // A bare save names what the stretch held (`d936`); one straight after
+    // another has nothing to name, which is how a stop gets no label now.
+    c.ok(&["save", "first"]);
     c.ok(&["save"]);
 
     let list = vivacs_json(&c);

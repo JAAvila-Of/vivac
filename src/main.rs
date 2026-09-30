@@ -1064,12 +1064,22 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
     // usage error never waits on another writer. `session` and `restore`
     // take their own: session once the brief is out, so a held lock never
     // costs the agent its brief, and restore once git has answered, so a
-    // slow git never holds every other writer.
+    // slow git never holds every other writer. `save` keeps the lock for its
+    // write and lets it go itself before the check that follows the stop,
+    // which also starts git.
     if may_append(cmd) && !matches!(cmd, "session" | "restore") {
         ctx.lock_for_write()?;
     }
 
-    if let Some(o) = write_op(cmd, &mut ctx, a)? {
+    if let Some(mut o) = write_op(cmd, &mut ctx, a)? {
+        // The stop is written. What it looks at next starts `git`, so the
+        // lock this run took at the top is let go first, and by the one
+        // that took it (`f602`); the MCP server reaches the same function
+        // the same way, after `Project::write` has released its own.
+        if cmd == "save" {
+            ctx.unlock();
+            ops::check_after_save(&ctx, &mut o);
+        }
         print!("{}", outcome::to_text(&o));
         // Trap: `focus` and `restore` used to end by delegating to
         // `render::stack`, which reads `--json` off `a` on its own. Neither
