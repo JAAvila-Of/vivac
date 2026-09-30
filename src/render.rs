@@ -485,6 +485,9 @@ fn path_step_json(
             "parked": below.parked_nodes,
         },
     });
+    if !full_extra {
+        trim_notes(&mut v);
+    }
     if p.kind == Kind::Rule {
         v["arms"] = arms_json(a, p);
     }
@@ -535,6 +538,7 @@ fn why_data_impl(
     a: &Tree,
     full: &Full,
     full_extra: bool,
+    only: bool,
     id: &str,
 ) -> Result<serde_json::Value, Failure> {
     let ag = &a.aggregates();
@@ -558,6 +562,7 @@ fn why_data_impl(
     } else {
         let mut v = json_node(a, ag, n);
         add_born_where(a, n, &mut v);
+        trim_notes(&mut v);
         v
     };
     // `t429`'s second fix: the JSON names the hidden claimants too, and
@@ -572,6 +577,9 @@ fn why_data_impl(
         .collect();
     if !hidden.is_empty() {
         node_json["repeated"] = json!({"num": n.num, "hidden": hidden});
+    }
+    if only {
+        return Ok(json!({ "node": node_json }));
     }
     let open_siblings: Vec<&Node> = n
         .parent
@@ -640,8 +648,42 @@ pub fn why_data(
     log: &[Event],
     id: &str,
     full: bool,
+    only: bool,
 ) -> Result<serde_json::Value, Failure> {
-    why_data_impl(a, &Full::from_log(log), full, id)
+    why_data_impl(a, &Full::from_log(log), full, only, id)
+}
+
+/// `f433`, `d931`: how many notes `why` shows whole, newest last. The state
+/// of a node tends to sit in its latest notes, and the rest came to
+/// eighteen of the twenty-four kilobytes one `why` cost. The ones left out
+/// are counted, with the command that shows them, so nothing is read as if
+/// it were all there is.
+const NOTES_SHOWN: usize = 3;
+
+/// The notes `why` leaves out in front of the newest [`NOTES_SHOWN`]:
+/// none under `--full`, which brings everything.
+fn earlier_notes(total: usize, full_extra: bool) -> usize {
+    if full_extra {
+        0
+    } else {
+        total.saturating_sub(NOTES_SHOWN)
+    }
+}
+
+/// The JSON half of [`earlier_notes`]: keeps the newest notes and says how
+/// many went, in `notes_earlier`, so the count the prose prints is there
+/// too. Only when some went: a node with three notes or fewer reads byte
+/// for byte what it did before, and what the plain read and `--full` agree
+/// on stays exactly what `tests/why.rs` holds them to.
+fn trim_notes(v: &mut serde_json::Value) {
+    let Some(notes) = v["notes"].as_array_mut() else {
+        return;
+    };
+    let earlier = earlier_notes(notes.len(), false);
+    if earlier > 0 {
+        notes.drain(..earlier);
+        v["notes_earlier"] = json!(earlier);
+    }
 }
 
 /// A front, identified by its alias and where it hangs, not the node itself:
@@ -900,9 +942,10 @@ pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
     // own three fields per step.
     let full_data = Full::from_log(log);
     let full_extra = args.has("full");
+    let only = args.has("only");
 
     if args.has("json") {
-        return print_json(why_data_impl(a, &full_data, full_extra, s)?);
+        return print_json(why_data_impl(a, &full_data, full_extra, only, s)?);
     }
 
     let out = Stream::Out;
@@ -937,8 +980,15 @@ pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
     }
     outln!();
     let cap = style::width(out).map(|w| w.saturating_sub(1));
-    for (i, p) in lineage.iter().enumerate() {
-        let is_last = i == lineage.len() - 1;
+    // `d931`: `--only` is the node alone, for walking siblings whose shared
+    // path was already read once -- the burst `f433` measured.
+    let steps = if only {
+        &lineage[lineage.len() - 1..]
+    } else {
+        &lineage[..]
+    };
+    for (i, p) in steps.iter().enumerate() {
+        let is_last = i == steps.len() - 1;
         // The node actually asked about prints whole either way; an
         // ancestor's body only survives whole under `--full`.
         let clip_body = !is_last && !full_extra;
@@ -989,13 +1039,24 @@ pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
             outln!("{l}");
         }
         let notes = p.notes(a);
+        let earlier = earlier_notes(notes.len(), full_extra);
+        if earlier > 0 {
+            let noun = if earlier == 1 { "note" } else { "notes" };
+            outln!(
+                "        {}",
+                style::dim(
+                    out,
+                    &format!("{earlier} earlier {noun}:  vivac why {} --full", p.alias())
+                )
+            );
+        }
         if notes.len() > 1 {
             // Two or more: each one gets its own line and its own date, or
             // there would be no way to tell which correction landed when.
             // With exactly one, a date says nothing a lone note does not
             // already say by being there -- `f186`'s own argument for
             // dropping the lineage's empty anchor.
-            for (at, text) in &notes {
+            for (at, text) in &notes[earlier..] {
                 let date = crate::clock::date_of(at);
                 let prefix = format!("! [{date}] ");
                 let prefix_len = prefix.chars().count();
@@ -1085,7 +1146,7 @@ pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
             }
             outln!("        {}", style::dim(out, "|"));
             outln!("        {}", style::dim(out, "v"));
-        } else {
+        } else if !only {
             outln!();
             outln!(
                 "        {}",
@@ -1094,6 +1155,9 @@ pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
         }
     }
     outln!();
+    if only {
+        return Ok(());
+    }
 
     // "we had ten things to review, we are on the first"
     if let Some(parent) = n.parent {

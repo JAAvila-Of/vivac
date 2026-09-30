@@ -107,10 +107,12 @@ const USAGE: &str = r#"vivac - provenance of work
     vivac brief [--budget 1500] [--now <date>]
                                               where you are and what NOT to
                                               touch
-    vivac why <id> [--full]                   WHY WE ARE HERE
+    vivac why <id> [--full] [--only]          WHY WE ARE HERE
                                               --full: anchor, standing
                                               decisions and open siblings,
-                                              per step of the path
+                                              per step of the path, and
+                                              every note
+                                              --only: the node alone
     vivac tree [id] [--all]                   the tree, with false closes marked
     vivac open [--all]                        open fronts and their lineage
     vivac find "<text>" [--everywhere]        every node whose words match
@@ -632,7 +634,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         // read. `--project` is `d273`'s second half: it answers from
         // another tree entirely, the same fan-out `find --everywhere`
         // already reads the registry for.
-        "why" => &["json", "full", "project"],
+        "why" => &["json", "full", "project", "only"],
         // `--everywhere` is `find`'s own for the same reason: the registry
         // fan-out (`d273`) is not something any other read takes.
         "find" => &["json", "everywhere"],
