@@ -429,6 +429,16 @@ pub struct LaneState {
     pub seg_closed: u64,
     pub seg_notes: u64,
     pub seg_events: u64,
+    /// `num -> seq` of every node this lane wrote to since its own stack
+    /// last changed, each with the seq of its newest such write (`f355`,
+    /// `d934`). `add`, `decide`, `note` and `done` leave the stack where it
+    /// was, so a session that works only through them ends with the focus
+    /// naming what it started on; this is what the brief reads to say where
+    /// the writing actually went. Emptied by any `stack.pushed`,
+    /// `stack.popped` or `stack.promoted` of this lane, and filled only by
+    /// events that name a node: a stop, a session or a branch moving is not
+    /// writing.
+    pub written: HashMap<u64, u64>,
 }
 
 #[derive(Debug, Default)]
@@ -579,6 +589,31 @@ impl Tree {
                 Body::StateChanged { state, .. } if *state == State::Done => s.seg_closed += 1,
                 Body::NodeNoted { .. } => s.seg_notes += 1,
                 _ => {}
+            }
+            // Looked up before the dispatch below, so a creation is counted
+            // only when it is about to stand: the dispatch refuses a ULID or
+            // a `num` it has already seen, and a node naming a ULID no
+            // creation has reached yet is not a node this lane can be shown.
+            let wrote = match body {
+                Body::Pushed { .. } | Body::Popped { .. } | Body::Promoted { .. } => {
+                    s.written.clear();
+                    None
+                }
+                Body::NodeCreated { node, num, .. } => (!self.ulid_index.contains_key(node)
+                    && !self.nodes.contains_key(num))
+                .then_some(*num),
+                Body::StateChanged { node, .. }
+                | Body::NodeNoted { node, .. }
+                | Body::BlockChanged { node, .. }
+                | Body::FlagRaised { node, .. }
+                | Body::FlagCleared { node, .. }
+                | Body::ArmAdded { node, .. }
+                | Body::ArmRemoved { node, .. }
+                | Body::AgainstAdded { node, .. } => self.ulid_index.get(node).copied(),
+                _ => None,
+            };
+            if let Some(num) = wrote {
+                s.written.insert(num, seq);
             }
         }
         match body {
