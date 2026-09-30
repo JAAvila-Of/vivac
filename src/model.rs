@@ -408,6 +408,42 @@ impl Counts {
     }
 }
 
+/// How many of the newest nodes a stretch names, for each of created and
+/// closed.
+pub const NAMED_NODES: usize = 3;
+
+/// What a lane did since its own last stop made by hand (`d936`): the
+/// counts, and the `num`s of the newest nodes created and closed, oldest
+/// first. Events of the stretch, read the way `changes` reads them: a node
+/// closed and reopened inside it still counts as closed once more, and
+/// nothing is filtered when it is read.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Stretch {
+    pub created: u64,
+    pub closed: u64,
+    pub noted: u64,
+    pub newest_created: Vec<u64>,
+    pub newest_closed: Vec<u64>,
+}
+
+impl Stretch {
+    fn name_created(&mut self, num: u64) {
+        self.newest_created.push(num);
+        if self.newest_created.len() > NAMED_NODES {
+            self.newest_created.remove(0);
+        }
+    }
+
+    /// A node closed twice appears once, at its newest position.
+    fn name_closed(&mut self, num: u64) {
+        self.newest_closed.retain(|&n| n != num);
+        self.newest_closed.push(num);
+        if self.newest_closed.len() > NAMED_NODES {
+            self.newest_closed.remove(0);
+        }
+    }
+}
+
 /// Everything about a tree that belongs to one working folder instead of to
 /// the product. The knowledge -- nodes, edges, decisions, and the numbering
 /// that names them -- is shared by every lane; the thread is not (`d595`).
@@ -429,6 +465,11 @@ pub struct LaneState {
     pub seg_closed: u64,
     pub seg_notes: u64,
     pub seg_events: u64,
+    /// What this lane did since its own last stop made by hand. Unlike the
+    /// `seg_*` counters above, which every stop empties, only a `Manual`
+    /// stop of this lane does: a hook's stop, a push, a pop or a park leaves
+    /// it alone, so a manual stop can say what the whole stretch held.
+    pub stretch: Stretch,
     /// `num -> seq` of every node this lane wrote to since its own stack
     /// last changed, each with the seq of its newest such write (`f355`,
     /// `d934`). `add`, `decide`, `note` and `done` leave the stack where it
@@ -566,6 +607,15 @@ impl Tree {
             s.seg_closed = 0;
             s.seg_notes = 0;
             s.seg_events = 0;
+            if matches!(
+                body,
+                Body::VivacCreated {
+                    kind: VivacKind::Manual,
+                    ..
+                }
+            ) {
+                s.stretch = Stretch::default();
+            }
         } else if matches!(body, Body::SessionStarted { .. }) {
             // Neither a change nor a stop. Opening a session says something
             // about the session and nothing about the tree: counted as a
@@ -590,6 +640,16 @@ impl Tree {
                 Body::NodeNoted { .. } => s.seg_notes += 1,
                 _ => {}
             }
+            match body {
+                Body::StateChanged { node, state, .. } if *state == State::Done => {
+                    s.stretch.closed += 1;
+                    if let Some(&num) = self.ulid_index.get(node) {
+                        s.stretch.name_closed(num);
+                    }
+                }
+                Body::NodeNoted { .. } => s.stretch.noted += 1,
+                _ => {}
+            }
             // Looked up before the dispatch below, so a creation is counted
             // only when it is about to stand: the dispatch refuses a ULID or
             // a `num` it has already seen, and a node naming a ULID no
@@ -612,6 +672,10 @@ impl Tree {
                 | Body::AgainstAdded { node, .. } => self.ulid_index.get(node).copied(),
                 _ => None,
             };
+            if let (Some(num), Body::NodeCreated { .. }) = (wrote, body) {
+                s.stretch.created += 1;
+                s.stretch.name_created(num);
+            }
             if let Some(num) = wrote {
                 s.written.insert(num, seq);
             }
@@ -2877,5 +2941,79 @@ mod tests {
             "both notes survive, oldest first"
         );
         assert_eq!(n.note(&tree), "second note", "note() still reads the last");
+    }
+
+    /// `d936`: what a lane did since its own last stop made by hand. Only a
+    /// `Manual` stop signed by that lane empties it; the newest three nodes
+    /// of each kind are kept oldest first, and closing a node again moves
+    /// it to the end instead of repeating it.
+    #[test]
+    fn the_stretch_starts_over_on_a_manual_stop_of_its_own_lane_only() {
+        let mut events = vec![
+            node(1, 1, Kind::Task, None),
+            node(2, 2, Kind::Task, None),
+            node(3, 3, Kind::Task, None),
+            node(4, 4, Kind::Task, None),
+            node(5, 5, Kind::Task, None),
+            closed(6, 2),
+            closed(7, 3),
+            closed(8, 4),
+            closed(9, 2),
+            closed(10, 5),
+            noted(11, TS, 1, "one"),
+            noted(12, TS, 1, "two"),
+        ];
+        let tree = fold(&events, 0);
+        let s = &tree.state().stretch;
+        assert_eq!((s.created, s.closed, s.noted), (5, 5, 2));
+        assert_eq!(s.newest_created, vec![3, 4, 5], "the newest three");
+        assert_eq!(s.newest_closed, vec![4, 2, 5], "a second close moves it");
+
+        // A node closed that no creation has reached is counted, not named.
+        let mut extra = events.clone();
+        extra.push(Event {
+            seq: 13,
+            id: "e13".to_string(),
+            ts: TS.to_string(),
+            actor: "a".to_string(),
+            lane: "main".to_string(),
+            payload: Body::StateChanged {
+                node: "nobody".to_string(),
+                state: State::Done,
+                outcome: "done".to_string(),
+                forced: false,
+                until: None,
+            },
+        });
+        let tree = fold(&extra, 0);
+        let s = &tree.state().stretch;
+        assert_eq!(s.closed, 6);
+        assert_eq!(s.newest_closed, vec![4, 2, 5]);
+
+        // Nothing but a manual stop of this lane empties it.
+        for (kind, lane) in [
+            (VivacKind::Auto, "main"),
+            (VivacKind::Push, "main"),
+            (VivacKind::Pop, "main"),
+            (VivacKind::Park, "main"),
+            (VivacKind::Manual, "other"),
+        ] {
+            let mut e = events.clone();
+            let mut stop = stop_of_kind(13, kind);
+            stop.lane = lane.to_string();
+            e.push(stop);
+            let tree = fold(&e, 0);
+            let s = &tree.state().stretch;
+            assert_eq!(
+                (s.created, s.closed, s.noted),
+                (5, 5, 2),
+                "{kind:?} on {lane} must leave it alone"
+            );
+        }
+
+        events.push(stop(13));
+        let tree = fold(&events, 0);
+        assert_eq!(tree.state().stretch, Stretch::default());
+        assert_eq!(tree.state().seg_new, 0);
     }
 }

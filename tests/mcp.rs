@@ -2543,3 +2543,64 @@ fn the_everywhere_description_names_the_projects_that_keep_to_themselves() {
         "Searches every project on the machine rather than this one, except those that keep what they know to themselves. Say which project anything you use comes from."
     );
 }
+
+/// `d936`: a bare `vivac_save` writes its own label, and its answer carries
+/// what the stop found unfinished, the same lines the CLI prints.
+#[test]
+fn save_writes_its_label_and_reports_what_is_left() {
+    let c = Sandbox::new_empty("save-unfinished");
+    let git = |args: &[&str]| {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(&c.0)
+            .args(args)
+            .output()
+            .expect("git is not on PATH");
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+    };
+    git(&["init", "-q"]);
+    git(&["config", "user.email", "t@example.invalid"]);
+    git(&["config", "user.name", "t"]);
+    std::fs::write(c.0.join("f.txt"), "start\n").unwrap();
+    git(&["add", "-A"]);
+    git(&["commit", "-qm", "init"]);
+    c.ok(&["init", "--yes"]);
+    c.ok(&["push", "Ship it", "--why", "it is needed"]);
+    std::fs::write(c.0.join("loose.txt"), "x\n").unwrap();
+
+    let mut s = hello(&c);
+    let r = s.ask(
+        r#"{"jsonrpc":"2.0","id":60,"method":"tools/call","params":{"name":"vivac_save","arguments":{}}}"#,
+    );
+    assert_eq!(r["result"]["isError"], false, "{r}");
+    let text = mcp_write_text(&r);
+    assert!(text.contains("1 new (g1)"), "{text}");
+    assert!(
+        text.lines().any(|l| l == "        1 file not committed"),
+        "{text}"
+    );
+    // The lock is not left behind: the CLI can write right after.
+    c.ok(&["note", "1", "after the stop"]);
+}
+
+/// `d936`: the tool says what the label does when left out and what the
+/// answer adds.
+#[test]
+fn the_save_tool_says_what_its_label_and_answer_hold() {
+    let c = seeded("mcp-save-desc");
+    let mut s = hello(&c);
+    let r = s.ask(r#"{"jsonrpc":"2.0","id":61,"method":"tools/list"}"#);
+    let tools = r["result"]["tools"].as_array().unwrap().clone();
+    let save = tools.iter().find(|t| t["name"] == "vivac_save").unwrap();
+    assert_eq!(
+        save["inputSchema"]["properties"]["label"]["description"],
+        "A short name for this stop. Left out, vivac writes one from what was opened and closed since the last stop made by hand."
+    );
+    assert!(
+        save["description"]
+            .as_str()
+            .unwrap()
+            .contains("instead of guessing from the log. The answer also says what the stop found unfinished, when there is any: files not committed, commits not pushed, and files changed that no node claims."),
+        "{save}"
+    );
+}

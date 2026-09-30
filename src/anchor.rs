@@ -396,6 +396,58 @@ pub(crate) fn tracks(root: &Path, rel: &str) -> Option<bool> {
     }
 }
 
+/// What `git status` says about one working tree: the paths with changes
+/// that are not committed, and how many commits the branch has that its upstream does not.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Standing {
+    /// One entry per path git lists as changed or untracked, relative to
+    /// the repository's root. The caller decides which are work.
+    pub paths: Vec<String>,
+    /// Commits the branch has that its upstream does not. `None` when the
+    /// branch has no upstream: there is nothing to compare it with.
+    pub not_pushed: Option<usize>,
+}
+
+/// Asks git where the working tree at `dir` stands, with one `status` call
+/// and no network: `# branch.ab` is computed from refs already on disk.
+/// `None` when `dir` is under no version control or git could not be asked.
+pub(crate) fn standing_of(dir: &Path) -> Option<Standing> {
+    let git = Git::new(dir)?;
+    let out = git.git(&["status", "--porcelain=v2", "--branch", "-uall"])?;
+    let mut paths = Vec::new();
+    let mut not_pushed = None;
+    for line in out.lines() {
+        if let Some(header) = line.strip_prefix("# branch.ab ") {
+            not_pushed = header
+                .split_whitespace()
+                .next()
+                .and_then(|a| a.strip_prefix('+'))
+                .and_then(|a| a.parse().ok());
+        } else if line.starts_with('#') {
+            continue;
+        } else if let Some(path) = entry_path(line) {
+            paths.push(path);
+        }
+    }
+    Some(Standing { paths, not_pushed })
+}
+
+/// The path an entry line of `status --porcelain=v2` names. Ordinary
+/// changes carry eight fields before it, renames nine (and the old path
+/// after a tab), unmerged ten, and untracked or ignored ones only a mark.
+fn entry_path(line: &str) -> Option<String> {
+    let skip = match line.chars().next()? {
+        '1' => 8,
+        '2' => 9,
+        'u' => 10,
+        '?' | '!' => 1,
+        _ => return None,
+    };
+    let rest = line.splitn(skip + 1, ' ').nth(skip)?;
+    let path = rest.split('\t').next().unwrap_or(rest);
+    Some(path.trim_matches('"').to_string())
+}
+
 /// The sentence both `check` and `setup` warn with when `tracks` above
 /// answers `Some(true)`: `.vivac/events` sitting inside the working tree's
 /// index, one `git add .` away from travelling to every clone and every

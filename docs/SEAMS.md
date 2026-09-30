@@ -146,6 +146,10 @@ before something risky.
 vivac save "before touching the adapter" --next "extract the validator"
 ```
 
+The label is optional: left out, vivac writes one from what you opened and
+closed since the last stop you made. Its answer also tells you what is not
+committed or not pushed yet, and nothing when everything is.
+
 What goes after `--next` is what the next brief says you were about to do.
 Leave it out and the brief says nothing is waiting, rather than reaching
 back for an older stop's intent. `pop` takes the same `--next`: its outcome

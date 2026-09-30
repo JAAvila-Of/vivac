@@ -102,7 +102,13 @@ const MAGIC: u64 = u64::from_le_bytes(*b"vivacIDX");
 // `num` order so two writes of the same tree produce the same bytes. A
 // version-15 lane record ends where this one's count begins, so it is
 // refused rather than read as a lane that wrote nothing.
-const FORMAT_VERSION: u32 = 16;
+// Version 17 widens each lane record once more with `stretch`, what the lane
+// did since its own last stop made by hand (`d936`): three counts, then the
+// `num`s of the newest nodes created and of the newest closed, each list a
+// count and that many `num`s oldest first. A version-16 lane record ends
+// where the first of these begins, so it is refused rather than read as a
+// lane that did nothing.
+const FORMAT_VERSION: u32 = 17;
 const ULID_LEN: usize = 26;
 const SPAN_LEN: usize = 8;
 const FLAG_RECORD_LEN: usize = 1 + SPAN_LEN;
@@ -1426,6 +1432,15 @@ fn write_lane(buf: &mut Vec<u8>, key: &str, s: &LaneState) {
         write_u64(buf, num);
         write_u64(buf, seq);
     }
+    write_u64(buf, s.stretch.created);
+    write_u64(buf, s.stretch.closed);
+    write_u64(buf, s.stretch.noted);
+    for list in [&s.stretch.newest_created, &s.stretch.newest_closed] {
+        write_u32(buf, list.len() as u32);
+        for &num in list {
+            write_u64(buf, num);
+        }
+    }
 }
 
 fn parse_lanes(bytes: &[u8], header: &Header) -> Option<BTreeMap<String, LaneState>> {
@@ -1457,6 +1472,15 @@ fn parse_lanes(bytes: &[u8], header: &Header) -> Option<BTreeMap<String, LaneSta
         for _ in 0..written_count {
             written.insert(c.u64()?, c.u64()?);
         }
+        let (created, closed, noted) = (c.u64()?, c.u64()?, c.u64()?);
+        let mut lists = [Vec::new(), Vec::new()];
+        for list in &mut lists {
+            let count = c.u32()?;
+            for _ in 0..count {
+                list.push(c.u64()?);
+            }
+        }
+        let [newest_created, newest_closed] = lists;
         out.insert(
             key,
             LaneState {
@@ -1470,6 +1494,13 @@ fn parse_lanes(bytes: &[u8], header: &Header) -> Option<BTreeMap<String, LaneSta
                 seg_closed,
                 seg_notes,
                 seg_events,
+                stretch: crate::model::Stretch {
+                    created,
+                    closed,
+                    noted,
+                    newest_created,
+                    newest_closed,
+                },
                 written,
             },
         );
@@ -2112,7 +2143,7 @@ mod tests {
             out.push_str(&format!(
                 "lane key={key:?} name={:?} repos={:?} stack={:?} seq_change={} \
                  seq_vivac={} seg_new={} seg_closed={} seg_notes={} seg_events={} \
-                 written={:?}\n",
+                 stretch={:?} written={:?}\n",
                 s.name,
                 s.repos,
                 s.stack,
@@ -2122,6 +2153,7 @@ mod tests {
                 s.seg_closed,
                 s.seg_notes,
                 s.seg_events,
+                s.stretch,
                 s.written.iter().collect::<BTreeMap<_, _>>(),
             ));
         }

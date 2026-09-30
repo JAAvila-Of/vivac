@@ -23,6 +23,37 @@
 use crate::anchor::AnchorRef;
 use crate::model::Counts;
 
+/// What `save` found unfinished once the stop was written (`d936`): per
+/// repository, work not committed and commits not pushed, and the files
+/// changed since the lane's previous stop made by hand that no node claims.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct StopFound {
+    pub repos: Vec<RepoFound>,
+    pub unclaimed: Option<UnclaimedFiles>,
+}
+
+impl StopFound {
+    pub fn is_empty(&self) -> bool {
+        self.repos.is_empty() && self.unclaimed.is_none()
+    }
+}
+
+/// One repository with something off. `path` is the declared path, empty for
+/// a lane that declared none; printed with no lead for either, or for `.`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RepoFound {
+    pub path: String,
+    pub not_committed: usize,
+    pub not_pushed: usize,
+}
+
+/// Files changed since the stop `since` that no node's `governs` covers.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct UnclaimedFiles {
+    pub count: usize,
+    pub since: String,
+}
+
 /// A node closed, win or by force. Shared by `pop` and `done`, which both
 /// wrap it: closing itself is one rule (`ops::close_node`) applied from two
 /// places.
@@ -312,6 +343,10 @@ pub enum Outcome {
         /// for a lane that declared none, where `anchor` still answers.
         anchors: Vec<crate::event::RepoAnchor>,
         next: String,
+        /// `d936`: what the stop found unfinished, looked at after it was
+        /// written. Absent from the JSON when nothing is off.
+        #[serde(skip_serializing_if = "StopFound::is_empty")]
+        found: StopFound,
     },
     Restored {
         alias: String,
@@ -381,6 +416,43 @@ fn closed_lines(out: &mut Vec<String>, c: &Closed) {
 /// `d926`'s list, capped: the lines are there to be read in the turn the
 /// work ended, and a wall of them is not. The count says what was left out.
 const LEFT_OPEN_SHOWN: usize = 5;
+
+/// The lines `save` adds after the anchor when its check found something
+/// off: one per repository with something, then the unclaimed files. A
+/// lane that declared no repositories has no path to lead with.
+fn found_lines(out: &mut Vec<String>, found: &StopFound) {
+    for r in &found.repos {
+        let mut parts = Vec::new();
+        if r.not_committed > 0 {
+            parts.push(format!(
+                "{} not committed",
+                crate::reconcile::plural(r.not_committed, "file", "files")
+            ));
+        }
+        if r.not_pushed > 0 {
+            parts.push(format!(
+                "{} not pushed",
+                crate::reconcile::plural(r.not_pushed, "commit", "commits")
+            ));
+        }
+        // A repository declared at the lane's own folder, `.`, is the lane
+        // itself: its name would add nothing but punctuation.
+        let lead = if r.path.is_empty() || r.path == "." {
+            String::new()
+        } else {
+            format!("{}: ", r.path)
+        };
+        out.push(format!("        {lead}{}", parts.join(", ")));
+    }
+    if let Some(u) = &found.unclaimed {
+        out.push(format!(
+            "        {} since {} that no node claims:  vivac reconcile --since {}",
+            crate::reconcile::plural(u.count, "file changed", "files changed"),
+            u.since,
+            u.since
+        ));
+    }
+}
 
 fn left_open_lines(out: &mut Vec<String>, left: &[LeftOpen]) {
     if left.is_empty() {
@@ -622,6 +694,7 @@ pub fn to_text(o: &Outcome) -> String {
             anchor,
             anchors,
             next,
+            found,
         } => {
             let shown = if label.is_empty() { "no label" } else { label };
             lines.push(format!("  v{num}  {shown}"));
@@ -630,6 +703,7 @@ pub fn to_text(o: &Outcome) -> String {
             } else {
                 lines.push("        no anchor: there is no version control here".to_string());
             }
+            found_lines(&mut lines, found);
             if next.is_empty() {
                 lines.push(
                     "        no --next: coming back there will be nothing to pick up".to_string(),

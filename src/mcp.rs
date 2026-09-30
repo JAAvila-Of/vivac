@@ -646,6 +646,9 @@ const TOOLS: &[Tool] = &[
                       stop is what vivac_brief shows as the last one, so a session that \
                       picks the thread back up -- this one later, or someone else's -- \
                       starts where this one left off instead of guessing from the log. \
+                      The answer also says what the stop found unfinished, when there is \
+                      any: files not committed, commits not pushed, and files changed that \
+                      no node claims. \
                       Call it at a clean seam: before the session ends, before a long \
                       pause or a handoff, or when the person asks for a safe point. To \
                       set a node aside, vivac_park; to keep a fact on one, vivac_note.",
@@ -654,7 +657,8 @@ const TOOLS: &[Tool] = &[
                 name: "label",
                 kind: ArgKind::Str,
                 required: false,
-                description: "A short name for this stop.",
+                description: "A short name for this stop. Left out, vivac writes one from what \
+                              was opened and closed since the last stop made by hand.",
             },
             Arg {
                 name: "next",
@@ -1185,7 +1189,14 @@ fn call(project: &mut Project, params: &Value) -> Result<String, Failure> {
                 label: a.str("label").unwrap_or("").to_string(),
                 next: a.str("next").unwrap_or("").to_string(),
             };
-            outcome_text(project.write(|ctx| ops::save(ctx, p))?)
+            let mut saved = project.write(|ctx| ops::save(ctx, p))?;
+            // After `write` has released the lock: the check starts `git`.
+            // A tree that cannot be read again only means no findings, and
+            // the stop is written either way.
+            if let Ok(ctx) = project.current() {
+                ops::check_after_save(ctx, &mut saved);
+            }
+            outcome_text(saved)
         }
         other => unreachable!("{other} passed the tool lookup but no arm here handles it"),
     }
