@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.16](https://github.com/JAAvila-Of/vivac/compare/v0.17.15...v0.17.16) - 2026-09-30
+
+### Added
+
+- *(pop)* say when no stop has said what comes next for a while ([#237](https://github.com/JAAvila-Of/vivac/pull/237))
+
 ## [0.17.15](https://github.com/JAAvila-Of/vivac/compare/v0.17.14...v0.17.15) - 2026-09-30
 
 ### Added
