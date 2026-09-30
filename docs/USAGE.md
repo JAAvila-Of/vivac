@@ -65,6 +65,12 @@ day. Then the brief lists it under DUE FOR REVIEW, wherever it sits in the
 tree, with the decisions made below it: looking at one again means looking at
 what was built on it. `--off` clears it once it has been looked at.
 
+`note` is also how a node gets corrected, since its title and its why never
+change. The brief shows the newest note under each node on the path down to
+the focus, with its date, so the next session reads the latest word on each
+of them and not only what it was born saying. A node that closed after its
+last note shows how it closed instead.
+
 `decide` takes `--alternative` for what was turned down and `--supersedes` for
 the decision it replaces, so a reversal reads from either end. `declare`
 names, after the fact, the pillar or rule a decision was judged against;
