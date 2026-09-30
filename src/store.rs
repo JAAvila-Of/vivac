@@ -672,6 +672,59 @@ pub fn write_gitignore(vivac_dir: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Replaces the file at `path` whole, and durably (`d946`): the bytes go to
+/// the temporary file `tmp`, which is synced, closed and renamed over the
+/// target, and on Unix the parent directory is synced so the rename itself
+/// survives a power cut. Every file that is written rarely
+/// -- `config`, `lane`, the registry, the files `setup` writes into a
+/// person's harness -- goes through here; the append path never does, because
+/// a sync there costs a spinning disk about 20 ms per write.
+///
+/// The directory sync is Unix-only because the standard library cannot make a
+/// rename durable on Windows (`f947`). A failure in it is returned like any
+/// other. If the rename fails the temporary file is removed, and so it is on
+/// every earlier failure.
+///
+/// The caller picks the temporary name because some writers rely on a fixed
+/// one being taken already: a directory sitting at `config.tmp` is how a test
+/// makes the config write fail the same way on every platform.
+pub(crate) fn replace_whole(path: &Path, tmp: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let parent = match path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => Path::new("."),
+    };
+    let written = (|| -> std::io::Result<()> {
+        let mut f = File::create(tmp)?;
+        f.write_all(bytes)?;
+        f.sync_all()
+    })()
+    .and_then(|()| fs::rename(tmp, path));
+    if written.is_err() {
+        let _ = fs::remove_file(tmp);
+        return written;
+    }
+    sync_dir(parent)
+}
+
+/// Syncs a file that already holds what it should, before it is renamed into
+/// place (`d946`). Opened for writing because Windows refuses to flush a
+/// handle that cannot write.
+pub(crate) fn sync_file(path: &Path) -> std::io::Result<()> {
+    OpenOptions::new().write(true).open(path)?.sync_all()
+}
+
+/// Syncs a directory so a rename inside it is durable. Does nothing off Unix
+/// (`f947`).
+#[cfg(unix)]
+pub(crate) fn sync_dir(dir: &Path) -> std::io::Result<()> {
+    File::open(dir)?.sync_all()
+}
+
+#[cfg(not(unix))]
+pub(crate) fn sync_dir(_dir: &Path) -> std::io::Result<()> {
+    Ok(())
+}
+
 /// Builds `vivac_dir` whole rather than empty-then-filled, for the one case
 /// it does not exist yet: everything `fill` writes lands in a sibling
 /// temporary directory first -- named `<DIR>.<ulid>.tmp`, so it sits beside
@@ -722,13 +775,22 @@ pub(crate) fn build_fresh(
     let tmp_dir = parent.join(format!("{DIR}.{}.tmp", id::ulid()));
     if let Err(e) = (|| -> std::io::Result<()> {
         fs::create_dir_all(&tmp_dir)?;
-        fill(&tmp_dir)
+        fill(&tmp_dir)?;
+        // Every file `fill` wrote is on disk before the directory that
+        // holds them takes its final name (`d946`).
+        for entry in fs::read_dir(&tmp_dir)? {
+            let path = entry?.path();
+            if path.is_file() {
+                sync_file(&path)?;
+            }
+        }
+        sync_dir(&tmp_dir)
     })() {
         fs::remove_dir_all(&tmp_dir).ok();
         return Err(e);
     }
     match fs::rename(&tmp_dir, vivac_dir) {
-        Ok(()) => Ok(true),
+        Ok(()) => sync_dir(parent).map(|()| true),
         Err(_) => {
             fs::remove_dir_all(&tmp_dir).ok();
             Ok(false)
@@ -838,8 +900,8 @@ impl Store {
     pub fn open(root: PathBuf) -> Result<Store, Failure> {
         let p = root.join(DIR).join(CONFIG);
         let config = match fs::read_to_string(&p) {
-            Ok(s) => read_config(&s)?,
-            Err(_) => {
+            Ok(s) => read_config(&s).map_err(unreadable_config)?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 // A `.vivac/` with no config comes from an earlier version or a
                 // half-finished delete. Fill it in rather than fail: the tree,
                 // which is what matters, lives in `events`. `d444`: if the log
@@ -854,6 +916,11 @@ impl Store {
                 write_config(&root, &c)?;
                 c
             }
+            // Any other read error -- invalid UTF-8, permission denied, a
+            // directory in its place -- is a config that exists and cannot be
+            // read, not a missing one: regenerating it would hand the tree a
+            // new project id, so it fails and writes nothing (`f941`).
+            Err(e) => return Err(unreadable_config(Failure::Io(e))),
         };
         let log_present = root.join(DIR).join(LOG).is_file();
         Ok(Store {
@@ -947,9 +1014,18 @@ fn write_config(root: &Path, c: &Config) -> std::io::Result<()> {
 /// hands back while planting a tree fresh is a temporary sibling, not
 /// `root.join(DIR)` yet.
 fn write_config_into(vivac_dir: &Path, c: &Config) -> std::io::Result<()> {
-    let mut f = File::create(vivac_dir.join(CONFIG))?;
-    f.write_all(serde_json::to_string_pretty(c)?.as_bytes())?;
-    f.write_all(b"\n")
+    replace_whole(
+        &vivac_dir.join(CONFIG),
+        &vivac_dir.join("config.tmp"),
+        &config_bytes(c)?,
+    )
+}
+
+/// The text `config` holds: pretty JSON and a newline.
+fn config_bytes(c: &Config) -> std::io::Result<Vec<u8>> {
+    let mut bytes = serde_json::to_string_pretty(c)?.into_bytes();
+    bytes.push(b'\n');
+    Ok(bytes)
 }
 
 /// `d444`'s own protection: the config is written to a sibling temporary
@@ -958,13 +1034,27 @@ fn write_config_into(vivac_dir: &Path, c: &Config) -> std::io::Result<()> {
 /// was -- there is no window where `config` itself is half-written.
 fn write_config_atomic(root: &Path, c: &Config) -> std::io::Result<()> {
     let dir = root.join(DIR);
-    let tmp = dir.join("config.tmp");
-    {
-        let mut f = File::create(&tmp)?;
-        f.write_all(serde_json::to_string_pretty(c)?.as_bytes())?;
-        f.write_all(b"\n")?;
+    replace_whole(
+        &dir.join(CONFIG),
+        &dir.join("config.tmp"),
+        &config_bytes(c)?,
+    )
+}
+
+/// What an unreadable `config` says it is (`f941`): the bare parser error
+/// told nobody which file it came from, or that the log was untouched. The
+/// newer-vivac refusal and every other kind of failure pass through as they
+/// were.
+fn unreadable_config(failure: Failure) -> Failure {
+    match failure {
+        Failure::Io(e) => Failure::Io(std::io::Error::other(format!(
+            ".vivac/config cannot be read ({e}), so this tree cannot be opened. The log in \
+             .vivac/events is untouched and nothing was written. Moving the file aside lets \
+             vivac rebuild it from the log, with a new project id; if this tree was closed \
+             with vivac share off, close it again afterwards."
+        ))),
+        other => other,
     }
-    fs::rename(&tmp, dir.join(CONFIG))
 }
 
 /// Parses `config`'s text into a `Config`, refusing the two shapes of
@@ -1108,13 +1198,20 @@ impl Store {
     /// Appends events at the end. One line per event, rewriting nothing.
     ///
     /// This is the critical path of the agent's turn: a p99 < 5 ms budget.
-    /// That is why there is no `fsync` --on Windows it costs more than the
-    /// whole budget-- and why it opens in `append` mode, which makes each
-    /// single-line write atomic. Atomic lines do not make two writers agree
-    /// on `seq` and `num`, though: the write lock is an argument here, not a
-    /// convention a caller could forget or take twice. Without one this does
-    /// not compile, and `lock.covers` refuses one taken on another tree's
-    /// `.vivac/lock` (`f602`).
+    /// That is why there is no `fsync` (`d946`). Measured on the spinning
+    /// disk where trees live, `sync_data` took each append from about 1 ms
+    /// to 21 ms at the median, and on Linux it took the end-to-end p99 from
+    /// 2 ms to between 15 and 62; on an NVMe drive it cost 0.6 ms, so the
+    /// cost is the disk's, not the system's. What a power cut can take is
+    /// the last seconds the system had not written yet -- the same seconds
+    /// it takes from every other file in the working copy -- and a reader
+    /// skips whatever it leaves torn, zeroed or unreadable (`f939`). It opens
+    /// in `append` mode, which makes each single-line write atomic. Atomic
+    /// lines do not make two writers agree on `seq` and `num`, though: the
+    /// write lock is an argument here, not a convention a caller could
+    /// forget or take twice. Without one this does not compile, and
+    /// `lock.covers` refuses one taken on another tree's `.vivac/lock`
+    /// (`f602`).
     ///
     /// `lane` is an argument for the same reason: which thread this write
     /// signs as is a fact about *this* write, not a property of the folder
@@ -1302,18 +1399,20 @@ pub(crate) fn read_all_from(path: &Path) -> Result<(Vec<crate::event::Event>, us
         if bytes.last() == Some(&b'\r') {
             bytes = &bytes[..bytes.len() - 1];
         }
-        let line = String::from_utf8(bytes.to_vec()).map_err(|_| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "stream did not contain valid UTF-8",
-            )
-        })?;
+        // A complete line that is not UTF-8 is a broken line, counted like
+        // one that is text and not JSON (`f939`). It is not converted
+        // lossily to try to parse it: a corrupted byte could sit inside an
+        // id.
+        let Ok(line) = std::str::from_utf8(bytes) else {
+            broken += 1;
+            continue;
+        };
         if line.trim().is_empty() {
             continue;
         }
-        match serde_json::from_str(&line) {
+        match serde_json::from_str(line) {
             Ok(e) => events.push(e),
-            Err(_) => match crate::event::unknown_reason_for(&line) {
+            Err(_) => match crate::event::unknown_reason_for(line) {
                 Some(reason) => return Err(newer_vivac_failure(line_no, reason)),
                 None => broken += 1,
             },
@@ -2239,6 +2338,46 @@ mod tests {
         let reopened = Store::open(tmp.clone()).unwrap();
         assert_eq!(reopened.config.version, ConfigVersion::Lanes);
         fs::remove_dir_all(&tmp).ok();
+    }
+
+    fn names_in(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// `d946`: the target holds the new bytes whole, over what was there,
+    /// and no temporary is left next to it.
+    #[test]
+    fn replace_whole_writes_the_target_and_leaves_no_temporary() {
+        let dir = std::env::temp_dir().join(format!("vivac-whole-{}", id::ulid()));
+        fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("config");
+        fs::write(&target, b"old and longer than the new one").unwrap();
+
+        replace_whole(&target, &dir.join("config.tmp"), b"new").unwrap();
+
+        assert_eq!(fs::read(&target).unwrap(), b"new");
+        assert_eq!(names_in(&dir), vec!["config".to_string()]);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A directory where the file should go makes the rename fail on every
+    /// platform; the temporary must not outlive it, and the error comes up.
+    #[test]
+    fn replace_whole_removes_its_temporary_when_the_rename_fails() {
+        let dir = std::env::temp_dir().join(format!("vivac-whole-{}", id::ulid()));
+        let target = dir.join("config");
+        fs::create_dir_all(target.join("occupied")).unwrap();
+
+        assert!(replace_whole(&target, &dir.join("config.tmp"), b"new").is_err());
+
+        assert_eq!(names_in(&dir), vec!["config".to_string()]);
+        assert!(target.join("occupied").is_dir());
+        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

@@ -211,6 +211,23 @@ fixes that.
 
 - **No network on the write path.** Ever. `push` is the binary writing to a
   file, and nothing in that path waits on anything.
+- **No `fsync` on the log.** Forcing each append to disk was measured
+  before it was refused. On the spinning disk where this project's trees
+  live, it took a write from 1 ms to 21 ms at the median. On Linux it took
+  the 99th percentile from 2 ms to between 15 and 62. On an NVMe drive it
+  cost 0.6 ms, so the price is set by the disk, not by the system, and a
+  budget that holds only on some disks does not hold. Forcing only the
+  stops was refused as well. A stop describes a working copy that sits on
+  the same disk, unforced, and a tree that survived a power cut the working
+  copy did not would claim work the disk no longer has.
+
+  What a power cut can take is the last seconds the system had not written
+  yet, the same seconds it takes from every other file you had open. The
+  tree opens with whatever a cut leaves behind. A line that is torn, zeroed
+  or unreadable is skipped and counted, and `check` names it. The files
+  written rarely and whole, `config` and the lane file among them, are
+  forced to disk before they replace the old ones, because they sit far
+  from the write budget and an empty one would lock the tree.
 
 **And one correction, which belongs here because this is the document a
 rejection cites for its authority.** *"No daemon on the local path"* used to sit

@@ -1022,7 +1022,9 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
     // §4, on when the index is rewritten: a command that might write never pays
     // to rewrite the derived index, even though reading a warm or stale one
     // stays free either way.
-    let mut ctx = if may_append(cmd) {
+    // `check` reads without rewriting the index either (`f940`): it is the
+    // command that says what the tree holds, and it writes nothing.
+    let mut ctx = if may_append(cmd) || cmd == "check" {
         ops::Ctx::load_for_write(store::Store::open(root)?, ops::Whose::Resolved(&located))?
     } else {
         ops::Ctx::load(store::Store::open(root)?, ops::Whose::Resolved(&located))?
@@ -1031,7 +1033,9 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
     // `check` is the only one with an exit code of its own: it separates
     // store corruption from a finding about the project.
     if cmd == "check" {
-        return check::check(&ctx.tree, &ctx.store.root, a);
+        let (events, broken) = ctx.store.read_all()?;
+        let fresh = model::fold(&events, broken);
+        return check::check(&fresh, &ctx.tree, &ctx.store.root, a);
     }
 
     // Words each command takes of its own. Anything past that is refused for

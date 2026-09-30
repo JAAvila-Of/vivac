@@ -602,6 +602,13 @@ fn install_from_archive(
         return Ok(ArchiveResult::AlreadyNewest(new_version));
     }
 
+    // The new executable is on disk before anything is swapped for it
+    // (`d946`). Nothing has been moved yet, so a failure here is still
+    // "Nothing was changed."
+    if let Err(e) = crate::store::sync_file(&extracted) {
+        return fail(format!("could not put the new vivac in place: {e}"));
+    }
+
     #[cfg(windows)]
     let still_running = match windows_set_aside::set_aside_excluding(
         exe,

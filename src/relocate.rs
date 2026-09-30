@@ -629,6 +629,12 @@ fn commit_copy(
         written.files.push(lock_path);
     }
 
+    // Both temporaries already hold whole, verified copies, so they are
+    // synced rather than rewritten, and only then take their final names
+    // (`d946`).
+    crate::store::sync_file(log_tmp)?;
+    crate::store::sync_file(config_tmp)?;
+
     let log_final = destination_vivac.join(crate::store::LOG);
     std::fs::rename(log_tmp, &log_final)?;
     written.files.push(log_final);
@@ -636,6 +642,8 @@ fn commit_copy(
     let config_final = destination_vivac.join(crate::store::CONFIG);
     std::fs::rename(config_tmp, &config_final)?;
     written.files.push(config_final);
+
+    crate::store::sync_dir(destination_vivac)?;
 
     Ok(())
 }
