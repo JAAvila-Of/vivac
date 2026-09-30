@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.17](https://github.com/JAAvila-Of/vivac/compare/v0.17.16...v0.17.17) - 2026-09-30
+
+### Added
+
+- *(note)* keep findings out of notes and refuse ids as titles ([#239](https://github.com/JAAvila-Of/vivac/pull/239))
+
 ## [0.17.16](https://github.com/JAAvila-Of/vivac/compare/v0.17.15...v0.17.16) - 2026-09-30
 
 ### Added
