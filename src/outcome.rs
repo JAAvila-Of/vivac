@@ -110,6 +110,16 @@ pub struct PoppedTo {
     pub counts: Counts,
 }
 
+/// What a close says when its lane has gone a long while without anyone
+/// saying what comes next (`d937`).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AsksForNext {
+    /// The changes the lane made since its last spoken stop.
+    pub changes: u64,
+    /// That stop's alias. `None` when the lane never had one.
+    pub since: Option<String>,
+}
+
 /// The parent `add` filed a node under, when it did not land at the root.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct AddedUnder {
@@ -262,11 +272,17 @@ pub enum Outcome {
         parent: Option<PoppedTo>,
         /// `d926`. Always present; `[]` when nothing was left open.
         left_open: Vec<LeftOpen>,
+        /// `d937`. Absent unless this close crossed a multiple of 25 changes.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        asks_for_next: Option<AsksForNext>,
     },
     Done {
         closed: Closed,
         /// `d926`. Always present; `[]` when nothing was left open.
         left_open: Vec<LeftOpen>,
+        /// `d937`. Absent unless this close crossed a multiple of 25 changes.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        asks_for_next: Option<AsksForNext>,
     },
     Added {
         alias: String,
@@ -471,6 +487,20 @@ fn left_open_lines(out: &mut Vec<String>, left: &[LeftOpen]) {
     out.push("        settled by this? close each:  vivac done <id> \"<how>\"".to_string());
 }
 
+fn asks_for_next_lines(out: &mut Vec<String>, ask: &Option<AsksForNext>) {
+    let Some(ask) = ask else {
+        return;
+    };
+    let changes = crate::reconcile::plural(ask.changes as usize, "change", "changes");
+    match &ask.since {
+        Some(stop) => out.push(format!(
+            "  {changes} since {stop}, the last stop that said what came next."
+        )),
+        None => out.push(format!("  {changes} and no stop has said what comes next.")),
+    }
+    out.push("  To leave the next step:  vivac save --next \"<what comes next>\"".to_string());
+}
+
 /// The `Outcome` as plain text, the way the CLI has always printed it.
 ///
 /// A mirror of `brief::to_text`: the data is already final by the time it
@@ -534,6 +564,7 @@ pub fn to_text(o: &Outcome) -> String {
             closed,
             parent,
             left_open,
+            asks_for_next,
         } => {
             closed_lines(&mut lines, closed);
             left_open_lines(&mut lines, left_open);
@@ -547,10 +578,16 @@ pub fn to_text(o: &Outcome) -> String {
                 }
                 None => lines.push("  empty stack".to_string()),
             }
+            asks_for_next_lines(&mut lines, asks_for_next);
         }
-        Outcome::Done { closed, left_open } => {
+        Outcome::Done {
+            closed,
+            left_open,
+            asks_for_next,
+        } => {
             closed_lines(&mut lines, closed);
             left_open_lines(&mut lines, left_open);
+            asks_for_next_lines(&mut lines, asks_for_next);
         }
         Outcome::Added {
             alias,

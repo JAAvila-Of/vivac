@@ -108,7 +108,13 @@ const MAGIC: u64 = u64::from_le_bytes(*b"vivacIDX");
 // count and that many `num`s oldest first. A version-16 lane record ends
 // where the first of these begins, so it is refused rather than read as a
 // lane that did nothing.
-const FORMAT_VERSION: u32 = 17;
+// Version 18 widens each lane record with the three fields behind the close's
+// reminder to say what comes next (`d937`): the changes since the last spoken
+// stop, that count as it stood after the lane's previous close, and whether
+// its latest close crossed a multiple of 25. A version-17 lane record ends
+// where the first of these begins, so it is refused rather than read as a
+// lane that has made no changes.
+const FORMAT_VERSION: u32 = 18;
 const ULID_LEN: usize = 26;
 const SPAN_LEN: usize = 8;
 const FLAG_RECORD_LEN: usize = 1 + SPAN_LEN;
@@ -1441,6 +1447,9 @@ fn write_lane(buf: &mut Vec<u8>, key: &str, s: &LaneState) {
             write_u64(buf, num);
         }
     }
+    write_u64(buf, s.since_spoken);
+    write_u64(buf, s.since_spoken_at_close);
+    write_bool(buf, s.close_crossing);
 }
 
 fn parse_lanes(bytes: &[u8], header: &Header) -> Option<BTreeMap<String, LaneState>> {
@@ -1481,6 +1490,8 @@ fn parse_lanes(bytes: &[u8], header: &Header) -> Option<BTreeMap<String, LaneSta
             }
         }
         let [newest_created, newest_closed] = lists;
+        let (since_spoken, since_spoken_at_close) = (c.u64()?, c.u64()?);
+        let close_crossing = c.bool_()?;
         out.insert(
             key,
             LaneState {
@@ -1501,6 +1512,9 @@ fn parse_lanes(bytes: &[u8], header: &Header) -> Option<BTreeMap<String, LaneSta
                     newest_created,
                     newest_closed,
                 },
+                since_spoken,
+                since_spoken_at_close,
+                close_crossing,
                 written,
             },
         );
@@ -2143,7 +2157,8 @@ mod tests {
             out.push_str(&format!(
                 "lane key={key:?} name={:?} repos={:?} stack={:?} seq_change={} \
                  seq_vivac={} seg_new={} seg_closed={} seg_notes={} seg_events={} \
-                 stretch={:?} written={:?}\n",
+                 stretch={:?} since_spoken={} since_spoken_at_close={} \
+                 close_crossing={} written={:?}\n",
                 s.name,
                 s.repos,
                 s.stack,
@@ -2154,6 +2169,9 @@ mod tests {
                 s.seg_notes,
                 s.seg_events,
                 s.stretch,
+                s.since_spoken,
+                s.since_spoken_at_close,
+                s.close_crossing,
                 s.written.iter().collect::<BTreeMap<_, _>>(),
             ));
         }

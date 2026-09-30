@@ -1515,6 +1515,36 @@ fn done_by_mcp_writes_the_same_events_as_done_by_the_cli() {
     assert_eq!(tree_events(&cli), tree_events(&via_mcp));
 }
 
+/// `d937`: the block a close adds when 25 changes have gone by with nobody
+/// saying what comes next reaches an agent through `vivac_done` as well.
+#[test]
+fn done_by_mcp_carries_the_ask_for_the_next_step() {
+    let c = Sandbox::new_seeded("done-mcp-asks");
+    c.ok(&["save", "--next", "carry on"]);
+    c.ok(&["add", "Keeper", "--why", "it holds the notes"]);
+    c.ok(&["add", "Job", "--why", "it is needed"]);
+    for n in 0..21 {
+        c.ok(&["note", "1", &format!("note {n}")]);
+    }
+    c.ok(&["add", "Other job", "--why", "it is needed"]);
+
+    let mut s = hello(&c);
+    let r = s.ask(
+        r#"{"jsonrpc":"2.0","id":60,"method":"tools/call","params":{"name":"vivac_done","arguments":{"id":"2","outcome":"finished"}}}"#,
+    );
+    assert_eq!(r["result"]["isError"], false, "{r}");
+    let body: Value = serde_json::from_str(&text_of(&r)).unwrap();
+    let text = body["text"].as_str().unwrap();
+    assert!(
+        text.contains(
+            "  25 changes since v1, the last stop that said what came next.\n  \
+             To leave the next step:  vivac save --next \"<what comes next>\""
+        ),
+        "{body}"
+    );
+    assert_eq!(body["asks_for_next"]["changes"], 25, "{body}");
+}
+
 /// `f177`/`d879`: `vivac_done` refuses a decision still in force the same
 /// way the CLI does, with the same text, and writes nothing.
 #[test]

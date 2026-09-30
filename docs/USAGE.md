@@ -333,6 +333,12 @@ them. When there is nothing to say it says nothing. It never fetches, so
 commits not pushed are counted against the upstream as git last saw it, and
 a branch with no upstream is not reported. The stop is written either way.
 
+Nothing makes you stop, but closing something keeps count. When `pop` or
+`done` closes a node and this lane has made 25 changes since its last stop
+that said what comes next — a `save` or a `pop` given `--next` — the answer
+ends by saying so, naming that stop and the `save --next` that leaves the
+next step. It says it once, and again only after 25 more.
+
 `restore` **never touches the working tree**. Mixing context navigation with
 tree manipulation gives you a branch manager worse than git.
 

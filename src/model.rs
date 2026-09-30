@@ -444,6 +444,13 @@ impl Stretch {
     }
 }
 
+/// How many changes a lane may make between two stops that said what comes
+/// next before a close mentions it (`d937`). Measured, not chosen: over 152
+/// stretches of this project's own tree the median was 13 changes between
+/// spoken stops, 26 at the 75th percentile and 43 at the 90th. It is meant to
+/// be adjusted by measuring again, like the constants of `d779`.
+pub const SPOKEN_STOP_EVERY: u64 = 25;
+
 /// Everything about a tree that belongs to one working folder instead of to
 /// the product. The knowledge -- nodes, edges, decisions, and the numbering
 /// that names them -- is shared by every lane; the thread is not (`d595`).
@@ -470,6 +477,15 @@ pub struct LaneState {
     /// stop of this lane does: a hook's stop, a push, a pop or a park leaves
     /// it alone, so a manual stop can say what the whole stretch held.
     pub stretch: Stretch,
+    /// Changes this lane made since its last spoken stop (`d937`): a manual
+    /// or pop stop with an intent. Counted the way `seg_events` counts, but
+    /// only a spoken stop empties it, never the hook, a push or a park.
+    pub since_spoken: u64,
+    /// `since_spoken` as it stood right after this lane's previous close.
+    pub since_spoken_at_close: u64,
+    /// Whether this lane's latest close crossed a multiple of
+    /// `SPOKEN_STOP_EVERY` since the close before it.
+    pub close_crossing: bool,
     /// `num -> seq` of every node this lane wrote to since its own stack
     /// last changed, each with the seq of its newest such write (`f355`,
     /// `d934`). `add`, `decide`, `note` and `done` leave the stack where it
@@ -616,6 +632,18 @@ impl Tree {
             ) {
                 s.stretch = Stretch::default();
             }
+            if matches!(
+                body,
+                Body::VivacCreated {
+                    kind: VivacKind::Manual | VivacKind::Pop,
+                    next_intent,
+                    ..
+                } if !next_intent.is_empty()
+            ) {
+                s.since_spoken = 0;
+                s.since_spoken_at_close = 0;
+                s.close_crossing = false;
+            }
         } else if matches!(body, Body::SessionStarted { .. }) {
             // Neither a change nor a stop. Opening a session says something
             // about the session and nothing about the tree: counted as a
@@ -634,6 +662,13 @@ impl Tree {
             let s = self.lanes.entry(lane.to_string()).or_default();
             s.seq_change = s.seq_change.max(seq);
             s.seg_events += 1;
+            // Before the close below, so a close counts itself.
+            s.since_spoken += 1;
+            if matches!(body, Body::StateChanged { state, .. } if *state == State::Done) {
+                s.close_crossing = s.since_spoken / SPOKEN_STOP_EVERY
+                    > s.since_spoken_at_close / SPOKEN_STOP_EVERY;
+                s.since_spoken_at_close = s.since_spoken;
+            }
             match body {
                 Body::NodeCreated { .. } => s.seg_new += 1,
                 Body::StateChanged { state, .. } if *state == State::Done => s.seg_closed += 1,
@@ -1455,6 +1490,17 @@ impl Tree {
             .iter()
             .rev()
             .find(|v| v.lane == self.lane() && v.kind == VivacKind::Manual)
+    }
+
+    /// The last stop of this lane someone gave an intent to, by hand or by
+    /// `pop` (`d937`): the one the lane's count since a spoken stop is
+    /// measured from.
+    pub fn last_spoken_vivac(&self) -> Option<&Vivac> {
+        self.vivacs.iter().rev().find(|v| {
+            v.lane == self.lane()
+                && matches!(v.kind, VivacKind::Manual | VivacKind::Pop)
+                && !v.next_intent.is_empty()
+        })
     }
 
     pub fn vivac(&self, s: &str) -> Option<&Vivac> {
@@ -3015,5 +3061,105 @@ mod tests {
         let tree = fold(&events, 0);
         assert_eq!(tree.state().stretch, Stretch::default());
         assert_eq!(tree.state().seg_new, 0);
+    }
+
+    fn spoken_stop(seq: u64, kind: VivacKind, intent: &str, lane: &str) -> Event {
+        let mut e = stop_of_kind(seq, kind);
+        e.lane = lane.to_string();
+        if let Body::VivacCreated { next_intent, .. } = &mut e.payload {
+            *next_intent = intent.to_string();
+        }
+        e
+    }
+
+    /// `d937`: a lane counts its changes since its last spoken stop, and a
+    /// close counts itself; `close_crossing` says whether the latest close
+    /// passed a multiple of 25 since the close before it.
+    #[test]
+    fn a_close_counts_itself_and_crosses_each_25_once() {
+        let mut events = vec![node(1, 1, Kind::Task, None), node(2, 2, Kind::Task, None)];
+        for seq in 3..=24 {
+            events.push(noted(seq, TS, 1, "n"));
+        }
+        // 24 changes so far: a close makes 25 and crosses.
+        let tree = fold(&events, 0);
+        let s = tree.state();
+        assert_eq!((s.since_spoken, s.close_crossing), (24, false));
+        events.push(closed(25, 2));
+        let tree = fold(&events, 0);
+        let s = tree.state();
+        assert_eq!((s.since_spoken, s.since_spoken_at_close), (25, 25));
+        assert!(s.close_crossing);
+
+        // The next close, still below 50, does not.
+        events.push(node(26, 3, Kind::Task, None));
+        events.push(closed(27, 3));
+        let s = fold(&events, 0).state().into_owned();
+        assert_eq!((s.since_spoken, s.since_spoken_at_close), (27, 27));
+        assert!(!s.close_crossing);
+
+        // Notes alone cross 50; the close after them is the one that shows.
+        for seq in 28..=52 {
+            events.push(noted(seq, TS, 1, "n"));
+        }
+        let s = fold(&events, 0).state().into_owned();
+        assert_eq!((s.since_spoken_at_close, s.close_crossing), (27, false));
+        events.push(node(53, 4, Kind::Task, None));
+        events.push(closed(54, 4));
+        let s = fold(&events, 0).state().into_owned();
+        assert_eq!(s.since_spoken, 54);
+        assert!(s.close_crossing);
+    }
+
+    /// `d937`: only a manual or pop stop with an intent starts the count
+    /// over. A bare save, a push, a park, the hook and a pop without
+    /// `--next` leave it alone, and so does another lane's spoken stop.
+    #[test]
+    fn only_a_spoken_stop_of_its_own_lane_starts_the_count_over() {
+        let mut events = vec![node(1, 1, Kind::Task, None), closed(2, 1)];
+        events.extend((3..=6).map(|seq| noted(seq, TS, 1, "n")));
+        let before = fold(&events, 0).state().into_owned();
+        assert_eq!(before.since_spoken, 6);
+
+        for (kind, intent, lane) in [
+            (VivacKind::Manual, "", "main"),
+            (VivacKind::Pop, "", "main"),
+            (VivacKind::Push, "a child title", "main"),
+            (VivacKind::Park, "a reason", "main"),
+            (VivacKind::Auto, "an intent", "main"),
+            (VivacKind::Manual, "what next", "other"),
+        ] {
+            let mut e = events.clone();
+            e.push(spoken_stop(7, kind, intent, lane));
+            let s = fold(&e, 0).state().into_owned();
+            assert_eq!(
+                (s.since_spoken, s.since_spoken_at_close),
+                (6, 2),
+                "{kind:?} with {intent:?} on {lane} must leave it alone"
+            );
+        }
+
+        for kind in [VivacKind::Manual, VivacKind::Pop] {
+            let mut e = events.clone();
+            e.push(spoken_stop(7, kind, "what next", "main"));
+            let tree = fold(&e, 0);
+            let s = tree.state();
+            assert_eq!(
+                (s.since_spoken, s.since_spoken_at_close, s.close_crossing),
+                (0, 0, false)
+            );
+            assert_eq!(tree.last_spoken_vivac().map(|v| v.num), Some(7));
+        }
+    }
+
+    /// `d937`: one lane's changes never move another lane's count.
+    #[test]
+    fn changes_of_one_lane_do_not_move_the_count_of_another() {
+        let mut other = noted(3, TS, 1, "n");
+        other.lane = "other".to_string();
+        let events = vec![node(1, 1, Kind::Task, None), noted(2, TS, 1, "n"), other];
+        let tree = fold(&events, 0);
+        assert_eq!(tree.lanes["main"].since_spoken, 2);
+        assert_eq!(tree.lanes["other"].since_spoken, 1);
     }
 }
