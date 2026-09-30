@@ -160,8 +160,10 @@ const TOOLS: &[Tool] = &[
         description: "Why a node exists: the chain from the goal down to it, what is open \
                       in parallel, what was born from it, and what blocks it from closing. \
                       This is the question the whole tool exists to answer. Open siblings \
-                      and children are capped at eight each, every blocking one kept; full \
-                      lists them all.",
+                      and children are capped at eight each, every blocking one kept, and \
+                      the node's newest three notes come whole with the rest counted; full \
+                      brings them all. Walking siblings one after another, pass only: \
+                      their shared path came with the first.",
         args: &[
             Arg {
                 name: "id",
@@ -185,6 +187,14 @@ const TOOLS: &[Tool] = &[
                               the answer keeps, plus each step's anchor, standing decisions \
                               and what was open at the time: what vivac why --full prints. \
                               Refused together with project.",
+            },
+            Arg {
+                name: "only",
+                kind: ArgKind::Bool,
+                required: false,
+                description: "The node alone: no path, no siblings, no children. For the \
+                              next sibling once one why has already brought the path \
+                              they share.",
             },
         ],
     },
@@ -985,6 +995,7 @@ fn call(project: &mut Project, params: &Value) -> Result<String, Failure> {
         "vivac_why" => {
             let id = a.str("id").ok_or_else(|| missing("id"))?.to_string();
             let full = a.bool("full");
+            let only = a.bool("only");
             match a.str("project") {
                 Some(spec) => {
                     // `d771`: `full` reads the whole log, and a foreign
@@ -1019,7 +1030,7 @@ fn call(project: &mut Project, params: &Value) -> Result<String, Failure> {
                         )));
                     }
                     let tree = index::load(&foreign, false)?;
-                    pretty(render::why_data(&tree, &[], &id, false)?)
+                    pretty(render::why_data(&tree, &[], &id, false, only)?)
                 }
                 // The resident log, kept for exactly this (`Project::log`'s
                 // own doc): `lane` and `where` answer here the same way
@@ -1027,7 +1038,7 @@ fn call(project: &mut Project, params: &Value) -> Result<String, Failure> {
                 // log a second time.
                 None => {
                     let (ctx, log) = project.current_with_log()?;
-                    pretty(render::why_data(&ctx.tree, log, &id, full)?)
+                    pretty(render::why_data(&ctx.tree, log, &id, full, only)?)
                 }
             }
         }

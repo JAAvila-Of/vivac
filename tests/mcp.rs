@@ -642,7 +642,8 @@ fn tools_list_announces_full_for_vivac_why() {
     assert!(
         why_tool["description"].as_str().unwrap().contains(
             "Open siblings and children are capped at eight each, every \
-                 blocking one kept; full lists them all."
+                 blocking one kept, and the node's newest three notes come whole \
+                 with the rest counted; full brings them all."
         ),
         "{why_tool}"
     );
@@ -1215,7 +1216,7 @@ fn an_unknown_argument_on_vivac_why_is_refused_the_same_way() {
     assert_eq!(r["result"]["isError"], true, "{r}");
     assert_eq!(
         text_of(&r),
-        "vivac_why does not take power.\n\n  It takes: id project full"
+        "vivac_why does not take power.\n\n  It takes: id project full only"
     );
 }
 
