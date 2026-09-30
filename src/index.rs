@@ -96,7 +96,13 @@ const MAGIC: u64 = u64::from_le_bytes(*b"vivacIDX");
 // `flag review --on`'s own review date (`d906`), written right behind
 // `parked_until` in the same shape. A version-14 index is missing those
 // bytes, and is refused for the same reason.
-const FORMAT_VERSION: u32 = 15;
+// Version 16 widens each lane record with `written`, the nodes that lane
+// wrote to since its stack last changed, each with the seq of its newest
+// write (`d934`): a count, then that many `num`/`seq` pairs in ascending
+// `num` order so two writes of the same tree produce the same bytes. A
+// version-15 lane record ends where this one's count begins, so it is
+// refused rather than read as a lane that wrote nothing.
+const FORMAT_VERSION: u32 = 16;
 const ULID_LEN: usize = 26;
 const SPAN_LEN: usize = 8;
 const FLAG_RECORD_LEN: usize = 1 + SPAN_LEN;
@@ -1413,6 +1419,13 @@ fn write_lane(buf: &mut Vec<u8>, key: &str, s: &LaneState) {
     write_u64(buf, s.seg_closed);
     write_u64(buf, s.seg_notes);
     write_u64(buf, s.seg_events);
+    let mut written: Vec<(&u64, &u64)> = s.written.iter().collect();
+    written.sort_unstable();
+    write_u32(buf, written.len() as u32);
+    for (&num, &seq) in written {
+        write_u64(buf, num);
+        write_u64(buf, seq);
+    }
 }
 
 fn parse_lanes(bytes: &[u8], header: &Header) -> Option<BTreeMap<String, LaneState>> {
@@ -1437,19 +1450,27 @@ fn parse_lanes(bytes: &[u8], header: &Header) -> Option<BTreeMap<String, LaneSta
         for _ in 0..stack_count {
             stack.push(c.u64()?);
         }
+        let (seq_change, seq_vivac, seq_wrote) = (c.u64()?, c.u64()?, c.u64()?);
+        let (seg_new, seg_closed, seg_notes, seg_events) = (c.u64()?, c.u64()?, c.u64()?, c.u64()?);
+        let written_count = c.u32()?;
+        let mut written = std::collections::HashMap::with_capacity(written_count as usize);
+        for _ in 0..written_count {
+            written.insert(c.u64()?, c.u64()?);
+        }
         out.insert(
             key,
             LaneState {
                 name,
                 repos,
                 stack,
-                seq_change: c.u64()?,
-                seq_vivac: c.u64()?,
-                seq_wrote: c.u64()?,
-                seg_new: c.u64()?,
-                seg_closed: c.u64()?,
-                seg_notes: c.u64()?,
-                seg_events: c.u64()?,
+                seq_change,
+                seq_vivac,
+                seq_wrote,
+                seg_new,
+                seg_closed,
+                seg_notes,
+                seg_events,
+                written,
             },
         );
     }
@@ -2090,7 +2111,8 @@ mod tests {
         for (key, s) in &tree.lanes {
             out.push_str(&format!(
                 "lane key={key:?} name={:?} repos={:?} stack={:?} seq_change={} \
-                 seq_vivac={} seg_new={} seg_closed={} seg_notes={} seg_events={}\n",
+                 seq_vivac={} seg_new={} seg_closed={} seg_notes={} seg_events={} \
+                 written={:?}\n",
                 s.name,
                 s.repos,
                 s.stack,
@@ -2100,6 +2122,7 @@ mod tests {
                 s.seg_closed,
                 s.seg_notes,
                 s.seg_events,
+                s.written.iter().collect::<BTreeMap<_, _>>(),
             ));
         }
         for w in &tree.wheres {

@@ -52,6 +52,14 @@ vivac park 3 "waiting on the license renewal" --until 2026-11-01
 vivac flag 4 review --why "does 2.0 ship the upstream fix?" --on 2027-01-15
 ```
 
+None of these moves the focus, so a session that works only through them ends
+with the brief still pointing at what it started on. The brief says where the
+writing went instead: under WRITTEN AWAY FROM HERE it names the nodes this
+[lane](LANES.md) wrote to since its focus last moved, newest first, leaving
+out the focus and what hangs under it. Three are named and the rest are
+counted. Nobody decides which writes deserve to be listed, since the order of
+the log decides it.
+
 `park` takes `--until` when the day it comes back is already known: the brief
 keeps the node under DO NOT TOUCH NOW until then, and moves it to BACK FROM
 PARKED on its own once that day arrives — nobody has to remember to look. The

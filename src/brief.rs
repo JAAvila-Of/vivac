@@ -348,6 +348,60 @@ fn born_from_here(a: &Tree, focus: &Node) -> Vec<String> {
     children
 }
 
+/// How many of the nodes written away from the focus are listed by name;
+/// the rest are counted.
+const WRITTEN_SHOWN: usize = 3;
+
+/// `f355`, `d934`: the nodes this lane wrote to since its stack last moved,
+/// leaving out the focus and everything under it, newest write first.
+///
+/// `add`, `decide`, `note` and `done` leave the stack alone, so a session
+/// that works only through them ends with HERE still naming what it started
+/// on, and the work it did is nowhere on the page. Moving the focus on every
+/// write would make the stack mean nothing, and asking whether a write
+/// deserves a `push` is the judgement of relevance `r510` measured at zero
+/// uses. So the focus stays and what went elsewhere is named: the log's own
+/// order decides what is listed, nobody's judgement. What hangs under the
+/// focus is left out because BORN FROM HERE already shows it.
+fn written_elsewhere(a: &Tree, focus: Option<&Node>) -> Vec<String> {
+    // Walked upward from each written node rather than by gathering the
+    // focus's whole subtree: the usual session writes a handful of nodes
+    // under a focus that may hold thousands. The cap is what a hand-edited
+    // cycle in the parents would otherwise turn into a hang.
+    let under_focus = |n: &Node| {
+        let Some(f) = focus else { return false };
+        let mut cur = Some(n.num);
+        for _ in 0..=a.total() {
+            match cur {
+                Some(num) if num == f.num => return true,
+                Some(num) => cur = a.node_by_num(num).and_then(|n| n.parent),
+                None => return false,
+            }
+        }
+        false
+    };
+    let mut written: Vec<(u64, &Node)> = a
+        .state()
+        .written
+        .iter()
+        .filter_map(|(&num, &seq)| a.node_by_num(num).map(|n| (seq, n)))
+        .filter(|(_, n)| !under_focus(n))
+        .collect();
+    written.sort_unstable_by_key(|&(seq, n)| std::cmp::Reverse((seq, n.num)));
+    let mut rows: Vec<String> = written
+        .iter()
+        .take(WRITTEN_SHOWN)
+        .map(|(_, n)| format!("  {:<6} {}", n.alias(), spine_label(a, n)))
+        .collect();
+    if written.len() > WRITTEN_SHOWN {
+        rows.push(format!(
+            "      ... and {} more",
+            written.len() - WRITTEN_SHOWN
+        ));
+    }
+    rows
+}
+
 /// The fixed block that takes the spine's place with no focus (`t533`
 /// §3.6). Never truncated, the same as the spine.
 fn no_focus_block(a: &Tree) -> Vec<String> {
@@ -420,6 +474,8 @@ pub fn brief(a: &Tree, root: &Path, lane_dir: &Path, args: &Args, project: &str)
 /// list.
 const BRIEF_HEADINGS: &[&str] = &[
     "BORN FROM HERE",
+    "WRITTEN AWAY FROM HERE",
+    "WRITTEN WITH NO FOCUS",
     "INVARIANTS",
     "BLOCKS",
     "FLAGGED",
@@ -1142,6 +1198,18 @@ pub fn to_text(
     //    Empty, and so omitted, with no focus to hang anything off.
     let born = focus.map(|f| born_from_here(a, f)).unwrap_or_default();
     s.push(Section::fixed(heading("BORN FROM HERE", born)));
+
+    //    And what the lane wrote since the focus last moved, away from it:
+    //    with no focus, everything it wrote since the stack emptied.
+    let elsewhere = written_elsewhere(a, focus);
+    s.push(Section::loose(heading(
+        if focus.is_some() {
+            "WRITTEN AWAY FROM HERE"
+        } else {
+            "WRITTEN WITH NO FOCUS"
+        },
+        elsewhere,
+    )));
 
     // 4. Invariants.
     let invariants: Vec<String> = constraints(a, &lineage, &date)
