@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.10](https://github.com/JAAvila-Of/vivac/compare/v0.17.9...v0.17.10) - 2026-09-30
+
+### Added
+
+- list open findings when closing or deciding ([#224](https://github.com/JAAvila-Of/vivac/pull/224))
+
 ## [0.17.9](https://github.com/JAAvila-Of/vivac/compare/v0.17.8...v0.17.9) - 2026-09-29
 
 ### Fixed
