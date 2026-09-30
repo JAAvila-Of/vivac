@@ -377,8 +377,9 @@ fn sibling_temp(path: &Path) -> PathBuf {
     path.with_file_name(name)
 }
 
-/// A temporary file next to `path`, renamed over it -- `write_config_atomic`'s
-/// own shape, so a process that dies mid-write leaves the original untouched.
+/// A temporary file next to `path`, synced and renamed over it
+/// (`store::replace_whole`, `d946`), so a process that dies mid-write leaves
+/// the original untouched and a power cut leaves either file whole.
 ///
 /// A temporary left behind by a failed write or rename is removed before the
 /// error goes up. It holds the whole new file, and a settings file can carry
@@ -389,12 +390,7 @@ fn write_atomic(path: &Path, content: &[u8]) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let tmp = sibling_temp(path);
-    let written = std::fs::write(&tmp, content).and_then(|()| std::fs::rename(&tmp, path));
-    if written.is_err() {
-        let _ = std::fs::remove_file(&tmp);
-    }
-    written
+    crate::store::replace_whole(path, &sibling_temp(path), content)
 }
 
 fn remove_if_present(path: &Path) -> std::io::Result<()> {

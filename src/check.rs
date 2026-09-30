@@ -28,7 +28,17 @@ use crate::output::outln;
 use crate::style::{self, Stream};
 use std::path::Path;
 
-pub fn check(a: &Tree, root: &Path, args: &Args) -> Result<i32, crate::failure::Failure> {
+/// `a` is the tree folded fresh from the log, never the one the derived
+/// index loaded: an index built before a line went bad still holds what the
+/// log no longer does, and trusting it reported such a tree clean (`f940`).
+/// `indexed` is that index-loaded tree, kept for the one comparison that
+/// names what the log lost.
+pub fn check(
+    a: &Tree,
+    indexed: &Tree,
+    root: &Path,
+    args: &Args,
+) -> Result<i32, crate::failure::Failure> {
     let mut store: Vec<String> = Vec::new();
     let mut project: Vec<String> = Vec::new();
     // Tracked apart from `project`'s own count so each footer prints only
@@ -43,6 +53,15 @@ pub fn check(a: &Tree, root: &Path, args: &Args) -> Result<i32, crate::failure::
             "{} unreadable line(s) in .vivac/events (skipped while reading)",
             a.broken_lines
         ));
+    }
+
+    let lost: Vec<String> = indexed
+        .nodes_iter()
+        .filter(|n| a.node(&n.id).is_none())
+        .map(|n| n.alias())
+        .collect();
+    if !lost.is_empty() {
+        store.push(index_still_holds(&lost));
     }
 
     // One ULID, one `num`. With `num` as `Tree`'s own storage key, only the
@@ -349,4 +368,80 @@ pub fn check(a: &Tree, root: &Path, args: &Args) -> Result<i32, crate::failure::
         }
     }
     Ok(i32::from(!ok))
+}
+
+/// The one store-corruption line for nodes the index holds and the log no
+/// longer reads (`f940`). `aliases` arrive in `num` order; up to three are
+/// named and the rest are counted.
+fn index_still_holds(aliases: &[String]) -> String {
+    let named = match aliases {
+        [one] => one.clone(),
+        [first, second] => format!("{first} and {second}"),
+        [first, second, third, rest @ ..] => {
+            let three = format!("{first}, {second} and {third}");
+            match rest.len() {
+                0 => three,
+                more => format!("{three} (and {more} more)"),
+            }
+        }
+        [] => String::new(),
+    };
+    let noun = if aliases.len() == 1 { "line" } else { "lines" };
+    format!("the index still holds {named}, whose {noun} in .vivac/events can no longer be read")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::index_still_holds;
+
+    fn aliases(n: usize) -> Vec<String> {
+        ["t9", "t12", "d15", "t20", "t21", "t22"]
+            .iter()
+            .take(n)
+            .map(|s| s.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn one_node_is_named_with_a_singular_line() {
+        assert_eq!(
+            index_still_holds(&aliases(1)),
+            "the index still holds t9, whose line in .vivac/events can no longer be read"
+        );
+    }
+
+    #[test]
+    fn two_nodes_are_joined_with_and() {
+        assert_eq!(
+            index_still_holds(&aliases(2)),
+            "the index still holds t9 and t12, whose lines in .vivac/events can no longer be read"
+        );
+    }
+
+    #[test]
+    fn three_nodes_are_all_named() {
+        assert_eq!(
+            index_still_holds(&aliases(3)),
+            "the index still holds t9, t12 and d15, whose lines in .vivac/events can no \
+             longer be read"
+        );
+    }
+
+    #[test]
+    fn five_nodes_name_three_and_count_two() {
+        assert_eq!(
+            index_still_holds(&aliases(5)),
+            "the index still holds t9, t12 and d15 (and 2 more), whose lines in \
+             .vivac/events can no longer be read"
+        );
+    }
+
+    #[test]
+    fn four_nodes_count_the_one_left() {
+        assert_eq!(
+            index_still_holds(&aliases(4)),
+            "the index still holds t9, t12 and d15 (and 1 more), whose lines in \
+             .vivac/events can no longer be read"
+        );
+    }
 }

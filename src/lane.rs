@@ -15,8 +15,6 @@
 
 use crate::failure::Failure;
 use serde::{Deserialize, Serialize};
-use std::fs::File;
-use std::io::Write;
 use std::path::Path;
 
 /// The name of the file itself. `store::LANE` is the one place that name is
@@ -93,14 +91,23 @@ pub fn read(vivac_dir: &Path) -> Result<Option<Lane>, Failure> {
     let raw = match std::fs::read_to_string(vivac_dir.join(FILE)) {
         Ok(raw) => raw,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(e.into()),
+        Err(e) => return Err(unreadable_lane(e)),
     };
-    let v: serde_json::Value =
-        serde_json::from_str(&raw).map_err(|e| Failure::Io(std::io::Error::other(e)))?;
+    let v: serde_json::Value = serde_json::from_str(&raw).map_err(unreadable_lane)?;
     check_lane_version(v.get("version"))?;
-    let lane: Lane =
-        serde_json::from_value(v).map_err(|e| Failure::Io(std::io::Error::other(e)))?;
+    let lane: Lane = serde_json::from_value(v).map_err(unreadable_lane)?;
     Ok(Some(lane))
+}
+
+/// What a `lane` file that cannot be read says it is (`f941`): which file,
+/// what that costs the folder, and the way out. Still `Failure::Io`, so the
+/// exit code is what it was; only the text changes.
+fn unreadable_lane(error: impl std::fmt::Display) -> Failure {
+    Failure::Io(std::io::Error::other(format!(
+        ".vivac/lane cannot be read ({error}), so this folder does not know which lane of \
+         which tree it is. Nothing was written. Moving the file aside and running  vivac \
+         init --join <folder that holds the tree> --yes  joins it again, as a new lane."
+    )))
 }
 
 /// Refuses a `version` this release does not know before the rest of the
@@ -168,13 +175,10 @@ fn write_in_place(vivac_dir: &Path, lane: &Lane) -> std::io::Result<()> {
 /// a ULID so two writers never collide, then a rename over the real one. A
 /// process that dies between the two leaves the old file exactly as it was.
 fn write_lane_file(vivac_dir: &Path, lane: &Lane) -> std::io::Result<()> {
+    let mut bytes = serde_json::to_string_pretty(lane)?.into_bytes();
+    bytes.push(b'\n');
     let tmp = vivac_dir.join(format!("{FILE}.{}.tmp", crate::id::ulid()));
-    {
-        let mut f = File::create(&tmp)?;
-        f.write_all(serde_json::to_string_pretty(lane)?.as_bytes())?;
-        f.write_all(b"\n")?;
-    }
-    std::fs::rename(&tmp, vivac_dir.join(FILE))
+    crate::store::replace_whole(&vivac_dir.join(FILE), &tmp, &bytes)
 }
 
 #[cfg(test)]

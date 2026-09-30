@@ -234,8 +234,8 @@ pub(crate) struct LastEvent {
 // ---------------------------------------------------------------------------
 // Reading the log, tracking byte offsets. Separate from `Store::read_all`
 // on purpose: that function's contract (broken lines counted and skipped,
-// invalid UTF-8 propagated) is exercised by the rest of the suite already,
-// and this module must reproduce it exactly for a tail applied on top of an
+// a complete line of invalid UTF-8 among them, `f939`) is exercised by the
+// rest of the suite already, and this module must reproduce it exactly for a tail applied on top of an
 // old index to agree with a fresh fold -- `read_tracked_agrees_with_store_
 // read_all` and `a_stale_index_picks_up_the_tail`, below, are what prove it
 // does.
@@ -327,16 +327,16 @@ pub(crate) fn read_tracked_in(f: &File, path: &Path, from_offset: u64) -> Result
         if bytes.last() == Some(&b'\r') {
             bytes = &bytes[..bytes.len() - 1];
         }
-        let line = String::from_utf8(bytes.to_vec()).map_err(|_| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "stream did not contain valid UTF-8",
-            )
-        })?;
+        // The same rule `Store::read_all` follows: a complete line that is
+        // not UTF-8 is a broken line, and reading goes on (`f939`).
+        let Ok(line) = std::str::from_utf8(bytes) else {
+            broken += 1;
+            continue;
+        };
         if line.trim().is_empty() {
             continue;
         }
-        match serde_json::from_str::<Event>(&line) {
+        match serde_json::from_str::<Event>(line) {
             Ok(e) => {
                 last = Some(LastEvent {
                     line_offset,
@@ -345,7 +345,7 @@ pub(crate) fn read_tracked_in(f: &File, path: &Path, from_offset: u64) -> Result
                 });
                 events.push(e);
             }
-            Err(_) => match crate::event::unknown_reason_for(&line) {
+            Err(_) => match crate::event::unknown_reason_for(line) {
                 // `from_offset` may sit mid-file, so the line number this
                 // read would report is only ever right when it starts at
                 // byte zero. Rather than reconstruct that count, a tail
@@ -3465,6 +3465,45 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&store.root).ok();
+    }
+
+    /// `f939`: a complete line that is not UTF-8 is a broken line to both
+    /// readers, so a tail read on top of an index that stops before it
+    /// gives the tree a fresh fold gives.
+    #[test]
+    fn a_tail_read_over_an_invalid_utf8_line_agrees_with_a_fresh_fold() {
+        let store = tmp_store("utf8-tail");
+        write_raw_locked(&store, &a_varied_event_set());
+        load(&store, true).unwrap();
+        assert!(store.index_path().is_file());
+
+        {
+            let mut f = File::options().append(true).open(store.log()).unwrap();
+            f.write_all(b"\xff\xfe not utf-8 \xc3\n").unwrap();
+        }
+        let more = vec![created(
+            8,
+            &fixed_id(3),
+            3,
+            Kind::Task,
+            Some(&fixed_id(1)),
+            "A node born after the damage",
+            vec![],
+            vec![],
+        )];
+        write_raw_locked(&store, &more);
+
+        let (all_events, all_broken) = store.read_all().unwrap();
+        assert_eq!(all_broken, 1);
+        let want = fold(&all_events, all_broken);
+
+        let got = load(&store, false).unwrap();
+        assert_eq!(got.broken_lines, 1);
+        assert_eq!(snapshot(&want), snapshot(&got));
+
+        let tail = read_tracked(&store.log(), 0).unwrap();
+        assert_eq!(tail.broken, 1);
+        assert_eq!(tail.events.len(), all_events.len());
     }
 
     #[test]

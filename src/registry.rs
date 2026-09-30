@@ -23,8 +23,6 @@
 use crate::failure::Failure;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::fs::File;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 const FILE: &str = "projects";
@@ -1097,17 +1095,14 @@ fn write(
     projects: &BTreeMap<String, Project>,
 ) -> std::io::Result<()> {
     std::fs::create_dir_all(store_dir)?;
-    let tmp = store_dir.join(format!("{FILE}.{}.tmp", crate::id::ulid()));
     let payload = ToDisk {
         version: VERSION,
         projects,
     };
-    {
-        let mut f = File::create(&tmp)?;
-        f.write_all(serde_json::to_string_pretty(&payload)?.as_bytes())?;
-        f.write_all(b"\n")?;
-    }
-    std::fs::rename(&tmp, path)
+    let mut bytes = serde_json::to_string_pretty(&payload)?.into_bytes();
+    bytes.push(b'\n');
+    let tmp = store_dir.join(format!("{FILE}.{}.tmp", crate::id::ulid()));
+    crate::store::replace_whole(path, &tmp, &bytes)
 }
 
 #[cfg(test)]
