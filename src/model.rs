@@ -155,6 +155,11 @@ pub struct Node {
     /// span arena like every other repeated text: a lane id repeats across
     /// thousands of nodes and cannot cost a `String` each.
     pub born_lane: Span,
+    /// The `node.noted` events this node has received since a node was last
+    /// born under it -- or since its own birth, when none ever was. Notes
+    /// from every lane count; nothing but a `node.created` naming this node
+    /// as its parent, and a note on it, moves the number. `f944`, `d945`.
+    pub notes_since_child: u64,
 }
 
 impl Node {
@@ -450,6 +455,16 @@ impl Stretch {
 /// spoken stops, 26 at the 75th percentile and 43 at the 90th. It is meant to
 /// be adjusted by measuring again, like the constants of `d779`.
 pub const SPOKEN_STOP_EVERY: u64 = 25;
+
+/// How many notes in a row a node may collect, with nothing filed under it,
+/// before `note` says that a finding, a choice or something left to do is a
+/// node and not a note, and again at every multiple of it (`d945`). Measured
+/// for `d945`, not chosen: over 458 runs of notes on one node with nothing
+/// filed under it in this project's own tree, p50 was 1, p90 3, p99 7 and
+/// the longest 14, so at 8 the reminder fires 4 times here, and 3 times in
+/// one run of 26 notes on another project's tree. It is meant to be adjusted
+/// by measuring again, like the constants of `d779`.
+pub const NOTES_SINCE_CHILD_EVERY: u64 = 8;
 
 /// Everything about a tree that belongs to one working folder instead of to
 /// the product. The knowledge -- nodes, edges, decisions, and the numbering
@@ -813,10 +828,16 @@ impl Tree {
                         born_lane: born_lane_span,
                         parked_until: None,
                         review_on: None,
+                        notes_since_child: 0,
                     },
                 );
                 self.ulid_index.insert(node.clone(), *num);
                 self.next_num = self.next_num.max(*num + 1);
+                // `d945`: something filed under the parent, so its notes are
+                // no longer notes with nothing filed under them.
+                if let Some(p) = parent_num.and_then(|p| self.nodes.get_mut(&p)) {
+                    p.notes_since_child = 0;
+                }
                 match parent_num {
                     Some(p) => self.children.entry(p).or_default().push(*num),
                     None => self.roots.push(*num),
@@ -865,6 +886,7 @@ impl Tree {
                 let num = self.resolve_ulid(node);
                 if let Some(n) = self.nodes.get_mut(&num) {
                     n.notes.push(Note { at, text });
+                    n.notes_since_child += 1;
                 }
             }
             Body::BlockChanged { node, blocks } => {
@@ -2987,6 +3009,35 @@ mod tests {
             "both notes survive, oldest first"
         );
         assert_eq!(n.note(&tree), "second note", "note() still reads the last");
+    }
+
+    /// `d945`: the notes a node has received since a node last hung from
+    /// it, counted from any lane. A child born under it starts the count
+    /// over; state changes, other nodes' children and other nodes' notes
+    /// leave it alone.
+    #[test]
+    fn the_notes_since_a_child_count_only_that_nodes_own_notes() {
+        let mut other_lane = noted(3, TS, 1, "from elsewhere");
+        other_lane.lane = "other".to_string();
+        let events = vec![
+            node(1, 1, Kind::Goal, None),
+            node(2, 2, Kind::Goal, None),
+            other_lane,
+            noted(4, TS, 1, "one"),
+            noted(5, TS, 2, "not mine"),
+            closed(6, 2),
+            node(7, 3, Kind::Task, Some("n2")),
+        ];
+        let tree = fold(&events, 0);
+        assert_eq!(tree.node_by_num(1).unwrap().notes_since_child, 2);
+        assert_eq!(tree.node_by_num(2).unwrap().notes_since_child, 0);
+        assert_eq!(tree.node_by_num(3).unwrap().notes_since_child, 0);
+        let mut more = events.clone();
+        more.push(node(8, 4, Kind::Finding, Some("n1")));
+        more.push(noted(9, TS, 1, "after the child"));
+        let tree = fold(&more, 0);
+        assert_eq!(tree.node_by_num(1).unwrap().notes_since_child, 1);
+        assert_eq!(tree.node_by_num(2).unwrap().notes_since_child, 0);
     }
 
     /// `d936`: what a lane did since its own last stop made by hand. Only a

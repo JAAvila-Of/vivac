@@ -241,7 +241,8 @@ const TOOLS: &[Tool] = &[
                       question that has to be settled before continuing, a detour worth \
                       its own trace -- never after the fact, once the reason for taking it \
                       has already faded. Look first with `vivac_find`: work the tree \
-                      already holds goes under its node, never into a second one. The \
+                      already holds is never opened twice, and what turns up while on it \
+                      is a node under it, not a note. The \
                       focus is wherever work was left, perhaps by another session and \
                       about something else, so name in `parent` the node this work \
                       continues, or pass `root` when it continues nothing. `why` is \
@@ -406,12 +407,14 @@ const TOOLS: &[Tool] = &[
                       not the next thing about to happen -- a finding surfaced while \
                       working on something else, a sibling task filed for later, a piece \
                       of an existing structure being brought in. `vivac_push` is for what \
-                      comes next; this is for what was just noticed. Look first with \
-                      `vivac_find`: what the tree already holds is not filed twice. A \
-                      finding is one node for each thing found that you tell the person, \
+                      comes next; this is for what was just noticed. Something left to \
+                      do that turns up while working on a node is a task filed under it, \
+                      never a note on it. Look first with `vivac_find`: what the tree \
+                      already holds is not filed twice. A finding is one node for each thing found that you tell the person, \
                       written when you tell them. One that asks nothing of anyone -- a \
                       lesson, a measurement -- is a record: close it right away with \
-                      vivac_done, its outcome starting with Record:.",
+                      vivac_done, its outcome starting with Record:. The title is words, \
+                      never an id: the node it hangs from goes in `parent`.",
         args: &[
             Arg {
                 name: "title",
@@ -498,8 +501,10 @@ const TOOLS: &[Tool] = &[
         title: "Record a decision",
         read_only: false,
         description: "Record a decision, with the reason it was made and every alternative \
-                      that lost. Call it the moment a choice is actually settled, not \
-                      before and not long after: the alternatives are optional in the \
+                      that lost. The choice can be yours or the person's, a limit they \
+                      set included; either way it is a decision, never a note. Call it \
+                      the moment a choice is actually settled, not before and not long \
+                      after: the alternatives are optional in the \
                       schema and not in practice, because without them the same option \
                       gets proposed again in a month by whoever was not in the room. \
                       When the project has pillars or rules, name in `against` the ones \
@@ -579,11 +584,13 @@ const TOOLS: &[Tool] = &[
         title: "Attach a fact to a node",
         read_only: false,
         description: "Attach a fact to a node without changing its state or the stack: \
-                      something worth keeping that is not itself a new node. Call it \
-                      beside `vivac_push` and `vivac_pop` for anything that would otherwise \
-                      only live in a chat transcript nobody rereads. When the fact deserves \
-                      to be found on its own -- a finding, a measurement -- file it as a \
-                      node with `vivac_add` instead.",
+                      how the work on it went, or something that changed outside git -- \
+                      CI, a tracker, the cloud -- that the tree is the only record of. A \
+                      note never carries a finding, a choice (yours or the person's) or \
+                      something left to do: each of those is a node under this one, filed \
+                      with `vivac_add` or `vivac_decide`, so it shows up as what it is. \
+                      When a node keeps collecting notes with nothing filed under it, the \
+                      answer says so.",
         args: &[
             Arg {
                 name: "note",
@@ -1408,7 +1415,7 @@ mod resident_write_tests {
             "node num={} id={} kind={:?} state={:?} parent={:?} blocks={} \
              forced_close={} title={:?} why={:?} note={:?} outcome={:?} \
              opened={:?} closed={:?} refs={:?} governs={:?} flags={:?} \
-             review_on={:?}\n",
+             review_on={:?} notes_since_child={}\n",
             n.num,
             n.id,
             n.kind,
@@ -1426,6 +1433,7 @@ mod resident_write_tests {
             n.governs(tree),
             n.flags,
             n.review_on(tree),
+            n.notes_since_child,
         )
     }
 

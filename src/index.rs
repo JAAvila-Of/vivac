@@ -114,7 +114,11 @@ const MAGIC: u64 = u64::from_le_bytes(*b"vivacIDX");
 // its latest close crossed a multiple of 25. A version-17 lane record ends
 // where the first of these begins, so it is refused rather than read as a
 // lane that has made no changes.
-const FORMAT_VERSION: u32 = 18;
+// Version 19 widens each node record with `notes_since_child`, the notes the
+// node has received since a node was last born under it (`d945`): one more
+// `u64`, written last. A version-18 node record ends where it begins, so it
+// is refused rather than read as a node with no notes.
+const FORMAT_VERSION: u32 = 19;
 const ULID_LEN: usize = 26;
 const SPAN_LEN: usize = 8;
 const FLAG_RECORD_LEN: usize = 1 + SPAN_LEN;
@@ -154,7 +158,8 @@ const NODE_RECORD_LEN: usize = ULID_LEN
     + 1 // parked_until presence
     + SPAN_LEN // parked_until span
     + 1 // review_on presence
-    + SPAN_LEN; // review_on span
+    + SPAN_LEN // review_on span
+    + 8; // notes_since_child
 
 /// `LOADING.md` §4 "El umbral, con su número": a stale index is left alone
 /// below this many pending events, because applying them in memory is cheap
@@ -1040,6 +1045,7 @@ struct NodeRaw {
     against_recorded: bool,
     parked_until: Option<Span>,
     review_on: Option<Span>,
+    notes_since_child: u64,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1148,6 +1154,7 @@ fn write_node_record(
             write_span(buf, Span::default());
         }
     }
+    write_u64(buf, n.notes_since_child);
     debug_assert_eq!(buf.len() - start, NODE_RECORD_LEN);
 }
 
@@ -1186,6 +1193,7 @@ fn read_node_record(c: &mut Cursor) -> Option<NodeRaw> {
     let review_on_present = c.bool_()?;
     let review_on_span = c.span()?;
     let review_on = review_on_present.then_some(review_on_span);
+    let notes_since_child = c.u64()?;
     Some(NodeRaw {
         id,
         num,
@@ -1214,6 +1222,7 @@ fn read_node_record(c: &mut Cursor) -> Option<NodeRaw> {
         against_recorded,
         parked_until,
         review_on,
+        notes_since_child,
     })
 }
 
@@ -1266,6 +1275,7 @@ fn assemble_nodes(
             born_lane: r.born_lane,
             parked_until: r.parked_until,
             review_on: r.review_on,
+            notes_since_child: r.notes_since_child,
         });
     }
     Some(out)
@@ -2197,7 +2207,8 @@ mod tests {
                  born_seq={} born_lane={:?} \
                  title={:?} why={:?} note={:?} outcome={:?} opened={:?} closed={:?} \
                  refs={:?} governs={:?} flags={:?} arms={:?} against={:?} \
-                 against_recorded={} parked_until={:?} review_on={:?}\n",
+                 against_recorded={} parked_until={:?} review_on={:?} \
+                 notes_since_child={}\n",
                 n.num,
                 n.id,
                 n.kind,
@@ -2224,6 +2235,7 @@ mod tests {
                 n.against_recorded,
                 n.parked_until(tree),
                 n.review_on(tree),
+                n.notes_since_child,
             ));
         }
         for v in &tree.vivacs {
@@ -2613,6 +2625,65 @@ mod tests {
         assert_eq!(snapshot(&fresh), snapshot(&loaded_again));
 
         std::fs::remove_dir_all(&store.root).ok();
+    }
+
+    /// `d945`: `notes_since_child` is new to the node record, the last
+    /// field of it. A run of notes leaves it above zero, and a child filed
+    /// under the node sends it back to zero: both have to come back out of
+    /// the index the way a fresh fold reads them.
+    #[test]
+    fn the_notes_since_a_child_survive_the_round_trip() {
+        let a_node = fixed_id(1);
+        let b_node = fixed_id(2);
+        let note = |seq: u32, node: &str| Event {
+            seq: seq as u64,
+            id: fixed_id(seq),
+            ts: "2026-09-05T10:03:00Z".to_string(),
+            actor: "a_test".to_string(),
+            lane: "main".to_string(),
+            payload: Body::NodeNoted {
+                node: node.to_string(),
+                note: "how it went".to_string(),
+            },
+        };
+        let mut events = vec![
+            created(1, &a_node, 1, Kind::Goal, None, "A", vec![], vec![]),
+            created(2, &b_node, 2, Kind::Goal, None, "B", vec![], vec![]),
+            note(3, &a_node),
+            note(4, &a_node),
+            note(5, &a_node),
+            note(6, &b_node),
+        ];
+        for (label, expected) in [("run", (3, 1)), ("reset", (0, 1))] {
+            if label == "reset" {
+                events.push(created(
+                    7,
+                    &fixed_id(7),
+                    3,
+                    Kind::Finding,
+                    Some(&a_node),
+                    "C",
+                    vec![],
+                    vec![],
+                ));
+            }
+            let fresh = fold(&events, 0);
+            assert_eq!(fresh.node(&a_node).unwrap().notes_since_child, expected.0);
+            assert_eq!(fresh.node(&b_node).unwrap().notes_since_child, expected.1);
+
+            let store = tmp_store(&format!("notes-since-child-{label}"));
+            write_raw_locked(&store, &events);
+
+            let loaded = load(&store, true).expect("load should succeed");
+            assert_eq!(loaded.node(&a_node).unwrap().notes_since_child, expected.0);
+            assert_eq!(loaded.node(&b_node).unwrap().notes_since_child, expected.1);
+            assert_eq!(snapshot(&fresh), snapshot(&loaded));
+
+            let loaded_again = load(&store, false).expect("load should succeed");
+            assert_eq!(snapshot(&fresh), snapshot(&loaded_again));
+
+            std::fs::remove_dir_all(&store.root).ok();
+        }
     }
 
     /// `d906`: `review_on` is new to the node record, right behind

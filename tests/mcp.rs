@@ -203,7 +203,8 @@ fn vivac_add_description_points_a_record_at_vivac_done() {
         description.ends_with(
             "One that asks nothing of anyone -- a lesson, a measurement -- is a \
              record: close it right away with vivac_done, its outcome starting \
-             with Record:."
+             with Record:. The title is words, never an id: the node it hangs \
+             from goes in `parent`."
         ),
         "{description}"
     );

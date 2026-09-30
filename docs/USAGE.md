@@ -77,7 +77,14 @@ what was built on it. `--off` clears it once it has been looked at.
 change. The brief shows the newest note under each node on the path down to
 the focus, with its date, so the next session reads the latest word on each
 of them and not only what it was born saying. A node that closed after its
-last note shows how it closed instead.
+last note shows how it closed instead. What a note never carries is a
+finding, a choice or something left to do: each of those is a node under the
+one it came up on, and when a node collects eight notes in a row with nothing
+filed under it, `note` says so.
+
+Because a title never changes, a title that is exactly the id of a node that
+exists, `t145` or its ULID, is refused: it is nearly always the parent typed
+where the title goes, and the refusal gives the command with `--parent`.
 
 `decide` takes `--alternative` for what was turned down and `--supersedes` for
 the decision it replaces, so a reversal reads from either end. `declare`

@@ -56,7 +56,7 @@ it read.
 | It tells you something it found | a finding, one for each thing, as it tells you. One that asks nothing of anyone, a measurement or a lesson, is closed on the spot as a record |
 | You say *not now*, *later*, *leave that* | the node, parked with your words; the next brief lists it under **DO NOT TOUCH NOW**, so the next session does not pick it up |
 | You say *not now, but check back on the 14th* | the same park, with `--until` naming the day; the brief keeps it under DO NOT TOUCH NOW until then and moves it to **BACK FROM PARKED** on its own, without anyone asking |
-| Something changes where git cannot see it: CI settings, a tracker, a cloud console | a note on the node it belongs to. The tree is the only record that change will ever have |
+| Something changes where git cannot see it: CI settings, a tracker, a cloud console | a note on the node it belongs to. The tree is the only record that change will ever have. A note never carries a finding, a choice or something left to do: those are nodes, so they show up as what they are |
 | The work is done | the node closes with its outcome, and so does the one it returns to, if that settles it too. The close, like a decision, lists the findings still open that were born under it or that it names, so one the work settled on the way gets closed then and not weeks later |
 
 The agent does all of it from the command line or over [MCP](SETUP.md#mcp),
@@ -83,6 +83,20 @@ Checked in a real session that ran past those ten minutes: the line arrived,
 the agent wrote back everything it had let pass, and it went on writing at
 its seams afterwards.
 
+A third slip showed up later, on a front one agent worked across four days.
+It never stopped writing, but for its last day everything went in as notes
+on a single node: twenty-six in a row, with six findings, three decisions
+and two things still to do inside them, none of which any list would ever
+show as what it was. The seams said that work the tree already holds goes
+under its node, and that read as *in its notes*. 0.17.17 says instead that
+what turns up while working on something is a node under it, and that a note
+never carries a finding, a choice or something left to do. And when a node
+collects eight notes in a row with nothing filed under it, the answer to the
+eighth says so and gives the two commands that file one, once every eight.
+Measured on this project's own tree first, where a node gets one note at a
+time in the median and seven at the 99th percentile, so it seldom fires on
+work that is going well.
+
 ### If it slips anyway
 
 No hook reads the conversation. Deciding what in it was worth keeping would be
@@ -94,6 +108,7 @@ the one who notices a skipped seam is you, and a sentence brings it back:
 | it reports something | *Is that in the tree?* |
 | you have chosen | *Write that down as a decision.* |
 | you put something off | *Not now. Park it.* |
+| it keeps adding notes to one node | *Is any of that a finding or a decision?* |
 | a long stretch of work | *Are you recording this in vivac?* |
 
 ---

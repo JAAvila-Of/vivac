@@ -294,6 +294,13 @@ pub enum Outcome {
     },
     Noted {
         alias: String,
+        /// The node's notes since something was last filed under it, set
+        /// only when that count is a positive multiple of
+        /// `NOTES_SINCE_CHILD_EVERY` -- the moment `note` says what goes in
+        /// a node instead. Left out of the JSON otherwise, so every other
+        /// note reads byte for byte as it did. `d945`.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        notes_since_child: Option<u64>,
     },
     Blocked {
         alias: String,
@@ -608,7 +615,27 @@ pub fn to_text(o: &Outcome) -> String {
                 no_against_lines(&mut lines, alias);
             }
         }
-        Outcome::Noted { alias } => lines.push(format!("  {alias} noted")),
+        Outcome::Noted {
+            alias,
+            notes_since_child,
+        } => {
+            lines.push(format!("  {alias} noted"));
+            if let Some(n) = notes_since_child {
+                lines.push(format!(
+                    "  {n} notes in a row on {alias} with nothing filed under it."
+                ));
+                lines.push(
+                    "  A finding, a choice or something left to do is a node, not a note:"
+                        .to_string(),
+                );
+                lines.push(format!(
+                    "    vivac add \"<title>\" --type finding|task --parent {alias}"
+                ));
+                lines.push(format!(
+                    "    vivac decide \"<title>\" --reason \"<why>\" --parent {alias}"
+                ));
+            }
+        }
         Outcome::Blocked {
             alias,
             blocks,
