@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.12](https://github.com/JAAvila-Of/vivac/compare/v0.17.11...v0.17.12) - 2026-09-30
+
+### Added
+
+- *(why)* keep the newest three notes and add --only ([#229](https://github.com/JAAvila-Of/vivac/pull/229))
+
 ## [0.17.11](https://github.com/JAAvila-Of/vivac/compare/v0.17.10...v0.17.11) - 2026-09-30
 
 ### Added
