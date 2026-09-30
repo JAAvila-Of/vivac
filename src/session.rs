@@ -126,10 +126,14 @@ pub fn start(ctx: &mut crate::ops::Ctx, a: &Args, project: &str) -> R {
 }
 
 pub fn end(ctx: &mut crate::ops::Ctx, a: &Args, located: &crate::store::Located) -> R {
+    if a.has("dry-run") {
+        return dry_run(ctx, a, located);
+    }
+    let hook = a.has("hook");
     // `d787`'s turn clock closes here, ahead of every check below: the
     // turn happened whether or not this session leaves anything worth an
     // automatic stop.
-    if a.has("hook") {
+    if hook {
         close_turn(located, a);
     }
     // The cheap checks go first, against whatever this process already
@@ -137,8 +141,8 @@ pub fn end(ctx: &mut crate::ops::Ctx, a: &Args, located: &crate::store::Located)
     // all: a read-only tree or a filesystem with no lock support would
     // otherwise fail this hook on every ordinary turn instead of only on
     // the one that actually has something to close.
-    if nothing_to_stop(&ctx.tree, a) {
-        return Ok(());
+    if let Some(v) = nothing_to_stop(&ctx.tree) {
+        return finish(located, a, v);
     }
     // The decision whether anything changed has to be made on the tree on
     // disk. In hook mode any failure to take the lock -- busy, or the lock
@@ -147,39 +151,99 @@ pub fn end(ctx: &mut crate::ops::Ctx, a: &Args, located: &crate::store::Located)
     // lost. Without a hook it is still reported, as before.
     let mine = match ctx.lock_for_write() {
         Ok(mine) => mine,
-        Err(_) if a.has("hook") => return Ok(()),
+        Err(_) if hook => return finish(located, a, Verdict::LockBusy),
         Err(e) => return Err(e),
     };
     // The lock may have reloaded the tree from disk, so the same cheap
     // checks are repeated here against what is actually there now.
-    if nothing_to_stop(&ctx.tree, a) {
-        return Ok(());
+    if let Some(v) = nothing_to_stop(&ctx.tree) {
+        return finish(located, a, v);
     }
     let next = a.opt_or("next");
     let label = segment_label(&ctx.tree);
     let num = ctx.tree.next_vivac_num.max(1);
-    crate::ops::auto_vivac(ctx, VivacKind::Auto, &next, &label)?;
+    if let Err(e) = crate::ops::auto_vivac(ctx, VivacKind::Auto, &next, &label) {
+        finish(located, a, Verdict::Failed)?;
+        return Err(e);
+    }
     // The write is done; nothing after this needs the lock. Only released
     // if this call is the one that took it (`f602`).
     if mine {
         ctx.unlock();
     }
-    if !a.has("hook") {
-        outln!("  v{num}  automatic stop at session close");
-    }
-    Ok(())
+    finish(located, a, Verdict::Stopped(num))
 }
 
-/// Whether `t` has nothing worth an automatic stop: an empty stack, or
-/// nothing new since the last one.
-fn nothing_to_stop(t: &crate::model::Tree, a: &Args) -> bool {
+/// What closing decided, or would decide (`f730`, `d935`).
+///
+/// The close hook has to print nothing (`f708`), and so an empty stack,
+/// nothing new since the last stop and a hook that never ran used to look
+/// exactly alike from outside: silence and no event. Each run of the hook
+/// now leaves its verdict in a small file beside `d787`'s turn clock, never
+/// in the log, and `session end --dry-run` reads it back.
+#[derive(Debug, PartialEq)]
+enum Verdict {
+    EmptyStack,
+    /// Nothing changed since this lane's last stop, which it names.
+    NothingNew(Option<u64>),
+    /// Another write held the tree; the stop is left for the next turn.
+    LockBusy,
+    Stopped(u64),
+    Failed,
+}
+
+impl Verdict {
+    /// The words the verdict file holds after its version and time.
+    fn words(&self) -> String {
+        match self {
+            Verdict::EmptyStack => "empty".to_string(),
+            Verdict::NothingNew(n) => format!("unchanged {}", n.unwrap_or(0)),
+            Verdict::LockBusy => "busy".to_string(),
+            Verdict::Stopped(n) => format!("stopped {n}"),
+            Verdict::Failed => "failed".to_string(),
+        }
+    }
+
+    fn parse<'a>(mut words: impl Iterator<Item = &'a str>) -> Option<Verdict> {
+        let num = |w: Option<&str>| w.and_then(|w| w.parse::<u64>().ok());
+        Some(match words.next()? {
+            "empty" => Verdict::EmptyStack,
+            "unchanged" => Verdict::NothingNew(num(words.next()).filter(|&n| n > 0)),
+            "busy" => Verdict::LockBusy,
+            "stopped" => Verdict::Stopped(num(words.next())?),
+            "failed" => Verdict::Failed,
+            _ => return None,
+        })
+    }
+
+    /// How the hook's last run reads, in the past.
+    fn past(&self) -> String {
+        match self {
+            Verdict::EmptyStack => "the stack was empty, so it wrote no stop".to_string(),
+            Verdict::NothingNew(n) => format!(
+                "nothing had changed since {}, so it wrote no stop",
+                stop_name(*n)
+            ),
+            Verdict::LockBusy => {
+                "another write held the tree, so it left the stop for the next turn".to_string()
+            }
+            Verdict::Stopped(n) => format!("it wrote v{n}"),
+            Verdict::Failed => "writing its stop failed, and the harness got the error".to_string(),
+        }
+    }
+}
+
+fn stop_name(n: Option<u64>) -> String {
+    n.map_or_else(|| "the last stop".to_string(), |n| format!("v{n}"))
+}
+
+/// Why closing would write no stop right now, or `None` when it would write
+/// one.
+fn nothing_to_stop(t: &crate::model::Tree) -> Option<Verdict> {
     // With no stack there is no thread to close, and an empty vivac is just
     // noise to be pruned later.
     if t.stack().is_empty() {
-        if !a.has("hook") {
-            outln!("  Empty stack: no stop worth saving.");
-        }
-        return true;
+        return Some(Verdict::EmptyStack);
     }
     // Nor with nothing new. Claude Code does have a `SessionEnd` event, but
     // the automatic stop hangs off `Stop` instead: `Stop` fires on every
@@ -187,12 +251,108 @@ fn nothing_to_stop(t: &crate::model::Tree, a: &Args) -> bool {
     // (`f568`). Without this guard it would be forty identical stops a day,
     // and a stop that repeats is not a stop, it is a log.
     if t.state().seq_change <= t.state().seq_vivac {
-        if !a.has("hook") {
-            outln!("  Nothing changed since the last stop.");
-        }
-        return true;
+        return Some(Verdict::NothingNew(t.last_vivac().map(|v| v.num)));
     }
-    false
+    None
+}
+
+/// Where a run of `session end` finishes. The hook says nothing and leaves
+/// its verdict for `--dry-run` to find; a person running it by hand is
+/// told instead and leaves none, since what is kept is what the hook
+/// decided.
+fn finish(located: &crate::store::Located, a: &Args, v: Verdict) -> R {
+    if a.has("hook") {
+        write_verdict(&verdict_path(located), &now(a), &v);
+        return Ok(());
+    }
+    match v {
+        Verdict::EmptyStack => outln!("  Empty stack: no stop worth saving."),
+        Verdict::NothingNew(_) => outln!("  Nothing changed since the last stop."),
+        Verdict::Stopped(num) => outln!("  v{num}  automatic stop at session close"),
+        Verdict::LockBusy | Verdict::Failed => {}
+    }
+    Ok(())
+}
+
+fn now(a: &Args) -> String {
+    a.opt("now")
+        .map(str::to_string)
+        .unwrap_or_else(crate::clock::now_rfc3339)
+}
+
+/// The verdict file of this project and lane: one per lane and not per
+/// session, since the person asking has no session id to give. Keyed the
+/// way `d787`'s turn clock is, so it holds no path of the project's own.
+fn verdict_path(located: &crate::store::Located) -> std::path::PathBuf {
+    let key = state_key(&located.root, &hook_lane(located), &None);
+    let hash = crate::setup::fnv1a64(key.as_bytes());
+    std::env::temp_dir()
+        .join("vivac")
+        .join(format!("end-{hash:016x}"))
+}
+
+/// One line, versioned: `v1 <time> <verdict words>`. Best effort, like the
+/// turn clock beside it: a failure here costs `--dry-run` one lost answer,
+/// never the turn.
+fn write_verdict(path: &std::path::Path, at: &str, v: &Verdict) {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).ok();
+    }
+    std::fs::write(path, format!("v1 {at} {}", v.words())).ok();
+}
+
+/// A file this version cannot read is no record at all, rather than a
+/// failure: `--dry-run` then says there is none.
+fn read_verdict(path: &std::path::Path) -> Option<(String, Verdict)> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let mut words = text.split_whitespace();
+    if words.next() != Some("v1") {
+        return None;
+    }
+    let at = words.next()?.to_string();
+    crate::clock::epoch_seconds(&at)?;
+    Some((at, Verdict::parse(words)?))
+}
+
+/// `session end --dry-run` (`d935`): what closing would do now, and what
+/// the close hook decided the last time it ran in this lane. Writes
+/// nothing and takes no lock: it is a person looking.
+fn dry_run(ctx: &crate::ops::Ctx, a: &Args, located: &crate::store::Located) -> R {
+    match nothing_to_stop(&ctx.tree) {
+        Some(Verdict::EmptyStack) => {
+            outln!("  Now: the stack is empty, so closing writes no stop.")
+        }
+        Some(Verdict::NothingNew(n)) => outln!(
+            "  Now: nothing changed since {}, so closing writes no stop.",
+            stop_name(n)
+        ),
+        _ => {
+            let label = segment_label(&ctx.tree);
+            let num = ctx.tree.next_vivac_num.max(1);
+            if label.is_empty() {
+                outln!("  Now: closing would write v{num}.")
+            } else {
+                outln!("  Now: closing would write v{num} ({label}).")
+            }
+        }
+    }
+    match read_verdict(&verdict_path(located)) {
+        Some((at, v)) => {
+            let when = crate::brief::earlier(&at, &now(a)).map_or_else(
+                || "less than a minute ago".to_string(),
+                |e| format!("{e} ago"),
+            );
+            outln!("  The close hook last ran here {when}: {}.", v.past());
+        }
+        None => {
+            outln!("  No record of the close hook running in this lane on this machine.");
+            // A hook running a vivac from before `d935` leaves no verdict
+            // either, and says nothing about the harness.
+            outln!("  If a turn has ended since setup, the harness did not run it, or ran a vivac");
+            outln!("  older than this one.");
+        }
+    }
+    Ok(())
 }
 
 /// What the segment being closed contained, counted off the seams.

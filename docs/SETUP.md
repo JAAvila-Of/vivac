@@ -157,6 +157,15 @@ not depend on the session closing cleanly. The stop is only saved if the tree
 changed since the previous one: a stop that repeats identically is not a stop,
 it is a log.
 
+The hook prints nothing, so a stop you expected and did not get looks the same
+whatever the cause. `vivac session end --dry-run` tells them apart without
+writing anything. It says what closing would do now, and what the hook decided
+the last time it ran in this folder: the stack was empty, nothing had changed,
+another write held the tree, or which stop it wrote. With no record at all,
+the harness did not run it, which is what a hook still waiting for approval
+looks like. The hook leaves that verdict in a small file next to the clock
+described below, never in the log.
+
 `UserPromptSubmit` runs on every message you send, and almost always says
 nothing. It speaks only when the agent has worked ten minutes, added up
 across its turns, without writing anything to the tree. The time you take to
@@ -181,7 +190,8 @@ What the hooks call is `vivac session start`, `vivac session prompt` and
 `vivac session end`, which are commands like any other. `--hook` makes them speak to a harness instead of
 a person: the brief goes out as plain text, and what kind of start it was is
 read from what the harness passes in. So each can be run by hand to see
-exactly what a hook would do.
+exactly what a hook would do. `session end` by hand writes the stop it finds
+due, the same as its hook; `--dry-run` looks without writing.
 
 **Any harness that can run a command when a session opens, and put its output
 in the agent's context, can call the same one.** Any MCP client can run

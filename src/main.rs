@@ -138,6 +138,7 @@ const USAGE: &str = r#"vivac - provenance of work
 
     vivac session start [--hook]              the brief, ready to inject
     vivac session end   [--hook]              automatic stop at close
+          --dry-run  what closing would do, and what the hook last did
     vivac session prompt [--hook]             a nudge when nothing was written
     vivac mcp                                 serve the tree over MCP
     vivac web [--port N] [--no-open]          the tree in a browser, and
@@ -580,7 +581,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         // gap: the shape would have to be designed, it has no consumer
         // today, and the agent reads the brief as prose. `d53`.
         "brief" => &["budget", "now"],
-        "session" => &["hook", "next", "budget", "now"],
+        "session" => &["hook", "next", "budget", "now", "dry-run"],
         "add" => &[
             "parent", "why", "type", "blocks", "ref", "governs", "arm", "arm-dir", "against",
             "root",
@@ -825,6 +826,13 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
     if cmd == "session" && a.has("hook") {
         style::plain_only();
         session::hook_stdin();
+    }
+    // `d935`: a rehearsal is a person looking at what the close hook
+    // does, so it goes with `session end` alone and never with `--hook`.
+    if cmd == "session" && a.has("dry-run") && (a.positional(0) != Some("end") || a.has("hook")) {
+        return Err(Failure::usage(
+            "--dry-run goes with session end, without --hook: it shows what closing would do.",
+        ));
     }
     if cmd == "session" && a.positional(0) == Some("prompt") {
         session::prompt(&cwd, a);

@@ -247,7 +247,7 @@ pub(crate) fn clip(s: &str, n: usize) -> String {
 /// after that. `None` under a minute, where there is nothing to warn about,
 /// and for a stamp `clock::epoch_seconds` cannot read -- no age beats a
 /// wrong one.
-fn earlier(from: &str, to: &str) -> Option<String> {
+pub(crate) fn earlier(from: &str, to: &str) -> Option<String> {
     let secs = crate::clock::epoch_seconds(to)? - crate::clock::epoch_seconds(from)?;
     Some(match secs {
         ..60 => return None,
