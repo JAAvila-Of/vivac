@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.13](https://github.com/JAAvila-Of/vivac/compare/v0.17.12...v0.17.13) - 2026-09-30
+
+### Added
+
+- *(brief)* name what the lane wrote away from the focus ([#231](https://github.com/JAAvila-Of/vivac/pull/231))
+
 ## [0.17.12](https://github.com/JAAvila-Of/vivac/compare/v0.17.11...v0.17.12) - 2026-09-30
 
 ### Added
