@@ -692,6 +692,7 @@ final
 finalize
 find
 finding
+findings
 finds
 fine
 fingerprint
@@ -962,6 +963,7 @@ keys
 kids
 kill
 kind
+kinds
 know
 knowledge
 known

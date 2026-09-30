@@ -46,6 +46,16 @@ pub struct Closed {
     pub still_standing: Option<bool>,
 }
 
+/// A finding still open when `pop`, `done` or `decide` wrote: born right
+/// under the node, or named in its refs or in the prose just written.
+/// `d926`: the work that fixes a finding tends to name it, and nothing
+/// closed it at that moment.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LeftOpen {
+    pub alias: String,
+    pub title: String,
+}
+
 /// `push`'s advice to reconsider the root, past a stack four deep. `MODEL.md`
 /// §6.1: intervene, never block, so it is advice and never a refusal.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -219,9 +229,13 @@ pub enum Outcome {
     Popped {
         closed: Closed,
         parent: Option<PoppedTo>,
+        /// `d926`. Always present; `[]` when nothing was left open.
+        left_open: Vec<LeftOpen>,
     },
     Done {
         closed: Closed,
+        /// `d926`. Always present; `[]` when nothing was left open.
+        left_open: Vec<LeftOpen>,
     },
     Added {
         alias: String,
@@ -280,6 +294,9 @@ pub enum Outcome {
         no_alternatives: bool,
         #[serde(skip_serializing_if = "is_false")]
         no_against: bool,
+        /// `d926`: the findings still open that the decision names. Always
+        /// present; `[]` when it names none.
+        left_open: Vec<LeftOpen>,
     },
     /// `declare`'s own write: what a decision was judged against, recorded
     /// after the fact. `t426` §2.2.
@@ -361,6 +378,27 @@ fn closed_lines(out: &mut Vec<String>, c: &Closed) {
     }
 }
 
+/// `d926`'s list, capped: the lines are there to be read in the turn the
+/// work ended, and a wall of them is not. The count says what was left out.
+const LEFT_OPEN_SHOWN: usize = 5;
+
+fn left_open_lines(out: &mut Vec<String>, left: &[LeftOpen]) {
+    if left.is_empty() {
+        return;
+    }
+    out.push("        findings still open, born under it or named in it:".to_string());
+    for f in left.iter().take(LEFT_OPEN_SHOWN) {
+        out.push(format!("          {:<6} {}", f.alias, f.title));
+    }
+    if left.len() > LEFT_OPEN_SHOWN {
+        out.push(format!(
+            "          ... and {} more",
+            left.len() - LEFT_OPEN_SHOWN
+        ));
+    }
+    out.push("        settled by this? close each:  vivac done <id> \"<how>\"".to_string());
+}
+
 /// The `Outcome` as plain text, the way the CLI has always printed it.
 ///
 /// A mirror of `brief::to_text`: the data is already final by the time it
@@ -420,8 +458,13 @@ pub fn to_text(o: &Outcome) -> String {
                 no_against_lines(&mut lines, alias);
             }
         }
-        Outcome::Popped { closed, parent } => {
+        Outcome::Popped {
+            closed,
+            parent,
+            left_open,
+        } => {
             closed_lines(&mut lines, closed);
+            left_open_lines(&mut lines, left_open);
             match parent {
                 Some(p) => {
                     lines.push(format!("  back to {}  {}", p.alias, p.title));
@@ -433,7 +476,10 @@ pub fn to_text(o: &Outcome) -> String {
                 None => lines.push("  empty stack".to_string()),
             }
         }
-        Outcome::Done { closed } => closed_lines(&mut lines, closed),
+        Outcome::Done { closed, left_open } => {
+            closed_lines(&mut lines, closed);
+            left_open_lines(&mut lines, left_open);
+        }
         Outcome::Added {
             alias,
             title,
@@ -545,6 +591,7 @@ pub fn to_text(o: &Outcome) -> String {
             superseded,
             no_alternatives,
             no_against,
+            left_open,
         } => {
             lines.push(format!("  {alias}  {title}"));
             if let Some(s) = superseded {
@@ -559,6 +606,7 @@ pub fn to_text(o: &Outcome) -> String {
             if *no_against {
                 no_against_lines(&mut lines, alias);
             }
+            left_open_lines(&mut lines, left_open);
         }
         Outcome::Declared { alias, against } => {
             for a in against {

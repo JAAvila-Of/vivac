@@ -1374,6 +1374,12 @@ pub fn pop(ctx: &mut Ctx, p: params::Pop) -> Result<Outcome, Failure> {
     // about to happen (`f910`), so without `--next` there is none.
     let next = p.next.as_deref().unwrap_or("");
     guard_text(&[("outcome", outcome_text), ("next", next)])?;
+    let left = left_open(
+        &ctx.tree,
+        Some(focus.num),
+        &focus.refs(&ctx.tree),
+        outcome_text,
+    );
     let v = vivac(ctx, VivacKind::Pop, next, Some(focus.id.clone()), "");
     // Trap: two separate `emit`s in a row, not one lot like `push` -- one
     // inside `close_node` (or one of the two bare branches below), one here
@@ -1421,7 +1427,48 @@ pub fn pop(ctx: &mut Ctx, p: params::Pop) -> Result<Outcome, Failure> {
         }),
         None => None,
     };
-    Ok(Outcome::Popped { closed, parent })
+    Ok(Outcome::Popped {
+        closed,
+        parent,
+        left_open: left,
+    })
+}
+
+/// `d926`: the findings still open that a close or a decision leaves
+/// behind -- born right under `num`, or named in `refs` or in the prose
+/// just written.
+///
+/// Opening a finding happens at a seam, and closing one happened at none:
+/// the work that fixed it usually named it -- 171 of the 388 closed by
+/// 29-sep-2026 were named by a decision or by another node's close before
+/// their own -- and nothing put it in front of anyone then (`q664`). So the
+/// seam that just fired shows them. It asks nothing and waits for nothing:
+/// ignored, the tree stays exactly as it was, which is what keeps this off
+/// the relevance judgement `r510` forbids.
+///
+/// Only words with a letter before the number count as names, the way an
+/// alias is written: a bare number in prose is a quantity far more often
+/// than a node. A parked finding is left out, since someone already said
+/// *not now* about it.
+fn left_open(tree: &Tree, num: Option<u64>, refs: &[&str], prose: &str) -> Vec<outcome::LeftOpen> {
+    let mut found: Vec<&Node> = num.map(|n| tree.children(n)).unwrap_or_default();
+    let words = prose.split(|c: char| !c.is_ascii_alphanumeric());
+    for w in refs.iter().copied().chain(words) {
+        let w = w.trim().trim_start_matches('#');
+        if w.starts_with(|c: char| c.is_ascii_alphabetic()) && looks_like_an_id(w) {
+            found.extend(tree.resolve(w));
+        }
+    }
+    found.retain(|n| n.kind == Kind::Finding && n.state == State::Active && Some(n.num) != num);
+    found.sort_by_key(|n| n.num);
+    found.dedup_by_key(|n| n.num);
+    found
+        .into_iter()
+        .map(|n| outcome::LeftOpen {
+            alias: n.alias(),
+            title: n.title(tree).to_string(),
+        })
+        .collect()
 }
 
 /// Whether a word is shaped like the name of a node.
@@ -1620,8 +1667,12 @@ pub fn done(ctx: &mut Ctx, p: params::Done) -> Result<Outcome, Failure> {
              vivac decide \"<what replaces it>\" --reason \"<why>\" --supersedes {alias}"
         )));
     }
+    let left = left_open(&ctx.tree, Some(n.num), &n.refs(&ctx.tree), &p.outcome);
     let closed = close_node(ctx, &n, &p.outcome, p.force, true)?;
-    Ok(Outcome::Done { closed })
+    Ok(Outcome::Done {
+        closed,
+        left_open: left,
+    })
 }
 
 /// `add` — a node without touching the stack. It is how a tree that already
@@ -2089,6 +2140,8 @@ pub fn decide(ctx: &mut Ctx, p: params::Decide) -> Result<Outcome, Failure> {
         }
     };
     let against = against_of(ctx, p.against, Kind::Decision)?;
+    let refs: Vec<&str> = p.refs.iter().map(String::as_str).collect();
+    let left = left_open(&ctx.tree, None, &refs, &p.reason);
     let (ev, num, _, no_against) = born(
         ctx,
         Born {
@@ -2122,6 +2175,7 @@ pub fn decide(ctx: &mut Ctx, p: params::Decide) -> Result<Outcome, Failure> {
         superseded: superseded.map(|v| outcome::SupersededNode { alias: v.alias() }),
         no_alternatives: p.alternatives.is_empty(),
         no_against,
+        left_open: left,
     })
 }
 

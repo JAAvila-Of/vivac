@@ -57,7 +57,7 @@ it read.
 | You say *not now*, *later*, *leave that* | the node, parked with your words; the next brief lists it under **DO NOT TOUCH NOW**, so the next session does not pick it up |
 | You say *not now, but check back on the 14th* | the same park, with `--until` naming the day; the brief keeps it under DO NOT TOUCH NOW until then and moves it to **BACK FROM PARKED** on its own, without anyone asking |
 | Something changes where git cannot see it: CI settings, a tracker, a cloud console | a note on the node it belongs to. The tree is the only record that change will ever have |
-| The work is done | the node closes with its outcome, and so does the one it returns to, if that settles it too |
+| The work is done | the node closes with its outcome, and so does the one it returns to, if that settles it too. The close, like a decision, lists the findings still open that were born under it or that it names, so one the work settled on the way gets closed then and not weeks later |
 
 The agent does all of it from the command line or over [MCP](SETUP.md#mcp),
 and both write the same events.
