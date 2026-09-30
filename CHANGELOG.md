@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.11](https://github.com/JAAvila-Of/vivac/compare/v0.17.10...v0.17.11) - 2026-09-30
+
+### Added
+
+- *(brief)* show each spine node's latest note or outcome ([#228](https://github.com/JAAvila-Of/vivac/pull/228))
+
+### Internal
+
+- check the subject a squash merge will write ([#226](https://github.com/JAAvila-Of/vivac/pull/226))
+
 ## [0.17.10](https://github.com/JAAvila-Of/vivac/compare/v0.17.9...v0.17.10) - 2026-09-30
 
 ### Added
