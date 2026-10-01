@@ -1031,6 +1031,92 @@ fn the_brief_says_the_branch_moved_and_where_that_branch_last_stopped() {
     );
 }
 
+/// `d976` (`f974`): the branch's last focus was closed after the lane left
+/// it. The line still says where the lane stopped there, marked closed, and
+/// `to resume` offers the nearest open node above it, which is where a pop
+/// would have left the stack -- never the closed one, which `vivac focus`
+/// refuses without `--reopen`.
+#[test]
+fn a_last_focus_closed_since_offers_the_nearest_open_node_above_it() {
+    let c = Sandbox::new_empty("branch-moved-closed");
+    let backend = c.0.join("backend");
+    commit_a_repo_on_branch(&backend, "feature/net10");
+    c.ok(&["init", "--yes"]);
+    c.ok(&["push", "First task", "--why", "seed"]);
+    c.ok(&["push", "Sub task", "--why", "seed"]);
+
+    git(&backend, &["checkout", "-q", "-b", "perf/sp"]);
+    c.ok(&["pop", "finished on the other branch"]);
+    git(&backend, &["checkout", "-q", "feature/net10"]);
+
+    let out = c.ok(&["brief"]);
+    assert_eq!(
+        branch_moved_block(&out),
+        vec![
+            " BRANCH MOVED since this lane last wrote",
+            "   backend   perf/sp -> feature/net10",
+            "   last focus on feature/net10:   t2   Sub task  [closed]",
+            "   to resume:  vivac focus g1   First task",
+        ],
+        "{out}"
+    );
+}
+
+/// `d976`: a parked last focus is offered no more than a closed one -- the
+/// same brief lists it under DO NOT TOUCH NOW.
+#[test]
+fn a_last_focus_parked_since_is_not_offered_to_go_back_to() {
+    let c = Sandbox::new_empty("branch-moved-parked");
+    let backend = c.0.join("backend");
+    commit_a_repo_on_branch(&backend, "feature/net10");
+    c.ok(&["init", "--yes"]);
+    c.ok(&["push", "First task", "--why", "seed"]);
+    c.ok(&["push", "Sub task", "--why", "seed"]);
+
+    git(&backend, &["checkout", "-q", "-b", "perf/sp"]);
+    c.ok(&["park", "not now"]);
+    git(&backend, &["checkout", "-q", "feature/net10"]);
+
+    let out = c.ok(&["brief"]);
+    assert_eq!(
+        branch_moved_block(&out),
+        vec![
+            " BRANCH MOVED since this lane last wrote",
+            "   backend   perf/sp -> feature/net10",
+            "   last focus on feature/net10:   t2   Sub task  [parked]",
+            "   to resume:  vivac focus g1   First task",
+        ],
+        "{out}"
+    );
+}
+
+/// `d976`: with nothing open left on the way up there is nowhere to resume,
+/// and `to resume` is left out, as it is when there is no candidate at all.
+#[test]
+fn a_last_focus_with_nothing_open_above_offers_nothing_to_go_back_to() {
+    let c = Sandbox::new_empty("branch-moved-all-closed");
+    let backend = c.0.join("backend");
+    commit_a_repo_on_branch(&backend, "feature/net10");
+    c.ok(&["init", "--yes"]);
+    c.ok(&["push", "First task", "--why", "seed"]);
+
+    git(&backend, &["checkout", "-q", "-b", "perf/sp"]);
+    c.ok(&["pop", "finished on the other branch"]);
+    git(&backend, &["checkout", "-q", "feature/net10"]);
+
+    let out = c.ok(&["brief"]);
+    assert_eq!(
+        branch_moved_block(&out),
+        vec![
+            " BRANCH MOVED since this lane last wrote",
+            "   backend   perf/sp -> feature/net10",
+            "   last focus on feature/net10:   g1   First task  [achieved]",
+        ],
+        "{out}"
+    );
+    assert!(!out.contains("to resume"), "{out}");
+}
+
 /// Once the lane's own `where.changed` matches the branch again, the notice
 /// is gone -- it compares against the last thing the lane wrote, not
 /// against history in general.
