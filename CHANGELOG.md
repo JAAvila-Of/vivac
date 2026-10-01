@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.21](https://github.com/JAAvila-Of/vivac/compare/v0.17.20...v0.17.21) - 2026-10-01
+
+### Fixed
+
+- *(store)* sync the directory after a rename on Windows too ([#248](https://github.com/JAAvila-Of/vivac/pull/248))
+
 ## [0.17.20](https://github.com/JAAvila-Of/vivac/compare/v0.17.19...v0.17.20) - 2026-10-01
 
 ### Fixed
