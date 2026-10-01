@@ -247,7 +247,8 @@ plain `why` keeps a node's newest three and counts the rest. `why --only` goes
 the other way: the node alone, for the next sibling once one `why` has
 brought the path they share. `check --gates` widens the
 invariants from this tree to every tree on the machine that nobody has opened,
-because a tree nobody opens is where an invariant goes to break quietly. And
+because a tree nobody opens is where an invariant goes to break quietly; one
+that keeps what it knows to itself is counted, not read. And
 `open --all` drops the cap, for the times you do want the whole wall.
 
 `find --everywhere` asks every project on the machine, grouped by the project

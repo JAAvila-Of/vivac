@@ -257,8 +257,9 @@ and nobody has asked for it.
 
 **A project can keep what it knows to itself.** Work for one client has no
 business turning up in the session of another's. `vivac share off`, run in
-that project, closes it: from every other project, `find --everywhere` and
-`vivac_find` leave it out and say only how many they left out, and
+that project, closes it: from every other project, `find --everywhere`,
+`vivac_find` and `check --gates` leave it out and say only how many they left
+out, and
 `--project` and `vivac_why` refuse to open it. From inside the project itself
 nothing changes. Projects start open; `init` says so when it plants a tree.
 
