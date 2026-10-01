@@ -1366,7 +1366,7 @@ fn setup_refuses_when_the_trees_own_vivac_is_the_global_store() {
 /// copy an earlier vivac wrote; these fixtures are what those copies actually
 /// looked like. The ones from v0.11.0 on are byte for byte the copies those
 /// releases wrote into real projects.
-const EARLIER_RELEASE_SKILLS: [(&str, &str); 8] = [
+const EARLIER_RELEASE_SKILLS: [(&str, &str); 9] = [
     ("v0.10.0", include_str!("data/skill-v0.10.0.md")),
     ("v0.11.0", include_str!("data/skill-v0.11.0.md")),
     ("v0.11.1", include_str!("data/skill-v0.11.1.md")),
@@ -1375,6 +1375,7 @@ const EARLIER_RELEASE_SKILLS: [(&str, &str); 8] = [
     ("v0.15.2", include_str!("data/skill-v0.15.2.md")),
     ("v0.15.4", include_str!("data/skill-v0.15.4.md")),
     ("v0.15.5", include_str!("data/skill-v0.15.5.md")),
+    ("v0.15.10", include_str!("data/skill-v0.15.10.md")),
 ];
 
 #[test]
@@ -1594,7 +1595,7 @@ fn written_part(out: &str) -> &str {
 // follow it -- both moved to `init` with the rest of the tree's own
 // writes. Captured from a real run rather than hand-edited from the
 // pre-piece-B text, the same discipline this section always held itself to.
-const WRITTEN_MESSAGE: &str = "Written.\n\nOpen a new Claude Code session in this folder. The brief arrives on its own when it starts. If Claude Code asks whether to use the \"vivac\" server from .mcp.json, say yes: it is what lets the agent write to the tree.\n\nThe hooks, the server and the skill are plain files in this project: commit them if everyone who works here uses vivac, and keep them out of version control if only you do. .vivac/ is never committed: it is this machine's record, and a copy of it in every clone would diverge from the others. Its own .gitignore keeps it out.\n\nUndo: vivac setup claude-code --undo\n\nNext: bring in what this project already knows. Ask the agent:\n\n  Use the vivac-migrate skill to bring everything this project knows into vivac.\n\nIt shows you a plan before writing anything, checks what it wrote, and offers to retire the other maps one at a time, only if you say yes.\n\nUntil then, another memory system you use keeps talking to the agent as before, and may tell it to use that system first. That is expected: the skill only reads from it.\n";
+const WRITTEN_MESSAGE: &str = "Written.\n\nOpen a new Claude Code session in this folder. The brief arrives on its own when it starts. If Claude Code asks whether to use the \"vivac\" server from .mcp.json, say yes: it is what lets the agent write to the tree.\n\nThe hooks, the server and the skill are plain files in this project: commit them if everyone who works here uses vivac, and keep them out of version control if only you do. .vivac/ is never committed: it is this machine's record, and a copy of it in every clone would diverge from the others. Its own .gitignore keeps it out.\n\nUndo: vivac setup claude-code --undo\n\nNext: bring in what this project already knows. Ask the agent:\n\n  Use the vivac-migrate skill to bring everything this project knows into vivac.\n\nIt shows you a plan before writing anything, checks what it wrote, and offers to retire the other maps one at a time, only if you say yes.\n\nUntil then, another memory system you use keeps talking to the agent as before, and may tell it to use that system first. That is expected: the skill only reads from it. Ask for it even when this project is new and has nothing to bring in: turning that system off here is the skill's job too.\n";
 
 #[test]
 fn a_fresh_setup_prints_the_written_message_verbatim() {
@@ -1610,7 +1611,7 @@ fn a_fresh_setup_prints_the_written_message_verbatim() {
 // `init --join`'s alone.
 
 /// (c): only the skill, which is what an upgrade writes.
-const SKILL_REPLACED_MESSAGE: &str = "Written.\n\nThe vivac-migrate skill is now the one this version of vivac ships. Sessions opened from now on use it.\n\nThe hooks, the server and the skill are plain files in this project: commit them if everyone who works here uses vivac, and keep them out of version control if only you do. .vivac/ is never committed: it is this machine's record, and a copy of it in every clone would diverge from the others. Its own .gitignore keeps it out.\n\nNext: bring in what this project already knows. Ask the agent:\n\n  Use the vivac-migrate skill to bring everything this project knows into vivac.\n\nIt shows you a plan before writing anything, checks what it wrote, and offers to retire the other maps one at a time, only if you say yes.\n\nUntil then, another memory system you use keeps talking to the agent as before, and may tell it to use that system first. That is expected: the skill only reads from it.\n";
+const SKILL_REPLACED_MESSAGE: &str = "Written.\n\nThe vivac-migrate skill is now the one this version of vivac ships. Sessions opened from now on use it.\n\nThe hooks, the server and the skill are plain files in this project: commit them if everyone who works here uses vivac, and keep them out of version control if only you do. .vivac/ is never committed: it is this machine's record, and a copy of it in every clone would diverge from the others. Its own .gitignore keeps it out.\n\nNext: bring in what this project already knows. Ask the agent:\n\n  Use the vivac-migrate skill to bring everything this project knows into vivac.\n\nIt shows you a plan before writing anything, checks what it wrote, and offers to retire the other maps one at a time, only if you say yes.\n\nUntil then, another memory system you use keeps talking to the agent as before, and may tell it to use that system first. That is expected: the skill only reads from it. Ask for it even when this project is new and has nothing to bring in: turning that system off here is the skill's job too.\n";
 
 /// (d): only the server. `--undo` would take the hooks and the skill as
 /// well, so it is not offered.
@@ -1619,7 +1620,7 @@ const SKILL_REPLACED_MESSAGE: &str = "Written.\n\nThe vivac-migrate skill is now
 /// session paragraph only when the server is the one piece this run adds
 /// and the tree already holds work. This tree holds none, so the message
 /// carries no such paragraph.
-const SERVER_ADDED_MESSAGE: &str = "Written.\n\nOpen a new Claude Code session in this folder. The brief arrives on its own when it starts. If Claude Code asks whether to use the \"vivac\" server from .mcp.json, say yes: it is what lets the agent write to the tree.\n\nThe hooks, the server and the skill are plain files in this project: commit them if everyone who works here uses vivac, and keep them out of version control if only you do. .vivac/ is never committed: it is this machine's record, and a copy of it in every clone would diverge from the others. Its own .gitignore keeps it out.\n\nNext: bring in what this project already knows. Ask the agent:\n\n  Use the vivac-migrate skill to bring everything this project knows into vivac.\n\nIt shows you a plan before writing anything, checks what it wrote, and offers to retire the other maps one at a time, only if you say yes.\n\nUntil then, another memory system you use keeps talking to the agent as before, and may tell it to use that system first. That is expected: the skill only reads from it.\n";
+const SERVER_ADDED_MESSAGE: &str = "Written.\n\nOpen a new Claude Code session in this folder. The brief arrives on its own when it starts. If Claude Code asks whether to use the \"vivac\" server from .mcp.json, say yes: it is what lets the agent write to the tree.\n\nThe hooks, the server and the skill are plain files in this project: commit them if everyone who works here uses vivac, and keep them out of version control if only you do. .vivac/ is never committed: it is this machine's record, and a copy of it in every clone would diverge from the others. Its own .gitignore keeps it out.\n\nNext: bring in what this project already knows. Ask the agent:\n\n  Use the vivac-migrate skill to bring everything this project knows into vivac.\n\nIt shows you a plan before writing anything, checks what it wrote, and offers to retire the other maps one at a time, only if you say yes.\n\nUntil then, another memory system you use keeps talking to the agent as before, and may tell it to use that system first. That is expected: the skill only reads from it. Ask for it even when this project is new and has nothing to bring in: turning that system off here is the skill's job too.\n";
 
 // (e) used to live here: a run that only plants the tree. `d723` piece B
 // removed it -- `setup` never plants, so there is no "only the tree" case

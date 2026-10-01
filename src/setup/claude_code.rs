@@ -1097,7 +1097,10 @@ fn migrate_next_heading() -> String {
     )
 }
 
-/// Nothing in the whole tree has captured anything yet.
+/// Nothing in the whole tree has captured anything yet. `d970`: that is
+/// also a project that starts out with vivac and has nothing to bring in,
+/// whose person skipped the skill and with it the only step that turns the
+/// other system off, so the last sentence says the skill is for them too.
 fn migrate_next_block() -> String {
     format!(
         "{}\n\n{}\n\n{}\n",
@@ -1106,7 +1109,8 @@ fn migrate_next_block() -> String {
          to retire the other maps one at a time, only if you say yes.",
         "Until then, another memory system you use keeps talking to the agent as before, \
          and may tell it to use that system first. That is expected: the skill only reads \
-         from it."
+         from it. Ask for it even when this project is new and has nothing to bring in: \
+         turning that system off here is the skill's job too."
     )
 }
 
@@ -1597,10 +1601,10 @@ mod tests {
         // Computed independently (Python's own FNV-1a/64) over the exact
         // frontmatter and body this file embeds. It moves whenever the
         // skill's text does, and moving it is meant to be deliberate: the
-        // last time was `d850`, which migrates a lesson as a record that
-        // keeps its mechanism instead of a rule, after a migration turned
-        // 296 of 303 lessons into rules and a quarter of them left no trace.
-        assert_eq!(skill_fingerprint(), 0x1208cad7c6c7671d);
+        // last time was `d970`, which sends a project with nothing to bring
+        // in straight to retiring the other maps, after one that started out
+        // with vivac never ran the skill and its memory tool kept talking.
+        assert_eq!(skill_fingerprint(), 0x577cb058da2ab1d8);
     }
 
     #[test]

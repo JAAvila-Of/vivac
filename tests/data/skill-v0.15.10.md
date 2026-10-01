@@ -1,3 +1,8 @@
+---
+name: vivac-migrate
+description: Bring everything a project already knows into the vivac tree, from another memory system, the harness's own memory, instruction files for any agent, decision records and internal documents; check it, and retire the other maps with the person's yes. Use when asked to migrate, import or move memories, notes, rules, decisions or documentation into vivac, or to bring what a project knows into it.
+---
+<!-- written by vivac setup; fingerprint 1208cad7c6c7671d; setup removes it with --undo while the text is unchanged -->
 
 # Bringing what a project knows into vivac
 
@@ -124,12 +129,6 @@ it and comparing it with the rest, then bringing in what the others do not
 say; it does not mean leaving it for later. If a source is not finished when
 the batch ends, say so in the plan and in the summary, with how much of it is
 left.
-
-If there is nothing to bring in, because nothing turned up or the person picks
-none of it, as in a project that starts out with vivac, say so and go straight
-to step 6. The other maps you found still reach every session here, and
-retiring them is the part of this page such a project needs. If you found no
-other map either, say that too, and you are done.
 
 ## 2. Look at the tree
 
@@ -276,8 +275,7 @@ on, and say in the summary that this check was not made.
 
 ## 6. Retire the other maps
 
-Start this only when step 5 has passed, the person's own search included, or
-when step 1 ended with nothing to bring in.
+Start this only when step 5 has passed, the person's own search included.
 
 Two maps collide: each one points the agent at what it holds, and sooner or
 later one settles something the other mapped differently. For each map you
