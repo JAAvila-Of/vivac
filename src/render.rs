@@ -17,11 +17,13 @@ use crate::failure::{Failure, R};
 use crate::model::{Aggregates, Node, Tree, Vivac, Where};
 use crate::output::outln;
 use crate::style::{self, Stream};
+use crate::width::{pad, width as columns};
 use serde_json::json;
 use std::collections::HashMap;
 use std::path::Path;
 use unicode_normalization::char::canonical_combining_class;
 use unicode_normalization::UnicodeNormalization;
+use unicode_segmentation::UnicodeSegmentation;
 
 pub(crate) const WIDTH: usize = 62;
 
@@ -45,7 +47,7 @@ pub(crate) fn wrap(text: &str, width: usize, indent: &str) -> Vec<String> {
     let mut lines = Vec::new();
     let mut cur = String::new();
     for p in text.split_whitespace() {
-        if !cur.is_empty() && cur.chars().count() + 1 + p.chars().count() > width {
+        if !cur.is_empty() && columns(&cur) + 1 + columns(p) > width {
             lines.push(format!("{indent}{cur}"));
             cur = p.to_string();
         } else {
@@ -128,7 +130,7 @@ pub(crate) fn print_title_row(
     let suffix_own_line = match cap {
         None => false,
         Some(w) => {
-            let last_len = chunks.last().unwrap().chars().count();
+            let last_len = columns(chunks.last().unwrap());
             !suffix.text.is_empty() && lead + last_len + suffix.len > w
         }
     };
@@ -1010,7 +1012,7 @@ pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
             " ".repeat(6usize.saturating_sub(alias.chars().count()))
         );
         let suffix = state_suffix_styled(out, p);
-        let suffix_len = state_suffix(p).chars().count();
+        let suffix_len = columns(&state_suffix(p));
         print_title_row(
             &format!("  {alias_field}"),
             &" ".repeat(8),
@@ -1059,7 +1061,7 @@ pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
             for (at, text) in &notes[earlier..] {
                 let date = crate::clock::date_of(at);
                 let prefix = format!("! [{date}] ");
-                let prefix_len = prefix.chars().count();
+                let prefix_len = columns(&prefix);
                 for (li, l) in wrap(
                     &format!("{prefix}{}", body(text, prefix_len)),
                     WIDTH,
@@ -1085,7 +1087,7 @@ pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
             let note = p.note(a);
             let prefix = "! ";
             for (li, l) in wrap(
-                &format!("{prefix}{}", body(note, prefix.chars().count())),
+                &format!("{prefix}{}", body(note, columns(prefix))),
                 WIDTH,
                 "        ",
             )
@@ -1110,7 +1112,7 @@ pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
         let outcome = p.outcome(a);
         let prefix = "= ";
         for (li, l) in wrap(
-            &format!("{prefix}{}", body(outcome, prefix.chars().count())),
+            &format!("{prefix}{}", body(outcome, columns(prefix))),
             WIDTH,
             "        ",
         )
@@ -1317,7 +1319,7 @@ fn branch(a: &Tree, ag: &Aggregates, n: &Node, prefix: &str, is_last: bool, show
     // blocks marker. `15` is `connector`'s own four columns plus
     // `[X] ` (four) plus the alias field's trailing space (one), plus the
     // six the alias itself always takes.
-    let lead = prefix.chars().count() + 15 + blocks_marker.chars().count();
+    let lead = columns(prefix) + 15 + columns(blocks_marker);
     let alias_field = format!(
         "{}{}",
         style::kind_id(out, n.kind, &alias),
@@ -1338,7 +1340,7 @@ fn branch(a: &Tree, ag: &Aggregates, n: &Node, prefix: &str, is_last: bool, show
         .collect();
     let cont_char = if children.is_empty() { " " } else { "|" };
     let cont_prefix = style::dim(out, &format!("{sig}{cont_char}"));
-    let cont_pad = " ".repeat(10 + blocks_marker.chars().count());
+    let cont_pad = " ".repeat(10 + columns(blocks_marker));
     let cont_line = format!("{cont_prefix}{cont_pad}");
 
     print_title_row(
@@ -1356,7 +1358,7 @@ fn branch(a: &Tree, ag: &Aggregates, n: &Node, prefix: &str, is_last: bool, show
         },
         TitleSuffix {
             text: &tail_styled,
-            len: tail_plain.chars().count(),
+            len: columns(&tail_plain),
         },
     );
 
@@ -2003,10 +2005,10 @@ pub fn triage(a: &Tree, args: &Args) -> R {
         for (n, d) in &deep {
             let alias = n.alias();
             outln!(
-                "    {}{} {:<40} depth {d}",
+                "    {}{} {} depth {d}",
                 style::kind_id(out, n.kind, &alias),
                 " ".repeat(6usize.saturating_sub(alias.chars().count())),
-                clip(n.title(a), 40)
+                pad(&clip(n.title(a), 40), 40)
             );
             // The lineage starts where the number does. Drawing it from the
             // root beside a distance to the goal would say two things at once.
@@ -2070,7 +2072,7 @@ pub fn triage(a: &Tree, args: &Args) -> R {
                 "    {}{} {} {}",
                 style::kind_id(out, n.kind, &alias),
                 " ".repeat(6usize.saturating_sub(alias.chars().count())),
-                style::dim(out, &format!("{:<40}", clip(n.title(a), 40))),
+                style::dim(out, &pad(&clip(n.title(a), 40), 40)),
                 style::bold(
                     out,
                     &style::gone(out, &format!("{} blocker(s)", ag.blockers(n.num)))
@@ -2089,8 +2091,8 @@ pub fn triage(a: &Tree, args: &Args) -> R {
 /// toward it.
 fn print_triage_heading(out: Stream, label: &str, hint: &str) {
     let left = format!("  {label}");
-    let pad = " ".repeat(36usize.saturating_sub(left.chars().count()));
-    outln!("{}{pad}{}", style::bold(out, &left), style::dim(out, hint));
+    let gap = " ".repeat(36usize.saturating_sub(columns(&left)));
+    outln!("{}{gap}{}", style::bold(out, &left), style::dim(out, hint));
 }
 
 /// `parked` — DO NOT TOUCH NOW. It is the section no other tool emits: every
@@ -2330,7 +2332,7 @@ pub fn stack(a: &Tree, root: &Path, args: &Args) -> R {
     for (i, n) in stack.iter().enumerate() {
         let is_focus = i == stack.len() - 1;
         let margin = format!("  {}", "  ".repeat(i));
-        let lead = margin.chars().count() + 7;
+        let lead = columns(&margin) + 7;
         let alias = n.alias();
         let alias_field = format!(
             "{}{}",
@@ -2352,7 +2354,7 @@ pub fn stack(a: &Tree, root: &Path, args: &Args) -> R {
             |chunk| chunk.to_string(),
             TitleSuffix {
                 text: &suffix_styled,
-                len: suffix_plain.chars().count(),
+                len: columns(suffix_plain),
             },
         );
     }
@@ -2456,15 +2458,15 @@ fn stack_lanes(a: &Tree, root: &Path, args: &Args, ag: &Aggregates) -> R {
                     " ".repeat(6usize.saturating_sub(alias.chars().count()))
                 );
                 outln!(
-                    "  {:<11} {alias_field} {:<45} {}{tail}",
-                    r.name,
-                    focus.title(a),
+                    "  {} {alias_field} {} {}{tail}",
+                    pad(r.name, 11),
+                    pad(focus.title(a), 45),
                     crate::clock::date_of(focus.opened(a))
                 )
             }
             None => outln!(
-                "  {:<11} {}{tail}",
-                r.name,
+                "  {} {}{tail}",
+                pad(r.name, 11),
                 style::dim(out, "(nothing pushed yet)")
             ),
         }
@@ -2607,9 +2609,7 @@ pub fn vivacs(a: &Tree, args: &Args) -> R {
         // Measured on the plain fields, never on `style::bold`'s own
         // escape codes: the same rule every wrapped row in this file
         // follows so a line that wraps still wraps at the right column.
-        let plain_prefix_len = format!("  {alias_field} {kind_field} {date}  ")
-            .chars()
-            .count();
+        let plain_prefix_len = columns(&format!("  {alias_field} {kind_field} {date}  "));
         let styled_prefix = format!("  {} {kind_field} {date}  ", style::bold(out, &alias_field));
         match v.stack.last() {
             Some((focus_alias, focus_title)) => {
@@ -2631,7 +2631,7 @@ pub fn vivacs(a: &Tree, args: &Args) -> R {
         }
         if !v.next_intent.is_empty() {
             const INTENT_PREFIX: &str = "you were about to: ";
-            let lead = 11 + INTENT_PREFIX.chars().count();
+            let lead = 11 + columns(INTENT_PREFIX);
             print_title_row(
                 &format!("           {}", style::dim(out, INTENT_PREFIX)),
                 &" ".repeat(lead),
@@ -2814,35 +2814,62 @@ fn fold_segment(
     }
 }
 
-/// A window of `width` characters around the first term that hit.
+/// A window of `width` columns around the first term that hit.
 ///
 /// The offsets come out of the folded copy `fold_with_origin` builds, and
 /// folding can change how many bytes --and even how many characters-- a
 /// string takes, so the map back to the original travels with it rather
 /// than being assumed. A snippet that lands two characters off is not a
 /// defect worth a wrong answer.
+///
+/// The window is made of whole grapheme clusters and measured in the
+/// columns they take (`f443`): a cut never parts an accent from its letter
+/// or leaves half a flag, and a line of Chinese is not twice as wide as a
+/// line of Latin. A blank cluster counts as one column, whatever it holds:
+/// `\r\n` is a single cluster, and a newline has no width to measure.
 fn snippet(text: &str, terms: &[String], width: usize) -> String {
-    let chars: Vec<char> = text.chars().collect();
-    if chars.len() <= width {
+    let clusters: Vec<&str> = text.graphemes(true).collect();
+    let blank = |c: &str| c.starts_with(char::is_whitespace);
+    // `col[i]` is the columns taken by every cluster before cluster `i`.
+    let mut col = Vec::with_capacity(clusters.len() + 1);
+    col.push(0);
+    for c in &clusters {
+        let taken = if blank(c) { 1 } else { columns(c) };
+        col.push(col[col.len() - 1] + taken);
+    }
+    let total = col[clusters.len()];
+    if total <= width {
         return text.split_whitespace().collect::<Vec<_>>().join(" ");
     }
     let (lower, origin) = fold_with_origin(text);
-    let at = terms
+    let hit = terms
         .iter()
         .filter_map(|t| lower.find(t.as_str()))
         .min()
         .map(|b| origin[b])
         .unwrap_or(0);
-    let end = (at + width * 2 / 3).clamp(width, chars.len());
-    let start = end - width;
+    // The cluster that holds the character the hit starts on.
+    let mut chars_before = 0;
+    let at = clusters
+        .iter()
+        .position(|c| {
+            chars_before += c.chars().count();
+            chars_before > hit
+        })
+        .unwrap_or(clusters.len() - 1);
+    let end_col = (col[at] + width * 2 / 3).clamp(width, total);
+    // The last boundary at or before `end_col`, and the first one that
+    // keeps the window within `width` columns of it.
+    let end = col.partition_point(|&c| c <= end_col) - 1;
+    let start = col.partition_point(|&c| c + width < col[end]);
     // `f716`: a raw offset usually lands inside a word on both sides.
     // `start` moves forward to the next boundary and `end` moves back to
     // the previous one, but neither is allowed to lose the hit that picked
     // this window in the first place: `start` never passes `at`, and `end`
     // never drops below `at + 1`. Where no boundary sits in that room, the
     // side stays at its raw cut -- a split word beats an empty window.
-    let is_start = |i: usize| i == 0 || chars[i - 1].is_whitespace();
-    let is_end = |i: usize| i == chars.len() || chars[i].is_whitespace();
+    let is_start = |i: usize| i == 0 || blank(clusters[i - 1]);
+    let is_end = |i: usize| i == clusters.len() || blank(clusters[i]);
     let mut s = start;
     while s < at && !is_start(s) {
         s += 1;
@@ -2857,8 +2884,8 @@ fn snippet(text: &str, terms: &[String], width: usize) -> String {
     if start > 0 {
         out.push_str("...");
     }
-    out.extend(chars[start..end].iter());
-    if end < chars.len() {
+    out.extend(clusters[start..end].iter().copied());
+    if end < clusters.len() {
         out.push_str("...");
     }
     out.split_whitespace().collect::<Vec<_>>().join(" ")

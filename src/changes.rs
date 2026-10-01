@@ -21,6 +21,7 @@ use crate::model::{Node, Tree, Vivac};
 use crate::output::outln;
 use crate::render::{print_json, print_title_row, wrap, TitleSuffix, WIDTH};
 use crate::style::{self, Stream};
+use crate::width::width as columns;
 use serde_json::json;
 
 /// Where a stretch is measured from, and how that place was chosen. Both live
@@ -439,7 +440,7 @@ fn print_changes_row(out: Stream, tree: &Tree, n: &Node, lane: &str, cap: Option
     } else {
         style::dim(out, &mark)
     };
-    let lead = 11 + mark.chars().count();
+    let lead = 11 + columns(&mark);
     let closed = n.state != State::Active;
     print_title_row(
         &format!("    {alias_field} {mark_styled}"),

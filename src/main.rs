@@ -43,6 +43,7 @@ mod store;
 mod style;
 mod update;
 mod web;
+mod width;
 
 use args::Args;
 use failure::Failure;

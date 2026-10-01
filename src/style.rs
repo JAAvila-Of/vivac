@@ -387,7 +387,7 @@ pub fn wrap_title(lead: usize, text: &str, width: usize) -> Vec<String> {
     let mut cur = String::new();
     for word in text.split_whitespace() {
         let extra = usize::from(!cur.is_empty());
-        if !cur.is_empty() && cur.chars().count() + extra + word.chars().count() > room {
+        if !cur.is_empty() && crate::width::width(&cur) + extra + crate::width::width(word) > room {
             lines.push(std::mem::take(&mut cur));
         } else if !cur.is_empty() {
             cur.push(' ');
