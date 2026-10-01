@@ -96,6 +96,17 @@ fn block(n: u64, alias: &str) -> String {
     )
 }
 
+/// The same reminder as [`block`], as it reads over MCP (`d964`): the moves
+/// are tools there, not commands.
+fn tools_block(n: u64, alias: &str) -> String {
+    format!(
+        "  {n} notes in a row on {alias} with nothing filed under it.\n  \
+         A finding, a choice or something left to do is a node, not a note:\n    \
+         vivac_add  title, type: finding or task, parent: {alias}\n    \
+         vivac_decide  title, reason, parent: {alias}"
+    )
+}
+
 fn note(c: &Sandbox, alias: &str) -> String {
     c.ok(&["note", alias, "how it went"])
 }
@@ -221,7 +232,7 @@ fn the_note_that_makes_eight_over_mcp_carries_the_block() {
     assert_eq!(r["result"]["isError"], false, "{r}");
     let t = written_text(&r);
     assert!(
-        t.contains(&format!("  g1 noted\n{}", block(8, "g1"))),
+        t.contains(&format!("  g1 noted\n{}", tools_block(8, "g1"))),
         "{t}"
     );
 }
@@ -301,14 +312,14 @@ fn a_title_that_is_the_id_of_a_node_is_refused_over_mcp() {
 fn the_seams_block_carries_the_new_head_and_hints() {
     let c = Sandbox::new_seeded("nn-seams");
     let (plain, _) = c.run_stdin(&["session", "start", "--hook"], "{}");
-    let head = "  Look first: vivac find \"<words>\". Work the tree already holds is never\n  opened twice: what you find, settle or leave to do while on it is a node\n  under it, not a note.";
+    let head = "  Look first: vivac_find \"<words>\". Work the tree already holds is never\n  opened twice: what you find, settle or leave to do while on it is a node\n  under it, not a note.";
     assert!(plain.contains(head), "{plain}");
     assert!(!plain.contains("focus above"), "{plain}");
     c.ok(&["push", "A goal", "--why", "it is needed"]);
     let (focused, _) = c.run_stdin(&["session", "start", "--hook"], "{}");
     assert!(
         focused.contains(
-            "  Look first: vivac find \"<words>\". Work the tree already holds is never
+            "  Look first: vivac_find \"<words>\". Work the tree already holds is never
   opened twice: what you find, settle or leave to do while on it is a node
   under it, not a note. The focus above is where work was left, maybe not
   by you: hang new work from what it continues.
@@ -318,7 +329,7 @@ fn the_seams_block_carries_the_new_head_and_hints() {
     );
     assert!(
         focused.contains(
-            "  a choice is settled  vivac decide \"<t>\" --reason \"<r>\" --alternative \"<x>\"\n                       yours or the person's\n"
+            "  a choice is settled  vivac_decide  title, reason, alternative\n                       yours or the person's\n"
         ),
         "{focused}"
     );

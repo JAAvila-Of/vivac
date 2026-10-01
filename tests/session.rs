@@ -539,7 +539,7 @@ fn a_real_session_identifier_passes_through_untouched() {
 /// every line included, none over the 76-column ceiling that
 /// `capture_seams_lines_never_widen_past_76_columns`, below, checks against
 /// the real rendering rather than against this constant.
-const CAPTURE_SEAMS_BLOCK: &str = "\n WRITE AT THESE SEAMS\n  Look first: vivac find \"<words>\". Work the tree already holds is never\n  opened twice: what you find, settle or leave to do while on it is a node\n  under it, not a note. The focus above is where work was left, maybe not\n  by you: hang new work from what it continues.\n  With --everywhere it looks in the person's other projects too: say which\n  one anything you use comes from, and show it to them before applying it.\n  Write before you answer: what you tell the person goes in the tree first.\n  new line of work     vivac push \"<title>\" --why \"<why>\" --parent <id>\n                       or --root, when it continues nothing in the tree\n  a choice is settled  vivac decide \"<t>\" --reason \"<r>\" --alternative \"<x>\"\n                       yours or the person's\n  you report findings  vivac add \"<t>\" --type finding --why \"<where>\"\n                       as you tell the person, one for each thing found\n                       asks nothing? close it: vivac done <id> \"Record: ...\"\n  told \"not now\"       vivac park <id> \"<their words>\"\n                       nothing to park yet? vivac add it, then park it\n  changed outside git  vivac note <id> \"<what changed, where>\"\n                       CI, a tracker, the cloud: the tree is its only record\n                       never a finding, a choice or something left to do\n  the work is done     vivac pop \"<outcome>\"\n                       and again if that settles the node it returns to\n  Or the same moves through the vivac_* tools.\n";
+const CAPTURE_SEAMS_BLOCK: &str = "\n WRITE AT THESE SEAMS\n  Look first: vivac_find \"<words>\". Work the tree already holds is never\n  opened twice: what you find, settle or leave to do while on it is a node\n  under it, not a note. The focus above is where work was left, maybe not\n  by you: hang new work from what it continues.\n  With everywhere set it looks in the person's other projects too: say which\n  one anything you use comes from, and show it to them before applying it.\n  Write before you answer: what you tell the person goes in the tree first.\n  new line of work     vivac_push  title, why, parent\n                       or root, when it continues nothing in the tree\n  a choice is settled  vivac_decide  title, reason, alternative\n                       yours or the person's\n  you report findings  vivac_add  title, type: finding, why\n                       as you tell the person, one for each thing found\n                       asks nothing? vivac_done it, outcome \"Record: ...\"\n  told \"not now\"       vivac_park  id, reason: their words\n                       nothing to park yet? vivac_add it, then park it\n  changed outside git  vivac_note  id, note: what changed, where\n                       CI, a tracker, the cloud: the tree is its only record\n                       never a finding, a choice or something left to do\n  the work is done     vivac_pop  outcome\n                       and again if that settles the node it returns to\n  The tools may arrive by name only: load them before the first write.\n  In Claude Code: ToolSearch \"select:mcp__vivac__vivac_find,mcp__vivac__vivac_push,mcp__vivac__vivac_decide,mcp__vivac__vivac_add,mcp__vivac__vivac_done,mcp__vivac__vivac_park,mcp__vivac__vivac_note,mcp__vivac__vivac_pop\"\n  Without the tools, each move is a command: vivac push, vivac decide...\n";
 
 /// Test (a): the hook's own brief carries the block, exactly. With a focus:
 /// the block's head speaks of the focus above, and `f912` keeps that
@@ -576,7 +576,7 @@ fn with_no_focus_the_capture_seams_leave_out_the_focus_above() {
         !s.contains("focus above"),
         "a brief with no focus spoke of the focus above:\n{s}"
     );
-    let head = "\n WRITE AT THESE SEAMS\n  Look first: vivac find \"<words>\". Work the tree already holds is never\n  opened twice: what you find, settle or leave to do while on it is a node\n  under it, not a note.\n  With --everywhere it looks in the person's other projects too: say which\n  one anything you use comes from, and show it to them before applying it.\n  Write before you answer: what you tell the person goes in the tree first.\n  new line of work     vivac push";
+    let head = "\n WRITE AT THESE SEAMS\n  Look first: vivac_find \"<words>\". Work the tree already holds is never\n  opened twice: what you find, settle or leave to do while on it is a node\n  under it, not a note.\n  With everywhere set it looks in the person's other projects too: say which\n  one anything you use comes from, and show it to them before applying it.\n  Write before you answer: what you tell the person goes in the tree first.\n";
     assert!(
         s.contains(head),
         "the head without its focus sentence is not the approved text:\n{s}"
@@ -598,6 +598,41 @@ fn a_person_running_session_start_without_hook_gets_no_capture_seams() {
     );
 }
 
+/// `d964`, `f963`: the hook brief speaks the tools, says how to load them
+/// when they arrive by name only, and keeps the commands as the fallback.
+#[test]
+fn the_hook_brief_shows_the_tools_and_how_to_load_them() {
+    let c = Sandbox::new_seeded("capture-seams-tools");
+    c.ok(&["push", "A goal", "--why", "it is needed"]);
+    let (s, code) = c.run_stdin(&["session", "start", "--hook"], "{}");
+    assert_eq!(code, 0, "{s}");
+    assert!(s.contains("vivac_push  title, why, parent"), "{s}");
+    let names = "ToolSearch \"select:mcp__vivac__vivac_find,mcp__vivac__vivac_push,\
+                  mcp__vivac__vivac_decide,mcp__vivac__vivac_add,mcp__vivac__vivac_done,\
+                  mcp__vivac__vivac_park,mcp__vivac__vivac_note,mcp__vivac__vivac_pop\"";
+    assert!(s.contains(names), "{s}");
+    assert!(
+        s.contains("Without the tools, each move is a command"),
+        "{s}"
+    );
+    assert!(
+        !s.lines()
+            .any(|l| l.starts_with("  new line of work     vivac push")),
+        "the hook brief still shows the command form:\n{s}"
+    );
+}
+
+/// `d964`: the person's own view never had the block, and the tool-loading
+/// line is for the agent alone.
+#[test]
+fn a_brief_read_in_a_terminal_still_has_no_seams() {
+    let c = Sandbox::new_seeded("capture-seams-terminal");
+    c.ok(&["push", "A goal", "--why", "it is needed"]);
+    let out = c.ok(&["brief"]);
+    assert!(!out.contains("WRITE AT THESE SEAMS"), "{out}");
+    assert!(!out.contains("ToolSearch"), "{out}");
+}
+
 /// Test (f): no line of the block, as actually rendered, is wider than 76
 /// columns. Read off `s` itself rather than off [`CAPTURE_SEAMS_BLOCK`], so
 /// a row that grows without anyone updating that constant still gets
@@ -612,13 +647,24 @@ fn capture_seams_lines_never_widen_past_76_columns() {
         .expect("no capture-seams heading in the hook brief");
     let block = &s[start..];
     let end = block.find("\n\n").unwrap_or(block.len());
+    let mut skipped = 0;
     for line in block[..end].lines() {
+        // `d964`: the one line that is a literal to be copied whole; wrapping
+        // it would break the very string the agent has to pass.
+        if line.starts_with("  In Claude Code: ToolSearch \"select:") {
+            skipped += 1;
+            continue;
+        }
         assert!(
             line.chars().count() <= 76,
             "a capture-seams line is wider than 76 columns ({} chars): {line:?}",
             line.chars().count()
         );
     }
+    assert_eq!(
+        skipped, 1,
+        "the exempted line is not there exactly once:\n{s}"
+    );
 }
 
 /// A command line, split the way a shell would: whitespace-separated,
