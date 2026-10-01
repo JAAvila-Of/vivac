@@ -148,10 +148,85 @@ fn gates_prints_the_advice_that_closes_the_section() {
     let (s, _) = c.run(&["check", "--gates"]);
 
     assert!(
-        s.contains("A tree nobody opens is a tree nobody reads. Run  vivac hooks  inside"),
+        s.contains("A tree nobody opens is a tree nobody reads. Run  vivac setup claude-code"),
         "{s}"
     );
-    assert!(s.contains("that project and paste what it prints."), "{s}");
+    assert!(
+        s.contains("or  vivac setup codex  inside that project: it shows the hooks before it"),
+        "{s}"
+    );
+    assert!(s.contains("writes them."), "{s}");
+    assert!(!s.contains("vivac hooks"), "{s}");
+}
+
+/// `d956`: a project closed to this one is neither read nor named, and how
+/// many were left out is said once, with no names.
+#[test]
+fn gates_leaves_a_closed_project_alone_and_counts_it() {
+    let a = Sandbox::new_seeded("gates-closed-a");
+    seed_no_session(&a, "Ship the release", "the tag is cut");
+    let name_a = project_name(&a);
+    let b = Sandbox::new_seeded_in("gates-closed-b", a.global_home());
+    seed_no_session(&b, "Guard the release notes", "the version was a hand edit");
+    b.ok(&["share", "off"]);
+    let name_b = project_name(&b);
+
+    let (s, _) = a.run(&["check", "--gates"]);
+    assert!(!s.contains(&name_b), "{s}");
+    assert!(
+        s.contains(&format!(
+            "{name_a}: 1 nodes written, and not one after a session ever opened"
+        )),
+        "{s}"
+    );
+    assert!(
+        s.contains("1 project keeps what it knows to itself, so --gates did not read it."),
+        "{s}"
+    );
+
+    let (j, _) = a.run(&["check", "--gates", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&j).expect("check --json is not JSON");
+    let gates = v["gates"].as_array().expect("gates is not an array");
+    assert_eq!(gates.len(), 1, "{j}");
+    assert!(gates[0].as_str().unwrap().starts_with(&name_a), "{j}");
+    let mut keys: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
+    keys.sort();
+    assert_eq!(keys, ["gates", "ok", "project", "store"], "{j}");
+}
+
+#[test]
+fn gates_counts_closed_projects_in_the_plural() {
+    let a = Sandbox::new_seeded("gates-plural-a");
+    seed_no_session(&a, "Ship the release", "the tag is cut");
+    let b = Sandbox::new_seeded_in("gates-plural-b", a.global_home());
+    seed_no_session(&b, "Guard the release notes", "the version was a hand edit");
+    b.ok(&["share", "off"]);
+    let c = Sandbox::new_seeded_in("gates-plural-c", a.global_home());
+    seed_no_session(&c, "Cut the tag", "the build is green");
+    c.ok(&["share", "off"]);
+
+    let (s, _) = a.run(&["check", "--gates"]);
+    assert!(
+        s.contains("2 projects keep what they know to themselves, so --gates did not read them."),
+        "{s}"
+    );
+}
+
+#[test]
+fn a_closed_project_is_still_checked_by_itself_under_gates() {
+    let b = Sandbox::new_seeded("gates-closed-self");
+    seed_no_session(&b, "Guard the release notes", "the version was a hand edit");
+    b.ok(&["share", "off"]);
+    let name_b = project_name(&b);
+
+    let (s, _) = b.run(&["check", "--gates"]);
+    assert!(
+        s.contains(&format!(
+            "{name_b}: 1 nodes written, and not one after a session ever opened"
+        )),
+        "{s}"
+    );
+    assert!(!s.contains("keeps what it knows to itself"), "{s}");
 }
 
 /// The regression: without `--gates`, `check` never looks at the registry,

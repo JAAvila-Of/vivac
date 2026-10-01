@@ -196,13 +196,22 @@ pub fn check(
     // existed. The single, bounded registry lookup above is unconditional;
     // this multi-project scan is the one `--gates` guards.
     let mut gates: Vec<String> = Vec::new();
+    let mut kept_to_themselves = 0usize;
     if args.has("gates") {
+        let own = crate::store::project_id_of(root);
         if let Some(store_dir) = crate::store::store_dir() {
             for root in crate::registry::roots(&store_dir) {
                 let Ok(project_store) = crate::store::Store::open_from_elsewhere(root.clone())
                 else {
                     continue;
                 };
+                // `d956`: a project closed to this one (`d916`) is neither
+                // read nor named, the same as `find --everywhere`; how many
+                // were left out is said once, at the end, with no names.
+                if project_store.config.closed_to(own.as_deref()) {
+                    kept_to_themselves += 1;
+                    continue;
+                }
                 let Ok((events, _)) = project_store.read_all() else {
                     continue;
                 };
@@ -358,13 +367,27 @@ pub fn check(
                 "  {}",
                 style::dim(
                     out,
-                    "A tree nobody opens is a tree nobody reads. Run  vivac hooks  inside"
+                    "A tree nobody opens is a tree nobody reads. Run  vivac setup claude-code"
                 )
             );
             outln!(
                 "  {}",
-                style::dim(out, "that project and paste what it prints.")
+                style::dim(
+                    out,
+                    "or  vivac setup codex  inside that project: it shows the hooks before it"
+                )
             );
+            outln!("  {}", style::dim(out, "writes them."));
+            outln!();
+        }
+        if args.has("gates") && kept_to_themselves > 0 {
+            if kept_to_themselves == 1 {
+                outln!("  1 project keeps what it knows to itself, so --gates did not read it.");
+            } else {
+                outln!(
+                    "  {kept_to_themselves} projects keep what they know to themselves, so --gates did not read them."
+                );
+            }
             outln!();
         }
     }
