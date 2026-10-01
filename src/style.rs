@@ -73,7 +73,8 @@ fn is_terminal(stream: Stream) -> bool {
 // ---------------------------------------------------------------------------
 // Windows: a terminal that answers `is_terminal()` still needs to be asked,
 // separately, whether it renders ANSI escapes at all -- `cmd.exe` and an
-// old console host do not, until told to. The crate's only `unsafe` (`d792`).
+// old console host do not, until told to. Asking takes `unsafe` system calls,
+// like the local time zone in `clock.rs` and the terminal width below (`d792`).
 // ---------------------------------------------------------------------------
 
 #[cfg(windows)]
