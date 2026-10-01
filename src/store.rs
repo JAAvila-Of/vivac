@@ -674,14 +674,16 @@ pub fn write_gitignore(vivac_dir: &Path) -> std::io::Result<()> {
 
 /// Replaces the file at `path` whole, and durably (`d946`): the bytes go to
 /// the temporary file `tmp`, which is synced, closed and renamed over the
-/// target, and on Unix the parent directory is synced so the rename itself
-/// survives a power cut. Every file that is written rarely
+/// target, and the parent directory is synced so the rename itself survives
+/// a power cut. Every file that is written rarely
 /// -- `config`, `lane`, the registry, the files `setup` writes into a
 /// person's harness -- goes through here; the append path never does, because
 /// a sync there costs a spinning disk about 20 ms per write.
 ///
-/// The directory sync is Unix-only because the standard library cannot make a
-/// rename durable on Windows (`f947`). A failure in it is returned like any
+/// The rename is `std::fs::rename` on every platform. On Windows it replaces
+/// a target another process holds open, and `MoveFileExW` with write-through
+/// does not, so the durability comes from syncing the directory afterwards
+/// instead (`d960`, `f959`). A failure in that sync is returned like any
 /// other. If the rename fails the temporary file is removed, and so it is on
 /// every earlier failure.
 ///
@@ -713,14 +715,31 @@ pub(crate) fn sync_file(path: &Path) -> std::io::Result<()> {
     OpenOptions::new().write(true).open(path)?.sync_all()
 }
 
-/// Syncs a directory so a rename inside it is durable. Does nothing off Unix
-/// (`f947`).
+/// Syncs a directory so a rename inside it is durable.
 #[cfg(unix)]
 pub(crate) fn sync_dir(dir: &Path) -> std::io::Result<()> {
     File::open(dir)?.sync_all()
 }
 
-#[cfg(not(unix))]
+/// Syncs a directory so a rename inside it is durable (`d960`). Windows
+/// opens a directory only when asked for backup semantics, and flushes only
+/// a handle that can write, so it is opened for writing with that flag:
+/// a read-only handle is refused with access denied. Measured on the
+/// spinning disk this project's trees live on, it costs about 7 ms at the
+/// median, and every caller is a rare, whole-file write.
+#[cfg(windows)]
+pub(crate) fn sync_dir(dir: &Path) -> std::io::Result<()> {
+    use std::os::windows::fs::OpenOptionsExt;
+    // `FILE_FLAG_BACKUP_SEMANTICS`, without which a directory will not open.
+    const FLAG_TO_OPEN_A_DIRECTORY: u32 = 0x0200_0000;
+    OpenOptions::new()
+        .write(true)
+        .custom_flags(FLAG_TO_OPEN_A_DIRECTORY)
+        .open(dir)?
+        .sync_all()
+}
+
+#[cfg(not(any(unix, windows)))]
 pub(crate) fn sync_dir(_dir: &Path) -> std::io::Result<()> {
     Ok(())
 }
@@ -2424,6 +2443,38 @@ mod tests {
 
         assert_eq!(fs::read(&target).unwrap(), b"new");
         assert_eq!(names_in(&dir), vec!["config".to_string()]);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `d960`: a reader holding the target open -- an MCP server or a hook
+    /// reading the config -- must not make the replacement fail. The rename
+    /// stays `std::fs::rename` for this: `MoveFileExW` with write-through
+    /// refuses a target another handle holds (`f959`).
+    #[test]
+    fn replace_whole_replaces_a_target_another_handle_holds_open() {
+        let dir = std::env::temp_dir().join(format!("vivac-whole-{}", id::ulid()));
+        fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("config");
+        fs::write(&target, b"old").unwrap();
+        let reader = File::open(&target).unwrap();
+
+        replace_whole(&target, &dir.join("config.tmp"), b"new").unwrap();
+
+        drop(reader);
+        assert_eq!(fs::read(&target).unwrap(), b"new");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `d960`: the directory is forced on every platform, Windows included,
+    /// so a folder that is not there is an error everywhere rather than a
+    /// call that does nothing and says it worked.
+    #[test]
+    fn sync_dir_is_a_real_sync_on_a_folder_and_fails_on_a_missing_one() {
+        let dir = std::env::temp_dir().join(format!("vivac-sync-{}", id::ulid()));
+        fs::create_dir_all(&dir).unwrap();
+
+        sync_dir(&dir).unwrap();
+        assert!(sync_dir(&dir.join("missing")).is_err());
         fs::remove_dir_all(&dir).ok();
     }
 
