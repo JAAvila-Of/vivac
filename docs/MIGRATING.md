@@ -77,6 +77,11 @@ Until then, another record you use keeps talking to the agent as before, and
 may tell it to use that one first. That is expected: the skill only reads from
 it.
 
+A project that starts out with vivac has nothing to bring in, and still needs
+the skill if another memory system is installed: that system keeps talking to
+the agent in this project until something turns it off here. With nothing to
+bring in, the skill says so and goes straight to retiring the other maps.
+
 **4.** Open a fresh session. The brief it starts with is what the tree now
 knows.
 
@@ -210,6 +215,11 @@ a floor: its uncertain half was never resolved one by one.
   reading subagent publishes nothing, a batch too large for the conversation
   goes to a file, and the last check stays with the person's memory (after
   0.15.9).
+- **A project that started out with vivac never ran the skill**, since it had
+  nothing to bring in, and its memory tool's plugin told the agent to use it
+  first in every message, three sessions running, until it was turned off by
+  hand. Setup says the skill is for that project too, and with nothing to
+  bring in the skill goes straight to retiring the other maps (after 0.17.22).
 
 ### What still holds
 
