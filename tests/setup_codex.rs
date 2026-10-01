@@ -867,3 +867,91 @@ fn no_terminal_and_no_yes_refuses_an_undo_too_and_removes_nothing() {
     assert!(hooks_path(&c).is_file(), "{out}");
     assert!(skill_path(&c).is_file(), "{out}");
 }
+
+// ---------------------------------------------------------------------------
+// `d978` (`q739`): a folder whose instructions are in CLAUDE.md, with no
+// AGENTS.md for Codex to read.
+// ---------------------------------------------------------------------------
+
+const CLAUDE_ONLY_PARAGRAPH: &str = "Codex finds no AGENTS.md here, only CLAUDE.md. It reads CLAUDE.md only when its own configuration names it as a fallback, so what CLAUDE.md says may not reach a Codex session in this folder. What governs this project reaches Codex from the tree, which the brief hands to every session: if CLAUDE.md holds rules or decisions the tree does not have yet, the vivac-migrate skill brings them in. A copy in AGENTS.md would drift away from it.";
+
+/// The case `q739` was asked about: what CLAUDE.md says never reaches
+/// Codex, and setup says so once it has written, pointing at the tree.
+#[test]
+fn a_folder_with_claude_md_and_no_agents_md_is_told_codex_does_not_read_it() {
+    let c = Sandbox::new_empty("setup-codex-claude-only");
+    std::fs::write(c.0.join("CLAUDE.md"), "# rules\n").unwrap();
+    c.ok(&["init", "--yes"]);
+    let out = c.ok(&["setup", "codex", "--yes"]);
+    assert!(out.contains(CLAUDE_ONLY_PARAGRAPH), "{out}");
+}
+
+/// The file is named as it was found, so `.claude/CLAUDE.md` reads as
+/// itself and the fallback named is the file's own name.
+#[test]
+fn the_paragraph_names_the_instruction_file_it_found() {
+    let c = Sandbox::new_empty("setup-codex-dot-claude");
+    std::fs::create_dir_all(c.0.join(".claude")).unwrap();
+    std::fs::write(c.0.join(".claude").join("CLAUDE.md"), "# rules\n").unwrap();
+    c.ok(&["init", "--yes"]);
+    let out = c.ok(&["setup", "codex", "--yes"]);
+    assert!(
+        out.contains(
+            "Codex finds no AGENTS.md here, only .claude/CLAUDE.md. It reads CLAUDE.md only"
+        ),
+        "{out}"
+    );
+}
+
+/// With an AGENTS.md, Codex has its own file, and whether it repeats or
+/// imports CLAUDE.md is content, which setup never reads (`d422`).
+#[test]
+fn a_folder_with_both_files_gets_no_paragraph() {
+    let c = Sandbox::new_empty("setup-codex-both");
+    std::fs::write(c.0.join("CLAUDE.md"), "# rules\n").unwrap();
+    std::fs::write(c.0.join("AGENTS.md"), "# rules\n").unwrap();
+    c.ok(&["init", "--yes"]);
+    let out = c.ok(&["setup", "codex", "--yes"]);
+    assert!(!out.contains("Codex finds no AGENTS.md"), "{out}");
+}
+
+/// Neither file: the brief is all there is, and there is nothing to warn
+/// about.
+#[test]
+fn a_folder_with_neither_file_gets_no_paragraph() {
+    let c = Sandbox::new_empty("setup-codex-neither");
+    c.ok(&["init", "--yes"]);
+    let out = c.ok(&["setup", "codex", "--yes"]);
+    assert!(!out.contains("Codex finds no AGENTS.md"), "{out}");
+}
+
+/// Codex reads AGENTS.md from the repository root down to the folder it is
+/// opened in, so one at the root covers a folder below it that has only
+/// CLAUDE.md.
+#[test]
+fn an_agents_md_at_the_repository_root_covers_the_folder_below_it() {
+    let root = Sandbox::new_empty("setup-codex-root-agents");
+    std::fs::create_dir_all(root.0.join(".git")).unwrap();
+    std::fs::write(root.0.join("AGENTS.md"), "# rules\n").unwrap();
+    let c = root.in_folder("app");
+    std::fs::write(c.0.join("CLAUDE.md"), "# rules\n").unwrap();
+    c.ok(&["init", "--yes"]);
+    let out = c.ok(&["setup", "codex", "--yes"]);
+    assert!(!out.contains("Codex finds no AGENTS.md"), "{out}");
+}
+
+/// A CLAUDE.md at the repository root above the folder is found too, and
+/// named by the way up to it.
+#[test]
+fn a_claude_md_at_the_repository_root_is_named_from_the_folder_below() {
+    let root = Sandbox::new_empty("setup-codex-root-claude");
+    std::fs::create_dir_all(root.0.join(".git")).unwrap();
+    std::fs::write(root.0.join("CLAUDE.md"), "# rules\n").unwrap();
+    let c = root.in_folder("app");
+    c.ok(&["init", "--yes"]);
+    let out = c.ok(&["setup", "codex", "--yes"]);
+    assert!(
+        out.contains("Codex finds no AGENTS.md here, only ../CLAUDE.md."),
+        "{out}"
+    );
+}

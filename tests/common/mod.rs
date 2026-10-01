@@ -180,6 +180,15 @@ impl Sandbox {
         &self.1
     }
 
+    /// The same machine, run from `rel` inside this sandbox: a folder
+    /// below a repository root, which is where setup looks upwards from.
+    #[allow(dead_code)]
+    pub fn in_folder(&self, rel: &str) -> Sandbox {
+        let d = self.0.join(rel);
+        std::fs::create_dir_all(&d).unwrap();
+        Sandbox(d, self.1.clone())
+    }
+
     pub fn run(&self, args: &[&str]) -> (String, i32) {
         let o = Command::new(BIN)
             .current_dir(&self.0)
