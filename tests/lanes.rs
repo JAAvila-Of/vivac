@@ -2167,7 +2167,7 @@ fn last_vivac_created(root: &Path) -> serde_json::Value {
     serde_json::from_str(line).expect("the vivac.created line parses")
 }
 
-/// `t594` task 4, paso 1 (`f613`): the shape Emisores and IQuorum both have,
+/// `t594` task 4, step 1 (`f613`): the shape Emisores and IQuorum both have,
 /// where the folder holding the tree is not a repository and the
 /// repositories are one level down. `save` used to answer "no anchor: there
 /// is no version control here" while the lane had already declared all of

@@ -517,7 +517,7 @@ fn setup_with_an_unknown_harness_names_both_harnesses() {
 // ---------------------------------------------------------------------------
 // 7. `t592` tranche 2 (`d710`) gave `--new-tree`, `--lane-name` and `--name`
 //    to `setup codex` as the tree's own flags. `d723` piece B took them
-//    away again, to `init` alone: each one now carries a lapida naming
+//    away again, to `init` alone: each one now carries a tombstone naming
 //    `vivac init` instead of doing anything here. `tests/init.rs` already
 //    covers what each flag does; what is left to prove here is that
 //    `setup codex` sends whoever still types one to the command that

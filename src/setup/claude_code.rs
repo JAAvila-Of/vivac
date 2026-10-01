@@ -770,8 +770,8 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         return Ok(0);
     }
 
-    // Build every write, then commit them together (`t565` §7.3: "se
-    // pregunta una sola vez por todo y se escribe todo o nada"). `d723`
+    // Build every write, then commit them together (`t565` §7.3: "it
+    // asks once for everything, and writes all of it or nothing"). `d723`
     // piece B: the tree's own `.gitignore` no longer joins this batch --
     // planting, the lane, the version lock and `.gitignore` are `init`'s
     // alone now, and this run never reaches any of them.

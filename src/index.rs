@@ -161,7 +161,7 @@ const NODE_RECORD_LEN: usize = ULID_LEN
     + SPAN_LEN // review_on span
     + 8; // notes_since_child
 
-/// `LOADING.md` §4 "El umbral, con su número": a stale index is left alone
+/// `LOADING.md` §4, "the threshold, with its number": a stale index is left alone
 /// below this many pending events, because applying them in memory is cheap
 /// enough to fit inside the write budget, and only a read is ever allowed to
 /// pay for rewriting the file itself.
@@ -170,8 +170,8 @@ const TAIL_REFRESH_THRESHOLD: usize = 200;
 /// Builds the `Tree` a command needs, using the derived index when it can.
 ///
 /// `allow_persist` is `false` for a command that may append to the log: a
-/// write must never pay the cost of rewriting the index (`LOADING.md` §4
-/// "Cuándo se reescribe"), even though it is free to read a warm or stale
+/// write must never pay the cost of rewriting the index (`LOADING.md` §4,
+/// "when it is rewritten"), even though it is free to read a warm or stale
 /// one exactly like a read does. The only error this can return is a
 /// genuine failure to read `events` itself -- everything the index's own
 /// file touches is caught internally and answered by folding the log --
@@ -509,8 +509,8 @@ fn is_ulid_shaped(s: &str) -> bool {
 }
 
 /// Best-effort: every failure -- an anomaly in the tree, a read-only
-/// directory, a full disk -- is swallowed. `LOADING.md` §4 "Si no se puede
-/// escribir, no pasa nada" and "Un log con anomalías no lleva índice".
+/// directory, a full disk -- is swallowed. `LOADING.md` §4: "if it cannot be
+/// written, nothing happens", and "a log with anomalies gets no index".
 fn persist(store: &Store, tree: &Tree, fold_end_offset: u64, last: Option<&LastEvent>) {
     if tree.has_pending() || !tree.repeated_nums.is_empty() {
         return;
@@ -671,7 +671,7 @@ impl Header {
     }
 
     /// Every section has to fit inside the file this header came from --
-    /// "un desplazamiento apunta fuera" is one of `LOADING.md` §4's own
+    /// "an offset points outside" is one of `LOADING.md` §4's own
     /// named reasons to regenerate rather than trust what is on disk.
     fn check_bounds(&self, len: usize) -> Option<()> {
         let fits = |off: u64, count: u64, width: u64| -> Option<bool> {
@@ -2404,7 +2404,7 @@ mod tests {
         );
         let mut partial =
             format!("{{\"seq\":2,\"id\":\"{}\",\"note\":\"caf", fixed_id(2)).into_bytes();
-        // The first byte of "é", with no second byte and no `\n`: a tail
+        // The first byte of `é`, with no second byte and no `\n`: a tail
         // torn mid-character, not just mid-line.
         partial.push(0xC3);
         {
@@ -3276,7 +3276,7 @@ mod tests {
     ///
     /// This calls `encode`/`build_tree` directly rather than through `load`:
     /// `load` falls back to folding the log whenever the index fails to
-    /// parse (`LOADING.md` §4 "nunca falla"), and the log it would fall back
+    /// parse (`LOADING.md` §4: "it never fails"), and the log it would fall back
     /// to is sitting right there, untouched, with the same two notes in it.
     /// A `parse`/`write_header` field landing out of step could come back
     /// `None` and hide behind that fallback with the surrounding suite still

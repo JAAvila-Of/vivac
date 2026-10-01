@@ -240,7 +240,7 @@ impl Serialize for ConfigVersion {
 impl<'de> Deserialize<'de> for ConfigVersion {
     /// Only ever reached once `check_config_version` has already let the raw
     /// value through: a `1`, the lock sentence, or the lane sentence.
-    /// Anything else refuses generically here, which is `d444`'s "como hoy"
+    /// Anything else refuses generically here, which is `d444`'s "as today"
     /// for a version this deserializer was never meant to explain --
     /// negative, a float, an object, `null`.
     fn deserialize<D>(d: D) -> Result<Self, D::Error>

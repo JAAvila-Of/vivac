@@ -268,7 +268,7 @@ fn the_json_carries_the_three_baskets() {
     assert!(!s.contains("more   --json"), "the json got trimmed:\n{s}");
 }
 
-/// `t594` task 4, paso 6 (§4.4): once a lane has more than one declared
+/// `t594` task 4, step 6 (§4.4): once a lane has more than one declared
 /// repository, every changed file is prefixed by the one it belongs to.
 #[test]
 fn reconcile_prefixes_each_change_with_its_repository() {
@@ -293,7 +293,7 @@ fn reconcile_prefixes_each_change_with_its_repository() {
     assert!(s.contains("infra/main.tf"), "{s}");
 }
 
-/// `t594` task 4, paso 6 (§4.4): a repository whose branch moved since the
+/// `t594` task 4, step 6 (§4.4): a repository whose branch moved since the
 /// stop is named and not diffed -- comparing across branches would be
 /// inferring whether something merged, which `d596` puts out of scope.
 #[test]

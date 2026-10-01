@@ -914,7 +914,7 @@ fn a_pop_with_no_next_leaves_nothing_to_pick_up() {
     );
 }
 
-/// `t594` task 4, paso 5 (§4.4): a lone repository keeps the short sha it
+/// `t594` task 4, step 5 (§4.4): a lone repository keeps the short sha it
 /// always showed, and only two or more collapse the line to a count.
 #[test]
 fn the_last_stop_shows_one_short_sha_and_counts_the_rest() {

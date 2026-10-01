@@ -3423,7 +3423,7 @@ mod fold_tests {
             "dueño",
             "café",
             "garçon",
-            "\u{1ec7}", // Vietnamese ệ, e with circumflex and dot below
+            "\u{1ec7}", // Vietnamese `ệ`, e with circumflex and dot below
             "Vi\u{1ec7}t Nam",
             "\u{5e9}\u{5b8}\u{5dc}\u{5d5}\u{5b9}\u{5dd}", // Hebrew, with points
             "\u{928}\u{940}\u{932}",                      // Devanagari
