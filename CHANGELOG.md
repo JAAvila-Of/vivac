@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.20](https://github.com/JAAvila-Of/vivac/compare/v0.17.19...v0.17.20) - 2026-10-01
+
+### Fixed
+
+- *(check)* --gates skips closed projects and points at setup ([#246](https://github.com/JAAvila-Of/vivac/pull/246))
+
+### Internal
+
+- *(deny)* don't warn about allowed licences nothing uses yet ([#245](https://github.com/JAAvila-Of/vivac/pull/245))
+
 ## [0.17.19](https://github.com/JAAvila-Of/vivac/compare/v0.17.18...v0.17.19) - 2026-09-30
 
 ### Fixed
