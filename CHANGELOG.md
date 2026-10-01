@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.23](https://github.com/JAAvila-Of/vivac/compare/v0.17.22...v0.17.23) - 2026-10-01
+
+### Added
+
+- *(setup)* warn when Codex has CLAUDE.md and no AGENTS.md ([#256](https://github.com/JAAvila-Of/vivac/pull/256))
+
+### Fixed
+
+- *(brief)* never offer to resume a node that is no longer open ([#255](https://github.com/JAAvila-Of/vivac/pull/255))
+- *(migrate)* retire other maps even with nothing to bring in ([#253](https://github.com/JAAvila-Of/vivac/pull/253))
+
 ## [0.17.22](https://github.com/JAAvila-Of/vivac/compare/v0.17.21...v0.17.22) - 2026-10-01
 
 ### Added
