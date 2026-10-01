@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.22](https://github.com/JAAvila-Of/vivac/compare/v0.17.21...v0.17.22) - 2026-10-01
+
+### Added
+
+- *(brief)* teach the seams with the vivac_* tools, not commands ([#252](https://github.com/JAAvila-Of/vivac/pull/252))
+
+### Documentation
+
+- *(style)* the console calls are not the crate's only unsafe ([#250](https://github.com/JAAvila-Of/vivac/pull/250))
+
 ## [0.17.21](https://github.com/JAAvila-Of/vivac/compare/v0.17.20...v0.17.21) - 2026-10-01
 
 ### Fixed
