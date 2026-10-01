@@ -606,6 +606,9 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     tree::note_registry(roots);
 
     print!("\n{}", written_text(here));
+    if let Some(paragraph) = claude_only_paragraph(here) {
+        print!("\n{paragraph}\n");
+    }
     // `f790`: the migrate advice moved off `init` and onto the first
     // successful `setup` of a lane that has not brought anything in yet.
     print!("{}", super::claude_code::migrate_advice(roots));
@@ -941,6 +944,64 @@ fn written_text(here: &Path) -> String {
         ]
         .join("\n\n")
     )
+}
+
+/// The instruction files Codex reads on its own, in every folder from the
+/// repository root down to the one it is opened in.
+const CODEX_INSTRUCTIONS: [&str; 2] = ["AGENTS.override.md", "AGENTS.md"];
+
+/// Claude Code's own, which Codex reads only when its configuration names
+/// one as a fallback.
+const CLAUDE_INSTRUCTIONS: [&str; 3] = ["CLAUDE.md", ".claude/CLAUDE.md", "CLAUDE.local.md"];
+
+/// `d978` (`q739`): the folders Codex reads instructions from, `here`
+/// first and then each one above it up to the repository root, each with
+/// how it is written from `here`. Only `here` when it is in no repository.
+fn instruction_folders(here: &Path) -> Vec<(PathBuf, String)> {
+    let mut folders = vec![(here.to_path_buf(), String::new())];
+    if here.join(".git").exists() {
+        return folders;
+    }
+    let Some(root) = super::git_root_above(here) else {
+        return folders;
+    };
+    let mut d = here.to_path_buf();
+    let mut up = String::new();
+    while d != root && d.pop() {
+        up.push_str("../");
+        folders.push((d.clone(), up.clone()));
+    }
+    folders
+}
+
+/// `d978` (`q739`): what Claude Code's instruction file says reaches Codex
+/// only through its own configuration, so a folder with that file and none
+/// of Codex's is told so, and pointed at the tree, which the brief hands to
+/// both. Presence alone: neither file is ever opened (`d422`), and with
+/// both there nothing is said, since whether one repeats the other is
+/// content.
+fn claude_only_paragraph(here: &Path) -> Option<String> {
+    let folders = instruction_folders(here);
+    let has_codex_file = folders
+        .iter()
+        .any(|(d, _)| CODEX_INSTRUCTIONS.iter().any(|f| d.join(f).is_file()));
+    if has_codex_file {
+        return None;
+    }
+    let (found, name) = folders.iter().find_map(|(d, up)| {
+        CLAUDE_INSTRUCTIONS
+            .iter()
+            .find(|f| d.join(f).is_file())
+            .map(|f| (format!("{up}{f}"), f.rsplit('/').next().unwrap_or(f)))
+    })?;
+    Some(format!(
+        "Codex finds no AGENTS.md here, only {found}. It reads {name} only when its own \
+         configuration names it as a fallback, so what {found} says may not reach a Codex \
+         session in this folder. What governs this project reaches Codex from the tree, \
+         which the brief hands to every session: if {found} holds rules or decisions the \
+         tree does not have yet, the vivac-migrate skill brings them in. A copy in AGENTS.md \
+         would drift away from it."
+    ))
 }
 
 #[cfg(test)]

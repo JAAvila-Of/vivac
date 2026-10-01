@@ -1889,3 +1889,16 @@ fn git_status_shows_nothing_of_a_planted_tree() {
 //     undo_after_a_join_that_wrote_something_keeps_the_lane_file,
 //     undo_leaves_a_vivac_dir_whose_gitignore_was_hand_edited
 // ---------------------------------------------------------------------------
+
+/// `d978`: the reverse of what `setup codex` warns about is not a gap.
+/// Claude Code reads AGENTS.md on its own when there is no CLAUDE.md, so
+/// saying otherwise would be wrong by default, and silence is what this
+/// setup owes it.
+#[test]
+fn an_agents_md_with_no_claude_md_gets_no_paragraph_from_claude_code_setup() {
+    let c = Sandbox::new_empty("setup-agents-only");
+    std::fs::write(c.0.join("AGENTS.md"), "# rules\n").unwrap();
+    c.ok(&["init", "--yes"]);
+    let out = c.ok(&["setup", "claude-code", "--yes"]);
+    assert!(!out.contains("AGENTS.md"), "{out}");
+}

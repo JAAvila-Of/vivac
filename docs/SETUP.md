@@ -139,6 +139,17 @@ approved on its own, against its hash, with `/hooks` inside Codex: the first
 time, and whenever a hook changes, as the third one does for projects set up
 before it existed.
 
+**When the project's instructions live in `CLAUDE.md`**, with no `AGENTS.md`
+anywhere from the folder up to the repository root, setup says that too.
+Codex reads `CLAUDE.md` only when its own configuration names it as a
+fallback, so what the file says may never reach a Codex session. setup only
+looks at which files exist and never opens them. It does not offer to write
+an `AGENTS.md`, because a second copy drifts away from the first. What governs
+the project belongs in the tree, which the brief hands to every agent, and the
+vivac-migrate skill is what brings it in. The reverse needs no warning: since
+version 2.1.277, Claude Code reads `AGENTS.md` on its own when there is no
+`CLAUDE.md`.
+
 The brief reaches the agent as plain text on the opening hook's standard
 output, which Codex adds to the session as context. Above roughly 2,500
 tokens it saves that context to a file and shows the model a shorter preview

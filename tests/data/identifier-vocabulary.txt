@@ -37,6 +37,7 @@ again
 against
 age
 agent
+agents
 ages
 aggregates
 ago
@@ -920,6 +921,8 @@ installs
 instant
 instants
 instead
+instruction
+instructions
 int
 intact
 integer
