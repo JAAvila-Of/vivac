@@ -44,6 +44,7 @@ use crate::model::{Node, Tree, Vivac};
 use crate::output::outln;
 use crate::registry;
 use crate::render::print_json;
+use crate::width::pad;
 use serde_json::json;
 use std::path::Path;
 
@@ -618,8 +619,8 @@ fn section(
         outln!(
             "{}",
             format!(
-                "{indent}    {:<44} {:>3}  {}",
-                clip(&v.file, 44),
+                "{indent}    {} {:>3}  {}",
+                pad(&clip(&v.file, 44), 44),
                 v.times,
                 note(v)
             )

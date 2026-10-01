@@ -20,6 +20,7 @@ use crate::event::{Flag, Kind, State, VivacKind, WhereRepo};
 use crate::failure::R;
 use crate::model::{Node, Tree};
 use crate::style;
+use crate::width::{pad, take, width};
 use std::collections::HashSet;
 use std::path::Path;
 
@@ -150,7 +151,7 @@ fn spine_label(a: &Tree, n: &Node) -> String {
         return clip(n.title(a), 44);
     }
     let mark = format!("  [{}]", n.state.word(n.kind));
-    let budget = 44usize.saturating_sub(mark.chars().count());
+    let budget = 44usize.saturating_sub(width(&mark));
     format!("{}{mark}", clip(n.title(a), budget))
 }
 
@@ -224,18 +225,19 @@ fn latest_word(a: &Tree, n: &Node) -> Option<String> {
         (None, None) => return None,
     };
     let head = format!("{label} {}: ", at.get(..10).unwrap_or(at));
-    let room = 64usize.saturating_sub(head.chars().count());
+    let room = 64usize.saturating_sub(width(&head));
     Some(format!("{head}{}", clip(text, room)))
 }
 
-/// Cuts on a word boundary without exceeding `n`, **counting the ellipsis**.
+/// Cuts on a word boundary without exceeding `n` terminal columns,
+/// **counting the ellipsis**, and never inside a grapheme cluster (`f443`).
 /// Budgeting for it matters: otherwise the cut overruns on exactly the
 /// tightest lines of the brief, which are the ones being truncated.
 pub(crate) fn clip(s: &str, n: usize) -> String {
-    if s.chars().count() <= n {
+    if width(s) <= n {
         return s.to_string();
     }
-    let t: String = s.chars().take(n.saturating_sub(3)).collect();
+    let t = take(s, n.saturating_sub(3));
     match t.rsplit_once(' ') {
         Some((a, _)) if !a.is_empty() => format!("{a}..."),
         _ => format!("{t}..."),
@@ -418,9 +420,9 @@ fn no_focus_block(a: &Tree) -> Vec<String> {
         v.push(" OPEN GOALS".to_string());
         for m in &goals {
             v.push(format!(
-                "  {:<6} {:<40} {} open below",
+                "  {:<6} {} {} open below",
                 m.alias(),
-                clip(m.title(a), 40),
+                pad(&clip(m.title(a), 40), 40),
                 a.counts(m.num).open_count
             ));
         }
@@ -1426,9 +1428,9 @@ pub fn to_text(
             }
         }
         let mut v = vec![format!(
-            "  {:<6} {:<40} {}",
+            "  {:<6} {} {}",
             n.alias(),
-            clip(n.title(a), 40),
+            pad(&clip(n.title(a), 40), 40),
             tail.join("  ")
         )];
         let outcome = n.outcome(a);
@@ -1550,7 +1552,7 @@ pub fn to_text(
                     format!(
                         "         {}{age} was about to: {}",
                         s.alias(),
-                        clip(&s.next_intent, 52 - age.chars().count())
+                        clip(&s.next_intent, 52 - width(&age))
                     )
                 });
             }

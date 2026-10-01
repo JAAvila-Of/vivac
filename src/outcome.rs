@@ -22,6 +22,7 @@
 
 use crate::anchor::AnchorRef;
 use crate::model::Counts;
+use crate::width::pad;
 
 /// What `save` found unfinished once the stop was written (`d936`): per
 /// repository, work not committed and commits not pushed, and the files
@@ -890,7 +891,7 @@ fn text_in(o: &Outcome, form: Form) -> String {
                         changes.len()
                     ));
                     for c in changes.iter().take(6) {
-                        lines.push(format!("      {:<52} ({})", c.file_path, c.times));
+                        lines.push(format!("      {} ({})", pad(&c.file_path, 52), c.times));
                     }
                     if changes.len() > 6 {
                         lines.push(format!("      ... and {} more", changes.len() - 6));

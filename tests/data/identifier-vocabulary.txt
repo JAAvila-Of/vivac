@@ -289,6 +289,7 @@ checked
 checksum
 child
 children
+chinese
 choice
 choose
 chunk
@@ -328,6 +329,8 @@ closed
 closes
 closing
 cls
+cluster
+clusters
 cmd
 cmp
 code
@@ -439,6 +442,7 @@ cut
 cuts
 cwd
 cyan
+cycle
 d200
 dash
 dashed
@@ -585,6 +589,7 @@ elsewhere
 email
 emisores
 emit
+emoji
 emptied
 empty
 enable
@@ -673,6 +678,7 @@ fallback
 falling
 falls
 false
+family
 fan
 favicon
 fd
@@ -789,6 +795,8 @@ governed
 governing
 governs
 grandchild
+grapheme
+graphemes
 green
 grew
 group
@@ -902,6 +910,7 @@ indented
 index
 indexed
 india
+indicators
 indices
 info
 inherit
@@ -1350,6 +1359,7 @@ platform
 plural
 pluralised
 plus
+point
 pointing
 points
 pop
@@ -1489,6 +1499,7 @@ refusing
 regardless
 regenerated
 regenerates
+regional
 registered
 registers
 registry
@@ -1660,6 +1671,7 @@ seen
 sees
 seg
 segment
+segmentation
 selected
 self
 sense
@@ -2124,6 +2136,7 @@ why3
 why4
 wide
 widen
+wider
 width
 win
 window

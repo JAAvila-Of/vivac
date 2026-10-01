@@ -35,6 +35,14 @@ unicode-normalization = "0.1"
 # a second time. RustCrypto's own, +1 crate.
 sha2 = "0.10"
 
+# `f443`: titles are cut and padded by what a terminal shows. A cut that
+# splits a grapheme drops an accent or leaves half a flag, and a column
+# padded by `char` drifts right after every CJK title. Both need Unicode's
+# own tables (UAX 29 and UAX 11), which `d138` refused to hand-roll. +2
+# crates, neither with dependencies of its own.
+unicode-segmentation = "1"
+unicode-width = "0.2"
+
 # The same `serde_json` the crate already links, so the tree gains nothing.
 # The MCP tests read JSON-RPC replies, and asserting on substrings of a
 # protocol is how a suite ends up green over malformed output.

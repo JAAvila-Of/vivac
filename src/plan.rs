@@ -13,6 +13,7 @@
 //! already rejected (`d815`).
 
 use crate::style::{self, Stream};
+use crate::width::width;
 
 /// One row of a plan: a verb, the path or label it acts on, what it does
 /// in plain words, and the value lines (a hook's command, a tree's own
@@ -66,7 +67,7 @@ pub(crate) fn heading(stream: Stream, cmd: &str, here: &std::path::Path) -> Stri
 /// terminal is what wraps it if it has to.
 pub(crate) fn render_items(stream: Stream, items: &[PlanItem]) -> String {
     let verb_width = items.iter().map(|i| i.verb.len()).max().unwrap_or(0);
-    let path_width = items.iter().map(|i| i.path.len()).max().unwrap_or(0);
+    let path_width = items.iter().map(|i| width(&i.path)).max().unwrap_or(0);
     let sub_label_width = items
         .iter()
         .flat_map(|i| i.sub.iter().map(|(label, _)| label.len()))
@@ -79,7 +80,7 @@ pub(crate) fn render_items(stream: Stream, items: &[PlanItem]) -> String {
         s.push_str(&style::verb(stream, item.verb));
         s.push_str(&" ".repeat(verb_width - item.verb.len() + 2));
         s.push_str(&style::path(stream, &item.path));
-        s.push_str(&" ".repeat(path_width - item.path.len() + 2));
+        s.push_str(&" ".repeat(path_width - width(&item.path) + 2));
         s.push_str(&item.what);
         s.push('\n');
         for (label, value) in &item.sub {
