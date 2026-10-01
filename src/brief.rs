@@ -751,7 +751,9 @@ fn branch_moved_block(a: &Tree, lane_dir: &Path) -> Vec<String> {
     struct Candidate {
         seq: u64,
         line: String,
-        target: Option<String>,
+        /// The alias `to resume` offers, and its title when that alias is
+        /// not the one the candidate's own line shows.
+        target: Option<(String, Option<String>)>,
     }
     let mut candidates: Vec<Candidate> = moved
         .iter()
@@ -765,14 +767,35 @@ fn branch_moved_block(a: &Tree, lane_dir: &Path) -> Vec<String> {
                             Some(other) => format!(" (lane {other})"),
                             None => String::new(),
                         };
+                        // `d976` (`f974`): the branch's last focus may have
+                        // been closed or parked since. The line still says
+                        // where the lane stopped there, with the state's
+                        // word, but `vivac focus` refuses a closed node and
+                        // DO NOT TOUCH NOW lists a parked one, so `to resume`
+                        // goes to the nearest open node above it -- where a
+                        // pop would have left the stack -- titled, since its
+                        // alias is no longer the one on the line before.
+                        let (mark, target) = if node.state.is_open() {
+                            (String::new(), Some((node.alias(), None)))
+                        } else {
+                            let above = a
+                                .ancestors(node.num)
+                                .into_iter()
+                                .rev()
+                                .find(|n| n.state.is_open());
+                            (
+                                format!("  [{}]", node.state.word(node.kind)),
+                                above.map(|n| (n.alias(), Some(n.title(a).to_string()))),
+                            )
+                        };
                         Candidate {
                             seq: c.seq,
                             line: format!(
-                                "   last focus on {branch}{who}:   {}   {}",
+                                "   last focus on {branch}{who}:   {}   {}{mark}",
                                 node.alias(),
                                 node.title(a)
                             ),
-                            target: Some(node.alias()),
+                            target,
                         }
                     }
                     None => Candidate {
@@ -790,14 +813,21 @@ fn branch_moved_block(a: &Tree, lane_dir: &Path) -> Vec<String> {
         lines.push(c.line.clone());
     }
 
-    let mut targets: Vec<&str> = candidates
+    let mut targets: Vec<&(String, Option<String>)> = candidates
         .iter()
-        .filter_map(|c| c.target.as_deref())
+        .filter_map(|c| c.target.as_ref())
         .collect();
+    // By alias alone: the same node reached as one repository's own last
+    // focus and as another's nearest open node above is one place to go.
+    // The untitled one sorts first and is kept, since a line above already
+    // shows that alias with its title.
     targets.sort_unstable();
-    targets.dedup();
-    if let [only] = targets[..] {
-        lines.push(format!("   to resume:  vivac focus {only}"));
+    targets.dedup_by(|later, kept| later.0 == kept.0);
+    if let [(only, title)] = targets[..] {
+        match title {
+            Some(t) => lines.push(format!("   to resume:  vivac focus {only}   {t}")),
+            None => lines.push(format!("   to resume:  vivac focus {only}")),
+        }
     }
     // A trailing blank, the same spacer `REPEATED NUMBERS` ends its own
     // block with: this section sits right after the header and relies on
