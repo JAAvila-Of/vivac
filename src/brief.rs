@@ -987,11 +987,11 @@ fn other_lanes_fallback(n: usize) -> Vec<String> {
 /// block exists to teach: what gets told out loud belongs in the tree before
 /// it belongs in the answer, not after.
 const CAPTURE_SEAMS_HEAD: &[&str] = &[
-    "  Look first: vivac find \"<words>\". Work the tree already holds is never",
+    "  Look first: vivac_find \"<words>\". Work the tree already holds is never",
     "  opened twice: what you find, settle or leave to do while on it is a node",
     "  under it, not a note. The focus above is where work was left, maybe not",
     "  by you: hang new work from what it continues.",
-    "  With --everywhere it looks in the person's other projects too: say which",
+    "  With everywhere set it looks in the person's other projects too: say which",
     "  one anything you use comes from, and show it to them before applying it.",
     "  Write before you answer: what you tell the person goes in the tree first.",
 ];
@@ -1001,17 +1001,17 @@ const CAPTURE_SEAMS_HEAD: &[&str] = &[
 /// a node under it, not a note, stays (`d945`) -- and the rest stays word for
 /// word.
 const CAPTURE_SEAMS_HEAD_NO_FOCUS: &[&str] = &[
-    "  Look first: vivac find \"<words>\". Work the tree already holds is never",
+    "  Look first: vivac_find \"<words>\". Work the tree already holds is never",
     "  opened twice: what you find, settle or leave to do while on it is a node",
     "  under it, not a note.",
-    "  With --everywhere it looks in the person's other projects too: say which",
+    "  With everywhere set it looks in the person's other projects too: say which",
     "  one anything you use comes from, and show it to them before applying it.",
     "  Write before you answer: what you tell the person goes in the tree first.",
 ];
 
 /// The capture seams (`d738`, `d757`): one row per place work is supposed to
-/// land, its label, the CLI shown for it, the hint lines under that row --
-/// zero, one or two of them -- and the MCP tool that does the same thing.
+/// land, its label, the tool and its arguments (`d964`), the hint lines under
+/// that row -- zero, one or two of them -- and the bare tool name.
 /// `f737` measured the gap this closes -- an agent with no project doctrine
 /// of its own only wrote to the tree when the person asked, because nothing
 /// it received unasked said when to -- and `f755`/`f756` measured that once
@@ -1019,39 +1019,39 @@ const CAPTURE_SEAMS_HEAD_NO_FOCUS: &[&str] = &[
 /// line of work hangs from.
 ///
 /// Single source: [`capture_seams_block`] renders every row of this table,
-/// so the label column, the command, the hints and the tool name can never
+/// so the label column, the tool, the hints and the tool name can never
 /// drift out of step with each other.
 const CAPTURE_SEAMS: &[(&str, &str, &[&str], &str)] = &[
     (
         "new line of work",
-        "vivac push \"<title>\" --why \"<why>\" --parent <id>",
-        &["or --root, when it continues nothing in the tree"],
+        "vivac_push  title, why, parent",
+        &["or root, when it continues nothing in the tree"],
         "vivac_push",
     ),
     (
         "a choice is settled",
-        "vivac decide \"<t>\" --reason \"<r>\" --alternative \"<x>\"",
+        "vivac_decide  title, reason, alternative",
         &["yours or the person's"],
         "vivac_decide",
     ),
     (
         "you report findings",
-        "vivac add \"<t>\" --type finding --why \"<where>\"",
+        "vivac_add  title, type: finding, why",
         &[
             "as you tell the person, one for each thing found",
-            "asks nothing? close it: vivac done <id> \"Record: ...\"",
+            "asks nothing? vivac_done it, outcome \"Record: ...\"",
         ],
         "vivac_add",
     ),
     (
         "told \"not now\"",
-        "vivac park <id> \"<their words>\"",
-        &["nothing to park yet? vivac add it, then park it"],
+        "vivac_park  id, reason: their words",
+        &["nothing to park yet? vivac_add it, then park it"],
         "vivac_park",
     ),
     (
         "changed outside git",
-        "vivac note <id> \"<what changed, where>\"",
+        "vivac_note  id, note: what changed, where",
         &[
             "CI, a tracker, the cloud: the tree is its only record",
             "never a finding, a choice or something left to do",
@@ -1060,11 +1060,15 @@ const CAPTURE_SEAMS: &[(&str, &str, &[&str], &str)] = &[
     ),
     (
         "the work is done",
-        "vivac pop \"<outcome>\"",
+        "vivac_pop  outcome",
         &["and again if that settles the node it returns to"],
         "vivac_pop",
     ),
 ];
+
+/// The server name `setup` registers the tools under: Claude Code names a
+/// tool `mcp__<server>__<tool>`.
+const TOOL_SERVER_PREFIX: &str = "mcp__vivac__";
 
 /// Renders [`CAPTURE_SEAMS_HEAD`] and [`CAPTURE_SEAMS`] into the block the
 /// hook brief shows. The label column is padded to the longest label plus
@@ -1086,13 +1090,35 @@ fn capture_seams_block(has_focus: bool) -> Vec<String> {
         CAPTURE_SEAMS_HEAD_NO_FOCUS
     };
     let mut body: Vec<String> = head.iter().map(|l| l.to_string()).collect();
-    for (label, command, hints, _) in CAPTURE_SEAMS {
-        body.push(format!("  {label:<width$}{command}"));
+    for (label, tool, hints, _) in CAPTURE_SEAMS {
+        body.push(format!("  {label:<width$}{tool}"));
         for hint in hints.iter() {
             body.push(format!("{}{hint}", " ".repeat(2 + width)));
         }
     }
-    body.push("  Or the same moves through the vivac_* tools.".to_string());
+    // `d964`, `f963`: Claude Code may hand MCP tools over by name only, and no
+    // server can opt out, so the brief says how to load them. The list is
+    // built from the table, plus the two tools that have no row of their own,
+    // so a row added later cannot be missing from it.
+    let mut names = vec!["vivac_find"];
+    for (_, _, _, tool) in CAPTURE_SEAMS {
+        names.push(tool);
+        if *tool == "vivac_add" {
+            names.push("vivac_done");
+        }
+    }
+    let names: Vec<String> = names
+        .iter()
+        .map(|n| format!("{TOOL_SERVER_PREFIX}{n}"))
+        .collect();
+    body.push("  The tools may arrive by name only: load them before the first write.".to_string());
+    body.push(format!(
+        "  In Claude Code: ToolSearch \"select:{}\"",
+        names.join(",")
+    ));
+    body.push(
+        "  Without the tools, each move is a command: vivac push, vivac decide...".to_string(),
+    );
     heading("WRITE AT THESE SEAMS", body)
 }
 

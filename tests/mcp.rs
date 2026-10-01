@@ -1539,7 +1539,7 @@ fn done_by_mcp_carries_the_ask_for_the_next_step() {
     assert!(
         text.contains(
             "  25 changes since v1, the last stop that said what came next.\n  \
-             To leave the next step:  vivac save --next \"<what comes next>\""
+             To leave the next step:  vivac_save  next"
         ),
         "{body}"
     );
@@ -2273,7 +2273,72 @@ fn decide_with_no_against_on_a_governed_tree_warns_in_its_text() {
         text.contains("no --against: a pillar judged in silence reads the same as one skipped"),
         "{text}"
     );
-    assert!(text.contains("vivac declare d3 adds one"), "{text}");
+    assert!(text.contains("vivac_declare on d3 adds one"), "{text}");
+    assert!(!text.contains("vivac declare"), "{text}");
+}
+
+/// `d964`: what comes back over MCP names tools. The same write through the
+/// CLI keeps naming the command.
+#[test]
+fn the_declare_hint_over_mcp_names_the_tool_and_the_cli_keeps_the_command() {
+    let build = |name: &str| {
+        let c = Sandbox::new_seeded(name);
+        c.ok(&[
+            "add",
+            "Security",
+            "--type",
+            "pillar",
+            "--why",
+            "vetoes on the spot",
+        ]);
+        c.ok(&[
+            "add",
+            "Keep the write path local",
+            "--parent",
+            "1",
+            "--type",
+            "rule",
+            "--why",
+            "guard",
+        ]);
+        c
+    };
+    let via_mcp = build("declare-hint-tools");
+    let mut s = hello(&via_mcp);
+    let r = s.ask(
+        r#"{"jsonrpc":"2.0","id":39,"method":"tools/call","params":{"name":"vivac_decide","arguments":{"title":"Keep it local","reason":"because"}}}"#,
+    );
+    assert_eq!(r["result"]["isError"], false, "{r}");
+    let text = mcp_write_text(&r);
+    assert!(text.contains("vivac_declare on d3 adds one"), "{text}");
+    assert!(!text.contains("vivac declare"), "{text}");
+
+    let via_cli = build("declare-hint-cli");
+    let out = via_cli.ok(&["decide", "Keep it local", "--reason", "because"]);
+    assert!(out.contains("vivac declare d3 adds one"), "{out}");
+}
+
+/// `d964`: the reminder after eight notes on a node with nothing under it
+/// names tools over MCP, with no flag in it.
+#[test]
+fn eight_notes_over_mcp_say_it_in_tool_form() {
+    let c = Sandbox::new_seeded("eight-notes-tools");
+    c.ok(&["push", "A goal", "--why", "it is needed"]);
+    let mut s = hello(&c);
+    let mut text = String::new();
+    for n in 0..8 {
+        let r = s.ask(&format!(
+            r#"{{"jsonrpc":"2.0","id":{},"method":"tools/call","params":{{"name":"vivac_note","arguments":{{"id":"g1","note":"note {n}"}}}}}}"#,
+            100 + n
+        ));
+        assert_eq!(r["result"]["isError"], false, "{r}");
+        text = mcp_write_text(&r);
+    }
+    assert!(
+        text.contains("vivac_add  title, type: finding or task, parent:"),
+        "{text}"
+    );
+    assert!(!text.contains("--parent"), "{text}");
 }
 
 /// `vivac_push` past four levels deep: `text` carries the depth advice, the

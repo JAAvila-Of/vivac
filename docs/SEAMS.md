@@ -35,8 +35,10 @@ In the folder you open your agent in. That is everything you run to start;
 
 A hook hands the agent the **brief**: where work was left, what governs that
 point, what not to touch. It ends with the seams, one line each with the
-command for it, and that block is printed by the binary, so it cannot fall
-behind the version you have installed. It arrives again after a compaction,
+tool for it, and that block is printed by the binary, so it cannot fall
+behind the version you have installed. A harness may hand the tools over by
+name only, to be loaded before their first use, so the block says how; the
+commands come last, for an agent that has no tools. It arrives again after a compaction,
 which is when whatever the agent was told earlier has just been thrown away.
 While the tree is still empty, the brief also tells the agent that the tree
 does not yet hold what the project knows, and names the skill that
@@ -59,8 +61,9 @@ it read.
 | Something changes where git cannot see it: CI settings, a tracker, a cloud console | a note on the node it belongs to. The tree is the only record that change will ever have. A note never carries a finding, a choice or something left to do: those are nodes, so they show up as what they are |
 | The work is done | the node closes with its outcome, and so does the one it returns to, if that settles it too. The close, like a decision, lists the findings still open that were born under it or that it names, so one the work settled on the way gets closed then and not weeks later |
 
-The agent does all of it from the command line or over [MCP](SETUP.md#mcp),
-and both write the same events.
+The agent does all of it over [MCP](SETUP.md#mcp), which is what the brief
+teaches, or from the command line. Both write the same events; only the tools
+fit the [write budget](SETUP.md#why-the-writes-are-here-at-all).
 
 ### Where it slipped, and what changed
 
@@ -92,10 +95,20 @@ under its node, and that read as *in its notes*. 0.17.17 says instead that
 what turns up while working on something is a node under it, and that a note
 never carries a finding, a choice or something left to do. And when a node
 collects eight notes in a row with nothing filed under it, the answer to the
-eighth says so and gives the two commands that file one, once every eight.
+eighth says so and says how to file one, once every eight.
 Measured on this project's own tree first, where a node gets one note at a
 time in the median and seven at the 99th percentile, so it seldom fires on
 work that is going well.
+
+A fourth was in how the agent wrote, not when. It wrote every seam, through
+the shell. Asked why, it gave three reasons: its harness had handed it the
+tools by name only, to be loaded before use; the brief showed it commands;
+and a shell let it chain a dozen writes into one call. It paid for that once,
+in a dollar sign the shell read as a variable. Starting the command line
+costs more than the whole budget for a write, so 0.17.22 turns the seams
+round: each one names its tool, the block says how to load them, and the
+commands are one closing line. An answer that comes back through a tool
+names tools too, where it used to name commands.
 
 ### If it slips anyway
 

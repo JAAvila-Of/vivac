@@ -395,12 +395,15 @@ pub enum Outcome {
 /// `d445`'s warning: a pillar or a rule judged in silence reads the same
 /// as one nobody checked at all, so a decision born while something governs
 /// and declaring nothing says so, and says how to fix it. `t426` §2.3.
-fn no_against_lines(out: &mut Vec<String>, alias: &str) {
+fn no_against_lines(out: &mut Vec<String>, alias: &str, form: Form) {
     out.push(
         "        no --against: a pillar judged in silence reads the same as one skipped"
             .to_string(),
     );
-    out.push(format!("        vivac declare {alias} adds one"));
+    out.push(match form {
+        Form::Cli => format!("        vivac declare {alias} adds one"),
+        Form::Tools => format!("        vivac_declare on {alias} adds one"),
+    });
 }
 
 fn closed_lines(out: &mut Vec<String>, c: &Closed) {
@@ -477,7 +480,7 @@ fn found_lines(out: &mut Vec<String>, found: &StopFound) {
     }
 }
 
-fn left_open_lines(out: &mut Vec<String>, left: &[LeftOpen]) {
+fn left_open_lines(out: &mut Vec<String>, left: &[LeftOpen], form: Form) {
     if left.is_empty() {
         return;
     }
@@ -491,10 +494,13 @@ fn left_open_lines(out: &mut Vec<String>, left: &[LeftOpen]) {
             left.len() - LEFT_OPEN_SHOWN
         ));
     }
-    out.push("        settled by this? close each:  vivac done <id> \"<how>\"".to_string());
+    out.push(match form {
+        Form::Cli => "        settled by this? close each:  vivac done <id> \"<how>\"".to_string(),
+        Form::Tools => "        settled by this? close each:  vivac_done  id, outcome".to_string(),
+    });
 }
 
-fn asks_for_next_lines(out: &mut Vec<String>, ask: &Option<AsksForNext>) {
+fn asks_for_next_lines(out: &mut Vec<String>, ask: &Option<AsksForNext>, form: Form) {
     let Some(ask) = ask else {
         return;
     };
@@ -505,7 +511,20 @@ fn asks_for_next_lines(out: &mut Vec<String>, ask: &Option<AsksForNext>) {
         )),
         None => out.push(format!("  {changes} and no stop has said what comes next.")),
     }
-    out.push("  To leave the next step:  vivac save --next \"<what comes next>\"".to_string());
+    out.push(match form {
+        Form::Cli => {
+            "  To leave the next step:  vivac save --next \"<what comes next>\"".to_string()
+        }
+        Form::Tools => "  To leave the next step:  vivac_save  next".to_string(),
+    });
+}
+
+/// Which door the text is for: the six lines that name a next move name a
+/// command for the CLI and a tool over MCP (`d964`).
+#[derive(Clone, Copy)]
+enum Form {
+    Cli,
+    Tools,
 }
 
 /// The `Outcome` as plain text, the way the CLI has always printed it.
@@ -513,6 +532,16 @@ fn asks_for_next_lines(out: &mut Vec<String>, ask: &Option<AsksForNext>) {
 /// A mirror of `brief::to_text`: the data is already final by the time it
 /// gets here, so this only ever formats, never decides.
 pub fn to_text(o: &Outcome) -> String {
+    text_in(o, Form::Cli)
+}
+
+/// The same text as [`to_text`], with the moves it suggests named as tools:
+/// what an agent writing over MCP is shown (`d964`).
+pub fn to_tools_text(o: &Outcome) -> String {
+    text_in(o, Form::Tools)
+}
+
+fn text_in(o: &Outcome, form: Form) -> String {
     let mut lines: Vec<String> = Vec::new();
     match o {
         Outcome::Pushed {
@@ -564,7 +593,7 @@ pub fn to_text(o: &Outcome) -> String {
                 lines.push("  If it moved:  vivac promote".to_string());
             }
             if *no_against {
-                no_against_lines(&mut lines, alias);
+                no_against_lines(&mut lines, alias, form);
             }
         }
         Outcome::Popped {
@@ -574,7 +603,7 @@ pub fn to_text(o: &Outcome) -> String {
             asks_for_next,
         } => {
             closed_lines(&mut lines, closed);
-            left_open_lines(&mut lines, left_open);
+            left_open_lines(&mut lines, left_open, form);
             match parent {
                 Some(p) => {
                     lines.push(format!("  back to {}  {}", p.alias, p.title));
@@ -585,7 +614,7 @@ pub fn to_text(o: &Outcome) -> String {
                 }
                 None => lines.push("  empty stack".to_string()),
             }
-            asks_for_next_lines(&mut lines, asks_for_next);
+            asks_for_next_lines(&mut lines, asks_for_next, form);
         }
         Outcome::Done {
             closed,
@@ -593,8 +622,8 @@ pub fn to_text(o: &Outcome) -> String {
             asks_for_next,
         } => {
             closed_lines(&mut lines, closed);
-            left_open_lines(&mut lines, left_open);
-            asks_for_next_lines(&mut lines, asks_for_next);
+            left_open_lines(&mut lines, left_open, form);
+            asks_for_next_lines(&mut lines, asks_for_next, form);
         }
         Outcome::Added {
             alias,
@@ -612,7 +641,7 @@ pub fn to_text(o: &Outcome) -> String {
                 lines.push("        blocks its parent from closing".to_string());
             }
             if *no_against {
-                no_against_lines(&mut lines, alias);
+                no_against_lines(&mut lines, alias, form);
             }
         }
         Outcome::Noted {
@@ -628,12 +657,22 @@ pub fn to_text(o: &Outcome) -> String {
                     "  A finding, a choice or something left to do is a node, not a note:"
                         .to_string(),
                 );
-                lines.push(format!(
-                    "    vivac add \"<title>\" --type finding|task --parent {alias}"
-                ));
-                lines.push(format!(
-                    "    vivac decide \"<title>\" --reason \"<why>\" --parent {alias}"
-                ));
+                match form {
+                    Form::Cli => {
+                        lines.push(format!(
+                            "    vivac add \"<title>\" --type finding|task --parent {alias}"
+                        ));
+                        lines.push(format!(
+                            "    vivac decide \"<title>\" --reason \"<why>\" --parent {alias}"
+                        ));
+                    }
+                    Form::Tools => {
+                        lines.push(format!(
+                            "    vivac_add  title, type: finding or task, parent: {alias}"
+                        ));
+                        lines.push(format!("    vivac_decide  title, reason, parent: {alias}"));
+                    }
+                }
             }
         }
         Outcome::Blocked {
@@ -740,9 +779,9 @@ pub fn to_text(o: &Outcome) -> String {
                 );
             }
             if *no_against {
-                no_against_lines(&mut lines, alias);
+                no_against_lines(&mut lines, alias, form);
             }
-            left_open_lines(&mut lines, left_open);
+            left_open_lines(&mut lines, left_open, form);
         }
         Outcome::Declared { alias, against } => {
             for a in against {
