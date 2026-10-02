@@ -1187,6 +1187,7 @@ nonexistent
 nonzero
 noon
 nor
+norm
 normalization
 normalize
 normalized
@@ -1894,6 +1895,7 @@ tar
 target
 targets
 task
+taught
 tcp
 tell
 tells

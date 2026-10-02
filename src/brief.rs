@@ -1066,6 +1066,18 @@ const CAPTURE_SEAMS: &[(&str, &str, &[&str], &str)] = &[
         &["yours or the person's"],
         "vivac_decide",
     ),
+    // `d993`, `f990`: a norm set for the work from now on is a constraint,
+    // which every brief hands over; filed as a decision it hung under one
+    // task, and moved to a rule it reached only `vivac rules`.
+    (
+        "a norm is set",
+        "vivac_add  title, type: constraint, why: their words",
+        &[
+            "root, if it holds for all work: every brief shows it",
+            "a constraint even when they call it a rule",
+        ],
+        "vivac_add",
+    ),
     (
         "you report findings",
         "vivac_add  title, type: finding, why",
@@ -1134,6 +1146,9 @@ fn capture_seams_block(has_focus: bool) -> Vec<String> {
     // so a row added later cannot be missing from it.
     let mut names = vec!["vivac_find"];
     for (_, _, _, tool) in CAPTURE_SEAMS {
+        if names.contains(tool) {
+            continue;
+        }
         names.push(tool);
         if *tool == "vivac_add" {
             names.push("vivac_done");

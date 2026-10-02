@@ -268,8 +268,12 @@ const TOOLS: &[Tool] = &[
                 required: false,
                 description: "goal, task, decision, question, constraint, finding, \
                               assumption, pillar or rule. Defaults to goal at the root, \
-                              task otherwise. A pillar is titled with its name and what \
-                              it restricts, in the project's own words.",
+                              task otherwise. A norm the person sets for the work from \
+                              now on is a constraint, with root when it holds for all \
+                              work, so every brief shows it. A rule is a line a pillar \
+                              draws, read with vivac_rules when work is checked. A \
+                              pillar is titled with its name and what it restricts, in \
+                              the project's own words.",
             },
             Arg {
                 name: "blocks",
@@ -441,8 +445,12 @@ const TOOLS: &[Tool] = &[
                 required: false,
                 description: "goal, task, decision, question, constraint, finding, \
                               assumption, pillar or rule. Defaults to goal at the root, \
-                              task otherwise. A pillar is titled with its name and what \
-                              it restricts, in the project's own words.",
+                              task otherwise. A norm the person sets for the work from \
+                              now on is a constraint, with root when it holds for all \
+                              work, so every brief shows it. A rule is a line a pillar \
+                              draws, read with vivac_rules when work is checked. A \
+                              pillar is titled with its name and what it restricts, in \
+                              the project's own words.",
             },
             Arg {
                 name: "blocks",
@@ -501,8 +509,10 @@ const TOOLS: &[Tool] = &[
         title: "Record a decision",
         read_only: false,
         description: "Record a decision, with the reason it was made and every alternative \
-                      that lost. The choice can be yours or the person's, a limit they \
-                      set included; either way it is a decision, never a note. Call it \
+                      that lost. The choice can be yours or the person's; either way \
+                      it is a decision, never a note. A norm the person sets for the \
+                      work from now on is not a choice: file it with vivac_add as a \
+                      constraint, even when they call it a rule. Call it \
                       the moment a choice is actually settled, not before and not long \
                       after: the alternatives are optional in the \
                       schema and not in practice, because without them the same option \

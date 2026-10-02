@@ -7,7 +7,8 @@ page is: the seams of a first session, in the order you meet them, and who
 acts at each.
 
 Capture hangs off the **seams** of the work — starting something, settling a
-choice, telling you what was found, being told *not now*, finishing — and
+choice, being given a norm, telling you what was found, being told *not
+now*, finishing — and
 never off a judgement that something matters enough to write down. A seam
 happens whether or not anybody is thinking about the tree, which is what
 keeps writing to it cheaper than losing the thread.
@@ -55,6 +56,7 @@ it read.
 |---|---|
 | It starts on something, or you ask for something new | a node, opened under the one it continues, after looking whether the tree already holds it. It may look in your other projects too; what it brings from one, it names, and shows you before using it |
 | A choice gets made, by you or with you | a decision, with what was turned down — when it is made, not at the end |
+| You set a norm for the work from now on: *always*, *never*, *let's make it a rule* | a constraint, with your words. At the root when it holds for all the work, so every brief hands it to the agent; under a node, only while the work is inside it. It stays a constraint when you call it a rule: a rule in vivac is a line a pillar draws, read when work is checked, and it reaches no session on its own |
 | It tells you something it found | a finding, one for each thing, as it tells you. One that asks nothing of anyone, a measurement or a lesson, is closed on the spot as a record |
 | You say *not now*, *later*, *leave that* | the node, parked with your words; the next brief lists it under **DO NOT TOUCH NOW**, so the next session does not pick it up |
 | You say *not now, but check back on the 14th* | the same park, with `--until` naming the day; the brief keeps it under DO NOT TOUCH NOW until then and moves it to **BACK FROM PARKED** on its own, without anyone asking |
@@ -110,6 +112,14 @@ round: each one names its tool, the block says how to load them, and the
 commands are one closing line. An answer that comes back through a tool
 names tools too, where it used to name commands.
 
+A fifth was in the kind of node it wrote. Told *let's make it a rule: all
+code in English*, an agent filed a decision under the task it happened to be
+on, because the seams sent every choice of the person's to `decide` and its
+description counted a limit they set as one. Asked why it was not a rule, it
+agreed and made it one, which only reaches a session when somebody asks for
+the rules. A norm for the work from then on now has a row of its own, and
+both tools say it is a constraint, even when it is called a rule.
+
 ### If it slips anyway
 
 No hook reads the conversation. Deciding what in it was worth keeping would be
@@ -120,6 +130,7 @@ the one who notices a skipped seam is you, and a sentence brings it back:
 |---|---|
 | it reports something | *Is that in the tree?* |
 | you have chosen | *Write that down as a decision.* |
+| you set a norm | *That is a constraint for every session.* |
 | you put something off | *Not now. Park it.* |
 | it keeps adding notes to one node | *Is any of that a finding or a decision?* |
 | a long stretch of work | *Are you recording this in vivac?* |

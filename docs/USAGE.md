@@ -94,6 +94,19 @@ the log, which is how a badly worded `--against` is fixed without inventing
 a new decision. `block` marks a
 node as something its parent cannot close over, and `--off` takes it back.
 
+A norm somebody sets for the work from then on, *all code in English* or
+*never touch the generated folder*, is not a decision: it has to hold in every
+session, not only where it was said. It is a constraint, and at the root every
+brief hands it to the agent:
+
+```sh
+vivac add "All code is in English, except comments and docs" --type constraint --root --why "set by the maintainer"
+```
+
+It stays a constraint when somebody calls it a rule. A rule is the line a
+pillar draws, read with `vivac rules` when work is checked, and it reaches no
+session on its own.
+
 A finding that asks nothing of anyone, a lesson or a measurement, is a record:
 write it and close it straight away, with an outcome that starts with
 `Record:`. `find` and `why` still bring it back, and `open` keeps answering
