@@ -1200,7 +1200,7 @@ fn power_is_an_unknown_argument_on_vivac_add_and_writes_nothing() {
     assert_eq!(
         text,
         "vivac_add does not take power.\n\n  \
-         It takes: title parent why type blocks ref governs arm arm_dir against root"
+         It takes: title parent why type blocks ref governs arm arm_dir against root supersedes"
     );
     assert_eq!(before, c.log(), "a refused vivac_add still wrote:\n{text}");
 }

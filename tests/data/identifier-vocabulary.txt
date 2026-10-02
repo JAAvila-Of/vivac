@@ -1550,6 +1550,7 @@ reopened
 reopening
 reordered
 repaired
+reparented
 repeat
 repeated
 repeating
@@ -1864,6 +1865,7 @@ sums
 super
 superseded
 supersedes
+superseding
 surface
 surplus
 survive
@@ -1876,6 +1878,7 @@ suspicious
 svg
 swallow
 swallowed
+swap
 sweep
 switch
 switches

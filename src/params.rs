@@ -40,6 +40,8 @@ pub struct Push {
     /// its own path first. Refused together with `root`, and on a node
     /// that is closed, abandoned or parked (`d757`).
     pub parent: Option<String>,
+    /// The governing node this one replaces (`d994`), as `Decide` has it.
+    pub supersedes: Option<String>,
 }
 
 impl Push {
@@ -66,6 +68,7 @@ impl Push {
             via_mcp: false,
             root: a.has("root"),
             parent: a.opt("parent").map(str::to_string),
+            supersedes: a.opt("supersedes").map(str::to_string),
         })
     }
 }
@@ -187,6 +190,8 @@ pub struct Add {
     pub via_mcp: bool,
     /// See `Push::root`. Refused together with `parent`.
     pub root: bool,
+    /// See `Push::supersedes`.
+    pub supersedes: Option<String>,
 }
 
 impl Add {
@@ -209,6 +214,7 @@ impl Add {
             against: a.list("against"),
             via_mcp: false,
             root: a.has("root"),
+            supersedes: a.opt("supersedes").map(str::to_string),
         })
     }
 }

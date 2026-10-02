@@ -960,6 +960,65 @@ fn kind_of(raw: Option<&str>, fallback: Kind) -> Result<Kind, Failure> {
     }
 }
 
+/// The node `--supersedes` names, once it is fit to be replaced (`d994`).
+/// One check for `add`, `push` and `decide`, run before anything is written:
+/// the old node has to be a governing kind, then still in force, and -- for
+/// `add` and `push`, which pass the kind they are about to create -- the new
+/// node has to be one of those kinds too.
+fn superseded_by(
+    ctx: &Ctx,
+    old: &str,
+    new_kind: Option<Kind>,
+    via_mcp: bool,
+) -> Result<Node, Failure> {
+    let n = ctx.resolve(old)?.clone();
+    let alias = n.alias();
+    if !is_governing(n.kind) {
+        return Err(Failure::Model(format!(
+            "  {alias} cannot be replaced: only a decision, a constraint, a rule or a pillar is. Close it with vivac done instead."
+        )));
+    }
+    if !n.state.is_open() {
+        return Err(Failure::Model(format!(
+            "  {alias} is {} already: only one still in force is replaced.",
+            n.state.word(n.kind)
+        )));
+    }
+    if let Some(kind) = new_kind.filter(|k| !is_governing(*k)) {
+        let (flag, place) = if via_mcp {
+            ("supersedes", "in type")
+        } else {
+            ("--supersedes", "with --type")
+        };
+        return Err(Failure::Model(format!(
+            "  {flag} is only for a decision, a constraint, a rule or a pillar, and this one's type is {}: give it one of those {place}.",
+            kind.word()
+        )));
+    }
+    Ok(n)
+}
+
+/// The event that retires `old` for the node numbered `num` and born as
+/// `kind` (`decide`'s own, now shared with `add` and `push`).
+fn superseded_event(old: &Node, kind: Kind, num: u64) -> Body {
+    Body::StateChanged {
+        node: old.id.clone(),
+        state: State::Superseded,
+        outcome: format!("superseded by {}{num}", kind.prefix()),
+        forced: false,
+        until: None,
+    }
+}
+
+/// The four kinds that govern and so can be replaced: the ones `is_front`
+/// keeps out of pending work.
+fn is_governing(kind: Kind) -> bool {
+    matches!(
+        kind,
+        Kind::Decision | Kind::Constraint | Kind::Pillar | Kind::Rule
+    )
+}
+
 /// The same guard `note` is held to: one line, not empty. `d415`.
 fn validate_arm_text(s: &str) -> Result<(), Failure> {
     if s.trim().is_empty() {
@@ -1281,6 +1340,10 @@ pub fn push(ctx: &mut Ctx, p: params::Push) -> Result<Outcome, Failure> {
             Kind::Task
         },
     )?;
+    let superseded = match &p.supersedes {
+        Some(s) => Some(superseded_by(ctx, s, Some(kind), p.via_mcp)?),
+        None => None,
+    };
     let arms = arms_of(ctx, p.arms, p.arm_dir, kind, p.via_mcp)?;
     let against = against_of(ctx, p.against, kind)?;
     let (ev, num, node, no_against) = born(
@@ -1313,6 +1376,9 @@ pub fn push(ctx: &mut Ctx, p: params::Push) -> Result<Outcome, Failure> {
     // setting off. The `next_intent` is the child being opened, because that
     let v = vivac(ctx, VivacKind::Push, &p.title, parent, "");
     let mut evs = vec![v, ev];
+    if let Some(old) = &superseded {
+        evs.push(superseded_event(old, kind, num));
+    }
     for &n in to_pop.iter().rev() {
         if let Some(left) = ctx.tree.node_by_num(n) {
             evs.push(Body::Popped {
@@ -1379,6 +1445,7 @@ pub fn push(ctx: &mut Ctx, p: params::Push) -> Result<Outcome, Failure> {
         left_stack,
         back_to,
         under: target.map(|t| t.alias()),
+        superseded: superseded.map(|v| outcome::SupersededNode { alias: v.alias() }),
     })
 }
 
@@ -1725,7 +1792,9 @@ pub fn done(ctx: &mut Ctx, p: params::Done) -> Result<Outcome, Failure> {
             "  {alias} is a decision, and a decision stays in force once it is carried\n  \
              out: done would take it off the decisions every session starts with.\n  \
              It stops standing when another decision replaces it:\n    \
-             vivac decide \"<what replaces it>\" --reason \"<why>\" --supersedes {alias}"
+             vivac decide \"<what replaces it>\" --reason \"<why>\" --supersedes {alias}\n  \
+             If it was never a decision, write what it should have been in its place:\n    \
+             vivac add \"<title>\" --type <constraint, rule or pillar> --supersedes {alias}"
         )));
     }
     let left = left_open(&ctx.tree, Some(n.num), &n.refs(&ctx.tree), &p.outcome);
@@ -1761,6 +1830,10 @@ pub fn add(ctx: &mut Ctx, p: params::Add) -> Result<Outcome, Failure> {
             Kind::Task
         },
     )?;
+    let superseded = match &p.supersedes {
+        Some(s) => Some(superseded_by(ctx, s, Some(kind), p.via_mcp)?),
+        None => None,
+    };
     let arms = arms_of(ctx, p.arms, p.arm_dir, kind, p.via_mcp)?;
     let against = against_of(ctx, p.against, kind)?;
     let (ev, num, _, no_against) = born(
@@ -1777,7 +1850,11 @@ pub fn add(ctx: &mut Ctx, p: params::Add) -> Result<Outcome, Failure> {
             against,
         },
     )?;
-    ctx.emit(vec![ev])?;
+    let mut evs = vec![ev];
+    if let Some(old) = &superseded {
+        evs.push(superseded_event(old, kind, num));
+    }
+    ctx.emit(evs)?;
     let parent_info = parent
         .and_then(|id| ctx.tree.node(&id))
         .map(|n| outcome::AddedUnder {
@@ -1790,6 +1867,7 @@ pub fn add(ctx: &mut Ctx, p: params::Add) -> Result<Outcome, Failure> {
         parent: parent_info,
         blocks: p.blocks,
         no_against,
+        superseded: superseded.map(|v| outcome::SupersededNode { alias: v.alias() }),
     })
 }
 
@@ -2204,7 +2282,7 @@ pub fn decide(ctx: &mut Ctx, p: params::Decide) -> Result<Outcome, Failure> {
         "vivac decide \"<title>\" --reason \"<why>\" --parent <ALIAS>",
     )?;
     let superseded = match &p.supersedes {
-        Some(s) => Some(ctx.resolve(s)?.clone()),
+        Some(s) => Some(superseded_by(ctx, s, None, false)?),
         None => None,
     };
 
@@ -2241,13 +2319,7 @@ pub fn decide(ctx: &mut Ctx, p: params::Decide) -> Result<Outcome, Failure> {
     let mut evs = vec![ev];
     if let Some(v) = &superseded {
         // `supersedes` forms a chain: the old one becomes superseded, not deleted.
-        evs.push(Body::StateChanged {
-            node: v.id.clone(),
-            state: State::Superseded,
-            outcome: format!("superseded by d{num}"),
-            forced: false,
-            until: None,
-        });
+        evs.push(superseded_event(v, Kind::Decision, num));
     }
     ctx.emit(evs)?;
     Ok(Outcome::Decided {

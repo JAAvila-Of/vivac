@@ -337,6 +337,16 @@ const TOOLS: &[Tool] = &[
                               nothing on it is closed, and the answer says how to get \
                               back. Refused together with parent.",
             },
+            Arg {
+                name: "supersedes",
+                kind: ArgKind::Str,
+                required: false,
+                description: "An earlier decision, constraint, rule or pillar this one \
+                              replaces, while it is still in force: it becomes superseded \
+                              and keeps its history. For a node filed with the wrong type, \
+                              write the one it should have been and name the old one here. \
+                              This node has to be one of those four types too.",
+            },
         ],
     },
     Tool {
@@ -502,6 +512,16 @@ const TOOLS: &[Tool] = &[
                 description: "Born at the root, with no parent, instead of under the \
                               focus. Refused together with parent.",
             },
+            Arg {
+                name: "supersedes",
+                kind: ArgKind::Str,
+                required: false,
+                description: "An earlier decision, constraint, rule or pillar this one \
+                              replaces, while it is still in force: it becomes superseded \
+                              and keeps its history. For a node filed with the wrong type, \
+                              write the one it should have been and name the old one here. \
+                              This node has to be one of those four types too.",
+            },
         ],
     },
     Tool {
@@ -551,7 +571,8 @@ const TOOLS: &[Tool] = &[
                 name: "supersedes",
                 kind: ArgKind::Str,
                 required: false,
-                description: "An earlier decision this one retires.",
+                description: "An earlier decision, constraint, rule or pillar this one retires, \
+                              while it is still in force.",
             },
             Arg {
                 name: "blocks",
@@ -1081,6 +1102,7 @@ fn call(project: &mut Project, params: &Value) -> Result<String, Failure> {
                 against: a.list("against"),
                 via_mcp: true,
                 root: a.bool("root"),
+                supersedes: a.str("supersedes").map(str::to_string),
                 parent: a.str("parent").map(str::to_string),
             };
             outcome_text(project.write(|ctx| ops::push(ctx, p))?)
@@ -1116,6 +1138,7 @@ fn call(project: &mut Project, params: &Value) -> Result<String, Failure> {
                 arm_dir: a.str("arm_dir").map(str::to_string),
                 against: a.list("against"),
                 via_mcp: true,
+                supersedes: a.str("supersedes").map(str::to_string),
                 root: a.bool("root"),
             };
             outcome_text(project.write(|ctx| ops::add(ctx, p))?)
@@ -1765,6 +1788,7 @@ mod resident_write_tests {
             against: vec![],
             via_mcp: false,
             root: true,
+            supersedes: None,
         }
     }
 

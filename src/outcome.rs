@@ -144,7 +144,7 @@ pub struct RescuedNode {
     pub title: String,
 }
 
-/// The decision `decide --supersedes` retires.
+/// The governing node `--supersedes` retires.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SupersededNode {
     pub alias: String,
@@ -267,6 +267,9 @@ pub enum Outcome {
         /// did.
         #[serde(skip_serializing_if = "Option::is_none")]
         under: Option<String>,
+        /// `d994`: the governing node this one replaced. Always present;
+        /// `null` when it replaced none, as `Decided` has it.
+        superseded: Option<SupersededNode>,
     },
     Popped {
         closed: Closed,
@@ -292,6 +295,9 @@ pub enum Outcome {
         blocks: bool,
         #[serde(skip_serializing_if = "is_false")]
         no_against: bool,
+        /// `d994`: the governing node this one replaced. Always present;
+        /// `null` when it replaced none, as `Decided` has it.
+        superseded: Option<SupersededNode>,
     },
     Noted {
         alias: String,
@@ -554,8 +560,12 @@ fn text_in(o: &Outcome, form: Form) -> String {
             left_stack,
             back_to,
             under,
+            superseded,
         } => {
             lines.push(format!("  {alias}  {title}"));
+            if let Some(s) = superseded {
+                lines.push(format!("        {} becomes superseded", s.alias));
+            }
             if *blocks {
                 lines.push("        blocks its parent from closing".to_string());
             }
@@ -632,12 +642,16 @@ fn text_in(o: &Outcome, form: Form) -> String {
             parent,
             blocks,
             no_against,
+            superseded,
         } => {
             let where_at = match parent {
                 Some(p) => format!(" under {}", p.alias),
                 None => " (root)".to_string(),
             };
             lines.push(format!("  {alias}  {title}{where_at}"));
+            if let Some(s) = superseded {
+                lines.push(format!("        {} becomes superseded", s.alias));
+            }
             if *blocks {
                 lines.push("        blocks its parent from closing".to_string());
             }
