@@ -210,7 +210,7 @@ impl Ctx {
     /// For a command that may append to the log. Still free to read a warm
     /// or stale index -- applying its tail is cheap enough for the write
     /// budget -- but it must never pay to rewrite the file itself
-    /// (`LOADING.md` §4 "Cuándo se reescribe").
+    /// (`LOADING.md` §4, "when it is rewritten").
     pub fn load_for_write(store: Store, whose: Whose) -> Result<Ctx, Failure> {
         Ctx::load_opt(store, false, whose)
     }

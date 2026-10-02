@@ -3,8 +3,8 @@
 //! This file exists because output that is not English got through **five
 //! separate times** during the port. Twice a rename reached inside string
 //! literals and swapped words for whatever the surrounding code happened to
-//! call them -- `vivac open` printed *"6 frente openeds"*, subtree counts came
-//! out as *"3 open_count / 8 closed_count"* -- and twice the prose pass simply
+//! call them -- `vivac open` printed `"6 frente openeds"`, subtree counts came
+//! out as `"3 open_count / 8 closed_count"` -- and twice the prose pass simply
 //! never opened the line. Every time it compiled, every time the suite stayed
 //! green, and the only thing that ever caught one was running the binary by
 //! hand.
@@ -22,9 +22,9 @@
 //! **The word list is derived, not remembered, and that is the point.** The
 //! first version of this file carried a list of the Spanish words that had
 //! already been caught, which is a list of the bugs somebody had already
-//! found. It went green over `main.rs` still answering *"Comando
-//! desconocido"* and *"push no acepta --bogus"*, because nobody had thought
-//! to write down `comando` or `acepta`.
+//! found. It went green over `main.rs` still answering `"Comando desconocido"`
+//! and `"push no acepta --bogus"`, because nobody had thought to write down
+//! `comando` or `acepta`.
 //!
 //! `tests/data/spanish-vocabulary.txt` is instead every word the binary
 //! printed while it was Spanish -- lifted from the string literals of commit
@@ -249,7 +249,7 @@ fn the_word_list_is_still_a_word_list() {
     }
 }
 
-/// `block --off` printed *"f2 ya no blocks the close of g1"*: half the
+/// `block --off` printed `"f2 ya no blocks the close of g1"`: half the
 /// sentence translated, half of it not. Nothing looked at that line, which is
 /// how it survived the port and shipped in `0.2.0`.
 #[test]

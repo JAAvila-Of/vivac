@@ -1632,7 +1632,7 @@ impl Tree {
     ///
     /// `pending` and `repeated_nums` start empty on purpose: the index is
     /// never written while either is non-empty (`has_pending`, below, and
-    /// `LOADING.md` §4 "Un log con anomalías no lleva índice"), so a tree
+    /// `LOADING.md` §4: "a log with anomalies gets no index"), so a tree
     /// loaded this way never had either to begin with.
     pub(crate) fn from_parts(mut p: RawParts) -> Tree {
         p.nodes.sort_by_key(|n| n.num);

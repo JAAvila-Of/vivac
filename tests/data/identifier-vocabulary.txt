@@ -143,6 +143,7 @@ back
 backdate
 backend
 backslash
+backtick
 backwards
 bad
 bare
@@ -357,6 +358,7 @@ comes
 command
 commands
 comment
+comments
 commit
 commits
 committed
@@ -377,6 +379,7 @@ conflicts
 connect
 connection
 connector
+consecutive
 console
 const
 constant
@@ -538,8 +541,10 @@ display
 distance
 distinct
 div
+divides
 do
 docs
+docstring
 documented
 doe
 does
@@ -958,6 +963,7 @@ iterator
 its
 itself
 jar
+javascript
 join
 joined
 joiner
@@ -1009,6 +1015,7 @@ length
 let
 lets
 letter
+letters
 level
 levels
 lexically
@@ -1425,6 +1432,8 @@ pushed
 pushes
 pushing
 px
+py
+python
 query
 question
 questions
@@ -1499,6 +1508,7 @@ refusing
 regardless
 regenerated
 regenerates
+regex
 regional
 registered
 registers
@@ -2049,6 +2059,7 @@ uppercase
 upto
 upward
 url
+urls
 usage
 use
 used
@@ -2174,6 +2185,7 @@ wrong
 wrote
 ws
 x1b
+yaml
 year
 yellow
 yes

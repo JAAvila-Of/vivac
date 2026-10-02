@@ -169,7 +169,7 @@ fn a_query_with_the_accent_finds_text_written_without_one() {
         "--type",
         "task",
     ]);
-    let s = c.ok(&["find", "due\u{00f1}o"]); // dueño
+    let s = c.ok(&["find", "due\u{00f1}o"]); // `dueño`
     assert!(s.contains("The process with no dueno assigned"), "{s}");
 }
 
@@ -180,7 +180,7 @@ fn an_upper_cased_accented_query_still_folds() {
     let c = seeded("fold-case-and-accent");
     c.ok(&[
         "add",
-        "El \u{e1}rbol del proyecto", // árbol
+        "El \u{e1}rbol del proyecto", // `árbol`
         "--why",
         "an unrelated reason",
         "--type",
@@ -188,7 +188,7 @@ fn an_upper_cased_accented_query_still_folds() {
     ]);
     let s = c.ok(&["find", "arbol"]);
     assert!(s.contains("rbol del proyecto"), "{s}");
-    let s = c.ok(&["find", "\u{c1}RBOL"]); // ÁRBOL
+    let s = c.ok(&["find", "\u{c1}RBOL"]); // `ÁRBOL`
     assert!(s.contains("rbol del proyecto"), "{s}");
 }
 
@@ -201,7 +201,7 @@ fn decomposed_and_precomposed_accents_find_each_other() {
     let c = seeded("fold-nfd");
     c.ok(&[
         "add",
-        "Buy caf\u{e9} beans", // precomposed é
+        "Buy caf\u{e9} beans", // precomposed `é`
         "--why",
         "an unrelated reason",
         "--type",
@@ -230,7 +230,7 @@ fn decomposed_and_precomposed_accents_find_each_other() {
 #[test]
 fn the_snippet_centres_on_the_hit_past_multibyte_accents() {
     let c = seeded("fold-snippet");
-    let lead = "\u{f1}\u{e9}\u{e1}\u{fc}\u{e7} filler word ".repeat(10); // ñéáüç...
+    let lead = "\u{f1}\u{e9}\u{e1}\u{fc}\u{e7} filler word ".repeat(10); // `ñéáüç`...
     let trail = " filler word".repeat(10);
     let long_why = format!("zzzfrontword {lead}zzzneedle{trail} zzzendword");
     c.ok(&[
