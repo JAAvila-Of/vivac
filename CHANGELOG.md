@@ -7,11 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.17.24](https://github.com/JAAvila-Of/vivac/compare/v0.17.23...v0.17.24) - 2026-10-02
+## [0.18.0](https://github.com/JAAvila-Of/vivac/compare/v0.17.23...v0.18.0) - 2026-10-02
+
+### Upgrading
+
+- **`vivac decide --supersedes` refuses anything but a decision, a
+  constraint, a rule or a pillar that is still in force.** It used to mark
+  whatever it was given as superseded: a task, a finding, a goal, a node
+  already closed. It now exits `1`, writes nothing, and says what to do
+  instead. A script that superseded a task or a closed node with `decide`
+  has to close it with `vivac done`.
 
 ### Added
 
-- *(supersede)* let add and push replace a governing node ([#261](https://github.com/JAAvila-Of/vivac/pull/261))
+- *(supersede)* [**breaking**] let add and push replace a governing node ([#261](https://github.com/JAAvila-Of/vivac/pull/261))
 
 ### Fixed
 
