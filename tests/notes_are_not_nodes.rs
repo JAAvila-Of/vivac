@@ -378,8 +378,63 @@ fn the_tool_texts_carry_the_new_sentences() {
     let decide = description("vivac_decide");
     assert!(
         decide.contains(
-            "Record a decision, with the reason it was made and every alternative that lost. The choice can be yours or the person's, a limit they set included; either way it is a decision, never a note."
+            "Record a decision, with the reason it was made and every alternative that lost. The choice can be yours or the person's; either way it is a decision, never a note."
         ),
         "{decide}"
     );
+}
+
+/// `d993`, `f990`: told "let's make it a rule: all code in English", an agent
+/// filed it as a decision under the task it was on, because `vivac_decide`
+/// said a limit the person sets is one; asked why it was not a rule, it moved
+/// it to a rule, which reaches no session unless somebody asks for the rules.
+/// A norm is a constraint, and the seams, `vivac_decide` and the `type` of
+/// `vivac_add` and `vivac_push` all say so.
+#[test]
+fn a_norm_the_person_sets_is_taught_as_a_constraint() {
+    let c = Sandbox::new_seeded("nn-norm-seam");
+    c.ok(&["push", "A goal", "--why", "to have a focus"]);
+    let (plain, _) = c.run_stdin(&["session", "start", "--hook"], "{}");
+    assert!(
+        plain.contains(
+            "  a norm is set        vivac_add  title, type: constraint, why: their words\n                       root, if it holds for all work: every brief shows it\n                       a constraint even when they call it a rule\n"
+        ),
+        "{plain}"
+    );
+    assert_eq!(
+        plain.matches("mcp__vivac__vivac_add,").count(),
+        1,
+        "a second row for vivac_add put it in the load list twice:\n{plain}"
+    );
+    let mut s = Server::start(&c);
+    let r = s.ask(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#);
+    let tools = r["result"]["tools"].as_array().unwrap();
+    let tool = |name: &str| -> Value {
+        tools
+            .iter()
+            .find(|t| t["name"] == name)
+            .unwrap_or_else(|| panic!("no {name}"))
+            .clone()
+    };
+    let decide = tool("vivac_decide")["description"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(!decide.contains("a limit they set"), "{decide}");
+    assert!(
+        decide.contains(
+            "A norm the person sets for the work from now on is not a choice: file it with vivac_add as a constraint, even when they call it a rule."
+        ),
+        "{decide}"
+    );
+    for name in ["vivac_add", "vivac_push"] {
+        let text = tool(name)["inputSchema"]["properties"]["type"]["description"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{name} has no type"))
+            .to_string();
+        assert!(
+            text.contains("A norm the person sets for the work from now on is a constraint, with root when it holds for all work, so every brief shows it. A rule is a line a pillar draws, read with vivac_rules when work is checked."),
+            "{name}: {text}"
+        );
+    }
 }

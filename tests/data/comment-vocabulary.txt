@@ -2407,6 +2407,7 @@ non
 none
 noon
 nor
+norm
 normal
 normalisation
 normalises
