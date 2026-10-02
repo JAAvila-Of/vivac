@@ -87,7 +87,7 @@ exists, `t145` or its ULID, is refused: it is nearly always the parent typed
 where the title goes, and the refusal gives the command with `--parent`.
 
 `decide` takes `--alternative` for what was turned down and `--supersedes` for
-the decision it replaces, so a reversal reads from either end. `declare`
+what it replaces, so a reversal reads from either end. `declare`
 names, after the fact, the pillar or rule a decision was judged against;
 declaring the same one again replaces its sentence, keeping the old one in
 the log, which is how a badly worded `--against` is fixed without inventing
@@ -106,6 +106,22 @@ vivac add "All code is in English, except comments and docs" --type constraint -
 It stays a constraint when somebody calls it a rule. A rule is the line a
 pillar draws, read with `vivac rules` when work is checked, and it reaches no
 session on its own.
+
+`add` and `push` take `--supersedes` as well. A constraint, a rule or a
+pillar that changes is written again, naming the one it replaces, and so is a
+node filed as the wrong kind: a norm that went in as a decision becomes the
+constraint it should have been, and the decision stops standing without a
+second decision written only to retire it.
+
+```sh
+vivac add "All code is in English, except comments and docs" --type constraint --root --supersedes d14
+```
+
+Only a decision, a constraint, a rule or a pillar replaces another or is
+replaced, and only one still in force. The old one keeps its place and its
+history, marked as superseded by the new one, and nothing moves: to regroup
+rules under a new pillar, write each rule again under it, replacing the old
+one.
 
 A finding that asks nothing of anyone, a lesson or a measurement, is a record:
 write it and close it straight away, with an outcome that starts with

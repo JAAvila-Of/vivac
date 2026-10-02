@@ -60,7 +60,7 @@ const USAGE: &str = r#"vivac - provenance of work
           [--blocks]         its parent cannot close until this one closes
           [--parent N]       under N and not the focus; the stack goes to N
           [--root]           born at the root; the stack keeps only it
-          [--ref R] [--governs G]
+          [--ref R] [--governs G] [--supersedes d9]
           [--arm "<command>"]  what verifies a rule; vivac never runs it
           [--arm-dir <dir>]    where it runs, relative to where .vivac lives
           [--against "r12: <why>"]  on a decision: what it was judged against
@@ -81,7 +81,7 @@ const USAGE: &str = r#"vivac - provenance of work
     vivac add "<title>" [--parent N | --root] [--why "<reason>"] [--blocks]
           [--type goal|task|decision|question|constraint|finding|assumption
                   |pillar|rule]
-          [--ref R] [--governs G]
+          [--ref R] [--governs G] [--supersedes d9]
           [--arm "<command>"]  what verifies a rule; vivac never runs it
           [--arm-dir <dir>]    where it runs, relative to where .vivac lives
           [--against "r12: <why>"]  on a decision: what it was judged against
@@ -561,8 +561,17 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
     // describes.
     let allowed: &[&str] = match cmd {
         "push" => &[
-            "why", "type", "blocks", "root", "parent", "ref", "governs", "arm", "arm-dir",
+            "why",
+            "type",
+            "blocks",
+            "root",
+            "parent",
+            "ref",
+            "governs",
+            "arm",
+            "arm-dir",
             "against",
+            "supersedes",
         ],
         "pop" => &["force", "next"],
         "decide" => &[
@@ -584,8 +593,17 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         "brief" => &["budget", "now"],
         "session" => &["hook", "next", "budget", "now", "dry-run"],
         "add" => &[
-            "parent", "why", "type", "blocks", "ref", "governs", "arm", "arm-dir", "against",
+            "parent",
+            "why",
+            "type",
+            "blocks",
+            "ref",
+            "governs",
+            "arm",
+            "arm-dir",
+            "against",
             "root",
+            "supersedes",
         ],
         "done" => &["force"],
         "abandon" => &["cascade", "rescue"],

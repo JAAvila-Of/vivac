@@ -1609,6 +1609,7 @@ gotten
 govern
 governance
 governed
+governing
 governs
 grab
 grammar
