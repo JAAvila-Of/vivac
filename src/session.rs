@@ -314,6 +314,21 @@ fn read_verdict(path: &std::path::Path) -> Option<(String, Verdict)> {
     Some((at, Verdict::parse(words)?))
 }
 
+/// Read the same evidence as the close rehearsal, without touching its file.
+/// A verdict belongs to the lane, not to a particular harness.
+pub(crate) fn close_evidence(
+    located: &crate::store::Located,
+) -> Option<(String, String, &'static str)> {
+    read_verdict(&verdict_path(located)).map(|(at, v)| {
+        let status = match v {
+            Verdict::LockBusy => "warning",
+            Verdict::Failed => "error",
+            _ => "ok",
+        };
+        (at, v.past(), status)
+    })
+}
+
 /// `session end --dry-run` (`d935`): what closing would do now, and what
 /// the close hook decided the last time it ran in this lane. Writes
 /// nothing and takes no lock: it is a person looking.

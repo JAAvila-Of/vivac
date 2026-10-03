@@ -870,6 +870,7 @@ dagesh
 damage
 damaged
 damages
+damaging
 dance
 dangerous
 dangling
@@ -1018,6 +1019,7 @@ development
 diacritic
 diacritical
 diacritics
+diagnose
 diagramas
 did
 die
@@ -1285,6 +1287,7 @@ exceeds
 except
 exception
 exceptions
+excerpts
 exchange
 excluded
 excludes
@@ -2124,6 +2127,7 @@ lives
 living
 load
 loaded
+loader
 loading
 loads
 local
@@ -2253,6 +2257,7 @@ mention
 mentioned
 mentions
 menu
+mere
 merely
 merge
 merged
@@ -2714,6 +2719,7 @@ pop
 popped
 popping
 pops
+populate
 port
 portable
 ported
@@ -2964,6 +2970,7 @@ recognise
 recognised
 recognises
 recognising
+recognition
 recognizing
 recommending
 recommends
@@ -4103,6 +4110,7 @@ unlocked
 unlocks
 unmerged
 unmistakably
+unmodified
 unnamed
 unnormalized
 unnoticed

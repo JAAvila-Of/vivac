@@ -262,12 +262,36 @@ vivac reconcile     files that changed with nothing in the tree claiming them
 vivac changes       what a stretch of work opened, closed and marked
 vivac stats         the numbers
 vivac check         the invariants; this one belongs in CI
+vivac doctor        project configuration and observed hook execution
 ```
 
 Everything the agent needs to do can be done from the command line, with no
 interface in the way, and every one of those reads takes `--json` — every one
 but the `brief`, which is written to be injected into a session and read as
 prose, never parsed.
+
+`doctor` checks the configuration in the current lane's folder and reads the
+evidence left by its hooks, without changing any files or starting a harness.
+Without an argument it examines the harnesses with project configuration;
+`doctor claude-code` or `doctor codex` selects one explicitly. It reports
+missing files and commands with a step to fix them. An installed command is
+**configured**, not proof that it ran.
+
+The opening recorded in the log and the last close-hook result identify a
+lane, not a harness. The close result is local to this machine and may be lost
+when temporary files are cleared. Both include their recorded time; neither
+proves that the current session or a newly edited configuration works. The
+prompt hook has no persisted execution record, so only its configuration is
+checked. Codex's project trust and hook approval remain unverified: open the
+project in Codex and inspect `/hooks`. Custom hook commands and modified
+Codex server blocks are also reported as unverified; doctor does not parse
+the surrounding TOML or test a connection to the MCP server.
+
+An exit code of `0` means no configuration, read or hook errors were found; it can
+still contain unverified checks. `1` means at least one such error was found,
+and `2` means the command's arguments were invalid. `doctor --json` returns
+`checks` with `name`, `status` (`ok`, `warning` or `error`), `detail` and an
+optional `fix`, plus the total `errors`. `check` still examines tree invariants.
 
 Some of them carry more than the line suggests. `why --full` adds the anchor,
 the standing decisions and the open siblings at every step of the path, which

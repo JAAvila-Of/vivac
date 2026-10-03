@@ -134,6 +134,8 @@ const USAGE: &str = r#"vivac - provenance of work
     vivac stats                               numbers
     vivac check [--gates]                     invariants; belongs in CI
           --gates    also every tree on this machine that nobody opens
+    vivac doctor [claude-code|codex]          project setup and observed hooks
+          --json     checks, statuses and steps to fix them
 
   Session
 
@@ -266,6 +268,7 @@ const COMMANDS: &[&str] = &[
     "changes",
     "stats",
     "check",
+    "doctor",
     "session",
     "mcp",
     "web",
@@ -649,6 +652,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         // `--gates` is its own on top of `--json`: the machine-wide scan
         // `d351` adds is nothing the other reads in this arm take.
         "check" => &["json", "gates"],
+        "doctor" => &["json"],
         // `--full` is its own on top of `--json`, so `why` cannot share the
         // arm above without granting every other read a flag it does not
         // read. `--project` is `d273`'s second half: it answers from
@@ -768,6 +772,11 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
     // to fall back to the current directory (`t565` §7.2).
     if cmd == "setup" {
         return setup::dispatch(&cwd, a);
+    }
+
+    // Diagnose before the usual loader: it can rebuild config and index.
+    if cmd == "doctor" {
+        return setup::doctor::run(&cwd, a);
     }
 
     // `--everywhere` reads the registry instead of the tree underfoot, so

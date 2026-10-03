@@ -111,7 +111,7 @@ const CONFIG_CLOSE_MARKER: &str = "# end of what vivac setup codex added";
 
 /// `d654`: written whole between the two markers above -- the block itself,
 /// unchanged from tranche 1.
-const CONFIG_CONTENT: &str = "# added by vivac setup codex\n\
+pub(super) const CONFIG_CONTENT: &str = "# added by vivac setup codex\n\
 [mcp_servers.vivac]\n\
 command = \"vivac\"\n\
 args = [\"mcp\"]\n\
