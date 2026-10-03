@@ -315,7 +315,7 @@ pub(super) fn remove_hook(root: &mut Value, event: &str, command: &str) -> bool 
 // The MCP server entry.
 // ---------------------------------------------------------------------------
 
-enum McpState {
+pub(super) enum McpState {
     Missing,
     Ours,
     OtherName(String),
@@ -352,7 +352,7 @@ fn is_our_mcp_entry(v: &Value) -> bool {
     is_vivac && args_ok
 }
 
-fn mcp_state(root: &Value) -> McpState {
+pub(super) fn mcp_state(root: &Value) -> McpState {
     let Some(servers) = root.get("mcpServers").and_then(Value::as_object) else {
         return McpState::Missing;
     };

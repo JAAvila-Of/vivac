@@ -287,12 +287,14 @@ characters
 chars
 check
 checked
+checks
 checksum
 child
 children
 chinese
 choice
 choose
+chosen
 chunk
 chunked
 chunks
@@ -373,6 +375,7 @@ compute
 concat
 condition
 config
+configuration
 confirms
 conflict
 conflicts
@@ -447,6 +450,7 @@ cwd
 cyan
 cycle
 d200
+damage
 dash
 dashed
 dashes
@@ -530,6 +534,8 @@ direct
 directly
 directory
 dirty
+disable
+disabled
 disables
 disagrees
 disappear
@@ -545,6 +551,7 @@ divides
 do
 docs
 docstring
+doctor
 documented
 doe
 does
@@ -580,6 +587,7 @@ each
 earlier
 earn
 eats
+echo
 echoes
 edges
 edit
@@ -627,6 +635,7 @@ era
 erase
 err
 error
+errors
 escape
 escaped
 escapes
@@ -640,6 +649,7 @@ ever
 every
 everything
 everywhere
+evidence
 evs
 exact
 exactly
@@ -651,6 +661,7 @@ excluding
 exclusive
 excuse
 exe
+execution
 exist
 existing
 exists
@@ -715,6 +726,7 @@ first
 fit
 fits
 five
+fix
 fixed
 fixes
 fixture
@@ -856,6 +868,7 @@ hexdigit
 hh
 hi
 hidden
+hide
 hides
 hiding
 high
@@ -1094,6 +1107,7 @@ mask
 match
 matched
 matcher
+matchers
 matches
 matching
 matter
@@ -1134,6 +1148,7 @@ mm
 mod
 mode
 model
+modes
 modified
 mon
 month
@@ -1212,6 +1227,7 @@ nums
 obj
 object
 observe
+observed
 of
 off
 offenders
@@ -2081,6 +2097,7 @@ v2
 val
 valid
 validate
+validated
 value
 values
 vanished
@@ -2122,6 +2139,7 @@ walk
 walking
 walks
 want
+warm
 warn
 warning
 warns
