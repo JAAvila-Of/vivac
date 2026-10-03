@@ -368,17 +368,15 @@ fn handle_json(a: &Tree, n: &Node) -> serde_json::Value {
     })
 }
 
-fn supersedes_by_alias(a: &Tree) -> HashMap<String, Vec<&Node>> {
-    let mut replacements: HashMap<String, Vec<&Node>> = HashMap::new();
+fn supersedes_by_alias<'a>(a: &'a Tree, steps: &[&Node]) -> HashMap<String, Vec<&'a Node>> {
+    let mut replacements: HashMap<String, Vec<&Node>> =
+        steps.iter().map(|n| (n.alias(), Vec::new())).collect();
     for old in a.nodes_iter().filter(|n| n.state == State::Superseded) {
         let Some(alias) = old.outcome(a).strip_prefix("superseded by ") else {
             continue;
         };
-        let Some(target) = a.resolve(alias) else {
-            continue;
-        };
-        if target.alias() == alias {
-            replacements.entry(alias.to_string()).or_default().push(old);
+        if let Some(nodes) = replacements.get_mut(alias) {
+            nodes.push(old);
         }
     }
     for old in replacements.values_mut() {
@@ -593,7 +591,12 @@ fn why_data_impl(
         }
     };
     let lineage = a.ancestors(n.num);
-    let replacements = supersedes_by_alias(a);
+    let steps = if only {
+        std::slice::from_ref(&n)
+    } else {
+        &lineage[..]
+    };
+    let replacements = supersedes_by_alias(a, steps);
     let mut node_json = if full_extra {
         json_node_full(a, ag, full, n)
     } else {
@@ -1003,8 +1006,6 @@ pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
         return print_json(why_data_impl(a, &full_data, full_extra, only, s)?);
     }
 
-    let replacements = supersedes_by_alias(a);
-
     let out = Stream::Out;
     outln!();
     outln!(
@@ -1044,6 +1045,7 @@ pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
     } else {
         &lineage[..]
     };
+    let replacements = supersedes_by_alias(a, steps);
     for (i, p) in steps.iter().enumerate() {
         let is_last = i == steps.len() - 1;
         // The node actually asked about prints whole either way; an
