@@ -17,6 +17,178 @@ use common::Sandbox;
 use serde_json::Value;
 use std::collections::BTreeSet;
 
+#[test]
+fn supersedes_follows_direct_replacements_across_kinds_and_path_steps() {
+    let c = Sandbox::new_seeded("why-supersedes-path");
+    c.ok(&["decide", "Original choice", "--reason", "reason", "--root"]);
+    c.ok(&[
+        "add",
+        "Replacement norm",
+        "--type",
+        "constraint",
+        "--why",
+        "reason",
+        "--root",
+        "--supersedes",
+        "d1",
+    ]);
+    c.ok(&[
+        "push",
+        "Replacement rule",
+        "--type",
+        "rule",
+        "--why",
+        "reason",
+        "--root",
+        "--supersedes",
+        "c2",
+    ]);
+    c.ok(&[
+        "decide",
+        "Current choice",
+        "--reason",
+        "reason",
+        "--root",
+        "--supersedes",
+        "r3",
+    ]);
+    c.ok(&["add", "Child", "--why", "reason", "--parent", "d4"]);
+    for (alias, old, title) in [
+        ("c2", "d1", "Original choice"),
+        ("r3", "c2", "Replacement norm"),
+        ("d4", "r3", "Replacement rule"),
+    ] {
+        for flags in [
+            vec![],
+            vec!["--full"],
+            vec!["--only"],
+            vec!["--only", "--full"],
+        ] {
+            let mut args = vec!["why", alias];
+            args.extend(&flags);
+            let prose = c.ok(&args);
+            assert!(
+                prose.contains(&format!("Supersedes {old}: {title}")),
+                "{prose}"
+            );
+            args.push("--json");
+            let v: Value = serde_json::from_str(&c.ok(&args)).unwrap();
+            let handles = v["node"]["supersedes"]
+                .as_array()
+                .expect("replacement handles");
+            assert_eq!(handles.len(), 1, "{v}");
+            assert_eq!(handles[0]["alias"], old, "{v}");
+            assert_eq!(handles[0]["title"], title, "{v}");
+            assert_eq!(handles[0].as_object().unwrap().len(), 4, "{v}");
+        }
+    }
+    for flags in [vec![], vec!["--full"]] {
+        let mut args = vec!["why", "t5"];
+        args.extend(&flags);
+        let prose = c.ok(&args);
+        assert!(prose.contains("Supersedes r3: Replacement rule"), "{prose}");
+        assert!(!prose.contains("Supersedes c2:"), "{prose}");
+        args.push("--json");
+        let v: Value = serde_json::from_str(&c.ok(&args)).unwrap();
+        assert_eq!(v["path"][0]["supersedes"][0]["alias"], "r3", "{v}");
+        assert!(v["node"].get("supersedes").is_none(), "{v}");
+    }
+}
+
+#[test]
+fn supersedes_requires_exact_outcome_canonical_alias_and_superseded_state() {
+    let c = Sandbox::new_seeded("why-supersedes-evidence");
+    c.ok(&["decide", "Old choice", "--reason", "reason", "--root"]);
+    c.ok(&[
+        "decide",
+        "Current choice",
+        "--reason",
+        "reason",
+        "--root",
+        "--supersedes",
+        "d1",
+        "--ref",
+        "d1",
+    ]);
+    let events: Vec<Value> = c
+        .log()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let original = events
+        .iter()
+        .find(|e| e["payload"]["type"] == "state.changed" && e["payload"]["state"] == "superseded")
+        .unwrap()
+        .clone();
+    for (i, outcome) in [
+        "superseded by 2",
+        "superseded by d2 ",
+        "superseded by d2: reason",
+        "almost superseded by d2",
+        "superseded by d999",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let mut event = original.clone();
+        event["seq"] = serde_json::json!(100 + i);
+        event["payload"]["outcome"] = serde_json::json!(outcome);
+        c.append_raw_line(&event.to_string());
+        let v: Value = serde_json::from_str(&c.ok(&["why", "d2", "--json"])).unwrap();
+        assert!(v["node"].get("supersedes").is_none(), "{outcome}: {v}");
+        assert!(!c.ok(&["why", "d2"]).contains("Supersedes"));
+    }
+    let mut event = original;
+    event["seq"] = serde_json::json!(200);
+    event["payload"]["state"] = serde_json::json!("done");
+    c.append_raw_line(&event.to_string());
+    let v: Value = serde_json::from_str(&c.ok(&["why", "d2", "--json"])).unwrap();
+    assert!(v["node"].get("supersedes").is_none(), "{v}");
+    assert_eq!(
+        v["node"]["refs"].as_array().unwrap().len(),
+        1,
+        "the reference alone must not count: {v}"
+    );
+}
+
+#[test]
+fn supersedes_clips_only_ancestor_titles_and_keeps_the_old_alias() {
+    let c = Sandbox::new_seeded("why-supersedes-long");
+    let title = "Earlier choice ".repeat(12);
+    c.ok(&["decide", &title, "--reason", "reason", "--root"]);
+    c.ok(&[
+        "decide",
+        "Current choice",
+        "--reason",
+        "reason",
+        "--root",
+        "--supersedes",
+        "d1",
+    ]);
+    c.ok(&["add", "Child", "--why", "reason", "--parent", "d2"]);
+    let plain = c.ok(&["why", "t3"]);
+    let line = plain
+        .lines()
+        .find(|line| line.contains("Supersedes d1:"))
+        .unwrap();
+    assert!(line.contains("..."), "{plain}");
+    assert!(line.trim().len() <= 62, "{line}");
+    for args in [vec!["why", "d2", "--only"], vec!["why", "t3", "--full"]] {
+        let prose = c.ok(&args);
+        assert_eq!(prose.matches("Earlier choice").count(), 12, "{prose}");
+    }
+    let plain: Value = serde_json::from_str(&c.ok(&["why", "t3", "--json"])).unwrap();
+    assert!(
+        plain["path"][0]["supersedes"][0]["title"]
+            .as_str()
+            .unwrap()
+            .ends_with("..."),
+        "{plain}"
+    );
+    let full = full_json(&c, "t3");
+    assert_eq!(full["path"][0]["supersedes"][0]["title"], title, "{full}");
+}
+
 /// `g1` (root), two siblings under it -- one closed before `t4` is born, one
 /// closed after -- and `t4` itself, the node every test below asks about.
 /// Two decisions are added last, one superseding the other, so their order

@@ -123,6 +123,12 @@ history, marked as superseded by the new one, and nothing moves: to regroup
 rules under a new pillar, write each rule again under it, replacing the old
 one.
 
+`why` on the replacement names the superseded node by alias and title, both
+in text and in a compact `supersedes` array in JSON. The link also appears
+when the replacement is an ancestor in the path. It comes from the old
+node's superseded state and recorded replacement; an ordinary reference
+does not establish it.
+
 A finding that asks nothing of anyone, a lesson or a measurement, is a record:
 write it and close it straight away, with an outcome that starts with
 `Record:`. `find` and `why` still bring it back, and `open` keeps answering

@@ -368,6 +368,40 @@ fn handle_json(a: &Tree, n: &Node) -> serde_json::Value {
     })
 }
 
+fn supersedes_by_alias(a: &Tree) -> HashMap<String, Vec<&Node>> {
+    let mut replacements: HashMap<String, Vec<&Node>> = HashMap::new();
+    for old in a.nodes_iter().filter(|n| n.state == State::Superseded) {
+        let Some(alias) = old.outcome(a).strip_prefix("superseded by ") else {
+            continue;
+        };
+        let Some(target) = a.resolve(alias) else {
+            continue;
+        };
+        if target.alias() == alias {
+            replacements.entry(alias.to_string()).or_default().push(old);
+        }
+    }
+    for old in replacements.values_mut() {
+        old.sort_by_key(|n| n.num);
+    }
+    replacements
+}
+
+fn add_supersedes_json(a: &Tree, old: &[&Node], clipped: bool, v: &mut serde_json::Value) {
+    if !old.is_empty() {
+        v["supersedes"] = json!(old
+            .iter()
+            .map(|n| {
+                let mut handle = handle_json(a, n);
+                if clipped {
+                    handle["title"] = json!(clip(n.title(a), ANCESTOR_CLIP));
+                }
+                handle
+            })
+            .collect::<Vec<_>>());
+    }
+}
+
 /// `d771`'s own selection: which of `nodes` -- an open sibling list or an
 /// open child list, already in birth order -- `why` actually prints, and how
 /// many were left out. `full` skips the cap entirely, the escape hatch every
@@ -559,6 +593,7 @@ fn why_data_impl(
         }
     };
     let lineage = a.ancestors(n.num);
+    let replacements = supersedes_by_alias(a);
     let mut node_json = if full_extra {
         json_node_full(a, ag, full, n)
     } else {
@@ -567,6 +602,15 @@ fn why_data_impl(
         trim_notes(&mut v);
         v
     };
+    add_supersedes_json(
+        a,
+        replacements
+            .get(&n.alias())
+            .map(Vec::as_slice)
+            .unwrap_or_default(),
+        false,
+        &mut node_json,
+    );
     // `t429`'s second fix: the JSON names the hidden claimants too, and
     // `t594` widens `hidden` to a list, since a hand-edited log can hand the
     // same `num` to more than two -- the same claimants the prose names, in
@@ -626,7 +670,16 @@ fn why_data_impl(
         "node": node_json,
         "path": lineage[..lineage.len().saturating_sub(1)]
             .iter()
-            .map(|p| path_step_json(a, ag, full, full_extra, p))
+            .map(|p| {
+                let mut step = path_step_json(a, ag, full, full_extra, p);
+                add_supersedes_json(
+                    a,
+                    replacements.get(&p.alias()).map(Vec::as_slice).unwrap_or_default(),
+                    !full_extra,
+                    &mut step,
+                );
+                step
+            })
             .collect::<Vec<_>>(),
         "in_parallel": siblings,
         "in_parallel_more": in_parallel_more,
@@ -950,6 +1003,8 @@ pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
         return print_json(why_data_impl(a, &full_data, full_extra, only, s)?);
     }
 
+    let replacements = supersedes_by_alias(a);
+
     let out = Stream::Out;
     outln!();
     outln!(
@@ -1025,6 +1080,14 @@ pub fn why(a: &Tree, log: &[Event], args: &Args) -> R {
                 len: suffix_len,
             },
         );
+        for old in replacements.get(&alias).into_iter().flatten() {
+            let prefix = format!("Supersedes {}: ", old.alias());
+            let title = body(old.title(a), columns(&prefix));
+            let width = cap.map(|w| w.saturating_sub(8).min(WIDTH)).unwrap_or(WIDTH);
+            for line in wrap(&format!("{prefix}{title}"), width, "        ") {
+                outln!("{line}");
+            }
+        }
         // `t411` §6: a rule shows its arms, in the same words `rules` prints
         // them with.
         if p.kind == Kind::Rule {
