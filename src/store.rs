@@ -144,7 +144,7 @@ pub fn store_dir() -> Option<PathBuf> {
 /// `std::env::set_var` is process-global and the test harness runs threads in
 /// parallel; two tests setting `VIVAC_HOME` would race and the failure would
 /// be intermittent, which is worse than no test at all.
-fn resolve_store_dir(
+pub(crate) fn resolve_store_dir(
     vivac_home: Option<&OsStr>,
     home: Option<&OsStr>,
     userprofile: Option<&OsStr>,
@@ -205,6 +205,7 @@ pub enum ConfigVersion {
     One,
     Locked,
     Lanes,
+    Agents,
 }
 
 /// The sentence a config's `version` becomes the moment its tree gains a
@@ -223,6 +224,8 @@ pub const LOCK_SENTENCE: &str =
 /// this one and loses nothing.
 pub const LANE_SENTENCE: &str =
     "this tree holds lanes, and this vivac is too old to read them: update vivac";
+pub const AGENT_SENTENCE: &str =
+    "this tree holds agent custody, and this vivac is too old to read it: update vivac";
 
 impl Serialize for ConfigVersion {
     fn serialize<S>(&self, s: S) -> Result<S::Ok, S::Error>
@@ -233,6 +236,7 @@ impl Serialize for ConfigVersion {
             ConfigVersion::One => s.serialize_u32(1),
             ConfigVersion::Locked => s.serialize_str(LOCK_SENTENCE),
             ConfigVersion::Lanes => s.serialize_str(LANE_SENTENCE),
+            ConfigVersion::Agents => s.serialize_str(AGENT_SENTENCE),
         }
     }
 }
@@ -252,6 +256,7 @@ impl<'de> Deserialize<'de> for ConfigVersion {
             serde_json::Value::Number(n) if n.as_u64() == Some(1) => Ok(ConfigVersion::One),
             serde_json::Value::String(s) if s == LOCK_SENTENCE => Ok(ConfigVersion::Locked),
             serde_json::Value::String(s) if s == LANE_SENTENCE => Ok(ConfigVersion::Lanes),
+            serde_json::Value::String(s) if s == AGENT_SENTENCE => Ok(ConfigVersion::Agents),
             _ => Err(serde::de::Error::custom("unsupported config version")),
         }
     }
@@ -916,6 +921,23 @@ pub fn first_event_id(root: &Path) -> Option<String> {
 }
 
 impl Store {
+    /// Opens existing authority without rebuilding configuration or derived files.
+    pub(crate) fn open_strict(root: PathBuf) -> Result<Store, Failure> {
+        let config = fs::read_to_string(root.join(DIR).join(CONFIG))
+            .map_err(|error| unreadable_config(Failure::Io(error)))
+            .and_then(|text| read_config(&text).map_err(unreadable_config))?;
+        if !fs::metadata(root.join(DIR).join(LOG))?.is_file() {
+            return Err(Failure::Io(std::io::Error::other(
+                "Agent custody requires an existing event log.",
+            )));
+        }
+        Ok(Store {
+            root,
+            config,
+            log_present: true,
+        })
+    }
+
     pub fn open(root: PathBuf) -> Result<Store, Failure> {
         let p = root.join(DIR).join(CONFIG);
         let config = match fs::read_to_string(&p) {
@@ -1153,6 +1175,7 @@ fn check_config_version(version: Option<&serde_json::Value>) -> Result<(), Failu
         },
         Some(serde_json::Value::String(s)) if s == LOCK_SENTENCE => Ok(()),
         Some(serde_json::Value::String(s)) if s == LANE_SENTENCE => Ok(()),
+        Some(serde_json::Value::String(s)) if s == AGENT_SENTENCE => Ok(()),
         Some(serde_json::Value::String(s)) => Err(Failure::newer_vivac(format!(
             "This tree was written by a newer vivac: its config says {s:?}. Update vivac \
              to read it. A session or vivac web opened before an update keeps the old \
@@ -1178,6 +1201,7 @@ fn regenerated_version(root: &Path) -> ConfigVersion {
         return ConfigVersion::One;
     };
     let mut governed = false;
+    let mut lanes = false;
     for line in BufReader::new(f).lines().map_while(Result::ok) {
         if line.trim().is_empty() {
             continue;
@@ -1186,7 +1210,8 @@ fn regenerated_version(root: &Path) -> ConfigVersion {
             continue;
         };
         match v["payload"]["type"].as_str() {
-            Some("lane.declared") | Some("lane.claimed") => return ConfigVersion::Lanes,
+            Some("lane.declared") | Some("lane.claimed") => lanes = true,
+            Some(tag) if tag.starts_with("agent.") => return ConfigVersion::Agents,
             Some("node.created")
                 if matches!(v["payload"]["kind"].as_str(), Some("pillar") | Some("rule")) =>
             {
@@ -1195,7 +1220,9 @@ fn regenerated_version(root: &Path) -> ConfigVersion {
             _ => {}
         }
     }
-    if governed {
+    if lanes {
+        ConfigVersion::Lanes
+    } else if governed {
         ConfigVersion::Locked
     } else {
         ConfigVersion::One
@@ -1370,6 +1397,27 @@ impl Store {
         body: &[crate::event::Body],
         tree_already_governed: bool,
     ) -> std::io::Result<()> {
+        if self.config.version != ConfigVersion::Agents
+            && body.iter().any(|b| {
+                matches!(
+                    b,
+                    crate::event::Body::AgentRecorded { .. }
+                        | crate::event::Body::AgentBound { .. }
+                        | crate::event::Body::AgentDetached { .. }
+                        | crate::event::Body::AgentMaterialized { .. }
+                        | crate::event::Body::AgentObserved { .. }
+                )
+            })
+        {
+            let locked = Config {
+                version: ConfigVersion::Agents,
+                project_id: self.config.project_id.clone(),
+                actor: self.config.actor.clone(),
+                share: self.config.share,
+            };
+            write_config_atomic(&self.root, &locked)?;
+            self.config = locked;
+        }
         if self.config.version != ConfigVersion::One {
             return Ok(());
         }
@@ -1409,7 +1457,10 @@ impl Store {
         if !lock.covers(&self.lock_path()) {
             return Err(std::io::Error::other("write lock does not cover this tree"));
         }
-        if self.config.version == ConfigVersion::Lanes {
+        if matches!(
+            self.config.version,
+            ConfigVersion::Lanes | ConfigVersion::Agents
+        ) {
             return Ok(());
         }
         let locked = Config {

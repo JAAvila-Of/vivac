@@ -357,5 +357,25 @@ pub(crate) fn run(cwd: &Path, args: &Args) -> Result<i32, Failure> {
         Some((at, detail, status)) => report.add("observed Stop", status, &format!("{at}: {detail}; shared lane evidence on this machine, harness not identified"), if status == "ok" { None } else { Some("Run vivac session end --dry-run to inspect the close hook's result.") }),
         None => report.add("observed Stop", "warning", "no readable close-hook record for this lane on this machine", Some("Let a turn finish in the harness, then run vivac doctor again; vivac session end --dry-run explains the close hook.")),
     }
+    match crate::agents::diagnosis(cwd, chosen) {
+        Ok(agents) => {
+            let count = |key: &str| agents[key].as_array().map_or(0, Vec::len);
+            let errors = count("errors");
+            let unmanaged = count("unmanaged");
+            let unverified = count("unverified");
+            report.add(
+                "agent custody",
+                if errors > 0 { "error" } else if unmanaged + unverified > 0 { "warning" } else { "ok" },
+                &format!("{errors} custody error(s), {unmanaged} unmanaged agent file(s), {unverified} unverified assignment(s); native configuration does not prove runtime selection"),
+                if errors + unmanaged + unverified > 0 { Some("Run vivac agents scan and vivac agents status to inspect assignments and custody.") } else { None },
+            );
+        }
+        Err(_) => report.add(
+            "agent custody",
+            "error",
+            "agent custody could not be inspected; file contents withheld",
+            Some("Run vivac agents status to inspect the failure."),
+        ),
+    }
     Ok(report.print(args.has("json")))
 }

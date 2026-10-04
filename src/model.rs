@@ -546,6 +546,7 @@ pub struct Tree {
     /// Every `where.changed` this tree has ever folded, in log order.
     /// `Tree::apply`'s own `Body::WhereChanged` arm is the only writer.
     pub wheres: Vec<Where>,
+    pub(crate) agent_history: Vec<(String, Body)>,
     pub next_vivac_num: u64,
     pub seq: u64,
     pub next_num: u64,
@@ -667,7 +668,14 @@ impl Tree {
             // one.
         } else if matches!(
             body,
-            Body::LaneDeclared { .. } | Body::LaneClaimed { .. } | Body::WhereChanged { .. }
+            Body::LaneDeclared { .. }
+                | Body::LaneClaimed { .. }
+                | Body::WhereChanged { .. }
+                | Body::AgentRecorded { .. }
+                | Body::AgentBound { .. }
+                | Body::AgentDetached { .. }
+                | Body::AgentMaterialized { .. }
+                | Body::AgentObserved { .. }
         ) {
             // Context events: they say where work happens, not that it did.
             // Counted as a change, joining a tree would look like work done
@@ -1072,6 +1080,13 @@ impl Tree {
                     lane: lane.to_string(),
                     repos: repos.clone(),
                 });
+            }
+            Body::AgentRecorded { .. }
+            | Body::AgentBound { .. }
+            | Body::AgentDetached { .. }
+            | Body::AgentMaterialized { .. }
+            | Body::AgentObserved { .. } => {
+                self.agent_history.push((lane.to_string(), body.clone()));
             }
         }
     }
@@ -1615,6 +1630,7 @@ pub(crate) struct RawParts {
     pub lanes: BTreeMap<String, LaneState>,
     pub vivacs: Vec<Vivac>,
     pub wheres: Vec<Where>,
+    pub agent_history: Vec<(String, Body)>,
     pub own_focus: OwnFocus,
     pub other_focus: OtherFocus,
     pub next_vivac_num: u64,
@@ -1663,6 +1679,7 @@ impl Tree {
             roots: p.roots,
             vivacs: p.vivacs,
             wheres: p.wheres,
+            agent_history: p.agent_history,
             own_focus: p.own_focus,
             other_focus: p.other_focus,
             next_vivac_num: p.next_vivac_num,

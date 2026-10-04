@@ -106,10 +106,10 @@ make, and the other maps are not retired until it passes.
 **What has to hold in every session goes in as a constraint under the root
 goal**, which the brief hands the agent every time.
 
-Pillars and rules are read on demand, with `vivac rules`, when work is
-checked — not injected into every session, because a rule that arrives unasked
-in a thousand sessions costs a thousand times what it costs to fetch it in the
-one where it matters.
+Every active pillar's complete title arrives in the brief, even with no
+focus. This section is fixed: a small token budget does not remove a pillar.
+Read `vivac rules` before making decisions or checking work to get their
+full reasons and rules. Rule bodies are not injected into every session.
 
 A lesson or a measurement that asks nothing of anyone goes in closed, as a
 record: `vivac find` and `vivac why` still bring it back, and `vivac open`
@@ -123,6 +123,13 @@ at review, and loses the words the lessons would be found by.
 Instruction files stay as they are for now. What they say still reaches every
 session from the file, and taking that away before the tree delivers it would
 trade one gap for another.
+
+Agent configuration has a separate lifecycle. `vivac agents scan` discovers
+project agents without adopting them or copying their prompts into the tree.
+An existing agent comes under custody only after its contract has been
+restated as reviewed prose and its harness assignments have been declared.
+See [Agent custody](AGENT-CUSTODY.md). Discovery and generation do not prove
+that a harness loaded the configuration, or that the agent applies its rules.
 
 ---
 

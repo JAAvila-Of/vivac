@@ -66,6 +66,20 @@ fn no_tree_reports_a_remedy_without_planting() {
 }
 
 #[test]
+fn agents_added_after_setup_are_reported_without_adoption_or_prompt_disclosure() {
+    let c = Sandbox::new_seeded("doctor-unmanaged-agent");
+    c.ok(&["setup", "codex", "--yes"]);
+    std::fs::create_dir_all(c.0.join(".codex/agents")).unwrap();
+    std::fs::write(c.0.join(".codex/agents/reviewer.toml"), "name = 'reviewer'\ndescription = 'Review'\nmodel = 'inherit'\nmodel_reasoning_effort = 'high'\ndeveloper_instructions = 'A private native instruction body.'\n").unwrap();
+    let r = report(&c, Some("codex"), 0);
+    let custody = check(&r, "agent custody");
+    assert_eq!(custody["status"], "warning");
+    assert!(custody["detail"].as_str().unwrap().contains("1 unmanaged"));
+    assert!(!r.to_string().contains("private native instruction"));
+    assert!(!c.log().contains("agent.recorded"));
+}
+
+#[test]
 fn configuration_is_not_execution_and_both_harnesses_are_detected() {
     let c = Sandbox::new_seeded("doctor-configured");
     for h in ["claude-code", "codex"] {

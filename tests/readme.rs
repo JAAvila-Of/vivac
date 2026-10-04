@@ -51,7 +51,7 @@ fn readme() -> String {
 /// door and the rest is the manual it hands off to, and what `f161` caught
 /// was prose rotting rather than one file going stale -- so the check follows
 /// the prose wherever it sits.
-const PAGES: [&str; 7] = [
+const PAGES: [&str; 8] = [
     "README.md",
     "docs/SEAMS.md",
     "docs/USAGE.md",
@@ -59,6 +59,7 @@ const PAGES: [&str; 7] = [
     "docs/MIGRATING.md",
     "docs/PERFORMANCE.md",
     "docs/VERSIONING.md",
+    "docs/AGENT-CUSTODY.md",
 ];
 
 /// Every fenced block, with the word that opened the fence.

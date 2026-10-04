@@ -1601,10 +1601,9 @@ mod tests {
         // Computed independently (Python's own FNV-1a/64) over the exact
         // frontmatter and body this file embeds. It moves whenever the
         // skill's text does, and moving it is meant to be deliberate: the
-        // last time was `d970`, which sends a project with nothing to bring
-        // in straight to retiring the other maps, after one that started out
-        // with vivac never ran the skill and its memory tool kept talking.
-        assert_eq!(skill_fingerprint(), 0x577cb058da2ab1d8);
+        // current change is `d1033`: every active pillar reaches the brief,
+        // with full rule bodies consulted before decisions and reviews.
+        assert_eq!(skill_fingerprint(), 0xe963f606b638d0c2);
     }
 
     #[test]

@@ -208,7 +208,14 @@ pub fn collect<'a>(tree: &'a Tree, log: &[Event], since_seq: u64) -> Changed<'a>
             // change, so there is nothing here for it to add. `where.changed`
             // is the same family: it says where the work happens, not that
             // it happened (§4.3).
-            Body::LaneDeclared { .. } | Body::LaneClaimed { .. } | Body::WhereChanged { .. } => {}
+            Body::LaneDeclared { .. }
+            | Body::LaneClaimed { .. }
+            | Body::WhereChanged { .. }
+            | Body::AgentRecorded { .. }
+            | Body::AgentBound { .. }
+            | Body::AgentDetached { .. }
+            | Body::AgentMaterialized { .. }
+            | Body::AgentObserved { .. } => {}
         }
     }
 

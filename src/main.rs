@@ -10,6 +10,7 @@
 //! actually measured is that an operation asking for a judgement of relevance
 //! never gets called under load.
 
+mod agents;
 mod anchor;
 mod args;
 mod brief;
@@ -136,6 +137,31 @@ const USAGE: &str = r#"vivac - provenance of work
           --gates    also every tree on this machine that nobody opens
     vivac doctor [claude-code|codex]          project setup and observed hooks
           --json     checks, statuses and steps to fix them
+
+  Agent custody
+
+    vivac agents scan [--harness H] [--json]  discover project agents
+    vivac agents status [<id>] [--harness H] [--json]
+                                              declared, configured and reported
+    vivac agents show <id> [--json]          contract and explicit assignments
+    vivac agents add --definition <file> --why "<reason>"
+    vivac agents set <id> --definition <file> --why "<reason>"
+          [--parent N] [--against "r12: <why>"]  revision provenance
+    vivac agents bind <id> --harness H --path <relative>
+    vivac agents adopt <id> --harness H --path <relative>
+          --digest <sha256> --why "<reason>"  review an existing destination
+    vivac agents diff <id> [--harness H] [--json]  materialization plan
+    vivac agents sync [<id>] [--harness H] [--json]
+          [--yes] [--dry-run] [--accept-digest <sha256>]
+                                              preview, then materialize
+    vivac agents detach <id> --harness H --path <relative>
+    vivac agents retire <id> --why "<reason>" retire without deleting files
+    vivac agents observe <id> --harness H --path <relative>
+          --revision <node> --model M --effort E --evidence "<reason>"
+                                              record reported runtime evidence
+    All agent commands return JSON. Add, set, adopt and retire accept
+    --parent N and --against "p12: <why>". Sync defaults to preview;
+    --dry-run always writes nothing, including when --yes is present.
 
   Session
 
@@ -269,6 +295,7 @@ const COMMANDS: &[&str] = &[
     "stats",
     "check",
     "doctor",
+    "agents",
     "session",
     "mcp",
     "web",
@@ -548,6 +575,10 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         return Err(unknown_command(cmd));
     }
     let cwd = std::env::current_dir().map_err(Failure::Io)?;
+
+    if cmd == "agents" {
+        return agents::run(&cwd, a);
+    }
 
     // Valid options per command. One that is not here is an error and not
     // silence: see `Args::unknown`.
