@@ -7,7 +7,7 @@ does.
 Every release opens with what it changes on disk and what to run — see the
 [changelog](../CHANGELOG.md).
 
-## The rule has been spent sixteen times
+## The rule has been spent seventeen times
 
 | | |
 |---|---|
@@ -27,6 +27,7 @@ Every release opens with what it changes on disk and what to run — see the
 | `0.16.0` | began refusing an import whose dates it cannot place, rather than stamping them with today |
 | `0.17.0` | made `done` refuse a decision still in force and `pop` leave one standing, and the MCP tools refuse an argument they do not take |
 | `0.18.0` | made `decide --supersedes` refuse anything but a decision, a constraint, a rule or a pillar still in force |
+| `0.19.0` | stops older clients reading a tree once agent custody has been written |
 
 Each went out as a minor for that reason, and counting them here is cheaper
 than counting them once and letting the sentence go stale.
