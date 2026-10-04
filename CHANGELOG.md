@@ -7,7 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.18.1](https://github.com/JAAvila-Of/vivac/compare/v0.18.0...v0.18.1) - 2026-10-04
+## [0.19.0](https://github.com/JAAvila-Of/vivac/compare/v0.18.0...v0.19.0) - 2026-10-04
+
+### Upgrading
+
+The first agent custody write enables a compatibility marker and appends agent
+configuration events that older versions cannot read. Update every CLI, hook and
+MCP client that uses the tree before declaring or adopting agents, then restart
+existing MCP sessions. On Windows, use `vivac update` from a terminal.
+
+Existing trees remain readable until custody is written. Discovery and diagnostic
+reads do not adopt agents or enable the marker. Keep native instruction and agent
+files until their contracts have been reviewed and their assignments explicitly
+adopted; static status and reported observations do not prove runtime behavior.
 
 ### Added
 
