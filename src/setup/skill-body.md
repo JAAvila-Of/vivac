@@ -146,7 +146,7 @@ next agent on its own:
 | Kind | What it is | How it reaches the agent |
 |---|---|---|
 | constraint | Something that has to stay true. | Under the root goal: in the brief, every session. Under another node: only while the work is inside it. |
-| pillar | A criterion the project's design is judged against, titled with its name and what it rejects. | vivac rules, when work is checked. |
+| pillar | A criterion the project's design is judged against, titled with its name and what it rejects. | Its complete title and mandate in every brief; full reason and rules through vivac rules before deciding or checking work. |
 | rule | A line a pillar draws that any piece of work can be checked against, beyond the incident that taught it, with the command that checks it if there is one (--arm). | vivac rules, when work is checked. |
 | decision | A choice that was made, with its reason, the options it beat, and the pillar or rule it was judged against. | The brief shows a few that still stand; vivac why shows the rest. |
 | finding, still open | Something observed that still asks for work: a bug nobody fixed, a gap, a risk. | vivac open, and the brief. |
@@ -255,6 +255,7 @@ anywhere else.
 - vivac check comes back clean.
 - vivac rules lists every pillar and rule you wrote.
 - vivac brief shows the constraints under the root goal.
+- vivac brief shows every active pillar's complete title, even without a focus.
 - vivac open shows work, not records.
 - Look through the sources for sentences that now send a reader to the old
   place, like "read X first" or "save this to Y", and for statements the tree

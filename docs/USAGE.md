@@ -107,6 +107,12 @@ It stays a constraint when somebody calls it a rule. A rule is the line a
 pillar draws, read with `vivac rules` when work is checked, and it reaches no
 session on its own.
 
+Every active pillar's complete title appears under `PILLARS` in
+the brief, independently of the focus. This section is fixed and survives
+the token budget. Read `vivac rules` before deciding or checking work: it
+returns the pillars' reasons and the rules under them. The brief's delivery
+does not prove that the agent applied them.
+
 `add` and `push` take `--supersedes` as well. A constraint, a rule or a
 pillar that changes is written again, naming the one it replaces, and so is a
 node filed as the wrong kind: a norm that went in as a decision becomes the

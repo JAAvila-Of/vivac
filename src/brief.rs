@@ -475,6 +475,7 @@ pub fn brief(a: &Tree, root: &Path, lane_dir: &Path, args: &Args, project: &str)
 /// carry more than a bare title on their own line, and neither is in this
 /// list.
 const BRIEF_HEADINGS: &[&str] = &[
+    "PILLARS",
     "BORN FROM HERE",
     "WRITTEN AWAY FROM HERE",
     "WRITTEN WITH NO FOCUS",
@@ -571,21 +572,42 @@ fn style_line(out: style::Stream, line: &str) -> String {
 /// the budget, the truncation and the token count in the footer are all
 /// computed on the plain text before this ever runs, so styling a line can
 /// only ever add invisible bytes to it, never move where a cut landed.
-/// `to_text` keeps its own clipping rather than `style::wrap_title`'s, and
-/// this pass never wraps anything either -- the same rows the plain read
-/// prints, on the same lines, with an escape code added on top of some of
-/// them.
+/// Pillar titles remain complete in the plain render and wrap to the
+/// terminal width here, without changing their selection or token budget.
 fn style_text(text: &str) -> String {
     let out = style::Stream::Out;
-    if !style::enabled(out) {
+    let columns = style::width(out);
+    if !style::enabled(out) && columns.is_none() {
         return text.to_string();
     }
     let mut styled = String::with_capacity(text.len());
+    let mut in_pillars = false;
     for line in text.split_inclusive('\n') {
         let (body, newline) = match line.strip_suffix('\n') {
             Some(b) => (b, "\n"),
             None => (line, ""),
         };
+        if body == " PILLARS" {
+            in_pillars = true;
+        } else if !body.starts_with("  ") {
+            in_pillars = false;
+        }
+        if let Some(columns) = columns.filter(|_| in_pillars) {
+            if let Some((alias, title)) = body.strip_prefix("  ").and_then(|r| r.split_once(' ')) {
+                let title = title.trim_start();
+                let lead = body.len() - title.len();
+                for (i, chunk) in style::wrap_title(lead, title, columns).iter().enumerate() {
+                    let row = if i == 0 {
+                        format!("  {alias:<6} {chunk}")
+                    } else {
+                        format!("{}{chunk}", " ".repeat(lead))
+                    };
+                    styled.push_str(&style_line(out, &row));
+                    styled.push_str(newline);
+                }
+                continue;
+            }
+        }
         styled.push_str(&style_line(out, body));
         styled.push_str(newline);
     }
@@ -1271,6 +1293,38 @@ pub fn to_text(
         Some(_) => spine(a, &lineage, &date),
         None => no_focus_block(a),
     }));
+
+    // Governance belongs to this tree, independently of the focus or path.
+    // Mandates are fixed: neither a row cap nor the token budget may hide one.
+    let mut pillars: Vec<&Node> = a
+        .nodes_iter()
+        .filter(|n| n.kind == Kind::Pillar && n.state == State::Active)
+        .collect();
+    pillars.sort_by_key(|n| n.num);
+    let has_governance = !pillars.is_empty()
+        || a.nodes_iter()
+            .any(|n| n.kind == Kind::Rule && n.state == State::Active);
+    s.push(Section::fixed(heading(
+        "PILLARS",
+        pillars
+            .iter()
+            .map(|n| format!("  {:<6} {}", n.alias(), n.title(a)))
+            .collect(),
+    )));
+    let orientation = if has_governance {
+        vec![
+            String::new(),
+            " Before deciding or reviewing, run vivac rules for full bodies and rules.".to_string(),
+        ]
+    } else {
+        vec![
+            String::new(),
+            " No active pillars or rules are recorded in this tree.".to_string(),
+            " Run vivac rules to check or propose governance with the person.".to_string(),
+            " Do not invent governance.".to_string(),
+        ]
+    };
+    s.push(Section::fixed(orientation));
 
     // 3. Focus: what hangs off it unclosed. Standing decisions do not go in
     //    --they are not pending work and they have their own section (8)--,

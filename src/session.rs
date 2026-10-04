@@ -458,7 +458,12 @@ fn is_capture(body: &Body) -> bool {
         Body::SessionStarted { .. }
         | Body::LaneDeclared { .. }
         | Body::LaneClaimed { .. }
-        | Body::WhereChanged { .. } => false,
+        | Body::WhereChanged { .. }
+        | Body::AgentRecorded { .. }
+        | Body::AgentBound { .. }
+        | Body::AgentDetached { .. }
+        | Body::AgentMaterialized { .. }
+        | Body::AgentObserved { .. } => false,
     }
 }
 

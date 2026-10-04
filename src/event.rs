@@ -523,6 +523,44 @@ pub enum Body {
     /// run `setup`: that is what keeps 0.11 able to read them (§2.6).
     #[serde(rename = "where.changed")]
     WhereChanged { repos: Vec<WhereRepo> },
+    #[serde(rename = "agent.recorded")]
+    AgentRecorded {
+        agent: String,
+        node: String,
+        definition: crate::agents::types::Definition,
+    },
+    #[serde(rename = "agent.bound")]
+    AgentBound {
+        agent: String,
+        harness: String,
+        path: String,
+        baseline: Option<String>,
+    },
+    #[serde(rename = "agent.detached")]
+    AgentDetached {
+        agent: String,
+        harness: String,
+        path: String,
+    },
+    #[serde(rename = "agent.materialized")]
+    AgentMaterialized {
+        agent: String,
+        revision: String,
+        harness: String,
+        path: String,
+        digest: String,
+        adapter: String,
+    },
+    #[serde(rename = "agent.observed")]
+    AgentObserved {
+        agent: String,
+        revision: String,
+        harness: String,
+        path: String,
+        model: String,
+        effort: String,
+        evidence: String,
+    },
 }
 
 impl Body {
@@ -553,6 +591,11 @@ impl Body {
         "lane.declared",
         "lane.claimed",
         "where.changed",
+        "agent.recorded",
+        "agent.bound",
+        "agent.detached",
+        "agent.materialized",
+        "agent.observed",
     ];
 }
 
@@ -628,11 +671,60 @@ mod tests {
             Body::LaneDeclared { .. } => "lane.declared",
             Body::LaneClaimed { .. } => "lane.claimed",
             Body::WhereChanged { .. } => "where.changed",
+            Body::AgentRecorded { .. } => "agent.recorded",
+            Body::AgentBound { .. } => "agent.bound",
+            Body::AgentDetached { .. } => "agent.detached",
+            Body::AgentMaterialized { .. } => "agent.materialized",
+            Body::AgentObserved { .. } => "agent.observed",
         }
     }
 
     fn one_of_each() -> Vec<Body> {
         vec![
+            Body::AgentRecorded {
+                agent: "a".into(),
+                node: "n".into(),
+                definition: crate::agents::types::Definition {
+                    schema_version: 1,
+                    name: "reviewer".into(),
+                    retired: false,
+                    contract: crate::agents::types::Contract {
+                        purpose: "Review.".into(),
+                        duties: vec!["Check.".into()],
+                        limits: vec![],
+                        acceptance: vec!["Evidence.".into()],
+                    },
+                    assignments: vec![],
+                },
+            },
+            Body::AgentBound {
+                agent: "a".into(),
+                harness: "codex".into(),
+                path: ".codex/agents/a.toml".into(),
+                baseline: None,
+            },
+            Body::AgentDetached {
+                agent: "a".into(),
+                harness: "codex".into(),
+                path: ".codex/agents/a.toml".into(),
+            },
+            Body::AgentMaterialized {
+                agent: "a".into(),
+                revision: "n".into(),
+                harness: "codex".into(),
+                path: ".codex/agents/a.toml".into(),
+                digest: "digest".into(),
+                adapter: "v1".into(),
+            },
+            Body::AgentObserved {
+                agent: "a".into(),
+                revision: "n".into(),
+                harness: "codex".into(),
+                path: ".codex/agents/a.toml".into(),
+                model: "inherit".into(),
+                effort: "high".into(),
+                evidence: "Reported.".into(),
+            },
             Body::NodeCreated {
                 node: "n".into(),
                 num: 1,

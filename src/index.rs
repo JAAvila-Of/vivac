@@ -118,7 +118,8 @@ const MAGIC: u64 = u64::from_le_bytes(*b"vivacIDX");
 // node has received since a node was last born under it (`d945`): one more
 // `u64`, written last. A version-18 node record ends where it begins, so it
 // is refused rather than read as a node with no notes.
-const FORMAT_VERSION: u32 = 19;
+// Version 20 preserves lane-scoped agent custody history in a bounded section.
+const FORMAT_VERSION: u32 = 20;
 const ULID_LEN: usize = 26;
 const SPAN_LEN: usize = 8;
 const FLAG_RECORD_LEN: usize = 1 + SPAN_LEN;
@@ -607,6 +608,8 @@ struct Header {
     vivacs_offset: u64,
     own_focus_offset: u64,
     other_focus_offset: u64,
+    agent_history_offset: u64,
+    agent_history_len: u64,
     text_offset: u64,
     text_len: u64,
     file_len: u64,
@@ -659,6 +662,8 @@ impl Header {
             vivacs_offset: c.u64()?,
             own_focus_offset: c.u64()?,
             other_focus_offset: c.u64()?,
+            agent_history_offset: c.u64()?,
+            agent_history_len: c.u64()?,
             text_offset: c.u64()?,
             text_len: c.u64()?,
             file_len: c.u64()?,
@@ -702,6 +707,16 @@ impl Header {
             return None;
         }
         if !fits(self.roots_offset, self.roots_count, 8)? {
+            return None;
+        }
+        let history_end = self
+            .agent_history_offset
+            .checked_add(self.agent_history_len)?;
+        if self.agent_history_offset < header_len() as u64
+            || self.agent_history_offset < self.other_focus_offset
+            || history_end != self.text_offset
+            || usize::try_from(history_end).ok()? > len
+        {
             return None;
         }
         let text_end = self.text_offset.checked_add(self.text_len)?;
@@ -775,6 +790,8 @@ fn write_header(buf: &mut Vec<u8>, h: &Header) {
     write_u64(buf, h.vivacs_offset);
     write_u64(buf, h.own_focus_offset);
     write_u64(buf, h.other_focus_offset);
+    write_u64(buf, h.agent_history_offset);
+    write_u64(buf, h.agent_history_len);
     write_u64(buf, h.text_offset);
     write_u64(buf, h.text_len);
     write_u64(buf, h.file_len);
@@ -819,6 +836,8 @@ fn header_len() -> usize {
         vivacs_offset: 0,
         own_focus_offset: 0,
         other_focus_offset: 0,
+        agent_history_offset: 0,
+        agent_history_len: 0,
         text_offset: 0,
         text_len: 0,
         file_len: 0,
@@ -1779,6 +1798,27 @@ fn build_tree(bytes: &[u8], header: &Header) -> Option<Tree> {
     let vivacs = parse_vivacs(bytes, header)?;
     let own_focus = parse_own_focus(bytes, header)?;
     let other_focus = parse_other_focus(bytes, header)?;
+    let start = usize::try_from(header.agent_history_offset).ok()?;
+    let end = usize::try_from(
+        header
+            .agent_history_offset
+            .checked_add(header.agent_history_len)?,
+    )
+    .ok()?;
+    let agent_history: Vec<(String, crate::event::Body)> =
+        serde_json::from_slice(bytes.get(start..end)?).ok()?;
+    if agent_history.iter().any(|(_, body)| {
+        !matches!(
+            body,
+            crate::event::Body::AgentRecorded { .. }
+                | crate::event::Body::AgentBound { .. }
+                | crate::event::Body::AgentDetached { .. }
+                | crate::event::Body::AgentMaterialized { .. }
+                | crate::event::Body::AgentObserved { .. }
+        )
+    }) {
+        return None;
+    }
     let text = parse_text(bytes, header)?;
     Some(Tree::from_parts(RawParts {
         text,
@@ -1790,6 +1830,7 @@ fn build_tree(bytes: &[u8], header: &Header) -> Option<Tree> {
         wheres,
         own_focus,
         other_focus,
+        agent_history,
         next_vivac_num: header.next_vivac_num,
         seq: header.seq,
         next_num: header.next_num,
@@ -1860,6 +1901,8 @@ fn encode(
     for (key, value) in &tree.other_focus {
         write_other_focus(&mut other_focus_buf, key, value);
     }
+    let agent_history_buf = serde_json::to_vec(&tree.agent_history)
+        .expect("Agent history contains only JSON event bodies.");
     let text = tree.raw_text();
     let text_bytes = text.as_bytes();
 
@@ -1876,7 +1919,9 @@ fn encode(
     let vivacs_offset = wheres_offset + wheres_buf.len() as u64;
     let own_focus_offset = vivacs_offset + vivacs_buf.len() as u64;
     let other_focus_offset = own_focus_offset + own_focus_buf.len() as u64;
-    let text_offset = other_focus_offset + other_focus_buf.len() as u64;
+    let agent_history_offset = other_focus_offset + other_focus_buf.len() as u64;
+    let agent_history_len = agent_history_buf.len() as u64;
+    let text_offset = agent_history_offset + agent_history_len;
     let file_len = text_offset + text_bytes.len() as u64;
 
     let (has_last, last_line_offset, last_ulid, last_seq) = match last {
@@ -1925,6 +1970,8 @@ fn encode(
         vivacs_offset,
         own_focus_offset,
         other_focus_offset,
+        agent_history_offset,
+        agent_history_len,
         text_offset,
         text_len: text_bytes.len() as u64,
         file_len,
@@ -1945,6 +1992,7 @@ fn encode(
     out.extend_from_slice(&vivacs_buf);
     out.extend_from_slice(&own_focus_buf);
     out.extend_from_slice(&other_focus_buf);
+    out.extend_from_slice(&agent_history_buf);
     out.extend_from_slice(text_bytes);
     out
 }
@@ -3356,6 +3404,87 @@ mod tests {
             rule.arms(&loaded),
             vec![("vivac", "cargo test --bin vivac redact::tests")]
         );
+    }
+
+    #[test]
+    fn agent_history_survives_index_loading_and_tail_replay() {
+        let store = tmp_store("agent-history");
+        let mut event = created(
+            1,
+            &fixed_id(1),
+            1,
+            Kind::Decision,
+            None,
+            "A reviewed contract",
+            vec![],
+            vec![],
+        );
+        write_raw_locked(&store, &[event.clone()]);
+        event.seq = 2;
+        event.id = fixed_id(2);
+        event.lane = "another-lane".into();
+        event.payload = Body::AgentBound {
+            agent: fixed_id(5),
+            harness: "codex".into(),
+            path: ".codex/agents/reviewer.toml".into(),
+            baseline: None,
+        };
+        write_raw_locked(&store, &[event.clone()]);
+        let fresh = load(&store, true).unwrap();
+        assert_eq!(
+            fresh.agent_history,
+            vec![(event.lane.clone(), event.payload.clone())]
+        );
+        let index = fs::read(store.index_path()).unwrap();
+        assert_eq!(
+            fresh.agent_history,
+            load(&store, false).unwrap().agent_history
+        );
+        event.seq = 3;
+        event.id = fixed_id(3);
+        event.payload = Body::AgentDetached {
+            agent: fixed_id(5),
+            harness: "codex".into(),
+            path: ".codex/agents/reviewer.toml".into(),
+        };
+        write_raw_locked(&store, &[event.clone()]);
+        let tail = load(&store, false).unwrap();
+        assert_eq!(tail.agent_history.len(), 2);
+        assert_eq!(tail.agent_history[1], (event.lane, event.payload));
+        assert_eq!(index, fs::read(store.index_path()).unwrap());
+    }
+
+    #[test]
+    fn an_invalid_agent_section_is_never_silently_loaded() {
+        let tree = Tree::default();
+        let valid = encode(&tree, 0, 0, 0, None);
+        let original = Header::parse(&valid).unwrap();
+        for section in [
+            b"invalid".to_vec(),
+            serde_json::to_vec(&vec![(
+                "main",
+                Body::NodeNoted {
+                    node: fixed_id(1),
+                    note: "A note is not agent custody.".into(),
+                },
+            )])
+            .unwrap(),
+        ] {
+            let mut header = Header::parse(&valid).unwrap();
+            header.agent_history_len = section.len() as u64;
+            header.text_offset = header.agent_history_offset + header.agent_history_len;
+            header.file_len = header.text_offset + header.text_len;
+            let mut bytes = Vec::new();
+            write_header(&mut bytes, &header);
+            bytes.extend_from_slice(&valid[header_len()..original.agent_history_offset as usize]);
+            bytes.extend_from_slice(&section);
+            bytes.extend_from_slice(&valid[original.text_offset as usize..]);
+            let header = Header::parse(&bytes).unwrap();
+            assert!(build_tree(&bytes, &header).is_none());
+        }
+        let mut header = Header::parse(&valid).unwrap();
+        header.agent_history_len = u64::MAX;
+        assert!(header.check_bounds(valid.len()).is_none());
     }
 
     /// Rewrites just the header of an already-persisted index, keeping the

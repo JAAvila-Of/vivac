@@ -368,7 +368,7 @@ impl Ctx {
     /// next is the state after the operation and not the one before it.
     /// What is applied is what was written, stamp included, which is what a
     /// fresh fold of the log would apply (`f590`).
-    fn emit(&mut self, bodies: Vec<Body>) -> R {
+    pub(crate) fn emit(&mut self, bodies: Vec<Body>) -> R {
         let mut bodies = bodies;
         // `t594` §2.3 rule 3, step 3, moved here from where it
         // used to sit: a worktree joins the moment something actually
@@ -1293,6 +1293,41 @@ fn born(ctx: &Ctx, b: Born) -> Result<(Body, u64, String, bool), Failure> {
         node,
         no_against,
     ))
+}
+
+/// Builds the source decision for an authored agent revision under the caller's lock.
+pub(crate) fn agent_revision(
+    ctx: &Ctx,
+    title: &str,
+    why: &str,
+    parent: Option<&str>,
+    against: Vec<String>,
+) -> Result<(Body, String), Failure> {
+    if ctx.lock.is_none() || why.trim().is_empty() {
+        return Err(Failure::usage(
+            "Agent revisions need --why and the tree's write lock.",
+        ));
+    }
+    let parent = match parent {
+        Some(id) => Some(ctx.resolve(id)?.id.clone()),
+        None => ctx.tree.focus().map(|node| node.id.clone()),
+    };
+    let against = against_of(ctx, against, Kind::Decision)?;
+    let (event, _, node, _) = born(
+        ctx,
+        Born {
+            title,
+            why,
+            kind: Kind::Decision,
+            parent,
+            refs: vec![],
+            governs: vec![],
+            blocks: false,
+            arms: vec![],
+            against,
+        },
+    )?;
+    Ok((event, node))
 }
 
 /// `push` — open a detour. It is **the** operation: the provenance edge is

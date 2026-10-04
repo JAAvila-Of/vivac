@@ -47,6 +47,7 @@ actual
 actually
 acute
 acyclic
+adapter
 adapteryou
 add
 added
@@ -257,6 +258,7 @@ audit
 auditable
 authenticates
 author
+authored
 authorised
 authority
 auto
@@ -487,6 +489,7 @@ canonicalized
 canonicalizing
 canonically
 cap
+capability
 capable
 capital
 capitals
@@ -766,6 +769,7 @@ continuation
 continues
 continuing
 contract
+contracts
 contradict
 contradicted
 contradicting
@@ -855,6 +859,7 @@ cure
 curl
 current
 currently
+custody
 custom
 cut
 cuts
@@ -2191,6 +2196,7 @@ making
 malformed
 manager
 manages
+mandates
 mandatory
 manifest
 manipulation
@@ -2209,6 +2215,7 @@ markers
 marking
 marks
 markup
+masquerade
 masthead
 match
 matched
@@ -2267,6 +2274,7 @@ merkle
 message
 messages
 met
+metadata
 method
 microseconds
 mid
@@ -2363,6 +2371,7 @@ narrow
 narrowed
 narrower
 narrowing
+native
 navigate
 navigates
 navigation
@@ -2765,6 +2774,7 @@ present
 presentation
 presents
 preserved
+preserves
 preserving
 pressure
 pretending
@@ -2811,6 +2821,7 @@ program
 progress
 project
 projection
+projections
 projects
 proleptic
 prologue
@@ -3083,6 +3094,7 @@ relocks
 rely
 relying
 rem
+remain
 remaining
 remedy
 remember
@@ -3222,6 +3234,7 @@ review
 reviewed
 reviewer
 reviews
+revision
 revisited
 revisiting
 revisits
