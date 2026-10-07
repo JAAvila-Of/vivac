@@ -1171,3 +1171,43 @@ fn the_log_never_grows_from_calling_it() {
     assert_eq!(out, nudge_text(11), "the fixture stopped nudging");
     assert_eq!(before, c.log(), "session prompt wrote to the log");
 }
+
+#[test]
+fn agent_custody_is_delivered_before_capture_seams_even_with_a_tiny_budget() {
+    let c = Sandbox::new_seeded("agent-custody-hook");
+    let before = c.log();
+    let (out, code) = c.run_stdin(&["session", "start", "--hook", "--budget", "1"], "{}");
+    assert_eq!(code, 0, "{out}");
+    let start = out
+        .find(" AGENT CUSTODY\n")
+        .expect("custody protocol missing");
+    let end = out
+        .find(" WRITE AT THESE SEAMS\n")
+        .expect("capture seams missing");
+    assert!(start < end, "{out}");
+    let block = &out[start..end];
+    for line in block.lines() {
+        assert!(
+            line.chars().count() <= 76,
+            "line exceeds 76 columns: {line:?}"
+        );
+    }
+    let prose = block.lines().skip(1).collect::<Vec<_>>().join(" ");
+    let prose = prose.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert_eq!(prose, "Agent custody runs in Rust at session start, recovery and prompt hooks. It does not depend on a model following this protocol. Inspect its report with vivac_agents operation reconcile; previews write nothing. To authorize continuous native import and synchronization in this lane, use reconcile with mode automatic, yes true and why after the person approves that scope. Mode manual disables the policy. Supported new agents are imported without merging identities by name; explicitly detached files stay excluded. Import preserves the complete prompt in native files and records only its source reference and digest. Never paste prompts into the provenance tree. A changed source requires a reviewed import revision. Declare assignments and destinations explicitly for another provider; never invent equivalents. Reconcile applies safe independent destinations and reports remaining conflicts or unsupported settings without accepting overwrite digests. A configured file is not runtime evidence. Observe only reliable harness evidence; otherwise leave execution unverified. Load vivac_agents by name if needed. Without MCP, use the equivalent vivac agents commands.");
+    let after = c.log();
+    assert!(after.starts_with(&before));
+    for event in after[before.len()..].lines() {
+        let event: serde_json::Value = serde_json::from_str(event).unwrap();
+        assert_eq!(event["payload"]["type"], "session.started", "{event}");
+    }
+}
+
+#[test]
+fn agent_custody_is_absent_from_a_persons_session_start() {
+    let c = Sandbox::new_seeded("agent-custody-no-hook");
+    let before = c.log();
+    let out = c.ok(&["session", "start"]);
+    assert!(!out.contains("AGENT CUSTODY"), "{out}");
+    assert_eq!(c.log(), before);
+}

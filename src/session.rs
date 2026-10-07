@@ -81,6 +81,7 @@ pub fn start(ctx: &mut crate::ops::Ctx, a: &Args, project: &str) -> R {
     // is no envelope to build and no format only this one hook understands.
     let text = crate::brief::to_text(&ctx.tree, &ctx.store.root, &ctx.lane_dir, a, project, true)?;
     print!("{text}");
+    reconciliation(&ctx.lane_dir);
     // The brief goes out **first**, and the write cannot take it down. A
     // failure that left the agent with no brief would turn a hole in the
     // instrument into blindness in the product, which is a far worse trade: a
@@ -463,7 +464,8 @@ fn is_capture(body: &Body) -> bool {
         | Body::AgentBound { .. }
         | Body::AgentDetached { .. }
         | Body::AgentMaterialized { .. }
-        | Body::AgentObserved { .. } => false,
+        | Body::AgentObserved { .. }
+        | Body::AgentAutomationConfigured { .. } => false,
     }
 }
 
@@ -657,22 +659,35 @@ fn prompt_text(n: i64) -> String {
 
 /// `session prompt --hook` (`d779`): a nudge for the stretch between the two
 /// boundaries `start` and `end` already cover, run on every message a person
-/// sends. **Always exits 0 and never writes to the log.** Anything that
-/// keeps this from answering cleanly -- no tree, a log this version cannot
-/// read, garbage on stdin, a `.vivac/lane` this process cannot resolve --
-/// reads exactly like nothing worth saying: empty stdout, exit 0. A hook
-/// that can fail the turn it rides on is worse than one that occasionally
-/// stays quiet when it had something to say.
-///
-/// The two seams already write a trace of their own kind -- `session
-/// started`, an automatic stop -- so this is the one hook of the three that
-/// is pure: it reads what the other two, and every ordinary write, already
-/// left behind, and decides without touching any of it.
+/// sends. **Always exits 0.** The nudge itself only reads what the other
+/// seams left behind. Missing or unreadable context keeps that nudge quiet.
+/// Under an authorized automatic agent policy, the hook also runs native
+/// import and synchronization before the nudge. Custody failures are reported
+/// without failing the turn or writing a session trace for this hook.
 pub fn prompt(cwd: &std::path::Path, a: &Args) {
+    if a.has("hook") {
+        reconciliation(cwd);
+    }
     let Some(text) = prompt_text_for(cwd, a) else {
         return;
     };
     print!("{text}");
+}
+
+fn reconciliation(cwd: &std::path::Path) {
+    let (report, code) = crate::agents::reconcile_for_hook(cwd);
+    if report.get("policy").is_none() {
+        if code > 1 && crate::store::locate(cwd).ok().flatten().is_some() {
+            outln!("  Agent custody could not complete; inspect vivac agents reconcile.");
+        }
+        return;
+    }
+    let pending = report["needs_review"].as_array().map_or(0, Vec::len);
+    let blocked = report["blocked"].as_array().map_or(0, Vec::len);
+    if report["policy"]["mode"] == "automatic" || pending + blocked > 0 {
+        outln!("  Agent custody: mode {}; changes applied {}; needs review {}; blocked {}. Inspect vivac agents reconcile.",
+            report["policy"]["mode"].as_str().unwrap_or("manual"), report["applied"], pending, blocked);
+    }
 }
 
 /// [`prompt`]'s own decision, factored out so every early exit is a plain

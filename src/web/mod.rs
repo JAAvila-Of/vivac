@@ -10,9 +10,8 @@
 //!
 //! **No CORS, anywhere.** Every response below carries its own set of
 //! security headers and none of them is `Access-Control-Allow-*`. A page
-//! served from another origin gets nothing back it can read, and `OPTIONS`
-//! is answered exactly like any other method -- no preflight is ever
-//! satisfied, which is what makes the missing `Access-Control-Allow-*`
+//! served from another origin gets nothing back it can read. No preflight is
+//! ever satisfied, which is what makes the missing `Access-Control-Allow-*`
 //! actually matter.
 //!
 //! **`/` always answers the index** (`d809`). Where a session starts is
@@ -21,6 +20,7 @@
 //! anywhere else. After that the index is one link away from every Today
 //! page, so no working directory can take it out of reach.
 
+mod agents;
 mod gate;
 mod map;
 mod today;
@@ -124,6 +124,7 @@ pub(crate) fn alias_link(project: &str, alias: &str) -> String {
 /// What an admitted request is asking for. The gate has already said the
 /// request may be answered; this says what with.
 enum Route<'a> {
+    Agents(&'a str, &'a str),
     /// `GET /` -- the index of projects.
     Index,
     /// `GET /p/<id>/` -- one project's Today page.
@@ -165,6 +166,12 @@ fn route(path: &str) -> Route<'_> {
                 if let Some(node) = tail.strip_prefix("why/") {
                     if !node.is_empty() && !node.contains('/') {
                         return Route::Why(id, node);
+                    }
+                } else if tail == "agents" {
+                    return Route::Agents(id, "");
+                } else if let Some(operation) = tail.strip_prefix("agents/") {
+                    if matches!(operation, "inventory" | "plan" | "apply" | "compare") {
+                        return Route::Agents(id, operation);
                     }
                 } else if tail == "tree" {
                     return Route::Tree(id, query);
@@ -308,6 +315,29 @@ fn handle(
             // it. The redirect a landing project earns did not go away; it
             // moved to `boot_redirect` above, which is spent once per
             // session rather than run on every request.
+            Route::Agents(id, operation) => match registry.named(id) {
+                Named::One(i) => {
+                    let project = registry.at(i);
+                    let name = project.name.clone();
+                    match project.current() {
+                        Ok(ctx) => agents::serve(
+                            request,
+                            id,
+                            &name,
+                            &ctx.lane_dir,
+                            operation,
+                            gate.token(),
+                        ),
+                        Err(_) => respond(
+                            request,
+                            500,
+                            TEXT,
+                            "the store could not be read\n".to_string(),
+                        ),
+                    }
+                }
+                other => not_one(request, registry, other),
+            },
             Route::Index => {
                 let unreachable = registry.unreachable().to_vec();
                 let page = today::index_page(registry.all(), &unreachable);

@@ -15,7 +15,137 @@ Update the CLI, hooks and MCP server that use the tree before its first
 custody write, and restart resident servers after updating. Discovery alone
 does not upgrade the tree.
 
-## Discover and adopt
+## Start with two commands
+
+After configuring your project harnesses with `vivac setup claude-code` and
+`vivac setup codex`, list the agents already present:
+
+```sh
+vivac agents
+vivac agents sync
+```
+
+The inventory shows native agents, custody identities, models, efforts and
+configuration differences across harnesses. Listing does not import anything.
+In a terminal, sync guides you through sources, destination harnesses, explicit
+model assignments, settings and a complete review before applying. Use Space
+to toggle destinations and Enter to continue; terminals without console support
+offer numbered choices. Cancel or end input before confirmation to write nothing.
+The original model and effort stay visible. Model suggestions come from local
+configuration; they do not assert account availability or provider equivalence.
+
+For example, three existing Claude Code agents appear as unmanaged. Select them
+in sync, select Codex as the destination and choose its model and effort. Vivac
+imports their identities, preserves the full native prompts and writes the
+reviewed Codex files. There is no need to author a definition or run import,
+set and bind separately. Run sync again after editing an agent: it presents
+pending or conflicting versions for review. Existing destination replacement
+requires approval of its exact fingerprint. Different agents with the same
+name are never merged automatically.
+
+The `vivac web` Agents page shows the harness matrix and current prompts side
+by side on demand. Prompt text is compared outside the provenance log; no
+historical merge base is inferred. Both surfaces use the same inventory,
+plan and apply functions. A plan becomes invalid if a source, destination or
+custody revision changes before application. Source settings without a
+destination representation remain in the source and are explicitly shown;
+destination permissions are chosen independently.
+
+Without a terminal, sync remains a JSON preview. Use `--json` for machine
+inventory and `inventory`, `plan`, `apply` and `compare` for scripted reviews:
+
+```sh
+vivac agents --json
+vivac agents plan --selection selection.json
+vivac agents apply --selection selection.json --plan-digest <reviewed-sha256> --yes
+vivac agents compare --selection references.json
+```
+
+A selection contains `why` and `items`; each item contains a nullable custody
+`agent`, a source `{harness,path,digest}` and destination entries
+`{assignment,path,digest}`. Assignments explicitly name harness, name, model,
+effort and settings. A destination digest is null only when its path must be
+absent. Compare accepts `{references:[{harness,path,digest}]}`. Reference hashes
+pin complete native files; stored prompt references hash decoded prompt text.
+These operations perform no network requests and need no skill or model to
+manage custody.
+
+## Continuous custody without a model
+
+The coordinator performs discovery, native import, independent destination
+planning, synchronization and configuration checks in Rust. Session start,
+context recovery and prompt hooks invoke it directly. It does not need a model
+to interpret a protocol or run the next command. There is no background watcher:
+a change is discovered on the next hook or explicit reconciliation.
+
+Preview the complete cycle without changing files, configuration or the log:
+
+```sh
+vivac agents reconcile
+vivac agents reconcile --dry-run
+```
+
+Authorize continuous custody for this lane once:
+
+```sh
+vivac agents reconcile --mode automatic --yes --why "Keep project agents synchronized"
+```
+
+This records a decision and policy in the tree. It authorizes import of supported
+project agents present now or added later and synchronization of managed
+destinations. It does not authorize provider equivalences, identity merging or
+conflict overwrites. Personal configuration remains outside discovery. Disable
+continuous custody with `--mode manual --yes --why "<reason>"`; this preserves
+native files and existing contracts. The policy is independent for each lane.
+A policy change cannot be combined with an agent or harness filter.
+
+`vivac agents reconcile --yes` applies a single cycle. With a manual policy it
+synchronizes managed destinations and reports new agents for explicit import.
+It does not enable continuous custody. Agent and harness filters select that
+cycle's destinations. Safe destinations can advance while another is blocked;
+conflicts, unsupported settings and assignments without destinations remain
+explicit. Detached files are excluded from automatic reimport. Runtime evidence
+is reported separately: unverified execution alone does not make reconciliation
+fail or trigger a fabricated observation.
+
+## Preserve native prompts between harnesses
+
+Import an existing native agent without asking a model to summarize its prompt:
+
+```sh
+vivac agents import --harness claude-code --path .claude/agents/reviewer.md \
+  --yes --why "Preserve the native agent contract"
+```
+
+Import reads supported metadata and preserves its explicit assignments, including
+inheritance. It gives the agent a stable identity and adopts its source file.
+The definition records a prompt source: harness, project-relative path and
+SHA-256 of the decoded prompt. The complete prompt remains in the source native
+file; its body is never returned by custody diagnostics or stored in the log.
+The source must remain available for materialization. Existing structured
+contracts without a prompt source continue to render their reviewed prose.
+
+Add an approved destination assignment with `set` and connect a new native
+path with `bind`, as below. Rendering transfers the complete prompt without
+rewriting instructions, including fenced examples and line breaks. Models,
+efforts and permissions remain explicit per harness. Literal preservation does
+not prove that harness-specific instructions have the same meaning elsewhere.
+Unsupported metadata or sensitive values refuse import; values are withheld.
+
+If the source prompt changes, reconciliation blocks its propagation until you
+record the new source revision explicitly:
+
+```sh
+vivac agents import <id> --harness claude-code --path .claude/agents/reviewer.md \
+  --yes --why "Accept the revised native prompt"
+vivac agents reconcile <id> --yes
+```
+
+This keeps the identity and other harness assignments. A changed destination
+that is not the source remains a conflict; import does not infer an identity
+from a matching name or silently take over another agent's path.
+
+## Discover and adopt through the CLI
 
 Run `vivac agents scan --json` in the project's lane folder. It reads project
 agent files in `.codex/agents/` and `.claude/agents/`, including agents added
@@ -27,8 +157,10 @@ An agent's identity is independent of its name and filename. Two agents
 with the same name remain distinct until the person explicitly links
 destinations to one identity.
 
-First restate the contract as reviewed prose. Do not paste a native agent
-file or prompt into the definition. Use a temporary JSON declaration:
+Alternatively, declare a structured contract as reviewed prose. Do not paste a
+native agent file or prompt into the definition; use native import to preserve
+those instructions. A structured declaration uses temporary JSON (or a direct
+object through MCP):
 
 ```json
 {
@@ -94,7 +226,7 @@ bound destination that uses it.
 does not change the authority or native files. Already current destinations
 are idempotent. Missing managed files are diagnosed and can be recreated
 through the reviewed plan.
-All agent commands return JSON. Status returns exit code 1 for pending,
+Explicit operations and `--json` return JSON. Status returns exit code 1 for pending,
 diverged or unverified assignments; diff and preview sync return 1 when
 materialization work remains. Invalid arguments return 2, redaction refusals 3 and
 file or receipt failures 5. A contract without a bound destination is
@@ -124,10 +256,9 @@ After inspecting the running harness, record evidence explicitly with
 not an automatic verification by vivac. It is tied to a revision and
 destination; a later revision does not inherit proof of loading.
 
-`vivac doctor` summarizes agent custody alongside project setup. Use the
-agent commands to resolve the detailed differences. Setup's inventory
-guidance is also available later through scan; setup is not required
-again when an agent is added.
+`vivac doctor` summarizes agent custody alongside project setup. The coordinator
+resolves detailed differences within the authorized scope. Direct scan remains
+available later; setup is not required again when an agent is added.
 
 `vivac agents detach <id> --harness H --path <relative>` stops managing
 one destination and leaves its file in place. `vivac agents retire <id>
@@ -137,7 +268,7 @@ Retirement in the tree does not disable a file the harness can still load.
 ## Integrations
 
 Adapters declare their native directory, adapter version, precedence, capabilities,
-metadata inspection and rendering. The lifecycle uses that interface,
+metadata inspection, prompt decoding and rendering. The lifecycle uses that interface,
 so a new integration does not need a second custody system. The initial
 adapters cover Codex and Claude Code. An unknown harness or unsupported
 setting is refused; vivac does not substitute models or permissions.
@@ -154,3 +285,26 @@ network calls, background watchers or harness processes to node writes.
 A missing or obsolete derived index can make diagnostics slower: they read
 the log without regenerating files. An ordinary read such as `vivac brief`
 can rebuild the index.
+
+## MCP results
+
+Call `vivac_agents` with an `operation` and the fields needed by that operation.
+The available operations are `inventory`, `plan`, `apply`, `compare`,
+`scan`, `status`, `show`, `diff`, `add`, `set`,
+`retire`, `bind`, `adopt`, `detach`, `sync`, `observe`, `import` and `reconcile`. `definition` is a JSON
+object, with the structure shown above, rather than a path to a file. Unknown
+fields and options that do not belong to the selected operation are rejected.
+
+`plan` and `apply` accept the selection object described above. Apply also
+requires `plan_digest` and `yes`. Compare takes `selection` with `references`.
+CLI, MCP and web share the same fingerprint validation and batch preparation.
+
+Reconcile accepts `mode` (`automatic` or `manual`) with `yes` and `why` to
+record its lane policy. Its result includes `policy`, `applied`, `plan`,
+`imported`, `needs_review`, `blocked`, `excluded` and runtime `unverified`.
+
+The response contains `exit_code` and `result`. An `exit_code` of 1 can mean
+pending synchronization or unverified execution; it is a status to continue
+working from, not a failed MCP transport. Error responses withhold native file
+contents and sensitive values. `sync` changes files and is advertised as a
+destructive tool operation; previews remain available before applying it.

@@ -206,6 +206,7 @@ pub enum ConfigVersion {
     Locked,
     Lanes,
     Agents,
+    AgentAutomation,
 }
 
 /// The sentence a config's `version` becomes the moment its tree gains a
@@ -227,6 +228,9 @@ pub const LANE_SENTENCE: &str =
 pub const AGENT_SENTENCE: &str =
     "this tree holds agent custody, and this vivac is too old to read it: update vivac";
 
+pub const AGENT_AUTOMATION_SENTENCE: &str =
+    "this tree holds automatic agent reconciliation, and this vivac is too old to read it: update vivac";
+
 impl Serialize for ConfigVersion {
     fn serialize<S>(&self, s: S) -> Result<S::Ok, S::Error>
     where
@@ -237,6 +241,7 @@ impl Serialize for ConfigVersion {
             ConfigVersion::Locked => s.serialize_str(LOCK_SENTENCE),
             ConfigVersion::Lanes => s.serialize_str(LANE_SENTENCE),
             ConfigVersion::Agents => s.serialize_str(AGENT_SENTENCE),
+            ConfigVersion::AgentAutomation => s.serialize_str(AGENT_AUTOMATION_SENTENCE),
         }
     }
 }
@@ -257,6 +262,9 @@ impl<'de> Deserialize<'de> for ConfigVersion {
             serde_json::Value::String(s) if s == LOCK_SENTENCE => Ok(ConfigVersion::Locked),
             serde_json::Value::String(s) if s == LANE_SENTENCE => Ok(ConfigVersion::Lanes),
             serde_json::Value::String(s) if s == AGENT_SENTENCE => Ok(ConfigVersion::Agents),
+            serde_json::Value::String(s) if s == AGENT_AUTOMATION_SENTENCE => {
+                Ok(ConfigVersion::AgentAutomation)
+            }
             _ => Err(serde::de::Error::custom("unsupported config version")),
         }
     }
@@ -1176,6 +1184,7 @@ fn check_config_version(version: Option<&serde_json::Value>) -> Result<(), Failu
         Some(serde_json::Value::String(s)) if s == LOCK_SENTENCE => Ok(()),
         Some(serde_json::Value::String(s)) if s == LANE_SENTENCE => Ok(()),
         Some(serde_json::Value::String(s)) if s == AGENT_SENTENCE => Ok(()),
+        Some(serde_json::Value::String(s)) if s == AGENT_AUTOMATION_SENTENCE => Ok(()),
         Some(serde_json::Value::String(s)) => Err(Failure::newer_vivac(format!(
             "This tree was written by a newer vivac: its config says {s:?}. Update vivac \
              to read it. A session or vivac web opened before an update keeps the old \
@@ -1202,6 +1211,7 @@ fn regenerated_version(root: &Path) -> ConfigVersion {
     };
     let mut governed = false;
     let mut lanes = false;
+    let mut agents = false;
     for line in BufReader::new(f).lines().map_while(Result::ok) {
         if line.trim().is_empty() {
             continue;
@@ -1211,7 +1221,11 @@ fn regenerated_version(root: &Path) -> ConfigVersion {
         };
         match v["payload"]["type"].as_str() {
             Some("lane.declared") | Some("lane.claimed") => lanes = true,
-            Some(tag) if tag.starts_with("agent.") => return ConfigVersion::Agents,
+            Some("agent.automation.configured") => return ConfigVersion::AgentAutomation,
+            Some("agent.recorded") if v["payload"]["definition"]["prompt"].is_object() => {
+                return ConfigVersion::AgentAutomation
+            }
+            Some(tag) if tag.starts_with("agent.") => agents = true,
             Some("node.created")
                 if matches!(v["payload"]["kind"].as_str(), Some("pillar") | Some("rule")) =>
             {
@@ -1220,7 +1234,9 @@ fn regenerated_version(root: &Path) -> ConfigVersion {
             _ => {}
         }
     }
-    if lanes {
+    if agents {
+        ConfigVersion::Agents
+    } else if lanes {
         ConfigVersion::Lanes
     } else if governed {
         ConfigVersion::Locked
@@ -1397,18 +1413,31 @@ impl Store {
         body: &[crate::event::Body],
         tree_already_governed: bool,
     ) -> std::io::Result<()> {
-        if self.config.version != ConfigVersion::Agents
-            && body.iter().any(|b| {
-                matches!(
-                    b,
-                    crate::event::Body::AgentRecorded { .. }
-                        | crate::event::Body::AgentBound { .. }
-                        | crate::event::Body::AgentDetached { .. }
-                        | crate::event::Body::AgentMaterialized { .. }
-                        | crate::event::Body::AgentObserved { .. }
-                )
-            })
+        if self.config.version != ConfigVersion::AgentAutomation
+            && body.iter().any(|b| matches!(b, crate::event::Body::AgentAutomationConfigured { .. }) || matches!(b, crate::event::Body::AgentRecorded { definition, .. } if definition.prompt.is_some()))
         {
+            let locked = Config {
+                version: ConfigVersion::AgentAutomation,
+                project_id: self.config.project_id.clone(),
+                actor: self.config.actor.clone(),
+                share: self.config.share,
+            };
+            write_config_atomic(&self.root, &locked)?;
+            self.config = locked;
+        }
+        if !matches!(
+            self.config.version,
+            ConfigVersion::Agents | ConfigVersion::AgentAutomation
+        ) && body.iter().any(|b| {
+            matches!(
+                b,
+                crate::event::Body::AgentRecorded { .. }
+                    | crate::event::Body::AgentBound { .. }
+                    | crate::event::Body::AgentDetached { .. }
+                    | crate::event::Body::AgentMaterialized { .. }
+                    | crate::event::Body::AgentObserved { .. }
+            )
+        }) {
             let locked = Config {
                 version: ConfigVersion::Agents,
                 project_id: self.config.project_id.clone(),
@@ -1459,7 +1488,7 @@ impl Store {
         }
         if matches!(
             self.config.version,
-            ConfigVersion::Lanes | ConfigVersion::Agents
+            ConfigVersion::Lanes | ConfigVersion::Agents | ConfigVersion::AgentAutomation
         ) {
             return Ok(());
         }
@@ -1674,6 +1703,43 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn automatic_custody_compatibility_survives_older_events_lanes_and_config_rebuild() {
+        let tmp = std::env::temp_dir().join(format!("vivac-policy-config-{}", id::ulid()));
+        let mut s = Store::create(&tmp).unwrap();
+        let lock = s.lock_for_write().unwrap();
+        let bound = crate::event::Body::AgentBound {
+            agent: id::ulid(),
+            harness: "codex".into(),
+            path: ".codex/agents/reviewer.toml".into(),
+            baseline: None,
+        };
+        s.append(&lock, crate::lane::MAIN, vec![bound.clone()], 0, false)
+            .unwrap();
+        assert_eq!(s.config.version, ConfigVersion::Agents);
+        s.append(
+            &lock,
+            crate::lane::MAIN,
+            vec![crate::event::Body::AgentAutomationConfigured {
+                node: id::ulid(),
+                enabled: true,
+            }],
+            1,
+            false,
+        )
+        .unwrap();
+        assert_eq!(s.config.version, ConfigVersion::AgentAutomation);
+        s.lock_lanes_in_config(&lock).unwrap();
+        s.append(&lock, crate::lane::MAIN, vec![bound], 2, false)
+            .unwrap();
+        assert_eq!(s.config.version, ConfigVersion::AgentAutomation);
+        drop(lock);
+        fs::remove_file(tmp.join(DIR).join(CONFIG)).unwrap();
+        let reopened = Store::open(tmp.clone()).unwrap();
+        assert_eq!(reopened.config.version, ConfigVersion::AgentAutomation);
+        fs::remove_dir_all(tmp).unwrap();
+    }
 
     #[test]
     fn search_upward() {

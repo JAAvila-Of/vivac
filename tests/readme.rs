@@ -362,7 +362,7 @@ fn the_readme_does_not_call_missing_what_the_binary_already_does() {
 ///
 /// `NotFound` is not a page. It is in the list because it is in the enum,
 /// and a list that quietly drops a variant is a list that stops noticing.
-const ROUTES: [&str; 5] = ["Index", "NotFound", "Today", "Tree", "Why"];
+const ROUTES: [&str; 6] = ["Agents", "Index", "NotFound", "Today", "Tree", "Why"];
 
 /// The variant names of `Route`, read off the source.
 fn route_variants() -> BTreeSet<String> {

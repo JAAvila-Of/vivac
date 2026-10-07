@@ -261,6 +261,7 @@ author
 authored
 authorised
 authority
+authorized
 auto
 automatic
 automatically
@@ -3390,6 +3391,7 @@ send
 sending
 sends
 sense
+sensitive
 sent
 sentence
 sentences
@@ -3797,6 +3799,7 @@ symmetric
 symptom
 sync
 synced
+synchronization
 synchronous
 syncing
 syncs
@@ -3977,6 +3980,7 @@ tramo
 tranche
 transaction
 transcript
+transfer
 transform
 transit
 transition

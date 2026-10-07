@@ -140,6 +140,20 @@ const USAGE: &str = r#"vivac - provenance of work
 
   Agent custody
 
+    vivac agents [--json]                    inventory across project harnesses
+    vivac agents sync                       guided review in a terminal
+    vivac agents inventory                  read-only machine inventory
+    vivac agents plan --selection <json|file>  preview a complete selection
+    vivac agents apply --selection <json|file> --plan-digest <sha256> --yes
+                                              apply the exact reviewed plan
+    vivac agents compare --selection <json|file>
+                                              compare pinned native references
+    vivac agents reconcile [<id>] [--harness H] [--yes|--dry-run]
+                                              preview or apply independent plans
+          --mode automatic|manual --yes --why "<reason>"
+                                              authorize or disable lane automation
+    vivac agents import [<id>] --harness H --path <relative>
+          --yes --why "<reason>"              preserve the complete native prompt
     vivac agents scan [--harness H] [--json]  discover project agents
     vivac agents status [<id>] [--harness H] [--json]
                                               declared, configured and reported
@@ -159,8 +173,8 @@ const USAGE: &str = r#"vivac - provenance of work
     vivac agents observe <id> --harness H --path <relative>
           --revision <node> --model M --effort E --evidence "<reason>"
                                               record reported runtime evidence
-    All agent commands return JSON. Add, set, adopt and retire accept
-    --parent N and --against "p12: <why>". Sync defaults to preview;
+    Explicit operations and --json return JSON. Add, set, adopt and retire accept
+    --parent N and --against "p12: <why>". Without a terminal sync previews;
     --dry-run always writes nothing, including when --yes is present.
 
   Session

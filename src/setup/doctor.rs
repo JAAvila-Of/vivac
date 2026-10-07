@@ -252,6 +252,43 @@ fn harness(here: &Path, name: &str, report: &mut Report) {
     }
 }
 
+pub(crate) fn configured(here: &Path, name: &str) -> bool {
+    let files: &[&str] = match name {
+        "codex" => &[".codex/hooks.json", ".codex/config.toml"],
+        "claude-code" => &[".claude/settings.json", ".mcp.json"],
+        _ => return false,
+    };
+    for relative in files {
+        let directory = relative.split('/').next().unwrap();
+        let Ok(path) = crate::agents::adapters::safe_path(here, relative, directory) else {
+            return false;
+        };
+        if !std::fs::metadata(path)
+            .is_ok_and(|metadata| metadata.is_file() && metadata.len() <= 1024 * 1024)
+        {
+            return false;
+        }
+    }
+    let local = ".claude/settings.local.json";
+    if name == "claude-code" && here.join(local).exists() {
+        let Ok(path) = crate::agents::adapters::safe_path(here, local, ".claude") else {
+            return false;
+        };
+        if !std::fs::metadata(path)
+            .is_ok_and(|metadata| metadata.is_file() && metadata.len() <= 1024 * 1024)
+        {
+            return false;
+        }
+    }
+    let mut report = Report::default();
+    harness(here, name, &mut report);
+    report
+        .checks
+        .iter()
+        .filter(|check| check.name != "codex trust")
+        .all(|check| check.status == "ok")
+}
+
 pub(crate) fn run(cwd: &Path, args: &Args) -> Result<i32, Failure> {
     let chosen = args.positional(0);
     if !args.extra(1).is_empty() || chosen.is_some_and(|h| !matches!(h, "claude-code" | "codex")) {

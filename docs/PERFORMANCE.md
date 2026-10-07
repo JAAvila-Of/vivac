@@ -95,9 +95,10 @@ for costs the same context as a tool nobody calls.**
 
 ## Two things worth knowing
 
-**The first read after an upgrade is slower, once.** The index is derived, and
-a version that does not recognise the format it finds folds the log and writes
-a new one. Nothing to run, and the read after it is back to the tables above.
+**The first ordinary read after an upgrade is slower, once.** The index is
+derived, and an ordinary read that does not recognise its format folds the log
+and writes a new one. Custody diagnostics and previews keep reads pure: they
+fold again until an ordinary command such as `vivac brief` rebuilds the index.
 
 **These numbers do not reconcile with the ones they replace, and cannot.**
 That table named no machine, and the fixture behind it came from a generator
@@ -105,3 +106,55 @@ that exists nowhere any more — so its shape, which governs three of the five
 rows, cannot be recovered to compare against. What replaced it is kept: the
 script, the fixtures it builds from a fixed seed, and one file per run
 recording what it measured and where.
+
+## Continuous agent custody
+
+Measured on **6 October 2026**, on this Windows development machine: 1,068
+nodes, 5,217 events, eight native prompt references and eight current managed
+destinations. Each cell has 10 warmups and 200 calls. The coordinator executable
+was 314 seconds old before measurement. The derived index was regenerated
+outside the timer; configuration, event and destination hashes stayed equal.
+
+| Operation | p50 / p99 (ms) |
+|---|---:|
+| 0.19.0 prompt hook, no agents | 42.672 / 96.862 |
+| Coordinator prompt hook, no agents | 56.661 / 132.688 |
+| Coordinator prompt hook, eight agents in automatic mode | 64.294 / 125.710 |
+| Resident MCP reconciliation, manual mode, no agents | 6.578 / 9.523 |
+| Resident MCP reconciliation, automatic mode, eight agents | 17.876 / 21.972 |
+
+The MCP calls exclude server startup and initialization. The hook calls include
+process startup, reconciliation and the existing session nudge. Both resident
+MCP tails fit 50 ms in this fixture; the complete hook does not. These are steady
+cycles without import or materialization work, not latency claims for writes,
+cold indexes, other platforms or ten thousand nodes. Configuration being current
+is not evidence that a harness loaded an agent.
+
+## Agent inventory and synchronization previews
+
+Measured on **7 October 2026**, on Windows 11 AMD64 with 12 logical CPUs:
+10,000 nodes, 200 open, fixture seed `20260908`, three unmanaged Claude Code
+agents and both Claude Code and Codex configured. Plans target three new Codex
+files with model `inherit` and effort `high`. The release executable was 517
+seconds old before measurement, with Cargo idle. Each cell has 10 warmups and
+200 measured calls; percentiles use the nearest rank.
+
+| Operation | CLI p50 / p99 (ms) | Resident MCP p50 / p99 (ms) |
+|---|---:|---:|
+| Inventory | 22.276 / 69.523 | 13.480 / 19.973 |
+| Synchronization plan | 26.573 / 73.284 | 16.282 / 29.318 |
+| Current-version comparison | 21.231 / 68.242 | 11.838 / 14.005 |
+
+CLI measurements include process startup; MCP measurements exclude server
+startup and initialization. All three resident MCP tails fit 50 ms in this
+fixture; complete CLI calls exceed it. These numbers do not establish the cause
+of the CLI tail or performance on other machines.
+
+A separate inventory call without the derived index took **67.606 ms**. That is
+one observation, not a percentile. The read left the index absent; its original
+bytes were restored outside the timer. Hashes of all 12 fixture files matched
+before and after the complete run, and CLI/MCP response schemas matched.
+
+These are pure inventory, new-agent planning and current-file comparison
+measurements. They do not measure applying a plan, loading agents in a harness,
+or interactive browser latency.

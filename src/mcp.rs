@@ -25,7 +25,7 @@
 //! and taking its place means being reachable through the same door, in the
 //! tool list, with a schema.
 //!
-//! **Five reads, ten writes, fifteen tools.** The reads answer `brief`,
+//! **Five reads, ten writes and agent custody.** The reads answer `brief`,
 //! `find`, `why`, `open` and `rules` -- the last one `t411`'s own pull,
 //! since a rule nobody pulls on is a rule that might as well not be there.
 //! The writes are `push`, `pop`, `done`, `add`, `decide`, `note`, `park`,
@@ -61,6 +61,7 @@ enum ArgKind {
     Str,
     Bool,
     List,
+    Object,
 }
 
 impl ArgKind {
@@ -81,6 +82,7 @@ impl ArgKind {
             ArgKind::Str => "string",
             ArgKind::Bool => "boolean",
             ArgKind::List => "list",
+            ArgKind::Object => "object",
         }
     }
 }
@@ -111,11 +113,132 @@ struct Tool {
     args: &'static [Arg],
 }
 
-/// Fifteen, and the number is a budget rather than a stage of growth: every
+/// The tool count is a budget rather than a stage of growth: every
 /// tool here costs context in every session the agent ever opens. The other
 /// six write ops -- `block`, `promote`, `abandon`, `focus`, `flag`,
 /// `restore` -- stay off this list on purpose; see the module doc.
 const TOOLS: &[Tool] = &[
+    Tool {
+        name: "vivac_agents",
+        title: "Manage project agent custody",
+        read_only: false,
+        description: "Manage project agents with a deterministic workflow. Inventory lists native agents, configured harnesses, assignments and differences without importing. Plan takes a selection with pinned source and destination fingerprints; apply requires the identical selection, reviewed plan_digest and yes. Compare explicitly returns current native prompts outside the provenance log. Reconcile previews independent plans; mode automatic with yes and why authorizes continuous import and safe synchronization in this lane. Manual disables it. Full prompts transfer through native references, never into the tree. Models and destination permissions require explicit assignments: never infer provider equivalence, merge identities by name, overwrite conflicts without exact fingerprint review or claim runtime loading from configuration. Exit code 1 reports remaining work.",
+        args: &[
+            Arg {
+                name: "operation",
+                kind: ArgKind::Str,
+                required: true,
+                description: "Agent operation, matching the CLI command.",
+            },
+            Arg {
+                name: "agent",
+                kind: ArgKind::Str,
+                required: false,
+                description: "Stable agent identity; never inferred from a name.",
+            },
+            Arg {
+                name: "mode", kind: ArgKind::Str, required: false,
+                description: "Reconciliation policy: automatic or manual; requires yes and why without destination filters.",
+            },
+            Arg {
+                name: "definition",
+                kind: ArgKind::Object,
+                required: false,
+                description: "Reviewed contract prose and explicit harness assignments.",
+            },
+            Arg {
+                name: "selection",
+                kind: ArgKind::Object,
+                required: false,
+                description: "Reviewed synchronization selection, or native references for comparison; inline objects only.",
+            },
+            Arg {
+                name: "plan_digest",
+                kind: ArgKind::Str,
+                required: false,
+                description: "Exact reviewed plan fingerprint required by apply.",
+            },
+            Arg {
+                name: "harness",
+                kind: ArgKind::Str,
+                required: false,
+                description: "Named harness adapter.",
+            },
+            Arg {
+                name: "path",
+                kind: ArgKind::Str,
+                required: false,
+                description: "Project-relative native destination.",
+            },
+            Arg {
+                name: "digest",
+                kind: ArgKind::Str,
+                required: false,
+                description: "Current fingerprint returned by scan.",
+            },
+            Arg {
+                name: "why",
+                kind: ArgKind::Str,
+                required: false,
+                description: "Reason for the source decision.",
+            },
+            Arg {
+                name: "parent",
+                kind: ArgKind::Str,
+                required: false,
+                description: "Source decision parent.",
+            },
+            Arg {
+                name: "against",
+                kind: ArgKind::List,
+                required: false,
+                description: "Judgements against governing pillars or rules.",
+            },
+            Arg {
+                name: "revision",
+                kind: ArgKind::Str,
+                required: false,
+                description: "Exact revision reported by the harness.",
+            },
+            Arg {
+                name: "model",
+                kind: ArgKind::Str,
+                required: false,
+                description: "Model reported by the harness.",
+            },
+            Arg {
+                name: "effort",
+                kind: ArgKind::Str,
+                required: false,
+                description: "Effort reported by the harness.",
+            },
+            Arg {
+                name: "evidence",
+                kind: ArgKind::Str,
+                required: false,
+                description: "Reported runtime evidence, without secrets.",
+            },
+            Arg {
+                name: "yes",
+                kind: ArgKind::Bool,
+                required: false,
+                description: "Apply the synchronization plan.",
+            },
+            Arg {
+                name: "dry_run",
+                kind: ArgKind::Bool,
+                required: false,
+                description: "Preview even when yes is true.",
+            },
+            Arg {
+                name: "accept_digest",
+                kind: ArgKind::Str,
+                required: false,
+                description: "Exact manual-change fingerprint explicitly accepted for synchronization.",
+            },
+        ],
+    },
+
     Tool {
         name: "vivac_brief",
         title: "Brief: where you are and what not to touch",
@@ -777,6 +900,42 @@ const TOOLS: &[Tool] = &[
     },
 ];
 
+fn definition_schema() -> Value {
+    let string = json!({"type":"string"});
+    let list = json!({"type":"array","items":string});
+    json!({"type":"object","additionalProperties":false,
+    "required":["schema_version","name","contract","assignments"],
+    "properties":{
+        "schema_version":{"type":"integer","const":1},"name":string,"retired":{"type":"boolean"},
+        "prompt":{"type":"object","additionalProperties":false,"required":["harness","path","digest"],"properties":{"harness":string,"path":string,"digest":string}},
+        "contract":{"type":"object","additionalProperties":false,"required":["purpose","duties","limits","acceptance"],"properties":{"purpose":string,"duties":list,"limits":list,"acceptance":list}},
+        "assignments":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["harness","name","model","effort"],"properties":{"harness":string,"name":string,"model":string,"effort":string,"settings":{"type":"object"}}}}
+    }})
+}
+
+fn selection_schema() -> Value {
+    let string = json!({"type":"string"});
+    let reference = json!({"type":"object","additionalProperties":false,
+        "required":["harness","path","digest"],
+        "properties":{"harness":string,"path":string,"digest":string}});
+    let assignment = json!({"type":"object","additionalProperties":false,
+        "required":["harness","name","model","effort"],
+        "properties":{"harness":string,"name":string,"model":string,"effort":string,"settings":{"type":"object"}}});
+    let destination = json!({"type":"object","additionalProperties":false,
+        "required":["assignment","path"],
+        "properties":{"assignment":assignment,"path":string,"digest":{"type":["string","null"]}}});
+    let item = json!({"type":"object","additionalProperties":false,
+        "required":["source","destinations"],
+        "properties":{"agent":{"type":["string","null"]},"source":reference,
+            "destinations":{"type":"array","items":destination}}});
+    json!({"type":"object","oneOf":[
+        {"type":"object","additionalProperties":false,"required":["why","items"],
+            "properties":{"why":string,"items":{"type":"array","items":item}}},
+        {"type":"object","additionalProperties":false,"required":["references"],
+            "properties":{"references":{"type":"array","maxItems":32,"items":reference}}}
+    ]})
+}
+
 fn schema(t: &Tool) -> Value {
     let mut properties = serde_json::Map::new();
     let mut required: Vec<&str> = Vec::new();
@@ -789,6 +948,16 @@ fn schema(t: &Tool) -> Value {
             ArgKind::Bool => {
                 entry.insert("type".to_string(), json!("boolean"));
             }
+            ArgKind::Object => {
+                entry = if a.name == "selection" {
+                    selection_schema()
+                } else {
+                    definition_schema()
+                }
+                .as_object()
+                .unwrap()
+                .clone();
+            }
             ArgKind::List => {
                 entry.insert("type".to_string(), json!("array"));
                 entry.insert("items".to_string(), json!({ "type": "string" }));
@@ -800,9 +969,31 @@ fn schema(t: &Tool) -> Value {
             required.push(a.name);
         }
     }
+    if t.name == "vivac_agents" {
+        properties.get_mut("operation").unwrap()["enum"] = json!([
+            "scan",
+            "status",
+            "show",
+            "diff",
+            "add",
+            "set",
+            "retire",
+            "bind",
+            "adopt",
+            "detach",
+            "sync",
+            "observe",
+            "reconcile",
+            "import",
+            "inventory",
+            "plan",
+            "apply",
+            "compare"
+        ]);
+    }
     let mut annotations = json!({
         "readOnlyHint": t.read_only,
-        "destructiveHint": false,
+        "destructiveHint": t.name == "vivac_agents",
         "openWorldHint": false,
     });
     if !t.read_only {
@@ -993,6 +1184,14 @@ fn call(project: &mut Project, params: &Value) -> Result<String, Failure> {
     // point the CLI refuses an unknown flag at. `arguments` is the only
     // place a caller's own keys live -- `_meta` sits beside it in `params`,
     // never inside it, so a protocol-level field never reaches this check.
+    if name == "vivac_agents" {
+        let result = crate::agents::request_args(&params["arguments"]).and_then(|args| {
+            let cwd = project.current()?.lane_dir.clone();
+            Ok(crate::agents::run_value(&cwd, &args))
+        });
+        let (value, code) = crate::agents::response(result);
+        return pretty(json!({"exit_code": code, "result": value}));
+    }
     let unknown = unknown_arguments(tool, &params["arguments"]);
     if !unknown.is_empty() {
         let takes = if tool.args.is_empty() {

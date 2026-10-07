@@ -1815,6 +1815,7 @@ fn build_tree(bytes: &[u8], header: &Header) -> Option<Tree> {
                 | crate::event::Body::AgentDetached { .. }
                 | crate::event::Body::AgentMaterialized { .. }
                 | crate::event::Body::AgentObserved { .. }
+                | crate::event::Body::AgentAutomationConfigured { .. }
         )
     }) {
         return None;
@@ -3442,16 +3443,34 @@ mod tests {
         );
         event.seq = 3;
         event.id = fixed_id(3);
-        event.payload = Body::AgentDetached {
-            agent: fixed_id(5),
-            harness: "codex".into(),
-            path: ".codex/agents/reviewer.toml".into(),
+        event.payload = Body::AgentAutomationConfigured {
+            node: fixed_id(1),
+            enabled: true,
         };
         write_raw_locked(&store, &[event.clone()]);
         let tail = load(&store, false).unwrap();
         assert_eq!(tail.agent_history.len(), 2);
-        assert_eq!(tail.agent_history[1], (event.lane, event.payload));
+        assert_eq!(
+            tail.agent_history[1],
+            (event.lane.clone(), event.payload.clone())
+        );
         assert_eq!(index, fs::read(store.index_path()).unwrap());
+        let persisted = load(&store, true).unwrap();
+        assert_eq!(persisted.agent_history, tail.agent_history);
+        assert_eq!(
+            load(&store, false).unwrap().agent_history,
+            tail.agent_history
+        );
+        event.seq = 4;
+        event.id = fixed_id(4);
+        event.payload = Body::AgentAutomationConfigured {
+            node: fixed_id(1),
+            enabled: false,
+        };
+        write_raw_locked(&store, &[event.clone()]);
+        let revoked = load(&store, false).unwrap();
+        assert_eq!(revoked.agent_history.len(), 3);
+        assert_eq!(revoked.agent_history[2], (event.lane, event.payload));
     }
 
     #[test]
