@@ -489,6 +489,7 @@ const BRIEF_HEADINGS: &[&str] = &[
     "LAST VIVAC",
     "UNTOUCHED FOR A WHILE",
     OTHER_LANES_TITLE,
+    "AGENT CUSTODY",
     "WRITE AT THESE SEAMS",
     "OPEN GOALS",
 ];
@@ -1033,6 +1034,26 @@ fn other_lanes_fallback(n: usize) -> Vec<String> {
     )
 }
 
+const AGENT_CUSTODY: &[&str] = &[
+    "  Agent custody runs in Rust at session start, recovery and prompt hooks. It",
+    "  does not depend on a model following this protocol. Inspect its report",
+    "  with vivac_agents operation reconcile; previews write nothing. To",
+    "  authorize continuous native import and synchronization in this lane, use",
+    "  reconcile with mode automatic, yes true and why after the person approves",
+    "  that scope. Mode manual disables the policy. Supported new agents are",
+    "  imported without merging identities by name; explicitly detached files",
+    "  stay excluded. Import preserves the complete prompt in native files and",
+    "  records only its source reference and digest. Never paste prompts into the",
+    "  provenance tree. A changed source requires a reviewed import revision.",
+    "  Declare assignments and destinations explicitly for another provider;",
+    "  never invent equivalents. Reconcile applies safe independent destinations",
+    "  and reports remaining conflicts or unsupported settings without accepting",
+    "  overwrite digests. A configured file is not runtime evidence. Observe only",
+    "  reliable harness evidence; otherwise leave execution unverified. Load",
+    "  vivac_agents by name if needed. Without MCP, use the equivalent vivac",
+    "  agents commands.",
+];
+
 /// The lines ahead of the table (`d757`, `d779`, `d945`): look at what the
 /// tree already holds before writing; what turns up while working on work it
 /// already holds is a node under it and never a note (`d945`); hang new work
@@ -1198,10 +1219,10 @@ fn capture_seams_block(has_focus: bool) -> Vec<String> {
 ///
 /// `for_hook` is the only thing that tells the hook's own call apart from
 /// `vivac brief`, read by a person, and the MCP `vivac_brief` tool. Only it
-/// gets the capture-seams block (`d738`, `d757`): a person reading `vivac brief`
-/// learns nothing from being told when to write, and the block belongs here,
-/// appended once, rather than being built twice by callers that would have
-/// to agree on it by hand.
+/// gets the custody protocol and capture-seams block (`d1057`, `d738`, `d757`):
+/// a person reading `vivac brief` learns nothing from instructions for the
+/// session agent. Both blocks belong here, appended once, rather than being
+/// built twice by callers that would have to agree on them by hand.
 pub fn to_text(
     a: &Tree,
     root: &Path,
@@ -1665,6 +1686,10 @@ pub fn to_text(
     // block that tells an agent when to write would be worse than the
     // brief running long.
     if for_hook {
+        s.push(Section::fixed(heading(
+            "AGENT CUSTODY",
+            AGENT_CUSTODY.iter().map(|line| line.to_string()).collect(),
+        )));
         s.push(Section::fixed(capture_seams_block(focus.is_some())));
     }
 

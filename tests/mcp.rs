@@ -123,7 +123,7 @@ fn initialize_answers_with_the_server_and_its_version() {
 /// reads plus the ten writes `t118`, `t411`, `t426` and `d776` add between
 /// them, and nothing past that.
 #[test]
-fn the_tool_list_is_the_fifteen_and_only_the_fifteen() {
+fn the_tool_list_has_only_the_declared_tools() {
     let c = seeded("list");
     let mut s = hello(&c);
     let r = s.ask(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#);
@@ -134,6 +134,7 @@ fn the_tool_list_is_the_fifteen_and_only_the_fifteen() {
         names,
         [
             "vivac_add",
+            "vivac_agents",
             "vivac_arm",
             "vivac_brief",
             "vivac_decide",
@@ -1080,7 +1081,7 @@ fn every_tool_carries_a_title_and_says_what_it_does_to_the_tree() {
         assert_eq!(a["readOnlyHint"], json!(read), "{name}: readOnlyHint");
         assert_eq!(
             a["destructiveHint"],
-            json!(false),
+            json!(name == "vivac_agents"),
             "{name}: destructiveHint"
         );
         assert_eq!(a["openWorldHint"], json!(false), "{name}: openWorldHint");
@@ -2698,5 +2699,356 @@ fn the_save_tool_says_what_its_label_and_answer_hold() {
             .unwrap()
             .contains("instead of guessing from the log. The answer also says what the stop found unfinished, when there is any: files not committed, commits not pushed, and files changed that no node claims."),
         "{save}"
+    );
+}
+
+fn custody(s: &mut Server, arguments: Value) -> Value {
+    let reply = s.ask(&json!({"jsonrpc":"2.0","id":91,"method":"tools/call","params":{"name":"vivac_agents","arguments":arguments}}).to_string());
+    assert_ne!(reply["result"]["isError"], true, "{reply}");
+    serde_json::from_str(&text_of(&reply)).unwrap()
+}
+
+fn custody_definition() -> Value {
+    json!({"schema_version":1,"name":"scout","contract":{"purpose":"Inspect the scoped change.","duties":["Return evidence."],"limits":["Do not publish."],"acceptance":["Cite source lines."]},"assignments":[{"harness":"claude-code","name":"scout","model":"sonnet","effort":"high"},{"harness":"codex","name":"scout","model":"inherit","effort":"high"}]})
+}
+
+#[test]
+fn agent_custody_runs_without_definition_files_or_shell_calls() {
+    let c = seeded("custody-wire");
+    let path = ".claude/agents/scout.md";
+    std::fs::create_dir_all(c.0.join(".claude/agents")).unwrap();
+    std::fs::write(c.0.join(path), "---\nname: scout\ndescription: Inspect changes\nmodel: sonnet\neffort: high\n---\nPrivate native prompt.\n").unwrap();
+    let mut s = hello(&c);
+    let scan = custody(&mut s, json!({"operation":"scan"}));
+    let digest = scan["result"]["unmanaged"][0]["digest"].clone();
+    let added = custody(
+        &mut s,
+        json!({"operation":"add","definition":custody_definition(),"why":"Preserve the reviewed contract","against":[]}),
+    );
+    assert_eq!(added["exit_code"], 0, "{added}");
+    let agent = added["result"]["agent"].clone();
+    let adopted = custody(
+        &mut s,
+        json!({"operation":"adopt","agent":agent,"harness":"claude-code","path":path,"digest":digest,"why":"Adopt the inspected destination"}),
+    );
+    assert_eq!(adopted["exit_code"], 0);
+    assert_eq!(
+        custody(
+            &mut s,
+            json!({"operation":"bind","agent":agent,"harness":"codex","path":".codex/agents/scout.toml"})
+        )["exit_code"],
+        0
+    );
+    let before = c.log();
+    assert_eq!(
+        custody(&mut s, json!({"operation":"sync","agent":agent}))["exit_code"],
+        1
+    );
+    assert_eq!(before, c.log());
+    assert_eq!(
+        custody(&mut s, json!({"operation":"sync","agent":agent,"yes":true}))["exit_code"],
+        0
+    );
+    let native = std::fs::read(c.0.join(path)).unwrap();
+    let mut definition = custody_definition();
+    definition["assignments"][1]["model"] = json!("chosen-model");
+    assert_eq!(
+        custody(
+            &mut s,
+            json!({"operation":"set","agent":agent,"definition":definition,"why":"Change only the Codex assignment"})
+        )["exit_code"],
+        0
+    );
+    assert_eq!(
+        custody(&mut s, json!({"operation":"sync","agent":agent,"yes":true}))["exit_code"],
+        0
+    );
+    assert_eq!(native, std::fs::read(c.0.join(path)).unwrap());
+    std::fs::write(
+        c.0.join(path),
+        String::from_utf8(native).unwrap() + "\nManual change.\n",
+    )
+    .unwrap();
+    let manual = std::fs::read(c.0.join(path)).unwrap();
+    assert_ne!(
+        custody(&mut s, json!({"operation":"sync","agent":agent,"yes":true}))["exit_code"],
+        0
+    );
+    assert_eq!(manual, std::fs::read(c.0.join(path)).unwrap());
+
+    let shown = custody(&mut s, json!({"operation":"show","agent":agent}));
+    assert_eq!(
+        custody(
+            &mut s,
+            json!({"operation":"observe","agent":agent,"harness":"codex","path":".codex/agents/scout.toml","revision":shown["result"]["revision"],"model":"chosen-model","effort":"high","evidence":"The harness reported this assignment."})
+        )["exit_code"],
+        0
+    );
+    let scan = custody(&mut s, json!({"operation":"scan"}));
+    assert!(scan["result"]["unmanaged"].as_array().unwrap().is_empty());
+    assert!(!c.log().contains("Private native prompt"));
+    let cli: Value =
+        serde_json::from_str(&c.run(&["agents", "status", agent.as_str().unwrap()]).0).unwrap();
+    assert_eq!(
+        custody(&mut s, json!({"operation":"status","agent":agent}))["result"],
+        cli
+    );
+    assert_eq!(
+        custody(
+            &mut s,
+            json!({"operation":"retire","agent":agent,"why":"Retire the pilot contract"})
+        )["exit_code"],
+        0
+    );
+    assert_eq!(
+        custody(
+            &mut s,
+            json!({"operation":"detach","agent":agent,"harness":"claude-code","path":path})
+        )["exit_code"],
+        0
+    );
+    assert_eq!(manual, std::fs::read(c.0.join(path)).unwrap());
+}
+
+#[test]
+fn agent_custody_schema_and_rejections_are_strict() {
+    let c = seeded("custody-schema");
+    let mut s = hello(&c);
+    let list = s.ask(r#"{"jsonrpc":"2.0","id":92,"method":"tools/list"}"#);
+    let tool = list["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "vivac_agents")
+        .unwrap();
+    assert_eq!(
+        tool["annotations"],
+        json!({"readOnlyHint":false,"destructiveHint":true,"idempotentHint":false,"openWorldHint":false})
+    );
+    assert_eq!(
+        tool["inputSchema"]["properties"]["definition"]["additionalProperties"],
+        false
+    );
+    let before = c.log();
+    let mut invalid = custody_definition();
+    invalid["contract"]["prompt"] = json!("forbidden");
+    for arguments in [
+        json!({"operation":"add","definition":invalid,"why":"Review"}),
+        json!({"operation":"add","definition":"file.json","why":"Review"}),
+        json!({"operation":"scan","yes":true}),
+        json!({"operation":"scan","harness":3}),
+        json!({"operation":"scan","harness":null}),
+        json!({"operation":"scan","yes":false}),
+        json!({"operation":"scan","against":[]}),
+        json!({"operation":"unknown"}),
+    ] {
+        let reply=s.ask(&json!({"jsonrpc":"2.0","id":93,"method":"tools/call","params":{"name":"vivac_agents","arguments":arguments}}).to_string());
+        let text = text_of(&reply);
+        let refusal = serde_json::from_str::<Value>(&text).ok();
+        assert!(
+            reply["result"]["isError"] == true
+                || refusal.is_some_and(|v| v["exit_code"].as_i64().unwrap() > 1),
+            "{reply}"
+        );
+    }
+    assert_eq!(before, c.log());
+}
+
+#[test]
+fn agent_custody_withholds_secrets_and_newer_config_values() {
+    let c = seeded("custody-withheld");
+    let mut s = hello(&c);
+    let secret = format!("ghp_{}", "a".repeat(30));
+    let mut definition = custody_definition();
+    definition["contract"]["purpose"] = json!(secret);
+    let before = c.log();
+    let refused = custody(
+        &mut s,
+        json!({"operation":"add","definition":definition,"why":"Reviewed contract"}),
+    );
+    assert_ne!(refused["exit_code"], 0);
+    assert!(!refused.to_string().contains(&secret));
+    assert_eq!(before, c.log());
+    let path = c.0.join(".vivac/config");
+    let mut config: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    config["version"] = json!(secret);
+    std::fs::write(&path, config.to_string()).unwrap();
+    let refused = custody(&mut s, json!({"operation":"scan"}));
+    assert_ne!(refused["exit_code"], 0);
+    assert!(!refused.to_string().contains(&secret));
+    assert!(refused.to_string().contains("withheld"));
+    assert_eq!(before, c.log());
+}
+
+#[test]
+fn reconcile_and_native_import_share_the_cli_coordinator_over_mcp() {
+    let c = seeded("custody-reconcile-wire");
+    let path = ".claude/agents/native.md";
+    std::fs::create_dir_all(c.0.join(".claude/agents")).unwrap();
+    std::fs::write(c.0.join(path), "---\nname: native\ndescription: Return scoped evidence.\nmodel: sonnet\n---\nKeep every instruction intact.\n").unwrap();
+    let mut s = hello(&c);
+    let before = c.log();
+    let preview = custody(&mut s, json!({"operation":"reconcile"}));
+    assert_eq!(preview["exit_code"], 1);
+    assert_eq!(before, c.log());
+    let enabled = custody(
+        &mut s,
+        json!({"operation":"reconcile","mode":"automatic","yes":true,"why":"Authorize continuous native custody"}),
+    );
+    assert_eq!(enabled["exit_code"], 0, "{enabled}");
+    assert_eq!(enabled["result"]["policy"]["mode"], "automatic");
+    assert_eq!(enabled["result"]["imported"].as_array().unwrap().len(), 1);
+    assert!(!c.log().contains("Keep every instruction intact."));
+    let cli: Value = serde_json::from_str(&c.run(&["agents", "reconcile"]).0).unwrap();
+    assert_eq!(
+        custody(&mut s, json!({"operation":"reconcile"}))["result"],
+        cli
+    );
+    let agent = enabled["result"]["imported"][0]["agent"].clone();
+    let imported = custody(
+        &mut s,
+        json!({"operation":"import","agent":agent,"harness":"claude-code","path":path,"why":"Confirm the pinned source","yes":true}),
+    );
+    assert_eq!(imported["exit_code"], 0, "{imported}");
+    assert_eq!(imported["result"]["unchanged"], true);
+    let log = c.log();
+    for invalid in [
+        json!({"operation":"reconcile","mode":"automatic","yes":true,"harness":"codex","why":"Scope"}),
+        json!({"operation":"reconcile","mode":"automatic","why":"Scope"}),
+        json!({"operation":"reconcile","yes":true,"dry_run":true}),
+        json!({"operation":"import","harness":"claude-code","path":path,"yes":true,"dry_run":false,"why":"Scope"}),
+    ] {
+        assert_eq!(custody(&mut s, invalid)["exit_code"], 2);
+    }
+    assert_eq!(log, c.log());
+}
+
+#[test]
+fn agent_review_schema_exposes_shared_plans_without_more_tools() {
+    let c = seeded("custody-review-schema");
+    let mut s = hello(&c);
+    let list = s.ask(r#"{"jsonrpc":"2.0","id":94,"method":"tools/list"}"#);
+    let tools = list["result"]["tools"].as_array().unwrap();
+    assert_eq!(tools.len(), 16);
+    let tool = tools
+        .iter()
+        .find(|tool| tool["name"] == "vivac_agents")
+        .unwrap();
+    let schema = &tool["inputSchema"];
+    for operation in ["inventory", "plan", "apply", "compare"] {
+        assert!(schema["properties"]["operation"]["enum"]
+            .as_array()
+            .unwrap()
+            .contains(&json!(operation)));
+    }
+    let choices = schema["properties"]["selection"]["oneOf"]
+        .as_array()
+        .unwrap();
+    assert_eq!(choices.len(), 2);
+    for choice in choices {
+        assert_eq!(choice["additionalProperties"], false);
+    }
+    assert_eq!(schema["properties"]["plan_digest"]["type"], "string");
+    let before = c.log();
+    let inventory = custody(&mut s, json!({"operation":"inventory"}));
+    assert_eq!(inventory["exit_code"], 0, "{inventory}");
+    let cli: Value = serde_json::from_str(&c.run(&["agents", "inventory", "--json"]).0).unwrap();
+    assert_eq!(inventory["result"], cli);
+    for arguments in [
+        json!({"operation":"plan","selection":"file.json"}),
+        json!({"operation":"plan","selection":{"why":"Review","items":[],"unknown":true}}),
+        json!({"operation":"apply","selection":{"why":"Review","items":[]},"plan_digest":"stale"}),
+        json!({"operation":"compare","selection":{"references":[],"unknown":true}}),
+        json!({"operation":"inventory","selection":{"references":[]}}),
+    ] {
+        let refusal = custody(&mut s, arguments);
+        assert!(refusal["exit_code"].as_i64().unwrap() > 1, "{refusal}");
+    }
+    assert_eq!(before, c.log());
+}
+
+fn custody_selection(c: &Sandbox, server: &mut Server) -> Value {
+    let source = ".claude/agents/reviewer.md";
+    std::fs::create_dir_all(c.0.join(".claude/agents")).unwrap();
+    std::fs::write(c.0.join(source), "---\nname: reviewer\ndescription: Review scoped changes.\nmodel: sonnet\neffort: high\n---\nInspect the complete requested scope.\n```text\nPreserve literal examples.\n```\n").unwrap();
+    assert_eq!(c.run(&["setup", "codex", "--yes"]).1, 0);
+    let inventory = custody(server, json!({"operation":"inventory"}));
+    assert_eq!(inventory["exit_code"], 0, "{inventory}");
+    let source = &inventory["result"]["unmanaged"][0];
+    json!({"why":"Transfer the reviewed native contract", "items":[{
+        "agent":null,
+        "source":{"harness":source["harness"],"path":source["path"],"digest":source["digest"]},
+        "destinations":[{"assignment":{"harness":"codex","name":"reviewer","model":"inherit","effort":"high","settings":{"sandbox_mode":"read-only"}},"path":".codex/agents/reviewer.toml","digest":null}]
+    }]})
+}
+
+#[test]
+fn agent_review_mcp_and_cli_share_comparison_plan_and_safe_application() {
+    let c = seeded("custody-review-transfer");
+    let mut server = hello(&c);
+    let selection = custody_selection(&c, &mut server);
+    let before = c.log();
+    let references = json!({"references":[selection["items"][0]["source"]]});
+    let comparison = custody(
+        &mut server,
+        json!({"operation":"compare","selection":references}),
+    );
+    assert_eq!(comparison["exit_code"], 0, "{comparison}");
+    let cli: Value = serde_json::from_str(
+        &c.run(&["agents", "compare", "--selection", &references.to_string()])
+            .0,
+    )
+    .unwrap();
+    assert_eq!(comparison["result"], cli);
+    let plan = custody(
+        &mut server,
+        json!({"operation":"plan","selection":selection}),
+    );
+    assert_eq!(plan["exit_code"], 0, "{plan}");
+    let cli: Value = serde_json::from_str(
+        &c.run(&["agents", "plan", "--selection", &selection.to_string()])
+            .0,
+    )
+    .unwrap();
+    assert_eq!(plan["result"], cli);
+    assert_eq!(before, c.log());
+    let applied = custody(
+        &mut server,
+        json!({"operation":"apply","selection":selection,"plan_digest":plan["result"]["plan_digest"],"yes":true}),
+    );
+    assert_eq!(applied["exit_code"], 0, "{applied}");
+    let native = std::fs::read_to_string(c.0.join(".codex/agents/reviewer.toml")).unwrap();
+    let document: toml::Table = toml::from_str(&native).unwrap();
+    assert_eq!(
+        document["developer_instructions"].as_str(),
+        Some("Inspect the complete requested scope.\n```text\nPreserve literal examples.\n```\n")
+    );
+    assert!(!c.log().contains("Inspect the complete requested scope."));
+    assert!(!c.log().contains("Preserve literal examples."));
+}
+
+#[test]
+fn agent_review_mcp_refuses_stale_targets_without_any_event_or_overwrite() {
+    let c = seeded("custody-review-stale");
+    let mut server = hello(&c);
+    let selection = custody_selection(&c, &mut server);
+    let plan = custody(
+        &mut server,
+        json!({"operation":"plan","selection":selection}),
+    );
+    assert_eq!(plan["exit_code"], 0, "{plan}");
+    let target = c.0.join(".codex/agents/reviewer.toml");
+    std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+    std::fs::write(&target, "Changed after the reviewed plan.\n").unwrap();
+    let before = c.log();
+    let refused = custody(
+        &mut server,
+        json!({"operation":"apply","selection":selection,"plan_digest":plan["result"]["plan_digest"],"yes":true}),
+    );
+    assert_eq!(refused["exit_code"], 1, "{refused}");
+    assert_eq!(before, c.log());
+    assert_eq!(
+        std::fs::read_to_string(target).unwrap(),
+        "Changed after the reviewed plan.\n"
     );
 }

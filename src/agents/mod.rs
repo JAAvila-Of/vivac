@@ -1,6 +1,10 @@
 //! Agent custody is rebuilt from events; native files are projections.
 pub mod adapters;
+mod human;
+mod reconcile;
+mod terminal;
 pub mod types;
+pub(crate) mod workflow;
 
 use crate::args::Args;
 use crate::event::{Body, Kind, State};
@@ -12,7 +16,7 @@ use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use types::{Assignment, Candidate, Definition};
+use types::{Assignment, Candidate, Definition, PromptSource};
 
 type Target = (String, String, String);
 type OwnedTarget = (String, String, String, String);
@@ -41,13 +45,15 @@ struct Observation {
     effort: String,
     evidence: String,
 }
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Ledger {
     agents: BTreeMap<String, Agent>,
     history: BTreeMap<String, Definition>,
     bindings: BTreeMap<Target, Binding>,
     receipts: BTreeMap<OwnedTarget, Receipt>,
     observations: BTreeMap<OwnedTarget, Observation>,
+    automation: BTreeMap<String, (bool, String)>,
+    detached: HashSet<Target>,
 }
 
 fn owned(key: &Target, agent: &str) -> OwnedTarget {
@@ -72,6 +78,7 @@ fn equivalent_receipt(
             .get(&receipt.revision)
             .is_some_and(|previous| {
                 previous.contract == agent.definition.contract
+                    && previous.prompt == agent.definition.prompt
                     && previous
                         .assignments
                         .iter()
@@ -94,10 +101,21 @@ fn replay(tree: &crate::model::Tree) -> Result<Ledger, Failure> {
                 | Body::AgentDetached { .. }
                 | Body::AgentMaterialized { .. }
                 | Body::AgentObserved { .. }
+                | Body::AgentAutomationConfigured { .. }
         ) {
             adapters::check_value(&serde_json::to_value(body).map_err(std::io::Error::other)?)?;
         }
         match body {
+            Body::AgentAutomationConfigured { node, enabled } => {
+                tree.resolve(node)
+                    .filter(|n| n.id == *node && n.kind == Kind::Decision)
+                    .ok_or_else(|| {
+                        Failure::Model("Agent automation has no source decision.".into())
+                    })?;
+                ledger
+                    .automation
+                    .insert(lane.clone(), (*enabled, node.clone()));
+            }
             Body::AgentRecorded {
                 agent,
                 node,
@@ -127,6 +145,9 @@ fn replay(tree: &crate::model::Tree) -> Result<Ledger, Failure> {
                 baseline,
             } => {
                 let key = (lane.clone(), harness.clone(), path.clone());
+                ledger.detached.remove(&key);
+                ledger.receipts.remove(&owned(&key, agent));
+                ledger.observations.remove(&owned(&key, agent));
                 if ledger
                     .bindings
                     .get(&key)
@@ -148,6 +169,7 @@ fn replay(tree: &crate::model::Tree) -> Result<Ledger, Failure> {
                 path,
             } => {
                 let key = (lane.clone(), harness.clone(), path.clone());
+                ledger.detached.insert(key.clone());
                 if ledger
                     .bindings
                     .get(&key)
@@ -243,6 +265,20 @@ fn validate_definition(definition: &Definition) -> Result<(), Failure> {
         return Err(Failure::usage("Agent names must be plain identifiers."));
     }
     checked("agent purpose", &definition.contract.purpose, 2000)?;
+    if let Some(source) = &definition.prompt {
+        let native = adapter(&source.harness)?;
+        if !source.path.starts_with(&format!("{}/", native.directory()))
+            || Path::new(&source.path)
+                .components()
+                .any(|part| !matches!(part, std::path::Component::Normal(_)))
+            || source.digest.len() != 64
+            || !source.digest.bytes().all(|b| b.is_ascii_hexdigit())
+        {
+            return Err(Failure::usage(
+                "Prompt references need an adapter path and SHA-256 digest.",
+            ));
+        }
+    }
     if definition.contract.duties.is_empty() || definition.contract.acceptance.is_empty() {
         return Err(Failure::usage(
             "An agent contract needs duties and acceptance criteria.",
@@ -414,6 +450,100 @@ fn read_ledger(cwd: &Path) -> Result<(Located, String, Ledger), Failure> {
     Ok((located, lane, ledger))
 }
 
+fn observed_state(
+    agent: &Agent,
+    selected: Option<&Assignment>,
+    observation: Option<&Observation>,
+) -> &'static str {
+    match observation {
+        None => "unverified",
+        Some(observation) if observation.revision != agent.revision => "stale",
+        Some(observation)
+            if selected.is_some_and(|assignment| {
+                assignment.model == observation.model && assignment.effort == observation.effort
+            }) =>
+        {
+            "reported_match"
+        }
+        Some(_) => "reported_mismatch",
+    }
+}
+
+fn unmanaged_candidates(
+    root: &Path,
+    lane: &str,
+    ledger: &Ledger,
+    harness: Option<&str>,
+) -> Result<Vec<Candidate>, Failure> {
+    let mut unmanaged = Vec::new();
+    for native in adapters::all()
+        .into_iter()
+        .filter(|native| harness.is_none_or(|harness| native.name() == harness))
+    {
+        for path in native.paths(root)? {
+            if !ledger.bindings.contains_key(&(
+                lane.to_string(),
+                native.name().into(),
+                path.clone(),
+            )) {
+                unmanaged.push(native.inspect(root, &path)?);
+            }
+        }
+    }
+    Ok(unmanaged)
+}
+
+fn custody_inventory(
+    root: &Path,
+    lane: &str,
+    ledger: &Ledger,
+    id: Option<&str>,
+    harness: Option<&str>,
+) -> Result<Value, Failure> {
+    let mut unbound = Vec::new();
+    let mut unverified = Vec::new();
+    for agent in ledger
+        .agents
+        .values()
+        .filter(|agent| id.is_none_or(|id| agent.agent == id))
+    {
+        for (key, _) in ledger.bindings.iter().filter(|(key, binding)| {
+            key.0 == lane
+                && binding.agent == agent.agent
+                && harness.is_none_or(|harness| key.1 == harness)
+        }) {
+            let observed = observed_state(
+                agent,
+                assignment(agent, &key.1).ok(),
+                ledger.observations.get(&owned(key, &agent.agent)),
+            );
+            if observed != "reported_match" && !agent.definition.retired {
+                unverified.push(
+                    json!({"agent":agent.agent,"harness":key.1,"path":key.2,"state":observed}),
+                );
+            }
+        }
+        for selected in agent
+            .definition
+            .assignments
+            .iter()
+            .filter(|selected| harness.is_none_or(|harness| selected.harness == harness))
+        {
+            let bound = ledger.bindings.iter().any(|(key, binding)| {
+                key.0 == lane && key.1 == selected.harness && binding.agent == agent.agent
+            });
+            if !bound {
+                unbound.push(json!({"agent":agent.agent,"harness":selected.harness}));
+                if !agent.definition.retired {
+                    unverified.push(json!({"agent":agent.agent,"harness":selected.harness,"path":null,"state":"unbound"}));
+                }
+            }
+        }
+    }
+    Ok(json!({"unbound":unbound,"unverified":unverified,
+        "unmanaged":unmanaged_candidates(root,lane,ledger,harness)?}))
+}
+
 fn status_value(
     root: &Path,
     lane: &str,
@@ -466,19 +596,7 @@ fn status_value(
                 "diverged"
             };
             let observation = ledger.observations.get(&owned(key, &agent.agent));
-            let observed = match observation {
-                None => "unverified",
-                Some(observation) if observation.revision != agent.revision => "stale",
-                Some(observation)
-                    if selected.is_some_and(|assignment| {
-                        assignment.model == observation.model
-                            && assignment.effort == observation.effort
-                    }) =>
-                {
-                    "reported_match"
-                }
-                Some(_) => "reported_mismatch",
-            };
+            let observed = observed_state(agent, selected, observation);
             if configured != "current" && configured != "retired" {
                 errors.push(json!({"agent": agent.agent, "harness": key.1, "path": key.2, "state": configured}));
             }
@@ -505,21 +623,7 @@ fn status_value(
         }
         agents.push(json!({"agent": agent.agent, "revision": agent.revision, "name": agent.definition.name, "retired": agent.definition.retired, "mappings": mappings}));
     }
-    let mut unmanaged = Vec::new();
-    for native in adapters::all()
-        .into_iter()
-        .filter(|native| harness.is_none_or(|harness| native.name() == harness))
-    {
-        for candidate in native.discover(root)? {
-            if !ledger.bindings.contains_key(&(
-                lane.to_string(),
-                candidate.harness.clone(),
-                candidate.path.clone(),
-            )) {
-                unmanaged.push(candidate);
-            }
-        }
-    }
+    let unmanaged = unmanaged_candidates(root, lane, ledger, harness)?;
     let adapters: Vec<Value> = adapters::all().into_iter().filter(|native| harness.is_none_or(|harness| native.name() == harness))
         .map(|native| json!({"harness": native.name(), "version": native.version(), "precedence": native.precedence(), "capabilities": native.capabilities()})).collect();
     Ok(
@@ -536,6 +640,9 @@ fn validate_args(args: &Args) -> Result<&str, Failure> {
         .positional(0)
         .ok_or_else(|| Failure::usage("Agent operation required."))?;
     let (takes, allowed): (usize, &[&str]) = match command {
+        "inventory" => (1, &["json"]),
+        "plan" | "compare" => (1, &["selection", "json"]),
+        "apply" => (1, &["selection", "plan-digest", "yes", "json"]),
         "scan" => (1, &["harness", "json"]),
         "status" | "diff" => (2, &["harness", "json"]),
         "show" => (2, &["json"]),
@@ -556,6 +663,16 @@ fn validate_args(args: &Args) -> Result<&str, Failure> {
             ],
         ),
         "sync" => (2, &["harness", "yes", "dry-run", "accept-digest", "json"]),
+        "reconcile" => (
+            2,
+            &[
+                "harness", "yes", "dry-run", "mode", "why", "parent", "against", "json",
+            ],
+        ),
+        "import" => (
+            2,
+            &["harness", "path", "why", "parent", "against", "yes", "json"],
+        ),
         _ => return Err(Failure::usage("Unknown agent operation.")),
     };
     if !args.unknown(allowed).is_empty() || !args.extra(takes).is_empty() {
@@ -579,6 +696,45 @@ fn validate_args(args: &Args) -> Result<&str, Failure> {
             "Accepting a manual digest requires --yes and cannot be a dry run.",
         ));
     }
+    if command == "reconcile" {
+        if args.has("dry-run") && args.has("yes") {
+            return Err(Failure::usage(
+                "Reconcile takes --yes or --dry-run, never both.",
+            ));
+        }
+        if let Some(mode) = args.opt("mode") {
+            if !matches!(mode, "automatic" | "manual")
+                || !args.has("yes")
+                || args.has("dry-run")
+                || args.positional(1).is_some()
+                || args.has("harness")
+            {
+                return Err(Failure::usage("A lane policy requires --mode automatic|manual --yes and no destination filter."));
+            }
+            required(args, "why")?;
+        } else if ["why", "parent", "against"].iter().any(|key| args.has(key)) {
+            return Err(Failure::usage("Policy provenance requires --mode."));
+        }
+    }
+    if command == "import" {
+        required(args, "harness")?;
+        required(args, "path")?;
+        required(args, "why")?;
+        if !args.has("yes") {
+            return Err(Failure::usage("Native import requires --yes."));
+        }
+    }
+    if matches!(command, "plan" | "apply" | "compare") {
+        required(args, "selection")?;
+    }
+    if command == "apply" {
+        required(args, "plan-digest")?;
+        if !args.has("yes") {
+            return Err(Failure::usage(
+                "Applying a reviewed agent plan requires --yes.",
+            ));
+        }
+    }
     if matches!(
         command,
         "show" | "diff" | "set" | "retire" | "bind" | "detach" | "adopt" | "observe"
@@ -588,8 +744,8 @@ fn validate_args(args: &Args) -> Result<&str, Failure> {
     Ok(command)
 }
 
-pub fn run(cwd: &Path, args: &Args) -> Result<i32, Failure> {
-    let (value, code) = match execute(cwd, args) {
+pub(crate) fn response(result: Result<(Value, i32), Failure>) -> (Value, i32) {
+    match result {
         Ok(result) => result,
         Err(error) => {
             let code = error.code();
@@ -609,7 +765,47 @@ pub fn run(cwd: &Path, args: &Args) -> Result<i32, Failure> {
             };
             (json!({"error": message, "code": code}), code)
         }
-    };
+    }
+}
+
+pub(crate) fn run_value(cwd: &Path, args: &Args) -> (Value, i32) {
+    response(execute(cwd, args))
+}
+
+pub(crate) fn reconcile_for_hook(cwd: &Path) -> (Value, i32) {
+    reconcile::hook(cwd)
+}
+
+pub fn run(cwd: &Path, args: &Args) -> Result<i32, Failure> {
+    use std::io::IsTerminal;
+    if args.positional(0).is_none() {
+        if !args.unknown(&["json"]).is_empty() {
+            return Err(Failure::usage("Unknown inventory option."));
+        }
+        if !args.has("json") {
+            return human::run(cwd, args);
+        }
+        let (value, code) = response(workflow::inventory(cwd).map(|value| (value, 0)));
+        crate::output::outln!(
+            "{}",
+            serde_json::to_string(&value).map_err(std::io::Error::other)?
+        );
+        return Ok(code);
+    }
+    if args.positional(0) == Some("sync")
+        && args.positional(1).is_none()
+        && !args.has("harness")
+        && !args.has("accept-digest")
+        && !args.has("json")
+        && !args.has("yes")
+        && !args.has("dry-run")
+        && std::io::stdin().is_terminal()
+        && std::io::stdout().is_terminal()
+    {
+        validate_args(args)?;
+        return human::sync(cwd, args);
+    }
+    let (value, code) = run_value(cwd, args);
     crate::output::outln!(
         "{}",
         serde_json::to_string(&value).map_err(std::io::Error::other)?
@@ -619,6 +815,32 @@ pub fn run(cwd: &Path, args: &Args) -> Result<i32, Failure> {
 
 fn execute(cwd: &Path, args: &Args) -> Result<(Value, i32), Failure> {
     let command = validate_args(args)?;
+    match command {
+        "inventory" => return workflow::inventory(cwd).map(|value| (value, 0)),
+        "plan" => {
+            return workflow::plan(
+                cwd,
+                &workflow::selection(cwd, required(args, "selection")?)?,
+            )
+            .map(|value| (value, 0))
+        }
+        "apply" => {
+            return workflow::apply(
+                cwd,
+                &workflow::selection(cwd, required(args, "selection")?)?,
+                required(args, "plan-digest")?,
+            )
+        }
+        "compare" => {
+            let comparison: workflow::Comparison =
+                workflow::selection(cwd, required(args, "selection")?)?;
+            return workflow::compare(cwd, &comparison.references).map(|value| (value, 0));
+        }
+        _ => {}
+    }
+    if matches!(command, "reconcile" | "import") {
+        return reconcile::execute(cwd, args, false);
+    }
     if matches!(command, "scan" | "status" | "show" | "diff")
         || (command == "sync" && (!args.has("yes") || args.has("dry-run")))
     {
@@ -910,11 +1132,22 @@ struct Plan {
     writes: Vec<crate::setup::PlannedWrite>,
     receipts: Vec<Body>,
     checks: Vec<(Target, Option<String>)>,
+    prompt_checks: Vec<PromptSource>,
     changed: bool,
     refused: bool,
 }
 
 fn plan(root: &Path, lane: &str, ledger: &Ledger, args: &Args) -> Result<Plan, Failure> {
+    plan_selected(root, lane, ledger, args, None)
+}
+
+fn plan_selected(
+    root: &Path,
+    lane: &str,
+    ledger: &Ledger,
+    args: &Args,
+    chosen_target: Option<&Target>,
+) -> Result<Plan, Failure> {
     if let Some(id) = args.positional(1) {
         find_agent(ledger, id)?;
     }
@@ -926,11 +1159,13 @@ fn plan(root: &Path, lane: &str, ledger: &Ledger, args: &Args) -> Result<Plan, F
         writes: vec![],
         receipts: vec![],
         checks: vec![],
+        prompt_checks: vec![],
         changed: false,
         refused: false,
     };
     for (key, binding) in ledger.bindings.iter().filter(|(key, binding)| {
         key.0 == lane
+            && chosen_target.is_none_or(|target| *key == target)
             && args.positional(1).is_none_or(|id| binding.agent == id)
             && args.opt("harness").is_none_or(|harness| key.1 == harness)
     }) {
@@ -963,7 +1198,28 @@ fn plan(root: &Path, lane: &str, ledger: &Ledger, args: &Args) -> Result<Plan, F
         let baseline = receipt
             .map(|receipt| &receipt.digest)
             .or(binding.baseline.as_ref());
-        let desired = native.render(&agent.agent, &agent.revision, &agent.definition, selected)?;
+        let prompt = agent
+            .definition
+            .prompt
+            .as_ref()
+            .map(|source| {
+                let body = adapters::read_prompt(root, &source.harness, &source.path)?;
+                if adapters::digest(body.as_bytes()) != source.digest {
+                    return Err(Failure::Model(
+                        "Prompt source changed; import its reviewed revision before synchronizing."
+                            .into(),
+                    ));
+                }
+                Ok(body)
+            })
+            .transpose()?;
+        let desired = native.render(
+            &agent.agent,
+            &agent.revision,
+            &agent.definition,
+            selected,
+            prompt.as_deref(),
+        )?;
         let desired_digest = adapters::digest(desired.as_bytes());
         let known = current_digest
             .as_ref()
@@ -1003,6 +1259,9 @@ fn plan(root: &Path, lane: &str, ledger: &Ledger, args: &Args) -> Result<Plan, F
                 .push(crate::setup::PlannedWrite::write(target, desired, current));
         }
         plan.checks.push((key.clone(), current_digest));
+        if let Some(source) = &agent.definition.prompt {
+            plan.prompt_checks.push(source.clone());
+        }
         plan.receipts.push(Body::AgentMaterialized {
             agent: agent.agent.clone(),
             revision: agent.revision.clone(),
@@ -1024,6 +1283,18 @@ fn sync(ctx: &mut Ctx, ledger: &Ledger, args: &Args) -> Result<(Value, i32), Fai
             1,
         ));
     }
+    apply_plan(ctx, &plan)
+}
+
+fn apply_plan(ctx: &mut Ctx, plan: &Plan) -> Result<(Value, i32), Failure> {
+    for source in &plan.prompt_checks {
+        let prompt = adapters::read_prompt(&ctx.lane_dir, &source.harness, &source.path)?;
+        if adapters::digest(prompt.as_bytes()) != source.digest {
+            return Err(Failure::Model(
+                "Prompt source changed after the materialization plan.".into(),
+            ));
+        }
+    }
     for (key, expected) in &plan.checks {
         let current =
             read_current(&ctx.lane_dir, &key.1, &key.2)?.map(|bytes| adapters::digest(&bytes));
@@ -1034,7 +1305,7 @@ fn sync(ctx: &mut Ctx, ledger: &Ledger, args: &Args) -> Result<(Value, i32), Fai
         }
     }
     crate::setup::commit(&plan.writes)?;
-    if !plan.receipts.is_empty() && ctx.emit(plan.receipts).is_err() {
+    if !plan.receipts.is_empty() && ctx.emit(plan.receipts.clone()).is_err() {
         let unrestored = crate::setup::rollback(&plan.writes);
         return Ok((
             json!({"applied": false, "receipt_failed": true, "rollback_attempted": true, "rollback_failed": !unrestored.is_empty(), "error": "Native writes were attempted but the custody receipt failed. Inspect every destination before retrying."}),
@@ -1047,6 +1318,46 @@ fn sync(ctx: &mut Ctx, ledger: &Ledger, args: &Args) -> Result<(Value, i32), Fai
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_source_prompt_changed_after_planning_cannot_be_materialized() {
+        let root = std::env::temp_dir().join(format!("vivac-prompt-race-{}", crate::id::ulid()));
+        fs::create_dir_all(root.join(".claude/agents")).unwrap();
+        let source = ".claude/agents/reviewer.md";
+        let original = "Inspect the scope.\n";
+        let native = |body: &str| {
+            format!("---\nname: reviewer\ndescription: Inspect the scope.\n---\n{body}")
+        };
+        fs::write(root.join(source), native(original)).unwrap();
+        let store = Store::create(&root).unwrap();
+        let mut ctx = Ctx::load_with_log(store, ops::Whose::Founding).unwrap().0;
+        ctx.lock_for_write().unwrap();
+        let target = root.join(".codex/agents/reviewer.toml");
+        let planned = Plan {
+            rows: vec![],
+            receipts: vec![],
+            checks: vec![],
+            changed: true,
+            refused: false,
+            writes: vec![crate::setup::PlannedWrite::write(
+                target.clone(),
+                "stale projection".into(),
+                None,
+            )],
+            prompt_checks: vec![PromptSource {
+                harness: "claude-code".into(),
+                path: source.into(),
+                digest: adapters::digest(original.as_bytes()),
+            }],
+        };
+        let before = fs::read(root.join(".vivac/events")).unwrap();
+        fs::write(root.join(source), native("Inspect the revised scope.\n")).unwrap();
+        assert_eq!(apply_plan(&mut ctx, &planned).unwrap_err().code(), 1);
+        assert!(!target.exists());
+        assert_eq!(before, fs::read(root.join(".vivac/events")).unwrap());
+        ctx.unlock();
+        fs::remove_dir_all(root).unwrap();
+    }
 
     // Enter the same operations with an isolated context, without resolving
     // this machine's registry or changing process-global environment variables.
@@ -1255,4 +1566,105 @@ mod tests {
         assert_eq!(fs::read(root.join(".vivac/events")).unwrap(), authority);
         fs::remove_dir_all(root).unwrap();
     }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Request {
+    operation: String,
+    agent: Option<String>,
+    definition: Option<Value>,
+    harness: Option<String>,
+    path: Option<String>,
+    digest: Option<String>,
+    why: Option<String>,
+    parent: Option<String>,
+    against: Option<Vec<String>>,
+    revision: Option<String>,
+    model: Option<String>,
+    effort: Option<String>,
+    evidence: Option<String>,
+    yes: Option<bool>,
+    dry_run: Option<bool>,
+    accept_digest: Option<String>,
+    mode: Option<String>,
+    selection: Option<Value>,
+    plan_digest: Option<String>,
+}
+
+pub(crate) fn request_args(value: &Value) -> Result<Args, Failure> {
+    if value
+        .as_object()
+        .is_some_and(|fields| fields.values().any(Value::is_null))
+    {
+        return Err(Failure::usage(
+            "Agent arguments must use their declared types; null is not an option value.",
+        ));
+    }
+    let request: Request = serde_json::from_value(value.clone()).map_err(|_| {
+        Failure::usage("Agent arguments must use known fields and their declared types.")
+    })?;
+    let mut flags = Vec::new();
+    if let Some(definition) = request.definition {
+        if !definition.is_object() {
+            return Err(Failure::usage(
+                "Agent definition must be an authored JSON object.",
+            ));
+        }
+        flags.push(format!("--definition={definition}"));
+    }
+    if let Some(selection) = request.selection {
+        if !selection.is_object() {
+            return Err(Failure::usage("Agent selection must be a JSON object."));
+        }
+        flags.push(format!("--selection={selection}"));
+    }
+    for (key, value) in [
+        ("harness", request.harness),
+        ("path", request.path),
+        ("digest", request.digest),
+        ("why", request.why),
+        ("parent", request.parent),
+        ("revision", request.revision),
+        ("model", request.model),
+        ("effort", request.effort),
+        ("evidence", request.evidence),
+        ("accept-digest", request.accept_digest),
+        ("mode", request.mode),
+        ("plan-digest", request.plan_digest),
+    ] {
+        if let Some(value) = value {
+            flags.push(format!("--{key}={value}"));
+        }
+    }
+    if let Some(values) = request.against {
+        if values.is_empty()
+            && !matches!(
+                request.operation.as_str(),
+                "add" | "set" | "retire" | "adopt" | "import" | "reconcile"
+            )
+        {
+            flags.push("--against".into());
+        }
+        for value in values {
+            flags.push(format!("--against={value}"));
+        }
+    }
+    for (key, value) in [("yes", request.yes), ("dry-run", request.dry_run)] {
+        if let Some(value) = value {
+            if !matches!(
+                request.operation.as_str(),
+                "sync" | "reconcile" | "import" | "apply"
+            ) || (request.operation == "import" && key == "dry-run")
+                || value
+            {
+                flags.push(format!("--{key}"));
+            }
+        }
+    }
+    let mut args = Args::parse(flags)?;
+    args.positionals.push(request.operation);
+    args.positionals.extend(request.agent);
+    validate_args(&args)?;
+    Ok(args)
 }

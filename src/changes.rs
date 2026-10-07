@@ -215,7 +215,8 @@ pub fn collect<'a>(tree: &'a Tree, log: &[Event], since_seq: u64) -> Changed<'a>
             | Body::AgentBound { .. }
             | Body::AgentDetached { .. }
             | Body::AgentMaterialized { .. }
-            | Body::AgentObserved { .. } => {}
+            | Body::AgentObserved { .. }
+            | Body::AgentAutomationConfigured { .. } => {}
         }
     }
 

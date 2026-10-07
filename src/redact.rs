@@ -93,6 +93,19 @@ pub fn check_fields(fields: &[(&str, &str)]) -> Option<Finding> {
     fields.iter().find_map(|(c, t)| check_field(c, t))
 }
 
+/// Native prompt transfer checks sensitive values without putting file contents in the log.
+pub(crate) fn check_prompt(text: &str) -> Option<Finding> {
+    if text.contains("-----BEGIN") && text.contains("PRIVATE KEY") {
+        return Some(Finding {
+            rule: "private key in PEM format",
+            field: "agent prompt".into(),
+            sample: "-----BEGIN ... PRIVATE KEY-----".into(),
+            advice: ADVICE_KEY,
+        });
+    }
+    tokens(text).find_map(|tok| check_token("agent prompt", tok))
+}
+
 /// An open fence, enough of it to describe without repeating it: which
 /// character opened it, the info string (a language tag, usually), and how
 /// many lines the block runs -- to the matching close if there is one, to

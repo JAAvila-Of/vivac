@@ -650,7 +650,7 @@ pub(super) fn today_page(project: &str, name: &str, tree: &Tree, log: &[Event]) 
          <p class=\"crumb\"><a href=\"/\">All projects</a></p>\n\
          <header><h1>{name_t}</h1></header>\n\
          <p class=\"promise\">What moved while you were not looking.</p>\n\
-         <p class=\"onward\"><a href=\"/p/{p}/tree\">The whole tree, as a map</a></p>\n\
+         <p class=\"onward\"><a href=\"/p/{p}/tree\">The whole tree, as a map</a> · <a href=\"/p/{p}/agents\">Agents across harnesses</a></p>\n\
          <main>\n{moved}{focus}{governs}{parked}</main>\n\
          <footer>The same reading in a terminal: \
          <code>vivac changes --since manual</code></footer>\n\

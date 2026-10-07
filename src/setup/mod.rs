@@ -113,8 +113,8 @@ pub fn dispatch(cwd: &Path, a: &Args) -> Result<i32, Failure> {
     if code == 0 && !a.has("undo") {
         if let Some(adapter) = crate::agents::adapters::get(h.word()) {
             match adapter.discover(cwd) {
-                Ok(files) => crate::output::outln!("  Agent inventory: {} project file(s). Inspect with vivac agents scan --harness {}. Discovery does not adopt agents; run scan again whenever agents are added.", files.len(), h.word()),
-                Err(_) => crate::output::outln!("  Agent inventory could not be read; file contents withheld. Inspect with vivac agents scan --harness {}.", h.word()),
+                Ok(files) => crate::output::outln!("  Agent inventory: {} project file(s). Session and prompt hooks run the coordinator without a model. Enable continuous native import and synchronization with vivac agents reconcile --mode automatic --yes --why <reason>.", files.len()),
+                Err(_) => crate::output::outln!("  Agent inventory could not be read; file contents withheld. Retry discovery with vivac agents reconcile."),
             }
         }
     }

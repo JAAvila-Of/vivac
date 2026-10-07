@@ -523,6 +523,8 @@ pub enum Body {
     /// run `setup`: that is what keeps 0.11 able to read them (§2.6).
     #[serde(rename = "where.changed")]
     WhereChanged { repos: Vec<WhereRepo> },
+    #[serde(rename = "agent.automation.configured")]
+    AgentAutomationConfigured { node: String, enabled: bool },
     #[serde(rename = "agent.recorded")]
     AgentRecorded {
         agent: String,
@@ -591,6 +593,7 @@ impl Body {
         "lane.declared",
         "lane.claimed",
         "where.changed",
+        "agent.automation.configured",
         "agent.recorded",
         "agent.bound",
         "agent.detached",
@@ -671,6 +674,7 @@ mod tests {
             Body::LaneDeclared { .. } => "lane.declared",
             Body::LaneClaimed { .. } => "lane.claimed",
             Body::WhereChanged { .. } => "where.changed",
+            Body::AgentAutomationConfigured { .. } => "agent.automation.configured",
             Body::AgentRecorded { .. } => "agent.recorded",
             Body::AgentBound { .. } => "agent.bound",
             Body::AgentDetached { .. } => "agent.detached",
@@ -681,10 +685,15 @@ mod tests {
 
     fn one_of_each() -> Vec<Body> {
         vec![
+            Body::AgentAutomationConfigured {
+                node: "n".into(),
+                enabled: true,
+            },
             Body::AgentRecorded {
                 agent: "a".into(),
                 node: "n".into(),
                 definition: crate::agents::types::Definition {
+                    prompt: None,
                     schema_version: 1,
                     name: "reviewer".into(),
                     retired: false,

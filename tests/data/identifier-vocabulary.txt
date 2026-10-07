@@ -10,6 +10,7 @@ absolute
 accent
 accented
 accents
+accept
 acceptance
 accepted
 accepts
@@ -32,6 +33,7 @@ admit
 admits
 admitted
 adopt
+adopted
 adoption
 advertised
 advice
@@ -90,11 +92,13 @@ anywhere
 apart
 appear
 appeared
+appearing
 appears
 append
 appended
 appending
 appends
+application
 applied
 applies
 apply
@@ -129,6 +133,7 @@ assertions
 assign
 assignment
 assignments
+assume
 assumed
 assuming
 assumption
@@ -141,8 +146,10 @@ attribute
 attributes
 authored
 authority
+authorization
 auto
 automatic
+automation
 available
 away
 aws
@@ -162,6 +169,7 @@ baseline
 basic
 basis
 baskets
+batch
 be
 beats
 becomes
@@ -206,6 +214,7 @@ bolds
 bookkeeping
 bool
 boot
+bootstrap
 born
 borrow
 borrowed
@@ -255,8 +264,11 @@ call
 called
 caller
 calling
+calls
 came
 can
+cancel
+cancellation
 candidate
 candidates
 cannot
@@ -283,6 +295,7 @@ cased
 cases
 categories
 cause
+cc
 ceil
 cell
 centres
@@ -306,6 +319,7 @@ child
 children
 chinese
 choice
+choices
 choose
 chosen
 chunk
@@ -369,6 +383,7 @@ coloured
 colours
 column
 columns
+combined
 combining
 come
 comes
@@ -382,6 +397,9 @@ committed
 common
 commondir
 compare
+compared
+comparison
+compatibility
 complete
 completes
 component
@@ -393,6 +411,7 @@ condition
 config
 configuration
 configured
+confirm
 confirms
 conflict
 conflicts
@@ -418,13 +437,16 @@ contexts
 continuation
 continue
 continues
+continuous
 contract
 contracts
 control
+controls
 cookie
 cooldown
 cooled
 coord
+coordinator
 copied
 copies
 copy
@@ -506,6 +528,7 @@ dedup
 deep
 deepest
 default
+defaults
 definition
 degradation
 degree
@@ -514,6 +537,7 @@ delete
 deleted
 deleting
 deliver
+delivered
 denial
 denied
 deny
@@ -532,6 +556,7 @@ desired
 despite
 dest
 destination
+destinations
 detached
 detachment
 detail
@@ -568,6 +593,7 @@ disagrees
 disappear
 disclosure
 discover
+discovered
 discovery
 disk
 dispatch
@@ -582,6 +608,7 @@ do
 docs
 docstring
 doctor
+document
 documented
 doe
 does
@@ -622,6 +649,7 @@ earn
 eats
 echo
 echoes
+echoing
 edges
 edit
 edited
@@ -646,6 +674,7 @@ enables
 encode
 encoded
 end
+endings
 ends
 english
 enough
@@ -711,6 +740,7 @@ expected
 expecting
 explains
 explicit
+exposes
 ext
 extend
 extends
@@ -744,13 +774,14 @@ fetch
 ffi
 field
 fields
-fifteen
 file
+fileno
 files
 fill
 filled
 filter
 filtered
+filters
 final
 finalize
 find
@@ -864,6 +895,7 @@ grown
 grows
 guard
 guarded
+guards
 guess
 guessed
 guessing
@@ -923,6 +955,7 @@ holder
 holds
 hollow
 home
+homonyms
 hook
 hooks
 host
@@ -937,10 +970,12 @@ hs
 html
 http
 hub
+human
 hunts
 i16
 i32
 i64
+icanon
 icons
 id
 id2
@@ -948,6 +983,7 @@ idempotent
 ident
 identical
 identifier
+identities
 ids
 idx
 if
@@ -958,6 +994,9 @@ image
 impl
 implicit
 import
+importable
+imported
+importing
 in
 include
 includes
@@ -967,6 +1006,7 @@ indefinite
 indent
 indentation
 indented
+independent
 index
 indexed
 india
@@ -978,6 +1018,7 @@ inherits
 init
 initial
 initialize
+inject
 inline
 inner
 input
@@ -1002,8 +1043,10 @@ interleaved
 intern
 into
 invalid
+invalidates
 invariant
 invariants
+inventory
 invents
 io
 ioctl
@@ -1011,6 +1054,7 @@ ip
 iquorum
 is
 ish
+isig
 isolated
 it
 item
@@ -1035,6 +1079,7 @@ keep
 keeps
 kept
 key
+keyboard
 keys
 kids
 kill
@@ -1045,6 +1090,7 @@ knowledge
 known
 knows
 label
+labels
 lacks
 landing
 lands
@@ -1078,7 +1124,9 @@ letters
 level
 levels
 lexically
+lflag
 li
+libc
 lifts
 light
 like
@@ -1123,6 +1171,7 @@ looks
 loop
 loopback
 loose
+losing
 lossy
 lost
 low
@@ -1145,6 +1194,7 @@ manual
 many
 map
 mapped
+mapping
 mappings
 margin
 mark
@@ -1160,11 +1210,13 @@ matcher
 matchers
 matches
 matching
+materialize
 materialized
 matter
 max
 maximum
 may
+maybe
 mcp
 md
 mday
@@ -1175,6 +1227,7 @@ measures
 mem
 mentioned
 merely
+merged
 message
 messy
 metadata
@@ -1199,6 +1252,7 @@ mm
 mod
 mode
 model
+models
 modes
 modified
 mon
@@ -1230,6 +1284,7 @@ native
 nd
 ne
 nearest
+need
 needed
 needle
 needs
@@ -1310,6 +1365,7 @@ open
 opened
 opening
 opens
+operation
 operations
 ops
 opt
@@ -1352,10 +1408,14 @@ over
 overall
 overdue
 overlong
+oversized
+overwrite
 overwrites
+overwriting
 overwritten
 own
 owned
+owner
 p11
 p12
 p30
@@ -1409,9 +1469,11 @@ permanent
 permissions
 perms
 persist
+persisted
 persists
 person
 personal
+persons
 phrase
 pick
 picked
@@ -1432,6 +1494,7 @@ placeholder
 plain
 plan
 planned
+planning
 plans
 plant
 planted
@@ -1444,6 +1507,7 @@ plus
 point
 pointing
 points
+policy
 pop
 popped
 populated
@@ -1453,6 +1517,7 @@ position
 positional
 positionals
 positive
+post
 power
 precedence
 precision
@@ -1460,12 +1525,17 @@ precomposed
 prefers
 prefix
 prefixes
+prepare
+prepared
 present
+preserve
 preserved
 preserves
+presets
 pretty
 prev
 preview
+previews
 previous
 prime
 print
@@ -1506,6 +1576,7 @@ pt
 ptr
 pub
 public
+pure
 purpose
 push
 pushed
@@ -1561,8 +1632,10 @@ recognise
 recognised
 recognized
 reconcile
+reconciliation
 record
 recorded
+recording
 records
 recovers
 recreates
@@ -1578,6 +1651,7 @@ redirecting
 redirects
 ref
 reference
+references
 refname
 refold
 refresh
@@ -1600,6 +1674,7 @@ registers
 registry
 reject
 rejected
+rejections
 rejects
 rel
 relative
@@ -1629,6 +1704,7 @@ rename
 renames
 render
 rendered
+rendering
 renders
 reopen
 reopened
@@ -1661,6 +1737,7 @@ repository
 repr
 request
 requested
+requests
 required
 requires
 rescue
@@ -1692,9 +1769,13 @@ rev
 revalidate
 reverse
 review
+reviewed
+reviewer
 revised
 revision
+revisions
 revived
+revoked
 rewrite
 rewritten
 rfc3339
@@ -1765,6 +1846,7 @@ sec
 second
 seconds
 secret
+secrets
 secs
 section
 sections
@@ -1778,12 +1860,15 @@ sees
 seg
 segment
 segmentation
+select
 selected
+selection
 self
 sense
 sentence
 sentences
 sep
+separate
 separator
 separators
 seq
@@ -1793,6 +1878,7 @@ sequences
 ser
 serde
 serialize
+serialized
 serializer
 serializing
 serve
@@ -1963,6 +2049,7 @@ super
 superseded
 supersedes
 superseding
+supplied
 surface
 surplus
 survive
@@ -1997,7 +2084,10 @@ target
 targets
 task
 taught
+tcgetattr
 tcp
+tcsanow
+tcsetattr
 tell
 tells
 temp
@@ -2007,6 +2097,7 @@ temporary
 ten
 term
 terminal
+termios
 terms
 test
 tests
@@ -2072,6 +2163,9 @@ trailer
 trailing
 trait
 transcript
+transfer
+transfers
+transpose
 travels
 treat
 treated
@@ -2117,6 +2211,7 @@ ulids
 ulong
 unambiguous
 unblocks
+unbound
 unchanged
 unclaimed
 undeclared
@@ -2128,6 +2223,7 @@ undone
 unfold
 ungoverned
 unicode
+uninit
 union
 unique
 unit
@@ -2161,6 +2257,7 @@ unwritten
 up
 update
 updated
+updates
 upper
 uppercase
 upto
@@ -2213,10 +2310,12 @@ visit
 visitor
 vivac
 vivacs
+vmin
 vocabulary
 void
 vowels
 vt
+vtime
 vv
 wait
 waited

@@ -63,6 +63,7 @@ admired
 admits
 admitted
 adopt
+adopting
 adopts
 advance
 advertises
@@ -102,6 +103,7 @@ alike
 alive
 aliveness
 all
+allocated
 allow
 allowed
 allows
@@ -261,6 +263,8 @@ author
 authored
 authorised
 authority
+authorize
+authorized
 auto
 automatic
 automatically
@@ -690,6 +694,7 @@ compared
 compares
 comparing
 comparison
+comparisons
 compatibility
 competes
 compile
@@ -724,6 +729,7 @@ conditions
 config
 configuration
 configure
+configured
 configures
 configuring
 confines
@@ -1931,6 +1937,7 @@ invariants
 invent
 invented
 inventing
+inventory
 invents
 inverse
 inverses
@@ -2136,6 +2143,7 @@ loader
 loading
 loads
 local
+locally
 located
 locates
 location
@@ -2194,6 +2202,7 @@ make
 makes
 making
 malformed
+managed
 manager
 manages
 mandates
@@ -2520,6 +2529,7 @@ orders
 ordinarily
 ordinary
 orientation
+oriented
 origin
 original
 originated
@@ -2973,6 +2983,7 @@ receiving
 recency
 recent
 recently
+rechecked
 recipe
 reclaim
 reclaiming
@@ -3239,6 +3250,7 @@ revisited
 revisiting
 revisits
 revives
+revocation
 reword
 rewrap
 rewrite
@@ -3383,6 +3395,7 @@ selectable
 selected
 selecting
 selection
+selections
 self
 semantics
 semicolon
@@ -3390,6 +3403,7 @@ send
 sending
 sends
 sense
+sensitive
 sent
 sentence
 sentences
@@ -3797,6 +3811,7 @@ symmetric
 symptom
 sync
 synced
+synchronization
 synchronous
 syncing
 syncs
@@ -3977,6 +3992,8 @@ tramo
 tranche
 transaction
 transcript
+transfer
+transfers
 transform
 transit
 transition

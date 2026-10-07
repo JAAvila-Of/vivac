@@ -1817,3 +1817,12 @@ fn a_node_closed_after_its_note_shows_its_outcome() {
     assert!(b.contains(": shipped in 0.1 after all"), "{b}");
     assert!(!b.contains("kept open on purpose"), "{b}");
 }
+
+#[test]
+fn agent_custody_is_absent_from_a_persons_brief() {
+    let c = populated("agent-custody-brief");
+    let before = c.log();
+    let out = c.ok(&["brief", "--now", "2026-09-15T10:00:00Z"]);
+    assert!(!out.contains("AGENT CUSTODY"), "{out}");
+    assert_eq!(c.log(), before);
+}

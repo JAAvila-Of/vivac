@@ -221,7 +221,9 @@ vivac web
 The agent writes the tree, and you can read it at any moment without asking
 the agent anything. `vivac web` opens every project on this machine in a
 browser: which one moved and which has been sitting still, what changed in
-one while you were away, a node's whole lineage, and the whole tree. It is
+one while you were away, a node's whole lineage, and the whole tree. Its Agents
+page compares native versions across harnesses and applies an explicitly reviewed
+synchronization plan through the same operations as `vivac agents sync`. It is
 where you see the state of each item for yourself, and where you catch what
 the agent let pass.
 
@@ -499,7 +501,7 @@ Not there yet: team mode. The project is in `0.x` and
 | [**When each command runs**](docs/SEAMS.md) | the moments of a session, who acts at each, and what to say if the agent skips one |
 | [**Using it**](docs/USAGE.md) | every command, grouped by who runs it |
 | [**Setting it up**](docs/SETUP.md) | what setup writes, Codex, the MCP server, where things are stored |
-| [**Agent custody**](docs/AGENT-CUSTODY.md) | reviewed contracts, explicit model assignments, discovery and checked synchronization |
+| [**Agent custody**](docs/AGENT-CUSTODY.md) | inventory, guided sync, web comparisons and explicit model assignments |
 | [**Bringing a project in**](docs/MIGRATING.md) | the migration, and why it is a migration and not an addition |
 | [**Lanes**](docs/LANES.md) | one product, several folders, one tree |
 | [**What it costs**](docs/PERFORMANCE.md) | the full measurements, and how they were taken |

@@ -1,9 +1,11 @@
 
 # Bringing what a project knows into vivac
 
-vivac never imports anything by itself. It does not read other memory systems,
-the harness's own memory or any instruction file. Moving what they hold into
-the tree is your job, and the person decides what goes in.
+This skill migrates project knowledge from memory systems and instruction
+files. Moving that knowledge into the tree is your job, and the person decides
+what goes in. Native agent custody is separate: vivac agents import and
+reconcile preserve prompts through file references without importing their
+bodies into the tree. Those commands do not migrate another memory system.
 
 The tree's log only grows: what you write stays written. So nothing is written
 until the person has seen the plan and said yes. Everything you need to do this

@@ -26,11 +26,21 @@ pub struct Assignment {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
+pub struct PromptSource {
+    pub harness: String,
+    pub path: String,
+    pub digest: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct Definition {
     pub schema_version: u32,
     pub name: String,
     pub contract: Contract,
     pub assignments: Vec<Assignment>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<PromptSource>,
     #[serde(default)]
     pub retired: bool,
 }

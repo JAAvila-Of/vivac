@@ -1601,9 +1601,9 @@ mod tests {
         // Computed independently (Python's own FNV-1a/64) over the exact
         // frontmatter and body this file embeds. It moves whenever the
         // skill's text does, and moving it is meant to be deliberate: the
-        // current change is `d1033`: every active pillar reaches the brief,
-        // with full rule bodies consulted before decisions and reviews.
-        assert_eq!(skill_fingerprint(), 0xe963f606b638d0c2);
+        // current change is `d1065`: native prompt custody preserves file
+        // references independently of project knowledge migration.
+        assert_eq!(skill_fingerprint(), 0x69e58e1c3ba3d985);
     }
 
     #[test]

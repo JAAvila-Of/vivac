@@ -353,6 +353,13 @@ because nobody had gone to look at the neighbour.
 
 ## The maintainer looks
 
+The Agents page compares current native prompts, models and settings across
+configured project harnesses. It makes differences visible before you choose
+which version to preserve. Review and apply use the same operations as
+`vivac agents plan` and `vivac agents apply`; source and destination fingerprints
+must still match at application. Use `vivac agents` for inventory and
+`vivac agents sync` for the guided terminal flow. See [Agent custody](AGENT-CUSTODY.md).
+
 ```sh
 vivac web           the tree in a browser, on this machine and nowhere else
 ```

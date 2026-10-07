@@ -263,6 +263,11 @@ tree is a map of where a system is weak and not yet fixed.**
   have no false positives, and a fence is the writer stating outright that what
   follows is not prose. A paste with no fence gets through, and that is the price
   of having no escape hatch.
+  Native agent prompt transfer stays outside the provenance log: custody records
+  a project file reference and its digest, while adapters preserve the prompt
+  between native configuration files. It never stores the prompt in the tree.
+  Sensitive values are refused before transfer; fenced examples are allowed in
+  native prompts, not in log prose.
 - **No telemetry.** The binary does not phone home. Ever.
 
   Phoning home is the binary reaching the network on its own account: to

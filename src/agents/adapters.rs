@@ -24,10 +24,12 @@ pub trait Adapter {
         revision: &str,
         definition: &Definition,
         assignment: &Assignment,
+        prompt: Option<&str>,
     ) -> Result<String, Failure>;
     fn validate(&self, assignment: &Assignment) -> Result<(), Failure>;
+    fn prompt_source(&self, text: &str) -> Result<(String, Option<String>), Failure>;
 
-    fn discover(&self, root: &Path) -> Result<Vec<Candidate>, Failure> {
+    fn paths(&self, root: &Path) -> Result<Vec<String>, Failure> {
         safe_path(root, self.directory(), self.directory())?;
         let directory = root.join(self.directory());
         if !directory.exists() {
@@ -52,7 +54,14 @@ pub trait Adapter {
             paths.push(relative);
         }
         paths.sort();
-        paths.iter().map(|path| self.inspect(root, path)).collect()
+        Ok(paths)
+    }
+
+    fn discover(&self, root: &Path) -> Result<Vec<Candidate>, Failure> {
+        self.paths(root)?
+            .iter()
+            .map(|path| self.inspect(root, path))
+            .collect()
     }
 }
 
@@ -75,6 +84,34 @@ pub fn get(name: &str) -> Option<Box<dyn Adapter>> {
 
 pub fn digest(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
+}
+
+pub fn read_prompt(root: &Path, harness: &str, relative: &str) -> Result<String, Failure> {
+    read_source(root, harness, relative).map(|source| source.0)
+}
+
+pub fn read_source(
+    root: &Path,
+    harness: &str,
+    relative: &str,
+) -> Result<(String, String, String), Failure> {
+    let adapter =
+        get(harness).ok_or_else(|| Failure::usage("Unsupported prompt source harness."))?;
+    let bytes = read_native(root, relative, adapter.directory())?;
+    let text =
+        std::str::from_utf8(&bytes).map_err(|_| Failure::usage("Prompt source is not UTF-8."))?;
+    let (prompt, description) = adapter.prompt_source(text)?;
+    if prompt.trim().is_empty() {
+        return Err(Failure::usage("Native prompt is empty."));
+    }
+    if let Some(finding) = crate::redact::check_prompt(&prompt) {
+        return Err(Failure::Redaction(Box::new(finding)));
+    }
+    Ok((
+        prompt,
+        description.ok_or_else(|| Failure::usage("Native description is missing."))?,
+        digest(&bytes),
+    ))
 }
 
 pub fn safe_path(
@@ -307,6 +344,20 @@ const CLAUDE_SETTINGS: &[&str] = &[
 
 pub struct Codex;
 impl Adapter for Codex {
+    fn prompt_source(&self, text: &str) -> Result<(String, Option<String>), Failure> {
+        let table = toml::from_str::<toml::Table>(text)
+            .map_err(|_| Failure::usage("Native prompt could not be read."))?;
+        let description = table
+            .get("description")
+            .and_then(toml::Value::as_str)
+            .map(str::to_owned);
+        let prompt = table
+            .get("developer_instructions")
+            .and_then(toml::Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| Failure::usage("Native prompt could not be read."))?;
+        Ok((prompt, description))
+    }
     fn name(&self) -> &str {
         "codex"
     }
@@ -393,6 +444,7 @@ impl Adapter for Codex {
         revision: &str,
         definition: &Definition,
         assignment: &Assignment,
+        prompt: Option<&str>,
     ) -> Result<String, Failure> {
         self.validate(assignment)?;
         let mut values = assignment.settings.clone();
@@ -403,7 +455,11 @@ impl Adapter for Codex {
         );
         values.insert(
             "developer_instructions".into(),
-            Value::String(contract_text(&definition.contract)),
+            Value::String(
+                prompt
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| contract_text(&definition.contract)),
+            ),
         );
         if assignment.model != "inherit" {
             values.insert("model".into(), Value::String(assignment.model.clone()));
@@ -425,6 +481,32 @@ impl Adapter for Codex {
 
 pub struct ClaudeCode;
 impl Adapter for ClaudeCode {
+    fn prompt_source(&self, text: &str) -> Result<(String, Option<String>), Failure> {
+        let rest = text
+            .strip_prefix("---\r\n")
+            .or_else(|| text.strip_prefix("---\n"))
+            .ok_or_else(|| Failure::usage("Native prompt frontmatter is missing."))?;
+        let mut offset = 0;
+        let mut body = None;
+        let mut description = None;
+        for line in rest.split_inclusive('\n') {
+            offset += line.len();
+            if line.trim_end_matches(['\r', '\n']) == "---" {
+                let values: BTreeMap<String, Value> =
+                    serde_yaml_ng::from_str(&rest[..offset - line.len()])
+                        .map_err(|_| Failure::usage("Native description could not be read."))?;
+                description = values
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                body = Some(rest[offset..].to_string());
+                break;
+            }
+        }
+        let body =
+            body.ok_or_else(|| Failure::usage("Native prompt frontmatter is incomplete."))?;
+        Ok((body, description))
+    }
     fn name(&self) -> &str {
         "claude-code"
     }
@@ -526,6 +608,7 @@ impl Adapter for ClaudeCode {
         revision: &str,
         definition: &Definition,
         assignment: &Assignment,
+        prompt: Option<&str>,
     ) -> Result<String, Failure> {
         self.validate(assignment)?;
         let mut values = assignment.settings.clone();
@@ -540,6 +623,12 @@ impl Adapter for ClaudeCode {
         }
         let yaml = serde_yaml_ng::to_string(&values)
             .map_err(|_| Failure::usage("The agent assignment cannot be rendered as YAML."))?;
+        if let Some(prompt) = prompt {
+            return Ok(format!(
+                "---\n# vivac agent={agent} revision={revision} adapter={}\n{yaml}---\n{prompt}",
+                self.version()
+            ));
+        }
         Ok(format!(
             "---\n{yaml}---\n<!-- vivac agent={agent} revision={revision} adapter={} -->\n\n{}",
             self.version(),
@@ -569,6 +658,14 @@ fn validate_candidate(adapter: &dyn Adapter, candidate: &mut Candidate) {
 pub struct Example;
 #[cfg(test)]
 impl Adapter for Example {
+    fn prompt_source(&self, text: &str) -> Result<(String, Option<String>), Failure> {
+        let values: Value = serde_json::from_str(text)
+            .map_err(|_| Failure::usage("Native prompt could not be read."))?;
+        let prompt = values["instructions"]
+            .as_str()
+            .ok_or_else(|| Failure::usage("Native prompt could not be read."))?;
+        Ok((prompt.into(), Some("Example agent contract.".into())))
+    }
     fn name(&self) -> &str {
         "example"
     }
@@ -614,8 +711,9 @@ impl Adapter for Example {
         _: &str,
         definition: &Definition,
         assignment: &Assignment,
+        prompt: Option<&str>,
     ) -> Result<String, Failure> {
-        Ok(serde_json::json!({"name": assignment.name, "model": assignment.model, "effort": assignment.effort, "instructions": contract_text(&definition.contract)}).to_string())
+        Ok(serde_json::json!({"name": assignment.name, "model": assignment.model, "effort": assignment.effort, "instructions": prompt.map(str::to_owned).unwrap_or_else(|| contract_text(&definition.contract))}).to_string())
     }
 }
 
@@ -624,6 +722,7 @@ mod tests {
     use super::*;
     fn definition() -> Definition {
         Definition {
+            prompt: None,
             schema_version: 1,
             name: "reviewer".into(),
             retired: false,
@@ -649,7 +748,7 @@ mod tests {
                 settings: BTreeMap::new(),
             };
             let text = adapter
-                .render("agent-id", "revision-id", &definition(), &assignment)
+                .render("agent-id", "revision-id", &definition(), &assignment, None)
                 .unwrap();
             let path = format!("{}/reviewer.{}", adapter.directory(), adapter.extension());
             fs::create_dir_all(root.join(adapter.directory())).unwrap();
@@ -663,6 +762,18 @@ mod tests {
             assert!(!serde_json::to_string(&candidate)
                 .unwrap()
                 .contains("Return evidence"));
+            let prompt = "Inspect the scope.\r\n```text\r\nReturn complete evidence.\r\n```\r\n";
+            let text = adapter
+                .render(
+                    "agent-id",
+                    "revision-id",
+                    &definition(),
+                    &assignment,
+                    Some(prompt),
+                )
+                .unwrap();
+            fs::write(root.join(&path), text).unwrap();
+            assert_eq!(read_prompt(&root, adapter.name(), &path).unwrap(), prompt);
         }
         fs::remove_dir_all(root).unwrap();
     }
@@ -734,7 +845,7 @@ mod tests {
         fs::write(
             root.join(".example/agents/reviewer.json"),
             Example
-                .render("id", "revision", &definition(), &assignment)
+                .render("id", "revision", &definition(), &assignment, None)
                 .unwrap(),
         )
         .unwrap();

@@ -676,6 +676,7 @@ impl Tree {
                 | Body::AgentDetached { .. }
                 | Body::AgentMaterialized { .. }
                 | Body::AgentObserved { .. }
+                | Body::AgentAutomationConfigured { .. }
         ) {
             // Context events: they say where work happens, not that it did.
             // Counted as a change, joining a tree would look like work done
@@ -1085,7 +1086,8 @@ impl Tree {
             | Body::AgentBound { .. }
             | Body::AgentDetached { .. }
             | Body::AgentMaterialized { .. }
-            | Body::AgentObserved { .. } => {
+            | Body::AgentObserved { .. }
+            | Body::AgentAutomationConfigured { .. } => {
                 self.agent_history.push((lane.to_string(), body.clone()));
             }
         }
