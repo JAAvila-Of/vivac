@@ -678,14 +678,14 @@ fn reconciliation(cwd: &std::path::Path) {
     let (report, code) = crate::agents::reconcile_for_hook(cwd);
     if report.get("policy").is_none() {
         if code > 1 && crate::store::locate(cwd).ok().flatten().is_some() {
-            outln!("  Agent custody could not complete; inspect vivac agents reconcile.");
+            outln!("  Agent custody could not complete; inspect vivac agents reconcile. Use vivac agents to inspect configuration errors.");
         }
         return;
     }
     let pending = report["needs_review"].as_array().map_or(0, Vec::len);
     let blocked = report["blocked"].as_array().map_or(0, Vec::len);
     if report["policy"]["mode"] == "automatic" || pending + blocked > 0 {
-        outln!("  Agent custody: mode {}; changes applied {}; needs review {}; blocked {}. Inspect vivac agents reconcile.",
+        outln!("  Agent custody: mode {}; changes applied {}; needs review {}; blocked {}. Inspect vivac agents reconcile; review configuration changes with vivac agents sync.",
             report["policy"]["mode"].as_str().unwrap_or("manual"), report["applied"], pending, blocked);
     }
 }

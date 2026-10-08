@@ -1,1 +1,319 @@
-.agents-page{max-width:1100px}.agent-card{border:1px solid var(--line,#aaa);border-radius:8px;padding:1rem;margin:1rem 0}.agent-card.attention{border-left:4px solid #b94040}.agent-card h2{margin-top:0}.agent-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:1rem}.agent-card label{display:block;margin:.5rem 0}input,select,button{font:inherit;max-width:100%;padding:.35rem}button{cursor:pointer}button:disabled{cursor:default;opacity:.5}.agent-card pre,#preview{white-space:pre-wrap;overflow-wrap:anywhere}.compare-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:1rem}.compare-grid textarea{width:100%;min-height:220px;font:inherit;box-sizing:border-box}.muted{opacity:.7}.warning{color:#a62b2b}#message{min-height:1.5em}#review{border-top:1px solid var(--line,#aaa);padding-top:1rem}
+.agents-page {
+  max-width: 76rem;
+}
+
+.agents-page [hidden] {
+  display: none!important;
+}
+
+.agents-page button,.agents-page input,.agents-page select,.agents-page textarea {
+  font: inherit;
+  color: var(--ink);
+  max-width: 100%;
+}
+
+.agents-page button {
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  padding: .45rem .8rem;
+  background: var(--panel);
+  cursor: pointer;
+}
+
+.agents-page button:hover {
+  border-color: var(--accent);
+}
+
+.agents-page button:disabled {
+  opacity: .5;
+  cursor: default;
+}
+
+.agents-page :focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.agents-page input:not([type=checkbox]),.agents-page select {
+  display: block;
+  width: 100%;
+  padding: .45rem .6rem;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: var(--panel);
+}
+
+.agents-page label {
+  display: block;
+  margin: .8rem 0;
+}
+
+.agents-page .muted {
+  color: var(--ink-soft);
+}
+
+.agents-page .warning {
+  color: var(--warn);
+}
+
+.agents-page #message {
+  min-height: 1.5em;
+  margin: 1rem 0;
+  overflow-wrap: anywhere;
+}
+
+.agents-page .agents-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: 1rem 0;
+}
+
+.agents-page .inventory-scroll {
+  overflow-x: auto;
+  border: 1px solid var(--sep);
+  border-radius: 10px;
+  background: var(--panel);
+}
+
+.agents-page .agents-table {
+  border-collapse: collapse;
+  width: 100%;
+  text-align: left;
+  min-width: 600px;
+}
+
+.agents-page .agents-table caption {
+  text-align: left;
+  padding: 1rem;
+  color: var(--ink-soft);
+}
+
+.agents-page .agents-table th,.agents-page .agents-table td {
+  padding: 1rem;
+  vertical-align: top;
+  border-top: 1px solid var(--sep);
+  overflow-wrap: anywhere;
+}
+
+.agents-page .agents-table thead th {
+  font-weight: 500;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+.agents-page .agents-table tbody th {
+  font-weight: 400;
+  min-width: 12rem;
+}
+
+.agents-page .agents-table p {
+  margin: .25rem 0;
+  font-size: .9rem;
+}
+
+.agents-page fieldset {
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
+
+.agents-page .editor-top {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+  margin: 1rem 0;
+}
+
+.agents-page .editor-top h2 {
+  font-size: 1.2rem;
+  overflow-wrap: anywhere;
+  margin: 0;
+}
+
+.agents-page .agents-layout {
+  display: grid;
+  grid-template-columns: 13rem minmax(0,1fr);
+  gap: 1rem;
+}
+
+.agents-page #agent-list {
+  display: flex;
+  flex-direction: column;
+  gap: .35rem;
+  align-self: start;
+  border: 1px solid var(--sep);
+  border-radius: 10px;
+  background: var(--panel);
+  padding: .65rem;
+}
+
+.agents-page #agent-list button {
+  text-align: left;
+  overflow-wrap: anywhere;
+  border-color: transparent;
+}
+
+.agents-page #agent-list button[data-selected=true]::after {
+  content: " Selected";
+  display: block;
+  font-size: .8rem;
+  color: var(--ink-soft);
+}
+
+.agents-page #agent-list button[aria-current=true],.agents-page #stages button[aria-current=step] {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--ground);
+}
+
+.agents-page .agent-workspace {
+  min-width: 0;
+  background: var(--panel);
+  border: 1px solid var(--sep);
+  border-radius: 10px;
+  padding: 1.25rem;
+}
+
+.agents-page #stages {
+  display: flex;
+  gap: .5rem;
+  flex-wrap: wrap;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--sep);
+  margin-bottom: 1.25rem;
+}
+
+.agents-page .agent-card h2,.agents-page .destination-panel h2 {
+  font-size: 1.15rem;
+  margin-top: 0;
+}
+
+.agents-page .source-details {
+  background: var(--ground);
+  border: 1px solid var(--sep);
+  border-radius: 8px;
+  padding: 1rem;
+  margin: 1rem 0;
+}
+
+.agents-page .agent-details {
+  display: grid;
+  grid-template-columns: minmax(6rem,auto) minmax(0,1fr);
+  gap: .4rem 1rem;
+  margin: .5rem 0;
+}
+
+.agents-page .agent-details dt {
+  color: var(--ink-soft);
+}
+
+.agents-page .agent-details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.agents-page .destination-checks {
+  border-top: 1px solid var(--sep);
+  margin-top: 1rem;
+}
+
+.agents-page .agent-grid {
+  display: grid;
+  gap: 1rem;
+}
+
+.agents-page .destination-panel {
+  border: 1px solid var(--sep);
+  border-radius: 8px;
+  padding: 1rem;
+  margin: 1rem 0;
+}
+
+.agents-page .compare-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit,minmax(min(100%,260px),1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.agents-page .compare-grid>div {
+  min-width: 0;
+  border: 1px solid var(--sep);
+  border-radius: 8px;
+  padding: 1rem;
+}
+
+.agents-page .compare-grid h3 {
+  font-size: 1rem;
+  overflow-wrap: anywhere;
+}
+
+.agents-page .compare-grid textarea {
+  width: 100%;
+  min-height: 16rem;
+  font-family: var(--mono);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  padding: .6rem;
+  background: var(--ground);
+}
+
+.agents-page .compare-grid pre {
+  font-family: var(--mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border-left: 3px solid var(--warn);
+  padding-left: .75rem;
+}
+
+.agents-page .stage-actions,.agents-page .review-actions {
+  display: flex;
+  gap: .65rem;
+  flex-wrap: wrap;
+  margin-top: 1.5rem;
+}
+
+.agents-page #apply {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+@media (max-width: 700px) {
+  .agents-page .agents-layout {
+    grid-template-columns: minmax(0,1fr);
+  }
+
+  .agents-page #agent-list {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .agents-page .agent-workspace {
+    padding: .85rem;
+  }
+
+  .agents-page .editor-top {
+    gap: .75rem;
+  }
+
+  .agents-page .agent-details {
+    grid-template-columns: minmax(0,1fr);
+  }
+
+  .agents-page .agent-details dd {
+    margin-bottom: .45rem;
+  }
+
+  .agents-page #stages button {
+    flex: 1 1 130px;
+  }
+
+  .agents-page .destination-panel {
+    padding: .75rem;
+  }
+
+}

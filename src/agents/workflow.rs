@@ -75,31 +75,49 @@ pub(crate) fn inventory(cwd: &Path) -> Result<Value, Failure> {
     }
     let mut harnesses = Vec::new();
     for native in adapters::all() {
-        let mut models = std::collections::BTreeSet::from(["inherit".to_string()]);
-        for agent in ledger.agents.values() {
-            for assignment in &agent.definition.assignments {
-                if assignment.harness == native.name() {
-                    models.insert(assignment.model.clone());
-                }
-            }
-        }
-        for candidate in native.discover(root)? {
-            if let Some(model) = candidate.model {
-                models.insert(model);
-            }
-        }
-        let efforts: &[&str] = if native.name() == "codex" {
-            &[
-                "inherit", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
-            ]
-        } else {
-            &["inherit", "low", "medium", "high", "xhigh", "max"]
-        };
-        harnesses.push(json!({"harness":native.name(),"configured":crate::setup::doctor::configured(root,native.name()),
-            "directory":native.directory(),"extension":native.extension(),"models":models,"efforts":efforts,"capabilities":native.capabilities()}));
+        harnesses.push(harness_value(root, &ledger, native.as_ref())?);
     }
     result["harnesses"] = json!(harnesses);
     Ok(result)
+}
+
+pub(crate) fn harness_inventory(cwd: &Path, harness: &str) -> Result<Value, Failure> {
+    let (located, _, ledger) = read_ledger(cwd)?;
+    let native = adapter(harness)?;
+    harness_value(&located.lane_dir, &ledger, native.as_ref())
+}
+
+fn harness_value(
+    root: &Path,
+    ledger: &Ledger,
+    native: &dyn adapters::Adapter,
+) -> Result<Value, Failure> {
+    let model_catalog = native.model_catalog(root);
+    let mut models = std::collections::BTreeSet::from(["inherit".to_string()]);
+    models.extend(model_catalog.models.iter().map(|model| model.id.clone()));
+    for agent in ledger.agents.values() {
+        for assignment in &agent.definition.assignments {
+            if assignment.harness == native.name() {
+                models.insert(assignment.model.clone());
+            }
+        }
+    }
+    for candidate in native.discover(root)? {
+        if let Some(model) = candidate.model {
+            models.insert(model);
+        }
+    }
+    let efforts: &[&str] = if native.name() == "codex" {
+        &[
+            "inherit", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
+        ]
+    } else {
+        &["inherit", "low", "medium", "high", "xhigh", "max"]
+    };
+    Ok(
+        json!({"harness":native.name(),"configured":crate::setup::doctor::configured(root,native.name()),
+        "directory":native.directory(),"extension":native.extension(),"models":models,"efforts":efforts,"model_catalog":model_catalog,"capabilities":native.capabilities()}),
+    )
 }
 
 fn reference(root: &Path, source: &NativeRef) -> Result<(Candidate, String, String), Failure> {
@@ -514,4 +532,110 @@ pub(super) fn selection<T: serde::de::DeserializeOwned>(
     }
     serde_json::from_str(&raw)
         .map_err(|_| Failure::usage("Selection must use the declared JSON fields and types."))
+}
+
+#[cfg(test)]
+mod catalog_refresh_tests {
+    use super::*;
+
+    #[test]
+    fn model_choices_refresh_without_losing_configured_models() {
+        const FIXTURE: &str = "VIVAC_CATALOG_REFRESH_FIXTURE";
+        let Some(root) = std::env::var_os(FIXTURE).map(PathBuf::from) else {
+            let root =
+                std::env::temp_dir().join(format!("vivac-catalog-refresh-{}", crate::id::ulid()));
+            fs::create_dir_all(root.join(".codex/agents")).unwrap();
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "agents::workflow::catalog_refresh_tests::model_choices_refresh_without_losing_configured_models", "--nocapture"])
+                .env(FIXTURE, &root)
+                .env("CODEX_HOME", root.join(".codex"))
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn().unwrap();
+            let started = std::time::Instant::now();
+            let timed_out = loop {
+                if child.try_wait().unwrap().is_some() {
+                    break false;
+                }
+                if started.elapsed() > std::time::Duration::from_secs(30) {
+                    child.kill().unwrap();
+                    break true;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            };
+            let output = child.wait_with_output().unwrap();
+            fs::remove_dir_all(root).unwrap();
+            assert!(!timed_out, "Model refresh fixture timed out.");
+            assert!(
+                output.status.success(),
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        };
+        let native = adapters::get("codex").unwrap();
+        let assignment = Assignment {
+            harness: "codex".into(),
+            name: "reviewer".into(),
+            model: "used-native".into(),
+            effort: "inherit".into(),
+            settings: BTreeMap::new(),
+        };
+        let mut definition = Definition {
+            schema_version: 1,
+            name: "reviewer".into(),
+            contract: types::Contract {
+                purpose: "Review changes.".into(),
+                duties: vec![],
+                limits: vec![],
+                acceptance: vec![],
+            },
+            assignments: vec![Assignment {
+                model: "used-ledger".into(),
+                ..assignment.clone()
+            }],
+            prompt: None,
+            retired: false,
+        };
+        fs::write(
+            root.join(".codex/agents/reviewer.toml"),
+            native
+                .render("agent", "revision", &definition, &assignment, None)
+                .unwrap(),
+        )
+        .unwrap();
+        let mut ledger = Ledger::default();
+        ledger.agents.insert(
+            "agent".into(),
+            Agent {
+                agent: "agent".into(),
+                revision: "revision".into(),
+                definition: definition.clone(),
+            },
+        );
+        let cache = root.join(".codex/models_cache.json");
+        fs::write(&cache, r#"{"models":[{"slug":"cached-old","visibility":"list","supported_reasoning_levels":[{"effort":"low"}]}]}"#).unwrap();
+        let before = harness_value(&root, &ledger, native.as_ref()).unwrap();
+        assert_eq!(
+            before["models"],
+            json!(["cached-old", "inherit", "used-ledger", "used-native"])
+        );
+        fs::write(&cache, r#"{"models":[{"slug":"cached-new","visibility":"list","supported_reasoning_levels":[{"effort":"high"}]}]}"#).unwrap();
+        definition.assignments[0].model = "changed-ledger".into();
+        ledger.agents.get_mut("agent").unwrap().definition = definition;
+        let after = harness_value(&root, &ledger, native.as_ref()).unwrap();
+        assert_eq!(
+            after["models"],
+            json!(["cached-new", "changed-ledger", "inherit", "used-native"])
+        );
+        assert_eq!(
+            after["model_catalog"]["models"][0]["efforts"],
+            json!(["high"])
+        );
+        assert_eq!(
+            before["model_catalog"]["models"][0]["efforts"],
+            json!(["low"])
+        );
+    }
 }

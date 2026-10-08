@@ -293,6 +293,7 @@ cascaded
 case
 cased
 cases
+catalog
 categories
 cause
 cc
@@ -311,6 +312,7 @@ character
 characters
 chars
 check
+checkbox
 checked
 checking
 checks
@@ -433,6 +435,7 @@ contains
 content
 contention
 contents
+context
 contexts
 continuation
 continue
@@ -583,6 +586,7 @@ dim
 dims
 dir
 direct
+direction
 directly
 directory
 dirty
@@ -771,6 +775,7 @@ feature
 fence
 fenced
 fetch
+fetched
 ffi
 field
 fields
@@ -818,6 +823,7 @@ folder
 folders
 folding
 folds
+follow
 followed
 follows
 footer
@@ -956,6 +962,7 @@ holds
 hollow
 home
 homonyms
+honor
 hook
 hooks
 host
@@ -1188,6 +1195,7 @@ main
 make
 makes
 malformed
+managed
 managing
 mandatory
 manual
@@ -1402,6 +1410,7 @@ outlives
 outln
 output
 outputs
+outs
 outside
 ov
 over
@@ -1561,6 +1570,7 @@ promote
 promoted
 promoting
 prompt
+prompts
 pronoun
 prop
 properties
@@ -1569,6 +1579,7 @@ proposing
 prose
 protocol
 provenance
+provider
 prune
 pruned
 ps
@@ -1863,6 +1874,7 @@ segmentation
 select
 selected
 selection
+selector
 self
 sense
 sentence
@@ -2124,6 +2136,7 @@ tidy
 tie
 tight
 time
+timed
 timeout
 times
 tiny
@@ -2172,6 +2185,7 @@ treated
 tree
 trees
 triage
+trial
 trim
 trimmed
 trimming
@@ -2210,6 +2224,7 @@ ulid
 ulids
 ulong
 unambiguous
+unavailable
 unblocks
 unbound
 unchanged
@@ -2345,6 +2360,7 @@ wherever
 whether
 which
 while
+whitelists
 whitespace
 who
 whoami

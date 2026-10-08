@@ -1,5 +1,6 @@
 //! Agent custody is rebuilt from events; native files are projections.
 pub mod adapters;
+mod catalog;
 mod human;
 mod reconcile;
 mod terminal;

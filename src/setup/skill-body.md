@@ -3,9 +3,11 @@
 
 This skill migrates project knowledge from memory systems and instruction
 files. Moving that knowledge into the tree is your job, and the person decides
-what goes in. Native agent custody is separate: vivac agents import and
-reconcile preserve prompts through file references without importing their
-bodies into the tree. Those commands do not migrate another memory system.
+what goes in. Native agent custody is separate: use vivac agents for inventory
+and vivac agents sync for reviewed sources, destinations and assignments.
+Sync and the import and reconcile operations preserve prompts through native
+file references without importing their bodies into the tree. Those commands
+do not migrate another memory system.
 
 The tree's log only grows: what you write stays written. So nothing is written
 until the person has seen the plan and said yes. Everything you need to do this
