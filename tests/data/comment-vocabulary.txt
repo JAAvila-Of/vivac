@@ -566,6 +566,7 @@ chinese
 chip
 chips
 choice
+choices
 choose
 chooses
 choosing
