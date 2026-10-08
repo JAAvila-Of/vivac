@@ -75,6 +75,12 @@ fn agents_added_after_setup_are_reported_without_adoption_or_prompt_disclosure()
     let custody = check(&r, "agent custody");
     assert_eq!(custody["status"], "warning");
     assert!(custody["detail"].as_str().unwrap().contains("1 unmanaged"));
+    let fix = custody["fix"].as_str().unwrap();
+    assert!(fix.contains("vivac agents sync"), "{fix}");
+    assert!(
+        fix.contains("Runtime selection remains unverified"),
+        "{fix}"
+    );
     assert!(!r.to_string().contains("private native instruction"));
     assert!(!c.log().contains("agent.recorded"));
 }

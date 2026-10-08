@@ -124,10 +124,12 @@ Instruction files stay as they are for now. What they say still reaches every
 session from the file, and taking that away before the tree delivers it would
 trade one gap for another.
 
-Agent configuration has a separate lifecycle. `vivac agents scan` discovers
-project agents without adopting them or copying their prompts into the tree.
-An existing agent comes under custody only after its contract has been
-restated as reviewed prose and its harness assignments have been declared.
+Agent configuration has a separate lifecycle. `vivac agents` lists project
+agents across harnesses without importing them. Use `vivac agents sync` to
+choose a source, destinations and explicit model and effort assignments,
+then review the plan before applying. It preserves the complete native prompt
+through file references; its body never goes into the tree. There is no need
+to restate the prompt as prose or run import, set and bind separately.
 See [Agent custody](AGENT-CUSTODY.md). Discovery and generation do not prove
 that a harness loaded the configuration, or that the agent applies its rules.
 

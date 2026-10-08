@@ -404,14 +404,14 @@ pub(crate) fn run(cwd: &Path, args: &Args) -> Result<i32, Failure> {
                 "agent custody",
                 if errors > 0 { "error" } else if unmanaged + unverified > 0 { "warning" } else { "ok" },
                 &format!("{errors} custody error(s), {unmanaged} unmanaged agent file(s), {unverified} unverified assignment(s); native configuration does not prove runtime selection"),
-                if errors + unmanaged + unverified > 0 { Some("Run vivac agents scan and vivac agents status to inspect assignments and custody.") } else { None },
+                if errors + unmanaged > 0 { Some("Run vivac agents to inspect differences, then vivac agents sync to review configuration changes. Runtime selection remains unverified without harness evidence.") } else if unverified > 0 { Some("Run vivac agents status to inspect unverified assignments. Synchronizing configuration does not prove runtime selection.") } else { None },
             );
         }
         Err(_) => report.add(
             "agent custody",
             "error",
             "agent custody could not be inspected; file contents withheld",
-            Some("Run vivac agents status to inspect the failure."),
+            Some("Run vivac agents to inspect discovery and custody errors."),
         ),
     }
     Ok(report.print(args.has("json")))

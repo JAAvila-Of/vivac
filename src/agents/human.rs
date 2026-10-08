@@ -1,10 +1,11 @@
 //! Human inventory and a short, reviewed synchronization flow.
 
-use super::terminal::{clean, line, select};
+use super::terminal::{clean, line, select, single};
 use super::types::{Assignment, Candidate};
 use super::workflow::{self, NativeRef, SyncDestination, SyncItem, SyncSelection};
 use crate::args::Args;
 use crate::failure::Failure;
+use crate::style::{self, Stream::Out};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::io::{self, Write};
@@ -45,17 +46,68 @@ fn metadata(source: &Candidate) -> String {
     ))
 }
 
+struct Context {
+    project: String,
+    name: String,
+    index: usize,
+    total: usize,
+}
+
+impl Context {
+    fn heading(&self, source: &str, destination: &str, step: usize) -> String {
+        clean(&format!(
+            "{} | Agent {}/{}: {} | {} -> {} | STEP {}/3: {}",
+            self.project,
+            self.index,
+            self.total,
+            self.name,
+            source,
+            destination,
+            step,
+            match step {
+                1 => "Source & destinations",
+                2 => "Assignments",
+                _ => "Reviewed changes",
+            }
+        ))
+    }
+
+    fn show(&self, source: &str, destination: &str, step: usize) -> Result<(), Failure> {
+        say!(
+            "\n{}",
+            style::bold(
+                Out,
+                &style::path(Out, &self.heading(source, destination, step))
+            )
+        );
+        Ok(())
+    }
+
+    fn direction(&self, source: &str, destination: &str) -> String {
+        clean(&format!("{} | {} -> {}", self.name, source, destination))
+    }
+}
+
 pub(super) fn run(cwd: &Path, _args: &Args) -> Result<i32, Failure> {
     render_inventory(&workflow::inventory(cwd)?)?;
     Ok(0)
 }
 
 fn render_inventory(inventory: &Value) -> Result<(), Failure> {
-    say!("Agents (configuration status; runtime use is not verified)");
-    for agent in entries(&inventory["agents"]) {
+    say!("{}", style::bold(Out, "Agents"));
+    say!(
+        "{}",
+        style::dim(
+            Out,
+            "Configuration status; runtime evidence is shown separately"
+        )
+    );
+    let mut managed: Vec<_> = entries(&inventory["agents"]).iter().collect();
+    managed.sort_by_key(|agent| text(agent, "name"));
+    for agent in managed {
         say!(
             "\n{} [{}] managed by vivac{}",
-            clean(text(agent, "name")),
+            style::bold(Out, &clean(text(agent, "name"))),
             clean(text(agent, "agent")),
             if agent["retired"] == true {
                 " (retired)"
@@ -63,25 +115,39 @@ fn render_inventory(inventory: &Value) -> Result<(), Failure> {
                 ""
             }
         );
+        say!("  Custody: managed by vivac");
         for mapping in entries(&agent["mappings"]) {
             let state = text(mapping, "configured");
+            let assignment = entries(&agent["definition"]["assignments"])
+                .iter()
+                .find(|assignment| text(assignment, "harness") == text(mapping, "harness"));
             let row = clean(&format!(
-                "  {}: {} | {}",
+                "  {}: {} | Assigned model {} | effort {} | Configuration: {} | Runtime: {}",
                 text(mapping, "harness"),
                 mapping["path"].as_str().unwrap_or("not bound"),
-                state
+                assignment
+                    .map(|assignment| text(assignment, "model"))
+                    .unwrap_or("not assigned"),
+                assignment
+                    .map(|assignment| text(assignment, "effort"))
+                    .unwrap_or("not assigned"),
+                state,
+                mapping["observed"]["state"]
+                    .as_str()
+                    .unwrap_or("unverified")
             ));
-            if state != "current"
-                && state != "retired"
-                && crate::style::enabled(crate::style::Stream::Out)
-            {
-                say!("\x1b[31m{row}\x1b[0m");
-            } else {
-                say!("{row}");
-            }
+            say!(
+                "{}",
+                match state {
+                    "current" => style::good(Out, &row),
+                    "retired" => style::dim(Out, &row),
+                    "missing" => style::warn(Out, &row),
+                    _ => style::gone(Out, &row),
+                }
+            );
         }
         for source in entries(&agent["sources"]) {
-            say!("  {}", metadata(&candidate(source)?));
+            say!("  Native: {}", metadata(&candidate(source)?));
         }
         for harness in entries(&inventory["harnesses"])
             .iter()
@@ -92,17 +158,25 @@ fn render_inventory(inventory: &Value) -> Result<(), Failure> {
                 .any(|m| text(m, "harness") == text(harness, "harness"))
             {
                 say!(
-                    "  {}: not configured for this agent",
-                    clean(text(harness, "harness"))
+                    "{}",
+                    style::warn(
+                        Out,
+                        &format!(
+                            "  {}: missing; not configured for this agent",
+                            clean(text(harness, "harness"))
+                        )
+                    )
                 );
             }
         }
     }
-    for source in entries(&inventory["unmanaged"]) {
+    let mut unmanaged: Vec<_> = entries(&inventory["unmanaged"]).iter().collect();
+    unmanaged.sort_by_key(|source| text(source, "name"));
+    for source in unmanaged {
         let native = candidate(source)?;
         say!(
             "\n{} | not managed{}",
-            clean(native.name.as_deref().unwrap_or("unnamed")),
+            style::bold(Out, &clean(native.name.as_deref().unwrap_or("unnamed"))),
             if source["detached"] == true {
                 " (detached; excluded from sync)"
             } else {
@@ -110,6 +184,22 @@ fn render_inventory(inventory: &Value) -> Result<(), Failure> {
             }
         );
         say!("  {}", metadata(&native));
+        say!("  Custody: not managed | Configuration: native | Runtime: unverified");
+        for harness in entries(&inventory["harnesses"])
+            .iter()
+            .filter(|h| h["configured"] == true && text(h, "harness") != native.harness)
+        {
+            say!(
+                "{}",
+                style::warn(
+                    Out,
+                    &format!(
+                        "  {}: missing; not configured for this agent",
+                        clean(text(harness, "harness"))
+                    )
+                )
+            );
+        }
         if let Some(problem) = &native.problem {
             say!("  blocked: {}", clean(problem));
         }
@@ -129,6 +219,7 @@ fn render_inventory(inventory: &Value) -> Result<(), Failure> {
             }
         );
     }
+    say!("\nNext: vivac agents sync to choose sources, destinations and assignments, then review changes before applying.");
     io::stdout().flush()?;
     Ok(())
 }
@@ -197,34 +288,96 @@ fn choose_source(cwd: &Path, sources: &[Candidate]) -> Result<Option<Candidate>,
 }
 
 fn choice(question: &str, options: &[Value], default: &str) -> Result<Option<String>, Failure> {
-    let options: Vec<_> = options.iter().filter_map(Value::as_str).collect();
-    say!("Available choices:");
-    for (index, option) in options.iter().enumerate() {
-        say!("  {}. {}", index + 1, clean(option));
+    let mut options: Vec<String> = options
+        .iter()
+        .filter_map(Value::as_str)
+        .map(str::to_owned)
+        .collect();
+    if options.is_empty() {
+        return Ok(
+            line(&format!("{question} [{default}] (q cancels):"))?.map(|answer| {
+                if answer.is_empty() {
+                    default.into()
+                } else {
+                    answer
+                }
+            }),
+        );
     }
-    loop {
-        let Some(answer) = line(&format!(
-            "{question} [{default}] (identifier or number; q cancels):"
-        ))?
-        else {
-            return Ok(None);
-        };
-        let chosen = if answer.is_empty() {
-            default.to_owned()
-        } else if let Some(option) = answer
-            .parse::<usize>()
-            .ok()
-            .and_then(|n| n.checked_sub(1))
-            .and_then(|n| options.get(n))
-        {
-            (*option).to_owned()
-        } else {
-            answer
-        };
-        if !chosen.is_empty() && !chosen.chars().any(char::is_control) {
-            return Ok(Some(chosen));
+    let selected = if let Some(index) = options.iter().position(|option| option == default) {
+        index
+    } else if question == "Model" {
+        options.push(default.to_owned());
+        options.len() - 1
+    } else {
+        options
+            .iter()
+            .position(|option| option == "inherit")
+            .unwrap_or(0)
+    };
+    single(question, &options, selected, question == "Model")
+}
+
+fn effort_options(harness: &Value, model: &str) -> (Vec<Value>, bool) {
+    if let Some(entry) = entries(&harness["model_catalog"]["models"])
+        .iter()
+        .find(|entry| text(entry, "id") == model)
+    {
+        let efforts: Vec<_> = entries(&entry["efforts"])
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        if !efforts.is_empty() {
+            let mut options = vec![Value::String("inherit".into())];
+            for effort in efforts {
+                let option = Value::String(effort.into());
+                if !options.contains(&option) {
+                    options.push(option);
+                }
+            }
+            return (options, true);
         }
     }
+    (entries(&harness["efforts"]).to_vec(), false)
+}
+
+fn show_catalog(harness: &Value) -> Result<(), Failure> {
+    say!("{}", style::dim(Out, &catalog_provenance(harness)));
+    let catalog = &harness["model_catalog"];
+    if !text(catalog, "note").is_empty() {
+        say!("{}", style::warn(Out, &clean(text(catalog, "note"))));
+    }
+    say!("Models are local identifiers; account access is not verified.");
+    Ok(())
+}
+
+fn catalog_provenance(harness: &Value) -> String {
+    let catalog = &harness["model_catalog"];
+    let source = catalog["source"].as_str().unwrap_or("unavailable");
+    let status = catalog["status"].as_str().unwrap_or("unavailable");
+    let mut line = format!("Model catalog: {} | {}", clean(source), clean(status));
+    if !text(catalog, "fetched_at").is_empty() {
+        line.push_str(&format!(
+            " | fetched at {}",
+            clean(text(catalog, "fetched_at"))
+        ));
+    }
+    line
+}
+
+fn show_original(source: &Candidate) -> Result<(), Failure> {
+    say!(
+        "{}",
+        style::bold(
+            Out,
+            &format!(
+                "Original model: {} | effort {}",
+                style::path(Out, &clean(source.model.as_deref().unwrap_or("inherit"))),
+                style::path(Out, &clean(source.effort.as_deref().unwrap_or("inherit")))
+            )
+        )
+    );
+    Ok(())
 }
 
 fn target_sources(inventory: &Value) -> Result<Vec<Candidate>, Failure> {
@@ -357,6 +510,18 @@ fn settings(
 
 pub(super) fn sync(cwd: &Path, _args: &Args) -> Result<i32, Failure> {
     let inventory = workflow::inventory(cwd)?;
+    let located =
+        crate::store::locate(cwd)?.ok_or_else(|| Failure::usage("No vivac tree found."))?;
+    let project = crate::render::project_name(&located.root);
+    let project = if project == "-" {
+        located
+            .lane_dir
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "project".into())
+    } else {
+        project
+    };
     let harnesses: Vec<_> = entries(&inventory["harnesses"])
         .iter()
         .filter(|h| h["configured"] == true)
@@ -426,17 +591,30 @@ pub(super) fn sync(cwd: &Path, _args: &Args) -> Result<i32, Failure> {
     else {
         return cancel();
     };
+    let total = selected.iter().filter(|chosen| **chosen).count();
     let targets = target_sources(&inventory)?;
     let mut items = Vec::new();
+    let mut current = 0;
     for ((agent, name, sources, definition), chosen) in pending.into_iter().zip(selected) {
         if !chosen {
             continue;
         }
-        say!("\nAgent: {}", clean(&name));
+        current += 1;
+        let context = Context {
+            project: project.clone(),
+            name: name.clone(),
+            index: current,
+            total,
+        };
+        context.show("native versions", "choose destinations", 1)?;
         let Some(source) = choose_source(cwd, &sources)? else {
             return cancel();
         };
-        say!("Original: {}", metadata(&source));
+        say!(
+            "Source: {} {}",
+            clean(&source.harness),
+            style::path(Out, &clean(&source.path))
+        );
         say!("The source harness remains configured with its original assignment.");
         let destinations_available: Vec<_> = harnesses
             .iter()
@@ -451,6 +629,13 @@ pub(super) fn sync(cwd: &Path, _args: &Args) -> Result<i32, Failure> {
         let Some(selected) = select("Configure this agent in", &labels, &defaults)? else {
             return cancel();
         };
+        let selected_destinations: Vec<_> = destinations_available
+            .iter()
+            .zip(&selected)
+            .filter(|(_, chosen)| **chosen)
+            .map(|(harness, _)| text(harness, "harness"))
+            .collect();
+        context.show(&source.harness, &selected_destinations.join(", "), 2)?;
         let mut destinations = Vec::new();
         for (harness, selected) in destinations_available.iter().zip(selected) {
             if !selected {
@@ -460,29 +645,62 @@ pub(super) fn sync(cwd: &Path, _args: &Args) -> Result<i32, Failure> {
             let previous = entries(&definition["assignments"])
                 .iter()
                 .find(|a| text(a, "harness") == harness_name);
-            say!(
-                "{} destination; original model {}, effort {}",
-                clean(harness_name),
-                clean(source.model.as_deref().unwrap_or("inherit")),
-                clean(source.effort.as_deref().unwrap_or("inherit"))
-            );
-            say!("Models are local identifiers; account access is not verified.");
+            if selected_destinations.len() > 1 {
+                say!(
+                    "\n{}",
+                    style::bold(
+                        Out,
+                        &style::path(Out, &context.direction(&source.harness, harness_name))
+                    )
+                );
+            }
+            show_original(&source)?;
+            let fresh_harness = workflow::harness_inventory(cwd, harness_name)?;
+            show_catalog(&fresh_harness)?;
             let Some(model) = choice(
                 "Model",
-                entries(&harness["models"]),
+                entries(&fresh_harness["models"]),
                 previous.map(|a| text(a, "model")).unwrap_or("inherit"),
             )?
             else {
                 return cancel();
             };
-            let Some(effort) = choice(
-                "Effort",
-                entries(&harness["efforts"]),
-                previous.map(|a| text(a, "effort")).unwrap_or("inherit"),
-            )?
-            else {
+            let (efforts, known) = effort_options(&fresh_harness, &model);
+            if known {
+                say!(
+                    "{}",
+                    style::dim(
+                        Out,
+                        &format!(
+                            "Effort choices declared by the catalog for {}.",
+                            clean(&model)
+                        )
+                    )
+                );
+            } else {
+                say!("{}", style::warn(Out, &format!("Effort capabilities unknown for {}; showing harness choices, not verified model support.", clean(&model))));
+            }
+            let previous_effort = previous.map(|a| text(a, "effort")).unwrap_or("inherit");
+            if !efforts
+                .iter()
+                .any(|effort| effort.as_str() == Some(previous_effort))
+            {
+                say!("{}", style::warn(Out, &format!("Previous effort {} is not among these choices; choose an effort explicitly.", clean(previous_effort))));
+            }
+            let Some(effort) = choice("Effort", &efforts, previous_effort)? else {
                 return cancel();
             };
+            say!(
+                "{}",
+                style::bold(
+                    Out,
+                    &format!(
+                        "Assignment: model {} | effort {}",
+                        style::path(Out, &clean(&model)),
+                        style::path(Out, &clean(&effort))
+                    )
+                )
+            );
             let Some(settings) = settings(harness, &source, previous)? else {
                 return cancel();
             };
@@ -524,11 +742,26 @@ pub(super) fn sync(cwd: &Path, _args: &Args) -> Result<i32, Failure> {
                 .iter()
                 .find(|t| t.harness == harness_name && t.path == path);
             if let Some(existing) = existing {
+                say!(
+                    "\n{}",
+                    style::warn(
+                        Out,
+                        &format!(
+                            "Existing destination: {} | {}",
+                            context.direction(&source.harness, harness_name),
+                            clean(&path)
+                        )
+                    )
+                );
                 say!("Existing target: {}", metadata(existing));
                 compare(cwd, &[source.clone(), existing.clone()])?;
-                if !confirm(
-                    "Replace this exact current target with the reviewed source? Type yes:",
-                )? {
+                if !confirm(&format!(
+                    "Replace {} at {} in {} with {}'s reviewed source? Type yes:",
+                    clean(&destination_name),
+                    clean(&path),
+                    clean(harness_name),
+                    clean(&name)
+                ))? {
                     return cancel();
                 }
             }
@@ -553,6 +786,7 @@ pub(super) fn sync(cwd: &Path, _args: &Args) -> Result<i32, Failure> {
     if items.is_empty() {
         return cancel();
     }
+    say!("\n{}", style::bold(Out, "Review all selected agents"));
     let Some(why) = line("Reason [Synchronize reviewed native agent configurations] (q cancels):")?
     else {
         return cancel();
@@ -566,13 +800,31 @@ pub(super) fn sync(cwd: &Path, _args: &Args) -> Result<i32, Failure> {
         items,
     };
     let plan = workflow::plan(cwd, &selection)?;
-    say!("\nReviewed plan:");
+    say!("\n{}", style::bold(Out, "Reviewed plan"));
     say!("Reason: {}", clean(&selection.why));
-    for item in &selection.items {
+    for (index, item) in selection.items.iter().enumerate() {
+        let name = targets
+            .iter()
+            .find(|source| source.harness == item.source.harness && source.path == item.source.path)
+            .and_then(|source| source.name.clone())
+            .unwrap_or_else(|| item.agent.clone().unwrap_or_else(|| "agent".into()));
+        let context = Context {
+            project: project.clone(),
+            name,
+            index: index + 1,
+            total: selection.items.len(),
+        };
+        let destinations = item
+            .destinations
+            .iter()
+            .map(|destination| destination.assignment.harness.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        context.show(&item.source.harness, &destinations, 3)?;
         say!(
             "  Preserve {} {} ({})",
             clean(&item.source.harness),
-            clean(&item.source.path),
+            style::path(Out, &clean(&item.source.path)),
             item.agent
                 .as_deref()
                 .map(clean)
@@ -582,7 +834,7 @@ pub(super) fn sync(cwd: &Path, _args: &Args) -> Result<i32, Failure> {
             say!(
                 "    {} {}: model {}, effort {} [{}]",
                 clean(&destination.assignment.harness),
-                clean(&destination.path),
+                style::path(Out, &clean(&destination.path)),
                 clean(&destination.assignment.model),
                 clean(&destination.assignment.effort),
                 if destination.digest.is_some() {
@@ -591,11 +843,21 @@ pub(super) fn sync(cwd: &Path, _args: &Args) -> Result<i32, Failure> {
                     "create only if absent"
                 }
             );
+            say!(
+                "      {}",
+                if destination.digest.is_some() {
+                    style::change(Out, "Replace reviewed current file")
+                } else {
+                    style::good(Out, "Create only if absent")
+                }
+            );
             for (key, value) in &destination.assignment.settings {
                 say!("      {}: {}", clean(key), clean(&value.to_string()));
             }
         }
     }
+    say!("Source unchanged. The complete prompt is transferred to each reviewed destination.");
+    say!("{}", style::dim(Out, "Runtime use remains unverified."));
     if !confirm("Apply this entire reviewed plan? Type yes:")? {
         return cancel();
     }
@@ -643,6 +905,202 @@ pub(super) fn sync(cwd: &Path, _args: &Args) -> Result<i32, Failure> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn catalog_provenance_exposes_cache_time_without_terminal_controls() {
+        let harness = serde_json::json!({"model_catalog": {
+            "source": "local cache", "status": "available", "fetched_at": "2026-10-08T11:04:00Z\n"
+        }});
+        assert_eq!(
+            catalog_provenance(&harness),
+            "Model catalog: local cache | available | fetched at 2026-10-08T11:04:00Z "
+        );
+        assert_eq!(
+            catalog_provenance(&serde_json::json!({})),
+            "Model catalog: unavailable | unavailable"
+        );
+    }
+    #[test]
+    fn effort_choices_follow_selected_model_without_claiming_unknown_capabilities() {
+        let harness = serde_json::json!({
+            "efforts": ["inherit", "low", "high", "max"],
+            "model_catalog": {"source": "local cache", "status": "available", "models": [
+                {"id": "review-model", "label": "Review", "efforts": ["low", "high"]},
+                {"id": "unknown-model", "efforts": []}
+            ]}
+        });
+        let (options, known) = effort_options(&harness, "review-model");
+        assert!(known);
+        assert_eq!(
+            options,
+            vec![
+                Value::from("inherit"),
+                Value::from("low"),
+                Value::from("high")
+            ]
+        );
+        let (options, known) = effort_options(&harness, "unknown-model");
+        assert!(!known);
+        assert_eq!(options, harness["efforts"].as_array().unwrap().clone());
+        assert!(!effort_options(&harness, "custom-model").1);
+    }
+    #[test]
+    fn assignment_prompts_keep_context_and_final_cancellation_preserves_native_files() {
+        sync_trial(&["reviewer"], "agents::human::tests::assignment_prompts_keep_context_and_final_cancellation_preserves_native_files");
+    }
+
+    #[test]
+    fn each_agent_gets_one_step_heading_and_its_own_assignment_summary() {
+        sync_trial(
+            &["reviewer", "scout"],
+            "agents::human::tests::each_agent_gets_one_step_heading_and_its_own_assignment_summary",
+        );
+    }
+
+    fn sync_trial(names: &[&str], test_name: &str) {
+        use std::fs;
+        use std::process::{Command, Stdio};
+        use std::time::{Duration, Instant};
+        const MARKER: &str = "VIVAC_TEST_HUMAN_SYNC_ROOT";
+        if let Some(root) = std::env::var_os(MARKER) {
+            let root = std::path::PathBuf::from(root);
+            let yes = Args::parse(["--yes".into()]).unwrap();
+            assert_eq!(crate::setup::init(&root, &yes).unwrap(), 0);
+            for harness in ["claude-code", "codex"] {
+                let args = Args::parse([harness.into(), "--yes".into()]).unwrap();
+                assert_eq!(crate::setup::dispatch(&root, &args).unwrap(), 0);
+            }
+            fs::create_dir_all(root.join(".claude/agents")).unwrap();
+            let source = |name| {
+                format!("---\nname: {name}\ndescription: Review changes.\nmodel: sonnet\n---\nReview the change.\n")
+            };
+            for name in names {
+                fs::write(root.join(format!(".claude/agents/{name}.md")), source(name)).unwrap();
+            }
+            let before = fs::read(root.join(".vivac/events")).unwrap();
+            assert_eq!(sync(&root, &Args::default()).unwrap(), 0);
+            assert_eq!(before, fs::read(root.join(".vivac/events")).unwrap());
+            for name in names {
+                assert_eq!(
+                    source(name),
+                    fs::read_to_string(root.join(format!(".claude/agents/{name}.md"))).unwrap()
+                );
+                assert!(!root.join(format!(".codex/agents/{name}.toml")).exists());
+            }
+            return;
+        }
+        struct Scratch(std::path::PathBuf);
+        impl Drop for Scratch {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let scratch =
+            Scratch(std::env::temp_dir().join(format!("vivac-human-sync-{}", crate::id::ulid())));
+        fs::create_dir_all(&scratch.0).unwrap();
+        let output_file = scratch.0.join("output.txt");
+        let error_file = scratch.0.join("error.txt");
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", test_name, "--nocapture"])
+            .env(MARKER, &scratch.0)
+            .env("VIVAC_HOME", scratch.0.join("home"))
+            .env("NO_COLOR", "1")
+            .stdin(Stdio::piped())
+            .stdout(fs::File::create(&output_file).unwrap())
+            .stderr(fs::File::create(&error_file).unwrap())
+            .spawn()
+            .unwrap();
+        let script = format!(
+            "\n{}\nno\n",
+            "\ncustom-model\nhigh\n\n\n".repeat(names.len())
+        );
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(script.as_bytes())
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break status;
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("Human sync test exceeded its deadline.");
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        let output = fs::read_to_string(output_file).unwrap();
+        assert!(
+            status.success(),
+            "{output}\n{}",
+            fs::read_to_string(error_file).unwrap()
+        );
+        assert_eq!(
+            output.matches("STEP 1/3: Source & destinations").count(),
+            names.len(),
+            "{output}"
+        );
+        assert_eq!(
+            output.matches("STEP 2/3: Assignments").count(),
+            names.len(),
+            "{output}"
+        );
+        assert_eq!(
+            output.matches("STEP 3/3: Reviewed changes").count(),
+            names.len(),
+            "{output}"
+        );
+        for (index, name) in names.iter().enumerate() {
+            assert!(
+                output.contains(&format!(
+                    "Agent {}/{}: {name} | claude-code -> codex | STEP 2/3: Assignments",
+                    index + 1,
+                    names.len()
+                )),
+                "{output}"
+            );
+            assert!(
+                output.contains(&format!(
+                    ".codex/agents/{name}.toml: model custom-model, effort high"
+                )),
+                "{output}"
+            );
+        }
+        assert_eq!(
+            output
+                .matches("Original model: sonnet | effort inherit")
+                .count(),
+            names.len(),
+            "{output}"
+        );
+        assert_eq!(
+            output
+                .matches("Assignment: model custom-model | effort high")
+                .count(),
+            names.len(),
+            "{output}"
+        );
+        assert!(
+            output.contains("Cancelled. No agent changes were applied."),
+            "{output}"
+        );
+        assert!(!output.contains('\u{1b}'), "{output}");
+    }
+    #[test]
+    fn assignment_heading_keeps_agent_direction_and_step_in_plain_text() {
+        let context = Context {
+            project: "ridge".into(),
+            name: "ridge-gate".into(),
+            index: 2,
+            total: 4,
+        };
+        assert_eq!(
+            context.heading("claude-code", "codex", 2),
+            "ridge | Agent 2/4: ridge-gate | claude-code -> codex | STEP 2/3: Assignments"
+        );
+    }
     #[test]
     fn original_metadata_cannot_inject_terminal_controls() {
         let source = Candidate {

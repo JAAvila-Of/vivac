@@ -1,5 +1,6 @@
 //! Harness formats stay behind a capability boundary.
 
+pub use super::catalog::ModelCatalog;
 use super::types::{contract_text, Assignment, Candidate, Definition};
 use crate::failure::Failure;
 use serde_json::Value;
@@ -17,6 +18,9 @@ pub trait Adapter {
     fn directory(&self) -> &str;
     fn extension(&self) -> &str;
     fn capabilities(&self) -> &[&str];
+    fn model_catalog(&self, _root: &Path) -> ModelCatalog {
+        ModelCatalog::unavailable()
+    }
     fn inspect(&self, root: &Path, relative: &str) -> Result<Candidate, Failure>;
     fn render(
         &self,
@@ -344,6 +348,9 @@ const CLAUDE_SETTINGS: &[&str] = &[
 
 pub struct Codex;
 impl Adapter for Codex {
+    fn model_catalog(&self, root: &Path) -> ModelCatalog {
+        super::catalog::codex(root)
+    }
     fn prompt_source(&self, text: &str) -> Result<(String, Option<String>), Failure> {
         let table = toml::from_str::<toml::Table>(text)
             .map_err(|_| Failure::usage("Native prompt could not be read."))?;
@@ -481,6 +488,9 @@ impl Adapter for Codex {
 
 pub struct ClaudeCode;
 impl Adapter for ClaudeCode {
+    fn model_catalog(&self, root: &Path) -> ModelCatalog {
+        super::catalog::claude(root)
+    }
     fn prompt_source(&self, text: &str) -> Result<(String, Option<String>), Failure> {
         let rest = text
             .strip_prefix("---\r\n")

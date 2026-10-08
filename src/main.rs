@@ -141,7 +141,7 @@ const USAGE: &str = r#"vivac - provenance of work
   Agent custody
 
     vivac agents [--json]                    inventory across project harnesses
-    vivac agents sync                       guided review in a terminal
+    vivac agents sync                       sources/destinations, assignments, review
     vivac agents inventory                  read-only machine inventory
     vivac agents plan --selection <json|file>  preview a complete selection
     vivac agents apply --selection <json|file> --plan-digest <sha256> --yes
@@ -176,6 +176,9 @@ const USAGE: &str = r#"vivac - provenance of work
     Explicit operations and --json return JSON. Add, set, adopt and retire accept
     --parent N and --against "p12: <why>". Without a terminal sync previews;
     --dry-run always writes nothing, including when --yes is present.
+    Guided sync shows the original model and effort, local catalog choices and
+    configuration differences. It applies only the plan you review and confirm.
+    Setup connects harnesses; it does not import or synchronize their agents.
 
   Session
 

@@ -25,6 +25,10 @@ vivac agents
 vivac agents sync
 ```
 
+Setup connects each harness and reports its native agent count; it does not
+import or synchronize agents. Inventory also shows native agents in harnesses
+that are not set up yet. Set up a destination harness before selecting it in sync.
+
 The inventory shows native agents, custody identities, models, efforts and
 configuration differences across harnesses. Listing does not import anything.
 In a terminal, sync guides you through sources, destination harnesses, explicit
@@ -32,7 +36,21 @@ model assignments, settings and a complete review before applying. Use Space
 to toggle destinations and Enter to continue; terminals without console support
 offer numbered choices. Cancel or end input before confirmation to write nothing.
 The original model and effort stay visible. Model suggestions come from local
-configuration; they do not assert account availability or provider equivalence.
+harness metadata and configuration; they do not assert account availability or
+provider equivalence. The selectors show the catalog's source and status.
+Codex's local model cache supplies visible models and their individual effort
+options. Sync reads these options again before each destination's model picker,
+and both interfaces show the cache update time when available. Each console step
+has one heading per agent; selected assignments are summarized before settings.
+Claude Code configuration supplies declared model choices; when effort
+support cannot be discovered, the selector explicitly says it is unverified.
+Missing or unreadable metadata leaves existing assignments and custom model
+entry available. Discovery starts no harness process and makes no network request.
+
+Console colors use vivac's existing palette: cyan marks the active choice and
+context, green marks selected destinations, and yellow or red reinforces pending
+changes or conflicts. Text and selection marks carry the same meaning without
+color. `NO_COLOR` and `TERM=dumb` retain plain output.
 
 For example, three existing Claude Code agents appear as unmanaged. Select them
 in sync, select Codex as the destination and choose its model and effort. Vivac
@@ -145,9 +163,11 @@ This keeps the identity and other harness assignments. A changed destination
 that is not the source remains a conflict; import does not infer an identity
 from a matching name or silently take over another agent's path.
 
-## Discover and adopt through the CLI
+## Advanced discovery and custody operations
 
-Run `vivac agents scan --json` in the project's lane folder. It reads project
+For scripted discovery, use `vivac agents scan --json` in the project's lane
+folder. Guided sync already discovers these agents; a separate scan is optional.
+Scan reads project
 agent files in `.codex/agents/` and `.claude/agents/`, including agents added
 after setup. It reports metadata, fingerprints and unsupported fields;
 it does not adopt anything, execute a harness or return prompt bodies.

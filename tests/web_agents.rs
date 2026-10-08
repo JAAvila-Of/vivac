@@ -133,6 +133,12 @@ fn agents_page_inventory_and_post_guards_share_the_backend() {
     assert!(page.starts_with("HTTP/1.1 200"), "{page}");
     assert!(page.contains("connect-src 'self'"));
     assert!(page.contains("Compare configurations"));
+    assert!(page.contains("id=\"editor-fields\""));
+    assert!(page.contains("id=\"agent-context\""));
+    assert!(page.contains("aria-label=\"Synchronization steps\""));
+    assert!(page.contains("id=\"source-stage\""));
+    assert!(page.contains("id=\"assignment-stage\""));
+    assert!(!page.contains("Design preview"));
     let inventory = server.call("GET", &format!("{path}/inventory"), "", "");
     assert!(inventory.starts_with("HTTP/1.1 200"));
     assert!(inventory.contains("\"harnesses\""));
