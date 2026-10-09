@@ -64,6 +64,47 @@ They do not launch Claude Code or Codex and cannot prove model reception.
 Passing synthetic `source: compact` proves producer behavior for that input,
 not that a real compaction triggered the hook.
 
+## Observed reception on Windows
+
+Local checks on 2026-10-09 used a development checkout reporting Vivac 0.19.3,
+Claude Code 2.1.294 and Codex 0.162.0. Disposable projects and harness homes
+contained invented instructions. A loopback provider received each request and
+returned an intentional HTTP 400 before inference. These checks establish
+context constructed by the harness, not understanding or compliance by a model.
+
+| Harness and operation | Observed request context |
+|---|---|
+| Claude Code, small startup and resume | Opening sentinels arrived; resume included an instruction added after startup |
+| Codex `exec`, small startup and resume | Opening sentinels arrived; resume included an instruction added after startup |
+| Codex app-server, `thread/start` with `sessionStartSource: clear` followed by a turn | A fresh sentinel arrived; the opening receipt recorded `source: clear` |
+| Claude Code, extensive opening | The hook emitted all 63 numbered title sentinels; the request contained only 2 |
+| Codex `exec`, extensive opening | The request contained 11 of 63 numbered title sentinels, from the beginning and end; a saved hook output contained all 63 |
+
+The extensive Claude fixture also included four synthetic pillars. Their
+titles and the instruction to consult `vivac rules` arrived, while the custody
+and work capture guidance did not. The extensive Codex fixture had one
+synthetic pillar and 62 constraints, with no active focus. Neither case
+establishes delivery for a deeply nested focus or the original project's
+instructions. No check established that a model read the saved output or
+consulted rule bodies. The clear check exercised the app-server API, not the
+interactive `/clear` command. Actual compaction remains unverified.
+
+A separate Claude consumer check used a deterministic test hook with three
+markers in ASCII text. Both plain stdout and JSON `additionalContext` delivered
+all three at 9,900 characters; at 10,100 characters, both delivered only the
+first marker. The local receiver validated complete HTTP bodies in every case.
+This demonstrates loss under those conditions and that JSON alone did not
+avoid it; it does not establish the internal cause or an exact universal cutoff.
+
+Codex's child processes needed the normal Windows `COMSPEC` and `PATHEXT`
+values. Omitting them from the isolated environment made trusted handlers
+fail. With that environment corrected, `exec` received the opening using
+`--dangerously-bypass-hook-trust`; app-server received it after the fixture's
+handlers were reviewed through `/hooks`. In this version, accepting the
+bypass flag before `app-server` did not make its untrusted handlers execute.
+Do not infer execution from argument acceptance or change personal trust
+settings to reproduce an isolated check.
+
 ## Check a real harness separately
 
 Use a disposable project containing only invented sentinels. Keep instruction
@@ -87,6 +128,10 @@ budget cannot exclude this case. Check for a preview and whether required
 instructions reached the model; a path alone does not show that it read the
 saved text. See the [Codex hook reference](https://learn.chatgpt.com/docs/hooks#large-hook-output).
 For Claude Code, see its [SessionStart reference](https://code.claude.com/docs/en/hooks#sessionstart).
+Its [JSON output reference](https://code.claude.com/docs/en/hooks#json-output)
+also documents a 10,000-character limit for plain stdout and individual
+context fields, including `hookSpecificOutput.additionalContext`. Switching
+to JSON alone does not establish complete delivery of oversized context.
 
 Finally, request a harmless decision whose acceptance depends on a sentinel
 in a rule body. Check that the agent retrieves `vivac rules` before deciding
