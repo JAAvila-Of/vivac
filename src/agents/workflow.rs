@@ -39,6 +39,13 @@ pub(crate) struct Comparison {
     pub references: Vec<NativeRef>,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AssistRequest {
+    pub references: Vec<NativeRef>,
+    pub harnesses: Vec<String>,
+}
+
 pub(crate) fn inventory(cwd: &Path) -> Result<Value, Failure> {
     let (located, lane, ledger) = read_ledger(cwd)?;
     let root = &located.lane_dir;
@@ -156,6 +163,83 @@ pub(crate) fn compare(cwd: &Path, refs: &[NativeRef]) -> Result<Value, Failure> 
         sources.push(json!({"harness":source.harness,"path":source.path,"digest":source.digest,"body":body,"metadata":metadata}));
     }
     Ok(json!({"sources":sources,"historical_base":false}))
+}
+
+pub(crate) fn assist(cwd: &Path, request: &AssistRequest) -> Result<Value, Failure> {
+    if request.references.is_empty() || request.references.len() > 32 {
+        return Err(Failure::usage("Assist takes one to 32 native references."));
+    }
+    if request.harnesses.is_empty() {
+        return Err(Failure::usage("Assist requires destination harnesses."));
+    }
+    let (located, lane, ledger) = read_ledger(cwd)?;
+    let root = &located.lane_dir;
+    let mut selected = HashSet::new();
+    let mut harnesses = Vec::new();
+    for harness in &request.harnesses {
+        let native = adapter(harness)?;
+        if !selected.insert(harness) {
+            return Err(Failure::usage("Select each destination harness once."));
+        }
+        if !crate::setup::doctor::configured(root, harness) {
+            return Err(Failure::usage(
+                "Set up the destination harness before assistance.",
+            ));
+        }
+        harnesses.push(harness_value(root, &ledger, native.as_ref())?);
+    }
+    let mut paths = HashSet::new();
+    let mut size = 0;
+    let mut sources = Vec::new();
+    for source in &request.references {
+        if !paths.insert((source.harness.clone(), source.path.to_ascii_lowercase())) {
+            return Err(Failure::usage("Select each native reference once."));
+        }
+        let key = (lane.clone(), source.harness.clone(), source.path.clone());
+        if ledger.detached.iter().any(|target| {
+            target.0 == key.0 && target.1 == key.1 && target.2.eq_ignore_ascii_case(&key.2)
+        }) {
+            return Err(Failure::usage(
+                "Detached sources require explicit import before assistance.",
+            ));
+        }
+        let agent = owner(&ledger, &key)
+            .map(|binding| find_agent(&ledger, &binding.agent))
+            .transpose()?;
+        if agent.is_some_and(|agent| agent.definition.retired) {
+            return Err(Failure::usage("This agent is retired."));
+        }
+        let (metadata, body, _) = reference(root, source)?;
+        size += body.len();
+        if size > 4 * 1024 * 1024 {
+            return Err(Failure::usage("Assistance exceeds its 4 MiB limit."));
+        }
+        let mut destinations = Vec::new();
+        for harness in &request.harnesses {
+            if *harness == source.harness {
+                continue;
+            }
+            let native = adapter(harness)?;
+            let unrepresentable_settings: Vec<_> = metadata
+                .settings
+                .keys()
+                .filter(|key| !native.capabilities().contains(&key.as_str()))
+                .collect();
+            destinations.push(
+                json!({"harness":harness,"unrepresentable_settings":unrepresentable_settings}),
+            );
+        }
+        if destinations.is_empty() {
+            return Err(Failure::usage(
+                "Each source requires a destination other than its harness.",
+            ));
+        }
+        sources.push(json!({"reference":source,"metadata":metadata,"body":body,
+            "agent":agent.map(|agent| &agent.agent),"revision":agent.map(|agent| &agent.revision),"destinations":destinations}));
+    }
+    Ok(
+        json!({"applied":false,"proposer":"session-model","runtime_verified":false,"sources":sources,"harnesses":harnesses}),
+    )
 }
 
 struct PreparedItem {

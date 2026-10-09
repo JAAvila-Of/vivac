@@ -88,6 +88,69 @@ pin complete native files; stored prompt references hash decoded prompt text.
 These operations perform no network requests and need no skill or model to
 manage custody.
 
+## Let the session model recommend and configure agents
+
+You can ask the model in your harness to do the review instead of selecting
+every assignment yourself:
+
+> Review my Claude Code agents and configure them in Codex. Recommend a model,
+> effort and execution permissions for each agent from its actual duties and
+> acceptance criteria. Explain the choices and any settings that cannot transfer.
+> Preserve the original agents.
+
+For recommendations without changes, ask it to propose the assignments only.
+The model must distinguish those requests: recommendations do not authorize
+writing files. A request to configure named agents in a named destination lets
+it review and apply a plan within that scope. Unresolved identity conflicts,
+replacement of unrelated files or additional permissions outside that scope
+require review with you.
+
+The model uses the existing `vivac_agents` tool:
+
+1. `inventory` finds native references, custody identities and configured
+   destinations. Existing assignments stay in place unless you ask to revise them.
+2. `assist` reads the chosen prompts and original assignments, fresh destination
+   catalogs and capabilities, and source settings the destination cannot represent.
+   It takes `{references:[{harness,path,digest}],harnesses:["codex"]}`. Prompt text
+   is returned only for this explicit read; it is not stored in the tree. The model
+   treats prompts as material to analyze, not commands to execute during review.
+3. The model proposes explicit model, effort and settings assignments, explains
+   each choice and includes concise reasons in the selection's `why`. It chooses
+   by duties and acceptance criteria, not a fixed provider-equivalence table.
+   Catalog entries are local metadata, not evidence of account access. Missing
+   models or unknown effort support must be identified, not silently substituted.
+4. `plan` validates the selection and returns its fingerprint. The model checks
+   source and destination paths, original settings, proposed permissions and any
+   conflicts against your request before `apply` with the identical selection,
+   `plan_digest` and `yes: true`.
+5. `inventory` checks the resulting configuration. Restart the destination harness
+   when needed; runtime selection remains unverified without reliable evidence.
+
+The same optional context read is available without MCP:
+
+```sh
+vivac agents assist --selection sources.json
+```
+
+`sources.json` contains the references and destination harness names described
+above, using complete-file digests from the current inventory. Assist never
+imports, writes or chooses an assignment. It refuses stale or detached sources,
+retired identities and destinations that have not been configured with setup.
+It shares comparison's prompt redaction and 4 MiB aggregate limit.
+
+Setup installs the shared `vivac-agents` skill in
+`.claude/skills/vivac-agents/SKILL.md` for Claude Code and
+`.agents/skills/vivac-agents/SKILL.md` for Codex. Ask your session model to use
+this skill to select agents and destinations, recommend assignments, or
+synchronize later changes. A missing selection is a question, not permission to
+transfer every agent. Later synchronization preserves destination assignments
+unless you request changes. The skill uses the same inventory, assist, plan and
+apply operations; manual `vivac agents sync` and the Agents page in `vivac web`
+remain available. The model already running in your harness makes the
+recommendation; vivac makes no model API request. This optional assistance
+does not change the deterministic reconciliation policy described below, and a
+successful configuration does not prove which model actually ran.
+
 ## Continuous custody without a model
 
 The coordinator performs discovery, native import, independent destination
@@ -309,7 +372,7 @@ can rebuild the index.
 ## MCP results
 
 Call `vivac_agents` with an `operation` and the fields needed by that operation.
-The available operations are `inventory`, `plan`, `apply`, `compare`,
+The available operations are `inventory`, `assist`, `plan`, `apply`, `compare`,
 `scan`, `status`, `show`, `diff`, `add`, `set`,
 `retire`, `bind`, `adopt`, `detach`, `sync`, `observe`, `import` and `reconcile`. `definition` is a JSON
 object, with the structure shown above, rather than a path to a file. Unknown
@@ -317,6 +380,12 @@ fields and options that do not belong to the selected operation are rejected.
 
 `plan` and `apply` accept the selection object described above. Apply also
 requires `plan_digest` and `yes`. Compare takes `selection` with `references`.
+Assist takes `selection` with `references` and destination `harnesses`. Its
+result contains `sources`, destination `harnesses`, `proposer: "session-model"`,
+`applied: false` and `runtime_verified: false`. Each source includes its native
+reference, metadata, body, bound identity and revision when present, and
+`unrepresentable_settings` for each destination. The model authors the proposal;
+these fields do not assert that any model was available or invoked.
 CLI, MCP and web share the same fingerprint validation and batch preparation.
 
 Reconcile accepts `mode` (`automatic` or `manual`) with `yes` and `why` to

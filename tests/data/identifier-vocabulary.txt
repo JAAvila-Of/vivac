@@ -45,6 +45,7 @@ age
 agent
 agents
 ages
+aggregate
 aggregates
 ago
 agree
@@ -133,6 +134,8 @@ assertions
 assign
 assignment
 assignments
+assist
+assistance
 assume
 assumed
 assuming
@@ -301,6 +304,7 @@ ceil
 cell
 centres
 cfg
+ch
 chain
 chains
 change
@@ -588,6 +592,7 @@ dir
 direct
 direction
 directly
+directories
 directory
 dirty
 disable
@@ -642,6 +647,7 @@ dual
 due
 dumb
 dump
+duplicate
 duration
 during
 duties
@@ -961,6 +967,7 @@ holder
 holds
 hollow
 home
+homonym
 homonyms
 honor
 hook
@@ -986,6 +993,7 @@ icanon
 icons
 id
 id2
+idempotence
 idempotent
 ident
 identical
@@ -1053,8 +1061,10 @@ invalid
 invalidates
 invariant
 invariants
+inventories
 inventory
 invents
+invitation
 io
 ioctl
 ip
@@ -1080,6 +1090,7 @@ joins
 js
 json
 judged
+junction
 just
 jwt
 keep
@@ -1240,6 +1251,7 @@ message
 messy
 metadata
 method
+mib
 mid
 middle
 midnight
@@ -1315,6 +1327,7 @@ node
 nodes
 non
 none
+nonempty
 nonexistent
 nonzero
 noon
@@ -1537,6 +1550,7 @@ prefixes
 prepare
 prepared
 present
+presentation
 preserve
 preserved
 preserves
@@ -1575,6 +1589,7 @@ pronoun
 prop
 properties
 property
+proposal
 proposing
 prose
 protocol
@@ -1593,6 +1608,7 @@ push
 pushed
 pushes
 pushing
+put
 px
 py
 python
@@ -1666,6 +1682,7 @@ references
 refname
 refold
 refresh
+refreshed
 refs
 refusal
 refusal3
@@ -1683,6 +1700,7 @@ regional
 registered
 registers
 registry
+reinstalled
 reject
 rejected
 rejections
@@ -1775,6 +1793,7 @@ retirement
 retried
 retry
 return
+returning
 returns
 rev
 revalidate
@@ -1900,6 +1919,7 @@ servers
 serves
 serving
 session
+sessions
 set
 sets
 settings
@@ -2079,6 +2099,7 @@ sweep
 switch
 switches
 symlink
+symlinks
 sync
 system
 t2
@@ -2248,10 +2269,12 @@ unknown
 unlock
 unlocked
 unmanaged
+unmarked
 unreachable
 unreadable
 unrecognised
 unrelated
+unrepresentable
 unrestorable
 unrestored
 unsafe
@@ -2273,6 +2296,7 @@ up
 update
 updated
 updates
+upgraded
 upper
 uppercase
 upto

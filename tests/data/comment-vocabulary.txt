@@ -265,6 +265,7 @@ authorised
 authority
 authorize
 authorized
+authors
 auto
 automatic
 automatically
@@ -2848,6 +2849,7 @@ propagates
 proper
 properly
 property
+proposal
 propose
 proposed
 proposes
