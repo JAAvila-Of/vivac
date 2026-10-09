@@ -445,7 +445,7 @@ pub(super) fn skill_text() -> String {
 /// been taken over -- `text` with the marker line and its newline removed.
 /// `None` when there is no frontmatter or no line right after it: `t565`
 /// §7.4's "any other case" for a skill with no marker at all.
-fn extract_marker(text: &str) -> Option<(String, String)> {
+pub(super) fn extract_marker(text: &str) -> Option<(String, String)> {
     let lines: Vec<&str> = text.split('\n').collect();
     if lines.first() != Some(&"---") {
         return None;
@@ -638,8 +638,12 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     let settings = read_json(&paths.settings);
     let mcp = read_json(&paths.mcp);
     let skill_raw = std::fs::read_to_string(&paths.skill).ok();
+    let agents_skill = super::agents_skill::Skill::read(here, super::agents_skill::CLAUDE_LABEL);
 
     let mut conflicts: Vec<String> = Vec::new();
+    if let Some(conflict) = agents_skill.conflict() {
+        conflicts.push(conflict);
+    }
     if let Some((line, col)) = settings.parse_error {
         conflicts.push(unreadable_conflict(SETTINGS_LABEL, line, col));
     } else if settings.not_object {
@@ -703,7 +707,8 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         && !stop_missing
         && !prompt_missing
         && !mcp_missing
-        && !skill_missing_or_replaceable;
+        && !skill_missing_or_replaceable
+        && !agents_skill.needs_write();
 
     let mut plan_block = heading(Stream::Out, "vivac setup claude-code", here);
     if let Some(warning) = git_root_warning(here) {
@@ -723,6 +728,7 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
             prompt_missing,
             &mcp_server_state,
             &skill_file_state,
+            &agents_skill,
         ),
     ));
 
@@ -841,6 +847,7 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         ));
     }
 
+    agents_skill.write(&mut writes);
     super::commit(&writes)?;
 
     // `d723` piece B: this run never touched the tree, so what it wrote is
@@ -903,6 +910,7 @@ fn plan_items(
     prompt_missing: bool,
     mcp_server_state: &McpState,
     skill_file_state: &SkillState,
+    agents_skill: &super::agents_skill::Skill,
 ) -> Vec<PlanItem> {
     let mut items = Vec::new();
 
@@ -967,6 +975,7 @@ fn plan_items(
         SkillState::Conflict => unreachable!("a skill conflict never reaches the plan"),
     };
     items.push(PlanItem::new(skill_verb, SKILL_LABEL, skill_what));
+    items.push(agents_skill.plan());
 
     items
 }
@@ -1254,7 +1263,7 @@ fn tree_kept_paragraph(actor: &str) -> String {
 }
 
 const FILES_PARAGRAPH: &str =
-    "The hooks, the server and the skill are plain files in this project: commit them if \
+    "The hooks, the server and the skills are plain files in this project: commit them if \
      everyone who works here uses vivac, and keep them out of version control if only you \
      do. .vivac/ is never committed: it is this machine's record, and a copy of it in \
      every clone would diverge from the others. Its own .gitignore keeps it out.";
@@ -1323,6 +1332,7 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
     let settings = read_json(&paths.settings);
     let mcp = read_json(&paths.mcp);
     let skill_raw = std::fs::read_to_string(&paths.skill).ok();
+    let agents_skill = super::agents_skill::Skill::read(here, super::agents_skill::CLAUDE_LABEL);
 
     let mut conflicts: Vec<String> = Vec::new();
     if let Some((line, col)) = settings.parse_error {
@@ -1364,7 +1374,12 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
     let prompt_ours = matches!(prompt_hook_state, HookState::Exact);
     let mcp_ours = matches!(mcp_server_state, McpState::Ours);
 
-    let nothing_to_undo = !start_ours && !stop_ours && !prompt_ours && !mcp_ours && !skill_ours;
+    let nothing_to_undo = !start_ours
+        && !stop_ours
+        && !prompt_ours
+        && !mcp_ours
+        && !skill_ours
+        && !agents_skill.ours();
     if nothing_to_undo {
         outln!("Nothing to undo: none of what setup writes is here.");
         return Ok(0);
@@ -1441,6 +1456,7 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
         settings_item,
         PlanItem::new(mcp_verb, MCP_LABEL, mcp_what),
         PlanItem::new(skill_verb, SKILL_LABEL, skill_what),
+        agents_skill.undo_plan(),
     ];
     let mut s = heading(Stream::Out, "vivac setup claude-code --undo", here);
     s.push_str(&render_items(Stream::Out, &items));
@@ -1538,7 +1554,9 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
         ));
     }
 
+    agents_skill.delete(&mut writes);
     super::commit(&writes)?;
+    agents_skill.clean_empty_directory();
 
     // Best-effort, and only once the commit above is known to have
     // succeeded: an empty directory left behind costs nothing to leave for

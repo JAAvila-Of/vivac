@@ -642,7 +642,7 @@ fn validate_args(args: &Args) -> Result<&str, Failure> {
         .ok_or_else(|| Failure::usage("Agent operation required."))?;
     let (takes, allowed): (usize, &[&str]) = match command {
         "inventory" => (1, &["json"]),
-        "plan" | "compare" => (1, &["selection", "json"]),
+        "plan" | "compare" | "assist" => (1, &["selection", "json"]),
         "apply" => (1, &["selection", "plan-digest", "yes", "json"]),
         "scan" => (1, &["harness", "json"]),
         "status" | "diff" => (2, &["harness", "json"]),
@@ -725,7 +725,7 @@ fn validate_args(args: &Args) -> Result<&str, Failure> {
             return Err(Failure::usage("Native import requires --yes."));
         }
     }
-    if matches!(command, "plan" | "apply" | "compare") {
+    if matches!(command, "plan" | "apply" | "compare" | "assist") {
         required(args, "selection")?;
     }
     if command == "apply" {
@@ -818,6 +818,13 @@ fn execute(cwd: &Path, args: &Args) -> Result<(Value, i32), Failure> {
     let command = validate_args(args)?;
     match command {
         "inventory" => return workflow::inventory(cwd).map(|value| (value, 0)),
+        "assist" => {
+            return workflow::assist(
+                cwd,
+                &workflow::selection(cwd, required(args, "selection")?)?,
+            )
+            .map(|value| (value, 0))
+        }
         "plan" => {
             return workflow::plan(
                 cwd,

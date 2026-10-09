@@ -143,6 +143,8 @@ const USAGE: &str = r#"vivac - provenance of work
     vivac agents [--json]                    inventory across project harnesses
     vivac agents sync                       sources/destinations, assignments, review
     vivac agents inventory                  read-only machine inventory
+    vivac agents assist --selection <json|file>
+                                              read pinned prompts and destination catalogs
     vivac agents plan --selection <json|file>  preview a complete selection
     vivac agents apply --selection <json|file> --plan-digest <sha256> --yes
                                               apply the exact reviewed plan

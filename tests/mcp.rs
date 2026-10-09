@@ -2935,7 +2935,7 @@ fn agent_review_schema_exposes_shared_plans_without_more_tools() {
         .find(|tool| tool["name"] == "vivac_agents")
         .unwrap();
     let schema = &tool["inputSchema"];
-    for operation in ["inventory", "plan", "apply", "compare"] {
+    for operation in ["inventory", "plan", "apply", "compare", "assist"] {
         assert!(schema["properties"]["operation"]["enum"]
             .as_array()
             .unwrap()
@@ -2944,7 +2944,7 @@ fn agent_review_schema_exposes_shared_plans_without_more_tools() {
     let choices = schema["properties"]["selection"]["oneOf"]
         .as_array()
         .unwrap();
-    assert_eq!(choices.len(), 2);
+    assert_eq!(choices.len(), 3);
     for choice in choices {
         assert_eq!(choice["additionalProperties"], false);
     }
@@ -2960,6 +2960,7 @@ fn agent_review_schema_exposes_shared_plans_without_more_tools() {
         json!({"operation":"apply","selection":{"why":"Review","items":[]},"plan_digest":"stale"}),
         json!({"operation":"compare","selection":{"references":[],"unknown":true}}),
         json!({"operation":"inventory","selection":{"references":[]}}),
+        json!({"operation":"assist","selection":{"references":[],"harnesses":["codex"]},"yes":true}),
     ] {
         let refusal = custody(&mut s, arguments);
         assert!(refusal["exit_code"].as_i64().unwrap() > 1, "{refusal}");
@@ -3024,6 +3025,63 @@ fn agent_review_mcp_and_cli_share_comparison_plan_and_safe_application() {
         Some("Inspect the complete requested scope.\n```text\nPreserve literal examples.\n```\n")
     );
     assert!(!c.log().contains("Inspect the complete requested scope."));
+    assert!(!c.log().contains("Preserve literal examples."));
+}
+
+#[test]
+fn agent_assistance_reads_context_then_applies_the_sessions_explicit_proposal() {
+    let c = seeded("custody-assistance");
+    let mut server = hello(&c);
+    let mut selection = custody_selection(&c, &mut server);
+    let request = json!({"references":[selection["items"][0]["source"]],"harnesses":["codex"]});
+    let before = c.log();
+    let context = custody(
+        &mut server,
+        json!({"operation":"assist","selection":request}),
+    );
+    assert_eq!(context["exit_code"], 0, "{context}");
+    assert_eq!(context["result"]["applied"], false);
+    assert_eq!(context["result"]["proposer"], "session-model");
+    assert_eq!(context["result"]["runtime_verified"], false);
+    assert_eq!(
+        context["result"]["sources"][0]["metadata"]["model"],
+        "sonnet"
+    );
+    assert!(context["result"]["sources"][0]["body"]
+        .as_str()
+        .unwrap()
+        .contains("Preserve literal examples."));
+    let (output, code) = c.run(&["agents", "assist", "--selection", &request.to_string()]);
+    assert_eq!(code, 0, "{output}");
+    let cli: Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(cli["sources"], context["result"]["sources"]);
+    assert_eq!(cli["harnesses"][0]["harness"], "codex");
+    assert_eq!(before, c.log());
+    assert!(!c.0.join(".codex/agents/reviewer.toml").exists());
+
+    // The session authors the proposal; the binary never chooses a model.
+    selection["why"] = json!(
+        "Use the explicitly chosen model with high effort and read-only access for scoped review."
+    );
+    selection["items"][0]["destinations"][0]["assignment"]["model"] = json!("review-model");
+    let plan = custody(
+        &mut server,
+        json!({"operation":"plan","selection":selection}),
+    );
+    assert_eq!(plan["exit_code"], 0, "{plan}");
+    assert_eq!(before, c.log());
+    let applied = custody(
+        &mut server,
+        json!({"operation":"apply","selection":selection,
+        "plan_digest":plan["result"]["plan_digest"],"yes":true}),
+    );
+    assert_eq!(applied["exit_code"], 0, "{applied}");
+    let native = std::fs::read_to_string(c.0.join(".codex/agents/reviewer.toml")).unwrap();
+    let document: toml::Table = toml::from_str(&native).unwrap();
+    assert_eq!(document["model"].as_str(), Some("review-model"));
+    assert_eq!(document["model_reasoning_effort"].as_str(), Some("high"));
+    assert_eq!(document["sandbox_mode"].as_str(), Some("read-only"));
+    assert!(c.log().contains("Use the explicitly chosen model"));
     assert!(!c.log().contains("Preserve literal examples."));
 }
 

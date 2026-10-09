@@ -12,6 +12,8 @@
 //! recording work, which is for whoever has a terminal, the same reason
 //! `abandon` and `restore` stay off that server.
 
+mod agents_notice;
+mod agents_skill;
 mod claude_code;
 mod codex;
 pub(crate) mod doctor;
@@ -110,13 +112,19 @@ pub fn dispatch(cwd: &Path, a: &Args) -> Result<i32, Failure> {
         Harness::ClaudeCode => claude_code::run(cwd, a),
         Harness::Codex => codex::run(cwd, a),
     }?;
-    if code == 0 && !a.has("undo") {
-        if let Some(adapter) = crate::agents::adapters::get(h.word()) {
-            match adapter.discover(cwd) {
-                Ok(files) => crate::output::outln!("  Agent inventory: {} project file(s) in {}. Run vivac agents to see agents across harnesses, then vivac agents sync to choose sources, destinations, models and efforts and review changes before applying. Setup does not import or synchronize agents. Session and prompt hooks run the coordinator without a model; continuous native import and synchronization require vivac agents reconcile --mode automatic --yes --why <reason>.", files.len(), h.word()),
-                Err(_) => crate::output::outln!("  Agent inventory could not be read; file contents withheld. Run vivac agents to inspect discovery errors. Setup does not import or synchronize agents."),
-            }
-        }
+    if code == 0
+        && !a.has("undo")
+        && !a.has("dry-run")
+        && doctor::configured(cwd, h.word())
+        && agents_skill::installed(
+            cwd,
+            match h {
+                Harness::ClaudeCode => agents_skill::CLAUDE_LABEL,
+                Harness::Codex => agents_skill::CODEX_LABEL,
+            },
+        )
+    {
+        agents_notice::print(cwd);
     }
     Ok(code)
 }
