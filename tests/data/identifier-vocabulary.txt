@@ -1,6 +1,7 @@
 abandon
 abandoned
 abandons
+abbreviated
 abc
 about
 above
@@ -353,6 +354,7 @@ cleared
 clears
 cli
 clicolor
+client
 clip
 clipped
 clipping
@@ -1017,6 +1019,7 @@ include
 includes
 inclusive
 incoming
+incompatible
 indefinite
 indent
 indentation
@@ -1712,6 +1715,7 @@ release
 released
 releases
 reload
+reloading
 reloc
 relocate
 relocated
@@ -2384,6 +2388,7 @@ wherever
 whether
 which
 while
+whitelisted
 whitelists
 whitespace
 who
