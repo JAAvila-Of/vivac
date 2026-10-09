@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.4](https://github.com/JAAvila-Of/vivac/compare/v0.19.3...v0.19.4) - 2026-10-09
+
+### Fixed
+
+- *(agents)* preserve configured models when catalogs change ([#272](https://github.com/JAAvila-Of/vivac/pull/272))
+
 ## [0.19.3](https://github.com/JAAvila-Of/vivac/compare/v0.19.2...v0.19.3) - 2026-10-09
 
 ### Added
