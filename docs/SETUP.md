@@ -153,7 +153,11 @@ version 2.1.277, Claude Code reads `AGENTS.md` on its own when there is no
 The brief reaches the agent as plain text on the opening hook's standard
 output, which Codex adds to the session as context. Above roughly 2,500
 tokens it saves that context to a file and shows the model a shorter preview
-instead; the brief's own budget is 1,500, so that only bites if you raise it.
+instead. The brief's own 1,500-token budget is a soft ceiling: fixed sections
+survive even when they exceed it. It therefore does not guarantee that Codex
+will pass the complete output directly to the model. Check the received
+context, including any saved-output preview, before replacing instruction
+files. See [Checking instruction delivery](INSTRUCTION-DELIVERY.md).
 
 setup takes three flags, and they read the same on both sides: `--dry-run`,
 `--yes` and `--undo`. The four that decide where the tree lives — `--join`,

@@ -67,6 +67,7 @@ alphabetic
 alphanumeric
 already
 also
+alternate
 alternatives
 always
 ambiguous
@@ -190,6 +191,7 @@ beside
 best
 beta
 between
+beyond
 bigger
 biggest
 bin
@@ -918,6 +920,7 @@ had
 half
 hand
 handle
+handlers
 handles
 hands
 hang
@@ -1234,6 +1237,7 @@ matches
 matching
 materialize
 materialized
+matrix
 matter
 max
 maximum
@@ -1388,6 +1392,7 @@ op
 open
 opened
 opening
+openings
 opens
 operation
 operations
@@ -1902,6 +1907,7 @@ self
 sense
 sentence
 sentences
+sentinels
 sep
 separate
 separator
@@ -2066,6 +2072,7 @@ style
 styled
 styles
 sub
+subdirectory
 subdirs
 subfolder
 submodule
