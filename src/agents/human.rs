@@ -318,6 +318,55 @@ fn choice(question: &str, options: &[Value], default: &str) -> Result<Option<Str
     single(question, &options, selected, question == "Model")
 }
 
+fn choose_model(
+    cwd: &Path,
+    harness_name: &str,
+    default: &str,
+) -> Result<Option<(Value, String)>, Failure> {
+    const RELOAD: &str = "Reload local model catalog";
+    let mut harness = workflow::harness_inventory(cwd, harness_name)?;
+    loop {
+        show_catalog(&harness)?;
+        if default != "inherit"
+            && !entries(&harness["model_catalog"]["models"])
+                .iter()
+                .any(|entry| text(entry, "id") == default)
+        {
+            say!("Current model {} is absent from the local catalog; support is unverified. Enter a model identifier manually as an alternative.", clean(default));
+        }
+        let mut options = entries(&harness["models"]).to_vec();
+        options.push(Value::String(RELOAD.into()));
+        let Some(model) = choice("Model", &options, default)? else {
+            return Ok(None);
+        };
+        if model != RELOAD {
+            if model != "inherit"
+                && !entries(&harness["model_catalog"]["models"])
+                    .iter()
+                    .any(|entry| text(entry, "id") == model)
+            {
+                say!("Selected model {} is absent from the local catalog; support is unverified. Manual identifiers remain available.", clean(&model));
+            }
+            return Ok(Some((harness, model)));
+        }
+        let latest = workflow::harness_inventory(cwd, harness_name)?;
+        let previous = text(&harness["model_catalog"], "revision");
+        let next = text(&latest["model_catalog"], "revision");
+        let change = if previous.is_empty() || next.is_empty() {
+            "Snapshot change is unknown because revision metadata is unavailable."
+        } else if previous == next {
+            "Snapshot revision is unchanged."
+        } else {
+            "Snapshot revision changed."
+        };
+        say!(
+            "Local model catalog reloaded. {} No harness process was started and no provider request was made.",
+            change
+        );
+        harness = latest;
+    }
+}
+
 fn effort_options(harness: &Value, model: &str) -> (Vec<Value>, bool) {
     if let Some(entry) = entries(&harness["model_catalog"]["models"])
         .iter()
@@ -341,13 +390,34 @@ fn effort_options(harness: &Value, model: &str) -> (Vec<Value>, bool) {
     (entries(&harness["efforts"]).to_vec(), false)
 }
 
+fn configured_models(harness: &Value) -> Vec<&str> {
+    let catalog = &harness["model_catalog"];
+    entries(&catalog["configured_models"])
+        .iter()
+        .filter_map(Value::as_str)
+        .filter(|model| {
+            *model != "inherit"
+                && !entries(&catalog["models"])
+                    .iter()
+                    .any(|entry| text(entry, "id") == *model)
+        })
+        .collect()
+}
+
 fn show_catalog(harness: &Value) -> Result<(), Failure> {
     say!("{}", style::dim(Out, &catalog_provenance(harness)));
     let catalog = &harness["model_catalog"];
     if !text(catalog, "note").is_empty() {
         say!("{}", style::warn(Out, &clean(text(catalog, "note"))));
     }
-    say!("Models are local identifiers; account access is not verified.");
+    for model in configured_models(harness) {
+        say!(
+            "Configured model {} is absent from the local catalog; support is unverified.",
+            clean(model)
+        );
+    }
+    say!("Models are local identifiers; current account context, cache expiration and runtime loading are unverified.");
+    say!("Reload reads local files only. It does not start a harness or contact a provider.");
     Ok(())
 }
 
@@ -361,6 +431,16 @@ fn catalog_provenance(harness: &Value) -> String {
             " | fetched at {}",
             clean(text(catalog, "fetched_at"))
         ));
+    }
+    if !text(catalog, "client_version").is_empty() {
+        line.push_str(&format!(
+            " | declared client version {}",
+            clean(text(catalog, "client_version"))
+        ));
+    }
+    if !text(catalog, "revision").is_empty() {
+        let revision: String = text(catalog, "revision").chars().take(12).collect();
+        line.push_str(&format!(" | revision {}", clean(&revision)));
     }
     line
 }
@@ -655,11 +735,9 @@ pub(super) fn sync(cwd: &Path, _args: &Args) -> Result<i32, Failure> {
                 );
             }
             show_original(&source)?;
-            let fresh_harness = workflow::harness_inventory(cwd, harness_name)?;
-            show_catalog(&fresh_harness)?;
-            let Some(model) = choice(
-                "Model",
-                entries(&fresh_harness["models"]),
+            let Some((fresh_harness, model)) = choose_model(
+                cwd,
+                harness_name,
                 previous.map(|a| text(a, "model")).unwrap_or("inherit"),
             )?
             else {
@@ -920,6 +998,29 @@ mod tests {
         );
     }
     #[test]
+    fn configured_catalog_models_are_not_reported_as_absent() {
+        let harness = serde_json::json!({"model_catalog": {
+            "configured_models": ["inherit", "known-model", "configured-only"],
+            "models": [{"id": "known-model", "efforts": ["high"]}]
+        }});
+        assert_eq!(configured_models(&harness), vec!["configured-only"]);
+    }
+
+    #[test]
+    fn catalog_metadata_exposes_declared_version_and_abbreviated_revision() {
+        let harness = serde_json::json!({"model_catalog": {
+            "source": "local cache", "status": "available", "fetched_at": "2026-10-09",
+            "client_version": "1.2.3", "revision": "123456789012abcdef"
+        }});
+        assert_eq!(catalog_provenance(&harness), "Model catalog: local cache | available | fetched at 2026-10-09 | declared client version 1.2.3 | revision 123456789012");
+    }
+
+    #[test]
+    fn reloading_local_catalog_keeps_current_agent_and_cancellation_preserves_files() {
+        sync_trial(&["reviewer", "scout"], "agents::human::tests::reloading_local_catalog_keeps_current_agent_and_cancellation_preserves_files");
+    }
+
+    #[test]
     fn effort_choices_follow_selected_model_without_claiming_unknown_capabilities() {
         let harness = serde_json::json!({
             "efforts": ["inherit", "low", "high", "max"],
@@ -1009,9 +1110,15 @@ mod tests {
             .stderr(fs::File::create(&error_file).unwrap())
             .spawn()
             .unwrap();
+        let reload = test_name.contains("reloading_local_catalog");
+        let model = if reload {
+            "Reload local model catalog\ncustom-model"
+        } else {
+            "custom-model"
+        };
         let script = format!(
             "\n{}\nno\n",
-            "\ncustom-model\nhigh\n\n\n".repeat(names.len())
+            format!("\n{model}\nhigh\n\n\n").repeat(names.len())
         );
         child
             .stdin
@@ -1086,6 +1193,13 @@ mod tests {
             output.contains("Cancelled. No agent changes were applied."),
             "{output}"
         );
+        if reload {
+            assert_eq!(
+                output.matches("Local model catalog reloaded.").count(),
+                names.len(),
+                "{output}"
+            );
+        }
         assert!(!output.contains('\u{1b}'), "{output}");
     }
     #[test]

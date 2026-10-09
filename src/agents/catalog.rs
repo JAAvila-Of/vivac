@@ -1,7 +1,7 @@
 //! Local harness metadata is evidence of choices, not account access.
 use serde::Serialize;
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -26,9 +26,14 @@ pub struct ModelCatalog {
     pub source: String,
     pub status: String,
     pub models: Vec<ModelOption>,
+    pub configured_models: Vec<String>,
     pub note: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fetched_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision: Option<String>,
 }
 
 impl ModelCatalog {
@@ -45,8 +50,11 @@ impl ModelCatalog {
             source: source.into(),
             status: status.into(),
             models: Vec::new(),
+            configured_models: Vec::new(),
             note: note.into(),
             fetched_at: None,
+            client_version: None,
+            revision: None,
         }
     }
 }
@@ -122,35 +130,41 @@ fn other_provider(table: &toml::Table) -> bool {
 
 fn codex_at(root: &Path, home: &Path) -> ModelCatalog {
     let source = "codex-local-cache";
+    let mut configured_models = BTreeSet::new();
     for path in [home.join("config.toml"), root.join(".codex/config.toml")] {
         match read(&path) {
             Ok(Some(text)) => match toml::from_str::<toml::Table>(&text) {
                 Ok(table) if other_provider(&table) => return ModelCatalog::empty(source, "unavailable", "Custom providers, profiles or model catalogs require their own catalog; the OpenAI cache was not used."),
-                Ok(_) => {},
+                Ok(table) => {
+                    if let Some(model) = table.get("model").and_then(toml::Value::as_str).filter(|model| identifier(model)) {
+                        configured_models.insert(model.to_owned());
+                    }
+                },
                 Err(_) => return ModelCatalog::empty(source, "error", "Local harness configuration could not be read safely."),
             },
             Ok(None) => {},
             Err(_) => return ModelCatalog::empty(source, "error", "Local harness configuration could not be read safely."),
         }
     }
-    let text = match read(&home.join("models_cache.json")) {
-        Ok(Some(text)) => text,
-        Ok(None) => {
-            return ModelCatalog::empty(
-                source,
-                "unavailable",
-                "No local Codex model cache was found; configured models remain selectable.",
-            )
+    let mut catalog = match read(&home.join("models_cache.json")) {
+        Ok(Some(text)) => {
+            let mut catalog = codex_cache(&text);
+            catalog.revision = Some(crate::agents::adapters::digest(text.as_bytes()));
+            catalog
         }
-        Err(_) => {
-            return ModelCatalog::empty(
-                source,
-                "error",
-                "Local model cache could not be read within the 2 MiB limit.",
-            )
-        }
+        Ok(None) => ModelCatalog::empty(
+            source,
+            "unavailable",
+            "No local Codex model cache was found; configured models remain selectable.",
+        ),
+        Err(_) => ModelCatalog::empty(
+            source,
+            "error",
+            "Local model cache could not be read within the 2 MiB limit.",
+        ),
     };
-    codex_cache(&text)
+    catalog.configured_models = configured_models.into_iter().collect();
+    catalog
 }
 
 fn codex_cache(text: &str) -> ModelCatalog {
@@ -235,13 +249,28 @@ fn codex_cache(text: &str) -> ModelCatalog {
                     .all(|byte| byte.is_ascii_digit() || b"-:.TZ+ ".contains(&byte))
         })
         .map(str::to_owned);
+    let client_version = value
+        .get("client_version")
+        .and_then(Value::as_str)
+        .filter(|value| {
+            !value.is_empty()
+                && value.len() <= 80
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"._+-".contains(&byte))
+                && crate::redact::check_field("client version", value).is_none()
+        })
+        .map(str::to_owned);
     ModelCatalog {
         source: source.into(),
         status: "cached".into(),
         models: models.into_values().collect(),
+        configured_models: Vec::new(),
         fetched_at,
+        client_version,
+        revision: Some(crate::agents::adapters::digest(text.as_bytes())),
         note:
-            "Local cached choices; runtime access and current account availability are unverified."
+            "Mutable local cache choices; cache context, session, TTL and account availability are unverified."
                 .into(),
     }
 }
@@ -302,7 +331,7 @@ fn claude_at(root: &Path, home: Option<&Path>) -> ModelCatalog {
         }
     }
     ModelCatalog { source: source.into(), status: if models.is_empty() { "unavailable" } else { "configured" }.into(),
-        models: models.into_values().collect(), fetched_at: None,
+        models: models.into_values().collect(), configured_models: Vec::new(), fetched_at: None, client_version: None, revision: None,
         note: "Configured local model choices only. Managed model restrictions, supported effort levels and runtime access are unverified; local availableModels is not an operative restriction.".into() }
 }
 
@@ -322,6 +351,103 @@ mod tests {
         let mut bytes = [0; 8];
         getrandom::getrandom(&mut bytes).unwrap();
         bytes
+    }
+
+    #[test]
+    fn configured_choices_survive_missing_or_invalid_cache_without_efforts() {
+        let root = fixture();
+        let home = root.join("home");
+        fs::create_dir_all(&home).unwrap();
+        fs::write(home.join("config.toml"), "model = 'configured-home'\n").unwrap();
+        fs::write(
+            root.join(".codex/config.toml"),
+            "model = 'configured-project'\n",
+        )
+        .unwrap();
+        for cache in [None, Some("{"), Some(r#"{"models":[]}"#)] {
+            if let Some(text) = cache {
+                fs::write(home.join("models_cache.json"), text).unwrap();
+            }
+            let result = serde_json::to_value(codex_at(&root, &home)).unwrap();
+            assert_eq!(
+                result["configured_models"],
+                serde_json::json!(["configured-home", "configured-project"])
+            );
+            assert_eq!(result["models"], serde_json::json!([]));
+            assert_eq!(
+                result["status"],
+                if cache.is_none() {
+                    "unavailable"
+                } else if cache == Some("{") {
+                    "error"
+                } else {
+                    "cached"
+                }
+            );
+        }
+        fs::write(
+            home.join("models_cache.json"),
+            vec![b' '; MAX_BYTES as usize + 1],
+        )
+        .unwrap();
+        let result = serde_json::to_value(codex_at(&root, &home)).unwrap();
+        assert_eq!(result["status"], "error");
+        assert_eq!(
+            result["configured_models"],
+            serde_json::json!(["configured-home", "configured-project"])
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn incompatible_or_invalid_config_withholds_all_configured_choices() {
+        let root = fixture();
+        let home = root.join("home");
+        fs::create_dir_all(&home).unwrap();
+        fs::write(home.join("config.toml"), "model = 'configured-home'\n").unwrap();
+        for config in [
+            "model_provider = 'other'\n",
+            "profile = 'work'\n",
+            "[profiles.work]\nmodel = 'custom'\n",
+            "model_catalog_json = 'custom.json'\n",
+            "model = [",
+        ] {
+            fs::write(root.join(".codex/config.toml"), config).unwrap();
+            let result = serde_json::to_value(codex_at(&root, &home)).unwrap();
+            assert_eq!(result["configured_models"], serde_json::json!([]));
+            assert!(result["models"].as_array().unwrap().is_empty());
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cache_revision_changes_and_client_version_is_whitelisted() {
+        let root = fixture();
+        let home = root.join(".codex");
+        let cache = home.join("models_cache.json");
+        let first = r#"{"models":[],"client_version":"1.2.3-preview.4","identity":"private"}"#;
+        fs::write(&cache, first).unwrap();
+        let before = serde_json::to_value(codex_at(&root, &home)).unwrap();
+        assert_eq!(before["client_version"], "1.2.3-preview.4");
+        assert_eq!(
+            before["revision"],
+            crate::agents::adapters::digest(first.as_bytes())
+        );
+        for version in [
+            "bad\nversion",
+            "private@example.com",
+            "private/path",
+            "é",
+            &"1".repeat(81),
+        ] {
+            let text = serde_json::json!({"models":[], "client_version":version}).to_string();
+            fs::write(&cache, &text).unwrap();
+            let after = serde_json::to_value(codex_at(&root, &home)).unwrap();
+            assert!(after.get("client_version").is_none());
+            assert_ne!(before["revision"], after["revision"]);
+            assert_eq!(fs::read_to_string(&cache).unwrap(), text);
+        }
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

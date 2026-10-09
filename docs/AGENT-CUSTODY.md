@@ -39,9 +39,21 @@ The original model and effort stay visible. Model suggestions come from local
 harness metadata and configuration; they do not assert account availability or
 provider equivalence. The selectors show the catalog's source and status.
 Codex's local model cache supplies visible models and their individual effort
-options. Sync reads these options again before each destination's model picker,
-and both interfaces show the cache update time when available. Each console step
-has one heading per agent; selected assignments are summarized before settings.
+options. Safe local Codex configuration also contributes its declared main model,
+even when the cache does not list it; its effort support remains unverified.
+Profiles, custom providers and catalog overrides require their own context, so
+vivac does not combine their configuration with the default OpenAI cache.
+Sync reads the options again before each destination's model picker. Both
+interfaces show the cache update time, declared client version and catalog
+revision when available. The revision identifies the current local snapshot;
+it does not identify an account or prove which process wrote it.
+Choose **Reload local model catalog** in the model picker or on the Agents page
+to reread local metadata without losing the selected agents, destinations or
+assignment drafts. This does not refresh Codex's cache, start Codex or contact a
+provider. A model missing from the cache can still be selected from configuration
+or entered explicitly. Its absence does not prove that account access was revoked.
+Each console step has one heading per agent; selected assignments are summarized
+before settings.
 Claude Code configuration supplies declared model choices; when effort
 support cannot be discovered, the selector explicitly says it is unverified.
 Missing or unreadable metadata leaves existing assignments and custom model

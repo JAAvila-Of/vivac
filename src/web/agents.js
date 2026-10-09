@@ -2,7 +2,7 @@
   'use strict';
   const boot = JSON.parse(document.getElementById('bootstrap').textContent);
   const $ = id => document.getElementById(id);
-  let inventory, visibleHarnesses = [], cards = [], reviewed = null, active = null, stage = 0, revision = 0, applying = false;
+  let inventory, visibleHarnesses = [], cards = [], reviewed = null, active = null, stage = 0, revision = 0, applying = false, editorRevision = 0;
   function element(tag, text, parent, className) {
     const node = document.createElement(tag);
     if (text !== undefined) node.textContent = text;
@@ -37,7 +37,7 @@
   function nativeRef(source) { return {harness:source.harness,path:source.path,digest:source.digest}; }
   function modelOptions(parent, harness, initial) {
     const catalog=harness.model_catalog?.models || [];
-    const values=[...new Set([...(harness.models || []),...catalog.map(model=>model.id),'inherit','Enter model identifier'])];
+    const values=[...new Set([...(harness.models || []),...(harness.model_catalog?.configured_models || []),...catalog.map(model=>model.id),'inherit','Enter model identifier'])];
     const select=choice(parent,'Model',values,values.includes(initial) ? initial : initial?'Enter model identifier':'inherit');
     for (const option of select.children) {
       const model=catalog.find(row=>row.id===option.value);
@@ -45,6 +45,36 @@
       else if (!model && !['inherit','Enter model identifier'].includes(option.value)) option.textContent=option.value + ' · configured, support unverified';
     }
     return select;
+  }
+  function showCatalog(target) {
+    const catalog=target.harness.model_catalog;
+    target.catalogNote.textContent=catalog
+      ? 'Model catalog: ' + catalog.source + ' | ' + catalog.status + '. ' + (catalog.note || '') + ' Configured identifiers absent from this catalog have unverified support. Current account context, cache expiration and runtime loading are unverified.'
+      : 'No model catalog is available. Configured identifiers remain available; model support is unverified.';
+    target.catalogMetadata.textContent=catalog ? [catalog.fetched_at && 'Fetched at: ' + catalog.fetched_at,catalog.client_version && 'Declared client version: ' + catalog.client_version,catalog.revision && 'Revision: ' + catalog.revision.slice(0,12)].filter(Boolean).join(' | ') : '';
+  }
+  async function reloadCatalog(card,target,button) {
+    if (applying || active!==card || !card.destinations.includes(target)) return;
+    const sourceKey=card.targetSource, generation=card.targetGeneration, editor=editorRevision, previous=target.harness.model_catalog?.revision;
+    button.disabled=true;
+    try {
+      const latest=await request('inventory');
+      if (applying || active!==card || card.targetSource!==sourceKey || card.targetGeneration!==generation || editorRevision!==editor || !cards.includes(card) || !card.destinations.includes(target)) return;
+      const harness=latest.harnesses?.find(row=>row.harness===target.harness.harness);
+      if (!harness) throw new Error('The destination harness is absent from the local inventory.');
+      const current=target.model.value;
+      const replacement=modelOptions(null,harness,current==='Enter model identifier' ? undefined : current);
+      const nextValue=replacement.value;
+      target.model.replaceChildren(...replacement.children);
+      target.model.value=current==='Enter model identifier' ? current : nextValue;
+      if (current!=='Enter model identifier' && target.model.value==='Enter model identifier') target.custom.value=current;
+      target.custom.parentElement.hidden=target.model.value!=='Enter model identifier';
+      target.harness=harness; showCatalog(target); refreshEfforts(target); invalidate();
+      const next=harness.model_catalog?.revision;
+      message('Local model catalog reloaded. ' + (previous && next ? previous===next ? 'Snapshot revision is unchanged.' : 'Snapshot revision changed.' : 'Snapshot change is unknown because revision metadata is unavailable.') + ' No harness process was started and no provider request was made.');
+    } catch(error) {
+      if (!applying && active===card && editorRevision===editor && card.targetGeneration===generation && card.targetSource===sourceKey && card.destinations.includes(target)) message(error.message);
+    } finally { button.disabled=false; }
   }
   function refreshEfforts(target) {
     const identifier=target.model.value==='Enter model identifier' ? target.custom.value.trim() : target.model.value;
@@ -92,6 +122,7 @@
     }
   }
   function edit(card) {
+    editorRevision++;
     if (!card.enabled.checked) { card.enabled.checked=true; markSelection(card); invalidate(); }
     active=card; $('inventory').hidden=true; $('editor').hidden=false;
     $('source-stage').replaceChildren(card.root); $('assignment-stage').replaceChildren(card.assignmentSource,card.targets,card.comparison);
@@ -193,7 +224,7 @@
     const sourceKey=selected && selected.harness + '/' + selected.path;
     if (card.targetSource===sourceKey) return;
     if (card.targetSource) card.drafts.set(card.targetSource,{nodes:[...card.targets.children],checks:[...card.destinationChecks.children],destinations:card.destinations});
-    card.targetSource=sourceKey;
+    card.targetGeneration=(card.targetGeneration || 0)+1; card.targetSource=sourceKey;
     card.targets.replaceChildren(); card.destinationChecks.replaceChildren(); card.sourceDetails.replaceChildren(); card.assignmentSource.replaceChildren(); card.destinations=[];
     const source = card.sources[card.source.selectedIndex];
     if (!source) return;
@@ -217,14 +248,14 @@
       const unsupportedSettings=Object.keys(source.settings || {}).filter(key=>!harness.capabilities.includes(key));
       if (unsupportedSettings.length) target.settingsAcknowledged=check(parent,'Keep settings only in the source: ' + unsupportedSettings.join(', ') + '. Destination settings below are independent.');
       target.name=input(parent,'Agent name',existing?.name || source.name || '');
-      const catalog=harness.model_catalog;
-      const provenance=element('p',catalog
-        ? 'Model catalog: ' + catalog.source + ' · ' + catalog.status + '. Local catalog entries and configured models do not verify account access or runtime loading.'
-        : 'No model catalog is available. Configured identifiers remain available; model support is unverified.',parent,'catalog-note muted');
-      if (catalog?.note) element('p',catalog.note,parent,'catalog-note muted');
-      if (catalog?.fetched_at) element('p','Cached catalog updated: ' + catalog.fetched_at,parent,'catalog-note muted');
+      target.catalogNote=element('p',undefined,parent,'catalog-note muted');
+      target.catalogMetadata=element('p',undefined,parent,'catalog-note muted');
+      showCatalog(target);
       target.model=modelOptions(parent,harness,existing?.model);
-      target.model.setAttribute('aria-describedby',provenance.id='model-catalog-' + cards.length + '-' + harness.harness);
+      target.model.setAttribute('aria-describedby',target.catalogNote.id='model-catalog-' + cards.length + '-' + harness.harness);
+      const reload=element('button','Reload local model catalog',parent); reload.type='button';
+      element('p','Reload reads local files only. It does not start a harness or contact a provider.',parent,'muted');
+      reload.onclick=()=>reloadCatalog(card,target,reload);
       target.custom=input(parent,'Custom model identifier',existing?.model || ''); target.custom.parentElement.hidden=target.model.value!=='Enter model identifier';
       target.model.onchange=()=>{ target.custom.parentElement.hidden=target.model.value!=='Enter model identifier'; refreshEfforts(target); invalidate(); };
       const initialEffort=existing?.effort || 'inherit';
@@ -293,7 +324,7 @@
     visibility();
   }
   $('show-all').onchange=visibility; $('reason').oninput=invalidate;
-  $('back').onclick=()=> { $('editor').hidden=true; $('inventory').hidden=false; };
+  $('back').onclick=()=> { editorRevision++; $('editor').hidden=true; $('inventory').hidden=false; };
   $('previous').onclick=()=>showStage(Math.max(0,stage-1)); $('next').onclick=()=>showStage(Math.min(2,stage+1));
   $('plan').onclick=async()=> {
     const version=revision;

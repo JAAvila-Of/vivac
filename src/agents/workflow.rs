@@ -102,6 +102,7 @@ fn harness_value(
     let model_catalog = native.model_catalog(root);
     let mut models = std::collections::BTreeSet::from(["inherit".to_string()]);
     models.extend(model_catalog.models.iter().map(|model| model.id.clone()));
+    models.extend(model_catalog.configured_models.iter().cloned());
     for agent in ledger.agents.values() {
         for assignment in &agent.definition.assignments {
             if assignment.harness == native.name() {
@@ -699,11 +700,22 @@ mod catalog_refresh_tests {
             },
         );
         let cache = root.join(".codex/models_cache.json");
+        fs::write(
+            root.join(".codex/config.toml"),
+            "model = 'configured-main'\n",
+        )
+        .unwrap();
         fs::write(&cache, r#"{"models":[{"slug":"cached-old","visibility":"list","supported_reasoning_levels":[{"effort":"low"}]}]}"#).unwrap();
         let before = harness_value(&root, &ledger, native.as_ref()).unwrap();
         assert_eq!(
             before["models"],
-            json!(["cached-old", "inherit", "used-ledger", "used-native"])
+            json!([
+                "cached-old",
+                "configured-main",
+                "inherit",
+                "used-ledger",
+                "used-native"
+            ])
         );
         fs::write(&cache, r#"{"models":[{"slug":"cached-new","visibility":"list","supported_reasoning_levels":[{"effort":"high"}]}]}"#).unwrap();
         definition.assignments[0].model = "changed-ledger".into();
@@ -711,7 +723,13 @@ mod catalog_refresh_tests {
         let after = harness_value(&root, &ledger, native.as_ref()).unwrap();
         assert_eq!(
             after["models"],
-            json!(["cached-new", "changed-ledger", "inherit", "used-native"])
+            json!([
+                "cached-new",
+                "changed-ledger",
+                "configured-main",
+                "inherit",
+                "used-native"
+            ])
         );
         assert_eq!(
             after["model_catalog"]["models"][0]["efforts"],
@@ -721,5 +739,20 @@ mod catalog_refresh_tests {
             before["model_catalog"]["models"][0]["efforts"],
             json!(["low"])
         );
+        assert_eq!(
+            after["model_catalog"]["models"].as_array().unwrap().len(),
+            1
+        );
+        assert_eq!(
+            after["model_catalog"]["configured_models"],
+            json!(["configured-main"])
+        );
+        fs::remove_file(&cache).unwrap();
+        let missing = harness_value(&root, &ledger, native.as_ref()).unwrap();
+        assert!(missing["models"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("configured-main")));
+        assert_eq!(missing["model_catalog"]["status"], "unavailable");
     }
 }

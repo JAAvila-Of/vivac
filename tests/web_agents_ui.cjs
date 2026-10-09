@@ -3,11 +3,11 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 class Node {
   constructor(tag = 'div') { this.tagName = tag; this.children = []; this.events = {}; this.attributes = {}; this.hidden = false; this.disabled = false; this.checked = false; this._value = ''; this.textContent = ''; }
-  append(...nodes) { for (const node of nodes) { node.parentElement = this; this.children.push(node); } }
+  append(...nodes) { for (const node of nodes) { if (node.parentElement) node.parentElement.children=node.parentElement.children.filter(child=>child!==node); node.parentElement = this; this.children.push(node); } }
   replaceChildren(...nodes) { this.children = []; this.append(...nodes); }
   setAttribute(key, value) { this.attributes[key] = value; }
   addEventListener(event, handler) { (this.events[event] ||= []).push(handler); }
-  get value() { return this._value; }
+  get value() { return this.tagName==='select' && !this.children.some(child=>child.value===this._value) ? this.children[0]?.value || '' : this._value; }
   set value(value) { this._value = String(value); }
   get selectedIndex() { return this.children.findIndex(child => child.value === this.value); }
   set selectedIndex(index) { this.value = this.children[index]?.value || ''; }
@@ -26,8 +26,8 @@ const inventory = {agents:[{agent:'a1',name:'reviewer',sources:[source,existing]
 inventory.harnesses[1].model_catalog={source:'local harness cache',status:'cached',models:[{id:'deep-model',label:'Deep model',efforts:['high','max']},{id:'swift-model',label:'Swift model',efforts:['low'],default_effort:'low'}],note:'Local metadata does not verify account availability.'};
 inventory.harnesses[1].models.push('configured-only');
 const calls = [];
-let resolvePlan;
-const context = {document:{getElementById:id=>ids[id] || all(ids.inventory).find(node=>node.id===id),createElement:tag=>new Node(tag),createTextNode:text=>({textContent:text})},fetch:async(url,options)=>{calls.push({url,body:options?.body && JSON.parse(options.body)}); if(url.endsWith('/plan')) return new Promise(resolve => {resolvePlan=()=>resolve({ok:true,json:async()=>({plan_digest:'reviewed-digest',items:JSON.parse(options.body).items.map(item=>({...item,original:source,destinations:item.destinations.map(destination=>({...destination,...destination.assignment,state:'replace_reviewed'}))}))})});}); return {ok:true,json:async()=> url.endsWith('/inventory')?inventory:{sources:[]}};},console};
+let resolvePlan, reloadInventory = inventory, inventoryError = false, resolveInventory;
+const context = {document:{getElementById:id=>ids[id] || all(ids.inventory).find(node=>node.id===id),createElement:tag=>new Node(tag),createTextNode:text=>({textContent:text})},fetch:async(url,options)=>{calls.push({url,body:options?.body && JSON.parse(options.body)}); if(url.endsWith('/plan')) return new Promise(resolve => {resolvePlan=()=>resolve({ok:true,json:async()=>({plan_digest:'reviewed-digest',items:JSON.parse(options.body).items.map(item=>({...item,original:source,destinations:item.destinations.map(destination=>({...destination,...destination.assignment,state:'replace_reviewed'}))}))})});}); if (url.endsWith('/inventory') && resolveInventory) return new Promise(resolve=>{resolveInventory.reply=()=>resolve({ok:true,json:async()=>reloadInventory});}); return {ok:!inventoryError,json:async()=> url.endsWith('/inventory')?(inventoryError?{error:'Local catalog unavailable'}:reloadInventory):{sources:[]}};},console};
 vm.runInNewContext(fs.readFileSync('src/web/agents.js','utf8'),context);
 const tick = () => new Promise(resolve=>setImmediate(resolve));
 const all = node => [node,...node.children.flatMap(child=>child.children?all(child):[child])];
@@ -82,6 +82,40 @@ async function run() {
   field(ids['assignment-stage'],'Custom model identifier').fire('input');
   assert.equal(effort.value,'low');
   assert.equal(effort.attributes['aria-invalid'],'false','Custom model support is unverified, not blocked');
+  const reload=find(ids['assignment-stage'],'button','Reload local model catalog');
+  assert(reload,'Each destination offers a local catalog reload');
+  const name=field(ids['assignment-stage'],'Agent name'), sandbox=field(ids['assignment-stage'],'Sandbox');
+  name.value='reviewer-custom'; sandbox.value='read-only';
+  const custom=field(ids['assignment-stage'],'Custom model identifier');
+  const replacement=JSON.parse(JSON.stringify(inventory));
+  replacement.harnesses[1].model_catalog={source:'local harness cache',status:'cached',fetched_at:'2026-10-09',client_version:'1.2.3',revision:'123456789012abcdef',models:[{id:'external-model',efforts:['high']},{id:'replacement-model',efforts:['low']}]};
+  replacement.harnesses[1].models=['inherit','replacement-model']; reloadInventory=replacement;
+  await reload.onclick();
+  assert.strictEqual(field(ids['assignment-stage'],'Model'),model,'Reload preserves existing fields');
+  assert.equal(model.value,'Enter model identifier'); assert.equal(custom.value,'external-model');
+  assert.equal(name.value,'reviewer-custom'); assert.equal(sandbox.value,'read-only');
+  assert(field(ids['source-stage'],'Synchronize this agent').checked); assert(field(ids['source-stage'],'Destination: codex').checked);
+  assert.equal(effort.value,'low'); assert.equal(effort.attributes['aria-invalid'],'true','Reload preserves incompatible effort and blocks review');
+  assert.match(ids.message.textContent,/change is unknown/);
+  assert(!model.children.some(option=>option.value==='deep-model'),'Reload replaces stale catalog options');
+  assert(model.children.some(option=>option.value==='replacement-model'));
+  assert.match(all(ids['assignment-stage']).map(node=>node.textContent).join(' '),/1\.2\.3.*123456789012/);
+  await ids.plan.onclick(); assert.equal(calls.filter(call=>call.url.endsWith('/plan')).length,0);
+  inventoryError=true; await reload.onclick(); inventoryError=false;
+  assert.equal(custom.value,'external-model'); assert.equal(name.value,'reviewer-custom');
+  reloadInventory=JSON.parse(JSON.stringify(replacement)); reloadInventory.harnesses[1].model_catalog.client_version='stale-version';
+  resolveInventory={}; const stale=reload.onclick(); await tick();
+  find(ids['agent-list'],'button','writer').onclick(); find(ids['agent-list'],'button','reviewer').onclick();
+  resolveInventory.reply(); await stale; resolveInventory=null;
+  assert(!all(ids['assignment-stage']).some(node=>/stale-version/.test(node.textContent)),'Leaving and returning to a target rejects its stale reload response');
+  assert.equal(custom.value,'external-model');
+  reloadInventory=replacement;
+  model.value='replacement-model'; model.fire('change'); effort.value='low'; effort.fire('change');
+  await reload.onclick(); assert.equal(model.value,'replacement-model','Known model remains selected after its option nodes move');
+  assert.match(ids.message.textContent,/revision is unchanged/);
+  reloadInventory=JSON.parse(JSON.stringify(replacement)); reloadInventory.harnesses[1].model_catalog.revision='changed-revision';
+  await reload.onclick(); assert.match(ids.message.textContent,/revision changed/);
+  model.value='Enter model identifier'; model.fire('change'); custom.value='external-model'; custom.fire('input'); effort.value='high'; effort.fire('change');
   const planning=ids.plan.onclick(); await tick();
   ids.reason.value='Changed during plan request'; ids.reason.fire('input');
   resolvePlan(); await planning;
@@ -91,12 +125,16 @@ async function run() {
   const planned=calls.filter(call=>call.url.endsWith('/plan')).at(-1).body;
   assert.equal(planned.items.length,2,'Configuring multiple agents retains a single batch');
   assert.equal(planned.items[0].destinations[0].digest,existing.digest);
+  assert.deepEqual(planned.items[0].source,{harness:source.harness,path:source.path,digest:source.digest},'Reload does not replace original source references');
+  assert.equal(planned.items[0].destinations[0].assignment.name,'reviewer-custom');
+  assert.equal(planned.items[0].destinations[0].assignment.settings.sandbox_mode,'read-only');
   assert.match(all(ids.preview).map(node=>node.textContent).join(' '),/Complete prompt/);
-  model.value='configured-only'; model.fire('change');
+  model.value='replacement-model'; model.fire('change');
+  effort.value='low'; effort.fire('change');
   assert.equal(ids.apply.disabled,true,'Editing a reviewed assignment revokes apply');
   assert.equal(calls.filter(call=>call.url.endsWith('/apply')).length,0);
   const again=ids.plan.onclick(); await tick(); resolvePlan(); await again;
-  inventory.harnesses[0].configured=false;
+  reloadInventory=inventory; inventory.harnesses[0].configured=false;
   const applying=ids.apply.onclick();
   assert.equal(ids['editor-fields'].disabled,true,'Apply disables editing during request');
   await applying;
