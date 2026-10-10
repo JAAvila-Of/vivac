@@ -96,6 +96,34 @@ first marker. The local receiver validated complete HTTP bodies in every case.
 This demonstrates loss under those conditions and that JSON alone did not
 avoid it; it does not establish the internal cause or an exact universal cutoff.
 
+A subsequent consumer check configured two synchronous command handlers, each
+returning 9,900 ASCII characters in JSON `additionalContext`. The receiver
+compared each complete expected string against the request context, rather
+than checking only its markers. Both complete strings arrived in both
+harnesses. Claude delivered them in the reverse of configured order; Codex
+delivered them in configured order in that run. Neither observation establishes
+an ordering guarantee. Codex used `additionalContextLimit: 0` with strictly
+bounded test producers. A separate Codex Unicode check also arrived intact:
+9,900 code points occupying 9,950 UTF-16 code units. Claude also received both
+complete blocks at startup and resume when one contained Unicode: that block
+occupied 9,900 UTF-16 code units and contained 9,899 code points.
+
+These checks demonstrate bounded transport, not a working multipart vivac
+integration. Independent invocations of the current opening command each
+render the tree, reconcile custody and attempt to record an opening. Simply
+registering that command several times would repeat those effects and could
+mix tree revisions. The consumed input fields, `session_id` and `source`, do
+not uniquely identify repeated openings of the same kind within one session.
+A multipart implementation therefore needs a reliable shared opening identity,
+one immutable payload, explicit part numbering and limits, and handling for
+missing parts and growth after setup. Time windows alone do not establish that
+two handlers belong to the same opening.
+In the isolated Claude startup and resume checks, the input had no separate
+opening identifier, and `CLAUDE_ENV_FILE` differed between handlers. The
+isolated Codex startup input likewise supplied no separate opening identifier.
+These observations do not rule out future harness capabilities, but the
+tested inputs provide no verified correlation mechanism for this design.
+
 Codex's child processes needed the normal Windows `COMSPEC` and `PATHEXT`
 values. Omitting them from the isolated environment made trusted handlers
 fail. With that environment corrected, `exec` received the opening using
