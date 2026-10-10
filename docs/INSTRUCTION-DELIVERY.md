@@ -40,6 +40,40 @@ in the input payload does not redirect it. Configure each folder where a
 harness is opened, including a nested repository that shares its parent's
 tree, as described in [Setup](SETUP.md).
 
+## Bounded Codex opening
+
+The Codex integration uses one synchronous invocation of
+`vivac session start --hook --context codex`. Its JSON `additionalContext`
+contains the existing opening text and operational notices. The handler has
+`additionalContextLimit: 0`; vivac imposes its own hard ceiling of 60,000 UTF-8
+bytes on the complete context instead. This avoids the default hook preview
+without permitting unbounded output or coordinating independent renderers.
+It does not change which rule bodies the brief includes.
+
+If the initial brief exceeds the ceiling, vivac returns `continue: false` and
+an explanation without reconciling custody or recording `session.started`.
+If a custody notice makes the final context exceed the ceiling, the opening is
+likewise rejected and no opening receipt is recorded; already authorized
+custody changes remain applied. A busy-store notice is also subject to the
+final ceiling. Rejection never disguises a shortened payload as a complete
+one. Review the oversized opening rather than retiring its source instructions.
+
+This is a transport budget, not a verified allowance in every model's context
+window. Doctor checks the command, synchronous execution and handler limit;
+reception remains separate evidence. Re-running `vivac setup codex` offers the
+upgrade for the recognized original opening handler, preserving foreign hooks.
+Approve the changed handler in Codex before relying on it.
+
+If locating, loading or rendering the context fails, the bounded Codex mode
+also returns `continue: false`, with a fixed explanation rather than error
+details in the context. The diagnostic stays on stderr. The hook exits
+successfully so Codex can process the JSON refusal; malformed commands retain
+their usage error. Outside a vivac project, the hook remains silent.
+
+Claude Code retains its plain-text opening hook. Its oversized-context problem
+remains unresolved: the multi-handler consumer tests below establish transport
+capacity, but not safe coordination of a dynamic vivac opening.
+
 ## Repeatable producer checks
 
 From a checkout of vivac, run:
@@ -79,6 +113,22 @@ context constructed by the harness, not understanding or compliance by a model.
 | Codex app-server, `thread/start` with `sessionStartSource: clear` followed by a turn | A fresh sentinel arrived; the opening receipt recorded `source: clear` |
 | Claude Code, extensive opening | The hook emitted all 63 numbered title sentinels; the request contained only 2 |
 | Codex `exec`, extensive opening | The request contained 11 of 63 numbered title sentinels, from the beginning and end; a saved hook output contained all 63 |
+| Codex `exec`, bounded JSON opening, startup and resume | The complete producer context arrived unchanged; resume included a fresh instruction |
+
+The bounded product check validated the setup-generated handler before using a
+temporary wrapper to capture the producer's actual JSON stdout in memory and
+re-emit its identical bytes. The receiver compared `additionalContext` with
+the complete `developer/input_text`: 36,581 UTF-8 bytes at startup and 36,638
+at resume, including 32,800 ASCII characters in synthetic titles. Each opening
+recorded one receipt with the corresponding source. A separate oversized
+product opening returned `continue: false`, with no provider request, custody
+change or opening receipt. This demonstrates reception and rejection in the
+tested harness, not actual compaction or model understanding.
+
+An unsupported future event in a separate fixture also produced the fixed
+preparation-failure JSON and a diagnostic on stderr. Codex processed that
+refusal without a provider request, opening receipt or change to the fixture's
+tree. This covers the observed loading failure, not every possible system error.
 
 The extensive Claude fixture also included four synthetic pillars. Their
 titles and the instruction to consult `vivac rules` arrived, while the custody
@@ -151,8 +201,9 @@ that it received everything is insufficient.
 
 Codex can replace oversized hook context with a head-and-tail preview and a
 path to the full output. Its documented default threshold is approximately
-2,500 tokens per handler. Vivac's brief budget is soft, so even the default
-budget cannot exclude this case. Check for a preview and whether required
+2,500 tokens per handler. Legacy or customized handlers using that default
+remain subject to this behavior; the bounded integration explicitly overrides
+it. Vivac's soft brief budget alone cannot exclude a preview. Check whether required
 instructions reached the model; a path alone does not show that it read the
 saved text. See the [Codex hook reference](https://learn.chatgpt.com/docs/hooks#large-hook-output).
 For Claude Code, see its [SessionStart reference](https://code.claude.com/docs/en/hooks#sessionstart).

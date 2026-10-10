@@ -6,7 +6,101 @@
 mod common;
 use common::Sandbox;
 
-const SESSION_START: &str = "vivac session start --hook";
+const SESSION_START: &str = "vivac session start --hook --context codex";
+
+#[test]
+fn custom_opening_cannot_coexist_with_the_complete_transport() {
+    for command in [
+        "vivac session start --hook --budget 1",
+        "C:/tools/vivac.exe session start --hook --budget 1",
+    ] {
+        let c = Sandbox::new_seeded("codex-custom-duplicate");
+        c.ok(&["setup", "codex", "--yes"]);
+        let path = hooks_path(&c);
+        let mut hooks: serde_json::Value = serde_json::from_str(&read(&path)).unwrap();
+        hooks["hooks"]["SessionStart"][0]["hooks"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"type": "command", "command": command}));
+        std::fs::write(&path, hooks.to_string()).unwrap();
+        let before = std::fs::read(&path).unwrap();
+        for args in [
+            vec!["setup", "codex", "--dry-run"],
+            vec!["setup", "codex", "--yes"],
+        ] {
+            let (text, code) = c.run(&args);
+            assert_ne!(code, 0, "{text}");
+            assert_eq!(std::fs::read(&path).unwrap(), before);
+        }
+    }
+}
+
+#[test]
+fn legacy_opening_upgrade_preserves_other_handlers_and_fields() {
+    let c = Sandbox::new_seeded("codex-legacy-upgrade");
+    std::fs::create_dir_all(c.0.join(".codex")).unwrap();
+    let existing = serde_json::json!({"foreign": true, "hooks": {"SessionStart": [{
+        "matcher": "startup|resume|clear|compact", "foreign": 7,
+        "hooks": [{"type": "command", "command": "vivac session start --hook", "timeout": 17},
+                  {"type": "command", "command": "other-tool"}]
+    }]}});
+    let path = hooks_path(&c);
+    std::fs::write(&path, existing.to_string()).unwrap();
+    let before = std::fs::read(&path).unwrap();
+    let plan = c.ok(&["setup", "codex", "--dry-run"]);
+    assert!(plan.contains("upgrade"), "{plan}");
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    c.ok(&["setup", "codex", "--yes"]);
+    let after: serde_json::Value = serde_json::from_str(&read(&path)).unwrap();
+    let entry = &after["hooks"]["SessionStart"][0];
+    assert_eq!(entry["foreign"], 7);
+    assert_eq!(entry["hooks"][0]["command"], SESSION_START);
+    assert_eq!(entry["hooks"][0]["timeout"], 17);
+    assert_eq!(entry["hooks"][0]["additionalContextLimit"], 0);
+    assert_eq!(entry["hooks"][0]["async"], false);
+    assert_eq!(
+        entry["hooks"][1],
+        existing["hooks"]["SessionStart"][0]["hooks"][1]
+    );
+    let applied = std::fs::read(&path).unwrap();
+    c.ok(&["setup", "codex", "--yes"]);
+    assert_eq!(std::fs::read(&path).unwrap(), applied);
+    c.ok(&["setup", "codex", "--undo", "--yes"]);
+    let undone: serde_json::Value = serde_json::from_str(&read(&path)).unwrap();
+    assert_eq!(undone["foreign"], true);
+    assert_eq!(undone["hooks"]["SessionStart"][0]["foreign"], 7);
+    assert_eq!(
+        undone["hooks"]["SessionStart"][0]["hooks"],
+        serde_json::json!([existing["hooks"]["SessionStart"][0]["hooks"][1].clone()])
+    );
+}
+
+#[test]
+fn customized_opening_transport_is_never_overwritten() {
+    for command in ["vivac session start --hook", SESSION_START] {
+        for settings in [
+            serde_json::json!({}),
+            serde_json::json!({"additionalContextLimit": 10}),
+            serde_json::json!({"additionalContextLimit": "0"}),
+            serde_json::json!({"additionalContextLimit": 0, "async": true}),
+        ] {
+            if command == "vivac session start --hook" && settings == serde_json::json!({}) {
+                continue;
+            }
+            let c = Sandbox::new_seeded("codex-custom-transport");
+            std::fs::create_dir_all(c.0.join(".codex")).unwrap();
+            let mut handler = settings;
+            handler["type"] = "command".into();
+            handler["command"] = command.into();
+            let existing = serde_json::json!({"hooks": {"SessionStart": [{"matcher": "startup|resume|clear|compact", "hooks": [handler]}]}});
+            std::fs::write(hooks_path(&c), existing.to_string()).unwrap();
+            let before = std::fs::read(hooks_path(&c)).unwrap();
+            let (out, code) = c.run(&["setup", "codex", "--yes"]);
+            assert_ne!(code, 0, "{out}");
+            assert_eq!(std::fs::read(hooks_path(&c)).unwrap(), before);
+        }
+    }
+}
 const SESSION_END: &str = "vivac session end --hook";
 const SESSION_PROMPT: &str = "vivac session prompt --hook";
 
@@ -26,7 +120,7 @@ const EXPECTED_HOOKS: &str = "{\n  \
       {\n        \
         \"matcher\": \"startup|resume|clear|compact\",\n        \
         \"hooks\": [\n          \
-          { \"type\": \"command\", \"command\": \"vivac session start --hook\" }\n        \
+          { \"type\": \"command\", \"command\": \"vivac session start --hook --context codex\", \"additionalContextLimit\": 0, \"async\": false }\n        \
         ]\n      \
       }\n    \
     ],\n    \
@@ -350,7 +444,7 @@ fn a_hooks_json_with_the_two_older_hooks_gains_only_the_third() {
             "SessionStart": [
                 {
                     "matcher": "startup|resume|clear|compact",
-                    "hooks": [ { "type": "command", "command": SESSION_START } ]
+                    "hooks": [ { "type": "command", "command": SESSION_START, "additionalContextLimit": 0, "async": false } ]
                 }
             ],
             "Stop": [

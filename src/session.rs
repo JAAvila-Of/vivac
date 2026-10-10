@@ -75,6 +75,9 @@ pub fn start(ctx: &mut crate::ops::Ctx, a: &Args, project: &str) -> R {
     if !a.has("hook") {
         return crate::brief::brief(&ctx.tree, &ctx.store.root, &ctx.lane_dir, a, project);
     }
+    if a.opt("context") == Some("codex") {
+        return codex_start(ctx, a, project);
+    }
     // In hook mode the brief goes straight to stdout, in plain text: Claude
     // Code's own hook reference says plain-text stdout on `SessionStart`
     // becomes context the agent can see and act on (`f403`, `f404`), so there
@@ -123,6 +126,72 @@ pub fn start(ctx: &mut crate::ops::Ctx, a: &Args, project: &str) -> R {
         }
         Err(_) => {}
     }
+    Ok(())
+}
+
+const CODEX_CONTEXT_BYTES: usize = 60_000;
+
+pub fn codex_preparation_failed() {
+    outln!(
+        "{}",
+        serde_json::json!({
+            "continue": false,
+            "systemMessage": "vivac could not prepare the complete opening context. This opening must not continue with missing instructions. Review the diagnostic and restore readable project context before continuing."
+        })
+    );
+}
+
+fn codex_rejected() {
+    outln!(
+        "{}",
+        serde_json::json!({
+            "continue": false,
+            "systemMessage": "vivac could not deliver the complete opening context within its 60000-byte transport limit. This opening must not proceed with partial instructions. Review vivac rules and vivac brief before continuing."
+        })
+    );
+}
+
+fn codex_start(ctx: &mut crate::ops::Ctx, a: &Args, project: &str) -> R {
+    let mut text =
+        crate::brief::to_text(&ctx.tree, &ctx.store.root, &ctx.lane_dir, a, project, true)?;
+    if text.len() > CODEX_CONTEXT_BYTES {
+        codex_rejected();
+        return Ok(());
+    }
+    let shown_focus = ctx.tree.focus().map(|n| n.id.clone());
+    let shown_vivac = ctx.tree.last_vivac().map(|v| v.id.clone());
+    text.push_str(&reconciliation_text(&ctx.lane_dir));
+    if text.len() > CODEX_CONTEXT_BYTES {
+        codex_rejected();
+        return Ok(());
+    }
+    let hook = HookInput::read();
+    match ctx.lock_for_write() {
+        Ok(mine) => {
+            crate::ops::session_started(ctx, &hook.source, hook.session, shown_focus, shown_vivac)
+                .ok();
+            if mine {
+                ctx.unlock();
+            }
+        }
+        Err(Failure::Busy(_)) => {
+            text.push_str(&format!(
+                "  Session not recorded: another vivac process held the tree for {} seconds.\n",
+                crate::store::LOCK_DEADLINE.as_secs()
+            ));
+        }
+        Err(_) => {}
+    }
+    if text.len() > CODEX_CONTEXT_BYTES {
+        codex_rejected();
+        return Ok(());
+    }
+    outln!(
+        "{}",
+        serde_json::json!({"hookSpecificOutput": {
+            "hookEventName": "SessionStart", "additionalContext": text
+        }})
+    );
     Ok(())
 }
 
@@ -675,19 +744,27 @@ pub fn prompt(cwd: &std::path::Path, a: &Args) {
 }
 
 fn reconciliation(cwd: &std::path::Path) {
+    let text = reconciliation_text(cwd);
+    if !text.is_empty() {
+        outln!("{}", text.strip_suffix('\n').unwrap_or(&text));
+    }
+}
+
+fn reconciliation_text(cwd: &std::path::Path) -> String {
     let (report, code) = crate::agents::reconcile_for_hook(cwd);
     if report.get("policy").is_none() {
         if code > 1 && crate::store::locate(cwd).ok().flatten().is_some() {
-            outln!("  Agent custody could not complete; inspect vivac agents reconcile. Use vivac agents to inspect configuration errors.");
+            return "  Agent custody could not complete; inspect vivac agents reconcile. Use vivac agents to inspect configuration errors.\n".to_string();
         }
-        return;
+        return String::new();
     }
     let pending = report["needs_review"].as_array().map_or(0, Vec::len);
     let blocked = report["blocked"].as_array().map_or(0, Vec::len);
     if report["policy"]["mode"] == "automatic" || pending + blocked > 0 {
-        outln!("  Agent custody: mode {}; changes applied {}; needs review {}; blocked {}. Inspect vivac agents reconcile; review configuration changes with vivac agents sync.",
+        return format!("  Agent custody: mode {}; changes applied {}; needs review {}; blocked {}. Inspect vivac agents reconcile; review configuration changes with vivac agents sync.\n",
             report["policy"]["mode"].as_str().unwrap_or("manual"), report["applied"], pending, blocked);
     }
+    String::new()
 }
 
 /// [`prompt`]'s own decision, factored out so every early exit is a plain

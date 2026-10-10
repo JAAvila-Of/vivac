@@ -146,8 +146,11 @@ pub(super) enum HookState {
     Different(String),
 }
 
-fn command_first_word(cmd: &str) -> Option<&str> {
-    cmd.split_whitespace().next()
+pub(super) fn is_session_command(command: &str, session_word: &str) -> bool {
+    let mut words = command.split_whitespace();
+    words.next().is_some_and(is_vivac_command)
+        && words.next() == Some("session")
+        && words.next() == Some(session_word)
 }
 
 /// Looks through `event`'s array, under the top-level `hooks` object
@@ -174,14 +177,7 @@ pub(super) fn hook_state(root: &Value, event: &str, session_word: &str, ours: &s
             let Some(cmd) = h.get("command").and_then(Value::as_str) else {
                 continue;
             };
-            let words: Vec<&str> = cmd.split_whitespace().collect();
-            let Some(prog) = command_first_word(cmd) else {
-                continue;
-            };
-            if !is_vivac_command(prog) {
-                continue;
-            }
-            if words.get(1) == Some(&"session") && words.get(2) == Some(&session_word) {
+            if is_session_command(cmd, session_word) {
                 return if cmd == ours {
                     HookState::Exact
                 } else {

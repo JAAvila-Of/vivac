@@ -380,6 +380,7 @@ code3
 code4
 codes
 codex
+coexist
 col
 cold
 collect
@@ -420,6 +421,7 @@ concurrent
 condition
 config
 configuration
+configure
 configured
 confirm
 confirms
@@ -499,6 +501,7 @@ current
 cursor
 custody
 custom
+customized
 cut
 cuts
 cwd
@@ -652,6 +655,7 @@ due
 dumb
 dump
 duplicate
+duplicates
 duration
 during
 duties
@@ -679,6 +683,7 @@ elsewhere
 email
 emisores
 emit
+emits
 emoji
 emptied
 empty
@@ -741,6 +746,7 @@ excluding
 exclusive
 excuse
 exe
+executable
 execute
 execution
 exist
@@ -920,6 +926,7 @@ had
 half
 hand
 handle
+handler
 handlers
 handles
 hands
@@ -1138,6 +1145,7 @@ leave
 leaves
 ledger
 left
+legacy
 legend
 len
 length
@@ -1437,6 +1445,7 @@ ov
 over
 overall
 overdue
+overflow
 overlong
 oversized
 overwrite
@@ -1555,6 +1564,7 @@ precomposed
 prefers
 prefix
 prefixes
+preparation
 prepare
 prepared
 present
@@ -1580,7 +1590,6 @@ process
 processing
 product
 products
-prog
 program
 progress
 proj
@@ -1663,9 +1672,11 @@ rebuild
 rebuilt
 receipt
 receipts
+reception
 recognise
 recognised
 recognized
+recommends
 reconcile
 reconciliation
 record
@@ -1728,6 +1739,7 @@ relock
 relocks
 rem
 remaining
+remains
 remedy
 remembered
 remembers
@@ -1963,6 +1975,7 @@ signed
 signing
 signs
 silence
+silent
 silently
 since
 single
@@ -2112,6 +2125,7 @@ switches
 symlink
 symlinks
 sync
+synchronous
 system
 t2
 table
@@ -2210,6 +2224,7 @@ trait
 transcript
 transfer
 transfers
+transport
 transpose
 travels
 treat
@@ -2307,6 +2322,7 @@ up
 update
 updated
 updates
+upgrade
 upgraded
 upper
 uppercase

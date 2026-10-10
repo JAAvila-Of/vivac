@@ -126,11 +126,45 @@ fn hooks(root: &Value, harness: &str, report: &mut Report) {
         ("Stop", "end"),
     ] {
         let name = format!("{harness} {event}");
-        let expected = format!("vivac session {word} --hook");
+        let expected = if harness == "codex" && event == "SessionStart" {
+            "vivac session start --hook --context codex".to_string()
+        } else {
+            format!("vivac session {word} --hook")
+        };
         let entries = root
             .get("hooks")
             .and_then(|v| v.get(event))
             .and_then(Value::as_array);
+        if harness == "codex" && event == "SessionStart" {
+            let openings = entries
+                .into_iter()
+                .flatten()
+                .flat_map(|entry| {
+                    entry
+                        .get("hooks")
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                })
+                .filter(|handler| {
+                    handler
+                        .get("command")
+                        .and_then(Value::as_str)
+                        .is_some_and(|command| {
+                            super::claude_code::is_session_command(command, "start")
+                        })
+                })
+                .count();
+            if openings > 1 {
+                report.add(
+                    &name,
+                    "warning",
+                    "duplicate opening commands; transport not verified",
+                    Some(&fix),
+                );
+                continue;
+            }
+        }
         let exact = entries.into_iter().flatten().any(|entry| {
             // The default start matcher covers every supported opening. A
             // narrower or custom matcher needs a person to judge its scope.
@@ -153,6 +187,10 @@ fn hooks(root: &Value, harness: &str, report: &mut Report) {
                         h.get("type").and_then(Value::as_str) == Some("command")
                             && h.get("command").and_then(Value::as_str) == Some(expected.as_str())
                             && matches!(h.get("async"), None | Some(Value::Bool(false)))
+                            && (harness != "codex"
+                                || event != "SessionStart"
+                                || h.get("additionalContextLimit").and_then(Value::as_u64)
+                                    == Some(0))
                     })
         });
         if exact {
@@ -175,7 +213,11 @@ fn hooks(root: &Value, harness: &str, report: &mut Report) {
                 _ => report.add(
                     &name,
                     "warning",
-                    "custom command, matcher or execution mode; not verified",
+                    if harness == "codex" && event == "SessionStart" {
+                        "custom or legacy command, matcher, context limit or execution mode; transport not verified"
+                    } else {
+                        "custom command, matcher or execution mode; not verified"
+                    },
                     Some(&fix),
                 ),
             }

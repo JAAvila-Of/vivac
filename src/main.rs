@@ -185,6 +185,7 @@ const USAGE: &str = r#"vivac - provenance of work
   Session
 
     vivac session start [--hook]              the brief, ready to inject
+      --context codex                        bounded complete JSON; requires --hook
     vivac session end   [--hook]              automatic stop at close
           --dry-run  what closing would do, and what the hook last did
     vivac session prompt [--hook]             a nudge when nothing was written
@@ -566,7 +567,17 @@ fn run() -> i32 {
     match dispatch(&cmd, &a) {
         Ok(code) => code,
         Err(e) => {
-            let c = e.code();
+            let codex_opening = cmd == "session"
+                && a.positional(0) == Some("start")
+                && a.has("hook")
+                && a.opt("context") == Some("codex")
+                && !matches!(e, Failure::Usage(_));
+            let c = if codex_opening {
+                session::codex_preparation_failed();
+                0
+            } else {
+                e.code()
+            };
             // Whatever `dispatch` already buffered has to reach stdout
             // before the refusal reaches stderr, or the two streams
             // interleave out of order once a terminal merges them.
@@ -644,7 +655,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         // gap: the shape would have to be designed, it has no consumer
         // today, and the agent reads the brief as prose. `d53`.
         "brief" => &["budget", "now"],
-        "session" => &["hook", "next", "budget", "now", "dry-run"],
+        "session" => &["hook", "next", "budget", "now", "dry-run", "context"],
         "add" => &[
             "parent",
             "why",
@@ -904,6 +915,14 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
     if cmd == "session" && a.has("hook") {
         style::plain_only();
         session::hook_stdin();
+    }
+    if cmd == "session"
+        && a.has("context")
+        && (a.positional(0) != Some("start") || !a.has("hook") || a.opt("context") != Some("codex"))
+    {
+        return Err(Failure::usage(
+            "--context codex requires session start --hook.",
+        ));
     }
     // `d935`: a rehearsal is a person looking at what the close hook
     // does, so it goes with `session end` alone and never with `--hook`.

@@ -5,6 +5,98 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::Path;
 
+#[test]
+fn codex_transport_requires_an_explicit_integer_zero_limit() {
+    for limit in [
+        None,
+        Some(serde_json::json!(100)),
+        Some(serde_json::json!("0")),
+        Some(serde_json::json!(null)),
+    ] {
+        let c = Sandbox::new_seeded("doctor-codex-context");
+        c.ok(&["setup", "codex", "--yes"]);
+        let path = c.0.join(".codex/hooks.json");
+        let mut hooks: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let handler = hooks["hooks"]["SessionStart"][0]["hooks"][0]
+            .as_object_mut()
+            .unwrap();
+        match limit {
+            Some(limit) => {
+                handler.insert("additionalContextLimit".to_string(), limit);
+            }
+            None => {
+                handler.remove("additionalContextLimit");
+            }
+        }
+        std::fs::write(&path, hooks.to_string()).unwrap();
+        let r = report(&c, Some("codex"), 0);
+        assert_eq!(check(&r, "codex SessionStart")["status"], "warning");
+        assert!(check(&r, "codex SessionStart")["fix"]
+            .as_str()
+            .unwrap()
+            .contains("setup codex"));
+    }
+}
+
+#[test]
+fn legacy_codex_transport_recommends_review_without_claiming_reception() {
+    let c = Sandbox::new_seeded("doctor-codex-legacy");
+    c.ok(&["setup", "codex", "--yes"]);
+    let path = c.0.join(".codex/hooks.json");
+    let mut hooks: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    hooks["hooks"]["SessionStart"][0]["hooks"][0]["command"] = "vivac session start --hook".into();
+    std::fs::write(&path, hooks.to_string()).unwrap();
+    let r = report(&c, Some("codex"), 0);
+    assert_eq!(check(&r, "codex SessionStart")["status"], "warning");
+}
+
+#[test]
+fn duplicate_codex_openings_are_not_reported_as_verified_transport() {
+    let c = Sandbox::new_seeded("doctor-codex-duplicate");
+    c.ok(&["setup", "codex", "--yes"]);
+    let path = c.0.join(".codex/hooks.json");
+    let mut hooks: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let mut duplicate = hooks["hooks"]["SessionStart"][0].clone();
+    duplicate["hooks"][0]["command"] = "vivac session start --hook".into();
+    hooks["hooks"]["SessionStart"]
+        .as_array_mut()
+        .unwrap()
+        .push(duplicate);
+    std::fs::write(&path, hooks.to_string()).unwrap();
+    let r = report(&c, Some("codex"), 0);
+    assert_eq!(check(&r, "codex SessionStart")["status"], "warning");
+    assert!(check(&r, "codex SessionStart")["detail"]
+        .as_str()
+        .unwrap()
+        .contains("duplicate"));
+}
+
+#[test]
+fn custom_and_executable_path_openings_are_counted_as_duplicates() {
+    for command in [
+        "vivac session start --hook --budget 1",
+        "C:/tools/vivac.exe session start --hook --budget 1",
+    ] {
+        let c = Sandbox::new_seeded("doctor-codex-custom-duplicate");
+        c.ok(&["setup", "codex", "--yes"]);
+        let path = c.0.join(".codex/hooks.json");
+        let mut hooks: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        hooks["hooks"]["SessionStart"][0]["hooks"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"type": "command", "command": command}));
+        std::fs::write(&path, hooks.to_string()).unwrap();
+        let r = report(&c, Some("codex"), 0);
+        assert_eq!(check(&r, "codex SessionStart")["status"], "warning");
+        assert!(check(&r, "codex SessionStart")["detail"]
+            .as_str()
+            .unwrap()
+            .contains("duplicate"));
+    }
+}
+
 fn snapshot(root: &Path) -> BTreeMap<String, Vec<u8>> {
     fn walk(root: &Path, at: &Path, out: &mut BTreeMap<String, Vec<u8>>) {
         for e in std::fs::read_dir(at).unwrap() {

@@ -61,7 +61,14 @@ fn configured_opening(sandbox: &Sandbox, opening_dir: &Path, harness: &str) {
     let handlers = opening["hooks"].as_array().unwrap();
     assert_eq!(handlers.len(), 1, "{settings}");
     assert_eq!(handlers[0]["type"], "command");
-    assert_eq!(handlers[0]["command"], START_COMMAND);
+    let expected = if harness == "codex" {
+        assert_eq!(handlers[0]["additionalContextLimit"], 0);
+        assert_eq!(handlers[0]["async"], false);
+        "vivac session start --hook --context codex"
+    } else {
+        START_COMMAND
+    };
+    assert_eq!(handlers[0]["command"], expected);
 }
 
 fn opening_events(sandbox: &Sandbox) -> Vec<Value> {
@@ -139,13 +146,25 @@ fn acceptance_matrix(harness: &str, nested: bool) {
         });
         // The generated command is checked above; execute reviewed argv directly.
         // This exercises emission without pretending to launch either harness.
-        let output = run(
-            &sandbox,
-            &cwd,
-            &["session", "start", "--hook"],
-            Some(&input),
-        );
-        let context = String::from_utf8(output.stdout).unwrap();
+        let args: &[&str] = if harness == "codex" {
+            &["session", "start", "--hook", "--context", "codex"]
+        } else {
+            &["session", "start", "--hook"]
+        };
+        let output = run(&sandbox, &cwd, args, Some(&input));
+        let context = if harness == "codex" {
+            let response: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(
+                response["hookSpecificOutput"]["hookEventName"],
+                "SessionStart"
+            );
+            response["hookSpecificOutput"]["additionalContext"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        } else {
+            String::from_utf8(output.stdout).unwrap()
+        };
         assert!(context.starts_with("vivac"), "{context}");
         for required in [
             "PILLARS",

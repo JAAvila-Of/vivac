@@ -101,7 +101,7 @@ vivac setup codex
 
 The same pieces, in the three places Codex reads inside a project:
 `.codex/config.toml` gets the server, `.codex/hooks.json` gets `SessionStart`,
-`UserPromptSubmit` and `Stop` running the same three commands, and `.agents/skills/vivac-migrate/`
+`UserPromptSubmit` and `Stop` running the session commands, and `.agents/skills/vivac-migrate/`
 gets the same skill file. Nothing goes in your own configuration directory.
 
 It refuses where there is no tree, and that refusal is the same argument
@@ -150,14 +150,22 @@ vivac-migrate skill is what brings it in. The reverse needs no warning: since
 version 2.1.277, Claude Code reads `AGENTS.md` on its own when there is no
 `CLAUDE.md`.
 
-The brief reaches the agent as plain text on the opening hook's standard
-output, which Codex adds to the session as context. Above roughly 2,500
-tokens it saves that context to a file and shows the model a shorter preview
-instead. The brief's own 1,500-token budget is a soft ceiling: fixed sections
-survive even when they exceed it. It therefore does not guarantee that Codex
-will pass the complete output directly to the model. Check the received
-context, including any saved-output preview, before replacing instruction
-files. See [Checking instruction delivery](INSTRUCTION-DELIVERY.md).
+Codex's opening handler runs `vivac session start --hook --context codex`.
+It returns one JSON response containing the complete opening text and custody
+notices. Setup makes the handler synchronous and sets `additionalContextLimit`
+to `0`, avoiding Codex's default saved-file preview. The producer enforces a
+separate ceiling of 60,000 UTF-8 bytes for that context. If the complete text
+cannot fit, it returns `continue: false` with an explanation, rather than a
+truncated opening. This ceiling is a vivac transport budget, not a promise
+about the active model's context window or account access.
+
+Run setup again to review an upgrade from the original plain-text opening hook;
+the changed handler must also be approved in Codex. Setup preserves foreign
+hooks and reports custom commands or execution settings for review. The brief's
+1,500-token budget remains soft: its fixed sections survive even when they
+exceed it. Configuration and successful emission do not prove reception.
+Check received context before replacing instruction files. See
+[Checking instruction delivery](INSTRUCTION-DELIVERY.md).
 
 setup takes three flags, and they read the same on both sides: `--dry-run`,
 `--yes` and `--undo`. The four that decide where the tree lives — `--join`,
