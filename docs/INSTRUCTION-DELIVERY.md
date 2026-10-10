@@ -448,6 +448,24 @@ not use snapshot counts to identify an inference request. This control proves
 late-opening isolation for the instrumented preserving candidate; it does not
 prove isolation of a suspended attachment continuation or activate setup.
 
+Further native attachment controls distinguished cancellation from a late
+downstream return. With an interrupt, the downstream clock rejected its wait;
+B and C each carried the complete fresh snapshot once, the previous snapshot
+zero times, foreign text once and no marker. Closure checkpoints observed the
+rejection independently of old-scope HTTP. This did not exercise the candidate's
+stale attachment catch.
+
+A natural chain timeout instead let the candidate return A's current snapshot
+before the downstream finished. B reached the provider before the planned
+downstream deadline; the downstream then completed and C retained B. A separate
+control replaced the clock with a module-local Promise: after interrupting A,
+the native C submission resolved that Promise only after B's provider request
+and result. The downstream continuation actually resumed, while B and C retained
+the complete fresh snapshot with the same conservation counts. In both controls,
+the candidate's earlier `next` call did not resume after the late downstream
+return. Neither control establishes a stale candidate catch or replay. Their
+complete acceptance results remain false, and setup remains inactive.
+
 ## Repeatable producer checks
 
 From a checkout of vivac, run:
