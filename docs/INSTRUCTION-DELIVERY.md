@@ -466,6 +466,55 @@ the candidate's earlier `next` call did not resume after the late downstream
 return. Neither control establishes a stale candidate catch or replay. Their
 complete acceptance results remain false, and setup remains inactive.
 
+A further control suspended the candidate itself after its real downstream
+result, immediately before its original current-reference predicate. After an
+interrupt, B completed with fresh context; C's native submission released the
+candidate's local Promise. A resumed and the unchanged predicate rejected its
+obsolete generation. Its captured turn was no longer active. B and C each
+retained the complete fresh snapshot once, foreign text once and no marker;
+A sent no provider request. The host did not invoke the abandoned attachment's
+registered catch. This exercises the candidate's stale continuation, but does
+not establish catch replay or complete recovery.
+
+The next fixture candidate therefore handles classified attachment failures
+locally when `next` has already returned, using that actual result. It removes
+only the own marker and aborts only the captured turn if it is still active.
+Failure before a downstream result remains a separate registered-catch path.
+Review found that a rejection during local recovery could escape into that
+path and call `next` again. The candidate must also distinguish failures after
+a result so they cannot trigger a second call. Neither this design nor offline
+controls alone establishes native recovery or authorizes setup activation.
+
+The first local-recovery candidate did not register natively. The loader rejected
+passing the harness capability `$` to its shared `recoverOwned` helper. No
+opening receipt was written and the independent CLI guard refused inference;
+there were zero Messages requests. Repeating the previous candidate exercised
+its opening and stale continuation again, locating the new failure to the
+candidate rather than a general harness failure. The replacement keeps capability
+calls inside the hooks and shares only pure result normalization. Each replacement
+still requires its own native checks; JavaScript syntax checks and offline hook
+tests do not establish that the native loader accepts it.
+
+That replacement passed a native interleaving on 2.1.294. A had received its
+real downstream result before the interrupt; B then opened and completed with
+fresh context. C's native submission released A's suspended continuation. The
+original predicate rejected A's obsolete generation, and the local catch
+returned its actual result with foreign text once and no marker. A's captured
+turn was inactive, so recovery made no abort call. B and C each received the
+complete fresh 19,872-byte snapshot once, the previous snapshot zero times,
+foreign text once and no marker. A sent no provider request. The native result
+had no non-text fields: preservation of arbitrary fields remains an offline
+test result, not a native observation. This control proves local recovery;
+it does not rely on host catch replay.
+
+The same replacement also passed separate native startup/resume, manual
+compaction and automatic compaction controls. Resume reused the native session
+ID and added one receipt. Each compaction completed one summary and one actual
+boundary, then delivered the complete fresh snapshot once, the previous one
+zero times, foreign context once and no marker. Automatic compaction used
+synthetic usage and window values; acceptance used actual provider request
+counts. These results do not install the module or activate setup.
+
 ## Repeatable producer checks
 
 From a checkout of vivac, run:
