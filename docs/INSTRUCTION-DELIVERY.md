@@ -397,6 +397,38 @@ The mock counted one downstream execution despite two calls to `next`.
 These passes do not establish native replay behavior, native concurrency safety
 or readiness to replace the product module.
 
+A native control on 2.1.294 added foreign text inside the same selected
+attachment. Without a fault, the provider received the complete snapshot once,
+the foreign text once and no marker. When an independent downstream hook removed
+only the marker, the catch replay recovered the foreign text and the downstream
+hook ran once. The active turn sent no provider request; an ordered clear and
+follow-up then delivered the fresh complete snapshot once, the previous one
+zero times, the foreign text once and no marker. However, the exterior hook did
+not observe the catch's final return in the abort-enabled control. The original
+probe therefore remained rejected under its final-return criterion; replay
+observation alone does not prove delivery of the catch's return.
+
+A deliberately unsafe fixture control removed only the abort call. It observed
+the final return with foreign text preserved and no marker, followed by a
+provider request containing zero complete snapshots. This control passed its
+negative-observation criterion and explicitly rejected safety. Preserving the
+returned text is insufficient: the active incomplete turn must also be refused.
+Neither control establishes native concurrent-opening behavior or installation
+readiness, and the unsafe variant is excluded from the product.
+
+The preserving fixture candidate also passed separate normal-opening controls
+on 2.1.294. A resumed session reused its native session ID after a fixture
+change; its first request contained the fresh complete snapshot once, the
+previous one zero times, foreign context once and no marker. Manual and
+automatic compaction controls each completed a summary and one actual boundary,
+then delivered the same fresh-once, old-absent and foreign-preserved result.
+The automatic control used synthetic usage and window values, rather than
+measured model token consumption. Its legacy callback predicate remained false;
+acceptance used the counts in actual provider requests. Startup and each
+corresponding reopening recorded one receipt. These controls tested the preserving
+candidate itself; they do not establish project-file installation, native concurrent-opening
+safety or activation of the setup integration.
+
 ## Repeatable producer checks
 
 From a checkout of vivac, run:
