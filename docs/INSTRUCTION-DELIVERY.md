@@ -73,6 +73,9 @@ their usage error. Outside a vivac project, the hook remains silent.
 Claude Code retains its plain-text opening hook. Its oversized-context problem
 remains unresolved: the multi-handler consumer tests below establish transport
 capacity, but not safe coordination of a dynamic vivac opening.
+Do not assume that the Codex refusal mechanism also protects Claude Code:
+the isolated Claude checks below found that `SessionStart` did not prevent a
+provider request after receiving `continue: false`.
 
 ## Repeatable producer checks
 
@@ -114,6 +117,7 @@ context constructed by the harness, not understanding or compliance by a model.
 | Claude Code, extensive opening | The hook emitted all 63 numbered title sentinels; the request contained only 2 |
 | Codex `exec`, extensive opening | The request contained 11 of 63 numbered title sentinels, from the beginning and end; a saved hook output contained all 63 |
 | Codex `exec`, bounded JSON opening, startup and resume | The complete producer context arrived unchanged; resume included a fresh instruction |
+| Claude Code mod, synthetic `prompt.submit` context, startup and resume | The complete 60,000-character test string appeared as contiguous text in request context |
 
 The bounded product check validated the setup-generated handler before using a
 temporary wrapper to capture the producer's actual JSON stdout in memory and
@@ -130,6 +134,71 @@ preparation-failure JSON and a diagnostic on stderr. Codex processed that
 refusal without a provider request, opening receipt or change to the fixture's
 tree. This covers the observed loading failure, not every possible system error.
 
+A separate Claude control check used a synthetic `SessionStart` command that
+returned `{"continue":false,"stopReason":"Synthetic fixed stop reason."}`.
+Claude reported the hook's successful execution, but still made two requests
+to the local provider, which returned HTTP 400 before inference. Startup and
+`--continue` behaved this way. Returning the same JSON with exit code 7 also
+did not prevent either opening's requests. These checks used a temporary
+harness home and a synthetic credential, with no tools or timeouts. They
+establish that these `SessionStart` responses did not block the tested sends;
+they do not establish behavior for other hook events or versions.
+
+In the same isolated harness, `UserPromptSubmit` did prevent requests when its
+command returned either `{"decision":"block","reason":"Synthetic fixed stop reason."}`
+or `{"continue":false,"stopReason":"Synthetic fixed stop reason."}`, each with
+exit code 0. Startup and `--continue` both finished without provider requests,
+tools or timeouts. A local synthetic counter confirmed one command execution
+per invocation; the stream output did not expose hook-response records for
+this event. This establishes an observed send guard, not complete context
+delivery or behavior after actual clearing or compaction.
+
+An isolated local Claude plugin also passed native validation and supplied a
+60,000-character synthetic string through `prompt.submit`. Every local
+request contained the complete string at startup and `--continue`, using
+either `--plugin-dir` or the `CLAUDE_CODE_PLUGIN_DIRS` environment variable.
+A separate `prompt.context` check delivered the complete string at startup.
+A `prompt.submit` handler returning `drop`, and a handler that threw with a
+`.catch` returning `drop`, produced no provider requests. These are consumer
+tests with synthetic modules, not a vivac setup integration. A subsequent
+resume check also delivered a unique marker added only to its context.
+Compaction, project-local configuration and the Rust producer required the
+separate checks below.
+The [mods reference](https://code.claude.com/docs/en/plugins/mods/reference)
+describes the interfaces; the [event guide](https://code.claude.com/docs/en/plugins/mods/events#handle-a-hook-that-fails)
+explains that a handler which fails without a refusal-producing `.catch` is
+skipped, allowing the next handler to proceed.
+
+Another synthetic-module check submitted two messages, a native `/compact`
+command and a followup through `--input-format stream-json` in one Claude
+process. A local provider returned invented successful streaming responses,
+without inference. Claude emitted `system:compact_boundary` and the module's
+`session.compact` marker. The followup received a fresh `prompt.context`
+sentinel absent from earlier requests and test prompts. The handler did not
+run again during the compact command itself, but did run on the followup in
+the same process. This proves refresh on that path, not automatic compaction
+in the middle of a turn or a vivac integration.
+
+A separate bridge check used a local module to call the stable vivac producer
+through `$.process.run` and attach its decoded `additionalContext` through
+`prompt.submit`. The complete startup context, 18,921 UTF-8 bytes, appeared
+contiguously in both local startup requests. After a new synthetic constraint was
+added, both resume requests contained the complete updated context, 19,931
+bytes, including the new instruction. Each opening recorded one receipt in
+the fixture, and the original workspace's event log remained unchanged. The
+fixture used the existing bounded Codex JSON mode to test the bridge; this is
+not a Claude setup integration or a Claude opening-lifecycle contract.
+
+Plugin declaration alone also did not establish loading. In two isolated
+non-interactive runs, project settings containing a local directory marketplace
+and an enabled plugin did not activate the module. Registering the marketplace
+and installing the plugin with `--scope project` in the isolated harness home
+did activate it and delivered a complete 12,066-character test string. Project
+settings with `env.CLAUDE_CODE_PLUGIN_DIRS` likewise did not activate a separate
+module, while the process environment did. Workspace trust was not confirmed
+in these runs; do not generalize their configuration behavior to trusted
+interactive sessions or treat native validation as proof of loading.
+
 The extensive Claude fixture also included four synthetic pillars. Their
 titles and the instruction to consult `vivac rules` arrived, while the custody
 and work capture guidance did not. The extensive Codex fixture had one
@@ -137,7 +206,8 @@ synthetic pillar and 62 constraints, with no active focus. Neither case
 establishes delivery for a deeply nested focus or the original project's
 instructions. No check established that a model read the saved output or
 consulted rule bodies. The clear check exercised the app-server API, not the
-interactive `/clear` command. Actual compaction remains unverified.
+interactive `/clear` command. Actual compaction of the vivac setup integrations
+remains unverified; the synthetic Claude module check above has narrower scope.
 
 A separate Claude consumer check used a deterministic test hook with three
 markers in ASCII text. Both plain stdout and JSON `additionalContext` delivered
@@ -184,6 +254,13 @@ Do not infer execution from argument acceptance or change personal trust
 settings to reproduce an isolated check.
 
 ## Check a real harness separately
+
+Create writable fixtures outside existing vivac trees. `VIVAC_HOME` isolates
+the global registry, but does not override discovery of `.vivac` in an ancestor
+of the working directory. Inside an existing tree, `vivac init` can declare a
+lane of that tree rather than create an independent log. Before adding test
+nodes, verify that the fixture has its own `.vivac/events`; do not treat a
+successful initialization alone as proof of isolation.
 
 Use a disposable project containing only invented sentinels. Keep instruction
 files in the original project throughout this check. Set up and approve the
