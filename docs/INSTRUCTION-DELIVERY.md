@@ -769,6 +769,30 @@ Claude exited successfully. The probe rejected both as inconclusive. These
 results establish neither child termination nor safe cancellation; the observer
 and fixture preparation must be checked before interpreting a rerun.
 
+The observer's Windows process-entry structure was missing a field. A corrected
+structure passed a separate owned-child check, and a native rerun then found
+the exact producer in both cases. With the store lock still held, each child
+was alive at approximately one second and terminated at approximately 6.2
+seconds; neither required cleanup termination. No provider request or opening
+receipt preceded lock release. In the interrupt case, the acknowledgement
+arrived at approximately five seconds, rather than before the one-second
+observation. This does not demonstrate immediate cancellation by interruption.
+Both clears recorded a new receipt. The interrupt recovery sent one provider
+request; the timeout case reported a result but no provider request, so the
+probe remained rejected. Its clear/follow-up result ordering needs an explicit
+check before claiming timeout recovery.
+
+A further native run waited explicitly for the clear result before submitting
+the follow-up. Both timeout and interrupt controls then passed the observation
+and recovery criteria: exact children alive at one second and terminated at
+6.2 seconds while the lock remained held, no cleanup termination, no provider
+request or opening receipt before release, and one clear receipt followed by
+one actual provider request. Both native processes exited successfully.
+The interrupt acknowledgement still arrived at approximately five seconds.
+This establishes the tested bounded wait and recovery, not immediate
+interrupt-driven termination, rollback of producer effects or cancellation
+outside this locked-store fixture.
+
 The extensive Claude fixture also included four synthetic pillars. Their
 titles and the instruction to consult `vivac rules` arrived, while the custody
 and work capture guidance did not. The extensive Codex fixture had one
