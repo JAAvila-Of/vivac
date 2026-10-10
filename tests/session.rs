@@ -9,6 +9,124 @@ use common::Sandbox;
 
 const CLAUDE_MODULE_START: &[&str] = &["session", "start", "--hook", "--context", "claude-module"];
 
+fn directory_snapshot(root: &std::path::Path) -> Vec<(std::path::PathBuf, Option<Vec<u8>>)> {
+    fn visit(
+        root: &std::path::Path,
+        dir: &std::path::Path,
+        files: &mut Vec<(std::path::PathBuf, Option<Vec<u8>>)>,
+    ) {
+        if !dir.exists() {
+            return;
+        }
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            let bytes = if path.is_dir() {
+                None
+            } else {
+                Some(std::fs::read(&path).unwrap())
+            };
+            files.push((path.strip_prefix(root).unwrap().to_path_buf(), bytes));
+            if path.is_dir() {
+                visit(root, &path, files);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    visit(root, root, &mut files);
+    files.sort();
+    files
+}
+
+#[test]
+fn opening_guard_checks_receipts_without_opening_the_tree_or_home() {
+    let valid = [
+        r#"{"vivac_opening":{"protocol":"vivac.claude.opening.v1","status":"ready","generation":1}}"#,
+        r#"{"vivac_opening":{"protocol":"vivac.claude.opening.v1","status":"absent","generation":9007199254740991}}"#,
+    ];
+    let mut invalid = vec![
+        String::new(),
+        "not JSON".into(),
+        "null".into(),
+        "[]".into(),
+        "{}".into(),
+        r#"{"vivac_opening":null}"#.into(),
+    ];
+    for generation in [
+        "0",
+        "-1",
+        "1.0",
+        "true",
+        "9007199254740992",
+        "18446744073709551616",
+        "null",
+        "\"1\"",
+    ] {
+        invalid.push(format!(r#"{{"vivac_opening":{{"protocol":"vivac.claude.opening.v1","status":"ready","generation":{generation}}}}}"#));
+    }
+    for receipt in [
+        r#"{"status":"ready","generation":1}"#,
+        r#"{"protocol":"vivac.claude.opening.v2","status":"ready","generation":1}"#,
+        r#"{"protocol":"vivac.claude.opening.v1","generation":1}"#,
+        r#"{"protocol":"vivac.claude.opening.v1","status":"blocked","generation":1}"#,
+        r#"{"protocol":"vivac.claude.opening.v1","status":"rejected","generation":1}"#,
+        r#"{"protocol":"vivac.claude.opening.v1","status":"ready"}"#,
+    ] {
+        invalid.push(format!(
+            r#"{{"vivac_opening":{receipt},"content":"DO NOT REFLECT INPUT"}}"#
+        ));
+    }
+    for seeded in [false, true] {
+        let c = if seeded {
+            Sandbox::new_seeded("opening-guard")
+        } else {
+            Sandbox::new_empty("opening-guard")
+        };
+        if seeded {
+            std::fs::write(c.0.join(".vivac/config"), "unreadable config").unwrap();
+            std::fs::write(c.0.join(".vivac/events"), "unreadable log").unwrap();
+            std::fs::write(c.0.join(".vivac/index"), "existing index").unwrap();
+        }
+        let before = directory_snapshot(&c.0);
+        let home_before = directory_snapshot(c.global_home());
+        for (input, allowed) in valid
+            .iter()
+            .map(|s| (*s, true))
+            .chain(invalid.iter().map(|s| (s.as_str(), false)))
+        {
+            let (stdout, stderr, code) =
+                run_stdin_split(&c, &["session", "guard", "--hook"], input);
+            assert_eq!(code, 0, "{stdout}{stderr}");
+            assert!(stderr.is_empty(), "{stderr}");
+            let response: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+            let expected = if allowed {
+                serde_json::json!({"continue":true})
+            } else {
+                serde_json::json!({"continue":false,"stopReason":"The vivac opening module did not confirm ready context. Check the Claude integration and restart the session."})
+            };
+            assert_eq!(response, expected, "{input}");
+            assert_eq!(directory_snapshot(&c.0), before);
+            assert_eq!(directory_snapshot(c.global_home()), home_before);
+        }
+    }
+}
+
+#[test]
+fn opening_guard_requires_only_hook_mode() {
+    let c = Sandbox::new_seeded("opening-guard-usage");
+    let before = directory_snapshot(&c.0);
+    for args in [
+        vec!["session", "guard"],
+        vec!["session", "guard", "--hook", "--context", "claude-module"],
+        vec!["session", "guard", "--hook", "--dry-run"],
+    ] {
+        let (stdout, stderr, code) = run_stdin_split(&c, &args, "{}");
+        assert_ne!(code, 0, "{args:?}");
+        assert!(stdout.is_empty(), "{stdout}");
+        assert!(!stderr.is_empty());
+        assert_eq!(directory_snapshot(&c.0), before);
+    }
+}
+
 #[test]
 fn claude_module_opening_is_complete_and_byte_bounded() {
     let c = Sandbox::new_seeded("claude-module-ready");

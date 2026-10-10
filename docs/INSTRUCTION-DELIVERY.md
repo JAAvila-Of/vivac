@@ -105,6 +105,92 @@ must validate the protocol and refuse a failed or incomplete preparation
 before any subsequent model send. Native module loading, cancellation,
 handler failures and installation still need their own checks.
 
+The consumer artifact is in `src/setup/claude-opening/`. It calls the producer
+once per native `SessionStart` and keeps only the current snapshot in memory.
+Its `prompt.context` handler preserves other context blocks, checks that the
+opening is still current after downstream handlers finish, then adds the
+complete snapshot as its own block. It does not send its context through the
+classic hook's stdout or prepare it again on each render. New openings and
+session endings invalidate the old snapshot; a late result cannot restore it.
+
+`vivac session guard --hook` provides a separate command hook check. It reads
+the `vivac_opening` object supplied by the module through the native
+`UserPromptSubmit` input. The protocol must match, the status must be `ready`
+or `absent`, and the generation must be a positive safe integer. Missing or
+invalid input returns `continue: false` with a fixed explanation. Valid input
+returns `continue: true`. Both exit successfully, without locating a tree or
+changing project files. This receipt checks the module-to-command path; it is
+not authentication or evidence of provider reception.
+
+The module also rejects sends while preparation is pending or blocked, and
+requires its own complete context block to have been published before
+advancing a turn with context. These guards are experimental: configuring the
+command alone does not establish their native ordering, execution or failure
+behavior. Setup and
+doctor do not install, enable or claim support for this artifact yet.
+
+Its behavioral tests import the real artifact with a simulated event runtime:
+
+```sh
+node --test tests/claude_opening_module.mjs
+```
+
+They check complete UTF-8 boundaries, foreign context, stale openings and
+renders, aborted handlers and blocked fallbacks. They do not prove native
+module loading or reception. The CLI guard is also covered by `tests/session.rs`.
+
+An initial native consumer check on Claude 2.1.294 exposed an ordering error:
+`turn.step` ran before `prompt.attachment`, so requiring attachment expansion
+at the turn guard blocked even a valid opening. A diagnostic variant that
+relaxed only that requirement observed `prompt.context`, then `turn.step`,
+then attachment rendering and a provider request. That variant establishes
+the event order, not safe behavior. The consumer therefore uses the earlier
+context-block event while retaining its publication requirement.
+
+An isolated missing-module control observed no receipt and no provider
+requests, with successful process exit. The native stream did not expose the
+command hook's JSON response. Separate checks of the same executable confirmed
+that a valid synthetic receipt permits continuation and missing input returns
+`continue: false`; do not confuse those CLI checks with captured native hook
+stdout.
+
+The unmodified context-block consumer then passed a native startup control
+with the real producer and command guard. An isolated twin project produced
+the expected 4,303-character snapshot; the receiver compared it literally
+with the published block and the provider request, keeping context only in
+memory. It arrived exactly once, with all five synthetic sentinels. The live
+fixture recorded one opening, and the native input carried a `ready` receipt
+with generation 1. The process exited successfully without a timeout. This
+small control establishes the working handoff and guard, not large-context
+reception, compaction, setup installation or a model's understanding.
+
+A later control of the same unmodified artifact received larger snapshots
+at startup and after a real `/clear`: 19,791 and 19,859 UTF-16 units,
+occupying 19,796 and 19,864 UTF-8 bytes respectively. Each complete string
+matched an isolated twin producer's output literally and arrived once. After
+clear, the previous complete snapshot appeared zero times and the fresh
+sentinel appeared once. The live fixture recorded one startup and one clear;
+baseline invocations wrote receipts only in the twins. The process exited
+successfully without a timeout or blocked proxy requests. An earlier attempt
+failed while recreating a twin directory in the helper, not in the consumer.
+
+Twelve subsequent synthetic stress prompts did not produce a compaction
+boundary or a `SessionStart` with source `compact`. That stress check does not
+establish automatic compaction or delivery after it.
+
+A final native `/compact` control did emit a compaction boundary and reopen
+with source `compact`. Its follow-up request received the fresh Unicode
+sentinel and the complete 19,858-unit snapshot (19,865 UTF-8 bytes), matching
+the isolated twin producer literally and appearing once. The previous
+complete snapshot appeared zero times. The live fixture recorded one startup
+and one compact; three provider requests included the compaction operation.
+The process exited successfully without a timeout or blocked proxy requests.
+The helper's report was adjusted afterward to account for auxiliary
+compaction requests, using the already captured counters without another
+launch. This establishes explicit compaction with the final artifact, not
+automatic compaction. These controls used an explicit plugin directory;
+they do not establish installation, update, undo or doctor behavior.
+
 ## Repeatable producer checks
 
 From a checkout of vivac, run:

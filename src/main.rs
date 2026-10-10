@@ -191,6 +191,7 @@ const USAGE: &str = r#"vivac - provenance of work
     vivac session end   [--hook]              automatic stop at close
           --dry-run  what closing would do, and what the hook last did
     vivac session prompt [--hook]             a nudge when nothing was written
+    vivac session guard --hook               experimental opening check; requires --hook
     vivac mcp                                 serve the tree over MCP
     vivac web [--port N] [--no-open]          the tree in a browser, and
           [--project P]                       nowhere but this machine
@@ -937,6 +938,13 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
     }
     if cmd == "session" && a.positional(0) == Some("prompt") {
         session::prompt(&cwd, a);
+        return Ok(0);
+    }
+    if cmd == "session" && a.positional(0) == Some("guard") {
+        if !a.has("hook") {
+            return Err(Failure::usage("session guard requires --hook."));
+        }
+        session::guard();
         return Ok(0);
     }
 

@@ -72,6 +72,33 @@ impl HookInput {
     }
 }
 
+pub fn guard() {
+    let input: serde_json::Value =
+        serde_json::from_str(hook_stdin()).unwrap_or(serde_json::Value::Null);
+    let allowed = input
+        .as_object()
+        .and_then(|input| input.get("vivac_opening"))
+        .and_then(serde_json::Value::as_object)
+        .is_some_and(|receipt| {
+            receipt.get("protocol").and_then(serde_json::Value::as_str)
+                == Some(CLAUDE_OPENING_PROTOCOL)
+                && matches!(
+                    receipt.get("status").and_then(serde_json::Value::as_str),
+                    Some("ready" | "absent")
+                )
+                && receipt
+                    .get("generation")
+                    .and_then(serde_json::Value::as_u64)
+                    .is_some_and(|generation| (1..=9_007_199_254_740_991).contains(&generation))
+        });
+    let response = if allowed {
+        serde_json::json!({"continue": true})
+    } else {
+        serde_json::json!({"continue": false, "stopReason": "The vivac opening module did not confirm ready context. Check the Claude integration and restart the session."})
+    };
+    outln!("{response}");
+}
+
 pub fn start(ctx: &mut crate::ops::Ctx, a: &Args, project: &str) -> R {
     if !a.has("hook") {
         return crate::brief::brief(&ctx.tree, &ctx.store.root, &ctx.lane_dir, a, project);
