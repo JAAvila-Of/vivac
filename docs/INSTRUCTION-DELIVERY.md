@@ -746,6 +746,42 @@ created no marketplace or plugin installation records. This establishes the
 project-file loading path after native trust acceptance, not automatic onboarding
 of a new account or loading before trust.
 
+A further synthetic project exercised this loading path with the real bounded
+producer and the preserving reference candidate. Its new profile contained
+only completed onboarding and approval of a fake API key; project trust was
+accepted through the native dialog. No `--plugin-dir`, marketplace registration
+or plugin installation was used. The main interactive request received the
+complete 19,796-byte UTF-8 snapshot once, with one module version tag and no
+reference marker. A separate title-generation request contained the test prompt
+but no opening context. Matching the prompt alone therefore did not identify
+the main request. The corrected probe classified requests by their purpose
+indicators and message structure before checking snapshot copies, and rejected
+unclassified requests. Earlier rejected reports remain separate.
+
+Reopening that project received the same complete snapshot once. Updating the
+fixture's recognized bundle from v1 to v2 and adding a fresh Unicode instruction
+then delivered the complete 19,867-byte snapshot once, with the v2 tag once and
+no old snapshot or v1 tag. Each reopen recorded one opening and exited with
+status 0. Neither reopen made a title-generation request. The fixture manager's
+update and undo reported no forbidden Python filesystem mutation attempts;
+foreign sentinels and the guard configuration remained byte-identical.
+
+After undo, the target module was absent from the native plugin list, no new
+opening was recorded and the receiver saw zero Messages requests. The native
+process exited with status 0, but exposed no `hook_response` row carrying the
+guard's `continue: false`. The complete cycle probe therefore remained rejected:
+zero messages alone did not satisfy its explicit guard-refusal criterion.
+An additional launch in the same already-removed fixture captured the native
+JSON output in memory. The command guard's exact refusal reason appeared in a
+`system`/`informational` event and in `result`/`success`, rather than in a
+`hook_response`. That observation passed with zero Messages requests, no new
+opening, the module absent and the guard configuration unchanged. A successful
+native exit therefore does not by itself mean that inference proceeded. The
+original rejected cycle report was retained separately.
+These counts do not establish zero token-count requests or other API calls.
+This remains a synthetic fixture manager, not the Rust setup implementation;
+it does not activate the candidate in the product.
+
 A native bridge then exercised the real bounded producer at startup and two
 real `/clear` commands in one stream-json process. It prepared snapshots of
 18,921, 19,974 and 21,027 UTF-8 bytes. Each subsequent request contained its
