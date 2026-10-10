@@ -313,6 +313,57 @@ once and no marker. Startup and clear each recorded a receipt; the process
 exited successfully. This covers a failure after attachment classification,
 not an earlier downstream exception or a confirmed abort return.
 
+A pre-result failure comparison exposed why attachment selection must precede
+the downstream call. Both fixture copies injected the same error inside the
+handler before calling `next`, after recognizing the own marker in input text.
+The late-selection control sent a request with no complete snapshot and one
+unexpanded marker. The early-selection variant recorded the own attachment
+before that error, entered its catch and sent no request. The process remained
+alive; `/clear` recovered one request containing the fresh complete snapshot
+once, the previous snapshot zero times, foreign context once and no marker.
+This injected handler error does not establish independent downstream-plugin
+failure behavior.
+
+A separate positive control of the early-selection candidate retained literal
+startup and resume delivery: startup contained its complete snapshot once;
+resume contained only the fresh complete snapshot once, including the Unicode
+sentinel. Foreign context appeared once and no marker survived in either
+request. Both processes reused the same session and exited successfully, with
+one receipt per opening. These candidates remain fixture-only.
+
+Two independent-hook controls then observed the actual chain order: the own
+input was selected before the separate hook ran. When that hook threw, the
+downstream result retained the marker and the candidate delivered the complete
+snapshot once. When the hook returned `text: null`, the result lost the marker;
+the candidate let a request proceed with no complete snapshot. Foreign context
+survived once in both cases. Early selection alone therefore does not establish
+safe delivery: a selected own reference must also survive the downstream result
+before expansion, or the turn must be refused.
+
+A guarded fixture candidate added that result check. The same independent-hook
+comparison then retained complete delivery after an exception, while marker
+removal entered the own catch and sent no request. The continuous-input process
+remained alive, and `/clear` recovered the fresh complete snapshot once without
+the previous one or a marker; foreign context survived once. A separate positive
+control of that guarded artifact also retained complete, fresh startup and
+resume delivery. These controls do not establish cancellation of the producer.
+
+An automatic-compaction control of the guarded candidate used the same synthetic
+window and simulated usage as the earlier context-block control. It completed a
+summary and one native compact boundary within three prompts. The fixture changed
+before the automatic hook; startup and compact each recorded one receipt.
+The first normal request after compact contained the fresh complete snapshot
+once, the previous one zero times, foreign context once and no marker. The native
+process exited successfully. The reference wrapper initially returned failure:
+its predicate required four prompts and the legacy `prompt.context` observation
+after compact, although the foreign block survived in both actual requests.
+The captured metadata then passed a separate offline evaluation using at most
+four prompts and preservation in the provider requests. No further native launch
+was performed, and the original probe failure remains recorded. The automatic
+control's output did not record startup marker absence; the separate positive
+control checked that condition.
+This observation does not establish explicit compaction or installation readiness.
+
 ## Repeatable producer checks
 
 From a checkout of vivac, run:
