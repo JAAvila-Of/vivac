@@ -1,0 +1,951 @@
+use super::PlannedWrite;
+use crate::agents::adapters::digest;
+use crate::failure::Failure;
+use std::fs::{self, File, Metadata};
+use std::io::Read;
+use std::path::{Path, PathBuf};
+
+const BUNDLE: &str = ".claude/skills/vivac-opening";
+const FILES: [&str; 3] = [
+    ".claude-plugin/plugin.json",
+    "hooks/hooks.json",
+    "hooks/register.mjs",
+];
+const RECEIPT: &str = ".vivac-owned.json";
+
+#[derive(Clone, Copy)]
+pub(super) struct BundleVersion {
+    pub(super) version: &'static str,
+    pub(super) files: [&'static str; 3],
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum Outcome {
+    Created,
+    Updated,
+    Current,
+    Removed,
+    Kept,
+    Absent,
+}
+
+pub(super) struct Plan {
+    pub(super) outcome: Outcome,
+    pub(super) writes: Vec<PlannedWrite>,
+    cleanup: Option<PathBuf>,
+    cleanup_on_failure: Option<PathBuf>,
+}
+
+#[derive(Debug)]
+pub(super) struct ApplyResult {
+    pub(super) cleanup_failures: Vec<PathBuf>,
+}
+
+const FILE_LIMIT: u64 = 1024 * 1024;
+const RECEIPT_LIMIT: u64 = 16 * 1024;
+
+// Only definitions compiled into the caller belong in this catalog. Receipt
+// contents never supply a definition, even when their hashes match disk.
+pub(super) fn canonical_receipt(version: &BundleVersion) -> String {
+    #[derive(serde::Serialize)]
+    struct Receipt<'a> {
+        files: std::collections::BTreeMap<&'static str, String>,
+        schema: u8,
+        version: &'a str,
+    }
+    let receipt = Receipt {
+        files: FILES
+            .into_iter()
+            .zip(version.files.map(|file| digest(file.as_bytes())))
+            .collect(),
+        schema: 1,
+        version: version.version,
+    };
+    format!(
+        "{}\n",
+        serde_json::to_string(&receipt).expect("compiled receipt is serializable")
+    )
+}
+
+pub(super) enum Inspection {
+    Absent,
+    Intact {
+        version: &'static BundleVersion,
+        originals: [Vec<u8>; 4],
+    },
+    Edited {
+        version: &'static BundleVersion,
+        originals: [Vec<u8>; 4],
+    },
+}
+
+fn conflict(path: &Path, reason: &str) -> Failure {
+    Failure::Model(format!(
+        "Opening bundle conflict at {}: {reason}.",
+        path.display()
+    ))
+}
+
+fn linked(metadata: &Metadata) -> bool {
+    if metadata.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if metadata.file_attributes() & 0x400 != 0 {
+            return true;
+        }
+    }
+    false
+}
+
+fn metadata(path: &Path, directory: bool, limit: u64) -> Result<bool, Failure> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(Failure::Io(error)),
+    };
+    if linked(&metadata) {
+        return Err(conflict(path, "links and reparse points are not supported"));
+    }
+    if (directory && !metadata.is_dir()) || (!directory && !metadata.is_file()) {
+        return Err(conflict(path, "unexpected file type"));
+    }
+    if !directory && metadata.len() > limit {
+        return Err(conflict(path, "file exceeds its size limit"));
+    }
+    Ok(true)
+}
+
+fn read_bounded(path: &Path, limit: u64) -> Result<Vec<u8>, Failure> {
+    let file = File::open(path).map_err(Failure::Io)?;
+    let mut bytes = Vec::new();
+    file.take(limit + 1)
+        .read_to_end(&mut bytes)
+        .map_err(Failure::Io)?;
+    if bytes.len() as u64 > limit {
+        return Err(conflict(path, "file exceeds its size limit"));
+    }
+    if std::str::from_utf8(&bytes).is_err() {
+        return Err(conflict(path, "file is not UTF-8"));
+    }
+    Ok(bytes)
+}
+
+/// Checks only the fixed paths; unrelated files are neither read nor owned.
+/// These checks do not protect against a concurrent filesystem replacement.
+pub(super) fn inspect(
+    root: &Path,
+    catalog: &'static [BundleVersion],
+) -> Result<Inspection, Failure> {
+    if !metadata(root, true, 0)? {
+        return Err(conflict(root, "project root does not exist"));
+    }
+    let bundle = root.join(BUNDLE);
+    let mut bundle_present = false;
+    for relative in [".claude", ".claude/skills", BUNDLE] {
+        let present = metadata(&root.join(relative), true, 0)?;
+        if relative == BUNDLE {
+            bundle_present = present;
+        }
+    }
+    for relative in [".claude-plugin", "hooks"] {
+        metadata(&bundle.join(relative), true, 0)?;
+    }
+    let paths = [
+        bundle.join(FILES[0]),
+        bundle.join(FILES[1]),
+        bundle.join(FILES[2]),
+        bundle.join(RECEIPT),
+    ];
+    let mut present = [false; 4];
+    // Complete path validation precedes every read, including a bad receipt.
+    for (index, path) in paths.iter().enumerate() {
+        present[index] = metadata(
+            path,
+            false,
+            if index == 3 {
+                RECEIPT_LIMIT
+            } else {
+                FILE_LIMIT
+            },
+        )?;
+    }
+    if !bundle_present {
+        return Ok(Inspection::Absent);
+    }
+    if present.iter().any(|present| !present) {
+        return Err(conflict(&bundle, "owned files or receipt are missing"));
+    }
+    let receipt = read_bounded(&paths[3], RECEIPT_LIMIT)?;
+    let Some(version) = catalog
+        .iter()
+        .find(|version| canonical_receipt(version).as_bytes() == receipt)
+    else {
+        return Err(conflict(
+            &paths[3],
+            "receipt is not a known canonical receipt",
+        ));
+    };
+    let originals = [
+        read_bounded(&paths[0], FILE_LIMIT)?,
+        read_bounded(&paths[1], FILE_LIMIT)?,
+        read_bounded(&paths[2], FILE_LIMIT)?,
+        receipt,
+    ];
+    let intact = originals[..3]
+        .iter()
+        .zip(version.files)
+        .all(|(actual, expected)| {
+            actual == expected.as_bytes() && digest(actual) == digest(expected.as_bytes())
+        });
+    if intact {
+        Ok(Inspection::Intact { version, originals })
+    } else {
+        Ok(Inspection::Edited { version, originals })
+    }
+}
+
+pub(super) fn plan_update(
+    root: &Path,
+    catalog: &'static [BundleVersion],
+    current: &'static BundleVersion,
+) -> Result<Plan, Failure> {
+    if !catalog
+        .iter()
+        .any(|version| version.version == current.version && version.files == current.files)
+    {
+        return Err(conflict(
+            &root.join(BUNDLE),
+            "target version is not in the compiled catalog",
+        ));
+    }
+    let (outcome, originals) = match inspect(root, catalog)? {
+        Inspection::Absent => (Outcome::Created, None),
+        Inspection::Intact { version, originals } => {
+            if version.version == current.version && version.files == current.files {
+                return Ok(Plan {
+                    outcome: Outcome::Current,
+                    writes: Vec::new(),
+                    cleanup: None,
+                    cleanup_on_failure: None,
+                });
+            }
+            (Outcome::Updated, Some(originals))
+        }
+        Inspection::Edited { .. } => {
+            return Err(conflict(&root.join(BUNDLE), "owned payload was edited"))
+        }
+    };
+    let contents = [
+        current.files[0].to_string(),
+        current.files[1].to_string(),
+        current.files[2].to_string(),
+        canonical_receipt(current),
+    ];
+    let paths = [FILES[0], FILES[1], FILES[2], RECEIPT];
+    let writes = paths
+        .into_iter()
+        .zip(contents)
+        .enumerate()
+        .map(|(index, (path, content))| {
+            PlannedWrite::write(
+                root.join(BUNDLE).join(path),
+                content,
+                originals.as_ref().map(|bytes| bytes[index].clone()),
+            )
+        })
+        .collect();
+    let cleanup_on_failure = if outcome == Outcome::Created {
+        Some(root.join(BUNDLE))
+    } else {
+        None
+    };
+    Ok(Plan {
+        outcome,
+        writes,
+        cleanup: None,
+        cleanup_on_failure,
+    })
+}
+
+pub(super) fn plan_undo(root: &Path, catalog: &'static [BundleVersion]) -> Result<Plan, Failure> {
+    match inspect(root, catalog)? {
+        Inspection::Absent => Ok(Plan {
+            outcome: Outcome::Absent,
+            writes: Vec::new(),
+            cleanup: None,
+            cleanup_on_failure: None,
+        }),
+        Inspection::Edited { .. } => Ok(Plan {
+            outcome: Outcome::Kept,
+            writes: Vec::new(),
+            cleanup: None,
+            cleanup_on_failure: None,
+        }),
+        Inspection::Intact { originals, .. } => {
+            let bundle = root.join(BUNDLE);
+            let writes = [FILES[0], FILES[1], FILES[2], RECEIPT]
+                .into_iter()
+                .zip(originals)
+                .map(|(path, original)| PlannedWrite::delete(bundle.join(path), original))
+                .collect();
+            Ok(Plan {
+                outcome: Outcome::Removed,
+                writes,
+                cleanup: Some(bundle),
+                cleanup_on_failure: None,
+            })
+        }
+    }
+}
+
+impl Plan {
+    pub(super) fn commit(&self) -> Result<ApplyResult, Failure> {
+        if let Err(failure) = super::commit(&self.writes) {
+            if let Some(bundle) = &self.cleanup_on_failure {
+                let residual = cleanup_directories(bundle, true);
+                if !residual.is_empty() {
+                    let mut warning =
+                        String::from("Opening bundle rollback could not remove these paths:");
+                    for path in residual {
+                        warning.push_str(&format!("\n  {}", path.display()));
+                    }
+                    return match failure {
+                        Failure::Io(error) => Err(Failure::Io(std::io::Error::new(
+                            error.kind(),
+                            format!("{error}\n{warning}"),
+                        ))),
+                        other => Err(other),
+                    };
+                }
+            }
+            return Err(failure);
+        }
+        let cleanup_failures = self
+            .cleanup
+            .as_ref()
+            .map(|bundle| cleanup_directories(bundle, false))
+            .unwrap_or_default();
+        Ok(ApplyResult { cleanup_failures })
+    }
+}
+
+fn cleanup_directories(bundle: &Path, report_nonempty: bool) -> Vec<PathBuf> {
+    let mut failed = Vec::new();
+    for directory in [
+        bundle.join("hooks"),
+        bundle.join(".claude-plugin"),
+        bundle.to_path_buf(),
+    ] {
+        match fs::remove_dir(&directory) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error)
+                if error.kind() == std::io::ErrorKind::DirectoryNotEmpty && !report_nonempty => {}
+            Err(_) => failed.push(directory),
+        }
+    }
+    failed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::path::PathBuf;
+
+    static V1: BundleVersion = BundleVersion {
+        version: "fixture-v1",
+        files: [
+            "{\"name\":\"fixture-one\"}\n",
+            "{\"hooks\":{}}\n",
+            "export {};\n",
+        ],
+    };
+    static V2: BundleVersion = BundleVersion {
+        version: "fixture-v2",
+        files: [
+            "{\"name\":\"fixture-two\"}\n",
+            "{\"hooks\":{}}\n",
+            "export const fixture = 2;\n",
+        ],
+    };
+    static CATALOG: [BundleVersion; 2] = [V1, V2];
+
+    struct Project(PathBuf);
+    impl Project {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!("vivac-opening-{}", crate::id::ulid()));
+            fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+    }
+    impl Drop for Project {
+        fn drop(&mut self) {
+            fs::remove_dir_all(&self.0).unwrap();
+        }
+    }
+
+    #[test]
+    fn fresh_plan_has_four_writes_and_does_not_create_directories() {
+        let project = Project::new();
+        let plan = plan_update(&project.0, &CATALOG, &CATALOG[0]).unwrap();
+        assert_eq!(plan.outcome, Outcome::Created);
+        assert_eq!(plan.writes.len(), 4);
+        assert!(plan.writes.iter().all(|write| write.original.is_none()));
+        assert!(!project.0.join(".claude").exists());
+        super::super::commit(&plan.writes).unwrap();
+        for (file, content) in FILES.iter().zip(V1.files) {
+            assert_eq!(
+                fs::read(project.0.join(BUNDLE).join(file)).unwrap(),
+                content.as_bytes()
+            );
+        }
+        let current = plan_update(&project.0, &CATALOG, &CATALOG[0]).unwrap();
+        assert_eq!(current.outcome, Outcome::Current);
+        assert!(current.writes.is_empty());
+    }
+
+    #[test]
+    fn fresh_failure_removes_empty_owned_directories_and_allows_retry() {
+        let project = Project::new();
+        let mut plan = plan_update(&project.0, &CATALOG, &CATALOG[0]).unwrap();
+        let blocked = project.0.join("blocked");
+        fs::create_dir(&blocked).unwrap();
+        fs::write(blocked.join("occupied"), "foreign sentinel").unwrap();
+        plan.writes[3].path = blocked.clone();
+        assert!(plan.commit().is_err());
+        assert!(matches!(
+            inspect(&project.0, &CATALOG).unwrap(),
+            Inspection::Absent
+        ));
+        assert!(project.0.join(".claude/skills").is_dir());
+        assert_eq!(
+            fs::read(blocked.join("occupied")).unwrap(),
+            b"foreign sentinel"
+        );
+        install(&project);
+        assert!(matches!(
+            inspect(&project.0, &CATALOG).unwrap(),
+            Inspection::Intact { .. }
+        ));
+    }
+
+    #[test]
+    fn fresh_failure_after_receipt_publication_removes_the_complete_bundle() {
+        let project = Project::new();
+        let plan = plan_update(&project.0, &CATALOG, &CATALOG[0]).unwrap();
+        super::super::FAILURE_AFTER_PUBLICATION
+            .with(|failure| failure.replace(Some(project.0.join(BUNDLE).join(RECEIPT))));
+        let error = plan.commit().unwrap_err();
+        assert!(error.message().contains("directory sync failure"));
+        assert!(matches!(
+            inspect(&project.0, &CATALOG).unwrap(),
+            Inspection::Absent
+        ));
+        assert!(project.0.join(".claude/skills").is_dir());
+        install(&project);
+    }
+
+    #[test]
+    fn fresh_failure_preserves_extra_files_and_reports_the_residual_bundle() {
+        let project = Project::new();
+        let mut plan = plan_update(&project.0, &CATALOG, &CATALOG[0]).unwrap();
+        let blocked = project.0.join("blocked");
+        fs::create_dir(&blocked).unwrap();
+        fs::write(blocked.join("occupied"), "foreign sentinel").unwrap();
+        plan.writes[3].path = blocked;
+        let bundle = project.0.join(BUNDLE);
+        fs::create_dir_all(bundle.join("hooks")).unwrap();
+        let extra = bundle.join("hooks/foreign.txt");
+        fs::write(&extra, "extra sentinel").unwrap();
+        let error = plan.commit().unwrap_err();
+        assert_eq!(fs::read(extra).unwrap(), b"extra sentinel");
+        assert!(owned_paths(&project).iter().all(|path| !path.exists()));
+        assert!(
+            error.message().contains(&bundle.display().to_string()),
+            "{}",
+            error.message()
+        );
+        assert!(error.message().contains("could not be written"));
+        assert_refused(&project);
+    }
+
+    fn install(project: &Project) {
+        plan_update(&project.0, &CATALOG, &CATALOG[0])
+            .unwrap()
+            .commit()
+            .unwrap();
+    }
+
+    fn owned_paths(project: &Project) -> [PathBuf; 4] {
+        [FILES[0], FILES[1], FILES[2], RECEIPT].map(|path| project.0.join(BUNDLE).join(path))
+    }
+
+    fn snapshot(project: &Project) -> [Vec<u8>; 4] {
+        owned_paths(project).map(|path| fs::read(path).unwrap())
+    }
+
+    fn assert_refused(project: &Project) {
+        assert!(inspect(&project.0, &CATALOG).is_err());
+        assert!(plan_update(&project.0, &CATALOG, &CATALOG[1]).is_err());
+        assert!(plan_undo(&project.0, &CATALOG).is_err());
+    }
+
+    #[test]
+    fn receipt_is_fixed_order_compact_sha256_with_one_newline() {
+        let version = BundleVersion {
+            version: "vectors",
+            files: ["abc", "", "a"],
+        };
+        assert_eq!(canonical_receipt(&version), concat!(
+            "{\"files\":{\".claude-plugin/plugin.json\":\"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\",",
+            "\"hooks/hooks.json\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",",
+            "\"hooks/register.mjs\":\"ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb\"},",
+            "\"schema\":1,\"version\":\"vectors\"}\n"
+        ));
+    }
+
+    #[test]
+    fn known_versions_update_and_undo_preserve_foreign_parents() {
+        let project = Project::new();
+        fs::create_dir_all(project.0.join(".claude/skills/foreign")).unwrap();
+        let foreign = project.0.join(".claude/skills/foreign/keep.txt");
+        fs::write(&foreign, b"foreign").unwrap();
+        install(&project);
+        let before = snapshot(&project);
+        assert!(
+            matches!(inspect(&project.0, &CATALOG).unwrap(), Inspection::Intact { version, .. } if version.version == V1.version)
+        );
+        let update = plan_update(&project.0, &CATALOG, &CATALOG[1]).unwrap();
+        assert_eq!(update.outcome, Outcome::Updated);
+        assert_eq!(update.writes.len(), 4);
+        for (write, original) in update.writes.iter().zip(&before) {
+            assert_eq!(write.original.as_ref().unwrap(), original);
+        }
+        assert_eq!(snapshot(&project), before);
+        update.commit().unwrap();
+        assert!(
+            matches!(inspect(&project.0, &CATALOG).unwrap(), Inspection::Intact { version, .. } if version.version == V2.version)
+        );
+        let current = plan_update(&project.0, &CATALOG, &CATALOG[1]).unwrap();
+        assert_eq!(current.outcome, Outcome::Current);
+        assert!(current.writes.is_empty());
+        let undo = plan_undo(&project.0, &CATALOG).unwrap();
+        assert_eq!(undo.outcome, Outcome::Removed);
+        assert_eq!(undo.writes.len(), 4);
+        assert!(undo
+            .writes
+            .iter()
+            .all(|write| matches!(write.action, super::super::Action::Delete)));
+        let applied = undo.commit().unwrap();
+        assert!(applied.cleanup_failures.is_empty());
+        assert!(!project.0.join(BUNDLE).exists());
+        assert!(project.0.join(".claude/skills").is_dir());
+        assert_eq!(fs::read(foreign).unwrap(), b"foreign");
+        let absent = plan_undo(&project.0, &CATALOG).unwrap();
+        assert_eq!(absent.outcome, Outcome::Absent);
+        assert!(absent.writes.is_empty());
+    }
+
+    #[test]
+    fn each_edited_payload_blocks_update_and_keeps_the_entire_bundle_on_undo() {
+        for index in 0..3 {
+            let project = Project::new();
+            install(&project);
+            fs::write(&owned_paths(&project)[index], "edited by owner\r\n").unwrap();
+            let before = snapshot(&project);
+            assert!(
+                matches!(inspect(&project.0, &CATALOG).unwrap(), Inspection::Edited { version, originals } if version.version == V1.version && originals == before)
+            );
+            assert!(plan_update(&project.0, &CATALOG, &CATALOG[1]).is_err());
+            let undo = plan_undo(&project.0, &CATALOG).unwrap();
+            assert_eq!(undo.outcome, Outcome::Kept);
+            assert!(undo.writes.is_empty());
+            undo.commit().unwrap();
+            assert_eq!(snapshot(&project), before);
+        }
+    }
+
+    #[test]
+    fn unknown_extra_files_are_not_read_owned_or_deleted() {
+        let project = Project::new();
+        install(&project);
+        let extras = [
+            "extra.bin",
+            "hooks/foreign.bin",
+            ".claude-plugin/foreign.bin",
+        ];
+        for extra in extras {
+            fs::write(project.0.join(BUNDLE).join(extra), [0xff, 0xfe]).unwrap();
+        }
+        let update = plan_update(&project.0, &CATALOG, &CATALOG[1]).unwrap();
+        update.commit().unwrap();
+        plan_undo(&project.0, &CATALOG).unwrap().commit().unwrap();
+        for extra in extras {
+            assert_eq!(
+                fs::read(project.0.join(BUNDLE).join(extra)).unwrap(),
+                [0xff, 0xfe]
+            );
+        }
+        assert!(project.0.join(BUNDLE).is_dir());
+    }
+
+    #[test]
+    fn missing_receipt_never_adopts_an_existing_bundle() {
+        for populated in [false, true] {
+            let project = Project::new();
+            if populated {
+                install(&project);
+                fs::remove_file(project.0.join(BUNDLE).join(RECEIPT)).unwrap();
+            } else {
+                fs::create_dir_all(project.0.join(BUNDLE)).unwrap();
+            }
+            assert_refused(&project);
+        }
+    }
+
+    #[test]
+    fn each_missing_owned_file_is_a_conflict() {
+        for index in 0..4 {
+            let project = Project::new();
+            install(&project);
+            fs::remove_file(&owned_paths(&project)[index]).unwrap();
+            assert_refused(&project);
+        }
+    }
+
+    #[test]
+    fn noncanonical_unknown_duplicate_and_extra_receipts_are_conflicts() {
+        let canonical = canonical_receipt(&CATALOG[0]);
+        let mut extra_route: serde_json::Value = serde_json::from_str(&canonical).unwrap();
+        extra_route["files"]["../outside"] = serde_json::json!(digest(b"outside"));
+        let candidates = [
+            "not json".to_string(),
+            canonical.trim_end().to_string(),
+            format!(" {canonical}"),
+            canonical.replace("fixture-v1", "unknown-version"),
+            canonical.replace("\"schema\":1", "\"schema\":1,\"schema\":1"),
+            canonical.replace("\"schema\":1", "\"schema\":\"1\""),
+            canonical.replace("\"schema\":1", "\"extra\":0,\"schema\":1"),
+            format!("{}\n", serde_json::to_string(&extra_route).unwrap()),
+            canonical.replace(
+                &digest(V1.files[0].as_bytes()),
+                &digest(V1.files[0].as_bytes()).to_uppercase(),
+            ),
+        ];
+        for candidate in candidates {
+            let project = Project::new();
+            install(&project);
+            fs::write(project.0.join(BUNDLE).join(RECEIPT), candidate.as_bytes()).unwrap();
+            let before = snapshot(&project);
+            assert_refused(&project);
+            assert_eq!(snapshot(&project), before);
+        }
+    }
+
+    #[test]
+    fn rehashing_an_edited_payload_does_not_prove_ownership() {
+        let project = Project::new();
+        install(&project);
+        fs::write(&owned_paths(&project)[0], "forged").unwrap();
+        let forged = canonical_receipt(&CATALOG[0])
+            .replace(&digest(V1.files[0].as_bytes()), &digest(b"forged"));
+        fs::write(&owned_paths(&project)[3], forged).unwrap();
+        let before = snapshot(&project);
+        assert_refused(&project);
+        assert_eq!(snapshot(&project), before);
+    }
+
+    #[test]
+    fn every_owned_file_requires_utf8_and_a_bounded_size() {
+        for index in 0..4 {
+            let project = Project::new();
+            install(&project);
+            let path = &owned_paths(&project)[index];
+            fs::write(path, [0xff]).unwrap();
+            assert_refused(&project);
+            let limit = if index == 3 {
+                RECEIPT_LIMIT
+            } else {
+                FILE_LIMIT
+            };
+            fs::write(path, vec![b'a'; limit as usize + 1]).unwrap();
+            let error = inspect(&project.0, &CATALOG).err().unwrap();
+            assert!(error.message().contains("size limit"));
+            assert_refused(&project);
+        }
+    }
+
+    #[test]
+    fn every_fixed_directory_and_file_rejects_the_wrong_type() {
+        for relative in [
+            ".claude",
+            ".claude/skills",
+            BUNDLE,
+            ".claude/skills/vivac-opening/hooks",
+            ".claude/skills/vivac-opening/.claude-plugin",
+        ] {
+            let project = Project::new();
+            let path = project.0.join(relative);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, "file where directory belongs").unwrap();
+            assert_refused(&project);
+        }
+        for index in 0..4 {
+            let project = Project::new();
+            install(&project);
+            let path = &owned_paths(&project)[index];
+            fs::remove_file(path).unwrap();
+            fs::create_dir(path).unwrap();
+            assert_refused(&project);
+        }
+    }
+
+    #[test]
+    fn project_root_must_exist_and_be_a_directory() {
+        let project = Project::new();
+        let missing = project.0.join("missing");
+        assert!(inspect(&missing, &CATALOG).is_err());
+        let file = project.0.join("file");
+        fs::write(&file, "root").unwrap();
+        assert!(inspect(&file, &CATALOG).is_err());
+    }
+
+    #[test]
+    fn a_failed_fourth_write_restores_all_three_payloads_exactly() {
+        let project = Project::new();
+        install(&project);
+        let before = snapshot(&project);
+        let mut plan = plan_update(&project.0, &CATALOG, &CATALOG[1]).unwrap();
+        // Inject a fourth destination that cannot be replaced, leaving the
+        // original receipt untouched while the three earlier writes roll back.
+        let blocked = project.0.join("blocked");
+        fs::create_dir(&blocked).unwrap();
+        fs::write(blocked.join("occupied"), "keep").unwrap();
+        plan.writes[3].path = blocked.clone();
+        let error = plan.commit().unwrap_err();
+        assert!(error
+            .message()
+            .contains("setup restored every planned destination\n  it changed."));
+        assert_eq!(snapshot(&project), before);
+        assert_eq!(fs::read(blocked.join("occupied")).unwrap(), b"keep");
+    }
+
+    #[test]
+    fn updates_preserve_foreign_files_at_the_old_temporary_names() {
+        let project = Project::new();
+        install(&project);
+        let temporaries = owned_paths(&project).map(|path| super::super::sibling_temp(&path));
+        for temporary in &temporaries {
+            fs::write(temporary, b"foreign temporary sentinel").unwrap();
+        }
+        plan_update(&project.0, &CATALOG, &CATALOG[1])
+            .unwrap()
+            .commit()
+            .unwrap();
+        for temporary in &temporaries {
+            assert_eq!(fs::read(temporary).unwrap(), b"foreign temporary sentinel");
+        }
+        assert!(
+            matches!(inspect(&project.0, &CATALOG).unwrap(), Inspection::Intact { version, .. } if version.version == V2.version)
+        );
+    }
+
+    #[test]
+    fn updates_preserve_foreign_symlinks_at_the_old_temporary_names() {
+        let project = Project::new();
+        install(&project);
+        let outside =
+            [0, 1, 2, 3].map(|index| project.0.join(format!("outside-sentinel-{index}.txt")));
+        for path in &outside {
+            fs::write(path, b"outside sentinel").unwrap();
+        }
+        let temporaries = owned_paths(&project).map(|path| super::super::sibling_temp(&path));
+        for (temporary, outside) in temporaries.iter().zip(&outside) {
+            match make_link(outside, temporary, false) {
+                Ok(()) => {}
+                #[cfg(windows)]
+                Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                    eprintln!("File symlink creation unavailable: {error}");
+                    return;
+                }
+                Err(error) => panic!("symlink creation failed: {error}"),
+            }
+        }
+        plan_update(&project.0, &CATALOG, &CATALOG[1])
+            .unwrap()
+            .commit()
+            .unwrap();
+        for (temporary, outside) in temporaries.iter().zip(&outside) {
+            assert_eq!(fs::read(outside).unwrap(), b"outside sentinel");
+            assert!(fs::symlink_metadata(temporary)
+                .unwrap()
+                .file_type()
+                .is_symlink());
+            assert_eq!(fs::read_link(temporary).unwrap(), *outside);
+        }
+    }
+
+    #[cfg(unix)]
+    fn make_link(source: &Path, target: &Path, _directory: bool) -> std::io::Result<()> {
+        std::os::unix::fs::symlink(source, target)
+    }
+
+    #[cfg(windows)]
+    fn make_link(source: &Path, target: &Path, directory: bool) -> std::io::Result<()> {
+        if directory {
+            std::os::windows::fs::symlink_dir(source, target)
+        } else {
+            std::os::windows::fs::symlink_file(source, target)
+        }
+    }
+
+    #[test]
+    fn linked_fixed_files_are_rejected_even_with_an_invalid_receipt() {
+        for index in 0..4 {
+            let project = Project::new();
+            install(&project);
+            let path = &owned_paths(&project)[index];
+            let outside = project.0.join("outside.txt");
+            fs::write(&outside, "external file").unwrap();
+            fs::remove_file(path).unwrap();
+            match make_link(&outside, path, false) {
+                Ok(()) => {}
+                #[cfg(windows)]
+                Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                    eprintln!("File symlink creation unavailable: {error}");
+                    return;
+                }
+                Err(error) => panic!("symlink creation failed: {error}"),
+            }
+            if index != 3 {
+                fs::write(&owned_paths(&project)[3], "invalid receipt").unwrap();
+            }
+            let error = inspect(&project.0, &CATALOG).err().unwrap();
+            assert!(error.message().contains("links and reparse"));
+            assert_refused(&project);
+            assert_eq!(fs::read(&outside).unwrap(), b"external file");
+        }
+    }
+
+    #[test]
+    fn linked_project_root_and_fixed_directories_are_rejected() {
+        for relative in [
+            "linked-root",
+            ".claude",
+            ".claude/skills",
+            BUNDLE,
+            ".claude/skills/vivac-opening/hooks",
+            ".claude/skills/vivac-opening/.claude-plugin",
+        ] {
+            let project = Project::new();
+            let outside = project.0.join("outside");
+            fs::create_dir(&outside).unwrap();
+            let path = project.0.join(relative);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            match make_link(&outside, &path, true) {
+                Ok(()) => {}
+                #[cfg(windows)]
+                Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                    eprintln!("Directory symlink creation unavailable: {error}");
+                    return;
+                }
+                Err(error) => panic!("symlink creation failed: {error}"),
+            }
+            let root = if relative == "linked-root" {
+                &path
+            } else {
+                &project.0
+            };
+            let error = inspect(root, &CATALOG).err().unwrap();
+            assert!(error.message().contains("links and reparse"));
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_real_windows_junction_is_rejected_as_a_reparse_point() {
+        let project = Project::new();
+        let outside = project.0.join("outside");
+        fs::create_dir(&outside).unwrap();
+        let junction = project.0.join(".claude");
+        let output = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&junction)
+            .arg(&outside)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "junction creation failed: {:?}",
+            output.status
+        );
+        use std::os::windows::fs::MetadataExt;
+        assert_ne!(
+            fs::symlink_metadata(&junction).unwrap().file_attributes() & 0x400,
+            0
+        );
+        let error = inspect(&project.0, &CATALOG).err().unwrap();
+        assert!(error.message().contains("links and reparse"));
+        assert_refused(&project);
+        fs::remove_dir(junction).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn unreadable_owned_file_reports_io_without_writes() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let project = Project::new();
+        install(&project);
+        let before = snapshot(&project);
+        let lock = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&owned_paths(&project)[0])
+            .unwrap();
+        assert!(matches!(inspect(&project.0, &CATALOG), Err(Failure::Io(_))));
+        assert_refused(&project);
+        drop(lock);
+        assert_eq!(snapshot(&project), before);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn cleanup_failure_reports_a_path_after_successful_file_deletion() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let project = Project::new();
+        install(&project);
+        let undo = plan_undo(&project.0, &CATALOG).unwrap();
+        let hooks = project.0.join(BUNDLE).join("hooks");
+        let lock = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .custom_flags(0x0200_0000)
+            .open(&hooks)
+            .unwrap();
+        let applied = undo.commit().unwrap();
+        assert_eq!(applied.cleanup_failures, vec![hooks]);
+        assert!(owned_paths(&project).iter().all(|path| !path.exists()));
+        assert!(project.0.join(BUNDLE).is_dir());
+        drop(lock);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_owned_socket_is_rejected_as_an_unexpected_type() {
+        let root = std::path::Path::new("/tmp").join(format!("vo-{}", crate::id::ulid()));
+        fs::create_dir(&root).unwrap();
+        let project = Project(root);
+        install(&project);
+        let path = &owned_paths(&project)[1];
+        fs::remove_file(path).unwrap();
+        let socket = std::os::unix::net::UnixListener::bind(path).unwrap();
+        let error = inspect(&project.0, &CATALOG).err().unwrap();
+        assert!(error.message().contains("unexpected file type"));
+        assert_refused(&project);
+        drop(socket);
+    }
+}

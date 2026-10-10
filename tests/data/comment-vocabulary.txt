@@ -39,6 +39,7 @@ act
 acted
 acting
 action
+activation
 active
 actively
 actor
@@ -521,6 +522,7 @@ case
 cased
 cases
 casing
+catalog
 catalogue
 catch
 catches
@@ -707,6 +709,7 @@ compiles
 compiling
 completable
 complete
+completed
 completes
 completing
 complexity
@@ -1011,6 +1014,7 @@ designed
 desktop
 despite
 destination
+destinations
 destroyed
 destroys
 destructive
@@ -1308,6 +1312,7 @@ excluded
 excludes
 exclusion
 exclusive
+exclusively
 excused
 exe
 exec
@@ -1870,6 +1875,7 @@ inherited
 inheriting
 inherits
 init
+inject
 injected
 injecting
 injection
@@ -2882,6 +2888,7 @@ pruned
 prunes
 pruning
 public
+publication
 publish
 published
 publishes
@@ -2986,6 +2993,7 @@ rebuilds
 rebuilt
 recalculated
 recall
+receipt
 receive
 received
 receives
@@ -3200,6 +3208,7 @@ rescue
 rescued
 rescues
 rescuing
+reservation
 reserve
 reserved
 reserves
@@ -3283,7 +3292,6 @@ rode
 roll
 rollback
 rolled
-rolling
 rolls
 room
 root
@@ -3766,6 +3774,7 @@ succeeded
 succeeds
 success
 successful
+successfully
 successor
 such
 suffix

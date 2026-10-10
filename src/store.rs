@@ -689,36 +689,72 @@ pub fn write_gitignore(vivac_dir: &Path) -> std::io::Result<()> {
 /// the temporary file `tmp`, which is synced, closed and renamed over the
 /// target, and the parent directory is synced so the rename itself survives
 /// a power cut. Every file that is written rarely
-/// -- `config`, `lane`, the registry, the files `setup` writes into a
-/// person's harness -- goes through here; the append path never does, because
+/// -- `config`, `lane`, the registry -- goes through here; setup reserves its
+/// own unique sibling and tracks whether a failed write was published so its
+/// transaction can restore that target too. The append path never syncs, because
 /// a sync there costs a spinning disk about 20 ms per write.
 ///
 /// The rename is `std::fs::rename` on every platform. On Windows it replaces
 /// a target another process holds open, and `MoveFileExW` with write-through
 /// does not, so the durability comes from syncing the directory afterwards
 /// instead (`d960`, `f959`). A failure in that sync is returned like any
-/// other. If the rename fails the temporary file is removed, and so it is on
-/// every earlier failure.
+/// other, after the target has already been replaced.
 ///
-/// The caller picks the temporary name because some writers rely on a fixed
-/// one being taken already: a directory sitting at `config.tmp` is how a test
-/// makes the config write fail the same way on every platform.
+/// The caller picks a fixed temporary name, which is reserved exclusively.
+/// An existing file, link or directory is a collision: reservation fails
+/// without touching it or the target. Only a successfully reserved temporary
+/// is cleaned up after a write or rename failure. A failed cleanup names that
+/// owned temporary in the error instead of claiming it was removed.
 pub(crate) fn replace_whole(path: &Path, tmp: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let parent = match path.parent() {
         Some(p) if !p.as_os_str().is_empty() => p,
         _ => Path::new("."),
     };
-    let written = (|| -> std::io::Result<()> {
-        let mut f = File::create(tmp)?;
-        f.write_all(bytes)?;
-        f.sync_all()
-    })()
-    .and_then(|()| fs::rename(tmp, path));
-    if written.is_err() {
-        let _ = fs::remove_file(tmp);
-        return written;
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(tmp)
+        .map_err(|error| {
+            std::io::Error::new(
+                error.kind(),
+                format!(
+                    "Could not reserve temporary file {} ({error})",
+                    tmp.display()
+                ),
+            )
+        })?;
+    let written = file.write_all(bytes).and_then(|()| file.sync_all());
+    drop(file);
+    if let Err(error) = written.and_then(|()| fs::rename(tmp, path)) {
+        if let Err(cleanup) = remove_replacement_temporary(tmp) {
+            if cleanup.kind() != std::io::ErrorKind::NotFound {
+                return Err(std::io::Error::new(
+                    error.kind(),
+                    format!(
+                        "{error}; could not remove owned temporary file {} ({cleanup})",
+                        tmp.display()
+                    ),
+                ));
+            }
+        }
+        return Err(error);
     }
     sync_dir(parent)
+}
+
+fn remove_replacement_temporary(path: &Path) -> std::io::Result<()> {
+    #[cfg(test)]
+    if REPLACEMENT_CLEANUP_FAILURE.with(|failure| failure.replace(false)) {
+        return Err(std::io::Error::other(
+            "injected replacement cleanup failure",
+        ));
+    }
+    fs::remove_file(path)
+}
+
+#[cfg(test)]
+thread_local! {
+    static REPLACEMENT_CLEANUP_FAILURE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// Syncs a file that already holds what it should, before it is renamed into
@@ -2608,6 +2644,102 @@ mod tests {
         assert_eq!(names_in(&dir), vec!["config".to_string()]);
         assert!(target.join("occupied").is_dir());
         fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn replace_whole_rejects_an_existing_temporary_without_touching_either_file() {
+        let dir = std::env::temp_dir().join(format!("vivac-whole-{}", id::ulid()));
+        fs::create_dir(&dir).unwrap();
+        let target = dir.join("config");
+        let temporary = dir.join("config.tmp");
+        fs::write(&target, b"original target\r\n").unwrap();
+        fs::write(&temporary, b"foreign temporary sentinel").unwrap();
+        let result = replace_whole(&target, &temporary, b"new target");
+        let actual_target = fs::read(&target).unwrap();
+        let actual_temporary = fs::read(&temporary).ok();
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(actual_target, b"original target\r\n");
+        assert_eq!(
+            actual_temporary,
+            Some(b"foreign temporary sentinel".to_vec())
+        );
+        let error = result.unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+        assert!(error
+            .to_string()
+            .contains("Could not reserve temporary file"));
+        assert!(error.to_string().contains(&temporary.display().to_string()));
+    }
+
+    #[test]
+    fn replace_whole_rejects_a_temporary_symlink_without_touching_its_target() {
+        let dir = std::env::temp_dir().join(format!("vivac-whole-{}", id::ulid()));
+        fs::create_dir(&dir).unwrap();
+        let target = dir.join("config");
+        let temporary = dir.join("config.tmp");
+        let outside = dir.join("outside");
+        fs::write(&target, b"original target\r\n").unwrap();
+        fs::write(&outside, b"outside sentinel").unwrap();
+        #[cfg(unix)]
+        let link = std::os::unix::fs::symlink(&outside, &temporary);
+        #[cfg(windows)]
+        let link = std::os::windows::fs::symlink_file(&outside, &temporary);
+        if let Err(error) = link {
+            #[cfg(windows)]
+            if error.kind() == std::io::ErrorKind::PermissionDenied {
+                eprintln!("File symlink creation unavailable: {error}");
+                fs::remove_dir_all(&dir).unwrap();
+                return;
+            }
+            panic!("symlink creation failed: {error}");
+        }
+        let result = replace_whole(&target, &temporary, b"new target");
+        let actual_outside = fs::read(&outside).unwrap();
+        let actual_target = fs::read(&target).unwrap();
+        let actual_link = fs::read_link(&temporary).ok();
+        let target_is_regular = fs::symlink_metadata(&target).unwrap().is_file();
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(actual_outside, b"outside sentinel");
+        assert_eq!(actual_target, b"original target\r\n");
+        assert_eq!(actual_link, Some(outside));
+        assert!(target_is_regular);
+        let error = result.unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+        assert!(error
+            .to_string()
+            .contains("Could not reserve temporary file"));
+        assert!(error.to_string().contains(&temporary.display().to_string()));
+    }
+
+    #[test]
+    fn replace_whole_reports_a_retained_owned_temporary_with_the_original_error_kind() {
+        let dir = std::env::temp_dir().join(format!("vivac-whole-{}", id::ulid()));
+        let target = dir.join("config");
+        let temporary = dir.join("config.tmp");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join("occupied"), b"foreign sentinel").unwrap();
+        let original_kind = replace_whole(&target, &temporary, b"new target")
+            .unwrap_err()
+            .kind();
+        assert!(!temporary.exists());
+        REPLACEMENT_CLEANUP_FAILURE.with(|failure| failure.set(true));
+        let error = replace_whole(&target, &temporary, b"new target").unwrap_err();
+        assert_eq!(error.kind(), original_kind);
+        assert_eq!(fs::read(&temporary).unwrap(), b"new target");
+        assert_eq!(
+            fs::read(target.join("occupied")).unwrap(),
+            b"foreign sentinel"
+        );
+        let message = error.to_string();
+        fs::remove_dir_all(&dir).unwrap();
+        assert!(
+            message.contains(&temporary.display().to_string()),
+            "{message}"
+        );
+        assert!(
+            message.contains("injected replacement cleanup failure"),
+            "{message}"
+        );
     }
 
     #[test]

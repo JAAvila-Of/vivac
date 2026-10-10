@@ -972,7 +972,7 @@ pub(super) fn sync(cwd: &Path, _args: &Args) -> Result<i32, Failure> {
             )
         );
         if result["rollback_failed"] == true {
-            say!("Restoring native files failed for at least one destination. Inspect destinations before retrying.");
+            say!("Restoring native files or removing owned temporary files failed. Inspect the reported paths before retrying.");
         } else if result["rollback_attempted"] == true {
             say!("Native file restoration was attempted. Inspect destinations before retrying.");
         }

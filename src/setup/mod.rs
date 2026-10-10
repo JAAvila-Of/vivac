@@ -19,6 +19,9 @@ mod codex;
 pub(crate) mod doctor;
 mod init;
 pub mod json;
+// Setup activation is withheld until native opening safety is verified.
+#[allow(dead_code)]
+mod opening_bundle;
 mod tree;
 
 use crate::args::Args;
@@ -389,26 +392,136 @@ impl PlannedWrite {
     }
 }
 
+#[cfg(test)]
 fn sibling_temp(path: &Path) -> PathBuf {
     let mut name = path.file_name().unwrap_or_default().to_os_string();
     name.push(".tmp");
     path.with_file_name(name)
 }
 
-/// A temporary file next to `path`, synced and renamed over it
-/// (`store::replace_whole`, `d946`), so a process that dies mid-write leaves
-/// the original untouched and a power cut leaves either file whole.
-///
-/// A temporary left behind by a failed write or rename is removed before the
-/// error goes up. It holds the whole new file, and a settings file can carry
-/// credentials in its `env` block: a `settings.json.tmp` lying next to the
-/// original is exactly the copy under another name that §7.6 keeps setup
-/// from ever making.
-fn write_atomic(path: &Path, content: &[u8]) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+#[derive(Debug)]
+struct AtomicWriteError {
+    error: std::io::Error,
+    published: bool,
+    unremoved_temporary: Option<PathBuf>,
+}
+
+impl AtomicWriteError {
+    fn before_publication(error: std::io::Error) -> Self {
+        Self {
+            error,
+            published: false,
+            unremoved_temporary: None,
+        }
     }
-    crate::store::replace_whole(path, &sibling_temp(path), content)
+}
+
+fn unique_temporary(path: &Path) -> PathBuf {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(format!(".{}.tmp", crate::id::ulid()));
+    path.with_file_name(name)
+}
+
+/// Reserves a sibling exclusively. A name already present belongs to someone
+/// else, so a failed reservation never removes or opens it for writing.
+fn reserve_temporary(
+    path: &Path,
+    mut candidate: impl FnMut(&Path) -> PathBuf,
+) -> std::io::Result<(PathBuf, std::fs::File)> {
+    for attempt in 0..8 {
+        let temporary = candidate(path);
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+        {
+            Ok(file) => return Ok((temporary, file)),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists && attempt < 7 => {}
+            Err(error) => return Err(error),
+        }
+    }
+    unreachable!("the last reservation attempt returns its result")
+}
+
+/// Writes and syncs an exclusively reserved sibling, closes it, then renames
+/// and syncs the parent directory. Failures before rename leave the target
+/// untouched; failures after rename report publication so commit restores it.
+/// Cleanup removes only the temporary this write successfully reserved.
+fn write_atomic(path: &Path, content: &[u8]) -> Result<(), AtomicWriteError> {
+    write_atomic_with(path, content, unique_temporary)
+}
+
+fn write_atomic_with(
+    path: &Path,
+    content: &[u8],
+    candidate: impl FnMut(&Path) -> PathBuf,
+) -> Result<(), AtomicWriteError> {
+    use std::io::Write;
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(parent).map_err(AtomicWriteError::before_publication)?;
+    let (temporary, mut file) =
+        reserve_temporary(path, candidate).map_err(AtomicWriteError::before_publication)?;
+    let written = file.write_all(content).and_then(|()| file.sync_all());
+    drop(file);
+    if let Err(error) = written.and_then(|()| std::fs::rename(&temporary, path)) {
+        if let Err(cleanup) = remove_temporary(&temporary) {
+            if cleanup.kind() != std::io::ErrorKind::NotFound {
+                let reported = std::io::Error::new(
+                    error.kind(),
+                    format!(
+                        "{error}; setup could not remove its owned temporary {} ({cleanup})",
+                        temporary.display()
+                    ),
+                );
+                return Err(AtomicWriteError {
+                    error: reported,
+                    published: false,
+                    unremoved_temporary: Some(temporary),
+                });
+            }
+        }
+        return Err(AtomicWriteError::before_publication(error));
+    }
+    #[cfg(test)]
+    fail_after_publication(path).map_err(|error| AtomicWriteError {
+        error,
+        published: true,
+        unremoved_temporary: None,
+    })?;
+    crate::store::sync_dir(parent).map_err(|error| AtomicWriteError {
+        error,
+        published: true,
+        unremoved_temporary: None,
+    })
+}
+
+fn remove_temporary(path: &Path) -> std::io::Result<()> {
+    #[cfg(test)]
+    if FAILURE_TEMPORARY_CLEANUP.with(|failure| failure.replace(false)) {
+        return Err(std::io::Error::other("injected temporary cleanup failure"));
+    }
+    std::fs::remove_file(path)
+}
+
+#[cfg(test)]
+thread_local! {
+    static FAILURE_AFTER_PUBLICATION: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+    static FAILURE_TEMPORARY_CLEANUP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+fn fail_after_publication(path: &Path) -> std::io::Result<()> {
+    FAILURE_AFTER_PUBLICATION.with(|failure| {
+        if failure.borrow().as_deref() == Some(path) {
+            failure.replace(None);
+            Err(std::io::Error::other("injected directory sync failure"))
+        } else {
+            Ok(())
+        }
+    })
 }
 
 fn remove_if_present(path: &Path) -> std::io::Result<()> {
@@ -419,19 +532,19 @@ fn remove_if_present(path: &Path) -> std::io::Result<()> {
     }
 }
 
-fn apply_action(w: &PlannedWrite) -> std::io::Result<()> {
+fn apply_action(w: &PlannedWrite) -> Result<(), AtomicWriteError> {
     match &w.action {
         Action::Write(content) => write_atomic(&w.path, content.as_bytes()),
-        Action::Delete => remove_if_present(&w.path),
+        Action::Delete => remove_if_present(&w.path).map_err(AtomicWriteError::before_publication),
     }
 }
 
 /// Puts `w` back exactly as it was: whether it was written or deleted makes
 /// no difference to undoing it, only what `original` says was there.
-fn restore_one(w: &PlannedWrite) -> std::io::Result<()> {
+fn restore_one(w: &PlannedWrite) -> Result<(), AtomicWriteError> {
     match &w.original {
         Some(bytes) => write_atomic(&w.path, bytes),
-        None => remove_if_present(&w.path),
+        None => remove_if_present(&w.path).map_err(AtomicWriteError::before_publication),
     }
 }
 
@@ -456,9 +569,10 @@ fn verify_one(w: &PlannedWrite) -> bool {
     }
 }
 
-/// Rolls every one of `writes` back, in reverse, and returns the paths it
-/// could not restore. `t565` §7.6: the order matters because a later write
-/// can depend on an earlier one existing (a directory it lives in).
+/// Rolls every one of `writes` back, in reverse, and returns failed
+/// destinations and any owned temporaries it could not remove. `t565` §7.6:
+/// the order matters because a later write can depend on an earlier one
+/// existing (a directory it lives in).
 ///
 /// Public so a caller whose own next step fails *after* a successful commit
 /// -- planting `.vivac/`, say -- can undo the commit by hand and report it
@@ -467,8 +581,11 @@ fn verify_one(w: &PlannedWrite) -> bool {
 pub fn rollback(writes: &[PlannedWrite]) -> Vec<PathBuf> {
     let mut failed = Vec::new();
     for w in writes.iter().rev() {
-        if restore_one(w).is_err() {
+        if let Err(failure) = restore_one(w) {
             failed.push(w.path.clone());
+            if let Some(temporary) = failure.unremoved_temporary {
+                failed.push(temporary);
+            }
         }
     }
     failed
@@ -480,20 +597,17 @@ enum Cause {
 }
 
 /// The exit-5 text for a rollback that just ran: `clause` names what went
-/// wrong, and `unrestored` lists whatever the rollback itself could not put
-/// back -- empty in the common case, where it says so plainly instead.
+/// wrong, and `unrestored` lists destinations it could not restore and owned
+/// temporaries it could not remove -- empty when rollback completed.
 pub fn failure_with_rollback(clause: String, unrestored: &[PathBuf]) -> Failure {
     let message = if unrestored.is_empty() {
-        format!("{clause}, so setup put every file it\n  touched back as it was.")
+        format!("{clause}, so setup restored every planned destination\n  it changed.")
     } else {
-        let mut m = format!("{clause}, and setup could not put these back as they were:\n");
+        let mut m = format!("{clause}, and setup could not restore or remove these files:\n");
         for p in unrestored {
             m.push_str(&format!("      {}\n", p.display()));
         }
-        m.push_str(
-            "  setup keeps no copy on disk, so the only other copy is whatever\n  \
-             version control holds.",
-        );
+        m.push_str("  Check version control for the original contents.");
         m
     };
     Failure::Io(std::io::Error::other(message))
@@ -514,11 +628,15 @@ fn rollback_failure(path: &Path, cause: Cause, writes: &[PlannedWrite]) -> Failu
 /// nothing, the same promise the security pillar was given.
 pub fn commit(writes: &[PlannedWrite]) -> Result<(), Failure> {
     for (i, w) in writes.iter().enumerate() {
-        if let Err(e) = apply_action(w) {
-            // `w` itself never changed -- a failed write leaves its target
-            // exactly as it was, since `write_atomic`'s last step is one
-            // rename -- so only the entries before it need rolling back.
-            return Err(rollback_failure(&w.path, Cause::Write(e), &writes[..i]));
+        if let Err(failure) = apply_action(w) {
+            // A failed parent sync follows publication, so this file must be
+            // restored too. A failure before rename never changed its target.
+            let touched = if failure.published { i + 1 } else { i };
+            return Err(rollback_failure(
+                &w.path,
+                Cause::Write(failure.error),
+                &writes[..touched],
+            ));
         }
     }
     for w in writes {
@@ -689,11 +807,138 @@ mod tests {
         let target = dir.join("settings.json");
         std::fs::create_dir_all(target.join("occupied")).unwrap();
         assert!(write_atomic(&target, b"{\"env\":{}}").is_err());
-        assert!(
-            !sibling_temp(&target).exists(),
-            "the temporary survived the failed rename"
-        );
+        let names: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(names, vec![target.file_name().unwrap()]);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn failed_reservations_preserve_the_original_and_foreign_file_after_eight_attempts() {
+        let dir = temp_dir("temporary-collision");
+        let target = dir.join("target.txt");
+        let occupied = sibling_temp(&target);
+        std::fs::write(&target, b"old target").unwrap();
+        std::fs::write(&occupied, b"foreign temporary").unwrap();
+        let calls = std::cell::Cell::new(0);
+        let error = write_atomic_with(&target, b"new target", |_| {
+            calls.set(calls.get() + 1);
+            occupied.clone()
+        })
+        .unwrap_err();
+        assert_eq!(calls.get(), 8);
+        assert_eq!(error.error.kind(), std::io::ErrorKind::AlreadyExists);
+        assert!(!error.published);
+        assert_eq!(std::fs::read(&target).unwrap(), b"old target");
+        assert_eq!(std::fs::read(&occupied).unwrap(), b"foreign temporary");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn an_occupied_temporary_is_skipped_without_touching_it() {
+        let dir = temp_dir("temporary-retry");
+        let target = dir.join("target.txt");
+        let occupied = sibling_temp(&target);
+        let reserved = dir.join("reserved.tmp");
+        std::fs::write(&target, b"old target").unwrap();
+        std::fs::write(&occupied, b"foreign temporary").unwrap();
+        let calls = std::cell::Cell::new(0);
+        write_atomic_with(&target, b"new target", |_| {
+            calls.set(calls.get() + 1);
+            if calls.get() == 1 {
+                occupied.clone()
+            } else {
+                reserved.clone()
+            }
+        })
+        .unwrap();
+        assert_eq!(calls.get(), 2);
+        assert_eq!(std::fs::read(&occupied).unwrap(), b"foreign temporary");
+        assert_eq!(std::fs::read(&target).unwrap(), b"new target");
+        assert!(!reserved.exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn failed_reservation_preserves_a_foreign_symlink_and_its_target() {
+        let dir = temp_dir("temporary-link-collision");
+        let target = dir.join("target.txt");
+        let occupied = sibling_temp(&target);
+        let outside = dir.join("outside.txt");
+        std::fs::write(&target, b"old target").unwrap();
+        std::fs::write(&outside, b"outside sentinel").unwrap();
+        #[cfg(unix)]
+        let link = std::os::unix::fs::symlink(&outside, &occupied);
+        #[cfg(windows)]
+        let link = std::os::windows::fs::symlink_file(&outside, &occupied);
+        if let Err(error) = link {
+            #[cfg(windows)]
+            if error.kind() == std::io::ErrorKind::PermissionDenied {
+                eprintln!("File symlink creation unavailable: {error}");
+                std::fs::remove_dir_all(dir).unwrap();
+                return;
+            }
+            panic!("symlink creation failed: {error}");
+        }
+        let error = write_atomic_with(&target, b"new target", |_| occupied.clone()).unwrap_err();
+        assert!(!error.published);
+        assert_eq!(error.error.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read(&target).unwrap(), b"old target");
+        assert_eq!(std::fs::read(&outside).unwrap(), b"outside sentinel");
+        assert_eq!(std::fs::read_link(&occupied).unwrap(), outside);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn an_unremoved_owned_temporary_is_reported_alongside_rollback() {
+        let dir = temp_dir("temporary-cleanup-fails");
+        let first = dir.join("first.txt");
+        let blocked = dir.join("blocked");
+        std::fs::write(&first, b"original first").unwrap();
+        std::fs::create_dir(&blocked).unwrap();
+        std::fs::write(blocked.join("occupied"), b"foreign sentinel").unwrap();
+        let writes = vec![
+            PlannedWrite::write(
+                first.clone(),
+                "new first".into(),
+                Some(b"original first".to_vec()),
+            ),
+            PlannedWrite::write(blocked.clone(), "new second".into(), None),
+        ];
+        FAILURE_TEMPORARY_CLEANUP.with(|failure| failure.set(true));
+        let error = commit(&writes).unwrap_err();
+        assert_eq!(std::fs::read(&first).unwrap(), b"original first");
+        assert_eq!(
+            std::fs::read(blocked.join("occupied")).unwrap(),
+            b"foreign sentinel"
+        );
+        let temporary = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("blocked.")
+            })
+            .unwrap();
+        assert_eq!(std::fs::read(&temporary).unwrap(), b"new second");
+        let message = error.message();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(
+            message.contains(&temporary.display().to_string()),
+            "{message}"
+        );
+        assert!(
+            message.contains("injected temporary cleanup failure"),
+            "{message}"
+        );
+        assert!(
+            message.contains("setup restored every planned destination\n  it changed."),
+            "{message}"
+        );
     }
 
     #[test]
@@ -733,9 +978,39 @@ mod tests {
         let err = commit(&writes).unwrap_err();
         let msg = err.message();
         assert!(msg.contains("could not be written"), "{msg}");
-        assert!(msg.contains("put every file it"), "{msg}");
+        assert!(
+            msg.contains("setup restored every planned destination\n  it changed."),
+            "{msg}"
+        );
         assert_eq!(std::fs::read_to_string(&first).unwrap(), "original first");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_failure_after_publication_restores_the_published_file_too() {
+        let dir = temp_dir("publication-fails");
+        let first = dir.join("first.txt");
+        let second = dir.join("second.txt");
+        std::fs::write(&first, b"original first\r\n").unwrap();
+        std::fs::write(&second, b"original second\r\n").unwrap();
+        let writes = vec![
+            PlannedWrite::write(
+                first.clone(),
+                "new first".into(),
+                Some(b"original first\r\n".to_vec()),
+            ),
+            PlannedWrite::write(
+                second.clone(),
+                "new second".into(),
+                Some(b"original second\r\n".to_vec()),
+            ),
+        ];
+        FAILURE_AFTER_PUBLICATION.with(|failure| failure.replace(Some(second.clone())));
+        let error = commit(&writes).unwrap_err();
+        assert!(error.message().contains("directory sync failure"));
+        assert_eq!(std::fs::read(&first).unwrap(), b"original first\r\n");
+        assert_eq!(std::fs::read(&second).unwrap(), b"original second\r\n");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
@@ -832,11 +1107,58 @@ mod tests {
 
         let msg = failure_with_rollback("something failed".to_string(), &unrestored).message();
         assert!(
-            msg.contains("could not put these back as they were"),
+            msg.contains("could not restore or remove these files"),
             "{msg}"
         );
         assert!(msg.contains(&first.display().to_string()), "{msg}");
         assert!(msg.contains("version control"), "{msg}");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn rollback_reports_an_owned_temporary_it_could_not_remove() {
+        let dir = temp_dir("rollback-temporary-cleanup-fails");
+        let blocked = dir.join("blocked");
+        std::fs::create_dir(&blocked).unwrap();
+        std::fs::write(blocked.join("occupied"), b"foreign sentinel").unwrap();
+        let writes = vec![PlannedWrite::write(
+            blocked.clone(),
+            "new content".into(),
+            Some(b"original contents\r\n".to_vec()),
+        )];
+        FAILURE_TEMPORARY_CLEANUP.with(|failure| failure.set(true));
+        let failed = rollback(&writes);
+        let temporary = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("blocked.")
+            })
+            .unwrap();
+        assert_eq!(std::fs::read(&temporary).unwrap(), b"original contents\r\n");
+        assert_eq!(
+            std::fs::read(blocked.join("occupied")).unwrap(),
+            b"foreign sentinel"
+        );
+        let message = failure_with_rollback("rollback failed".into(), &failed).message();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(failed, vec![blocked, temporary.clone()]);
+        assert!(
+            message.contains(&temporary.display().to_string()),
+            "{message}"
+        );
+        assert!(
+            message.contains("could not restore or remove these files"),
+            "{message}"
+        );
+        assert!(
+            message.contains("Check version control for the original contents."),
+            "{message}"
+        );
+        assert!(!message.contains("only other copy"), "{message}");
+        assert!(!message.contains("keeps no copy"), "{message}");
     }
 }

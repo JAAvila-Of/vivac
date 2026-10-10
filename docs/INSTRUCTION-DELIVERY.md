@@ -429,6 +429,25 @@ corresponding reopening recorded one receipt. These controls tested the preservi
 candidate itself; they do not establish project-file installation, native concurrent-opening
 safety or activation of the setup integration.
 
+A native late-opening control then used one persistent 2.1.294 process. A's
+real producer completed, but its instrumented continuation waited beyond the
+native opening timeout. The catch blocked A. While that continuation still
+waited, `/clear` prepared B and its first provider request carried the complete
+fresh 19,872-byte snapshot once, the previous snapshot zero times, foreign text
+once and no marker. A then completed with an obsolete generation and an aborted
+signal. A later C request still carried B with the same conservation counts.
+There were two main Messages requests, none for A, and no title, unknown,
+count-token or proxy-denied requests. The independent CLI guard stayed unchanged.
+The producer's startup receipt remained; this is not evidence of receipt rollback.
+
+The first two runs retained their failed results: the classifier initially
+rejected native command blocks added after `/clear`. The corrected classifier
+recognizes three exact native wrappers and an exact synthetic prompt, with
+separate negative controls for altered, unknown or duplicated blocks. It does
+not use snapshot counts to identify an inference request. This control proves
+late-opening isolation for the instrumented preserving candidate; it does not
+prove isolation of a suspended attachment continuation or activate setup.
+
 ## Repeatable producer checks
 
 From a checkout of vivac, run:
@@ -681,6 +700,23 @@ installed bundle, or that its final context transport is safe. When bundle
 diagnostics are added, doctor must distinguish intact project files from
 observed module execution; neither the receipt nor a matching digest establishes
 runtime loading. Doctor does not yet inspect this bundle.
+
+An internal Rust ownership module now implements inspection and pure plans for
+that boundary. Receipts must match canonical compiled definitions byte for byte;
+payload reads are limited to 1 MiB each and receipt reads to 16 KiB. The compiled
+versions used by its tests are synthetic. Setup and doctor do not call the module,
+and no production bundle catalog has been introduced.
+
+Setup's shared transaction now reserves unique sibling temporaries exclusively.
+Existing files or links at temporary names remain untouched. A directory-sync
+failure after rename includes that published destination in rollback. A failed
+fresh bundle installation removes only its empty private directories, allowing
+a retry when no additional content prevents cleanup, while preserving shared
+parents and additional files. Failed removal of
+an owned temporary is reported with its path. Cleanup failures after a successful
+bundle removal are separate warnings, not a claim that the file transaction failed.
+These checks do not establish crash recovery or protection against concurrent
+filesystem changes.
 
 A Windows filesystem rehearsal exercised 64 lifecycle cases with two synthetic
 bundle versions, plus two deliberately unsafe controls. The cases covered

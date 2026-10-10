@@ -36,6 +36,7 @@ admitted
 adopt
 adopted
 adoption
+adopts
 advertised
 advice
 after
@@ -59,8 +60,10 @@ aligns
 all
 allow
 allowed
+allows
 alone
 along
+alongside
 alpha
 alphabet
 alphabetic
@@ -146,6 +149,8 @@ at
 atomic
 atomically
 attached
+attempt
+attempts
 attr
 attribute
 attributes
@@ -252,6 +257,7 @@ buf
 buffer
 build
 built
+bundle
 busy
 but
 bv
@@ -408,6 +414,7 @@ commits
 committed
 common
 commondir
+compact
 compare
 compared
 comparison
@@ -551,6 +558,7 @@ degrees
 delete
 deleted
 deleting
+deletion
 deliver
 delivered
 denial
@@ -701,6 +709,7 @@ enough
 ensure
 enter
 enters
+entire
 entirely
 entries
 entropy
@@ -771,6 +780,7 @@ external
 extra
 extract
 extracted
+extras
 eye
 f32
 f64
@@ -780,6 +790,7 @@ failed
 failing
 fails
 failure
+failures
 fallback
 falling
 falls
@@ -849,6 +860,7 @@ for
 force
 forced
 foreign
+forged
 forget
 forgets
 forgetting
@@ -863,6 +875,7 @@ forward
 found
 founding
 four
+fourth
 fp
 fractional
 fragment
@@ -1309,6 +1322,7 @@ msg
 mtime
 mul
 multibyte
+must
 mut
 mutation
 mutex
@@ -1346,6 +1360,7 @@ nobody
 node
 nodes
 non
+noncanonical
 none
 nonempty
 nonexistent
@@ -1381,6 +1396,7 @@ observation
 observations
 observe
 observed
+occupied
 of
 off
 offenders
@@ -1426,6 +1442,7 @@ orientation
 orig
 origin
 original
+originals
 orphan
 orphaned
 orphans
@@ -1460,6 +1477,7 @@ overwritten
 own
 owned
 owner
+ownership
 p11
 p12
 p30
@@ -1503,6 +1521,7 @@ path
 paths
 pattern
 payload
+payloads
 peek
 peekable
 pending
@@ -1510,6 +1529,7 @@ per
 percent
 perm
 permanent
+permission
 permissions
 perms
 persist
@@ -1615,6 +1635,7 @@ proposal
 proposing
 prose
 protocol
+prove
 provenance
 provider
 prune
@@ -1624,6 +1645,8 @@ pt
 ptr
 pub
 public
+publication
+published
 pure
 purpose
 push
@@ -1725,6 +1748,7 @@ registered
 registers
 registry
 regular
+rehashing
 reinstalled
 reject
 rejected
@@ -1769,6 +1793,7 @@ reordered
 repair
 repaired
 reparented
+reparse
 repeat
 repeated
 repeating
@@ -1799,10 +1824,13 @@ requires
 rescue
 rescued
 rescuing
+reservation
+reservations
 reserve
 reserved
 reset
 resident
+residual
 resolve
 resolved
 resolves
@@ -1813,8 +1841,10 @@ rest
 restamp
 restore
 restored
+restores
 result
 retain
+retained
 retired
 retirement
 retried
@@ -2009,6 +2039,7 @@ small
 snapshot
 snippet
 so
+socket
 some
 something
 sort
@@ -2102,6 +2133,7 @@ substituted
 substitutes
 subtree
 success
+successful
 successor
 such
 suffix
@@ -2158,6 +2190,7 @@ tells
 temp
 template
 templates
+temporaries
 temporary
 ten
 term
@@ -2217,6 +2250,7 @@ top
 torn
 total
 touch
+touched
 touches
 touching
 toward
@@ -2289,6 +2323,7 @@ underneath
 undo
 undoable
 undone
+unexpected
 unfold
 ungoverned
 unicode
@@ -2307,6 +2342,7 @@ unreachable
 unreadable
 unrecognised
 unrelated
+unremoved
 unrepresentable
 unrestorable
 unrestored
@@ -2374,6 +2410,7 @@ verification
 verified
 verify
 version
+versions
 very
 via
 view
