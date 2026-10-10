@@ -1,4 +1,6 @@
+// Fixture-only candidate. It is not installed by the product.
 const protocol = 'vivac.claude.opening.v1';
+const marker = '@@VIVAC_OPENING_CURRENT_REFERENCE_8f716aa0c351448fb5ce9c8b21e7a699@@';
 const blockedMessage = 'The vivac opening context is not ready. Check the integration and restart the session.';
 
 function utf8Bytes(text) {
@@ -21,16 +23,18 @@ export function register(on) {
   let generation = 0;
   let phase = 'blocked';
   let snapshot = null;
-  let expanded = false;
+  let referencePublished = false;
+  let activeTurn = null;
   const openings = new WeakMap();
-  const contexts = new WeakMap();
-  const blockName = `vivac-opening-${Math.random().toString(36).slice(2)}`;
+  const attachments = new WeakMap();
+  const returnedAttachments = new WeakSet();
+  const attachmentFailures = new WeakMap();
 
   function invalidate() {
     generation += 1;
     phase = 'blocked';
     snapshot = null;
-    expanded = false;
+    referencePublished = false;
   }
 
   function current(token, next) {
@@ -44,6 +48,13 @@ export function register(on) {
 
   function receipt(event, status) {
     return { ...event, vivac_opening: { protocol, status, generation } };
+  }
+
+  function normalizeOwned(result) {
+    if (result && typeof result === 'object' && !Array.isArray(result) && typeof result.text === 'string')
+      return { ...result, text: result.text.split(marker).join('') };
+    if (result && typeof result === 'object' && !Array.isArray(result) && result.text === null) return result;
+    return { text: null };
   }
 
   on('classic.SessionStart', async ($, event, next) => {
@@ -61,7 +72,8 @@ export function register(on) {
       try {
         const value = JSON.parse(produced.stdout);
         if (value && typeof value === 'object' && !Array.isArray(value) && value.protocol === protocol) {
-          if (value.status === 'ready' && typeof value.context === 'string' && value.context.length > 0 && utf8Bytes(value.context) <= 60000 && (event.source === 'startup' || event.source === 'clear')) {
+          if (value.status === 'ready' && typeof value.context === 'string' && value.context.length > 0
+              && utf8Bytes(value.context) <= 60000 && ['startup', 'clear', 'resume', 'compact'].includes(event.source)) {
             candidate = { context: value.context };
             status = 'ready';
           } else if (value.status === 'absent' && !Object.hasOwn(value, 'context')) {
@@ -72,9 +84,18 @@ export function register(on) {
     }
     const result = await next(event);
     if (!current(token, next)) return result;
+    if (status === 'ready' && (!result || typeof result !== 'object' || Array.isArray(result)
+        || (result.additionalContext !== undefined && !Array.isArray(result.additionalContext)))) {
+      invalidate();
+      return result;
+    }
     phase = status;
     snapshot = candidate;
-    return result;
+    if (status !== 'ready') return result;
+    const publication = { ...result, additionalContext: [...(result.additionalContext ?? []), marker] };
+    if (!current(token, next)) return result;
+    referencePublished = true;
+    return publication;
   }).catch(async ($, event, next) => {
     const token = openings.get(event);
     if (token !== undefined && current(token, next)) invalidate();
@@ -85,31 +106,60 @@ export function register(on) {
 
   on('session.end', async ($, event, next) => {
     invalidate();
+    activeTurn = null;
     return next(event);
   });
 
-  on('prompt.context', async ($, event, next) => {
-    const token = generation;
-    expanded = false;
-    contexts.set(event, token);
-    const result = await next(event);
-    if (!current(token, next) || phase !== 'ready') return result;
-    if (!result || typeof result !== 'object' || Array.isArray(result) || !Array.isArray(result.blocks)
-        || result.blocks.some(block => block?.name === blockName)) {
-      invalidate();
-      return result;
+  on('prompt.attachment', async ($, event, next) => {
+    let result;
+    let returned = false;
+    try {
+      const token = generation;
+      const turn = activeTurn;
+      const eligible = event.origin?.kind === 'hook' && event.origin?.event === 'SessionStart';
+      const before = !eligible || current(token, next);
+      if (eligible && typeof event.text === 'string' && event.text.includes(marker))
+        attachments.set(event,{token,turn});
+      result = await next(event);
+      returned = true;
+      returnedAttachments.add(event);
+      if (attachments.has(event) && (typeof result?.text !== 'string' || !result.text.includes(marker)))
+        throw new Error('Synthetic owned reference disappeared');
+      if (!eligible || typeof result?.text !== 'string' || !result.text.includes(marker)) return result;
+      attachments.set(event, { token, turn });
+      if (!before || !current(token, next) || phase !== 'ready' || !referencePublished || !snapshot)
+        throw new Error('Synthetic current reference is unavailable');
+      const text = result.text.split(marker).join(snapshot.context);
+      if (!current(token, next)) throw new Error('Synthetic current reference changed');
+      return { ...result, text };
+    } catch (error) {
+      const selected = attachments.get(event);
+      if (!returned || !selected) throw error;
+      attachmentFailures.set(event, error);
+      if (selected.token === generation) invalidate();
+      try {
+        if (selected.turn && selected.turn === activeTurn) {
+          await $.turn.abort({ turnId: selected.turn.id });
+        }
+        return normalizeOwned(result);
+      } catch (recoveryError) {
+        attachmentFailures.set(event, recoveryError);
+        throw recoveryError;
+      }
     }
-    if (!current(token, next)) return result;
-    const publication = { ...result, blocks: [...result.blocks, { name: blockName, text: snapshot.context }] };
-    if (!current(token, next)) return result;
-    expanded = true;
-    return publication;
   }).catch(async ($, event, next) => {
-    const token = contexts.get(event);
-    if (token !== undefined && current(token, next)) invalidate();
+    const selected = attachments.get(event);
+    if (!selected) throw new Error('Synthetic attachment failure was not classified');
+    if (returnedAttachments.has(event)) {
+      if (attachmentFailures.has(event)) throw attachmentFailures.get(event);
+      throw new Error('Synthetic attachment recovery failed after a downstream result');
+    }
+    if (selected.token === generation) invalidate();
     const result = await next(event);
-    current(token, next);
-    return result;
+    if (selected.turn && selected.turn === activeTurn) {
+      await $.turn.abort({ turnId: selected.turn.id });
+    }
+    return normalizeOwned(result);
   });
 
   on('prompt.submit', async ($, event, next) => {
@@ -119,12 +169,19 @@ export function register(on) {
   }).catch(() => ({ drop: blockedMessage }));
 
   on('turn.step', async function* ($, event, next) {
-    if (next.signal.aborted || (phase !== 'absent' && (phase !== 'ready' || !expanded))) return yield* stopTurn(event);
-    return yield* next(event);
+    if (next.signal.aborted || (phase !== 'absent' && (phase !== 'ready' || !referencePublished)))
+      return yield* stopTurn(event);
+    const turn = { id: event.turnId, generation };
+    activeTurn = turn;
+    try {
+      return yield* next(event);
+    } finally {
+      if (activeTurn === turn) activeTurn = null;
+    }
   }).catch(async function* ($, event) { return yield* stopTurn(event); });
 
   on('classic.UserPromptSubmit', async ($, event, next) => {
-    const status = !next.signal.aborted && (phase === 'ready' || phase === 'absent') ? phase : 'blocked';
+    const status = !next.signal.aborted && (phase === 'absent' || (phase === 'ready' && referencePublished)) ? phase : 'blocked';
     return next(receipt(event, status));
   }).catch(($, event, next) => next(receipt(event, 'blocked')));
 }

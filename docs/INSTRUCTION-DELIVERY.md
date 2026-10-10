@@ -107,17 +107,19 @@ handler failures and installation still need their own checks.
 
 The consumer artifact is in `src/setup/claude-opening/`. It calls the producer
 once per native `SessionStart` and keeps only the current snapshot in memory.
-With a vivac tree present, the experimental consumer accepts ready context only
-for `startup` and `clear`. It rejects `resume`, `compact` and unknown sources,
-even when preparation succeeds: publishing a new context block did not reliably
-replace the previous snapshot in the provider request. The preparation
-can still record an opening receipt; that receipt does not establish delivery.
-Outside a vivac tree, `absent` permits continuation, including resume and compact.
-Its `prompt.context` handler preserves other context blocks, checks that the
-opening is still current after downstream handlers finish, then adds the
-complete snapshot as its own block. It does not send its context through the
-classic hook's stdout or prepare it again on each render. New openings and
-session endings invalidate the old snapshot; a late result cannot restore it.
+With a vivac tree present, the experimental consumer accepts ready context for
+`startup`, `clear`, `resume` and `compact`; unknown sources remain blocked.
+Outside a vivac tree, `absent` permits continuation. The opening handler preserves
+foreign hook context and publishes a small owned reference. Its
+`prompt.attachment` handler expands only that reference in a `SessionStart`
+attachment, checking the current opening after downstream handlers finish.
+For valid text results, it preserves foreign text and result fields. New
+openings and session endings invalidate the old snapshot; a late result cannot
+restore it. Classified
+attachment failures reuse an already returned downstream result without
+calling `next` again, and abort only the captured turn if it is still active.
+The module does not prepare context again on each render. An opening receipt
+records preparation, not provider reception.
 
 `vivac session guard --hook` provides a separate command hook check. It reads
 the `vivac_opening` object supplied by the module through the native
@@ -128,8 +130,9 @@ returns `continue: true`. Both exit successfully, without locating a tree or
 changing project files. This receipt checks the module-to-command path; it is
 not authentication or evidence of provider reception.
 
-The module also rejects sends while preparation is pending or blocked, and
-requires its own complete context block to have been published before
+The module rejects model work while preparation is pending or blocked. Its
+prompt handler permits `/clear` and `/resume` as recovery commands. It also
+requires its own reference to have been published before
 advancing a turn with context. These guards are experimental: configuring the
 command alone does not establish their native ordering, execution or failure
 behavior. Setup and
@@ -142,7 +145,7 @@ node --test tests/claude_opening_module.mjs
 ```
 
 They check complete UTF-8 boundaries, foreign context, stale openings and
-renders, aborted handlers and blocked fallbacks. They do not prove native
+attachments, aborted handlers and blocked fallbacks. They do not prove native
 module loading or reception. The CLI guard is also covered by `tests/session.rs`.
 
 An initial native consumer check on Claude 2.1.294 exposed an ordering error:
@@ -254,11 +257,11 @@ once, the fresh complete snapshot zero times and no fresh sentinel. One startup
 receipt and one compact receipt were recorded; the process exited successfully
 without a timeout or blocked proxy traffic.
 
-The experimental consumer therefore rejects ready compact openings as well as
+The context-block prototype therefore rejected ready compact openings as well as
 resume. `source: compact` alone does not distinguish manual from automatic
-compaction, so the earlier explicit-compaction success does not authorize that
-source. Clear remains the checked recovery path. These controls neither activate
-the module nor establish installation, cancellation, update, undo or doctor
+compaction, so the earlier explicit-compaction success did not authorize that
+source. Clear remained its checked recovery path. These controls did not activate
+the module or establish installation, cancellation, update, undo or doctor
 support.
 
 The restricted artifact passed a separate native refusal control with the same
@@ -514,6 +517,40 @@ boundary, then delivered the complete fresh snapshot once, the previous one
 zero times, foreign context once and no marker. Automatic compaction used
 synthetic usage and window values; acceptance used actual provider request
 counts. These results do not install the module or activate setup.
+
+The replacement also passed a separate late-opening control. A's producer
+completed, but its opening continuation remained suspended beyond the native
+timeout. B opened and sent the complete fresh snapshot before A resumed. A's
+unchanged generation predicate rejected the obsolete publication, and C
+retained B's snapshot. A sent no Messages request; B and C each received fresh
+context once, previous context zero times, foreign text once and no marker.
+
+A disappearance control removed the owned marker from a real downstream
+attachment result while its captured turn was still active. Local recovery
+aborted that turn exactly once and returned the actual result with foreign
+text preserved. It did not call `next` again or send A to the provider. A fresh
+opening then delivered B's complete snapshot once, previous context zero
+times, foreign text once and no marker. The observer records return facts in
+its closure before attempting HTTP. After a completed own abort, or an
+explicitly aborted outer signal, it skips that report and counts the skip
+separately; B still delivers the closure checkpoint. Unexpected observer
+errors remain rejection conditions. This avoids mistaking a report attempted
+after cancellation for a consumer failure without tolerating unknown errors.
+
+Review then found that the tracked turn survived completion of its `turn.step`
+continuation. The replacement releases that object in `finally`, only if it
+is still the tracked turn; completing an older continuation cannot clear a newer
+one. Offline controls cover normal completion, return, rejection and a second
+attachment failure after abort. The revised consumer separately passed the same
+native startup/resume, manual and automatic compaction, late-opening, stale
+attachment and active-disappearance controls. These native controls do not
+independently exercise every offline generator completion case.
+
+The versioned experimental module contains this revised consumer, from which
+the native controls derived their instrumented copies. Its offline suite
+imports that product file, checks its fixed digest, and retains both attachment
+recovery checks and earlier opening guarantees.
+Neither this replacement nor the bundle transaction API activates setup.
 
 ## Repeatable producer checks
 
