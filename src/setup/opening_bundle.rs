@@ -235,7 +235,7 @@ pub(super) fn plan_update(
             (Outcome::Updated, Some(originals))
         }
         Inspection::Edited { .. } => {
-            return Err(conflict(&root.join(BUNDLE), "owned payload was edited"))
+            return Err(conflict(&root.join(BUNDLE), "owned payload was edited"));
         }
     };
     let contents = [
@@ -302,6 +302,19 @@ pub(super) fn plan_undo(root: &Path, catalog: &'static [BundleVersion]) -> Resul
 }
 
 impl Plan {
+    pub(super) fn with_writes(mut self, additional: Vec<PlannedWrite>) -> Result<Self, Failure> {
+        let mut destinations = std::collections::HashSet::new();
+        for write in additional.iter().chain(&self.writes) {
+            if !destinations.insert(&write.path) {
+                return Err(conflict(&write.path, "duplicate planned destination"));
+            }
+        }
+        let mut writes = additional;
+        writes.append(&mut self.writes);
+        self.writes = writes;
+        Ok(self)
+    }
+
     pub(super) fn commit(&self) -> Result<ApplyResult, Failure> {
         if let Err(failure) = super::commit(&self.writes) {
             if let Some(bundle) = &self.cleanup_on_failure {
@@ -409,6 +422,207 @@ mod tests {
     }
 
     #[test]
+    fn combined_create_orders_external_writes_before_bundle_and_receipt_last() {
+        let project = Project::new();
+        let settings = project.0.join("settings.json");
+        let original = b"original settings\r\n";
+        fs::write(&settings, original).unwrap();
+        let plan = plan_update(&project.0, &CATALOG, &CATALOG[0])
+            .unwrap()
+            .with_writes(vec![PlannedWrite::write(
+                settings.clone(),
+                "new settings\n".into(),
+                Some(original.to_vec()),
+            )])
+            .unwrap();
+        assert_eq!(plan.outcome, Outcome::Created);
+        assert_eq!(plan.writes.len(), 5);
+        assert_eq!(plan.writes[0].path, settings);
+        assert_eq!(plan.writes[4].path, project.0.join(BUNDLE).join(RECEIPT));
+        assert_eq!(fs::read(&settings).unwrap(), original);
+        assert!(!project.0.join(BUNDLE).exists());
+        assert!(plan.commit().unwrap().cleanup_failures.is_empty());
+        assert_eq!(fs::read(settings).unwrap(), b"new settings\n");
+        assert!(matches!(
+            inspect(&project.0, &CATALOG).unwrap(),
+            Inspection::Intact { .. }
+        ));
+    }
+
+    #[test]
+    fn combined_update_bundle_failure_restores_external_settings_and_bundle_bytes() {
+        let project = Project::new();
+        install(&project);
+        let before = snapshot(&project);
+        let settings = project.0.join("settings.json");
+        let original = b"original settings\r\n";
+        fs::write(&settings, original).unwrap();
+        let plan = plan_update(&project.0, &CATALOG, &CATALOG[1])
+            .unwrap()
+            .with_writes(vec![PlannedWrite::write(
+                settings.clone(),
+                "new settings".into(),
+                Some(original.to_vec()),
+            )])
+            .unwrap();
+        super::super::FAILURE_AFTER_PUBLICATION
+            .with(|failure| failure.replace(Some(project.0.join(BUNDLE).join(RECEIPT))));
+        assert!(plan
+            .commit()
+            .unwrap_err()
+            .message()
+            .contains("directory sync failure"));
+        assert_eq!(snapshot(&project), before);
+        assert_eq!(fs::read(settings).unwrap(), original);
+    }
+
+    #[test]
+    fn combined_fresh_bundle_failure_restores_settings_and_cleans_owned_directories() {
+        let project = Project::new();
+        let settings = project.0.join("settings.json");
+        let original = b"original settings\r\n";
+        fs::write(&settings, original).unwrap();
+        let plan = plan_update(&project.0, &CATALOG, &CATALOG[0])
+            .unwrap()
+            .with_writes(vec![PlannedWrite::write(
+                settings.clone(),
+                "new settings".into(),
+                Some(original.to_vec()),
+            )])
+            .unwrap();
+        super::super::FAILURE_AFTER_PUBLICATION
+            .with(|failure| failure.replace(Some(project.0.join(BUNDLE).join(RECEIPT))));
+        assert!(plan.commit().is_err());
+        assert_eq!(fs::read(settings).unwrap(), original);
+        assert!(matches!(
+            inspect(&project.0, &CATALOG).unwrap(),
+            Inspection::Absent
+        ));
+        assert!(project.0.join(".claude/skills").is_dir());
+        assert!(!project.0.join(BUNDLE).exists());
+    }
+
+    #[test]
+    fn combined_undo_external_failure_preserves_bundle_and_settings() {
+        let project = Project::new();
+        install(&project);
+        let before = snapshot(&project);
+        let settings = project.0.join("settings.json");
+        let original = b"original settings\r\n";
+        fs::write(&settings, original).unwrap();
+        let plan = plan_undo(&project.0, &CATALOG)
+            .unwrap()
+            .with_writes(vec![PlannedWrite::write(
+                settings.clone(),
+                "restored configuration".into(),
+                Some(original.to_vec()),
+            )])
+            .unwrap();
+        super::super::FAILURE_AFTER_PUBLICATION
+            .with(|failure| failure.replace(Some(settings.clone())));
+        assert!(plan.commit().is_err());
+        assert_eq!(snapshot(&project), before);
+        assert_eq!(fs::read(settings).unwrap(), original);
+        assert!(project.0.join(BUNDLE).is_dir());
+    }
+
+    #[test]
+    fn combined_undo_late_delete_failure_restores_deleted_bundle_files_and_settings() {
+        let project = Project::new();
+        install(&project);
+        let before = snapshot(&project);
+        let settings = project.0.join("settings.json");
+        let original = b"original settings\r\n";
+        fs::write(&settings, original).unwrap();
+        let mut undo = plan_undo(&project.0, &CATALOG).unwrap();
+        let blocked = project.0.join("blocked");
+        fs::create_dir(&blocked).unwrap();
+        fs::write(blocked.join("foreign"), b"foreign sentinel").unwrap();
+        undo.writes[3].path = blocked.clone();
+        let plan = undo
+            .with_writes(vec![PlannedWrite::write(
+                settings.clone(),
+                "restored configuration".into(),
+                Some(original.to_vec()),
+            )])
+            .unwrap();
+        assert!(plan.commit().is_err());
+        assert_eq!(snapshot(&project), before);
+        assert_eq!(fs::read(settings).unwrap(), original);
+        assert_eq!(
+            fs::read(blocked.join("foreign")).unwrap(),
+            b"foreign sentinel"
+        );
+    }
+
+    #[test]
+    fn composition_rejects_duplicates_in_additional_bundle_and_between_both_without_writes() {
+        for case in 0..3 {
+            let project = Project::new();
+            let settings = project.0.join("settings.json");
+            let original = b"original settings\r\n";
+            fs::write(&settings, original).unwrap();
+            let mut plan = plan_update(&project.0, &CATALOG, &CATALOG[0]).unwrap();
+            let additional = match case {
+                0 => vec![
+                    PlannedWrite::write(settings.clone(), "first".into(), Some(original.to_vec())),
+                    PlannedWrite::delete(settings.clone(), original.to_vec()),
+                ],
+                1 => vec![PlannedWrite::write(
+                    plan.writes[3].path.clone(),
+                    "foreign receipt".into(),
+                    None,
+                )],
+                _ => {
+                    plan.writes[3].path = plan.writes[0].path.clone();
+                    Vec::new()
+                }
+            };
+            let error = plan.with_writes(additional).err().unwrap();
+            assert!(error.message().contains("duplicate planned destination"));
+            assert_eq!(fs::read(settings).unwrap(), original);
+            assert!(!project.0.join(".claude").exists());
+        }
+    }
+
+    #[test]
+    fn current_and_edited_kept_plans_commit_only_additional_writes() {
+        let project = Project::new();
+        install(&project);
+        let settings = project.0.join("settings.json");
+        fs::write(&settings, b"old settings").unwrap();
+        let before = snapshot(&project);
+        let current = plan_update(&project.0, &CATALOG, &CATALOG[0])
+            .unwrap()
+            .with_writes(vec![PlannedWrite::write(
+                settings.clone(),
+                "current settings".into(),
+                Some(b"old settings".to_vec()),
+            )])
+            .unwrap();
+        assert_eq!(current.outcome, Outcome::Current);
+        assert_eq!(current.writes.len(), 1);
+        current.commit().unwrap();
+        assert_eq!(snapshot(&project), before);
+        assert_eq!(fs::read(&settings).unwrap(), b"current settings");
+        fs::write(&owned_paths(&project)[2], b"edited by owner\r\n").unwrap();
+        let edited = snapshot(&project);
+        let kept = plan_undo(&project.0, &CATALOG)
+            .unwrap()
+            .with_writes(vec![PlannedWrite::write(
+                settings.clone(),
+                "kept settings".into(),
+                Some(b"current settings".to_vec()),
+            )])
+            .unwrap();
+        assert_eq!(kept.outcome, Outcome::Kept);
+        assert_eq!(kept.writes.len(), 1);
+        assert!(kept.commit().unwrap().cleanup_failures.is_empty());
+        assert_eq!(snapshot(&project), edited);
+        assert_eq!(fs::read(settings).unwrap(), b"kept settings");
+    }
+
+    #[test]
     fn fresh_failure_removes_empty_owned_directories_and_allows_retry() {
         let project = Project::new();
         let mut plan = plan_update(&project.0, &CATALOG, &CATALOG[0]).unwrap();
@@ -500,12 +714,15 @@ mod tests {
             version: "vectors",
             files: ["abc", "", "a"],
         };
-        assert_eq!(canonical_receipt(&version), concat!(
-            "{\"files\":{\".claude-plugin/plugin.json\":\"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\",",
-            "\"hooks/hooks.json\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",",
-            "\"hooks/register.mjs\":\"ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb\"},",
-            "\"schema\":1,\"version\":\"vectors\"}\n"
-        ));
+        assert_eq!(
+            canonical_receipt(&version),
+            concat!(
+                "{\"files\":{\".claude-plugin/plugin.json\":\"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\",",
+                "\"hooks/hooks.json\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",",
+                "\"hooks/register.mjs\":\"ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb\"},",
+                "\"schema\":1,\"version\":\"vectors\"}\n"
+            )
+        );
     }
 
     #[test]

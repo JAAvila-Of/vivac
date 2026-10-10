@@ -27,6 +27,7 @@ adapter
 adapters
 add
 added
+additional
 additions
 addr
 adds
@@ -357,6 +358,7 @@ clause
 clauses
 clean
 cleanly
+cleans
 cleanup
 clear
 cleared
@@ -423,6 +425,7 @@ complete
 completes
 component
 components
+composition
 compute
 concat
 concurrent
