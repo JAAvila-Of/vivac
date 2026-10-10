@@ -107,11 +107,12 @@ handler failures and installation still need their own checks.
 
 The consumer artifact is in `src/setup/claude-opening/`. It calls the producer
 once per native `SessionStart` and keeps only the current snapshot in memory.
-With a vivac tree present, the experimental consumer currently rejects
-`resume`, even when preparation succeeds: publishing a new context block did
-not replace the snapshot saved in the resumed conversation. The preparation
+With a vivac tree present, the experimental consumer accepts ready context only
+for `startup` and `clear`. It rejects `resume`, `compact` and unknown sources,
+even when preparation succeeds: publishing a new context block did not reliably
+replace the previous snapshot in the provider request. The preparation
 can still record an opening receipt; that receipt does not establish delivery.
-Outside a vivac tree, `absent` permits continuation, including resume.
+Outside a vivac tree, `absent` permits continuation, including resume and compact.
 Its `prompt.context` handler preserves other context blocks, checks that the
 opening is still current after downstream handlers finish, then adds the
 complete snapshot as its own block. It does not send its context through the
@@ -183,8 +184,9 @@ Twelve subsequent synthetic stress prompts did not produce a compaction
 boundary or a `SessionStart` with source `compact`. That stress check does not
 establish automatic compaction or delivery after it.
 
-A final native `/compact` control did emit a compaction boundary and reopen
-with source `compact`. Its follow-up request received the fresh Unicode
+Before compact openings were restricted, a native `/compact` control did emit a
+compaction boundary and reopen with source `compact`. Its follow-up request
+received the fresh Unicode
 sentinel and the complete 19,858-unit snapshot (19,865 UTF-8 bytes), matching
 the isolated twin producer literally and appearing once. The previous
 complete snapshot appeared zero times. The live fixture recorded one startup
@@ -192,7 +194,7 @@ and one compact; three provider requests included the compaction operation.
 The process exited successfully without a timeout or blocked proxy requests.
 The helper's report was adjusted afterward to account for auxiliary
 compaction requests, using the already captured counters without another
-launch. This establishes explicit compaction with the final artifact, not
+launch. This establishes explicit compaction with that artifact, not
 automatic compaction. These controls used an explicit plugin directory;
 they do not establish installation, update, undo or doctor behavior.
 
@@ -227,6 +229,46 @@ the provider request. The event exposed text and engine origin, without
 structured sections identifying the own block. That establishes a rendering
 hook, not a safe replacement mechanism for preserving foreign context.
 No transcript was edited. Fresh-context resume remains an installation gate.
+
+A fixture-only `prompt.compose` alternative placed the snapshot in its own
+namespaced system section with session scope. A subsequent control invalidated
+`prompt.section` after each successful opening. Both invalidation calls were
+observed, and the composed sections matched the startup and fresh resume
+snapshots literally. Startup sent its complete snapshot once. Resume nevertheless
+sent the startup snapshot once and the fresh snapshot zero times; trimming and
+line-ending normalization gave the same result, and the fresh sentinel was
+absent. The foreign section arrived once in both requests. The two launches
+reused the same native session ID and recorded one receipt per opening.
+These observations reject that alternative on Claude 2.1.294; they do not
+establish the cause or a safe way to replace saved context.
+
+A separate automatic-compaction control of the real context-block consumer
+used a synthetic 100,000-token window, a 50% threshold and simulated usage of
+60,000 tokens before summary and 10,000 afterward. Those values are fixture
+inputs, not measured token counts. The tree changed before the automatic
+trigger. An initial downstream attempt failed; a later attempt completed a
+summary, emitted a native compaction boundary and reopened with source
+`compact`. The fourth prompt produced a normal request after that opening.
+It preserved the foreign block once but sent the previous complete snapshot
+once, the fresh complete snapshot zero times and no fresh sentinel. One startup
+receipt and one compact receipt were recorded; the process exited successfully
+without a timeout or blocked proxy traffic.
+
+The experimental consumer therefore rejects ready compact openings as well as
+resume. `source: compact` alone does not distinguish manual from automatic
+compaction, so the earlier explicit-compaction success does not authorize that
+source. Clear remains the checked recovery path. These controls neither activate
+the module nor establish installation, cancellation, update, undo or doctor
+support.
+
+The restricted artifact passed a separate native refusal control with the same
+synthetic automatic-compaction setup. Startup sent the complete snapshot and
+foreign block once. After the tree changed, a summary completed, one compact
+boundary appeared and one compact receipt was recorded. The fourth prompt sent
+no subsequent provider request. The process exited successfully without a
+timeout or blocked proxy traffic. The native stream did not expose the command
+hook's JSON response; this proves refusal on that path, not fresh delivery or
+captured `continue: false` output.
 
 ## Repeatable producer checks
 
