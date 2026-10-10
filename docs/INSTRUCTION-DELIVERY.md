@@ -270,6 +270,49 @@ timeout or blocked proxy traffic. The native stream did not expose the command
 hook's JSON response; this proves refusal on that path, not fresh delivery or
 captured `continue: false` output.
 
+Two further fixture-only resume controls invalidated `prompt.context` after
+preparing the fresh snapshot; the second also invalidated `prompt.attachment`.
+Both calls completed, but both resumed requests still contained the original
+snapshot once and the fresh snapshot zero times. Foreign context survived once.
+Each control reused the native session ID, recorded one receipt per opening and
+exited successfully. Invalidation alone did not repair the observed delivery.
+
+A separate attachment failure control compared the same synthetic expansion
+failure with and without `$.turn.abort`. Without abort, the provider received a
+request despite the omitted attachment. With abort, no request reached it.
+The single-prompt print process exited with an error and did not expose an abort
+return acknowledgement; that result does not establish that an interactive
+session becomes unusable.
+
+A subsequent control used one process with continuous JSON input. After the
+attachment failure, the catch invoked `$.turn.abort`; no provider request
+followed, and the process remained alive.
+An actual `/clear` then prepared fresh context; the next prompt sent that full
+snapshot without the previous one, and the process exited successfully. The
+fixture recorded only startup and clear receipts. These checks used synthetic
+attachments alongside the current context-block module, not a completed
+reference transport. They establish the tested refusal and recovery behavior,
+not producer cancellation, installation readiness or an abort acknowledgement.
+
+A fixture-only reference candidate then replaced the own `prompt.context`
+block with a stable SessionStart marker. Its attachment handler substituted
+the current snapshot from memory; it retained no previous snapshots. Startup
+sent the complete context once. A second process resumed the same session after
+the fixture tree changed: the request contained the new complete context once,
+the previous context zero times and the fresh Unicode sentinel once. Foreign
+context appeared once in both requests, with no unexpanded marker. Both
+processes exited successfully and recorded one receipt per opening. This is
+fresh-delivery evidence for the candidate, not the current product module.
+Compaction, cancellation and concurrency remain gates.
+
+A separate copy of that candidate injected one expansion error after selecting
+the own attachment. Its catch ran, no request reached the provider, and the
+continuous-input process remained alive. After `/clear`, one request contained
+the new complete snapshot once, the old snapshot zero times, the foreign block
+once and no marker. Startup and clear each recorded a receipt; the process
+exited successfully. This covers a failure after attachment classification,
+not an earlier downstream exception or a confirmed abort return.
+
 ## Repeatable producer checks
 
 From a checkout of vivac, run:
