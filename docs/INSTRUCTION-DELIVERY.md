@@ -808,8 +808,31 @@ runtime loading. Doctor does not yet inspect this bundle.
 An internal Rust ownership module now implements inspection and pure plans for
 that boundary. Receipts must match canonical compiled definitions byte for byte;
 payload reads are limited to 1 MiB each and receipt reads to 16 KiB. The compiled
-versions used by its tests are synthetic. Setup and doctor do not call the module,
-and no production bundle catalog has been introduced.
+catalog now embeds the experimental manifest, hook definition and consumer with
+`include_str!` as `opening-reference-v1`. Setup and doctor do not call the module.
+An explicitly selected, ignored test drives the real Rust plans in isolated
+native fixtures; its two marked versions are derived from the embedded consumer,
+never from a receipt on disk. The test reports metadata rather than payloads and
+rejects paths outside the synthetic directory structure, linked components and
+projects beneath an existing external vivac tree. A fixture's own initialized
+tree is allowed. This test entry point adds no command to the public binary.
+The private native adapter also pins the exact external fixture directory. The
+portable Rust guard checks directory structure rather than a particular
+workspace; it does not isolate a caller that deliberately selects another
+directory with the same structure.
+
+A Windows native fixture then exercised that Rust test driver with Claude Code
+2.1.294. Preview left the project fingerprint unchanged; installation and update
+published matching canonical receipts. Native requests contained the complete
+current context and its version tag once, with no prior version after update.
+Undo removed all owned files while preserving additional files and settings.
+With the independent CLI guard deliberately retained, a subsequent launch sent
+no provider request and produced no opening receipt. The exact guard refusal
+reason appeared in native informational/result output; a native `continue`
+field was not exposed. This negative control is not a test of setup undo, which
+must also remove its own configuration. A separate driver invocation beneath
+the workspace's existing tree rejected the external ancestor before any write.
+Neither observation activates setup or proves loading in other harness versions.
 
 Setup's shared transaction now reserves unique sibling temporaries exclusively.
 Existing files or links at temporary names remain untouched. A directory-sync

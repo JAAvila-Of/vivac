@@ -239,6 +239,7 @@ boundary
 bounded
 bounds
 box
+boxed
 brackets
 branch
 branched
@@ -309,6 +310,7 @@ cased
 cases
 catalog
 categories
+category
 cause
 cc
 ceil
@@ -421,6 +423,7 @@ compare
 compared
 comparison
 compatibility
+compiled
 complete
 completes
 component
@@ -571,6 +574,7 @@ depth
 depths
 deref
 derive
+derived
 descend
 descendants
 describe
@@ -693,6 +697,7 @@ element
 else
 elsewhere
 email
+embedded
 emisores
 emit
 emits
@@ -857,6 +862,7 @@ folding
 folds
 follow
 followed
+following
 follows
 footer
 for
@@ -1157,6 +1163,7 @@ le
 lead
 leading
 leaf
+leak
 leap
 learn
 learned
@@ -1242,6 +1249,7 @@ malformed
 managed
 managing
 mandatory
+manifest
 manual
 many
 map

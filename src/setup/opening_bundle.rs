@@ -19,6 +19,16 @@ pub(super) struct BundleVersion {
     pub(super) files: [&'static str; 3],
 }
 
+pub(super) static CURRENT: BundleVersion = BundleVersion {
+    version: "opening-reference-v1",
+    files: [
+        include_str!("claude-opening/.claude-plugin/plugin.json"),
+        include_str!("claude-opening/hooks/hooks.json"),
+        include_str!("claude-opening/hooks/register.mjs"),
+    ],
+};
+pub(super) static CATALOG: [BundleVersion; 1] = [CURRENT];
+
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum Outcome {
     Created,
@@ -368,6 +378,339 @@ mod tests {
     use super::*;
     use std::fs;
     use std::path::PathBuf;
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "lowercase")]
+    enum FixtureAction {
+        Preview,
+        Apply,
+        Undo,
+        Inspect,
+    }
+
+    #[derive(serde::Deserialize)]
+    enum FixtureVersion {
+        #[serde(rename = "v1")]
+        V1,
+        #[serde(rename = "v2")]
+        V2,
+    }
+
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct FixtureRequest {
+        root: String,
+        action: FixtureAction,
+        version: FixtureVersion,
+    }
+
+    #[derive(serde::Serialize)]
+    struct FixtureResult {
+        outcome: &'static str,
+        #[serde(rename = "plannedwrites")]
+        planned_writes: usize,
+        applied: bool,
+        #[serde(rename = "cleanupfailures")]
+        cleanup_failures: usize,
+        expected_receipt_sha256: Option<String>,
+        receipt_sha256: Option<String>,
+        version: Option<&'static str>,
+        error_category: Option<&'static str>,
+    }
+
+    fn fixture_request(input: &str) -> Result<FixtureRequest, &'static str> {
+        if input.len() > 16 * 1024 {
+            return Err("request");
+        }
+        serde_json::from_str(input).map_err(|_| "request")
+    }
+
+    fn fixture_root(root: &str) -> Result<PathBuf, &'static str> {
+        let normalized = root.replace('\\', "/");
+        let path = PathBuf::from(normalized);
+        let fixture = path.parent().ok_or("scope")?;
+        let base = fixture.parent().ok_or("scope")?;
+        let suffix = fixture
+            .file_name()
+            .and_then(|name| name.to_str())
+            .and_then(|name| name.strip_prefix("claude-bundle-rust-cycle-"))
+            .ok_or("scope")?;
+        if path.file_name().and_then(|name| name.to_str()) != Some("project")
+            || base.file_name().and_then(|name| name.to_str()) != Some("instruction-reception")
+            || base
+                .parent()
+                .and_then(Path::file_name)
+                .and_then(|name| name.to_str())
+                != Some(".scratch")
+            || suffix.is_empty()
+            || !suffix
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+        {
+            return Err("scope");
+        }
+        Ok(path)
+    }
+
+    fn fixture_directories(root: &Path) -> Result<(), &'static str> {
+        for path in root.ancestors() {
+            let metadata = fs::symlink_metadata(path).map_err(|_| "scope_io")?;
+            if linked(&metadata) || !metadata.is_dir() {
+                return Err("scope");
+            }
+        }
+        Ok(())
+    }
+
+    fn fixture_ancestor_store(root: &Path) -> Result<(), &'static str> {
+        for path in root.ancestors() {
+            match fs::symlink_metadata(path.join(".vivac")) {
+                Ok(_) => return Err("ancestor_store"),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => return Err("scope_io"),
+            }
+        }
+        Ok(())
+    }
+
+    fn fixture_catalog() -> &'static [BundleVersion; 2] {
+        static CATALOG: std::sync::OnceLock<[BundleVersion; 2]> = std::sync::OnceLock::new();
+        CATALOG.get_or_init(|| {
+            [
+                ("v1", "1.0.0", "SYNTHETIC_NATIVE_BUNDLE_VERSION_v1_1a34"),
+                ("v2", "2.0.0", "SYNTHETIC_NATIVE_BUNDLE_VERSION_v2_1a34"),
+            ]
+            .map(|(version, manifest_version, tag)| {
+                let mut manifest: serde_json::Value =
+                    serde_json::from_str(CURRENT.files[0]).unwrap();
+                manifest["version"] = manifest_version.into();
+                let manifest = format!("{}\n", serde_json::to_string(&manifest).unwrap());
+                let anchor = "additionalContext: [...(result.additionalContext ?? []), marker]";
+                assert_eq!(CURRENT.files[2].matches(anchor).count(), 1);
+                let module = CURRENT.files[2].replace(
+                    anchor,
+                    &format!(
+                        "additionalContext: [...(result.additionalContext ?? []), marker, '{tag}']"
+                    ),
+                );
+                BundleVersion {
+                    version,
+                    files: [
+                        Box::leak(manifest.into_boxed_str()),
+                        CURRENT.files[1],
+                        Box::leak(module.into_boxed_str()),
+                    ],
+                }
+            })
+        })
+    }
+
+    fn fixture_outcome(outcome: &Outcome) -> &'static str {
+        match outcome {
+            Outcome::Created => "created",
+            Outcome::Updated => "updated",
+            Outcome::Current => "current",
+            Outcome::Removed => "removed",
+            Outcome::Kept => "kept",
+            Outcome::Absent => "absent",
+        }
+    }
+
+    fn fixture_failure(failure: Failure) -> &'static str {
+        match failure {
+            Failure::Model(_) => "conflict",
+            _ => "io",
+        }
+    }
+
+    fn fixture_run(input: &str, result: &mut FixtureResult) -> Result<(), &'static str> {
+        let request = fixture_request(input)?;
+        let root = fixture_root(&request.root)?;
+        if !root.is_absolute() {
+            return Err("scope");
+        }
+        fixture_directories(&root)?;
+        fixture_ancestor_store(root.parent().ok_or("scope")?)?;
+        let catalog = fixture_catalog();
+        let current = &catalog[match request.version {
+            FixtureVersion::V1 => 0,
+            FixtureVersion::V2 => 1,
+        }];
+        result.expected_receipt_sha256 = Some(digest(canonical_receipt(current).as_bytes()));
+        if !matches!(request.action, FixtureAction::Inspect) {
+            let plan = match request.action {
+                FixtureAction::Undo => plan_undo(&root, catalog),
+                _ => plan_update(&root, catalog, current),
+            }
+            .map_err(fixture_failure)?;
+            result.outcome = fixture_outcome(&plan.outcome);
+            result.planned_writes = plan.writes.len();
+            if !matches!(request.action, FixtureAction::Preview) {
+                let applied = plan.commit().map_err(|_| "commit")?;
+                result.applied = true;
+                result.cleanup_failures = applied.cleanup_failures.len();
+            }
+        }
+        // Removal can leave additional files in the bundle directory. Inspecting
+        // that directory as an installed bundle would misclassify successful undo.
+        if matches!(request.action, FixtureAction::Undo)
+            && matches!(result.outcome, "removed" | "absent")
+        {
+            return Ok(());
+        }
+        match inspect(&root, catalog).map_err(fixture_failure)? {
+            Inspection::Absent => {
+                if matches!(request.action, FixtureAction::Inspect) {
+                    result.outcome = "absent";
+                }
+            }
+            Inspection::Intact { originals, version } => {
+                result.receipt_sha256 = Some(digest(&originals[3]));
+                result.version = Some(version.version);
+                if matches!(request.action, FixtureAction::Inspect) {
+                    result.outcome = "intact";
+                }
+            }
+            Inspection::Edited { originals, version } => {
+                result.receipt_sha256 = Some(digest(&originals[3]));
+                result.version = Some(version.version);
+                if matches!(request.action, FixtureAction::Inspect) {
+                    result.outcome = "edited";
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "Requires an explicitly scoped native fixture request"]
+    fn native_bundle_cycle_fixture() {
+        use std::io::Write;
+        let mut result = FixtureResult {
+            outcome: "error",
+            planned_writes: 0,
+            applied: false,
+            cleanup_failures: 0,
+            expected_receipt_sha256: None,
+            receipt_sha256: None,
+            version: None,
+            error_category: None,
+        };
+        let status = match std::env::var("VIVAC_OPENING_FIXTURE_REQUEST") {
+            Ok(input) => fixture_run(&input, &mut result),
+            Err(_) => Err("request"),
+        };
+        if let Err(category) = status {
+            result.outcome = if category == "conflict" {
+                "conflict"
+            } else {
+                "error"
+            };
+            result.error_category = Some(category);
+        }
+        let mut stdout = std::io::stdout().lock();
+        writeln!(
+            stdout,
+            "VIVAC_OPENING_FIXTURE_RESULT {}",
+            serde_json::to_string(&result).unwrap()
+        )
+        .unwrap();
+        stdout.flush().unwrap();
+        assert!(status.is_ok(), "Opening bundle fixture request failed");
+    }
+
+    #[test]
+    fn compiled_current_catalog_installs_the_exact_embedded_payloads() {
+        let project = Project::new();
+        assert_eq!(super::CURRENT.version, "opening-reference-v1");
+        assert_eq!(super::CATALOG.len(), 1);
+        let plan = plan_update(&project.0, &super::CATALOG, &super::CURRENT).unwrap();
+        assert_eq!(plan.writes.len(), 4);
+        plan.commit().unwrap();
+        for (path, expected) in owned_paths(&project)[..3].iter().zip(super::CURRENT.files) {
+            assert_eq!(fs::read(path).unwrap(), expected.as_bytes());
+        }
+        assert_eq!(
+            fs::read(&owned_paths(&project)[3]).unwrap(),
+            canonical_receipt(&super::CURRENT).as_bytes()
+        );
+        assert!(matches!(
+            inspect(&project.0, &super::CATALOG).unwrap(),
+            Inspection::Intact { .. }
+        ));
+    }
+
+    #[test]
+    fn native_fixture_versions_are_known_distinct_and_derived_from_current() {
+        let catalog = fixture_catalog();
+        assert_ne!(
+            canonical_receipt(&catalog[0]),
+            canonical_receipt(&catalog[1])
+        );
+        for (version, tag, manifest_version) in [
+            (
+                &catalog[0],
+                "SYNTHETIC_NATIVE_BUNDLE_VERSION_v1_1a34",
+                "1.0.0",
+            ),
+            (
+                &catalog[1],
+                "SYNTHETIC_NATIVE_BUNDLE_VERSION_v2_1a34",
+                "2.0.0",
+            ),
+        ] {
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(version.files[0]).unwrap()["version"],
+                manifest_version
+            );
+            assert!(version.files[2].contains(tag));
+            assert_eq!(version.files[1], super::CURRENT.files[1]);
+        }
+    }
+
+    #[test]
+    fn fixture_request_bounds_and_external_scope_reject_unrelated_roots() {
+        let request = r#"{"root":"C:/.scratch/instruction-reception/claude-bundle-rust-cycle-test/project","action":"preview","version":"v1"}"#;
+        assert!(fixture_request(&format!(
+            "{request}{}",
+            " ".repeat(16 * 1024 - request.len())
+        ))
+        .is_ok());
+        assert!(fixture_request(&format!(
+            "{request}{}",
+            " ".repeat(16 * 1024 + 1 - request.len())
+        ))
+        .is_err());
+        assert!(fixture_root(&fixture_request(request).unwrap().root).is_ok());
+        for root in [
+            "project",
+            "C:/unrelated-project",
+            "C:/.scratch/instruction-reception/claude-bundle-rust-cycle-test",
+            "C:/.scratch/instruction-reception/claude-bundle-rust-cycle-test/../project",
+            "C:/.scratch/instruction-reception/claude-bundle-rust-cycle-/project",
+        ] {
+            assert!(fixture_root(root).is_err());
+        }
+    }
+
+    #[test]
+    fn fixture_directory_guard_rejects_linked_ancestors_without_following_them() {
+        let project = Project::new();
+        let target = project.0.join("target");
+        fs::create_dir_all(target.join("project")).unwrap();
+        let link = project.0.join("linked");
+        match make_link(&target, &link, true) {
+            Ok(()) => {}
+            #[cfg(windows)]
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                eprintln!("Directory symlink creation unavailable: {error}");
+                return;
+            }
+            Err(error) => panic!("symlink creation failed: {error}"),
+        }
+        assert_eq!(fixture_directories(&link.join("project")), Err("scope"));
+        assert!(target.join("project").is_dir());
+    }
 
     static V1: BundleVersion = BundleVersion {
         version: "fixture-v1",
