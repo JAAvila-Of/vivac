@@ -653,6 +653,60 @@ checks do not authorize adding that process to setup, nor establish its
 ownership, rollback or undo contract. The experimental producer does not
 change this setup boundary.
 
+The planned project bundle has a narrower ownership boundary than its
+directory. It owns three fixed relative paths: `.claude-plugin/plugin.json`,
+`hooks/hooks.json` and `hooks/register.mjs`. A separate `.vivac-owned.json`
+receipt records the bundle version and the SHA-256 digest of each file. The
+receipt cannot choose additional paths; its entries must match the fixed list.
+Its canonical bytes, version and digests must match a locally recognized
+published bundle. Recalculating an edited file's digest does not make that
+bundle owned. Supported older receipts must remain in the local catalog;
+unknown versions are conflicts. These checks detect edits, not authenticate
+who wrote the files.
+
+Before planning any changes, the installer must validate the complete receipt,
+the types of the path components and the contents of all owned files. Linked,
+unreadable, incomplete or unrecognized bundles are conflicts. An intact older
+bundle can be updated together; an edited bundle must not be partly replaced.
+Undo preserves the whole bundle when an owned file has been edited. For an
+intact bundle, it removes only the owned files and receipt, then removes only
+empty bundle directories. The shared `.claude/skills` and `.claude` directories
+remain. Additional files belong to the person and remain in place.
+These requirements do not establish protection against concurrent filesystem
+changes between inspection and writing.
+
+This ownership contract is not yet connected to setup. A filesystem rehearsal
+does not prove that the Rust installer implements it, that Claude loads the
+installed bundle, or that its final context transport is safe. When bundle
+diagnostics are added, doctor must distinguish intact project files from
+observed module execution; neither the receipt nor a matching digest establishes
+runtime loading. Doctor does not yet inspect this bundle.
+
+A Windows filesystem rehearsal exercised 64 lifecycle cases with two synthetic
+bundle versions, plus two deliberately unsafe controls. The cases covered
+creation, idempotence, update, removal, edits, unrecognized receipts, missing
+parts, invalid metadata, file-type conflicts, sharing locks and symbolic links.
+Twelve cases injected a failure after each of the four changes in initial
+installation, update and undo, checking restoration of owned bytes and
+preservation of foreign sentinels. The shared parent directories survived undo.
+
+The initial 65-case rehearsal counted mutation attempts but did not classify
+their destinations during successful changes or rollback. A separate unsafe
+rollback control wrote and restored a foreign sentinel and passed that original
+criterion. The corrected 66-case rehearsal classified destinations in memory
+and required zero forbidden mutation attempts for every ordinary operation.
+Both unsafe controls were detected despite identical final sentinel bytes;
+the mixed control also performed a legitimate four-file update. All 66 cases
+met their respective criteria. Passing an unsafe control means detecting its
+violation, not accepting the operation as safe.
+
+This rehearsal used a Python prototype, not the Rust installer or a native
+Claude session. Its audit covered the Python filesystem APIs used by that
+prototype, not direct native syscalls. It did not establish crash recovery,
+bounded reads, junction handling or protection against concurrent filesystem
+changes. The original report and unsafe-control evidence remain separate from
+the corrected result.
+
 The [loading reference](https://code.claude.com/docs/en/plugins/loading#plugins-shared-through-a-repository)
 also describes project plugins placed under `.claude/skills/`, identified as
 `<name>@skills-dir`. They require acceptance of the native workspace trust
