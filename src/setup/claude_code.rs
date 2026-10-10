@@ -516,6 +516,37 @@ fn paths(root: &Path) -> Paths {
     }
 }
 
+fn read_migration_skill(here: &Path) -> Result<Option<String>, Failure> {
+    let conflict = || {
+        Failure::Model(
+            "  .claude/skills/vivac-migrate/SKILL.md cannot be read safely: a path component is linked, has the wrong type, or is unreadable.\n\n  Nothing written."
+                .to_string(),
+        )
+    };
+    let mut path = here.to_path_buf();
+    let parts: Vec<_> = Path::new(SKILL_LABEL).components().collect();
+    for (index, part) in parts.iter().enumerate() {
+        path.push(part.as_os_str());
+        match std::fs::symlink_metadata(&path) {
+            Ok(metadata)
+                if metadata.file_type().is_symlink()
+                    || (index + 1 < parts.len() && !metadata.is_dir())
+                    || (index + 1 == parts.len() && !metadata.is_file()) =>
+            {
+                return Err(conflict());
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(_) => return Err(conflict()),
+        }
+    }
+    match std::fs::read_to_string(path) {
+        Ok(raw) => Ok(Some(raw)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(_) => Err(conflict()),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Recognizing an existing product, before planting a second map of it:
 // `t594` §4.5, case 3 -- reached only when there is no tree above `here`
@@ -631,9 +662,9 @@ fn guarded_relative(base: &Path, path: &Path) -> Option<String> {
 fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     let here = &roots.here;
     let paths = paths(here);
+    let skill_raw = read_migration_skill(here)?;
     let settings = read_json(&paths.settings);
     let mcp = read_json(&paths.mcp);
-    let skill_raw = std::fs::read_to_string(&paths.skill).ok();
     let agents_skill = super::agents_skill::Skill::read(here, super::agents_skill::CLAUDE_LABEL);
 
     let mut conflicts: Vec<String> = Vec::new();
@@ -1325,9 +1356,9 @@ fn skill_conflict() -> String {
 /// wrote is always safe, regardless of what the tree above `here` is doing.
 fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
     let paths = paths(here);
+    let skill_raw = read_migration_skill(here)?;
     let settings = read_json(&paths.settings);
     let mcp = read_json(&paths.mcp);
-    let skill_raw = std::fs::read_to_string(&paths.skill).ok();
     let agents_skill = super::agents_skill::Skill::read(here, super::agents_skill::CLAUDE_LABEL);
 
     let mut conflicts: Vec<String> = Vec::new();
