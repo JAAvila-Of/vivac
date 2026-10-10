@@ -179,6 +179,67 @@ run again during the compact command itself, but did run on the followup in
 the same process. This proves refresh on that path, not automatic compaction
 in the middle of a turn or a vivac integration.
 
+A further synthetic-module check registered `classic.SessionStart` without a
+settings command for that event. In a single stream-json process, startup and
+two real `/clear` commands produced the corresponding native opening events;
+`session.end` reported both clears. The receiver never received `/clear` as a
+literal user message. Complete synthetic `prompt.context` blocks exceeding
+12,000 characters arrived in subsequent requests. A separate `--continue`
+process reported `source: resume`. The same fixture also expanded a
+fixture-owned `SessionStart` marker through `prompt.attachment`: the receiver
+compared the entire replacement text, exceeding 12,000 characters, with the
+requests for startup, both clears and resume. Attachments owned by the engine
+were left unchanged. This establishes native opening metadata and intact
+synthetic transport on those paths, not cancellation of an abandoned
+preparation: the delayed hook did not observe its abort signal during clear.
+
+A separate automatic-compaction fixture used synthetic provider usage to
+trigger `session.compact` with `trigger: auto`, and observed a native
+`system:compact_boundary`. No `precompute` trigger was observed in that run.
+The baseline did not observe another `prompt.context` after the boundary in
+its three submitted entries; it therefore does not establish fresh context
+delivery after automatic compaction. These lifecycle checks use invented
+responses and do not establish a working vivac integration.
+
+A subsequent four-prompt automatic-compaction check registered
+`classic.SessionStart` in the module, without a settings command. It returned
+a small fixture-owned marker. `prompt.attachment` recognized only that marker
+with hook origin and event `SessionStart`, and emitted 12,385 bytes
+of synthetic context. The provider request immediately after the native
+boundary, within the same turn, contained the new marker once. After a
+second automatic compaction, the request contained the new marker
+and no occurrence of the previous marker. That receiver counted markers;
+it did not establish intact reception of the expanded text. `prompt.context`
+did not reopen during that compaction; it reopened before the fourth
+submitted prompt.
+
+The receiver was then corrected to reconstruct each entire expected ASCII
+snapshot in memory and compare it with the request's text fields. Repeated
+12,385-byte and 60,000-byte cases both matched the complete snapshot in the
+request immediately after the boundary. Another request, between the next
+`session.compact(auto)` and `SessionStart(compact)`, did not contain that
+snapshot intact; the fixture does not classify that request, which may have
+been for summarization. After the new opening, the request contained the new
+complete snapshot and not the old one. Do not infer loss from a main response
+based on the intermediate request.
+
+A separate refusal check called `turn.abort` after a simulated failure in
+`session.compact` with trigger `auto`, and returned `skip` with a string
+reason. No provider request followed the failure. Claude exited with
+`error_during_execution` and no compaction boundary in that variant. This
+establishes rejection before compaction, not rejection of a failed context
+preparation after the new opening or safe loading through vivac setup.
+
+A further failure variant simulated failed preparation in
+`classic.SessionStart` with source `compact`, after the native boundary. A
+`turn.step` guard called `turn.abort` and returned without calling the next
+handler. Three provider requests preceded the failure; none followed it.
+The fixture does not independently classify the preceding requests by their
+purpose. Claude exited with
+`error_during_execution`, without a timeout. This establishes refusal of the
+next send in that variant, not refusal when the module fails to load, handler
+exceptions or timeouts, or cancellation of a request already in flight.
+
 A separate bridge check used a local module to call the stable vivac producer
 through `$.process.run` and attach its decoded `additionalContext` through
 `prompt.submit`. The complete startup context, 18,921 UTF-8 bytes, appeared
@@ -188,6 +249,20 @@ bytes, including the new instruction. Each opening recorded one receipt in
 the fixture, and the original workspace's event log remained unchanged. The
 fixture used the existing bounded Codex JSON mode to test the bridge; this is
 not a Claude setup integration or a Claude opening-lifecycle contract.
+
+A further bridge used the same stable producer from native
+`classic.SessionStart`, without a settings command. The module prepared one
+snapshot per startup or resume event, returned its own small marker, and
+expanded only that marker through `prompt.attachment`. The receiver compared
+the complete producer text with both requests per opening: 18,921 UTF-8 bytes
+at startup and 19,931 at resume, including the fresh resume instruction.
+Each event invoked the producer once and recorded one `session.started` with
+the native source and session identifier. The fixture's own event log was
+verified before mutations; the original workspace log's hash was identical
+before and after. Native plugin validation succeeded and `--plugin-dir`
+loaded the module. This bridge still uses the bounded Codex producer mode
+only as a fixture; it does not establish clear or compaction of that producer,
+or installation and loading by vivac setup.
 
 Plugin declaration alone also did not establish loading. In two isolated
 non-interactive runs, project settings containing a local directory marketplace
