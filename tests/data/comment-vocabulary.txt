@@ -1340,6 +1340,7 @@ expect
 expected
 expects
 experiment
+experimental
 expires
 explain
 explained
@@ -2073,6 +2074,7 @@ led
 left
 leftover
 leftovers
+legacy
 legal
 legend
 legible
@@ -2827,6 +2829,7 @@ process
 processes
 produce
 produced
+producer
 produces
 producing
 product

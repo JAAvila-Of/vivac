@@ -7,6 +7,208 @@
 mod common;
 use common::Sandbox;
 
+const CLAUDE_MODULE_START: &[&str] = &["session", "start", "--hook", "--context", "claude-module"];
+
+#[test]
+fn claude_module_opening_is_complete_and_byte_bounded() {
+    let c = Sandbox::new_seeded("claude-module-ready");
+    let title = "Unicode mandate: acci\u{f3}n \u{1f9ed} remains complete";
+    c.ok(&[
+        "add",
+        title,
+        "--root",
+        "--type",
+        "constraint",
+        "--why",
+        "Keep the title complete",
+    ]);
+    let (expected, code) = c.run_stdin(&["session", "start", "--hook"], "{}");
+    assert_eq!(code, 0);
+    let before = c.log().matches("session.started").count();
+    let (stdout, stderr, code) = run_stdin_split(&c, CLAUDE_MODULE_START, "{}");
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert!(stderr.is_empty(), "{stderr}");
+    let response: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(response["protocol"], "vivac.claude.opening.v1");
+    assert_eq!(response["status"], "ready");
+    let context = response["context"].as_str().unwrap();
+    assert_eq!(context, expected);
+    assert!(context.contains(title));
+    assert!(context.contains("WRITE AT THESE SEAMS"));
+    assert!(context.len() <= 60_000);
+    assert_eq!(c.log().matches("session.started").count(), before + 1);
+}
+
+#[test]
+fn claude_module_outside_a_tree_emits_absent() {
+    let c = Sandbox::new_empty("claude-module-absent");
+    let (stdout, stderr, code) = run_stdin_split(&c, CLAUDE_MODULE_START, "{}");
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert!(stderr.is_empty(), "{stderr}");
+    let response: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(
+        response,
+        serde_json::json!({"protocol":"vivac.claude.opening.v1", "status":"absent"})
+    );
+    assert!(!c.0.join(".vivac").exists());
+}
+
+#[test]
+fn bounded_openings_reject_unreadable_context_without_custody_or_receipts() {
+    for mode in ["codex", "claude-module"] {
+        for warm in [false, true] {
+            for fault in [
+                "unsupported",
+                "invalid-log",
+                "invalid-utf8",
+                "torn-tail",
+                "unreadable-log",
+                "invalid-lane",
+            ] {
+                let c = Sandbox::new_seeded("bounded-opening-failure");
+                c.ok(&[
+                    "agents",
+                    "reconcile",
+                    "--mode",
+                    "automatic",
+                    "--yes",
+                    "--why",
+                    "Preserve native agents automatically",
+                ]);
+                std::fs::create_dir_all(c.0.join(".claude/agents")).unwrap();
+                let native = c.0.join(".claude/agents/reviewer.md");
+                std::fs::write(&native, "---\nname: reviewer\ndescription: Review the change.\nmodel: sonnet\n---\nInspect the requested files.\n").unwrap();
+                if warm {
+                    c.ok(&["brief"]);
+                    assert!(c.0.join(".vivac/index").is_file());
+                } else {
+                    assert!(!c.0.join(".vivac/index").exists());
+                }
+                let events = c.0.join(".vivac/events");
+                match fault {
+                    "unsupported" => c.append_unknown_event_type(),
+                    "invalid-log" | "invalid-utf8" | "torn-tail" => {
+                        let mut bytes = std::fs::read(&events).unwrap();
+                        bytes.extend_from_slice(match fault {
+                            "invalid-log" => b"not JSON\n",
+                            "invalid-utf8" => &[0xff, b'\n'],
+                            "torn-tail" => b"{\"type\":",
+                            _ => unreachable!(),
+                        });
+                        std::fs::write(&events, bytes).unwrap();
+                    }
+                    "unreadable-log" => {
+                        std::fs::remove_file(&events).unwrap();
+                        std::fs::create_dir(&events).unwrap();
+                    }
+                    "invalid-lane" => std::fs::write(c.0.join(".vivac/lane"), "not JSON").unwrap(),
+                    _ => unreachable!(),
+                }
+                let log_before = std::fs::read(&events).ok();
+                let config_before = std::fs::read(c.0.join(".vivac/config")).unwrap();
+                let native_before = std::fs::read(&native).unwrap();
+                let (stdout, stderr, code) =
+                    run_stdin_split(&c, &["session", "start", "--hook", "--context", mode], "{}");
+                assert_eq!(code, 0, "{mode}/{fault}/{warm}: {stdout}{stderr}");
+                assert!(!stderr.is_empty(), "{mode}/{fault}/{warm}");
+                let response: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+                if mode == "claude-module" {
+                    assert_eq!(
+                        response,
+                        serde_json::json!({"protocol":"vivac.claude.opening.v1", "status":"rejected", "reason":"preparation-failed"}),
+                        "{fault}/{warm}"
+                    );
+                } else {
+                    assert_eq!(response["continue"], false);
+                    assert!(response.get("hookSpecificOutput").is_none());
+                    assert!(response["systemMessage"]
+                        .as_str()
+                        .unwrap()
+                        .contains("could not prepare the complete opening context"));
+                }
+                assert_eq!(std::fs::read(&events).ok(), log_before);
+                assert_eq!(
+                    std::fs::read(c.0.join(".vivac/config")).unwrap(),
+                    config_before
+                );
+                assert_eq!(std::fs::read(&native).unwrap(), native_before);
+                assert!(!c.0.join(".codex/agents").exists());
+                if ["invalid-log", "invalid-utf8", "torn-tail"].contains(&fault) {
+                    let (brief, code) = c.run(&["brief"]);
+                    assert_eq!(code, 0, "{brief}");
+                    assert!(brief.starts_with("vivac"), "{brief}");
+                    assert_eq!(std::fs::read(&events).ok(), log_before);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn claude_module_context_requires_a_start_hook() {
+    let c = Sandbox::new_seeded("claude-module-usage");
+    for args in [
+        vec!["session", "start", "--context", "claude-module"],
+        vec!["session", "end", "--hook", "--context", "claude-module"],
+        vec!["session", "prompt", "--hook", "--context", "claude-module"],
+        vec!["session", "start", "--hook", "--context", "wrong"],
+    ] {
+        let (stdout, _, code) = run_stdin_split(&c, &args, "{}");
+        assert_ne!(code, 0, "accepted {args:?}");
+        assert!(stdout.is_empty(), "{stdout}");
+    }
+    assert!(!c.log().contains("session.started"));
+}
+
+#[test]
+fn claude_module_unicode_overflow_rejects_before_custody_or_receipt() {
+    let c = Sandbox::new_seeded("claude-module-overflow");
+    c.ok(&[
+        "agents",
+        "reconcile",
+        "--mode",
+        "automatic",
+        "--yes",
+        "--why",
+        "Preserve native agents automatically",
+    ]);
+    std::fs::create_dir_all(c.0.join(".claude/agents")).unwrap();
+    std::fs::write(c.0.join(".claude/agents/reviewer.md"), "---\nname: reviewer\ndescription: Review the change.\nmodel: sonnet\n---\nInspect the requested files.\n").unwrap();
+    c.ok(&[
+        "add",
+        "Large mandate",
+        "--root",
+        "--type",
+        "constraint",
+        "--why",
+        "Exercise the transport ceiling",
+    ]);
+    let log = c
+        .log()
+        .lines()
+        .map(|line| {
+            let mut event: serde_json::Value = serde_json::from_str(line).unwrap();
+            if event["payload"]["title"] == "Large mandate" {
+                event["payload"]["title"] = "\u{1f9ed}".repeat(15_001).into();
+            }
+            event.to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    std::fs::write(c.0.join(".vivac/events"), &log).unwrap();
+    let (stdout, stderr, code) = run_stdin_split(&c, CLAUDE_MODULE_START, "{}");
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    let response: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(
+        response,
+        serde_json::json!({"protocol":"vivac.claude.opening.v1", "status":"rejected", "reason":"too-large"})
+    );
+    assert_eq!(c.log(), log);
+    assert!(!c.log().contains("agent.imported"));
+    assert!(!c.0.join(".codex/agents").exists());
+}
+
 #[test]
 fn unsupported_tree_rejects_the_codex_opening_with_control_json() {
     let c = Sandbox::new_seeded("codex-unsupported-tree");

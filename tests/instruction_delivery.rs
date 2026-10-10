@@ -113,7 +113,9 @@ fn acceptance_matrix(harness: &str, nested: bool) {
     } else {
         sandbox.0.clone()
     };
-    configured_opening(&sandbox, &cwd, harness);
+    if harness != "claude-module" {
+        configured_opening(&sandbox, &cwd, harness);
+    }
 
     let mut sentinels = Vec::new();
     for source in OPENING_SOURCES {
@@ -148,6 +150,8 @@ fn acceptance_matrix(harness: &str, nested: bool) {
         // This exercises emission without pretending to launch either harness.
         let args: &[&str] = if harness == "codex" {
             &["session", "start", "--hook", "--context", "codex"]
+        } else if harness == "claude-module" {
+            &["session", "start", "--hook", "--context", "claude-module"]
         } else {
             &["session", "start", "--hook"]
         };
@@ -162,6 +166,11 @@ fn acceptance_matrix(harness: &str, nested: bool) {
                 .as_str()
                 .unwrap()
                 .to_string()
+        } else if harness == "claude-module" {
+            let response: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(response["protocol"], "vivac.claude.opening.v1");
+            assert_eq!(response["status"], "ready");
+            response["context"].as_str().unwrap().to_string()
         } else {
             String::from_utf8(output.stdout).unwrap()
         };
@@ -230,4 +239,14 @@ fn codex_openings_emit_fresh_governance_from_workspace_root() {
 #[test]
 fn codex_openings_emit_fresh_governance_beyond_nested_git_root() {
     acceptance_matrix("codex", true);
+}
+
+#[test]
+fn claude_module_openings_emit_fresh_governance_from_workspace_root() {
+    acceptance_matrix("claude-module", false);
+}
+
+#[test]
+fn claude_module_openings_emit_fresh_governance_beyond_nested_git_root() {
+    acceptance_matrix("claude-module", true);
 }

@@ -9,8 +9,9 @@
 //! It reads the log and never writes to it, and it never fails the turn --
 //! see [`prompt`]'s own doc for the whole of that promise.
 //!
-//! `start` and `end` exit 0 and say nothing when there is no `.vivac/`. A
-//! hook that fails in every directory without a tree gets switched off
+//! Opening and closing hooks exit 0 outside a vivac tree. Legacy hooks stay
+//! silent; the experimental module producer reports absence in its protocol.
+//! A hook that fails in every directory without a tree gets switched off
 //! within two days.
 
 use crate::args::Args;
@@ -75,8 +76,8 @@ pub fn start(ctx: &mut crate::ops::Ctx, a: &Args, project: &str) -> R {
     if !a.has("hook") {
         return crate::brief::brief(&ctx.tree, &ctx.store.root, &ctx.lane_dir, a, project);
     }
-    if a.opt("context") == Some("codex") {
-        return codex_start(ctx, a, project);
+    if matches!(a.opt("context"), Some("codex" | "claude-module")) {
+        return bounded_start(ctx, a, project);
     }
     // In hook mode the brief goes straight to stdout, in plain text: Claude
     // Code's own hook reference says plain-text stdout on `SessionStart`
@@ -129,7 +130,38 @@ pub fn start(ctx: &mut crate::ops::Ctx, a: &Args, project: &str) -> R {
     Ok(())
 }
 
-const CODEX_CONTEXT_BYTES: usize = 60_000;
+const OPENING_CONTEXT_BYTES: usize = 60_000;
+const CLAUDE_OPENING_PROTOCOL: &str = "vivac.claude.opening.v1";
+
+pub fn claude_module_absent() {
+    outln!(
+        "{}",
+        serde_json::json!({"protocol": CLAUDE_OPENING_PROTOCOL, "status": "absent"})
+    );
+}
+
+fn claude_module_rejected(reason: &str) {
+    outln!(
+        "{}",
+        serde_json::json!({"protocol": CLAUDE_OPENING_PROTOCOL, "status": "rejected", "reason": reason})
+    );
+}
+
+pub fn opening_preparation_failed(context: &str) {
+    if context == "claude-module" {
+        claude_module_rejected("preparation-failed");
+    } else {
+        codex_preparation_failed();
+    }
+}
+
+fn opening_rejected(context: &str) {
+    if context == "claude-module" {
+        claude_module_rejected("too-large");
+    } else {
+        codex_rejected();
+    }
+}
 
 pub fn codex_preparation_failed() {
     outln!(
@@ -151,18 +183,22 @@ fn codex_rejected() {
     );
 }
 
-fn codex_start(ctx: &mut crate::ops::Ctx, a: &Args, project: &str) -> R {
+fn bounded_start(ctx: &mut crate::ops::Ctx, a: &Args, project: &str) -> R {
+    let context = a.opt("context").unwrap();
+    if ctx.tree.broken_lines > 0 {
+        return Err(Failure::Model("Cannot prepare complete opening context: the tree contains unreadable event lines. Run vivac check to inspect the store; restore a readable log before relying on opening context.".to_string()));
+    }
     let mut text =
         crate::brief::to_text(&ctx.tree, &ctx.store.root, &ctx.lane_dir, a, project, true)?;
-    if text.len() > CODEX_CONTEXT_BYTES {
-        codex_rejected();
+    if text.len() > OPENING_CONTEXT_BYTES {
+        opening_rejected(context);
         return Ok(());
     }
     let shown_focus = ctx.tree.focus().map(|n| n.id.clone());
     let shown_vivac = ctx.tree.last_vivac().map(|v| v.id.clone());
     text.push_str(&reconciliation_text(&ctx.lane_dir));
-    if text.len() > CODEX_CONTEXT_BYTES {
-        codex_rejected();
+    if text.len() > OPENING_CONTEXT_BYTES {
+        opening_rejected(context);
         return Ok(());
     }
     let hook = HookInput::read();
@@ -182,16 +218,23 @@ fn codex_start(ctx: &mut crate::ops::Ctx, a: &Args, project: &str) -> R {
         }
         Err(_) => {}
     }
-    if text.len() > CODEX_CONTEXT_BYTES {
-        codex_rejected();
+    if text.len() > OPENING_CONTEXT_BYTES {
+        opening_rejected(context);
         return Ok(());
     }
-    outln!(
-        "{}",
-        serde_json::json!({"hookSpecificOutput": {
-            "hookEventName": "SessionStart", "additionalContext": text
-        }})
-    );
+    if context == "claude-module" {
+        outln!(
+            "{}",
+            serde_json::json!({"protocol": CLAUDE_OPENING_PROTOCOL, "status": "ready", "context": text})
+        );
+    } else {
+        outln!(
+            "{}",
+            serde_json::json!({"hookSpecificOutput": {
+                "hookEventName": "SessionStart", "additionalContext": text
+            }})
+        );
+    }
     Ok(())
 }
 

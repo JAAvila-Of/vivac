@@ -70,12 +70,40 @@ details in the context. The diagnostic stays on stderr. The hook exits
 successfully so Codex can process the JSON refusal; malformed commands retain
 their usage error. Outside a vivac project, the hook remains silent.
 
+The bounded modes also reject a loaded tree containing broken event lines,
+before rendering, custody reconciliation or an opening receipt. The ordinary
+reader still recovers readable events so `vivac brief` and `vivac check` can
+help inspect a damaged store. Recoverable text is useful for repair, but cannot
+establish that an omitted line contained no required instruction.
+
 Claude Code retains its plain-text opening hook. Its oversized-context problem
 remains unresolved: the multi-handler consumer tests below establish transport
 capacity, but not safe coordination of a dynamic vivac opening.
 Do not assume that the Codex refusal mechanism also protects Claude Code:
 the isolated Claude checks below found that `SessionStart` did not prevent a
 provider request after receiving `continue: false`.
+
+## Experimental Claude module producer
+
+`vivac session start --hook --context claude-module` prepares a bounded snapshot
+for an experimental module. Setup does not install or activate that module;
+the existing Claude integration remains unchanged. This command is not itself
+a replacement for the opening hook or proof that Claude received its output.
+
+Every response is one JSON object with `protocol: "vivac.claude.opening.v1"`.
+`status: "ready"` includes the complete `context`, limited to 60,000 UTF-8
+bytes. `status: "absent"` means no vivac tree was found and has no context.
+`status: "rejected"` has no context and names `reason: "too-large"` or
+`reason: "preparation-failed"`. Operational failures leave diagnostics on
+stderr and exit successfully so the consumer can inspect the rejection;
+invalid commands retain their usage error.
+
+The producer shares Codex's single preparation, custody reconciliation and
+opening receipt path, including its limits on operational notices. It does
+not make the Codex JSON envelope a Claude hook response. A consuming module
+must validate the protocol and refuse a failed or incomplete preparation
+before any subsequent model send. Native module loading, cancellation,
+handler failures and installation still need their own checks.
 
 ## Repeatable producer checks
 
@@ -105,8 +133,10 @@ not that a real compaction triggered the hook.
 
 Local checks on 2026-10-09 used a development checkout reporting Vivac 0.19.3,
 Claude Code 2.1.294 and Codex 0.162.0. Disposable projects and harness homes
-contained invented instructions. A loopback provider received each request and
-returned an intentional HTTP 400 before inference. These checks establish
+contained invented instructions. A loopback provider received each request;
+initial consumer checks returned an intentional HTTP 400, and subsequent
+lifecycle checks returned synthetic successful responses without inference.
+These checks establish
 context constructed by the harness, not understanding or compliance by a model.
 
 | Harness and operation | Observed request context |
@@ -273,6 +303,100 @@ settings with `env.CLAUDE_CODE_PLUGIN_DIRS` likewise did not activate a separate
 module, while the process environment did. Workspace trust was not confirmed
 in these runs; do not generalize their configuration behavior to trusted
 interactive sessions or treat native validation as proof of loading.
+
+Further isolated checks exercised local installation separately from loading.
+Adding a directory marketplace did not activate the module; installing its
+plugin did. Disable and uninstall removed its text from requests, while enable
+and reinstall restored it. Editing the module in the directory source changed
+the code used by a subsequent session even before a native update refreshed
+the cached copy. A cached file alone is therefore insufficient evidence of
+which module code ran. These checks did not exercise an interactive trust
+prompt or remote plugin sources.
+
+Project and local scopes did not isolate a marketplace's name in the global
+registry. With the same marketplace name in two disposable projects, registering
+B replaced that registry entry; A then loaded B's module. With distinct
+marketplace names, both entries coexisted and A retained its own module after
+B was registered. Both plugins still had the same plugin name. Complete
+12,038-character snapshots matched the respective requests in the distinct-name
+control. Neither a project settings declaration nor a local directory path
+alone prevents a global marketplace-name collision.
+
+Vivac setup currently writes project files without running the harness to
+configure itself or reading its personal configuration. Native plugin
+registration has effects outside those project files. The isolated installation
+checks do not authorize adding that process to setup, nor establish its
+ownership, rollback or undo contract. The experimental producer does not
+change this setup boundary.
+
+A native bridge then exercised the real bounded producer at startup and two
+real `/clear` commands in one stream-json process. It prepared snapshots of
+18,921, 19,974 and 21,027 UTF-8 bytes. Each subsequent request contained its
+complete snapshot once, including the fresh constraint added before that
+clear. Three native opening events invoked the producer three times and
+recorded three receipts with matching source and session identifier. Both
+clears produced `session.end` events; `/clear` never became a literal provider
+prompt.
+
+A separate real-producer bridge triggered two automatic compact boundaries
+within one process. The complete startup snapshot was 18,957 UTF-8 bytes;
+the two fresh compact snapshots were 18,993 and 19,029 bytes. Requests
+immediately following the corresponding openings contained the entire current
+snapshot once. After a new compact opening, the old complete snapshot was
+absent. One producer invocation and one receipt matched each native opening.
+The fresh constraints came from the fixture tree, not the submitted prompts.
+Both bridges used the existing Codex JSON mode only as a fixture, verified
+their own event log before writes and left the original workspace log unchanged.
+They establish real-producer transport on those paths, not installation by
+vivac setup or the experimental Claude protocol's native reception.
+
+The same bridges were subsequently adapted to the experimental
+`claude-module` producer, changing the command mode and validating
+`vivac.claude.opening.v1` with `status: "ready"` before attaching its context.
+With the minimal adaptation, startup and two real clears each delivered their
+complete snapshot once in the first corresponding provider request. A separate
+startup and two automatic-compaction cycle passed the same first-request
+comparison, including fresh instructions and absence of the previous complete
+snapshot. Each cycle matched three preparations to three opening receipts,
+finished without a timeout and left the original workspace log unchanged.
+A broader adapter did not pass its reception assertions; those results remain
+unverified. The minimal bridges establish reception of this producer in those
+fixtures, not the final module's failure guards, cancellation or setup loading.
+
+Failure checks validated modules before loading them. Without a module, and
+with a preparation exception but no `.catch` fallback, the provider received
+a request. With the tested fallbacks, startup exceptions, rejected promises
+and an actual hook timeout instead made `prompt.submit` drop the entry before
+any request. A native resumed session with a preparation exception was also
+blocked. After an automatic compact opening failed, a `turn.step` fallback
+returned a terminal result without calling the next handler; no provider
+request followed that failure. Claude reported a successful terminal result
+in this variant: it means the runtime finished without a send, not that a model
+completed the requested work. These checks do not cover a fallback that itself
+fails or cancellation of an already transmitted provider request. The
+[module event reference](https://code.claude.com/docs/en/plugins/mods/events)
+documents that handler failures without a fallback can be skipped.
+
+A separate command guard checked module absence. A loaded
+`classic.UserPromptSubmit` handler added a fixture-owned field to a copy of
+its native input. The settings command received that field: it allowed the
+loaded control and blocked absent or throwing-module controls, with no provider
+request in either blocked case. A fixed environment stamp failed the same
+test: an absent module inherited the stamp from its parent and passed the
+guard. This is evidence of that input-field path on the tested version, not an
+authentication mechanism or a guarantee for future harness versions.
+
+A native SDK interrupt during a suspended hook returned a matching success
+control response and ended the turn with `aborted_streaming`, before any
+provider request. The suspended wait reported neither completion nor rejection;
+its abort signal remained unobserved. A follow-up completed in the same process,
+but no clear boundary was observed. This proves abandonment of that turn,
+not invalidation of a prepared snapshot or rollback of producer effects.
+A second control sent an interrupt while `classic.SessionStart` reported a
+pending preparation. The preparation reached ready before the interrupt's
+success acknowledgement; the aborted turn sent no request, and the follow-up
+used ready state. That ordering did not exercise cancellation of SessionStart
+or a guard blocking pending state. It does not close the cancellation check.
 
 The extensive Claude fixture also included four synthetic pillars. Their
 titles and the instruction to consult `vivac rules` arrived, while the custody

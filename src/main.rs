@@ -186,6 +186,8 @@ const USAGE: &str = r#"vivac - provenance of work
 
     vivac session start [--hook]              the brief, ready to inject
       --context codex                        bounded complete JSON; requires --hook
+      --context claude-module                experimental complete JSON; requires --hook
+                                             module not installed by setup
     vivac session end   [--hook]              automatic stop at close
           --dry-run  what closing would do, and what the hook last did
     vivac session prompt [--hook]             a nudge when nothing was written
@@ -567,13 +569,13 @@ fn run() -> i32 {
     match dispatch(&cmd, &a) {
         Ok(code) => code,
         Err(e) => {
-            let codex_opening = cmd == "session"
+            let bounded_opening = cmd == "session"
                 && a.positional(0) == Some("start")
                 && a.has("hook")
-                && a.opt("context") == Some("codex")
+                && matches!(a.opt("context"), Some("codex" | "claude-module"))
                 && !matches!(e, Failure::Usage(_));
-            let c = if codex_opening {
-                session::codex_preparation_failed();
+            let c = if bounded_opening {
+                session::opening_preparation_failed(a.opt("context").unwrap());
                 0
             } else {
                 e.code()
@@ -918,10 +920,12 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
     }
     if cmd == "session"
         && a.has("context")
-        && (a.positional(0) != Some("start") || !a.has("hook") || a.opt("context") != Some("codex"))
+        && (a.positional(0) != Some("start")
+            || !a.has("hook")
+            || !matches!(a.opt("context"), Some("codex" | "claude-module")))
     {
         return Err(Failure::usage(
-            "--context codex requires session start --hook.",
+            "--context codex or claude-module requires session start --hook.",
         ));
     }
     // `d935`: a rehearsal is a person looking at what the close hook
@@ -941,6 +945,9 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         // every unrelated directory gets switched off within two days, and
         // the two that matter go with it.
         if cmd == "session" && a.has("hook") {
+            if a.opt("context") == Some("claude-module") {
+                session::claude_module_absent();
+            }
             return Ok(0);
         }
         return Err(Failure::NoStore);
