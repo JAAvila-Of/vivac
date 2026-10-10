@@ -107,6 +107,11 @@ handler failures and installation still need their own checks.
 
 The consumer artifact is in `src/setup/claude-opening/`. It calls the producer
 once per native `SessionStart` and keeps only the current snapshot in memory.
+With a vivac tree present, the experimental consumer currently rejects
+`resume`, even when preparation succeeds: publishing a new context block did
+not replace the snapshot saved in the resumed conversation. The preparation
+can still record an opening receipt; that receipt does not establish delivery.
+Outside a vivac tree, `absent` permits continuation, including resume.
 Its `prompt.context` handler preserves other context blocks, checks that the
 opening is still current after downstream handlers finish, then adds the
 complete snapshot as its own block. It does not send its context through the
@@ -190,6 +195,38 @@ compaction requests, using the already captured counters without another
 launch. This establishes explicit compaction with the final artifact, not
 automatic compaction. These controls used an explicit plugin directory;
 they do not establish installation, update, undo or doctor behavior.
+
+Two native failure controls then exercised the real producer: exclusive
+access to the fixture's config prevented reading it, and an operating-system
+lock held the producer's store lock. Neither initial opening sent a provider
+request or recorded an opening receipt. After releasing the lock, a real
+`/clear` received the current complete snapshot once, with no previous copy.
+The module sets a five-second process timeout, but the native stream did not
+expose the child error or confirm termination. These observations do not
+establish that a timeout kills the child or rolls back its writes.
+
+A native resume control exposed a different failure in the preceding
+consumer: after adding a fresh Unicode sentinel, the producer prepared and
+`prompt.context` published the new 19,859-unit snapshot, but the provider
+request contained the old snapshot once and the new snapshot zero times.
+The turn guard accepted publication without detecting that difference.
+The current experimental module therefore blocks resume with a present tree;
+this is a refusal, not a completed resume integration.
+
+The corrected artifact then passed a separate native rejection control.
+Startup delivered the complete 19,862-unit baseline once and preserved the
+foreign block once. Resuming that same session recorded one resume receipt
+but sent no provider request and published no fresh block. Both processes
+exited successfully. The native stream did not expose the command hook's
+JSON response, so the control establishes the absence of a provider request,
+not captured `continue: false` output.
+
+A separate diagnostic on the same saved session observed the historical
+`context_sections` attachment passing through `prompt.attachment` before
+the provider request. The event exposed text and engine origin, without
+structured sections identifying the own block. That establishes a rendering
+hook, not a safe replacement mechanism for preserving foreign context.
+No transcript was edited. Fresh-context resume remains an installation gate.
 
 ## Repeatable producer checks
 

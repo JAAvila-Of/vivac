@@ -65,6 +65,42 @@ test('absent tree permits work without an own block or inferred cwd', async () =
   assert.equal(await advances(h), true);
 });
 
+test('ready resume stays blocked after context rendering and clear recovers with fresh context', async () => {
+  let ordinal = 0;
+  const h = harness(async () => ready(++ordinal === 1 ? 'Startup context' : ordinal === 2 ? 'Resume context' : 'Fresh clear context'));
+  await h.invoke('classic.SessionStart', opening());
+  const published = await context(h);
+  assert.equal(await advances(h), true);
+  const hookResult = { additionalContext: ['Foreign hook context'], other: true };
+  assert.deepEqual(await h.invoke('classic.SessionStart', opening('resume'), async () => hookResult), hookResult);
+  assert.equal(h.calls.length, 2);
+  assert.equal(JSON.parse(h.calls[1][1].stdin).source, 'resume');
+  assert.equal((await h.invoke('classic.UserPromptSubmit', {})).vivac_opening.status, 'blocked');
+  assert.match((await h.invoke('prompt.submit', { text: 'work' })).drop, /not ready/);
+  assert.equal(await advances(h), false);
+  assert.deepEqual(await context(h), foreign());
+  assert.deepEqual(await context(h, async () => published), published);
+  assert.equal((await h.invoke('classic.UserPromptSubmit', {})).vivac_opening.status, 'blocked');
+  assert.match((await h.invoke('prompt.submit', { text: 'work' })).drop, /not ready/);
+  assert.equal(await advances(h), false);
+  assert.equal(h.calls.length, 2);
+
+  assert.equal((await h.invoke('prompt.submit', { text: '/clear' })).text, '/clear');
+  await h.invoke('session.end', { reason: 'clear' });
+  assert.deepEqual(await h.invoke('classic.SessionStart', opening('clear'), async () => hookResult), hookResult);
+  const recovered = await context(h);
+  assert.deepEqual(recovered.blocks[0], foreign().blocks[0]);
+  assert.deepEqual(recovered.instructionFiles, foreign().instructionFiles);
+  assert.equal(recovered.other, true);
+  assert.equal(recovered.blocks.length, 2);
+  assert.equal(recovered.blocks[1].text, 'Fresh clear context');
+  assert.equal((await h.invoke('classic.UserPromptSubmit', {})).vivac_opening.status, 'ready');
+  assert.equal((await h.invoke('prompt.submit', { text: 'work' })).text, 'work');
+  assert.equal(await advances(h), true);
+  assert.equal(h.calls.length, 3);
+  assert.deepEqual(h.calls.map(([, options]) => JSON.parse(options.stdin).source), ['startup', 'resume', 'clear']);
+});
+
 test('invalid producers block work and never expose raw diagnostics', async () => {
   const invalid = [
     { protocol: 'wrong', status: 'ready', context: 'private raw error' },
@@ -102,7 +138,7 @@ test('abortion during opening or publication cannot authorize a turn', async () 
   const next = async () => { next.signal.aborted = true; return { additionalContext: ['Foreign'] }; };
   assert.deepEqual(await h.invoke('classic.SessionStart', opening(), next), { additionalContext: ['Foreign'] });
   assert.equal((await h.invoke('classic.UserPromptSubmit', {})).vivac_opening.status, 'blocked');
-  await h.invoke('classic.SessionStart', opening('resume'));
+  await h.invoke('classic.SessionStart', opening('clear'));
   const contextNext = async () => { contextNext.signal.aborted = true; return foreign(); };
   assert.deepEqual(await context(h, contextNext), foreign());
   assert.equal(await advances(h), false);
@@ -168,7 +204,7 @@ test('a failed later render cannot inherit publication from an earlier successfu
   assert.equal(await advances(h), false);
   assert.deepEqual(await context(h, async () => foreign(), event, false, true), foreign());
   assert.equal((await h.invoke('classic.UserPromptSubmit', {})).vivac_opening.status, 'blocked');
-  await h.invoke('classic.SessionStart', opening('resume'));
+  await h.invoke('classic.SessionStart', opening('clear'));
   await context(h);
   assert.equal(await advances(h), true);
 });

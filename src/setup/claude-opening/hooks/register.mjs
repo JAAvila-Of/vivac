@@ -61,7 +61,7 @@ export function register(on) {
       try {
         const value = JSON.parse(produced.stdout);
         if (value && typeof value === 'object' && !Array.isArray(value) && value.protocol === protocol) {
-          if (value.status === 'ready' && typeof value.context === 'string' && value.context.length > 0 && utf8Bytes(value.context) <= 60000) {
+          if (value.status === 'ready' && typeof value.context === 'string' && value.context.length > 0 && utf8Bytes(value.context) <= 60000 && event.source !== 'resume') {
             candidate = { context: value.context };
             status = 'ready';
           } else if (value.status === 'absent' && !Object.hasOwn(value, 'context')) {
