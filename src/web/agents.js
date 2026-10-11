@@ -10,6 +10,12 @@
     if (parent) parent.append(node);
     return node;
   }
+  function runtimeEvidence(mapping) {
+    const state=mapping.observed?.state || 'unverified';
+    const explanation={unverified:'no runtime selection evidence recorded',reported_match:'reported selection matches; runtime is not independently verified',reported_mismatch:'reported selection differs from the configured assignment',stale:'recorded evidence belongs to an earlier revision',unbound:'no native binding; runtime selection evidence is unavailable'};
+    return 'Runtime evidence: ' + state + ' - ' + (explanation[state] || 'runtime selection is not independently verified');
+  }
+  function runtimeStyle(mapping) { return mapping.observed?.state==='reported_mismatch' || mapping.observed?.state==='stale' ? 'warning' : 'muted'; }
   function invalidate() { revision++; reviewed = null; $('apply').disabled = true; $('preview').replaceChildren(); }
   function message(text) { $('message').textContent = text; }
   async function request(operation, value) {
@@ -191,10 +197,10 @@
       const cell=element('td',undefined,row), source=sources.find(item=>item.harness===harness.harness), mapping=mappings.find(item=>item.harness===harness.harness);
       element('strong',source?'Present':'Not present',cell);
       if (source) { element('p',(source.model || 'inherit') + ' / ' + (source.effort || 'inherit'),cell); element('p',source.path,cell,'muted'); }
-      element('p',mapping?.configured || (source?'Native only':'No assignment'),cell,pending?'warning':'muted');
-      if (mapping) element('p','Runtime: ' + (mapping.observed?.state || 'unverified'),cell,'muted');
+      element('p','Configuration: ' + (mapping?.configured || (source?'Native only':'No assignment')),cell,mapping && !['current','retired'].includes(mapping.configured) ? 'warning' : 'muted');
+      if (mapping) element('p',runtimeEvidence(mapping),cell,runtimeStyle(mapping));
     }
-    const custody=element('td',managed?'Managed by vivac':'Not managed',row);
+    const custody=element('td',managed?'Custody: managed by vivac':'Custody: not managed',row);
     const blocked=agent.retired || agent.definition?.retired || sources.some(source=>source.detached) || !sources.length;
     if (blocked) element('p','Retired, detached or no native source. Synchronization is disabled.',custody,'warning');
     const action=element('td',undefined,row), configure=element('button','Configure',action); configure.disabled=!!blocked; configure.onclick=()=>edit(card);
@@ -205,14 +211,18 @@
     cards.push(card);
     if (blocked) return;
     element('h2','Source version',root);
-    element('p',managed ? 'Managed by vivac · ' + agent.agent : 'Not managed by vivac',root);
+    element('p',managed ? 'Custody: managed by vivac | ' + agent.agent : 'Custody: not managed by vivac',root);
+    element('p','Synchronization changes configuration; it does not verify runtime selection. Missing runtime evidence alone does not require synchronization.',root,'muted');
     card.enabled = check(root,'Synchronize this agent');
     card.enabled.addEventListener('change',()=>markSelection(card)); markSelection(card);
     const sourceLabels = sources.map(source=>source.harness + ' / ' + source.path + ' · model: ' + (source.model || 'inherit') + ' · effort: ' + (source.effort || 'inherit'));
     card.source = choice(root,'Source version',sourceLabels,sourceLabels[0]);
     card.source.addEventListener('change',()=> { refreshTargets(card); card.comparison.replaceChildren(); invalidate(); showStage(stage); });
     card.sourceDetails=element('div',undefined,root,'source-details');
-    for (const mapping of mappings) element('p',mapping.harness + ': ' + mapping.configured + ' · runtime: ' + (mapping.observed?.state || 'unverified'),root,pending ? 'warning' : 'muted');
+    for (const mapping of mappings) {
+      element('p',mapping.harness + ' | Configuration: ' + mapping.configured,root,!['current','retired'].includes(mapping.configured) ? 'warning' : 'muted');
+      element('p',mapping.harness + ' | ' + runtimeEvidence(mapping),root,runtimeStyle(mapping));
+    }
     for (const source of sources) if (source.problem || source.unsupported?.length) element('p',source.harness + ': ' + (source.problem || 'Unsupported fields: ' + source.unsupported.join(', ')),root,'warning');
     const button = element('button','Compare configurations',root); button.type='button'; button.onclick=()=>compare(card);
     card.destinationChecks=element('div',undefined,root,'destination-checks');

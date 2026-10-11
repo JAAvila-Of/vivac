@@ -505,9 +505,29 @@ pub(crate) fn run(cwd: &Path, args: &Args) -> Result<i32, Failure> {
             let unverified = count("unverified");
             report.add(
                 "agent custody",
-                if errors > 0 { "error" } else if unmanaged + unverified > 0 { "warning" } else { "ok" },
-                &format!("{errors} custody error(s), {unmanaged} unmanaged agent file(s), {unverified} unverified assignment(s); native configuration does not prove runtime selection"),
-                if errors + unmanaged > 0 { Some("Run vivac agents to inspect differences, then vivac agents sync to review configuration changes. Runtime selection remains unverified without harness evidence.") } else if unverified > 0 { Some("Run vivac agents status to inspect unverified assignments. Synchronizing configuration does not prove runtime selection.") } else { None },
+                if errors > 0 { "error" } else if unmanaged > 0 { "warning" } else { "ok" },
+                &format!("{errors} custody error(s), {unmanaged} unmanaged agent file(s)"),
+                if errors + unmanaged > 0 { Some("Run vivac agents to inspect differences, then vivac agents sync to review configuration changes.") } else { None },
+            );
+            let active_mappings = agents["agents"].as_array().map_or(0, |agents| {
+                agents
+                    .iter()
+                    .filter(|agent| agent["retired"] != true)
+                    .map(|agent| agent["mappings"].as_array().map_or(0, Vec::len))
+                    .sum::<usize>()
+            });
+            let runtime_detail = if unverified > 0 {
+                format!("{unverified} assignment(s) lack matching current selection reports; native configuration does not prove runtime selection")
+            } else if active_mappings == 0 {
+                "No active managed assignments to inspect; native configuration does not prove runtime selection".to_string()
+            } else {
+                "Reported selections match the configured assignments; reports do not independently verify runtime".to_string()
+            };
+            report.add(
+                "agent runtime",
+                if unverified > 0 { "warning" } else { "ok" },
+                &runtime_detail,
+                if unverified > 0 { Some("Run vivac agents status to inspect runtime evidence. Confirm effective selections using reliable harness evidence. Synchronizing configuration does not prove runtime selection.") } else { None },
             );
         }
         Err(_) => report.add(

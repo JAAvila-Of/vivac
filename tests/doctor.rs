@@ -240,10 +240,11 @@ fn agents_added_after_setup_are_reported_without_adoption_or_prompt_disclosure()
     assert!(custody["detail"].as_str().unwrap().contains("1 unmanaged"));
     let fix = custody["fix"].as_str().unwrap();
     assert!(fix.contains("vivac agents sync"), "{fix}");
-    assert!(
-        fix.contains("Runtime selection remains unverified"),
-        "{fix}"
-    );
+    assert_eq!(check(&r, "agent runtime")["status"], "ok");
+    assert!(check(&r, "agent runtime")["detail"]
+        .as_str()
+        .unwrap()
+        .contains("No active managed assignments"));
     assert!(!r.to_string().contains("private native instruction"));
     assert!(!c.log().contains("agent.recorded"));
 }
@@ -450,4 +451,126 @@ fn arguments_are_validated_before_reading_the_tree() {
         let (_, code) = c.run(args);
         assert_eq!(code, 2);
     }
+}
+
+#[test]
+fn managed_configuration_and_runtime_evidence_are_independent_checks() {
+    let c = Sandbox::new_seeded("doctor-agent-runtime");
+    c.ok(&["setup", "codex", "--yes"]);
+    let definition = serde_json::json!({"schema_version":1,"name":"reviewer", "contract":{"purpose":"Review the scoped change.","duties":["Return evidence."],"limits":["Do not publish."],"acceptance":["Cite changed lines."]},"assignments":[{"harness":"codex","name":"reviewer","model":"inherit","effort":"high","settings":{}}]}).to_string();
+    let created: Value = serde_json::from_str(&c.ok(&[
+        "agents",
+        "add",
+        "--definition",
+        &definition,
+        "--why",
+        "Record the reviewed contract",
+    ]))
+    .unwrap();
+    let agent = created["agent"].as_str().unwrap();
+    let revision = created["revision"].as_str().unwrap();
+    let path = ".codex/agents/reviewer.toml";
+    c.ok(&[
+        "agents",
+        "bind",
+        agent,
+        "--harness",
+        "codex",
+        "--path",
+        path,
+    ]);
+    c.ok(&["agents", "sync", agent, "--yes"]);
+    let r = report(&c, Some("codex"), 0);
+    assert_eq!(check(&r, "agent custody")["status"], "ok");
+    assert!(check(&r, "agent custody")["fix"].is_null());
+    assert_eq!(check(&r, "agent runtime")["status"], "warning");
+    assert!(check(&r, "agent runtime")["fix"]
+        .as_str()
+        .unwrap()
+        .contains("vivac agents status"));
+    let listing = c.ok(&["agents"]);
+    assert!(listing.contains("Configuration: current"), "{listing}");
+    assert!(
+        listing.contains("Runtime evidence: unverified - no runtime selection evidence recorded"),
+        "{listing}"
+    );
+    assert!(
+        listing.contains("No configuration changes require review; synchronization is optional"),
+        "{listing}"
+    );
+    c.ok(&[
+        "agents",
+        "observe",
+        agent,
+        "--harness",
+        "codex",
+        "--path",
+        path,
+        "--revision",
+        revision,
+        "--model",
+        "inherit",
+        "--effort",
+        "high",
+        "--evidence",
+        "The person reported this launch assignment",
+    ]);
+    let r = report(&c, Some("codex"), 0);
+    assert_eq!(check(&r, "agent custody")["status"], "ok");
+    assert_eq!(check(&r, "agent runtime")["status"], "ok");
+    assert!(check(&r, "agent runtime")["detail"]
+        .as_str()
+        .unwrap()
+        .contains("reports do not independently verify runtime"));
+    assert!(c.ok(&["agents"]).contains(
+        "reported_match - reported selection matches; runtime is not independently verified"
+    ));
+    let (_, code) = c.run(&[
+        "agents",
+        "observe",
+        agent,
+        "--harness",
+        "codex",
+        "--path",
+        path,
+        "--revision",
+        revision,
+        "--model",
+        "other-model",
+        "--effort",
+        "high",
+        "--evidence",
+        "The person reported a different launch assignment",
+    ]);
+    assert_eq!(code, 1);
+    let r = report(&c, Some("codex"), 0);
+    assert_eq!(check(&r, "agent custody")["status"], "ok");
+    assert_eq!(check(&r, "agent runtime")["status"], "warning");
+    assert!(c
+        .ok(&["agents"])
+        .contains("reported_mismatch - reported selection differs from the configured assignment"));
+    let revised = definition.replace(
+        "Review the scoped change.",
+        "Review the next scoped change.",
+    );
+    c.ok(&[
+        "agents",
+        "set",
+        agent,
+        "--definition",
+        &revised,
+        "--why",
+        "Revise the reviewed contract",
+    ]);
+    c.ok(&["agents", "sync", agent, "--yes"]);
+    let r = report(&c, Some("codex"), 0);
+    assert_eq!(check(&r, "agent custody")["status"], "ok");
+    assert_eq!(check(&r, "agent runtime")["status"], "warning");
+    assert!(c
+        .ok(&["agents"])
+        .contains("stale - recorded evidence belongs to an earlier revision"));
+    std::fs::write(c.0.join(path), "name='reviewer'\ndescription='Review'\nmodel='inherit'\ndeveloper_instructions='A private conflicting prompt'\n").unwrap();
+    let r = report(&c, Some("codex"), 1);
+    assert_eq!(check(&r, "agent custody")["status"], "error");
+    assert!(!r.to_string().contains("private conflicting prompt"));
 }
