@@ -197,13 +197,14 @@
       ["opened", n.op || "--"],
     ];
     if (n.cl) pairs.push(["closed", n.cl]);
-    if (n.rf.length) pairs.push(["refs", n.rf.join("<br>")]);
+    if (n.rf.length) pairs.push(["refs", n.rf]);
     if (n.gv.length) pairs.push(["governs", n.gv.join(", ")]);
     return (
       "<h3>Card</h3><dl>" +
       pairs
         .map(function (p) {
-          return "<dt>" + p[0] + "</dt><dd>" + p[1] + "</dd>";
+          var value = Array.isArray(p[1]) ? p[1].map(esc).join("<br>") : esc(p[1]);
+          return "<dt>" + p[0] + "</dt><dd>" + value + "</dd>";
         })
         .join("") +
       "</dl>"

@@ -46,6 +46,7 @@ jobs:
           node-version: '24'
           package-manager-cache: false
       - run: node --test tests/claude_opening_module.mjs
+      - run: node tests/web_map_ui.cjs
 
   lint:
     runs-on: ubuntu-latest
