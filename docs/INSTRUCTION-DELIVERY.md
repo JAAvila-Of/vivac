@@ -30,7 +30,8 @@ depends on a detail in a body needs that consultation before the action.
 `SessionStart` covers `startup`, `resume`, `clear` and `compact` in both setup
 integrations. Claude Code's entry has no source matcher; Codex's entry names
 those four sources. `UserPromptSubmit` handles custody reconciliation and the
-capture reminder, rather than reinjecting the opening brief on every message.
+capture reminder, with Claude's independent module-status guard. It does not
+reinject the opening brief on every message.
 Calling `vivac brief` or its MCP equivalent mid-session retrieves orientation;
 it is not evidence that the opening hook ran, and does not include the hook's
 custody and capture sections.
@@ -76,18 +77,17 @@ reader still recovers readable events so `vivac brief` and `vivac check` can
 help inspect a damaged store. Recoverable text is useful for repair, but cannot
 establish that an omitted line contained no required instruction.
 
-Claude Code retains its plain-text opening hook. Its oversized-context problem
-remains unresolved: the multi-handler consumer tests below establish transport
-capacity, but not safe coordination of a dynamic vivac opening.
-Do not assume that the Codex refusal mechanism also protects Claude Code:
-the isolated Claude checks below found that `SessionStart` did not prevent a
-provider request after receiving `continue: false`.
+Claude Code setup installs an experimental opening module and an independent
+prompt guard instead of the original plain-text opening command. Re-run setup
+to review that upgrade. The isolated checks below found that a plain
+`SessionStart` response with `continue: false` did not prevent a provider
+request; the module and guard therefore have their own rejection contract.
 
 ## Experimental Claude module producer
 
 `vivac session start --hook --context claude-module` prepares a bounded snapshot
-for an experimental module. Setup does not install or activate that module;
-the existing Claude integration remains unchanged. This command is not itself
+for the experimental module installed by `vivac setup claude-code`.
+This command is not itself
 a replacement for the opening hook or proof that Claude received its output.
 
 Every response is one JSON object with `protocol: "vivac.claude.opening.v1"`.
@@ -103,7 +103,8 @@ opening receipt path, including its limits on operational notices. It does
 not make the Codex JSON envelope a Claude hook response. A consuming module
 must validate the protocol and refuse a failed or incomplete preparation
 before any subsequent model send. Native module loading, cancellation,
-handler failures and installation still need their own checks.
+handler failures and installation require separate evidence; the isolated
+checks below describe the tested runtime and their limits.
 
 The consumer artifact is in `src/setup/claude-opening/`. It calls the producer
 once per native `SessionStart` and keeps only the current snapshot in memory.
@@ -135,8 +136,8 @@ prompt handler permits `/clear` and `/resume` as recovery commands. It also
 requires its own reference to have been published before
 advancing a turn with context. These guards are experimental: configuring the
 command alone does not establish their native ordering, execution or failure
-behavior. Setup and
-doctor do not install, enable or claim support for this artifact yet.
+behavior. Setup installs the compiled bundle and its independent guard;
+doctor checks their configuration and integrity without claiming reception.
 
 Its behavioral tests import the real artifact with a simulated event runtime:
 
@@ -231,7 +232,8 @@ A separate diagnostic on the same saved session observed the historical
 the provider request. The event exposed text and engine origin, without
 structured sections identifying the own block. That establishes a rendering
 hook, not a safe replacement mechanism for preserving foreign context.
-No transcript was edited. Fresh-context resume remains an installation gate.
+No transcript was edited. At that stage, fresh-context resume remained an
+installation gate; the later current-reference controls below address it.
 
 A fixture-only `prompt.compose` alternative placed the snapshot in its own
 namespaced system section with session scope. A subsequent control invalidated
@@ -550,7 +552,9 @@ The versioned experimental module contains this revised consumer, from which
 the native controls derived their instrumented copies. Its offline suite
 imports that product file, checks its fixed digest, and retains both attachment
 recovery checks and earlier opening guarantees.
-Neither this replacement nor the bundle transaction API activates setup.
+Those controls did not activate setup. The subsequent integration uses that
+consumer with only its introductory comment updated; its executable body is
+unchanged. Setup and doctor now use the compiled ownership catalog.
 
 ## Repeatable producer checks
 
@@ -769,12 +773,13 @@ B was registered. Both plugins still had the same plugin name. Complete
 control. Neither a project settings declaration nor a local directory path
 alone prevents a global marketplace-name collision.
 
-Vivac setup currently writes project files without running the harness to
+Vivac setup writes project files without running the harness to
 configure itself or reading its personal configuration. Native plugin
 registration has effects outside those project files. The isolated installation
-checks do not authorize adding that process to setup, nor establish its
-ownership, rollback or undo contract. The experimental producer does not
-change this setup boundary.
+checks did not authorize adding that registration process to setup, nor
+establish its ownership, rollback or undo contract. The subsequent integration
+installs the project-local skill bundle described below, without marketplace
+registration or personal harness configuration.
 
 The planned project bundle has a narrower ownership boundary than its
 directory. It owns three fixed relative paths: `.claude-plugin/plugin.json`,
@@ -798,18 +803,18 @@ remain. Additional files belong to the person and remain in place.
 These requirements do not establish protection against concurrent filesystem
 changes between inspection and writing.
 
-This ownership contract is not yet connected to setup. A filesystem rehearsal
-does not prove that the Rust installer implements it, that Claude loads the
-installed bundle, or that its final context transport is safe. When bundle
-diagnostics are added, doctor must distinguish intact project files from
-observed module execution; neither the receipt nor a matching digest establishes
-runtime loading. Doctor does not yet inspect this bundle.
+Setup connects this ownership contract to its configuration transaction.
+Doctor distinguishes intact project files from observed opening execution;
+neither the receipt nor a matching digest establishes runtime loading or
+provider reception. Edited bundles are not overwritten, and undo preserves
+them with an explicit warning that they may still execute.
 
 An internal Rust ownership module now implements inspection and pure plans for
 that boundary. Receipts must match canonical compiled definitions byte for byte;
 payload reads are limited to 1 MiB each and receipt reads to 16 KiB. The compiled
 catalog now embeds the experimental manifest, hook definition and consumer with
-`include_str!` as `opening-reference-v1`. Setup and doctor do not call the module.
+`include_str!` as `opening-reference-v1`. Setup uses its update and undo plans;
+doctor inspects the current compiled bundle and the separate command hooks.
 An explicitly selected, ignored test drives the real Rust plans in isolated
 native fixtures; its two marked versions are derived from the embedded consumer,
 never from a receipt on disk. The test reports metadata rather than payloads and
@@ -832,7 +837,37 @@ reason appeared in native informational/result output; a native `continue`
 field was not exposed. This negative control is not a test of setup undo, which
 must also remove its own configuration. A separate driver invocation beneath
 the workspace's existing tree rejected the external ancestor before any write.
-Neither observation activates setup or proves loading in other harness versions.
+Those driver observations preceded setup integration and do not prove loading
+in other harness versions.
+
+### Native check through setup
+
+A separate Windows fixture used the compiled public commands rather than the
+ignored ownership driver. `vivac setup claude-code --dry-run` left the project
+unchanged; `--yes` installed the exact current three payloads and canonical
+receipt. Repeating setup changed no project files. Doctor reported no
+configuration errors, while retaining warnings for runtime evidence not yet
+observed.
+
+Claude Code 2.1.294 loaded that uninstrumented bundle from the project skill
+directory after the isolated workspace trust dialog. The interactive request
+and a subsequent startup request each contained the complete current opening
+once, without its internal reference marker. Resume of the same saved session
+after a synthetic context change contained the new complete opening once and
+the previous startup snapshot zero times. The prompt clock and stop verdict
+were observed on these turns; no automatic work stop was written. The setup
+consumer differs from the earlier instrumented controls only in its introductory
+comment, leaving the executable body unchanged.
+
+The real `--undo --dry-run` left the project unchanged. Applying undo removed
+the owned payloads, receipt and guard, prompt and end commands, while preserving
+additional files and an unrelated settings key. A subsequent launch made one
+principal provider request with no vivac opening context or receipt: removal
+intentionally removes the guard too. Doctor then reported the missing
+configuration, rather than treating the earlier opening receipt as a complete
+installation. These checks used synthetic data, isolated harness homes and a
+loopback provider; they do not establish reception on other harness versions,
+model compliance, or a filesystem audit of native session persistence.
 
 Setup's shared transaction now reserves unique sibling temporaries exclusively.
 Existing files or links at temporary names remain untouched. A directory-sync

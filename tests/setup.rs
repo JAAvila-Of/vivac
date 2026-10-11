@@ -9,6 +9,7 @@ use common::Sandbox;
 use std::path::Path;
 
 const SESSION_START: &str = "vivac session start --hook";
+const SESSION_GUARD: &str = "vivac session guard --hook";
 const SESSION_END: &str = "vivac session end --hook";
 const SESSION_PROMPT: &str = "vivac session prompt --hook";
 
@@ -30,6 +31,242 @@ fn read(p: &Path) -> String {
 }
 fn read_bytes(p: &Path) -> Vec<u8> {
     std::fs::read(p).unwrap_or_else(|e| panic!("reading {p:?}: {e}"))
+}
+
+fn bundle_paths(c: &Sandbox) -> [std::path::PathBuf; 4] {
+    [
+        ".claude-plugin/plugin.json",
+        "hooks/hooks.json",
+        "hooks/register.mjs",
+        ".vivac-owned.json",
+    ]
+    .map(|path| c.0.join(".claude/skills/vivac-opening").join(path))
+}
+
+#[test]
+fn opening_bundle_preview_and_nonterminal_cancel_leave_every_destination_untouched() {
+    let c = Sandbox::new_seeded("setup-opening-preview");
+    let log = c.log();
+    let (preview, code) = c.run(&["setup", "claude-code", "--dry-run"]);
+    assert_eq!(code, 0, "{preview}");
+    for path in bundle_paths(&c) {
+        assert!(
+            preview.contains(
+                path.strip_prefix(&c.0)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/")
+                    .as_str()
+            ),
+            "{preview}"
+        );
+        assert!(!path.exists());
+    }
+    let (cancel, code) = c.run_stdin(&["setup", "claude-code"], "n\n");
+    assert_ne!(code, 0, "{cancel}");
+    assert!(!c.0.join(".claude").exists());
+    assert!(!mcp_path(&c).exists());
+    assert_eq!(c.log(), log);
+}
+
+#[test]
+fn opening_bundle_installs_exact_payloads_and_a_current_run_preserves_bytes() {
+    let c = Sandbox::new_seeded("setup-opening-current");
+    c.ok(&["setup", "claude-code", "--yes"]);
+    let paths = bundle_paths(&c);
+    assert_eq!(
+        read_bytes(&paths[0]),
+        include_bytes!("../src/setup/claude-opening/.claude-plugin/plugin.json")
+    );
+    assert_eq!(
+        read_bytes(&paths[1]),
+        include_bytes!("../src/setup/claude-opening/hooks/hooks.json")
+    );
+    assert_eq!(
+        read_bytes(&paths[2]),
+        include_bytes!("../src/setup/claude-opening/hooks/register.mjs")
+    );
+    let receipt: serde_json::Value = serde_json::from_slice(&read_bytes(&paths[3])).unwrap();
+    assert_eq!(receipt["schema"], 1);
+    assert_eq!(receipt["version"], "opening-reference-v1");
+    assert_eq!(receipt["files"].as_object().unwrap().len(), 3);
+    let before = paths.map(|path| read_bytes(&path));
+    let settings = read_bytes(&settings_path(&c));
+    let out = c.ok(&["setup", "claude-code", "--yes"]);
+    assert!(out.contains("Nothing to write"), "{out}");
+    assert_eq!(bundle_paths(&c).map(|path| read_bytes(&path)), before);
+    assert_eq!(read_bytes(&settings_path(&c)), settings);
+}
+
+#[test]
+fn legacy_migration_preserves_mixed_group_metadata_foreign_handlers_and_order() {
+    let c = Sandbox::new_seeded("setup-opening-migration");
+    std::fs::create_dir_all(c.0.join(".claude")).unwrap();
+    let first = serde_json::json!({"type":"command","command":"foreign-first","timeout":17});
+    let second = serde_json::json!({"type":"command","command":"foreign-second"});
+    let typed_foreign = serde_json::json!({"type":"prompt","command":SESSION_START});
+    let settings = serde_json::json!({"other":true,"hooks":{"SessionStart":[
+        {"matcher":"startup","groupField":"preserved","hooks":[first.clone(),{"type":"command","command":SESSION_START},second.clone()]},
+        {"matcher":"clear","hooks":[{"type":"command","command":SESSION_START}]},
+        {"hooks":[{"type":"command","command":"foreign-last"}]}
+    ]}});
+    std::fs::write(settings_path(&c), settings.to_string()).unwrap();
+    c.ok(&["setup", "claude-code", "--yes"]);
+    let after: serde_json::Value = serde_json::from_str(&read(&settings_path(&c))).unwrap();
+    assert_eq!(after["other"], true);
+    let groups = after["hooks"]["SessionStart"].as_array().unwrap();
+    assert_eq!(groups.len(), 2);
+    assert_eq!(groups[0]["matcher"], "startup");
+    assert_eq!(groups[0]["groupField"], "preserved");
+    assert_eq!(groups[0]["hooks"], serde_json::json!([first, second]));
+    assert_eq!(groups[1], settings["hooks"]["SessionStart"][2]);
+    let mut with_typed_foreign = after.clone();
+    with_typed_foreign["hooks"]["SessionStart"][0]["hooks"]
+        .as_array_mut()
+        .unwrap()
+        .push(typed_foreign.clone());
+    std::fs::write(settings_path(&c), with_typed_foreign.to_string()).unwrap();
+    c.ok(&["setup", "claude-code", "--undo", "--yes"]);
+    let undone: serde_json::Value = serde_json::from_str(&read(&settings_path(&c))).unwrap();
+    assert_eq!(
+        undone["hooks"]["SessionStart"][0]["hooks"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap(),
+        &typed_foreign
+    );
+}
+
+#[test]
+fn opening_and_guard_variants_after_exact_handlers_abort_before_every_write_without_disclosure() {
+    for (event, command) in [
+        (
+            "SessionStart",
+            "vivac session start --hook --private-sentinel",
+        ),
+        (
+            "UserPromptSubmit",
+            "vivac session guard --hook --private-sentinel",
+        ),
+    ] {
+        let c = Sandbox::new_seeded("setup-opening-conflict");
+        std::fs::create_dir_all(c.0.join(".claude")).unwrap();
+        let exact = if event == "SessionStart" {
+            SESSION_START
+        } else {
+            SESSION_GUARD
+        };
+        let mut settings = serde_json::json!({"hooks":{}});
+        settings["hooks"][event] = serde_json::json!([{"hooks":[{"type":"command","command":exact},{"type":"command","command":command}]}]);
+        let original = settings.to_string();
+        std::fs::write(settings_path(&c), &original).unwrap();
+        let (out, code) = c.run(&["setup", "claude-code", "--yes"]);
+        assert_ne!(code, 0, "{out}");
+        assert!(!out.contains("private-sentinel"), "{out}");
+        assert_eq!(read(&settings_path(&c)), original);
+        assert!(!mcp_path(&c).exists());
+        assert!(!c.0.join(".claude/skills").exists());
+    }
+}
+
+#[test]
+fn edited_bundle_blocks_apply_but_undo_keeps_all_payloads_and_warns_about_execution() {
+    let c = Sandbox::new_seeded("setup-opening-edited");
+    c.ok(&["setup", "claude-code", "--yes"]);
+    std::fs::write(&bundle_paths(&c)[2], "export const edited = true;\r\n").unwrap();
+    let bundle = bundle_paths(&c).map(|path| read_bytes(&path));
+    let settings = read_bytes(&settings_path(&c));
+    let mcp = read_bytes(&mcp_path(&c));
+    let (out, code) = c.run(&["setup", "claude-code", "--yes"]);
+    assert_ne!(code, 0, "{out}");
+    assert_eq!(bundle_paths(&c).map(|path| read_bytes(&path)), bundle);
+    assert_eq!(read_bytes(&settings_path(&c)), settings);
+    assert_eq!(read_bytes(&mcp_path(&c)), mcp);
+    let out = c.ok(&["setup", "claude-code", "--undo", "--yes"]);
+    assert!(out.contains("may still execute"), "{out}");
+    assert!(!out.contains("\nUndone."), "{out}");
+    assert_eq!(bundle_paths(&c).map(|path| read_bytes(&path)), bundle);
+    assert!(!settings_path(&c).exists());
+    assert!(!mcp_path(&c).exists());
+}
+
+#[test]
+fn intact_bundle_undo_removes_only_owned_paths_and_keeps_foreign_extras() {
+    let c = Sandbox::new_seeded("setup-opening-foreign");
+    c.ok(&["setup", "claude-code", "--yes"]);
+    let extra = c.0.join(".claude/skills/vivac-opening/hooks/foreign.mjs");
+    std::fs::write(&extra, "foreign sentinel\n").unwrap();
+    c.ok(&["setup", "claude-code", "--undo", "--yes"]);
+    assert!(bundle_paths(&c).iter().all(|path| !path.exists()));
+    assert_eq!(read(&extra), "foreign sentinel\n");
+    assert!(c.0.join(".claude/skills").is_dir());
+}
+
+#[test]
+fn unknown_or_incomplete_bundle_refuses_apply_and_undo_without_config_changes() {
+    for malformed in [false, true] {
+        let c = Sandbox::new_seeded("setup-opening-invalid");
+        c.ok(&["setup", "claude-code", "--yes"]);
+        if malformed {
+            std::fs::write(&bundle_paths(&c)[3], "{}\n").unwrap();
+        } else {
+            std::fs::remove_file(&bundle_paths(&c)[1]).unwrap();
+        }
+        let settings = read_bytes(&settings_path(&c));
+        let mcp = read_bytes(&mcp_path(&c));
+        let before: Vec<_> = bundle_paths(&c)
+            .iter()
+            .map(|path| std::fs::read(path).ok())
+            .collect();
+        for action in [
+            vec!["setup", "claude-code", "--yes"],
+            vec!["setup", "claude-code", "--undo", "--yes"],
+        ] {
+            let (out, code) = c.run(&action);
+            assert_ne!(code, 0, "{out}");
+            assert_eq!(read_bytes(&settings_path(&c)), settings);
+            assert_eq!(read_bytes(&mcp_path(&c)), mcp);
+            assert_eq!(
+                bundle_paths(&c)
+                    .iter()
+                    .map(|path| std::fs::read(path).ok())
+                    .collect::<Vec<_>>(),
+                before
+            );
+        }
+    }
+}
+
+#[test]
+fn undo_removes_exact_opening_and_guard_handlers_after_variants_but_keeps_foreign_siblings() {
+    let c = Sandbox::new_seeded("setup-opening-selective-undo");
+    c.ok(&["setup", "claude-code", "--yes"]);
+    let mut settings: serde_json::Value = serde_json::from_str(&read(&settings_path(&c))).unwrap();
+    let foreign_start = serde_json::json!({"type":"command","command":"vivac session start --hook --private-start"});
+    let foreign_guard = serde_json::json!({"type":"command","command":"vivac session guard --hook --private-guard"});
+    settings["hooks"]["SessionStart"] = serde_json::json!([{"matcher":"clear","other":true,"hooks":[foreign_start.clone(),{"type":"command","command":SESSION_START}]}]);
+    settings["hooks"]["UserPromptSubmit"][0]["hooks"]
+        .as_array_mut()
+        .unwrap()
+        .insert(0, foreign_guard.clone());
+    std::fs::write(settings_path(&c), settings.to_string()).unwrap();
+    let out = c.ok(&["setup", "claude-code", "--undo", "--yes"]);
+    assert!(out.contains("may still execute"), "{out}");
+    assert!(!out.contains("private-start"), "{out}");
+    assert!(!out.contains("private-guard"), "{out}");
+    let after: serde_json::Value = serde_json::from_str(&read(&settings_path(&c))).unwrap();
+    assert_eq!(
+        after["hooks"]["SessionStart"][0]["hooks"],
+        serde_json::json!([foreign_start])
+    );
+    assert_eq!(after["hooks"]["SessionStart"][0]["matcher"], "clear");
+    assert_eq!(after["hooks"]["SessionStart"][0]["other"], true);
+    assert_eq!(
+        after["hooks"]["UserPromptSubmit"][0]["hooks"],
+        serde_json::json!([foreign_guard])
+    );
+    assert!(bundle_paths(&c).iter().all(|path| !path.exists()));
 }
 
 /// Whether `dir` holds a tree of its own: `store::already_planted`'s own
@@ -88,7 +325,7 @@ fn a_fresh_project_gets_the_three_harness_pieces() {
         out.contains("create") && out.contains("three hooks"),
         "{out}"
     );
-    assert!(out.contains(SESSION_START), "{out}");
+    assert!(out.contains(SESSION_GUARD), "{out}");
     assert!(out.contains(SESSION_END), "{out}");
     assert!(out.contains(SESSION_PROMPT), "{out}");
     assert!(
@@ -109,15 +346,15 @@ fn a_fresh_project_gets_the_three_harness_pieces() {
 
     let settings: serde_json::Value = serde_json::from_str(&read(&settings_path(&c))).unwrap();
     assert_eq!(
-        settings["hooks"]["SessionStart"][0]["hooks"][0]["command"],
-        SESSION_START
+        settings["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"],
+        SESSION_GUARD
     );
     assert_eq!(
         settings["hooks"]["Stop"][0]["hooks"][0]["command"],
         SESSION_END
     );
     assert_eq!(
-        settings["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"],
+        settings["hooks"]["UserPromptSubmit"][1]["hooks"][0]["command"],
         SESSION_PROMPT
     );
 
@@ -197,7 +434,7 @@ fn a_settings_file_with_its_own_content_keeps_it_and_gains_ours_at_the_end() {
         after.contains("another-tool"),
         "the foreign Stop hook was lost:\n{after}"
     );
-    assert!(after.contains(SESSION_START), "{after}");
+    assert!(after.contains(SESSION_GUARD), "{after}");
     assert!(after.contains(SESSION_END), "{after}");
     assert!(after.contains(SESSION_PROMPT), "{after}");
     assert!(after.contains("\r\n"), "CRLF was lost:\n{after:?}");
@@ -225,7 +462,7 @@ fn indentation_of_an_existing_file_is_kept() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn a_differently_spelled_session_start_is_left_alone_and_copied_into_the_plan() {
+fn a_differently_spelled_session_start_blocks_setup_without_disclosing_the_command() {
     let c = Sandbox::new_empty("setup-different-spelling");
     c.ok(&["init", "--yes"]);
     std::fs::create_dir_all(c.0.join(".claude")).unwrap();
@@ -242,20 +479,14 @@ fn a_differently_spelled_session_start_is_left_alone_and_copied_into_the_plan() 
     )
     .unwrap();
 
+    let before = read_bytes(&settings_path(&c));
     let (out, code) = c.run(&["setup", "claude-code", "--yes"]);
-    assert_eq!(code, 0, "{out}");
-    assert!(
-        out.contains("already runs  C:/tools/vivac.exe session start --hook"),
-        "{out}"
-    );
-
-    let after: serde_json::Value = serde_json::from_str(&read(&settings_path(&c))).unwrap();
-    let start = after["hooks"]["SessionStart"].as_array().unwrap();
-    assert_eq!(
-        start.len(),
-        1,
-        "a second SessionStart entry was added:\n{after}"
-    );
+    assert_ne!(code, 0, "{out}");
+    assert!(out.contains("Nothing written"), "{out}");
+    assert!(!out.contains("C:/tools/vivac.exe"), "{out}");
+    assert_eq!(read_bytes(&settings_path(&c)), before);
+    assert!(!mcp_path(&c).exists());
+    assert!(!c.0.join(".claude/skills").exists());
 }
 
 // ---------------------------------------------------------------------------
@@ -264,7 +495,7 @@ fn a_differently_spelled_session_start_is_left_alone_and_copied_into_the_plan() 
 // ---------------------------------------------------------------------------
 
 #[test]
-fn a_project_with_the_two_older_hooks_gains_only_the_third() {
+fn a_project_with_legacy_hooks_migrates_start_and_keeps_stop() {
     let c = Sandbox::new_empty("setup-prompt-hook-add-third");
     c.ok(&["init", "--yes"]);
     std::fs::create_dir_all(c.0.join(".claude")).unwrap();
@@ -287,24 +518,20 @@ fn a_project_with_the_two_older_hooks_gains_only_the_third() {
     let (out, code) = c.run(&["setup", "claude-code", "--yes"]);
     assert_eq!(code, 0, "{out}");
     assert!(
-        out.contains("add") && out.contains("the UserPromptSubmit hook"),
+        out.contains("add") && out.contains(SESSION_GUARD) && out.contains(SESSION_PROMPT),
         "{out}"
     );
     assert!(!out.contains("already has all three hooks"), "{out}");
 
     let after: serde_json::Value = serde_json::from_str(&read(&settings_path(&c))).unwrap();
-    assert_eq!(
-        after["hooks"]["SessionStart"].as_array().unwrap().len(),
-        1,
-        "the existing SessionStart hook was duplicated:\n{after}"
-    );
+    assert!(after["hooks"].get("SessionStart").is_none(), "{after}");
     assert_eq!(
         after["hooks"]["Stop"].as_array().unwrap().len(),
         1,
         "the existing Stop hook was duplicated:\n{after}"
     );
     assert_eq!(
-        after["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"],
+        after["hooks"]["UserPromptSubmit"][1]["hooks"][0]["command"],
         SESSION_PROMPT
     );
 }
@@ -732,12 +959,11 @@ fn undo_leaves_a_differently_spelled_hook_and_an_edited_skill() {
             ]
         }
     });
-    std::fs::write(
-        settings_path(&c),
-        serde_json::to_string_pretty(&settings).unwrap(),
-    )
-    .unwrap();
     c.ok(&["setup", "claude-code", "--yes"]);
+    let mut configured: serde_json::Value =
+        serde_json::from_str(&read(&settings_path(&c))).unwrap();
+    configured["hooks"]["SessionStart"] = settings["hooks"]["SessionStart"].clone();
+    std::fs::write(settings_path(&c), configured.to_string()).unwrap();
     // Edit the skill after setup wrote it, so its fingerprint no longer
     // matches: the way an edited file looks to `--undo`.
     let skill = read(&skill_path(&c));

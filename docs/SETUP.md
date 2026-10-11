@@ -41,7 +41,8 @@ anything is written.
 
 | File | What it gets |
 |---|---|
-| `.claude/settings.json` | three hooks — `SessionStart` runs `vivac session start --hook`, which hands the agent the brief when a session opens and again after a compaction, ending with the seams where work is written down and the tool for each; `UserPromptSubmit` runs `vivac session prompt --hook`, which says one line when the session has gone a while without writing anything; `Stop` runs `vivac session end --hook`, which leaves an automatic stop |
+| `.claude/settings.json` | `UserPromptSubmit` runs `vivac session guard --hook` to check that the opening module is available, then `vivac session prompt --hook` for custody and capture reminders; `Stop` runs `vivac session end --hook` |
+| `.claude/skills/vivac-opening/` | the experimental opening module: `.claude-plugin/plugin.json`, `hooks/hooks.json`, `hooks/register.mjs`, and an ownership receipt, `.vivac-owned.json` |
 | `.mcp.json` | the server, which runs `vivac mcp` |
 | `.claude/skills/vivac-migrate/` | the skill an agent follows to bring another record into the tree — see [Migrating](MIGRATING.md) |
 
@@ -69,9 +70,12 @@ and that nothing else in it moved. If one does not, it puts all of them back
 the way they were.
 
 `vivac setup claude-code --undo` removes exactly what setup writes and leaves
-anything that is not exactly its own. Of folders it removes only its own
-`vivac-migrate`: `.claude/` stays, even empty, because setup cannot tell
-whether it was there before. The tree is never part of it: what `init`
+anything that is not exactly its own. It removes intact owned opening files
+and their empty private folders, preserving extra files and shared parents.
+An edited opening bundle stays in place, with a warning that it may still run.
+Custom opening or guard commands also remain, with a warning. `.claude/`
+stays, even empty, because setup cannot tell whether it was there before.
+The tree is never part of it: what `init`
 wrote, `vivac init --undo` takes back. Right after planting, while the tree
 holds no work yet, that is the whole `.vivac/` and its line in this
 machine's registry. Once the tree holds work, `init --undo` never removes
@@ -92,6 +96,28 @@ missing that file, and gives the command that takes an already-committed
 `.vivac` back out of git.
 
 ---
+
+### Claude Code opening context
+
+The module prepares the complete opening text once for `startup`, `clear`,
+`resume` or `compact`, using `vivac session start --hook --context claude-module`.
+It supplies that snapshot through an owned native attachment, preserving
+foreign hook text. Preparation is limited to 60,000 UTF-8 bytes; oversized or
+failed preparations block model work rather than sending a shortened opening.
+The independent prompt guard also rejects a missing or invalid module status.
+This transport budget does not establish the active model's context capacity.
+
+Re-run setup to upgrade the original plain-text opening hook. It removes only
+exact `vivac session start --hook` command handlers, including those in groups
+with foreign handlers. Custom opening or guard commands require review and
+prevent an automatic upgrade. Bundle contents must match a compiled version
+and its receipt; unknown or edited ownership is not permission to overwrite.
+All planned configuration and bundle changes share one transaction.
+
+`vivac doctor claude-code` checks bundle integrity and the guard, prompt and
+stop hooks. Configuration and an opening receipt do not prove that the
+harness loaded the module or delivered its output. The native checks and their
+limits are recorded in [Checking instruction delivery](INSTRUCTION-DELIVERY.md).
 
 ## Codex
 
@@ -203,7 +229,10 @@ temporary directory. Long sessions are where the seams
 fade: the brief arrives when a session opens, not in the turn where the work
 happens.
 
-All three hooks stay quiet and exit 0 where there is no `.vivac/`.
+The ordinary plain-text start hook, prompt and end commands stay quiet and
+exit 0 where there is no `.vivac/`. Claude's module producer instead returns
+JSON with `status: absent`. Its independent guard checks the module status: a
+valid `absent` status permits continuation, while a missing status is rejected.
 
 ---
 

@@ -17,6 +17,7 @@
 //! job.
 
 use super::json::{self, Value};
+use super::opening_bundle;
 use super::tree;
 use crate::args::Args;
 use crate::failure::Failure;
@@ -30,6 +31,7 @@ const MCP_LABEL: &str = ".mcp.json";
 const SKILL_LABEL: &str = ".claude/skills/vivac-migrate/SKILL.md";
 
 const SESSION_START_COMMAND: &str = "vivac session start --hook";
+const SESSION_GUARD_COMMAND: &str = "vivac session guard --hook";
 const SESSION_END_COMMAND: &str = "vivac session end --hook";
 const SESSION_PROMPT_COMMAND: &str = "vivac session prompt --hook";
 
@@ -135,7 +137,7 @@ pub(super) fn read_json(path: &Path) -> JsonFile {
 }
 
 // ---------------------------------------------------------------------------
-// Hooks: SessionStart and Stop.
+// Command hooks and opening module configuration.
 // ---------------------------------------------------------------------------
 
 /// `pub(super)`: `codex.rs` reads its own two hooks through this same type
@@ -197,6 +199,127 @@ fn our_hook_entry(command: &str) -> Value {
             ("command", Value::str(command)),
         ])]),
     )])
+}
+
+fn managed_hook_state(
+    root: &Value,
+    event: &str,
+    word: &str,
+    exact: &str,
+) -> Result<HookState, Failure> {
+    let mut found = false;
+    for handler in root
+        .get("hooks")
+        .and_then(|hooks| hooks.get(event))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .flat_map(|group| {
+            group
+                .get("hooks")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+        })
+    {
+        if let Some(command) = handler.get("command").and_then(Value::as_str) {
+            if is_session_command(command, word) {
+                if command != exact
+                    || handler.get("type").and_then(Value::as_str) != Some("command")
+                {
+                    return Err(Failure::Model("Conflicting Claude Code opening or guard command. Review project hooks before setup.\n\n  Nothing written.".into()));
+                }
+                found = true;
+            }
+        }
+    }
+    Ok(if found {
+        HookState::Exact
+    } else {
+        HookState::Missing
+    })
+}
+
+fn remove_managed_hook(root: &mut Value, event: &str, command: &str) -> bool {
+    let Some(mut hooks) = root.get("hooks").cloned() else {
+        return false;
+    };
+    let Some(groups) = hooks.get(event).and_then(Value::as_array) else {
+        return false;
+    };
+    let mut removed = false;
+    let mut kept = Vec::new();
+    for group in groups {
+        let mut group = group.clone();
+        if let Some(handlers) = group.get("hooks").and_then(Value::as_array) {
+            let remaining: Vec<_> = handlers
+                .iter()
+                .filter(|handler| {
+                    let own = handler.get("type").and_then(Value::as_str) == Some("command")
+                        && handler.get("command").and_then(Value::as_str) == Some(command);
+                    removed |= own;
+                    !own
+                })
+                .cloned()
+                .collect();
+            if remaining.is_empty() && remaining.len() != handlers.len() {
+                continue;
+            }
+            group.set("hooks", Value::Array(remaining));
+        }
+        kept.push(group);
+    }
+    if !removed {
+        return false;
+    }
+    if kept.is_empty() {
+        hooks
+            .as_object_mut()
+            .unwrap()
+            .retain(|(key, _)| key != event);
+    } else {
+        hooks.set(event, Value::Array(kept));
+    }
+    if hooks.as_object().is_some_and(|fields| fields.is_empty()) {
+        root.as_object_mut()
+            .unwrap()
+            .retain(|(key, _)| key != "hooks");
+    } else {
+        root.set("hooks", hooks);
+    }
+    true
+}
+
+fn bundle_items(plan: &opening_bundle::Plan, here: &Path) -> Vec<PlanItem> {
+    plan.writes
+        .iter()
+        .map(|write| {
+            let verb = match &write.action {
+                super::Action::Delete => "remove",
+                super::Action::Write(_) if write.original.is_some() => "replace",
+                super::Action::Write(_) => "create",
+            };
+            PlanItem::new(
+                verb,
+                write
+                    .path
+                    .strip_prefix(here)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/"),
+                "the owned opening bundle",
+            )
+        })
+        .collect()
+}
+
+fn print_bundle_cleanup(applied: &opening_bundle::ApplyResult) {
+    for path in &applied.cleanup_failures {
+        outln!(
+            "Warning: an empty opening bundle directory could not be removed: {}",
+            path.display()
+        );
+    }
 }
 
 /// The same entry `our_hook_entry` builds, with the matcher Codex's own
@@ -661,6 +784,8 @@ fn guarded_relative(base: &Path, path: &Path) -> Option<String> {
 
 fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     let here = &roots.here;
+    let bundle =
+        opening_bundle::plan_update(here, &opening_bundle::CATALOG, &opening_bundle::CURRENT)?;
     let paths = paths(here);
     let skill_raw = read_migration_skill(here)?;
     let settings = read_json(&paths.settings);
@@ -707,12 +832,19 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     }
 
     let settings_root = settings.value.clone().unwrap();
-    let start_hook_state = hook_state(
+    let legacy_hook_state = managed_hook_state(
         &settings_root,
         "SessionStart",
         "start",
         SESSION_START_COMMAND,
-    );
+    )?;
+    let guard_hook_state = managed_hook_state(
+        &settings_root,
+        "UserPromptSubmit",
+        "guard",
+        SESSION_GUARD_COMMAND,
+    )?;
+    let legacy_present = matches!(legacy_hook_state, HookState::Exact);
     let stop_hook_state = hook_state(&settings_root, "Stop", "end", SESSION_END_COMMAND);
     let prompt_hook_state = hook_state(
         &settings_root,
@@ -721,7 +853,7 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         SESSION_PROMPT_COMMAND,
     );
 
-    let start_missing = matches!(start_hook_state, HookState::Missing);
+    let guard_missing = matches!(guard_hook_state, HookState::Missing);
     let stop_missing = matches!(stop_hook_state, HookState::Missing);
     let prompt_missing = matches!(prompt_hook_state, HookState::Missing);
     let mcp_missing = matches!(mcp_server_state, McpState::Missing);
@@ -730,12 +862,14 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         SkillState::Missing | SkillState::Replaceable
     );
 
-    let nothing_to_write = !start_missing
+    let nothing_to_write = !guard_missing
         && !stop_missing
         && !prompt_missing
         && !mcp_missing
         && !skill_missing_or_replaceable
-        && !agents_skill.needs_write();
+        && !agents_skill.needs_write()
+        && !legacy_present
+        && bundle.outcome == opening_bundle::Outcome::Current;
 
     let mut plan_block = heading(Stream::Out, "vivac setup claude-code", here);
     if let Some(warning) = git_root_warning(here) {
@@ -747,10 +881,10 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         &plan_items(
             settings.exists,
             mcp.exists,
-            &start_hook_state,
+            &guard_hook_state,
             &stop_hook_state,
             &prompt_hook_state,
-            start_missing,
+            guard_missing,
             stop_missing,
             prompt_missing,
             &mcp_server_state,
@@ -758,6 +892,12 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
             &agents_skill,
         ),
     ));
+
+    plan_block.push_str(&render_items(Stream::Out, &bundle_items(&bundle, here)));
+    if legacy_present {
+        plan_block
+            .push_str("\nRemove the legacy SessionStart command while preserving foreign hooks.\n");
+    }
 
     // Checked before `nothing_to_write`, not after: that branch notes the
     // registry (`note_registry`), and `--dry-run` promises to write
@@ -767,7 +907,10 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     if a.has("dry-run") {
         outln!(
             "{}",
-            close_with(&format!("{plan_block}\n{TRAILING_PARAGRAPH}"), DRY_RUN_LINE)
+            close_with(
+                &format!("{plan_block}\n{CLAUDE_TRAILING_PARAGRAPH}"),
+                DRY_RUN_LINE
+            )
         );
         return Ok(0);
     }
@@ -796,7 +939,7 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         )));
     }
 
-    print_plan(&format!("{plan_block}\n{TRAILING_PARAGRAPH}"));
+    print_plan(&format!("{plan_block}\n{CLAUDE_TRAILING_PARAGRAPH}"));
     let proceed = a.has("yes") || super::ask("\nWrite it? [y/N] ");
     if !proceed {
         outln!("\nNothing written.");
@@ -809,13 +952,14 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     // planting, the lane, the version lock and `.gitignore` are `init`'s
     // alone now, and this run never reaches any of them.
     let mut writes = Vec::new();
-    if start_missing || stop_missing || prompt_missing {
+    if guard_missing || stop_missing || prompt_missing || legacy_present {
         let mut new_settings = settings_root.clone();
-        if start_missing {
+        remove_managed_hook(&mut new_settings, "SessionStart", SESSION_START_COMMAND);
+        if guard_missing {
             append_hook(
                 &mut new_settings,
-                "SessionStart",
-                SESSION_START_COMMAND,
+                "UserPromptSubmit",
+                SESSION_GUARD_COMMAND,
                 None,
             );
         }
@@ -835,7 +979,8 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
             settings.eol,
             settings.trailing_newline,
         );
-        let before = settings_root.clone();
+        let mut before = settings_root.clone();
+        remove_managed_hook(&mut before, "SessionStart", SESSION_START_COMMAND);
         writes.push(super::PlannedWrite {
             path: paths.settings.clone(),
             action: super::Action::Write(rendered),
@@ -875,14 +1020,21 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     }
 
     agents_skill.write(&mut writes);
-    super::commit(&writes)?;
+    let bundle_changed = bundle.outcome != opening_bundle::Outcome::Current;
+    let applied = bundle.with_writes(writes)?.commit()?;
+    print_bundle_cleanup(&applied);
 
     // `d723` piece B: this run never touched the tree, so what it wrote is
     // exactly the three pieces above -- `needs_lock`, `lane_declared` and
     // the rest of what `tree::commit` used to report are `init`'s to say
     // now, not `setup`'s.
     let written = Written {
-        connection: start_missing || stop_missing || prompt_missing || mcp_missing,
+        connection: guard_missing
+            || stop_missing
+            || prompt_missing
+            || mcp_missing
+            || legacy_present
+            || bundle_changed,
         // `f638`, `d641`: every tree `setup` writes into already existed
         // before this run, so the one question left is whether this run
         // is the one adding the "vivac" server to it.
@@ -893,7 +1045,7 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         // yet does not get the warning.
         hand_registered_risk: mcp_missing && tree_has_work(roots),
         skill: skill_missing_or_replaceable,
-        undoable: start_missing
+        undoable: guard_missing
             && stop_missing
             && prompt_missing
             && mcp_missing
@@ -929,10 +1081,10 @@ pub(super) fn git_root_warning(here: &Path) -> Option<String> {
 fn plan_items(
     settings_exists: bool,
     mcp_exists: bool,
-    start_hook_state: &HookState,
+    guard_hook_state: &HookState,
     stop_hook_state: &HookState,
     prompt_hook_state: &HookState,
-    start_missing: bool,
+    guard_missing: bool,
     stop_missing: bool,
     prompt_missing: bool,
     mcp_server_state: &McpState,
@@ -942,9 +1094,9 @@ fn plan_items(
     let mut items = Vec::new();
 
     let (settings_verb, settings_what) =
-        match (settings_exists, start_missing, stop_missing, prompt_missing) {
+        match (settings_exists, guard_missing, stop_missing, prompt_missing) {
             (_, false, false, false) => ("keep", "already has all three hooks"),
-            (_, true, false, false) => ("add", "the SessionStart hook"),
+            (_, true, false, false) => ("add", "the UserPromptSubmit guard"),
             (_, false, true, false) => ("add", "the Stop hook"),
             (_, false, false, true) => ("add", "the UserPromptSubmit hook"),
             (_, true, true, false) | (_, true, false, true) | (_, false, true, true) => {
@@ -954,12 +1106,13 @@ fn plan_items(
             (true, true, true, true) => ("add", "three hooks"),
         };
     let mut settings_item = PlanItem::new(settings_verb, SETTINGS_LABEL, settings_what);
-    match start_hook_state {
+    match guard_hook_state {
         HookState::Missing => {
-            settings_item = settings_item.with_sub("SessionStart", SESSION_START_COMMAND)
+            settings_item = settings_item.with_sub("UserPromptSubmit guard", SESSION_GUARD_COMMAND)
         }
         HookState::Different(cmd) => {
-            settings_item = settings_item.with_sub("SessionStart", format!("already runs  {cmd}"))
+            settings_item =
+                settings_item.with_sub("UserPromptSubmit guard", format!("already runs  {cmd}"))
         }
         HookState::Exact => {}
     }
@@ -1010,6 +1163,7 @@ fn plan_items(
 // `pub(super)`: true of `codex.rs`'s own hooks and server too, and neither
 // names Claude Code (`d653`).
 pub(super) const TRAILING_PARAGRAPH: &str = "The hooks run a command in every session, and the server is how the agent writes to the tree. Nothing outside this directory is touched, and no file is copied.";
+const CLAUDE_TRAILING_PARAGRAPH: &str = "The opening module supplies session context, the command hooks check its status and capture work, and the server is how the agent writes to the tree. Nothing outside this directory is touched, and existing files are not copied into backups.";
 
 /// The plain sentence a plan to write always ends with, once every
 /// optional warning ahead of it has had its own paragraph.
@@ -1355,6 +1509,8 @@ fn skill_conflict() -> String {
 /// and none of the tree's own refusals: undoing whatever an earlier setup
 /// wrote is always safe, regardless of what the tree above `here` is doing.
 fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
+    let bundle = opening_bundle::plan_undo(here, &opening_bundle::CATALOG)?;
+    let bundle_kept = bundle.outcome == opening_bundle::Outcome::Kept;
     let paths = paths(here);
     let skill_raw = read_migration_skill(here)?;
     let settings = read_json(&paths.settings);
@@ -1396,7 +1552,28 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
     let mcp_server_state = mcp_state(&mcp_root);
     let skill_ours = skill_raw.as_deref().is_some_and(skill_fingerprint_intact);
 
-    let start_ours = matches!(start_hook_state, HookState::Exact);
+    let mut opening_preview = settings_root.clone();
+    let start_ours =
+        remove_managed_hook(&mut opening_preview, "SessionStart", SESSION_START_COMMAND);
+    let guard_ours = remove_managed_hook(
+        &mut opening_preview,
+        "UserPromptSubmit",
+        SESSION_GUARD_COMMAND,
+    );
+    let other_start = managed_hook_state(
+        &settings_root,
+        "SessionStart",
+        "start",
+        SESSION_START_COMMAND,
+    )
+    .is_err();
+    let other_guard = managed_hook_state(
+        &settings_root,
+        "UserPromptSubmit",
+        "guard",
+        SESSION_GUARD_COMMAND,
+    )
+    .is_err();
     let stop_ours = matches!(stop_hook_state, HookState::Exact);
     let prompt_ours = matches!(prompt_hook_state, HookState::Exact);
     let mcp_ours = matches!(mcp_server_state, McpState::Ours);
@@ -1406,16 +1583,22 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
         && !prompt_ours
         && !mcp_ours
         && !skill_ours
-        && !agents_skill.ours();
+        && !agents_skill.ours()
+        && !guard_ours
+        && bundle.writes.is_empty()
+        && !bundle_kept;
     if nothing_to_undo {
+        if other_start || other_guard {
+            outln!("Warning: custom opening or guard commands are kept and may still execute.");
+        }
         outln!("Nothing to undo: none of what setup writes is here.");
         return Ok(0);
     }
 
     // Preview the settings.json result to know whether it empties out.
-    let mut preview = settings_root.clone();
+    let mut preview = opening_preview;
     if start_ours {
-        remove_hook(&mut preview, "SessionStart", SESSION_START_COMMAND);
+        remove_managed_hook(&mut preview, "SessionStart", SESSION_START_COMMAND);
     }
     if stop_ours {
         remove_hook(&mut preview, "Stop", SESSION_END_COMMAND);
@@ -1433,7 +1616,7 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
             .is_some_and(|s: &[(String, Value)]| s.is_empty());
 
     let (settings_verb, settings_what): (&'static str, &'static str) =
-        match (start_ours, stop_ours, prompt_ours) {
+        match (start_ours || guard_ours, stop_ours, prompt_ours) {
             (true, true, true) if settings_becomes_empty => (
                 "remove",
                 "the three hooks setup wrote; nothing else is left, so it goes",
@@ -1442,6 +1625,7 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
             (true, true, false) | (true, false, true) | (false, true, true) => {
                 ("remove", "the two hooks setup wrote")
             }
+            (true, false, false) if guard_ours => ("remove", "the UserPromptSubmit guard"),
             (true, false, false) => ("remove", "the SessionStart hook"),
             (false, true, false) => ("remove", "the Stop hook"),
             (false, false, true) => ("remove", "the UserPromptSubmit hook"),
@@ -1485,8 +1669,20 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
         PlanItem::new(skill_verb, SKILL_LABEL, skill_what),
         agents_skill.undo_plan(),
     ];
+    let mut items = items;
+    items.extend(bundle_items(&bundle, here));
+    if bundle_kept {
+        items.push(PlanItem::new(
+            "keep",
+            ".claude/skills/vivac-opening",
+            "edited; the complete bundle remains and may still execute",
+        ));
+    }
     let mut s = heading(Stream::Out, "vivac setup claude-code --undo", here);
     s.push_str(&render_items(Stream::Out, &items));
+    if other_start || other_guard {
+        s.push_str("\nWarning: custom opening or guard commands are kept and may still execute.\n");
+    }
 
     if a.has("dry-run") {
         outln!("{}", close_with(&s, DRY_RUN_LINE));
@@ -1514,7 +1710,7 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
     // Every change -- a rewrite or a removal -- is one commit, the same
     // all-or-nothing guarantee `apply` gives (`t565` §7.6).
     let mut writes = Vec::new();
-    if start_ours || stop_ours || prompt_ours {
+    if start_ours || stop_ours || prompt_ours || guard_ours {
         let original = settings.raw.clone().into_bytes();
         if settings_becomes_empty {
             writes.push(super::PlannedWrite::delete(
@@ -1524,7 +1720,10 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
         } else {
             let mut new_settings = settings_root.clone();
             if start_ours {
-                remove_hook(&mut new_settings, "SessionStart", SESSION_START_COMMAND);
+                remove_managed_hook(&mut new_settings, "SessionStart", SESSION_START_COMMAND);
+            }
+            if guard_ours {
+                remove_managed_hook(&mut new_settings, "UserPromptSubmit", SESSION_GUARD_COMMAND);
             }
             if stop_ours {
                 remove_hook(&mut new_settings, "Stop", SESSION_END_COMMAND);
@@ -1582,7 +1781,8 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
     }
 
     agents_skill.delete(&mut writes);
-    super::commit(&writes)?;
+    let applied = bundle.with_writes(writes)?.commit()?;
+    print_bundle_cleanup(&applied);
     agents_skill.clean_empty_directory();
 
     // Best-effort, and only once the commit above is known to have
@@ -1595,7 +1795,11 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
         remove_if_empty(paths.skill.parent());
     }
 
-    outln!("\nUndone. The tree in .vivac/ is untouched.");
+    if bundle_kept {
+        outln!("\nThe edited opening bundle was kept and may still execute. The tree in .vivac/ is untouched.");
+    } else {
+        outln!("\nUndone. The tree in .vivac/ is untouched.");
+    }
     Ok(0)
 }
 

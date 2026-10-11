@@ -497,7 +497,7 @@ async function assertBlockedWork(h, diagnostic = 'SYNTHETIC_PRIVATE_DIAGNOSTIC')
 }
 
 test('promotion controls use the frozen native-compatible candidate', () => {
-  assert.equal(candidateSha256, '6F06C1687F92F09ACBB460DE4CDF57155D509C4DDD6E43DF258227CD7C5AA926');
+  assert.equal(candidateSha256, 'B4BB19565116606AFD310765AC16FF46A336294AD38BD905915D91035068E376');
 });
 
 const producerDiagnostic = 'SYNTHETIC_PRIVATE_DIAGNOSTIC';

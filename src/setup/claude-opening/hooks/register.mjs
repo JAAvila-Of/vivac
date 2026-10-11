@@ -1,4 +1,4 @@
-// Fixture-only candidate. It is not installed by the product.
+// Experimental complete opening context for vivac.
 const protocol = 'vivac.claude.opening.v1';
 const marker = '@@VIVAC_OPENING_CURRENT_REFERENCE_8f716aa0c351448fb5ce9c8b21e7a699@@';
 const blockedMessage = 'The vivac opening context is not ready. Check the integration and restart the session.';

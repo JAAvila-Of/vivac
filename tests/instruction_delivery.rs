@@ -50,6 +50,49 @@ fn configured_opening(sandbox: &Sandbox, opening_dir: &Path, harness: &str) {
     };
     let settings: Value =
         serde_json::from_str(&std::fs::read_to_string(opening_dir.join(file)).unwrap()).unwrap();
+    if harness == "claude-code" {
+        assert!(
+            settings["hooks"].get("SessionStart").is_none(),
+            "{settings}"
+        );
+        let guards: Vec<_> = settings["hooks"]["UserPromptSubmit"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|group| group["hooks"].as_array().unwrap())
+            .filter(|handler| handler["command"] == "vivac session guard --hook")
+            .collect();
+        assert_eq!(guards.len(), 1, "{settings}");
+        assert_eq!(guards[0]["type"], "command");
+        let bundle = opening_dir.join(".claude/skills/vivac-opening");
+        let manifest = std::fs::read_to_string(bundle.join(".claude-plugin/plugin.json")).unwrap();
+        assert_eq!(
+            manifest,
+            include_str!("../src/setup/claude-opening/.claude-plugin/plugin.json")
+        );
+        let hooks_text = std::fs::read_to_string(bundle.join("hooks/hooks.json")).unwrap();
+        assert_eq!(
+            hooks_text,
+            include_str!("../src/setup/claude-opening/hooks/hooks.json")
+        );
+        let hooks: Value = serde_json::from_str(&hooks_text).unwrap();
+        assert_eq!(hooks["modules"], json!(["./register.mjs"]));
+        let module = std::fs::read_to_string(bundle.join("hooks/register.mjs")).unwrap();
+        assert_eq!(
+            module,
+            include_str!("../src/setup/claude-opening/hooks/register.mjs")
+        );
+        assert!(module
+            .contains("['vivac', 'session', 'start', '--hook', '--context', 'claude-module']"));
+        let receipt: Value = serde_json::from_str(
+            &std::fs::read_to_string(bundle.join(".vivac-owned.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(receipt["schema"], 1);
+        assert_eq!(receipt["version"], "opening-reference-v1");
+        assert_eq!(receipt["files"].as_object().unwrap().len(), 3);
+        return;
+    }
     let openings = settings["hooks"]["SessionStart"].as_array().unwrap();
     assert_eq!(openings.len(), 1, "{settings}");
     let opening = &openings[0];
@@ -150,7 +193,7 @@ fn acceptance_matrix(harness: &str, nested: bool) {
         // This exercises emission without pretending to launch either harness.
         let args: &[&str] = if harness == "codex" {
             &["session", "start", "--hook", "--context", "codex"]
-        } else if harness == "claude-module" {
+        } else if matches!(harness, "claude-code" | "claude-module") {
             &["session", "start", "--hook", "--context", "claude-module"]
         } else {
             &["session", "start", "--hook"]
@@ -166,7 +209,7 @@ fn acceptance_matrix(harness: &str, nested: bool) {
                 .as_str()
                 .unwrap()
                 .to_string()
-        } else if harness == "claude-module" {
+        } else if matches!(harness, "claude-code" | "claude-module") {
             let response: Value = serde_json::from_slice(&output.stdout).unwrap();
             assert_eq!(response["protocol"], "vivac.claude.opening.v1");
             assert_eq!(response["status"], "ready");
