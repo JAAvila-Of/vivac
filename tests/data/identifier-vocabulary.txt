@@ -779,6 +779,7 @@ expect
 expected
 expecting
 explains
+explanation
 explicit
 exposes
 ext

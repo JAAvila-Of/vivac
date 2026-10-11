@@ -351,8 +351,15 @@ After inspecting the running harness, record evidence explicitly with
 not an automatic verification by vivac. It is tied to a revision and
 destination; a later revision does not inherit proof of loading.
 
-`vivac doctor` summarizes agent custody alongside project setup. The coordinator
-resolves detailed differences within the authorized scope. Direct scan remains
+`vivac doctor` reports `agent custody` and `agent runtime` separately. Custody
+checks errors and unmanaged native files; missing execution evidence does not
+change its status. Runtime reports missing, stale or mismatched selection
+evidence. A reported match remains a report, not independent verification.
+Use `vivac agents sync` to review configuration changes and `vivac agents status`
+to inspect execution reports. Synchronizing files cannot verify runtime selection.
+The console inventory and web show configuration and runtime evidence separately.
+
+The coordinator resolves detailed differences within the authorized scope. Direct scan remains
 available later; setup is not required again when an agent is added.
 
 `vivac agents detach <id> --harness H --path <relative>` stops managing

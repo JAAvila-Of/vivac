@@ -93,6 +93,21 @@ pub(super) fn run(cwd: &Path, _args: &Args) -> Result<i32, Failure> {
     Ok(0)
 }
 
+fn runtime_evidence(mapping: &Value) -> String {
+    let state = mapping["observed"]["state"]
+        .as_str()
+        .unwrap_or("unverified");
+    let explanation = match state {
+        "unverified" => "no runtime selection evidence recorded",
+        "reported_match" => "reported selection matches; runtime is not independently verified",
+        "reported_mismatch" => "reported selection differs from the configured assignment",
+        "stale" => "recorded evidence belongs to an earlier revision",
+        "unbound" => "no native binding; runtime selection evidence is unavailable",
+        _ => "runtime selection is not independently verified",
+    };
+    clean(&format!("    Runtime evidence: {state} - {explanation}"))
+}
+
 fn render_inventory(inventory: &Value) -> Result<(), Failure> {
     say!("{}", style::bold(Out, "Agents"));
     say!(
@@ -122,7 +137,7 @@ fn render_inventory(inventory: &Value) -> Result<(), Failure> {
                 .iter()
                 .find(|assignment| text(assignment, "harness") == text(mapping, "harness"));
             let row = clean(&format!(
-                "  {}: {} | Assigned model {} | effort {} | Configuration: {} | Runtime: {}",
+                "  {}: {} | Assigned model {} | effort {} | Configuration: {}",
                 text(mapping, "harness"),
                 mapping["path"].as_str().unwrap_or("not bound"),
                 assignment
@@ -131,10 +146,7 @@ fn render_inventory(inventory: &Value) -> Result<(), Failure> {
                 assignment
                     .map(|assignment| text(assignment, "effort"))
                     .unwrap_or("not assigned"),
-                state,
-                mapping["observed"]["state"]
-                    .as_str()
-                    .unwrap_or("unverified")
+                state
             ));
             say!(
                 "{}",
@@ -143,6 +155,14 @@ fn render_inventory(inventory: &Value) -> Result<(), Failure> {
                     "retired" => style::dim(Out, &row),
                     "missing" => style::warn(Out, &row),
                     _ => style::gone(Out, &row),
+                }
+            );
+            let runtime = runtime_evidence(mapping);
+            say!(
+                "{}",
+                match text(&mapping["observed"], "state") {
+                    "reported_mismatch" | "stale" => style::warn(Out, &runtime),
+                    _ => style::dim(Out, &runtime),
                 }
             );
         }
@@ -184,7 +204,8 @@ fn render_inventory(inventory: &Value) -> Result<(), Failure> {
             }
         );
         say!("  {}", metadata(&native));
-        say!("  Custody: not managed | Configuration: native | Runtime: unverified");
+        say!("  Custody: not managed | Configuration: native");
+        say!("  Runtime evidence: unverified - no runtime selection evidence recorded");
         for harness in entries(&inventory["harnesses"])
             .iter()
             .filter(|h| h["configured"] == true && text(h, "harness") != native.harness)
@@ -219,7 +240,18 @@ fn render_inventory(inventory: &Value) -> Result<(), Failure> {
             }
         );
     }
-    say!("\nNext: vivac agents sync to choose sources, destinations and assignments, then review changes before applying.");
+    let needs_review = !entries(&inventory["unmanaged"]).is_empty()
+        || entries(&inventory["agents"]).iter().any(|agent| {
+            entries(&agent["mappings"])
+                .iter()
+                .any(|mapping| !matches!(text(mapping, "configured"), "current" | "retired"))
+        });
+    if needs_review {
+        say!("\nConfiguration needs review: vivac agents sync to choose sources, destinations and assignments, then review changes before applying.");
+    } else {
+        say!("\nNo configuration changes require review; synchronization is optional for transfers or assignment changes: vivac agents sync, then review changes before applying.");
+    }
+    say!("Runtime evidence: vivac agents status. Synchronization changes configuration; it does not verify runtime selection. Missing runtime evidence alone does not require synchronization.");
     io::stdout().flush()?;
     Ok(())
 }

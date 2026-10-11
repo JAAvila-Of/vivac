@@ -17,6 +17,9 @@ tree log: they identify neither the harness nor the machine and do not prove
 reception by a model.
 A successful agent load check likewise does not establish its effective model,
 effort or compliance without corresponding runtime evidence.
+Doctor reports agent custody and runtime evidence separately: managed files can
+be current while execution remains unverified. Repeating agent synchronization
+does not supply that evidence.
 
 ## What the opening carries
 
