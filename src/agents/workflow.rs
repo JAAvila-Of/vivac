@@ -588,8 +588,17 @@ pub(crate) fn apply(
     crate::setup::commit(&writes)?;
     if ctx.emit(events).is_err() {
         let unrestored = crate::setup::rollback(&writes);
+        let error = if unrestored.is_empty() {
+            "Native writes were attempted but the custody receipt failed. Inspect destinations before retrying.".to_string()
+        } else {
+            crate::setup::failure_with_rollback(
+                "Native writes were attempted but the custody receipt failed".to_string(),
+                &unrestored,
+            )
+            .message()
+        };
         return Ok((
-            json!({"applied":false,"receipt_failed":true,"rollback_attempted":true,"rollback_failed":!unrestored.is_empty(),"error":"Native writes were attempted but the custody receipt failed. Inspect destinations before retrying."}),
+            json!({"applied":false,"receipt_failed":true,"rollback_attempted":true,"rollback_failed":!unrestored.is_empty(),"error":error}),
             5,
         ));
     }

@@ -41,7 +41,8 @@ anything is written.
 
 | File | What it gets |
 |---|---|
-| `.claude/settings.json` | three hooks — `SessionStart` runs `vivac session start --hook`, which hands the agent the brief when a session opens and again after a compaction, ending with the seams where work is written down and the tool for each; `UserPromptSubmit` runs `vivac session prompt --hook`, which says one line when the session has gone a while without writing anything; `Stop` runs `vivac session end --hook`, which leaves an automatic stop |
+| `.claude/settings.json` | `UserPromptSubmit` runs `vivac session guard --hook` to check that the opening module is available, then `vivac session prompt --hook` for custody and capture reminders; `Stop` runs `vivac session end --hook` |
+| `.claude/skills/vivac-opening/` | the experimental opening module: `.claude-plugin/plugin.json`, `hooks/hooks.json`, `hooks/register.mjs`, and an ownership receipt, `.vivac-owned.json` |
 | `.mcp.json` | the server, which runs `vivac mcp` |
 | `.claude/skills/vivac-migrate/` | the skill an agent follows to bring another record into the tree — see [Migrating](MIGRATING.md) |
 
@@ -69,9 +70,12 @@ and that nothing else in it moved. If one does not, it puts all of them back
 the way they were.
 
 `vivac setup claude-code --undo` removes exactly what setup writes and leaves
-anything that is not exactly its own. Of folders it removes only its own
-`vivac-migrate`: `.claude/` stays, even empty, because setup cannot tell
-whether it was there before. The tree is never part of it: what `init`
+anything that is not exactly its own. It removes intact owned opening files
+and their empty private folders, preserving extra files and shared parents.
+An edited opening bundle stays in place, with a warning that it may still run.
+Custom opening or guard commands also remain, with a warning. `.claude/`
+stays, even empty, because setup cannot tell whether it was there before.
+The tree is never part of it: what `init`
 wrote, `vivac init --undo` takes back. Right after planting, while the tree
 holds no work yet, that is the whole `.vivac/` and its line in this
 machine's registry. Once the tree holds work, `init --undo` never removes
@@ -93,6 +97,28 @@ missing that file, and gives the command that takes an already-committed
 
 ---
 
+### Claude Code opening context
+
+The module prepares the complete opening text once for `startup`, `clear`,
+`resume` or `compact`, using `vivac session start --hook --context claude-module`.
+It supplies that snapshot through an owned native attachment, preserving
+foreign hook text. Preparation is limited to 60,000 UTF-8 bytes; oversized or
+failed preparations block model work rather than sending a shortened opening.
+The independent prompt guard also rejects a missing or invalid module status.
+This transport budget does not establish the active model's context capacity.
+
+Re-run setup to upgrade the original plain-text opening hook. It removes only
+exact `vivac session start --hook` command handlers, including those in groups
+with foreign handlers. Custom opening or guard commands require review and
+prevent an automatic upgrade. Bundle contents must match a compiled version
+and its receipt; unknown or edited ownership is not permission to overwrite.
+All planned configuration and bundle changes share one transaction.
+
+`vivac doctor claude-code` checks bundle integrity and the guard, prompt and
+stop hooks. Configuration and an opening receipt do not prove that the
+harness loaded the module or delivered its output. The native checks and their
+limits are recorded in [Checking instruction delivery](INSTRUCTION-DELIVERY.md).
+
 ## Codex
 
 ```sh
@@ -101,7 +127,7 @@ vivac setup codex
 
 The same pieces, in the three places Codex reads inside a project:
 `.codex/config.toml` gets the server, `.codex/hooks.json` gets `SessionStart`,
-`UserPromptSubmit` and `Stop` running the same three commands, and `.agents/skills/vivac-migrate/`
+`UserPromptSubmit` and `Stop` running the session commands, and `.agents/skills/vivac-migrate/`
 gets the same skill file. Nothing goes in your own configuration directory.
 
 It refuses where there is no tree, and that refusal is the same argument
@@ -150,10 +176,22 @@ vivac-migrate skill is what brings it in. The reverse needs no warning: since
 version 2.1.277, Claude Code reads `AGENTS.md` on its own when there is no
 `CLAUDE.md`.
 
-The brief reaches the agent as plain text on the opening hook's standard
-output, which Codex adds to the session as context. Above roughly 2,500
-tokens it saves that context to a file and shows the model a shorter preview
-instead; the brief's own budget is 1,500, so that only bites if you raise it.
+Codex's opening handler runs `vivac session start --hook --context codex`.
+It returns one JSON response containing the complete opening text and custody
+notices. Setup makes the handler synchronous and sets `additionalContextLimit`
+to `0`, avoiding Codex's default saved-file preview. The producer enforces a
+separate ceiling of 60,000 UTF-8 bytes for that context. If the complete text
+cannot fit, it returns `continue: false` with an explanation, rather than a
+truncated opening. This ceiling is a vivac transport budget, not a promise
+about the active model's context window or account access.
+
+Run setup again to review an upgrade from the original plain-text opening hook;
+the changed handler must also be approved in Codex. Setup preserves foreign
+hooks and reports custom commands or execution settings for review. The brief's
+1,500-token budget remains soft: its fixed sections survive even when they
+exceed it. Configuration and successful emission do not prove reception.
+Check received context before replacing instruction files. See
+[Checking instruction delivery](INSTRUCTION-DELIVERY.md).
 
 setup takes three flags, and they read the same on both sides: `--dry-run`,
 `--yes` and `--undo`. The four that decide where the tree lives — `--join`,
@@ -191,7 +229,10 @@ temporary directory. Long sessions are where the seams
 fade: the brief arrives when a session opens, not in the turn where the work
 happens.
 
-All three hooks stay quiet and exit 0 where there is no `.vivac/`.
+The ordinary plain-text start hook, prompt and end commands stay quiet and
+exit 0 where there is no `.vivac/`. Claude's module producer instead returns
+JSON with `status: absent`. Its independent guard checks the module status: a
+valid `absent` status permits continuation, while a missing status is rejected.
 
 ---
 

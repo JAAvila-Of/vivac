@@ -37,6 +37,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.89.0
       - run: cargo check --locked --all-targets
 
+  claude-module:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - run: node --test tests/claude_opening_module.mjs
+
   lint:
     runs-on: ubuntu-latest
     steps:

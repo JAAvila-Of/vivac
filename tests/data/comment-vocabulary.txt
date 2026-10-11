@@ -39,6 +39,7 @@ act
 acted
 acting
 action
+activation
 active
 actively
 actor
@@ -53,6 +54,7 @@ add
 added
 adding
 addition
+additional
 address
 addressable
 addresses
@@ -194,6 +196,7 @@ arena
 argued
 argument
 arguments
+argv
 arise
 arithmetic
 arm
@@ -452,6 +455,7 @@ builds
 built
 bump
 bumping
+bundle
 bundled
 burden
 buried
@@ -520,6 +524,7 @@ case
 cased
 cases
 casing
+catalog
 catalogue
 catch
 catches
@@ -706,6 +711,7 @@ compiles
 compiling
 completable
 complete
+completed
 completes
 completing
 complexity
@@ -1010,6 +1016,7 @@ designed
 desktop
 despite
 destination
+destinations
 destroyed
 destroys
 destructive
@@ -1224,6 +1231,7 @@ email
 embedded
 embeds
 emisores
+emission
 emit
 emits
 emitted
@@ -1306,6 +1314,7 @@ excluded
 excludes
 exclusion
 exclusive
+exclusively
 excused
 exe
 exec
@@ -1338,6 +1347,7 @@ expect
 expected
 expects
 experiment
+experimental
 expires
 explain
 explained
@@ -1867,6 +1877,7 @@ inherited
 inheriting
 inherits
 init
+inject
 injected
 injecting
 injection
@@ -1887,6 +1898,7 @@ insets
 inside
 insists
 inspectable
+inspecting
 install
 installed
 installer
@@ -2043,6 +2055,7 @@ late
 later
 latest
 latin
+launch
 lay
 layer
 layout
@@ -2070,6 +2083,7 @@ led
 left
 leftover
 leftovers
+legacy
 legal
 legend
 legible
@@ -2311,6 +2325,7 @@ minutes
 mirror
 mirroring
 mirrors
+misclassify
 misdate
 mislabel
 mismatch
@@ -2824,6 +2839,7 @@ process
 processes
 produce
 produced
+producer
 produces
 producing
 product
@@ -2876,6 +2892,7 @@ pruned
 prunes
 pruning
 public
+publication
 publish
 published
 publishes
@@ -2980,6 +2997,7 @@ rebuilds
 rebuilt
 recalculated
 recall
+receipt
 receive
 received
 receives
@@ -2987,6 +3005,7 @@ receiving
 recency
 recent
 recently
+reception
 rechecked
 recipe
 reclaim
@@ -3193,6 +3212,7 @@ rescue
 rescued
 rescues
 rescuing
+reservation
 reserve
 reserved
 reserves
@@ -3276,7 +3296,6 @@ rode
 roll
 rollback
 rolled
-rolling
 rolls
 room
 root
@@ -3759,6 +3778,7 @@ succeeded
 succeeds
 success
 successful
+successfully
 successor
 such
 suffix

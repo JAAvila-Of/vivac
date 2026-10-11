@@ -5,6 +5,98 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::Path;
 
+#[test]
+fn codex_transport_requires_an_explicit_integer_zero_limit() {
+    for limit in [
+        None,
+        Some(serde_json::json!(100)),
+        Some(serde_json::json!("0")),
+        Some(serde_json::json!(null)),
+    ] {
+        let c = Sandbox::new_seeded("doctor-codex-context");
+        c.ok(&["setup", "codex", "--yes"]);
+        let path = c.0.join(".codex/hooks.json");
+        let mut hooks: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let handler = hooks["hooks"]["SessionStart"][0]["hooks"][0]
+            .as_object_mut()
+            .unwrap();
+        match limit {
+            Some(limit) => {
+                handler.insert("additionalContextLimit".to_string(), limit);
+            }
+            None => {
+                handler.remove("additionalContextLimit");
+            }
+        }
+        std::fs::write(&path, hooks.to_string()).unwrap();
+        let r = report(&c, Some("codex"), 0);
+        assert_eq!(check(&r, "codex SessionStart")["status"], "warning");
+        assert!(check(&r, "codex SessionStart")["fix"]
+            .as_str()
+            .unwrap()
+            .contains("setup codex"));
+    }
+}
+
+#[test]
+fn legacy_codex_transport_recommends_review_without_claiming_reception() {
+    let c = Sandbox::new_seeded("doctor-codex-legacy");
+    c.ok(&["setup", "codex", "--yes"]);
+    let path = c.0.join(".codex/hooks.json");
+    let mut hooks: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    hooks["hooks"]["SessionStart"][0]["hooks"][0]["command"] = "vivac session start --hook".into();
+    std::fs::write(&path, hooks.to_string()).unwrap();
+    let r = report(&c, Some("codex"), 0);
+    assert_eq!(check(&r, "codex SessionStart")["status"], "warning");
+}
+
+#[test]
+fn duplicate_codex_openings_are_not_reported_as_verified_transport() {
+    let c = Sandbox::new_seeded("doctor-codex-duplicate");
+    c.ok(&["setup", "codex", "--yes"]);
+    let path = c.0.join(".codex/hooks.json");
+    let mut hooks: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let mut duplicate = hooks["hooks"]["SessionStart"][0].clone();
+    duplicate["hooks"][0]["command"] = "vivac session start --hook".into();
+    hooks["hooks"]["SessionStart"]
+        .as_array_mut()
+        .unwrap()
+        .push(duplicate);
+    std::fs::write(&path, hooks.to_string()).unwrap();
+    let r = report(&c, Some("codex"), 0);
+    assert_eq!(check(&r, "codex SessionStart")["status"], "warning");
+    assert!(check(&r, "codex SessionStart")["detail"]
+        .as_str()
+        .unwrap()
+        .contains("duplicate"));
+}
+
+#[test]
+fn custom_and_executable_path_openings_are_counted_as_duplicates() {
+    for command in [
+        "vivac session start --hook --budget 1",
+        "C:/tools/vivac.exe session start --hook --budget 1",
+    ] {
+        let c = Sandbox::new_seeded("doctor-codex-custom-duplicate");
+        c.ok(&["setup", "codex", "--yes"]);
+        let path = c.0.join(".codex/hooks.json");
+        let mut hooks: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        hooks["hooks"]["SessionStart"][0]["hooks"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"type": "command", "command": command}));
+        std::fs::write(&path, hooks.to_string()).unwrap();
+        let r = report(&c, Some("codex"), 0);
+        assert_eq!(check(&r, "codex SessionStart")["status"], "warning");
+        assert!(check(&r, "codex SessionStart")["detail"]
+            .as_str()
+            .unwrap()
+            .contains("duplicate"));
+    }
+}
+
 fn snapshot(root: &Path) -> BTreeMap<String, Vec<u8>> {
     fn walk(root: &Path, at: &Path, out: &mut BTreeMap<String, Vec<u8>>) {
         for e in std::fs::read_dir(at).unwrap() {
@@ -55,6 +147,77 @@ fn check<'a>(r: &'a Value, name: &str) -> &'a Value {
 }
 
 #[test]
+fn claude_bundle_missing_edited_or_unknown_is_an_error_without_runtime_claims() {
+    for case in 0..3 {
+        let c = Sandbox::new_seeded("doctor-opening-bundle");
+        c.ok(&["setup", "claude-code", "--yes"]);
+        let r = report(&c, Some("claude-code"), 0);
+        assert_eq!(check(&r, "claude-code opening bundle")["status"], "ok");
+        assert!(check(&r, "claude-code opening bundle")["detail"]
+            .as_str()
+            .unwrap()
+            .contains("checked separately"));
+        let bundle = c.0.join(".claude/skills/vivac-opening");
+        match case {
+            0 => std::fs::remove_file(bundle.join("hooks/hooks.json")).unwrap(),
+            1 => std::fs::write(bundle.join("hooks/register.mjs"), "private-module-sentinel")
+                .unwrap(),
+            _ => std::fs::write(
+                bundle.join(".vivac-owned.json"),
+                "{\"version\":\"private-version-sentinel\"}",
+            )
+            .unwrap(),
+        }
+        let r = report(&c, Some("claude-code"), 1);
+        assert_eq!(check(&r, "claude-code opening bundle")["status"], "error");
+        assert!(!r.to_string().contains("private-module-sentinel"));
+        assert!(!r.to_string().contains("private-version-sentinel"));
+    }
+}
+
+#[test]
+fn a_missing_claude_guard_is_an_error_and_legacy_opening_is_only_a_warning() {
+    let c = Sandbox::new_seeded("doctor-opening-guard");
+    c.ok(&["setup", "claude-code", "--yes"]);
+    let path = c.0.join(".claude/settings.json");
+    let mut settings: Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    settings["hooks"]["SessionStart"] =
+        serde_json::json!([{"hooks":[{"type":"command","command":"vivac session start --hook"}]}]);
+    std::fs::write(&path, settings.to_string()).unwrap();
+    let r = report(&c, Some("claude-code"), 0);
+    assert_eq!(check(&r, "claude-code SessionStart")["status"], "warning");
+    settings["hooks"]["UserPromptSubmit"]
+        .as_array_mut()
+        .unwrap()
+        .remove(0);
+    std::fs::write(&path, settings.to_string()).unwrap();
+    let r = report(&c, Some("claude-code"), 1);
+    assert_eq!(
+        check(&r, "claude-code UserPromptSubmit guard")["status"],
+        "error"
+    );
+    assert_eq!(check(&r, "claude-code UserPromptSubmit")["status"], "ok");
+}
+
+#[test]
+fn a_guard_variant_after_the_exact_command_is_not_reported_as_configured() {
+    let c = Sandbox::new_seeded("doctor-guard-variant");
+    c.ok(&["setup", "claude-code", "--yes"]);
+    let path = c.0.join(".claude/settings.json");
+    let mut settings: Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    settings["hooks"]["UserPromptSubmit"][0]["hooks"].as_array_mut().unwrap().push(serde_json::json!({"type":"command","command":"vivac session guard --hook --private-variant"}));
+    std::fs::write(&path, settings.to_string()).unwrap();
+    let r = report(&c, Some("claude-code"), 1);
+    assert_eq!(
+        check(&r, "claude-code UserPromptSubmit guard")["status"],
+        "error"
+    );
+    assert!(!r.to_string().contains("private-variant"));
+}
+
+#[test]
 fn no_tree_reports_a_remedy_without_planting() {
     let c = Sandbox::new_empty("doctor-empty");
     let r = report(&c, None, 1);
@@ -94,7 +257,8 @@ fn configuration_is_not_execution_and_both_harnesses_are_detected() {
     let r = report(&c, None, 0);
     for name in [
         "tree",
-        "claude-code SessionStart",
+        "claude-code opening bundle",
+        "claude-code UserPromptSubmit guard",
         "codex Stop",
         "claude-code MCP",
         "codex MCP",
@@ -206,8 +370,7 @@ fn disabled_and_custom_hooks_are_not_claimed_to_work() {
     let path = c.0.join(".claude/settings.json");
     let mut v: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     v["disableAllHooks"] = true.into();
-    v["hooks"]["SessionStart"][0]["hooks"][0]["command"] =
-        "vivac session start --hook --private-content-sentinel".into();
+    v["hooks"]["SessionStart"] = serde_json::json!([{"hooks": [{"type": "command", "command": "vivac session start --hook --private-content-sentinel"}]}]);
     std::fs::write(&path, v.to_string()).unwrap();
     let r = report(&c, None, 1);
     assert_eq!(check(&r, "claude-code")["status"], "error");
@@ -221,36 +384,43 @@ fn only_valid_hook_modes_and_event_matchers_are_verified() {
     c.ok(&["setup", "claude-code", "--yes"]);
     let path = c.0.join(".claude/settings.json");
     let original: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-    for event in ["SessionStart", "UserPromptSubmit", "Stop"] {
+    for (event, index, name, code, status) in [
+        (
+            "UserPromptSubmit",
+            0,
+            "claude-code UserPromptSubmit guard",
+            1,
+            "error",
+        ),
+        (
+            "UserPromptSubmit",
+            1,
+            "claude-code UserPromptSubmit",
+            0,
+            "warning",
+        ),
+        ("Stop", 0, "claude-code Stop", 0, "warning"),
+    ] {
         for invalid in [serde_json::json!(42), serde_json::json!(null)] {
             let mut v = original.clone();
-            v["hooks"][event][0]["matcher"] = invalid;
+            v["hooks"][event][index]["matcher"] = invalid;
             std::fs::write(&path, v.to_string()).unwrap();
-            let r = report(&c, None, 0);
-            assert_eq!(
-                check(&r, &format!("claude-code {event}"))["status"],
-                "warning"
-            );
+            let r = report(&c, None, code);
+            assert_eq!(check(&r, name)["status"], status);
         }
         for invalid in [serde_json::json!("false"), serde_json::json!(true)] {
             let mut v = original.clone();
-            v["hooks"][event][0]["hooks"][0]["async"] = invalid;
+            v["hooks"][event][index]["hooks"][0]["async"] = invalid;
             std::fs::write(&path, v.to_string()).unwrap();
-            let r = report(&c, None, 0);
-            assert_eq!(
-                check(&r, &format!("claude-code {event}"))["status"],
-                "warning"
-            );
+            let r = report(&c, None, code);
+            assert_eq!(check(&r, name)["status"], status);
         }
         if event != "SessionStart" {
             let mut v = original.clone();
-            v["hooks"][event][0]["matcher"] = "startup|resume|clear|compact".into();
+            v["hooks"][event][index]["matcher"] = "startup|resume|clear|compact".into();
             std::fs::write(&path, v.to_string()).unwrap();
-            let r = report(&c, None, 0);
-            assert_eq!(
-                check(&r, &format!("claude-code {event}"))["status"],
-                "warning"
-            );
+            let r = report(&c, None, code);
+            assert_eq!(check(&r, name)["status"], status);
         }
     }
 }

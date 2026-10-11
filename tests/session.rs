@@ -7,6 +7,574 @@
 mod common;
 use common::Sandbox;
 
+const CLAUDE_MODULE_START: &[&str] = &["session", "start", "--hook", "--context", "claude-module"];
+
+fn directory_snapshot(root: &std::path::Path) -> Vec<(std::path::PathBuf, Option<Vec<u8>>)> {
+    fn visit(
+        root: &std::path::Path,
+        dir: &std::path::Path,
+        files: &mut Vec<(std::path::PathBuf, Option<Vec<u8>>)>,
+    ) {
+        if !dir.exists() {
+            return;
+        }
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            let bytes = if path.is_dir() {
+                None
+            } else {
+                Some(std::fs::read(&path).unwrap())
+            };
+            files.push((path.strip_prefix(root).unwrap().to_path_buf(), bytes));
+            if path.is_dir() {
+                visit(root, &path, files);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    visit(root, root, &mut files);
+    files.sort();
+    files
+}
+
+#[test]
+fn opening_guard_checks_receipts_without_opening_the_tree_or_home() {
+    let valid = [
+        r#"{"vivac_opening":{"protocol":"vivac.claude.opening.v1","status":"ready","generation":1}}"#,
+        r#"{"vivac_opening":{"protocol":"vivac.claude.opening.v1","status":"absent","generation":9007199254740991}}"#,
+    ];
+    let mut invalid = vec![
+        String::new(),
+        "not JSON".into(),
+        "null".into(),
+        "[]".into(),
+        "{}".into(),
+        r#"{"vivac_opening":null}"#.into(),
+    ];
+    for generation in [
+        "0",
+        "-1",
+        "1.0",
+        "true",
+        "9007199254740992",
+        "18446744073709551616",
+        "null",
+        "\"1\"",
+    ] {
+        invalid.push(format!(r#"{{"vivac_opening":{{"protocol":"vivac.claude.opening.v1","status":"ready","generation":{generation}}}}}"#));
+    }
+    for receipt in [
+        r#"{"status":"ready","generation":1}"#,
+        r#"{"protocol":"vivac.claude.opening.v2","status":"ready","generation":1}"#,
+        r#"{"protocol":"vivac.claude.opening.v1","generation":1}"#,
+        r#"{"protocol":"vivac.claude.opening.v1","status":"blocked","generation":1}"#,
+        r#"{"protocol":"vivac.claude.opening.v1","status":"rejected","generation":1}"#,
+        r#"{"protocol":"vivac.claude.opening.v1","status":"ready"}"#,
+    ] {
+        invalid.push(format!(
+            r#"{{"vivac_opening":{receipt},"content":"DO NOT REFLECT INPUT"}}"#
+        ));
+    }
+    for seeded in [false, true] {
+        let c = if seeded {
+            Sandbox::new_seeded("opening-guard")
+        } else {
+            Sandbox::new_empty("opening-guard")
+        };
+        if seeded {
+            std::fs::write(c.0.join(".vivac/config"), "unreadable config").unwrap();
+            std::fs::write(c.0.join(".vivac/events"), "unreadable log").unwrap();
+            std::fs::write(c.0.join(".vivac/index"), "existing index").unwrap();
+        }
+        let before = directory_snapshot(&c.0);
+        let home_before = directory_snapshot(c.global_home());
+        for (input, allowed) in valid
+            .iter()
+            .map(|s| (*s, true))
+            .chain(invalid.iter().map(|s| (s.as_str(), false)))
+        {
+            let (stdout, stderr, code) =
+                run_stdin_split(&c, &["session", "guard", "--hook"], input);
+            assert_eq!(code, 0, "{stdout}{stderr}");
+            assert!(stderr.is_empty(), "{stderr}");
+            let response: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+            let expected = if allowed {
+                serde_json::json!({"continue":true})
+            } else {
+                serde_json::json!({"continue":false,"stopReason":"The vivac opening module did not confirm ready context. Check the Claude integration and restart the session."})
+            };
+            assert_eq!(response, expected, "{input}");
+            assert_eq!(directory_snapshot(&c.0), before);
+            assert_eq!(directory_snapshot(c.global_home()), home_before);
+        }
+    }
+}
+
+#[test]
+fn opening_guard_requires_only_hook_mode() {
+    let c = Sandbox::new_seeded("opening-guard-usage");
+    let before = directory_snapshot(&c.0);
+    for args in [
+        vec!["session", "guard"],
+        vec!["session", "guard", "--hook", "--context", "claude-module"],
+        vec!["session", "guard", "--hook", "--dry-run"],
+    ] {
+        let (stdout, stderr, code) = run_stdin_split(&c, &args, "{}");
+        assert_ne!(code, 0, "{args:?}");
+        assert!(stdout.is_empty(), "{stdout}");
+        assert!(!stderr.is_empty());
+        assert_eq!(directory_snapshot(&c.0), before);
+    }
+}
+
+#[test]
+fn claude_module_opening_is_complete_and_byte_bounded() {
+    let c = Sandbox::new_seeded("claude-module-ready");
+    let title = "Unicode mandate: acci\u{f3}n \u{1f9ed} remains complete";
+    c.ok(&[
+        "add",
+        title,
+        "--root",
+        "--type",
+        "constraint",
+        "--why",
+        "Keep the title complete",
+    ]);
+    let (expected, code) = c.run_stdin(&["session", "start", "--hook"], "{}");
+    assert_eq!(code, 0);
+    let before = c.log().matches("session.started").count();
+    let (stdout, stderr, code) = run_stdin_split(&c, CLAUDE_MODULE_START, "{}");
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert!(stderr.is_empty(), "{stderr}");
+    let response: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(response["protocol"], "vivac.claude.opening.v1");
+    assert_eq!(response["status"], "ready");
+    let context = response["context"].as_str().unwrap();
+    assert_eq!(context, expected);
+    assert!(context.contains(title));
+    assert!(context.contains("WRITE AT THESE SEAMS"));
+    assert!(context.len() <= 60_000);
+    assert_eq!(c.log().matches("session.started").count(), before + 1);
+}
+
+#[test]
+fn claude_module_outside_a_tree_emits_absent() {
+    let c = Sandbox::new_empty("claude-module-absent");
+    let (stdout, stderr, code) = run_stdin_split(&c, CLAUDE_MODULE_START, "{}");
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert!(stderr.is_empty(), "{stderr}");
+    let response: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(
+        response,
+        serde_json::json!({"protocol":"vivac.claude.opening.v1", "status":"absent"})
+    );
+    assert!(!c.0.join(".vivac").exists());
+}
+
+#[test]
+fn bounded_openings_reject_unreadable_context_without_custody_or_receipts() {
+    for mode in ["codex", "claude-module"] {
+        for warm in [false, true] {
+            for fault in [
+                "unsupported",
+                "invalid-log",
+                "invalid-utf8",
+                "torn-tail",
+                "unreadable-log",
+                "invalid-lane",
+            ] {
+                let c = Sandbox::new_seeded("bounded-opening-failure");
+                c.ok(&[
+                    "agents",
+                    "reconcile",
+                    "--mode",
+                    "automatic",
+                    "--yes",
+                    "--why",
+                    "Preserve native agents automatically",
+                ]);
+                std::fs::create_dir_all(c.0.join(".claude/agents")).unwrap();
+                let native = c.0.join(".claude/agents/reviewer.md");
+                std::fs::write(&native, "---\nname: reviewer\ndescription: Review the change.\nmodel: sonnet\n---\nInspect the requested files.\n").unwrap();
+                if warm {
+                    c.ok(&["brief"]);
+                    assert!(c.0.join(".vivac/index").is_file());
+                } else {
+                    assert!(!c.0.join(".vivac/index").exists());
+                }
+                let events = c.0.join(".vivac/events");
+                match fault {
+                    "unsupported" => c.append_unknown_event_type(),
+                    "invalid-log" | "invalid-utf8" | "torn-tail" => {
+                        let mut bytes = std::fs::read(&events).unwrap();
+                        bytes.extend_from_slice(match fault {
+                            "invalid-log" => b"not JSON\n",
+                            "invalid-utf8" => &[0xff, b'\n'],
+                            "torn-tail" => b"{\"type\":",
+                            _ => unreachable!(),
+                        });
+                        std::fs::write(&events, bytes).unwrap();
+                    }
+                    "unreadable-log" => {
+                        std::fs::remove_file(&events).unwrap();
+                        std::fs::create_dir(&events).unwrap();
+                    }
+                    "invalid-lane" => std::fs::write(c.0.join(".vivac/lane"), "not JSON").unwrap(),
+                    _ => unreachable!(),
+                }
+                let log_before = std::fs::read(&events).ok();
+                let config_before = std::fs::read(c.0.join(".vivac/config")).unwrap();
+                let native_before = std::fs::read(&native).unwrap();
+                let (stdout, stderr, code) =
+                    run_stdin_split(&c, &["session", "start", "--hook", "--context", mode], "{}");
+                assert_eq!(code, 0, "{mode}/{fault}/{warm}: {stdout}{stderr}");
+                assert!(!stderr.is_empty(), "{mode}/{fault}/{warm}");
+                let response: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+                if mode == "claude-module" {
+                    assert_eq!(
+                        response,
+                        serde_json::json!({"protocol":"vivac.claude.opening.v1", "status":"rejected", "reason":"preparation-failed"}),
+                        "{fault}/{warm}"
+                    );
+                } else {
+                    assert_eq!(response["continue"], false);
+                    assert!(response.get("hookSpecificOutput").is_none());
+                    assert!(response["systemMessage"]
+                        .as_str()
+                        .unwrap()
+                        .contains("could not prepare the complete opening context"));
+                }
+                assert_eq!(std::fs::read(&events).ok(), log_before);
+                assert_eq!(
+                    std::fs::read(c.0.join(".vivac/config")).unwrap(),
+                    config_before
+                );
+                assert_eq!(std::fs::read(&native).unwrap(), native_before);
+                assert!(!c.0.join(".codex/agents").exists());
+                if ["invalid-log", "invalid-utf8", "torn-tail"].contains(&fault) {
+                    let (brief, code) = c.run(&["brief"]);
+                    assert_eq!(code, 0, "{brief}");
+                    assert!(brief.starts_with("vivac"), "{brief}");
+                    assert_eq!(std::fs::read(&events).ok(), log_before);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn claude_module_context_requires_a_start_hook() {
+    let c = Sandbox::new_seeded("claude-module-usage");
+    for args in [
+        vec!["session", "start", "--context", "claude-module"],
+        vec!["session", "end", "--hook", "--context", "claude-module"],
+        vec!["session", "prompt", "--hook", "--context", "claude-module"],
+        vec!["session", "start", "--hook", "--context", "wrong"],
+    ] {
+        let (stdout, _, code) = run_stdin_split(&c, &args, "{}");
+        assert_ne!(code, 0, "accepted {args:?}");
+        assert!(stdout.is_empty(), "{stdout}");
+    }
+    assert!(!c.log().contains("session.started"));
+}
+
+#[test]
+fn claude_module_unicode_overflow_rejects_before_custody_or_receipt() {
+    let c = Sandbox::new_seeded("claude-module-overflow");
+    c.ok(&[
+        "agents",
+        "reconcile",
+        "--mode",
+        "automatic",
+        "--yes",
+        "--why",
+        "Preserve native agents automatically",
+    ]);
+    std::fs::create_dir_all(c.0.join(".claude/agents")).unwrap();
+    std::fs::write(c.0.join(".claude/agents/reviewer.md"), "---\nname: reviewer\ndescription: Review the change.\nmodel: sonnet\n---\nInspect the requested files.\n").unwrap();
+    c.ok(&[
+        "add",
+        "Large mandate",
+        "--root",
+        "--type",
+        "constraint",
+        "--why",
+        "Exercise the transport ceiling",
+    ]);
+    let log = c
+        .log()
+        .lines()
+        .map(|line| {
+            let mut event: serde_json::Value = serde_json::from_str(line).unwrap();
+            if event["payload"]["title"] == "Large mandate" {
+                event["payload"]["title"] = "\u{1f9ed}".repeat(15_001).into();
+            }
+            event.to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    std::fs::write(c.0.join(".vivac/events"), &log).unwrap();
+    let (stdout, stderr, code) = run_stdin_split(&c, CLAUDE_MODULE_START, "{}");
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    let response: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(
+        response,
+        serde_json::json!({"protocol":"vivac.claude.opening.v1", "status":"rejected", "reason":"too-large"})
+    );
+    assert_eq!(c.log(), log);
+    assert!(!c.log().contains("agent.imported"));
+    assert!(!c.0.join(".codex/agents").exists());
+}
+
+#[test]
+fn unsupported_tree_rejects_the_codex_opening_with_control_json() {
+    let c = Sandbox::new_seeded("codex-unsupported-tree");
+    c.ok(&[
+        "agents",
+        "reconcile",
+        "--mode",
+        "automatic",
+        "--yes",
+        "--why",
+        "Preserve approved native agents automatically",
+    ]);
+    std::fs::create_dir_all(c.0.join(".claude/agents")).unwrap();
+    std::fs::write(c.0.join(".claude/agents/reviewer.md"), "---\nname: reviewer\ndescription: Review the change.\nmodel: sonnet\n---\nInspect the requested files.\n").unwrap();
+    c.append_unknown_event_type();
+    let before = c.log();
+    let (stdout, stderr, code) = run_stdin_split(
+        &c,
+        &["session", "start", "--hook", "--context", "codex"],
+        "{}",
+    );
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    let response: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(response["continue"], false);
+    let message = response["systemMessage"].as_str().unwrap();
+    assert!(
+        message.contains("could not prepare the complete opening context"),
+        "{message}"
+    );
+    assert!(message.contains("must not continue"), "{message}");
+    assert!(!message.contains("node.evolved"), "{message}");
+    assert!(!message.contains("60000"), "{message}");
+    assert!(stderr.contains("newer vivac"), "{stderr}");
+    assert_eq!(c.log(), before);
+    assert!(!c.log().contains("agent.imported"));
+}
+
+#[test]
+fn broken_lane_location_rejects_the_codex_opening_with_control_json() {
+    let c = Sandbox::new_seeded("codex-broken-lane");
+    let lane = c.0.join(".vivac/lane");
+    std::fs::write(&lane, "not readable lane JSON").unwrap();
+    let before = c.log();
+    let (stdout, stderr, code) = run_stdin_split(
+        &c,
+        &["session", "start", "--hook", "--context", "codex"],
+        "{}",
+    );
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    let response: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(response["continue"], false);
+    assert!(response["systemMessage"]
+        .as_str()
+        .unwrap()
+        .contains("must not continue"));
+    assert!(!stderr.is_empty());
+    assert!(!stdout.contains("not readable lane JSON"));
+    assert_eq!(
+        std::fs::read_to_string(lane).unwrap(),
+        "not readable lane JSON"
+    );
+    assert_eq!(c.log(), before);
+}
+
+#[test]
+fn codex_opening_emits_complete_json_context_and_one_receipt() {
+    let c = Sandbox::new_seeded("codex-context");
+    let title = "Unicode mandate: acción 🧭 remains complete";
+    c.ok(&[
+        "add",
+        title,
+        "--root",
+        "--type",
+        "constraint",
+        "--why",
+        "Preserve the complete title",
+    ]);
+    let (expected, expected_code) = c.run_stdin(&["session", "start", "--hook"], "{}");
+    assert_eq!(expected_code, 0, "{expected}");
+    let receipts_before = c.log().matches("session.started").count();
+    let (stdout, stderr, code) = run_stdin_split(
+        &c,
+        &["session", "start", "--hook", "--context", "codex"],
+        "{}",
+    );
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    let response: serde_json::Value = serde_json::from_str(&stdout).expect("one JSON response");
+    assert_eq!(
+        response["hookSpecificOutput"]["hookEventName"],
+        "SessionStart"
+    );
+    let context = response["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(context.contains(title), "{context}");
+    assert!(context.contains("WRITE AT THESE SEAMS"), "{context}");
+    assert_eq!(context, expected, "the transport changed the opening text");
+    assert!(context.len() <= 60_000);
+    assert_eq!(
+        c.log().matches("session.started").count(),
+        receipts_before + 1
+    );
+}
+
+#[test]
+fn codex_context_is_only_valid_for_start_hooks() {
+    let c = Sandbox::new_seeded("codex-context-usage");
+    for args in [
+        vec!["session", "start", "--context", "codex"],
+        vec!["session", "end", "--hook", "--context", "codex"],
+        vec!["session", "prompt", "--hook", "--context", "codex"],
+        vec!["session", "start", "--hook", "--context", "unknown"],
+        vec!["session", "start", "--hook", "--context"],
+    ] {
+        let (_, code) = c.run_stdin(&args, "{}");
+        assert_ne!(code, 0, "accepted {args:?}");
+    }
+    assert!(!c.log().contains("session.started"));
+}
+
+#[test]
+fn codex_opening_outside_a_tree_remains_silent() {
+    let c = Sandbox::new_empty("codex-no-tree");
+    let (stdout, stderr, code) = run_stdin_split(
+        &c,
+        &["session", "start", "--hook", "--context", "codex"],
+        "{}",
+    );
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(!c.0.join(".vivac").exists());
+}
+
+#[test]
+fn oversized_codex_opening_rejects_without_a_receipt_or_custody() {
+    let c = Sandbox::new_seeded("codex-overflow");
+    c.ok(&[
+        "agents",
+        "reconcile",
+        "--mode",
+        "automatic",
+        "--yes",
+        "--why",
+        "Preserve approved native agents automatically",
+    ]);
+    std::fs::create_dir_all(c.0.join(".claude/agents")).unwrap();
+    std::fs::write(c.0.join(".claude/agents/reviewer.md"), "---\nname: reviewer\ndescription: Review the change.\nmodel: sonnet\n---\nInspect the requested files.\n").unwrap();
+    c.ok(&[
+        "add",
+        "Large mandate",
+        "--root",
+        "--type",
+        "constraint",
+        "--why",
+        "Exercise the transport ceiling",
+    ]);
+    let log = c
+        .log()
+        .lines()
+        .map(|line| {
+            let mut event: serde_json::Value = serde_json::from_str(line).unwrap();
+            if event["payload"]["title"] == "Large mandate" {
+                event["payload"]["title"] = serde_json::Value::String("🧭".repeat(15_001));
+            }
+            event.to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    std::fs::write(c.0.join(".vivac/events"), &log).unwrap();
+    let config_before = std::fs::read(c.0.join(".vivac/config")).unwrap();
+    let native_before = std::fs::read(c.0.join(".claude/agents/reviewer.md")).unwrap();
+    let (stdout, stderr, code) = run_stdin_split(
+        &c,
+        &["session", "start", "--hook", "--context", "codex"],
+        "{}",
+    );
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    let response: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(response["continue"], false);
+    assert!(response["systemMessage"]
+        .as_str()
+        .unwrap()
+        .contains("vivac rules"));
+    assert!(response.get("hookSpecificOutput").is_none());
+    assert_eq!(c.log(), log);
+    assert_eq!(
+        std::fs::read(c.0.join(".vivac/config")).unwrap(),
+        config_before
+    );
+    assert_eq!(
+        std::fs::read(c.0.join(".claude/agents/reviewer.md")).unwrap(),
+        native_before
+    );
+    assert!(!c.0.join(".codex/agents").exists());
+}
+
+#[test]
+fn custody_notice_overflow_does_not_record_an_opening() {
+    let c = Sandbox::new_seeded("codex-notice-overflow");
+    c.ok(&[
+        "agents",
+        "reconcile",
+        "--mode",
+        "automatic",
+        "--yes",
+        "--why",
+        "Preserve native agents automatically",
+    ]);
+    let title = "Transport boundary mandate";
+    c.ok(&[
+        "add",
+        title,
+        "--root",
+        "--type",
+        "constraint",
+        "--why",
+        "Exercise the final context ceiling",
+    ]);
+    let (baseline, code) = c.run_stdin(&["session", "start", "--hook"], "{}");
+    assert_eq!(code, 0, "{baseline}");
+    let brief = baseline.split("  Agent custody: mode").next().unwrap();
+    let replacement = "X".repeat(59_990 - brief.len() + title.len());
+    let log = c
+        .log()
+        .lines()
+        .map(|line| {
+            let mut event: serde_json::Value = serde_json::from_str(line).unwrap();
+            if event["payload"]["title"] == title {
+                event["payload"]["title"] = replacement.clone().into();
+            }
+            event.to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    std::fs::write(c.0.join(".vivac/events"), &log).unwrap();
+    let (stdout, stderr, code) = run_stdin_split(
+        &c,
+        &["session", "start", "--hook", "--context", "codex"],
+        "{}",
+    );
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    let response: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(response["continue"], false);
+    assert_eq!(c.log(), log, "rejected context left an opening receipt");
+}
+
 fn how_many(vivacs: &str, kind: &str) -> usize {
     vivacs.lines().filter(|l| l.contains(kind)).count()
 }

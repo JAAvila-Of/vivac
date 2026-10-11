@@ -1315,8 +1315,17 @@ fn apply_plan(ctx: &mut Ctx, plan: &Plan) -> Result<(Value, i32), Failure> {
     crate::setup::commit(&plan.writes)?;
     if !plan.receipts.is_empty() && ctx.emit(plan.receipts.clone()).is_err() {
         let unrestored = crate::setup::rollback(&plan.writes);
+        let error = if unrestored.is_empty() {
+            "Native writes were attempted but the custody receipt failed. Inspect every destination before retrying.".to_string()
+        } else {
+            crate::setup::failure_with_rollback(
+                "Native writes were attempted but the custody receipt failed".to_string(),
+                &unrestored,
+            )
+            .message()
+        };
         return Ok((
-            json!({"applied": false, "receipt_failed": true, "rollback_attempted": true, "rollback_failed": !unrestored.is_empty(), "error": "Native writes were attempted but the custody receipt failed. Inspect every destination before retrying."}),
+            json!({"applied": false, "receipt_failed": true, "rollback_attempted": true, "rollback_failed": !unrestored.is_empty(), "error": error}),
             5,
         ));
     }

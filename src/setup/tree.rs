@@ -1423,18 +1423,18 @@ fn lane_failure_with_rollback(clause: String, unrestored: &[PathBuf]) -> Failure
     let mut message = clause;
     if unrestored.is_empty() {
         message.push_str(
-            ", so init put back everything it had already written here and in\n  \
-             the tree. Whatever this already wrote to the tree's own log stays\n  \
+            ", so init restored the planned files it had changed. Whatever this\n  \
+             already wrote to the tree's own log stays\n  \
              either way: the log only ever grows.",
         );
     } else {
-        message.push_str(", and init could not put these back as they were:\n");
+        message.push_str(", and init could not restore or remove these files:\n");
         for p in unrestored {
             message.push_str(&format!("      {}\n", p.display()));
         }
         message.push_str(
-            "  init keeps no copy on disk, so the only other copy is whatever\n  \
-             version control holds. Whatever this already wrote to the tree's own\n  \
+            "  Check version control for the original contents. Whatever this\n  \
+             already wrote to the tree's own\n  \
              log stays either way: the log only ever grows.",
         );
     }
@@ -1743,7 +1743,7 @@ mod tests {
     /// by the time a lane declaration fails, a real event can already sit
     /// in the tree's own log, which `rollback` never touches. With
     /// nothing left `rollback` could not restore, this still says
-    /// whatever `init` itself had already written came back **and** that
+    /// the planned files `init` itself had changed came back **and** that
     /// the log stays either way -- both halves, not one instead of the
     /// other.
     #[test]
@@ -1752,27 +1752,32 @@ mod tests {
             lane_failure_with_rollback("the lane could not be declared (boom)".to_string(), &[])
                 .message();
         assert!(
-            msg.contains("so init put back everything it had already written"),
+            msg.contains("so init restored the planned files it had changed"),
             "{msg}"
         );
         assert!(msg.contains("the log only ever grows"), "{msg}");
     }
 
     /// The other half: something `rollback` itself could not put back is
-    /// named, version control is pointed at as the only other copy, and
+    /// named, version control is pointed at for the original contents, and
     /// the log is still said to stay -- the same two things true at once,
     /// not a choice between them.
     #[test]
     fn lane_failure_with_rollback_with_something_unrestored_names_it_and_still_says_the_log_stays()
     {
-        let unrestored = vec![PathBuf::from("/tmp/.vivac/.gitignore")];
+        let unrestored = vec![
+            PathBuf::from("/tmp/.vivac/.gitignore"),
+            PathBuf::from("/tmp/.vivac/.gitignore.owned.tmp"),
+        ];
         let msg = lane_failure_with_rollback(
             "the lane could not be declared (boom)".to_string(),
             &unrestored,
         )
         .message();
         assert!(msg.contains("/tmp/.vivac/.gitignore"), "{msg}");
-        assert!(msg.contains("init keeps no copy on disk"), "{msg}");
+        assert!(msg.contains("/tmp/.vivac/.gitignore.owned.tmp"), "{msg}");
+        assert!(msg.contains("Check version control"), "{msg}");
+        assert!(!msg.contains("only other copy"), "{msg}");
         assert!(msg.contains("the log only ever grows"), "{msg}");
     }
 }

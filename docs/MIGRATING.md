@@ -123,6 +123,9 @@ at review, and loses the words the lessons would be found by.
 Instruction files stay as they are for now. What they say still reaches every
 session from the file, and taking that away before the tree delivers it would
 trade one gap for another.
+Use [Checking instruction delivery](INSTRUCTION-DELIVERY.md) to distinguish
+configured hooks, emitted output, received context and consultation before
+an action. Producer tests alone do not establish equivalent delivery.
 
 Agent configuration has a separate lifecycle. `vivac agents` lists project
 agents across harnesses without importing them. Use `vivac agents sync` to

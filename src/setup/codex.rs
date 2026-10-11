@@ -53,7 +53,8 @@ const CONFIG_LABEL: &str = ".codex/config.toml";
 const HOOKS_LABEL: &str = ".codex/hooks.json";
 const SKILL_LABEL: &str = ".agents/skills/vivac-migrate/SKILL.md";
 
-const SESSION_START_COMMAND: &str = "vivac session start --hook";
+const LEGACY_START_COMMAND: &str = "vivac session start --hook";
+const SESSION_START_COMMAND: &str = "vivac session start --hook --context codex";
 const SESSION_END_COMMAND: &str = "vivac session end --hook";
 const SESSION_PROMPT_COMMAND: &str = "vivac session prompt --hook";
 const SESSION_START_MATCHER: &str = "startup|resume|clear|compact";
@@ -69,6 +70,154 @@ const SESSION_START_MATCHER: &str = "startup|resume|clear|compact";
 /// its output stops matching this string byte for byte the moment there is
 /// anything to merge with -- one puts `{ "type": ..., "command": ... }` on
 /// one line and the other never does (`t592` tranche 2, piece B).
+fn start_handlers_mut(root: &mut Value) -> impl Iterator<Item = &mut Value> {
+    root.as_object_mut()
+        .into_iter()
+        .flatten()
+        .filter(|(key, _)| key == "hooks")
+        .flat_map(|(_, value)| value.as_object_mut().into_iter().flatten())
+        .filter(|(key, _)| key == "SessionStart")
+        .flat_map(|(_, value)| value.as_array_mut().into_iter().flatten())
+        .flat_map(|entry| entry.as_object_mut().into_iter().flatten())
+        .filter(|(key, _)| key == "hooks")
+        .flat_map(|(_, value)| value.as_array_mut().into_iter().flatten())
+}
+
+fn start_state(root: &Value) -> Result<(HookState, bool), Failure> {
+    let openings = root
+        .get("hooks")
+        .and_then(|value| value.get("SessionStart"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .flat_map(|entry| {
+            entry
+                .get("hooks")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+        })
+        .filter(|handler| {
+            handler
+                .get("command")
+                .and_then(Value::as_str)
+                .is_some_and(|command| super::claude_code::is_session_command(command, "start"))
+        })
+        .count();
+    if openings > 1 {
+        return Err(Failure::Model("The Codex SessionStart transport has duplicate opening commands. Review the hooks before applying setup; nothing written.".to_string()));
+    }
+    let mut found = None;
+    for entry in root
+        .get("hooks")
+        .and_then(|v| v.get("SessionStart"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        for handler in entry
+            .get("hooks")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let command = handler.get("command").and_then(Value::as_str).unwrap_or("");
+            if command != SESSION_START_COMMAND && command != LEGACY_START_COMMAND {
+                continue;
+            }
+            let legacy = command == LEGACY_START_COMMAND;
+            let limit = handler.get("additionalContextLimit");
+            let zero = matches!(limit, Some(Value::Number(n)) if n.as_u64() == Some(0));
+            let scope = entry.get("matcher").and_then(Value::as_str) == Some(SESSION_START_MATCHER);
+            let synchronous = matches!(handler.get("async"), None | Some(Value::Bool(false)));
+            if found.is_some()
+                || !scope
+                || !synchronous
+                || handler.get("type").and_then(Value::as_str) != Some("command")
+                || !(zero || (legacy && limit.is_none()))
+            {
+                return Err(Failure::Model("The Codex SessionStart transport has custom or duplicate settings. Review its command, matcher, additionalContextLimit and async settings; nothing written.".to_string()));
+            }
+            found = Some((HookState::Exact, legacy));
+        }
+    }
+    Ok(found.unwrap_or_else(|| {
+        (
+            hook_state(root, "SessionStart", "start", SESSION_START_COMMAND),
+            false,
+        )
+    }))
+}
+
+fn configure_start(root: &mut Value, missing: bool) {
+    if missing {
+        append_hook(
+            root,
+            "SessionStart",
+            SESSION_START_COMMAND,
+            Some(SESSION_START_MATCHER),
+        );
+    }
+    for handler in start_handlers_mut(root) {
+        if matches!(
+            handler.get("command").and_then(Value::as_str),
+            Some(LEGACY_START_COMMAND | SESSION_START_COMMAND)
+        ) {
+            handler.set("command", Value::str(SESSION_START_COMMAND));
+            handler.set("additionalContextLimit", Value::Number(0.into()));
+            handler.set("async", Value::Bool(false));
+        }
+    }
+}
+
+fn remove_start(root: &mut Value, command: &str) {
+    let Some(mut hooks) = root.get("hooks").cloned() else {
+        return;
+    };
+    let Some(mut entries) = hooks
+        .get("SessionStart")
+        .and_then(Value::as_array)
+        .map(<[Value]>::to_vec)
+    else {
+        return;
+    };
+    for entry in &mut entries {
+        if let Some(handlers) = entry.get("hooks").and_then(Value::as_array) {
+            let kept = handlers
+                .iter()
+                .filter(|handler| handler.get("command").and_then(Value::as_str) != Some(command))
+                .cloned()
+                .collect();
+            entry.set("hooks", Value::Array(kept));
+        }
+    }
+    entries.retain(|entry| {
+        !entry
+            .get("hooks")
+            .and_then(Value::as_array)
+            .is_some_and(|handlers| handlers.is_empty())
+            || entry.as_object().is_some_and(|fields| {
+                fields
+                    .iter()
+                    .any(|(key, _)| key != "matcher" && key != "hooks")
+            })
+    });
+    if entries.is_empty() {
+        if let Some(fields) = hooks.as_object_mut() {
+            fields.retain(|(key, _)| key != "SessionStart");
+        }
+    } else {
+        hooks.set("SessionStart", Value::Array(entries));
+    }
+    if hooks.as_object().is_some_and(|fields| fields.is_empty()) {
+        if let Some(fields) = root.as_object_mut() {
+            fields.retain(|(key, _)| key != "hooks");
+        }
+    } else {
+        root.set("hooks", hooks);
+    }
+}
+
 fn hooks_content() -> String {
     format!(
         "{{\n  \
@@ -77,7 +226,7 @@ fn hooks_content() -> String {
                {{\n        \
                  \"matcher\": \"{SESSION_START_MATCHER}\",\n        \
                  \"hooks\": [\n          \
-                   {{ \"type\": \"command\", \"command\": \"{SESSION_START_COMMAND}\" }}\n        \
+                   {{ \"type\": \"command\", \"command\": \"{SESSION_START_COMMAND}\", \"additionalContextLimit\": 0, \"async\": false }}\n        \
                  ]\n      \
                }}\n    \
              ],\n    \
@@ -311,6 +460,7 @@ fn plan_items(
     stop_hook_state: &HookState,
     prompt_hook_state: &HookState,
     start_missing: bool,
+    start_upgrade: bool,
     stop_missing: bool,
     prompt_missing: bool,
     skill_file_state: &SkillState,
@@ -338,7 +488,21 @@ fn plan_items(
         (false, true, true, true) => ("create", "three hooks"),
         (true, true, true, true) => ("add", "three hooks"),
     };
+    let (hooks_verb, hooks_what) = if start_upgrade {
+        (
+            "upgrade",
+            "the SessionStart transport; add any missing hooks listed below",
+        )
+    } else {
+        (hooks_verb, hooks_what)
+    };
     let mut hooks_item = PlanItem::new(hooks_verb, HOOKS_LABEL, hooks_what);
+    if start_upgrade {
+        hooks_item = hooks_item.with_sub(
+            "SessionStart",
+            "complete bounded JSON context; additionalContextLimit 0; synchronous",
+        );
+    }
     match start_hook_state {
         HookState::Missing => {
             hooks_item = hooks_item.with_sub("SessionStart", SESSION_START_COMMAND)
@@ -446,7 +610,7 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     let config_state = config_state_result.expect("checked above");
 
     let hooks_root = hooks.value.clone().unwrap_or_else(|| Value::object(vec![]));
-    let start_hook_state = hook_state(&hooks_root, "SessionStart", "start", SESSION_START_COMMAND);
+    let (start_hook_state, start_upgrade) = start_state(&hooks_root)?;
     let stop_hook_state = hook_state(&hooks_root, "Stop", "end", SESSION_END_COMMAND);
     let prompt_hook_state = hook_state(
         &hooks_root,
@@ -463,7 +627,7 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     );
 
     let config_needs_write = !matches!(config_state, ConfigState::Already);
-    let hooks_needs_write = start_missing || stop_missing || prompt_missing;
+    let hooks_needs_write = start_missing || start_upgrade || stop_missing || prompt_missing;
 
     let nothing_to_write = !config_needs_write
         && !hooks_needs_write
@@ -482,6 +646,7 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
                 &stop_hook_state,
                 &prompt_hook_state,
                 start_missing,
+                start_upgrade,
                 stop_missing,
                 prompt_missing,
                 &skill_file_state,
@@ -560,14 +725,7 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     if hooks_needs_write {
         if hooks.exists {
             let mut new_hooks = hooks_root.clone();
-            if start_missing {
-                append_hook(
-                    &mut new_hooks,
-                    "SessionStart",
-                    SESSION_START_COMMAND,
-                    Some(SESSION_START_MATCHER),
-                );
-            }
+            configure_start(&mut new_hooks, start_missing);
             if stop_missing {
                 append_hook(&mut new_hooks, "Stop", SESSION_END_COMMAND, None);
             }
@@ -584,7 +742,10 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
                 hooks.eol,
                 hooks.trailing_newline,
             );
-            let before = hooks_root.clone();
+            let mut before = hooks_root.clone();
+            if start_upgrade {
+                configure_start(&mut before, false);
+            }
             writes.push(super::PlannedWrite {
                 path: target.hooks.clone(),
                 action: super::Action::Write(rendered),
@@ -665,7 +826,15 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
     let config_ours = matches!(config_state, Some(ConfigUndoState::Ours));
 
     let hooks_root = hooks.value.clone().unwrap_or_else(|| Value::object(vec![]));
-    let start_hook_state = hook_state(&hooks_root, "SessionStart", "start", SESSION_START_COMMAND);
+    let (start_hook_state, start_legacy) = start_state(&hooks_root).unwrap_or((
+        HookState::Different("custom transport settings".to_string()),
+        false,
+    ));
+    let undo_start_command = if start_legacy {
+        LEGACY_START_COMMAND
+    } else {
+        SESSION_START_COMMAND
+    };
     let stop_hook_state = hook_state(&hooks_root, "Stop", "end", SESSION_END_COMMAND);
     let prompt_hook_state = hook_state(
         &hooks_root,
@@ -691,7 +860,7 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
 
     let mut preview = hooks_root.clone();
     if start_ours {
-        remove_hook(&mut preview, "SessionStart", SESSION_START_COMMAND);
+        remove_start(&mut preview, undo_start_command);
     }
     if stop_ours {
         remove_hook(&mut preview, "Stop", SESSION_END_COMMAND);
@@ -836,7 +1005,7 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
         } else {
             let mut new_hooks = hooks_root.clone();
             if start_ours {
-                remove_hook(&mut new_hooks, "SessionStart", SESSION_START_COMMAND);
+                remove_start(&mut new_hooks, undo_start_command);
             }
             if stop_ours {
                 remove_hook(&mut new_hooks, "Stop", SESSION_END_COMMAND);

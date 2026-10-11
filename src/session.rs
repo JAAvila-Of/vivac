@@ -9,8 +9,9 @@
 //! It reads the log and never writes to it, and it never fails the turn --
 //! see [`prompt`]'s own doc for the whole of that promise.
 //!
-//! `start` and `end` exit 0 and say nothing when there is no `.vivac/`. A
-//! hook that fails in every directory without a tree gets switched off
+//! Opening and closing hooks exit 0 outside a vivac tree. Legacy hooks stay
+//! silent; the experimental module producer reports absence in its protocol.
+//! A hook that fails in every directory without a tree gets switched off
 //! within two days.
 
 use crate::args::Args;
@@ -71,9 +72,39 @@ impl HookInput {
     }
 }
 
+pub fn guard() {
+    let input: serde_json::Value =
+        serde_json::from_str(hook_stdin()).unwrap_or(serde_json::Value::Null);
+    let allowed = input
+        .as_object()
+        .and_then(|input| input.get("vivac_opening"))
+        .and_then(serde_json::Value::as_object)
+        .is_some_and(|receipt| {
+            receipt.get("protocol").and_then(serde_json::Value::as_str)
+                == Some(CLAUDE_OPENING_PROTOCOL)
+                && matches!(
+                    receipt.get("status").and_then(serde_json::Value::as_str),
+                    Some("ready" | "absent")
+                )
+                && receipt
+                    .get("generation")
+                    .and_then(serde_json::Value::as_u64)
+                    .is_some_and(|generation| (1..=9_007_199_254_740_991).contains(&generation))
+        });
+    let response = if allowed {
+        serde_json::json!({"continue": true})
+    } else {
+        serde_json::json!({"continue": false, "stopReason": "The vivac opening module did not confirm ready context. Check the Claude integration and restart the session."})
+    };
+    outln!("{response}");
+}
+
 pub fn start(ctx: &mut crate::ops::Ctx, a: &Args, project: &str) -> R {
     if !a.has("hook") {
         return crate::brief::brief(&ctx.tree, &ctx.store.root, &ctx.lane_dir, a, project);
+    }
+    if matches!(a.opt("context"), Some("codex" | "claude-module")) {
+        return bounded_start(ctx, a, project);
     }
     // In hook mode the brief goes straight to stdout, in plain text: Claude
     // Code's own hook reference says plain-text stdout on `SessionStart`
@@ -122,6 +153,114 @@ pub fn start(ctx: &mut crate::ops::Ctx, a: &Args, project: &str) -> R {
             );
         }
         Err(_) => {}
+    }
+    Ok(())
+}
+
+const OPENING_CONTEXT_BYTES: usize = 60_000;
+const CLAUDE_OPENING_PROTOCOL: &str = "vivac.claude.opening.v1";
+
+pub fn claude_module_absent() {
+    outln!(
+        "{}",
+        serde_json::json!({"protocol": CLAUDE_OPENING_PROTOCOL, "status": "absent"})
+    );
+}
+
+fn claude_module_rejected(reason: &str) {
+    outln!(
+        "{}",
+        serde_json::json!({"protocol": CLAUDE_OPENING_PROTOCOL, "status": "rejected", "reason": reason})
+    );
+}
+
+pub fn opening_preparation_failed(context: &str) {
+    if context == "claude-module" {
+        claude_module_rejected("preparation-failed");
+    } else {
+        codex_preparation_failed();
+    }
+}
+
+fn opening_rejected(context: &str) {
+    if context == "claude-module" {
+        claude_module_rejected("too-large");
+    } else {
+        codex_rejected();
+    }
+}
+
+pub fn codex_preparation_failed() {
+    outln!(
+        "{}",
+        serde_json::json!({
+            "continue": false,
+            "systemMessage": "vivac could not prepare the complete opening context. This opening must not continue with missing instructions. Review the diagnostic and restore readable project context before continuing."
+        })
+    );
+}
+
+fn codex_rejected() {
+    outln!(
+        "{}",
+        serde_json::json!({
+            "continue": false,
+            "systemMessage": "vivac could not deliver the complete opening context within its 60000-byte transport limit. This opening must not proceed with partial instructions. Review vivac rules and vivac brief before continuing."
+        })
+    );
+}
+
+fn bounded_start(ctx: &mut crate::ops::Ctx, a: &Args, project: &str) -> R {
+    let context = a.opt("context").unwrap();
+    if ctx.tree.broken_lines > 0 {
+        return Err(Failure::Model("Cannot prepare complete opening context: the tree contains unreadable event lines. Run vivac check to inspect the store; restore a readable log before relying on opening context.".to_string()));
+    }
+    let mut text =
+        crate::brief::to_text(&ctx.tree, &ctx.store.root, &ctx.lane_dir, a, project, true)?;
+    if text.len() > OPENING_CONTEXT_BYTES {
+        opening_rejected(context);
+        return Ok(());
+    }
+    let shown_focus = ctx.tree.focus().map(|n| n.id.clone());
+    let shown_vivac = ctx.tree.last_vivac().map(|v| v.id.clone());
+    text.push_str(&reconciliation_text(&ctx.lane_dir));
+    if text.len() > OPENING_CONTEXT_BYTES {
+        opening_rejected(context);
+        return Ok(());
+    }
+    let hook = HookInput::read();
+    match ctx.lock_for_write() {
+        Ok(mine) => {
+            crate::ops::session_started(ctx, &hook.source, hook.session, shown_focus, shown_vivac)
+                .ok();
+            if mine {
+                ctx.unlock();
+            }
+        }
+        Err(Failure::Busy(_)) => {
+            text.push_str(&format!(
+                "  Session not recorded: another vivac process held the tree for {} seconds.\n",
+                crate::store::LOCK_DEADLINE.as_secs()
+            ));
+        }
+        Err(_) => {}
+    }
+    if text.len() > OPENING_CONTEXT_BYTES {
+        opening_rejected(context);
+        return Ok(());
+    }
+    if context == "claude-module" {
+        outln!(
+            "{}",
+            serde_json::json!({"protocol": CLAUDE_OPENING_PROTOCOL, "status": "ready", "context": text})
+        );
+    } else {
+        outln!(
+            "{}",
+            serde_json::json!({"hookSpecificOutput": {
+                "hookEventName": "SessionStart", "additionalContext": text
+            }})
+        );
     }
     Ok(())
 }
@@ -675,19 +814,27 @@ pub fn prompt(cwd: &std::path::Path, a: &Args) {
 }
 
 fn reconciliation(cwd: &std::path::Path) {
+    let text = reconciliation_text(cwd);
+    if !text.is_empty() {
+        outln!("{}", text.strip_suffix('\n').unwrap_or(&text));
+    }
+}
+
+fn reconciliation_text(cwd: &std::path::Path) -> String {
     let (report, code) = crate::agents::reconcile_for_hook(cwd);
     if report.get("policy").is_none() {
         if code > 1 && crate::store::locate(cwd).ok().flatten().is_some() {
-            outln!("  Agent custody could not complete; inspect vivac agents reconcile. Use vivac agents to inspect configuration errors.");
+            return "  Agent custody could not complete; inspect vivac agents reconcile. Use vivac agents to inspect configuration errors.\n".to_string();
         }
-        return;
+        return String::new();
     }
     let pending = report["needs_review"].as_array().map_or(0, Vec::len);
     let blocked = report["blocked"].as_array().map_or(0, Vec::len);
     if report["policy"]["mode"] == "automatic" || pending + blocked > 0 {
-        outln!("  Agent custody: mode {}; changes applied {}; needs review {}; blocked {}. Inspect vivac agents reconcile; review configuration changes with vivac agents sync.",
+        return format!("  Agent custody: mode {}; changes applied {}; needs review {}; blocked {}. Inspect vivac agents reconcile; review configuration changes with vivac agents sync.\n",
             report["policy"]["mode"].as_str().unwrap_or("manual"), report["applied"], pending, blocked);
     }
+    String::new()
 }
 
 /// [`prompt`]'s own decision, factored out so every early exit is a plain

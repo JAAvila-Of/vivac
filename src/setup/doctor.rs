@@ -122,16 +122,59 @@ fn hooks(root: &Value, harness: &str, report: &mut Report) {
     }
     for (event, word) in [
         ("SessionStart", "start"),
+        ("UserPromptSubmit", "guard"),
         ("UserPromptSubmit", "prompt"),
         ("Stop", "end"),
     ] {
-        let name = format!("{harness} {event}");
-        let expected = format!("vivac session {word} --hook");
+        if (harness == "claude-code" && word == "start") || (harness == "codex" && word == "guard")
+        {
+            continue;
+        }
+        let name = if word == "guard" {
+            format!("{harness} UserPromptSubmit guard")
+        } else {
+            format!("{harness} {event}")
+        };
+        let expected = if harness == "codex" && event == "SessionStart" {
+            "vivac session start --hook --context codex".to_string()
+        } else {
+            format!("vivac session {word} --hook")
+        };
         let entries = root
             .get("hooks")
             .and_then(|v| v.get(event))
             .and_then(Value::as_array);
-        let exact = entries.into_iter().flatten().any(|entry| {
+        if harness == "codex" && event == "SessionStart" {
+            let openings = entries
+                .into_iter()
+                .flatten()
+                .flat_map(|entry| {
+                    entry
+                        .get("hooks")
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                })
+                .filter(|handler| {
+                    handler
+                        .get("command")
+                        .and_then(Value::as_str)
+                        .is_some_and(|command| {
+                            super::claude_code::is_session_command(command, "start")
+                        })
+                })
+                .count();
+            if openings > 1 {
+                report.add(
+                    &name,
+                    "warning",
+                    "duplicate opening commands; transport not verified",
+                    Some(&fix),
+                );
+                continue;
+            }
+        }
+        let mut exact = entries.into_iter().flatten().any(|entry| {
             // The default start matcher covers every supported opening. A
             // narrower or custom matcher needs a person to judge its scope.
             let scope = match entry.get("matcher") {
@@ -153,8 +196,37 @@ fn hooks(root: &Value, harness: &str, report: &mut Report) {
                         h.get("type").and_then(Value::as_str) == Some("command")
                             && h.get("command").and_then(Value::as_str) == Some(expected.as_str())
                             && matches!(h.get("async"), None | Some(Value::Bool(false)))
+                            && (harness != "codex"
+                                || event != "SessionStart"
+                                || h.get("additionalContextLimit").and_then(Value::as_u64)
+                                    == Some(0))
                     })
         });
+        if word == "guard"
+            && entries
+                .into_iter()
+                .flatten()
+                .flat_map(|entry| {
+                    entry
+                        .get("hooks")
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                })
+                .any(|handler| {
+                    handler
+                        .get("command")
+                        .and_then(Value::as_str)
+                        .is_some_and(|command| {
+                            super::claude_code::is_session_command(command, "guard")
+                                && (command != expected
+                                    || handler.get("type").and_then(Value::as_str)
+                                        != Some("command"))
+                        })
+                })
+        {
+            exact = false;
+        }
         if exact {
             report.add(
                 &name,
@@ -174,11 +246,39 @@ fn hooks(root: &Value, harness: &str, report: &mut Report) {
                 }
                 _ => report.add(
                     &name,
-                    "warning",
-                    "custom command, matcher or execution mode; not verified",
+                    if word == "guard" { "error" } else { "warning" },
+                    if harness == "codex" && event == "SessionStart" {
+                        "custom or legacy command, matcher, context limit or execution mode; transport not verified"
+                    } else {
+                        "custom command, matcher or execution mode; not verified"
+                    },
                     Some(&fix),
                 ),
             }
+        }
+    }
+    if harness == "claude-code" {
+        let legacy = root
+            .get("hooks")
+            .and_then(|hooks| hooks.get("SessionStart"))
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .flat_map(|group| {
+                group
+                    .get("hooks")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+            })
+            .any(|handler| {
+                handler
+                    .get("command")
+                    .and_then(Value::as_str)
+                    .is_some_and(|command| super::claude_code::is_session_command(command, "start"))
+            });
+        if legacy {
+            report.add("claude-code SessionStart", "warning", "a legacy or custom opening command remains and may still execute; reception is not verified", Some(&fix));
         }
     }
 }
@@ -194,6 +294,9 @@ fn harness(here: &Path, name: &str, report: &mut Report) {
         hooks(&v, name, report);
     }
     if name == "claude-code" {
+        let bundle = super::opening_bundle::inspect(here, &super::opening_bundle::CATALOG);
+        let current = matches!(bundle, Ok(super::opening_bundle::Inspection::Intact { version, .. }) if version.version == super::opening_bundle::CURRENT.version && version.files == super::opening_bundle::CURRENT.files);
+        report.add("claude-code opening bundle", if current { "ok" } else { "error" }, if current { "current owned files are intact; module loading and context reception are checked separately" } else { "the current owned opening bundle is missing, edited or conflicting" }, if current { None } else { Some(&fix) });
         let local = here.join(".claude/settings.local.json");
         if local.exists() {
             if let Some(v) = read_json(&local, ".claude/settings.local.json", "Inspect the project's .claude/settings.local.json; it can override shared hook settings.", report) {
