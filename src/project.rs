@@ -98,6 +98,18 @@ impl Project {
         let store = store::Store::open(root.clone())?;
         let seen = store::fingerprint(&store.log());
         let log_file = File::open(store.log()).ok();
+        #[cfg(windows)]
+        let mut store = store;
+        #[cfg(windows)]
+        let read = match &log_file {
+            Some(file) => {
+                let read = crate::index::read_tracked_in(file, &store.log(), 0)?;
+                store.retain_log_reader(file);
+                read
+            }
+            None => crate::index::read_tracked(&store.log(), 0)?,
+        };
+        #[cfg(not(windows))]
         let read = crate::index::read_tracked(&store.log(), 0)?;
         let committed_broken = read.broken;
         let mut ctx = ops::Ctx::from_events(store, &read.events, committed_broken, seen, whose);
@@ -155,9 +167,20 @@ impl Project {
     /// by applying just what was appended; anything else is folded whole,
     /// as it always was.
     fn refresh_if_stale(&mut self) -> Result<(), Failure> {
+        #[cfg(windows)]
+        let recovery = self.ctx.store.needs_log_refold();
+        #[cfg(not(windows))]
+        let recovery = false;
+        // Recovery protects the fresh fold without requiring a writable lane.
+        #[cfg(windows)]
+        let _recovery_lock = if recovery && self.ctx.lock.is_none() {
+            Some(self.ctx.store.lock_for_write()?)
+        } else {
+            None
+        };
         let log_path = self.ctx.store.log();
         let now = store::fingerprint(&log_path);
-        if now == self.seen {
+        if now == self.seen && !recovery {
             return Ok(());
         }
         // A handle keeps reading the file it opened. A log that was replaced
@@ -172,7 +195,16 @@ impl Project {
         if !handle_is_current {
             self.log_file = File::open(&log_path).ok();
         }
-        let grew = now.0 >= self.fold_end
+        #[cfg(windows)]
+        let replaced = match &self.log_file {
+            Some(file) => self.ctx.store.reader_changed(file)?,
+            None => self.ctx.store.has_log_reader(),
+        };
+        #[cfg(not(windows))]
+        let replaced = false;
+        let grew = !recovery
+            && !replaced
+            && now.0 >= self.fold_end
             && match &self.last {
                 Some(last) => match &self.log_file {
                     Some(f) => crate::index::event_still_at_in(f, last),
@@ -201,13 +233,34 @@ impl Project {
                 self.last = tail.last;
             }
             self.ctx.seen = now;
+            #[cfg(windows)]
+            if let Some(file) = &self.log_file {
+                self.ctx.store.retain_log_reader(file);
+            }
         } else {
-            let store = store::Store::open(self.root.clone())?;
+            let store = if recovery {
+                store::Store::open_strict(self.root.clone())?
+            } else {
+                store::Store::open(self.root.clone())?
+            };
+            #[cfg(windows)]
+            let mut store = store;
             let store_log = store.log();
             // A whole fold is starting from scratch over the file as it
             // stands right now, so the reader does too.
             self.log_file = File::open(&store_log).ok();
+            #[cfg(windows)]
+            if recovery && self.log_file.is_none() {
+                return Err(Failure::Io(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "The event log is missing during authoritative recovery.",
+                )));
+            }
             let read = self.tracked(&store_log, 0)?;
+            #[cfg(windows)]
+            if let Some(file) = &self.log_file {
+                store.retain_log_reader(file);
+            }
             self.committed_broken = read.broken;
             self.ctx
                 .refold(store, &read.events, self.committed_broken, now);
@@ -258,7 +311,7 @@ impl Project {
         &mut self,
         f: impl FnOnce(&mut ops::Ctx) -> Result<T, Failure>,
     ) -> Result<T, Failure> {
-        self.ctx.lock_for_write()?;
+        self.ctx.lock_for_project_write()?;
         let result = self.locked_write(f);
         self.ctx.unlock();
         result
@@ -274,6 +327,7 @@ impl Project {
         f: impl FnOnce(&mut ops::Ctx) -> Result<T, Failure>,
     ) -> Result<T, Failure> {
         self.refresh_if_stale()?;
+        self.ctx.check_write_lane()?;
         self.ctx.wrote = None;
         let result = f(&mut self.ctx);
         // What `f` appended is already applied to the tree (`Ctx::emit`),
@@ -634,6 +688,143 @@ fn assign_names_and_slugs(roots: &[PathBuf], store_dir: Option<&Path>) -> Vec<(S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn a_retained_log_reader_tracks_external_appends_and_truncation() {
+        let root = crate::artifacts::standalone_root("reader-refresh");
+        let mut store = store::Store::create(&root).unwrap();
+        let body = || crate::event::Body::NodeNoted {
+            node: "n".into(),
+            note: "selected".into(),
+        };
+        let lock = store.lock_for_write().unwrap();
+        let first = store
+            .append(&lock, crate::lane::MAIN, vec![body()], 0, false)
+            .unwrap();
+        drop(lock);
+        let mut project = Project::open(
+            root.clone(),
+            "fixture".into(),
+            "fixture".into(),
+            ops::Whose::Founding,
+        )
+        .unwrap();
+        let lock = store.lock_for_write().unwrap();
+        store
+            .append(&lock, crate::lane::MAIN, vec![body()], 1, false)
+            .unwrap();
+        drop(lock);
+        project.write(|ctx| ctx.emit(vec![body()])).unwrap();
+        assert_eq!(
+            project
+                .log
+                .iter()
+                .map(|event| event.seq)
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+        let mut truncated = first.events.into_iter().next().unwrap();
+        truncated.seq = 10;
+        let mut bytes = serde_json::to_vec(&truncated).unwrap();
+        bytes.push(b'\n');
+        std::fs::write(store.log(), bytes).unwrap();
+        project.write(|ctx| ctx.emit(vec![body()])).unwrap();
+        assert_eq!(
+            project
+                .log
+                .iter()
+                .map(|event| event.seq)
+                .collect::<Vec<_>>(),
+            vec![10, 11]
+        );
+        assert_eq!(project.ctx.tree.seq, 11);
+        drop(project);
+        drop(store);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_resident_write_rejects_an_identically_stamped_replacement_before_refolding() {
+        let root = crate::artifacts::standalone_root("replaced-resident");
+        let mut store = store::Store::create(&root).unwrap();
+        let log = store.log();
+        let lock = store.lock_for_write().unwrap();
+        store
+            .append(
+                &lock,
+                crate::lane::MAIN,
+                vec![crate::event::Body::NodeNoted {
+                    node: "n".into(),
+                    note: "old".into(),
+                }],
+                9,
+                false,
+            )
+            .unwrap();
+        drop(lock);
+        let mut project = Project::open(
+            root.clone(),
+            "fixture".into(),
+            "fixture".into(),
+            ops::Whose::Founding,
+        )
+        .unwrap();
+        let stamp = std::fs::metadata(&log).unwrap().modified().unwrap();
+        let fingerprint = store::fingerprint(&log);
+        let (mut events, _) = store.read_all().unwrap();
+        events[0].seq = 20;
+        events[0].payload = crate::event::Body::NodeNoted {
+            node: "n".into(),
+            note: "new".into(),
+        };
+        let mut replacement = serde_json::to_vec(&events[0]).unwrap();
+        replacement.push(b'\n');
+        store::replace_whole(&log, &root.join("replacement"), &replacement).unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&log)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(stamp))
+            .unwrap();
+        assert_eq!(store::fingerprint(&log), fingerprint);
+        let config = root.join(store::DIR).join(store::CONFIG);
+        let config_before = std::fs::read(&config).unwrap();
+        let body = || crate::event::Body::NodeNoted {
+            node: "n".into(),
+            note: "next".into(),
+        };
+        let marker_body = crate::event::Body::ArtifactCaptured {
+            artifact: crate::id::ulid(),
+            revision: crate::id::ulid(),
+            operation: crate::id::ulid(),
+            producer: "n".into(),
+            previous: None,
+            source: "mockup.html".into(),
+            site: crate::id::ulid(),
+            size: 0,
+            digest: "0".repeat(64),
+            object: "objects/rejected.blob".into(),
+        };
+        assert!(
+            project.write(|ctx| ctx.emit(vec![marker_body])).is_err(),
+            "a replacement was appended using the previous tree"
+        );
+        assert_eq!(std::fs::read(&log).unwrap(), replacement);
+        assert_eq!(std::fs::read(&config).unwrap(), config_before);
+        assert!(!project.ctx.holds_write_lock());
+        project.write(|ctx| ctx.emit(vec![body()])).unwrap();
+        let (recorded, broken) = store.read_all().unwrap();
+        assert_eq!(broken, 0);
+        assert_eq!(
+            recorded.iter().map(|event| event.seq).collect::<Vec<_>>(),
+            vec![20, 21]
+        );
+        assert_eq!(project.log.len(), 2);
+        drop(project);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     fn slugs_of(pairs: Vec<(String, String)>) -> Vec<String> {
         pairs.into_iter().map(|(_, slug)| slug).collect()

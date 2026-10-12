@@ -508,6 +508,7 @@ Not there yet: team mode. The project is in `0.x` and
 | [**Versioning**](docs/VERSIONING.md) | what breaks when, and what keeps `1.0` away |
 | [**Where it sits**](docs/POSITION.md) | what each category of tool stores, and where each is better than this |
 | [**Pillars**](docs/PILLARS.md) | the four arbiters every decision here is judged against |
+| [**Artifact custody**](docs/ARTIFACTS.md) | retain selected local text deliveries, reference exact revisions and recover their bytes |
 
 ## Licence
 

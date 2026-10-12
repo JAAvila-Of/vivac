@@ -18,6 +18,7 @@ use crate::anchor;
 use crate::failure::Failure;
 use crate::{clock, id};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
@@ -207,6 +208,7 @@ pub enum ConfigVersion {
     Lanes,
     Agents,
     AgentAutomation,
+    Artifacts,
 }
 
 /// The sentence a config's `version` becomes the moment its tree gains a
@@ -231,6 +233,9 @@ pub const AGENT_SENTENCE: &str =
 pub const AGENT_AUTOMATION_SENTENCE: &str =
     "this tree holds automatic agent reconciliation, and this vivac is too old to read it: update vivac";
 
+pub const ARTIFACT_SENTENCE: &str =
+    "this tree holds artifact custody, and this vivac is too old to read it: update vivac";
+
 impl Serialize for ConfigVersion {
     fn serialize<S>(&self, s: S) -> Result<S::Ok, S::Error>
     where
@@ -242,6 +247,7 @@ impl Serialize for ConfigVersion {
             ConfigVersion::Lanes => s.serialize_str(LANE_SENTENCE),
             ConfigVersion::Agents => s.serialize_str(AGENT_SENTENCE),
             ConfigVersion::AgentAutomation => s.serialize_str(AGENT_AUTOMATION_SENTENCE),
+            ConfigVersion::Artifacts => s.serialize_str(ARTIFACT_SENTENCE),
         }
     }
 }
@@ -265,6 +271,7 @@ impl<'de> Deserialize<'de> for ConfigVersion {
             serde_json::Value::String(s) if s == AGENT_AUTOMATION_SENTENCE => {
                 Ok(ConfigVersion::AgentAutomation)
             }
+            serde_json::Value::String(s) if s == ARTIFACT_SENTENCE => Ok(ConfigVersion::Artifacts),
             _ => Err(serde::de::Error::custom("unsupported config version")),
         }
     }
@@ -328,6 +335,210 @@ pub struct Store {
     /// there, and then had it moved out from underneath it, fails instead
     /// of silently starting a fresh one in its place.
     log_present: bool,
+    capture_log: Option<CaptureLog>,
+    #[cfg(windows)]
+    log_reader: Option<File>,
+    #[cfg(windows)]
+    reader_identity: Option<(u64, [u8; 16])>,
+    #[cfg(windows)]
+    needs_refold: bool,
+}
+
+struct CaptureLog {
+    reader: File,
+    identity: Option<(u64, [u8; 16])>,
+    checkpoint: CaptureCheckpoint,
+    rejected: bool,
+}
+
+#[derive(Clone, Copy)]
+struct CaptureCheckpoint {
+    offset: u64,
+    line_start: u64,
+    digest: [u8; 32],
+    terminated: bool,
+    blank: bool,
+}
+
+impl Default for CaptureCheckpoint {
+    fn default() -> Self {
+        Self {
+            offset: 0,
+            line_start: 0,
+            digest: Sha256::digest([]).into(),
+            terminated: true,
+            blank: true,
+        }
+    }
+}
+
+impl CaptureCheckpoint {
+    fn observe(&mut self, bytes: &[u8]) {
+        self.line_start = self.offset;
+        self.offset += bytes.len() as u64;
+        self.digest = Sha256::digest(bytes).into();
+        self.terminated = bytes.last() == Some(&b'\n');
+        self.blank = std::str::from_utf8(bytes).is_ok_and(|line| line.trim().is_empty());
+    }
+}
+
+const CAPTURE_TAIL_BYTES: usize = 64 * 1024;
+const CAPTURE_TAIL_EVENTS: usize = 64;
+
+fn capture_reload_error() -> std::io::Error {
+    std::io::Error::other(
+        "Artifact capture cannot refresh this log safely; reload a fresh capture context.",
+    )
+}
+
+fn capture_writer(path: &Path) -> std::io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true).append(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.access_mode(0x0012_0194);
+    }
+    options.open(path)
+}
+
+fn hash_log_range(reader: &mut File, start: u64, end: u64) -> std::io::Result<Sha256> {
+    let length = end.checked_sub(start).ok_or_else(capture_reload_error)?;
+    if length > CAPTURE_LINE_LIMIT as u64 {
+        return Err(capture_reload_error());
+    }
+    reader.seek(SeekFrom::Start(start))?;
+    let mut remaining = length;
+    let mut digest = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    while remaining > 0 {
+        let count = remaining.min(buffer.len() as u64) as usize;
+        reader.read_exact(&mut buffer[..count])?;
+        digest.update(&buffer[..count]);
+        remaining -= count as u64;
+    }
+    Ok(digest)
+}
+
+impl CaptureLog {
+    fn verify_writer(&self, writer: &File, length: u64) -> std::io::Result<()> {
+        if self.rejected
+            || self.identity.is_none()
+            || Some(log_identity(writer)?) != self.identity
+            || self.reader.metadata()?.len() != length
+            || length < self.checkpoint.offset
+        {
+            return Err(capture_reload_error());
+        }
+        Ok(())
+    }
+
+    fn refresh(&mut self, path: &Path) -> Result<Vec<crate::event::Event>, Failure> {
+        let writer = capture_writer(path)?;
+        let length = writer.metadata()?.len();
+        self.verify_writer(&writer, length)?;
+        let checkpoint = self.checkpoint;
+        let prefix = hash_log_range(&mut self.reader, checkpoint.line_start, checkpoint.offset)?;
+        let actual: [u8; 32] = prefix.clone().finalize().into();
+        if actual != checkpoint.digest || length - checkpoint.offset > CAPTURE_TAIL_BYTES as u64 {
+            return Err(capture_reload_error().into());
+        }
+        if length == checkpoint.offset {
+            return Ok(Vec::new());
+        }
+        self.reader.seek(SeekFrom::Start(checkpoint.offset))?;
+        let mut tail = Vec::with_capacity(CAPTURE_TAIL_BYTES + 1);
+        (&mut self.reader)
+            .take((CAPTURE_TAIL_BYTES + 1) as u64)
+            .read_to_end(&mut tail)?;
+        if tail.len() > CAPTURE_TAIL_BYTES
+            || tail.len() as u64 != length - checkpoint.offset
+            || tail.last() != Some(&b'\n')
+            || (!checkpoint.terminated && (!checkpoint.blank || tail.first() != Some(&b'\n')))
+        {
+            return Err(capture_reload_error().into());
+        }
+        let mut events = Vec::with_capacity(CAPTURE_TAIL_EVENTS);
+        let mut excessive = false;
+        let broken = visit_events(&mut std::io::Cursor::new(&tail), true, |event| {
+            if events.len() < CAPTURE_TAIL_EVENTS {
+                events.push(event);
+            } else {
+                excessive = true;
+            }
+        })
+        .map_err(|_| capture_reload_error())?;
+        if broken != 0 || excessive {
+            return Err(capture_reload_error().into());
+        }
+        let last_start = tail[..tail.len() - 1]
+            .iter()
+            .rposition(|byte| *byte == b'\n')
+            .map_or(0, |position| position + 1);
+        let next = if last_start == 0 && !checkpoint.terminated {
+            if checkpoint.offset - checkpoint.line_start + tail.len() as u64
+                > CAPTURE_LINE_LIMIT as u64
+            {
+                return Err(capture_reload_error().into());
+            }
+            let mut digest = prefix;
+            digest.update(&tail);
+            CaptureCheckpoint {
+                offset: length,
+                line_start: checkpoint.line_start,
+                digest: digest.finalize().into(),
+                terminated: true,
+                blank: true,
+            }
+        } else {
+            let mut next = CaptureCheckpoint {
+                offset: checkpoint.offset + last_start as u64,
+                ..checkpoint
+            };
+            next.observe(&tail[last_start..]);
+            next
+        };
+        self.checkpoint = next;
+        Ok(events)
+    }
+}
+
+#[cfg(unix)]
+fn log_identity(file: &File) -> std::io::Result<(u64, [u8; 16])> {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = file.metadata()?;
+    let mut identifier = [0u8; 16];
+    identifier[..8].copy_from_slice(&metadata.ino().to_le_bytes());
+    Ok((metadata.dev(), identifier))
+}
+
+#[cfg(not(any(unix, windows)))]
+fn log_identity(_: &File) -> std::io::Result<(u64, [u8; 16])> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "Physical log identity is unavailable.",
+    ))
+}
+
+#[cfg(windows)]
+fn log_identity(file: &File) -> std::io::Result<(u64, [u8; 16])> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FileIdInfo, GetFileInformationByHandleEx, FILE_ID_INFO,
+    };
+    let mut info = FILE_ID_INFO::default();
+    let ok = unsafe {
+        GetFileInformationByHandleEx(
+            file.as_raw_handle(),
+            FileIdInfo,
+            (&mut info as *mut FILE_ID_INFO).cast(),
+            std::mem::size_of::<FILE_ID_INFO>() as u32,
+        )
+    };
+    if ok == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok((info.VolumeSerialNumber, info.FileId.Identifier))
 }
 
 /// Walks up from `from_dir` looking for a `.vivac/`. No daemon and no environment
@@ -965,6 +1176,130 @@ pub fn first_event_id(root: &Path) -> Option<String> {
 }
 
 impl Store {
+    #[cfg(windows)]
+    pub(crate) fn needs_log_refold(&self) -> bool {
+        self.needs_refold
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn has_log_reader(&self) -> bool {
+        self.log_reader.is_some()
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn reader_changed(&mut self, file: &File) -> std::io::Result<bool> {
+        match self.reader_identity {
+            Some(old) => match log_identity(file) {
+                Ok(identity) => Ok(identity != old),
+                Err(error) => {
+                    self.needs_refold = true;
+                    Err(error)
+                }
+            },
+            None => Ok(false),
+        }
+    }
+
+    /// Retains only a reader whose bytes have just supplied the authoritative fold.
+    #[cfg(windows)]
+    pub(crate) fn retain_log_reader(&mut self, file: &File) {
+        match log_identity(file)
+            .and_then(|identity| file.try_clone().map(|reader| (identity, reader)))
+        {
+            Ok((identity, reader)) => {
+                self.log_reader = Some(reader);
+                self.reader_identity = Some(identity);
+            }
+            Err(_) => {
+                self.log_reader = None;
+                self.reader_identity = None;
+            }
+        }
+        self.needs_refold = false;
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn read_authoritative(
+        &mut self,
+    ) -> Result<(Vec<crate::event::Event>, usize), Failure> {
+        let path = self.log();
+        let file = match File::open(&path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound && !self.log_present => {
+                return Ok((Vec::new(), 0));
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let read = crate::index::read_tracked_in(&file, &path, 0)?;
+        self.retain_log_reader(&file);
+        Ok((read.events, read.broken + usize::from(read.unterminated)))
+    }
+
+    pub(crate) fn fold_for_capture(&mut self) -> Result<crate::model::Tree, Failure> {
+        let file = File::open(self.log())?;
+        let mut tree = crate::model::Tree::default();
+        let mut checkpoint = CaptureCheckpoint::default();
+        let broken = visit_events_observed(
+            &mut BufReader::new(&file),
+            true,
+            |event| {
+                tree.apply(event.seq, &event.ts, &event.lane, &event.payload);
+            },
+            |bytes| checkpoint.observe(bytes),
+        )?;
+        tree.broken_lines = broken;
+        tree.sort_nodes();
+        let identity = log_identity(&file).ok();
+        self.capture_log = Some(CaptureLog {
+            reader: file,
+            identity,
+            checkpoint,
+            rejected: false,
+        });
+        #[cfg(windows)]
+        {
+            self.log_reader = None;
+            self.reader_identity = None;
+            self.needs_refold = false;
+        }
+        Ok(tree)
+    }
+
+    pub(crate) fn refresh_capture(
+        &mut self,
+        lock: &WriteLock,
+        changed_date_without_growth: bool,
+    ) -> Result<Vec<crate::event::Event>, Failure> {
+        if !lock.covers(&self.lock_path()) {
+            return Err(capture_reload_error().into());
+        }
+        let path = self.log();
+        let capture = self.capture_log.as_mut().ok_or_else(capture_reload_error)?;
+        if changed_date_without_growth {
+            capture.rejected = true;
+            return Err(capture_reload_error().into());
+        }
+        match capture.refresh(&path) {
+            Ok(events) => Ok(events),
+            Err(error) => {
+                capture.rejected = true;
+                let kind = match error {
+                    Failure::Io(error) => error.kind(),
+                    _ => std::io::ErrorKind::Other,
+                };
+                Err(std::io::Error::new(kind, capture_reload_error().to_string()).into())
+            }
+        }
+    }
+
+    pub(crate) fn capture_seen(&self) -> Result<(u64, Option<std::time::SystemTime>), Failure> {
+        let capture = self.capture_log.as_ref().ok_or_else(capture_reload_error)?;
+        Ok((
+            capture.checkpoint.offset,
+            capture.reader.metadata()?.modified().ok(),
+        ))
+    }
+
     /// Opens existing authority without rebuilding configuration or derived files.
     pub(crate) fn open_strict(root: PathBuf) -> Result<Store, Failure> {
         let config = fs::read_to_string(root.join(DIR).join(CONFIG))
@@ -979,6 +1314,13 @@ impl Store {
             root,
             config,
             log_present: true,
+            capture_log: None,
+            #[cfg(windows)]
+            log_reader: None,
+            #[cfg(windows)]
+            reader_identity: None,
+            #[cfg(windows)]
+            needs_refold: false,
         })
     }
 
@@ -1027,6 +1369,13 @@ impl Store {
             root,
             config,
             log_present,
+            capture_log: None,
+            #[cfg(windows)]
+            log_reader: None,
+            #[cfg(windows)]
+            reader_identity: None,
+            #[cfg(windows)]
+            needs_refold: false,
         })
     }
 
@@ -1059,6 +1408,13 @@ impl Store {
             root,
             config,
             log_present,
+            capture_log: None,
+            #[cfg(windows)]
+            log_reader: None,
+            #[cfg(windows)]
+            reader_identity: None,
+            #[cfg(windows)]
+            needs_refold: false,
         })
     }
 
@@ -1098,6 +1454,13 @@ impl Store {
             root: root.to_path_buf(),
             config,
             log_present: true,
+            capture_log: None,
+            #[cfg(windows)]
+            log_reader: None,
+            #[cfg(windows)]
+            reader_identity: None,
+            #[cfg(windows)]
+            needs_refold: false,
         })
     }
 
@@ -1221,6 +1584,7 @@ fn check_config_version(version: Option<&serde_json::Value>) -> Result<(), Failu
         Some(serde_json::Value::String(s)) if s == LANE_SENTENCE => Ok(()),
         Some(serde_json::Value::String(s)) if s == AGENT_SENTENCE => Ok(()),
         Some(serde_json::Value::String(s)) if s == AGENT_AUTOMATION_SENTENCE => Ok(()),
+        Some(serde_json::Value::String(s)) if s == ARTIFACT_SENTENCE => Ok(()),
         Some(serde_json::Value::String(s)) => Err(Failure::newer_vivac(format!(
             "This tree was written by a newer vivac: its config says {s:?}. Update vivac \
              to read it. A session or vivac web opened before an update keeps the old \
@@ -1248,6 +1612,8 @@ fn regenerated_version(root: &Path) -> ConfigVersion {
     let mut governed = false;
     let mut lanes = false;
     let mut agents = false;
+    let mut automatic_agents = false;
+    let mut artifacts = false;
     for line in BufReader::new(f).lines().map_while(Result::ok) {
         if line.trim().is_empty() {
             continue;
@@ -1257,9 +1623,10 @@ fn regenerated_version(root: &Path) -> ConfigVersion {
         };
         match v["payload"]["type"].as_str() {
             Some("lane.declared") | Some("lane.claimed") => lanes = true,
-            Some("agent.automation.configured") => return ConfigVersion::AgentAutomation,
+            Some("artifact.captured") => artifacts = true,
+            Some("agent.automation.configured") => automatic_agents = true,
             Some("agent.recorded") if v["payload"]["definition"]["prompt"].is_object() => {
-                return ConfigVersion::AgentAutomation
+                automatic_agents = true
             }
             Some(tag) if tag.starts_with("agent.") => agents = true,
             Some("node.created")
@@ -1270,7 +1637,11 @@ fn regenerated_version(root: &Path) -> ConfigVersion {
             _ => {}
         }
     }
-    if agents {
+    if artifacts {
+        ConfigVersion::Artifacts
+    } else if automatic_agents {
+        ConfigVersion::AgentAutomation
+    } else if agents {
         ConfigVersion::Agents
     } else if lanes {
         ConfigVersion::Lanes
@@ -1308,22 +1679,40 @@ pub struct Appended {
     pub end_offset: u64,
 }
 
-/// Whether `path`'s log already ends with `\n`, so `append` knows whether
-/// it can write straight behind it or has to close the torn line first
-/// (`f604`). One open plus one seek to the log's own end and one byte read
-/// back -- never a read of what came before it, so this stays flat no
-/// matter how long the log has grown. An empty log has no line to tear, so
-/// it answers `true`.
-fn log_ends_with_newline(path: &Path) -> std::io::Result<bool> {
-    let mut f = File::open(path)?;
-    let len = f.metadata()?.len();
-    if len == 0 {
-        return Ok(true);
-    }
-    f.seek(SeekFrom::End(-1))?;
-    let mut last = [0u8; 1];
-    f.read_exact(&mut last)?;
-    Ok(last[0] == b'\n')
+#[cfg(test)]
+std::thread_local! {
+    static APPEND_PROFILE: std::cell::RefCell<Option<(std::time::Instant, [std::time::Duration; 6])>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn append_profile_start() {
+    APPEND_PROFILE.with(|profile| {
+        if let Some((last, _)) = profile.borrow_mut().as_mut() {
+            *last = std::time::Instant::now();
+        }
+    });
+}
+
+#[cfg(test)]
+fn append_profile_step(index: usize) {
+    APPEND_PROFILE.with(|profile| {
+        if let Some((last, phases)) = profile.borrow_mut().as_mut() {
+            let now = std::time::Instant::now();
+            phases[index] += now.duration_since(*last);
+            *last = now;
+        }
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn profile_append<T>(f: impl FnOnce() -> T) -> (T, [std::time::Duration; 6]) {
+    APPEND_PROFILE.with(|profile| {
+        assert!(profile.borrow().is_none());
+        *profile.borrow_mut() = Some((std::time::Instant::now(), [std::time::Duration::ZERO; 6]));
+    });
+    let result = f();
+    let phases = APPEND_PROFILE.with(|profile| profile.borrow_mut().take().unwrap().1);
+    (result, phases)
 }
 
 impl Store {
@@ -1388,7 +1777,21 @@ impl Store {
         if !lock.covers(&self.lock_path()) {
             return Err(std::io::Error::other("write lock does not cover this tree"));
         }
-        self.lock_if_needed(&body, tree_already_governed)?;
+        if self
+            .capture_log
+            .as_ref()
+            .is_some_and(|capture| capture.rejected || capture.identity.is_none())
+        {
+            return Err(capture_reload_error());
+        }
+        #[cfg(windows)]
+        if self.needs_refold {
+            return Err(std::io::Error::other(
+                "The event log requires a fresh authoritative fold before writing.",
+            ));
+        }
+        #[cfg(test)]
+        append_profile_start();
         let mut buf = String::with_capacity(256 * body.len());
         let mut written = Vec::with_capacity(body.len());
         let mut last_line_start = 0usize;
@@ -1414,29 +1817,139 @@ impl Store {
         // already lost. Checked with one seek and one byte read from the
         // log's own end, never a read of what came before it, so the cost
         // stays flat as the log grows: `append`'s budget is p99 < 5 ms.
-        let needs_newline_first = self.log_present && !log_ends_with_newline(&self.log())?;
-        let mut f = OpenOptions::new()
-            .create(!self.log_present)
-            .append(true)
-            .open(self.log())?;
-        let previous_len = f.metadata()?.len();
+        #[cfg(test)]
+        append_profile_step(0);
+        let opened = (|| -> std::io::Result<(File, u64, bool)> {
+            let mut options = OpenOptions::new();
+            options.read(true).create(!self.log_present).append(true);
+            #[cfg(windows)]
+            if self.log_reader.is_some() || self.capture_log.is_some() {
+                use std::os::windows::fs::OpenOptionsExt;
+                // Append rights plus read attributes, without read data.
+                options.access_mode(0x0012_0194);
+            }
+            let mut f = options.open(self.log())?;
+            #[cfg(test)]
+            append_profile_step(1);
+            let previous_len = f.metadata()?.len();
+            #[cfg(test)]
+            append_profile_step(2);
+            if let Some(capture) = &self.capture_log {
+                capture.verify_writer(&f, previous_len)?;
+                if previous_len != capture.checkpoint.offset {
+                    return Err(capture_reload_error());
+                }
+            }
+            #[cfg(windows)]
+            if let Some(reader) = self.log_reader.as_mut() {
+                if Some(log_identity(&f)?) != self.reader_identity
+                    || reader.metadata()?.len() != previous_len
+                {
+                    return Err(std::io::Error::other(
+                        "The event log changed identity; a fresh authoritative fold is required.",
+                    ));
+                }
+            }
+            let needs_newline_first = if self.log_present && previous_len > 0 {
+                let tail = if let Some(capture) = self.capture_log.as_mut() {
+                    &mut capture.reader
+                } else {
+                    #[cfg(windows)]
+                    let tail = self.log_reader.as_mut().unwrap_or(&mut f);
+                    #[cfg(not(windows))]
+                    let tail = &mut f;
+                    tail
+                };
+                tail.seek(SeekFrom::End(-1))?;
+                let mut last = [0u8; 1];
+                tail.read_exact(&mut last)?;
+                last[0] != b'\n'
+            } else {
+                false
+            };
+            #[cfg(test)]
+            append_profile_step(3);
+            Ok((f, previous_len, needs_newline_first))
+        })();
+        let (mut f, previous_len, needs_newline_first) = match opened {
+            Ok(opened) => opened,
+            Err(error) => {
+                if let Some(capture) = &mut self.capture_log {
+                    capture.rejected = true;
+                }
+                #[cfg(windows)]
+                if self.log_reader.is_some() {
+                    self.needs_refold = true;
+                }
+                return Err(error);
+            }
+        };
+        if needs_newline_first
+            && self.capture_log.as_ref().is_some_and(|capture| {
+                capture.checkpoint.offset - capture.checkpoint.line_start
+                    >= CAPTURE_LINE_LIMIT as u64
+            })
+        {
+            if let Some(capture) = &mut self.capture_log {
+                capture.rejected = true;
+            }
+            return Err(capture_reload_error());
+        }
+        self.lock_if_needed(
+            written.iter().map(|event| &event.payload),
+            tree_already_governed,
+        )?;
         let prefix_len: u64 = if needs_newline_first {
-            f.write_all(b"\n")?;
+            if let Err(error) = f.write_all(b"\n") {
+                if let Some(capture) = &mut self.capture_log {
+                    capture.rejected = true;
+                }
+                return Err(error);
+            }
             1
         } else {
             0
         };
-        f.write_all(buf.as_bytes())?;
+        if let Err(error) = f.write_all(buf.as_bytes()) {
+            if let Some(capture) = &mut self.capture_log {
+                capture.rejected = true;
+            }
+            return Err(error);
+        }
+        #[cfg(test)]
+        append_profile_step(4);
         self.log_present = true;
         if !written.is_empty() {
             mark_write();
         }
-        Ok(Appended {
+        let appended = Appended {
             previous_len,
             last_line_offset: previous_len + prefix_len + last_line_start as u64,
             end_offset: previous_len + prefix_len + buf.len() as u64,
             events: written,
-        })
+        };
+        if let Some(capture) = &mut self.capture_log {
+            if !buf.is_empty() {
+                capture.checkpoint.offset = previous_len + prefix_len + last_line_start as u64;
+                capture
+                    .checkpoint
+                    .observe(&buf.as_bytes()[last_line_start..]);
+            } else if prefix_len != 0 {
+                let end = appended.end_offset;
+                let digest =
+                    hash_log_range(&mut capture.reader, capture.checkpoint.line_start, end)?;
+                capture.checkpoint.offset = end;
+                capture.checkpoint.digest = digest.finalize().into();
+                capture.checkpoint.terminated = true;
+            }
+        }
+        #[cfg(test)]
+        {
+            append_profile_start();
+            drop(f);
+            append_profile_step(5);
+        }
+        Ok(appended)
     }
 
     /// `d444`: locks the config in place the moment this tree gains its
@@ -1444,13 +1957,30 @@ impl Store {
     /// appended. A no-op once the config is already locked, and a no-op for
     /// every write that neither creates a pillar or a rule nor lands on a
     /// tree that already has one.
-    fn lock_if_needed(
+    fn lock_if_needed<'a>(
         &mut self,
-        body: &[crate::event::Body],
+        body: impl Iterator<Item = &'a crate::event::Body> + Clone,
         tree_already_governed: bool,
     ) -> std::io::Result<()> {
+        if self.config.version != ConfigVersion::Artifacts
+            && body
+                .clone()
+                .any(|b| matches!(b, crate::event::Body::ArtifactCaptured { .. }))
+        {
+            let locked = Config {
+                version: ConfigVersion::Artifacts,
+                project_id: self.config.project_id.clone(),
+                actor: self.config.actor.clone(),
+                share: self.config.share,
+            };
+            write_config_atomic(&self.root, &locked)?;
+            self.config = locked;
+        }
+        if self.config.version == ConfigVersion::Artifacts {
+            return Ok(());
+        }
         if self.config.version != ConfigVersion::AgentAutomation
-            && body.iter().any(|b| matches!(b, crate::event::Body::AgentAutomationConfigured { .. }) || matches!(b, crate::event::Body::AgentRecorded { definition, .. } if definition.prompt.is_some()))
+            && body.clone().any(|b| matches!(b, crate::event::Body::AgentAutomationConfigured { .. }) || matches!(b, crate::event::Body::AgentRecorded { definition, .. } if definition.prompt.is_some()))
         {
             let locked = Config {
                 version: ConfigVersion::AgentAutomation,
@@ -1464,7 +1994,7 @@ impl Store {
         if !matches!(
             self.config.version,
             ConfigVersion::Agents | ConfigVersion::AgentAutomation
-        ) && body.iter().any(|b| {
+        ) && body.clone().any(|b| {
             matches!(
                 b,
                 crate::event::Body::AgentRecorded { .. }
@@ -1486,7 +2016,7 @@ impl Store {
         if self.config.version != ConfigVersion::One {
             return Ok(());
         }
-        let creates_governance = body.iter().any(|b| {
+        let creates_governance = body.clone().any(|b| {
             matches!(
                 b,
                 crate::event::Body::NodeCreated {
@@ -1524,7 +2054,10 @@ impl Store {
         }
         if matches!(
             self.config.version,
-            ConfigVersion::Lanes | ConfigVersion::Agents | ConfigVersion::AgentAutomation
+            ConfigVersion::Lanes
+                | ConfigVersion::Agents
+                | ConfigVersion::AgentAutomation
+                | ConfigVersion::Artifacts
         ) {
             return Ok(());
         }
@@ -1555,21 +2088,53 @@ pub(crate) fn read_all_from(path: &Path) -> Result<(Vec<crate::event::Event>, us
     };
     let mut reader = BufReader::new(f);
     let mut events = Vec::new();
+    let broken = visit_events(&mut reader, false, |event| events.push(event))?;
+    Ok((events, broken))
+}
+
+fn visit_events(
+    reader: &mut impl BufRead,
+    bounded: bool,
+    accept: impl FnMut(crate::event::Event),
+) -> Result<usize, Failure> {
+    visit_events_observed(reader, bounded, accept, |_| {})
+}
+
+fn visit_events_observed(
+    reader: &mut impl BufRead,
+    bounded: bool,
+    mut accept: impl FnMut(crate::event::Event),
+    mut observe: impl FnMut(&[u8]),
+) -> Result<usize, Failure> {
     let mut broken = 0usize;
     let mut line_no = 0usize;
-    let mut raw = Vec::new();
+    let mut raw = if bounded {
+        Vec::with_capacity(CAPTURE_LINE_LIMIT + 1)
+    } else {
+        Vec::new()
+    };
     loop {
         raw.clear();
-        let n = reader.read_until(b'\n', &mut raw)?;
+        let n = if bounded {
+            (&mut *reader)
+                .take((CAPTURE_LINE_LIMIT + 1) as u64)
+                .read_until(b'\n', &mut raw)?
+        } else {
+            reader.read_until(b'\n', &mut raw)?
+        };
+        if bounded && raw.len() > CAPTURE_LINE_LIMIT {
+            return Err(capture_loading_limit());
+        }
         if n == 0 {
             break;
         }
+        observe(&raw);
         line_no += 1;
         if raw.last() != Some(&b'\n') {
             // An append that stopped mid-write is not a line until it
             // ends -- the same rule `index::read_tracked` follows, so a
             // log the two of them read agrees on what it holds (`f599`).
-            if !String::from_utf8_lossy(&raw).trim().is_empty() {
+            if !std::str::from_utf8(&raw).is_ok_and(|line| line.trim().is_empty()) {
                 broken += 1;
             }
             break;
@@ -1592,15 +2157,117 @@ pub(crate) fn read_all_from(path: &Path) -> Result<(Vec<crate::event::Event>, us
         if line.trim().is_empty() {
             continue;
         }
+        if bounded && !within_json_limits(line)? {
+            broken += 1;
+            continue;
+        }
         match serde_json::from_str(line) {
-            Ok(e) => events.push(e),
+            Ok(e) => accept(e),
             Err(_) => match crate::event::unknown_reason_for(line) {
                 Some(reason) => return Err(newer_vivac_failure(line_no, reason)),
                 None => broken += 1,
             },
         }
     }
-    Ok((events, broken))
+    Ok(broken)
+}
+
+const CAPTURE_LINE_LIMIT: usize = 512 * 1024;
+const CAPTURE_JSON_ITEMS: usize = 1024;
+
+fn capture_loading_limit() -> Failure {
+    Failure::Model("Artifact capture requires event log lines within its loading limits.".into())
+}
+
+struct JsonItems<'a> {
+    items: &'a mut usize,
+    exceeded: &'a mut bool,
+}
+
+impl<'de> serde::de::DeserializeSeed<'de> for JsonItems<'_> {
+    type Value = ();
+
+    fn deserialize<D: serde::Deserializer<'de>>(self, deserializer: D) -> Result<(), D::Error> {
+        *self.items += 1;
+        if *self.items > CAPTURE_JSON_ITEMS {
+            *self.exceeded = true;
+            return Err(serde::de::Error::custom(
+                "Event log loading limit exceeded.",
+            ));
+        }
+        deserializer.deserialize_any(self)
+    }
+}
+
+impl<'de> serde::de::Visitor<'de> for JsonItems<'_> {
+    type Value = ();
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a JSON value within the event log loading limits")
+    }
+
+    fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<(), E> {
+        Ok(())
+    }
+    fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<(), E> {
+        Ok(())
+    }
+    fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<(), E> {
+        Ok(())
+    }
+    fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<(), E> {
+        Ok(())
+    }
+    fn visit_str<E: serde::de::Error>(self, _: &str) -> Result<(), E> {
+        Ok(())
+    }
+    fn visit_unit<E: serde::de::Error>(self) -> Result<(), E> {
+        Ok(())
+    }
+
+    fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<(), A::Error> {
+        while seq
+            .next_element_seed(JsonItems {
+                items: &mut *self.items,
+                exceeded: &mut *self.exceeded,
+            })?
+            .is_some()
+        {}
+        Ok(())
+    }
+
+    fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<(), A::Error> {
+        while map
+            .next_key_seed(JsonItems {
+                items: &mut *self.items,
+                exceeded: &mut *self.exceeded,
+            })?
+            .is_some()
+        {
+            map.next_value_seed(JsonItems {
+                items: &mut *self.items,
+                exceeded: &mut *self.exceeded,
+            })?;
+        }
+        Ok(())
+    }
+}
+
+fn within_json_limits(line: &str) -> Result<bool, Failure> {
+    use serde::de::DeserializeSeed;
+    let mut items = 0;
+    let mut exceeded = false;
+    let mut deserializer = serde_json::Deserializer::from_str(line);
+    let parsed = JsonItems {
+        items: &mut items,
+        exceeded: &mut exceeded,
+    }
+    .deserialize(&mut deserializer)
+    .and_then(|()| deserializer.end());
+    if exceeded {
+        return Err(capture_loading_limit());
+    }
+    Ok(parsed.is_ok())
 }
 
 /// One `seq` two different writes both believed was theirs (`f610`): unlike
@@ -1739,6 +2406,211 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn capture_without_a_supported_physical_identity_refuses_before_writing() {
+        let root = crate::artifacts::standalone_root("capture-identity");
+        let mut store = Store::create(&root).unwrap();
+        store.fold_for_capture().unwrap();
+        store.capture_log.as_mut().unwrap().identity = None;
+        let before = fs::read(store.log()).unwrap();
+        let config_path = root.join(DIR).join(CONFIG);
+        let config = fs::read(&config_path).unwrap();
+        let lock = store.lock_for_write().unwrap();
+        let refresh = store.refresh_capture(&lock, false);
+        let append = store.append(
+            &lock,
+            crate::lane::MAIN,
+            vec![captured_artifact()],
+            0,
+            false,
+        );
+        let unchanged =
+            fs::read(store.log()).unwrap() == before && fs::read(config_path).unwrap() == config;
+        drop(lock);
+        drop(store);
+        fs::remove_dir_all(root).unwrap();
+        assert!(refresh.is_err());
+        assert!(append.is_err());
+        assert!(unchanged);
+    }
+
+    #[test]
+    fn bounded_event_visiting_refuses_oversized_lines_before_collecting_them() {
+        let input = vec![b' '; 2 * 1024 * 1024];
+        let (result, peak) = crate::test_alloc::measure(|| {
+            visit_events(&mut std::io::Cursor::new(&input), true, |_| {
+                panic!("unexpected event")
+            })
+        });
+        assert!(
+            peak <= 2 * 1024 * 1024,
+            "line reader allocated {peak} bytes"
+        );
+        assert!(result.is_err(), "an oversized line was accepted");
+    }
+
+    #[test]
+    fn bounded_event_visiting_refuses_many_json_values_before_event_parsing() {
+        let input = format!("[{}]\n", vec!["0"; 100_000].join(","));
+        let (result, peak) = crate::test_alloc::measure(|| {
+            visit_events(&mut std::io::Cursor::new(input.as_bytes()), true, |_| {
+                panic!("unexpected event")
+            })
+        });
+        assert!(
+            peak <= 2 * 1024 * 1024,
+            "JSON visitor allocated {peak} bytes"
+        );
+        assert!(
+            result.is_err(),
+            "a line containing too many JSON values was accepted"
+        );
+    }
+
+    #[test]
+    fn bounded_event_visiting_keeps_escaped_strings_within_the_parser_budget() {
+        let input = format!("\"{}\"\n", "\\u0061".repeat(80_000));
+        let (result, peak) = crate::test_alloc::measure(|| {
+            visit_events(&mut std::io::Cursor::new(input.as_bytes()), true, |_| {
+                panic!("unexpected event")
+            })
+        });
+        assert_eq!(result.unwrap(), 1);
+        assert!(
+            peak <= 2 * 1024 * 1024,
+            "escaped JSON allocated {peak} bytes"
+        );
+    }
+
+    #[test]
+    fn bounded_event_visiting_streams_ten_thousand_valid_receipts_without_collecting_events() {
+        use crate::event::{Body, Event, Kind};
+        let producer = format!("{:026x}", 1);
+        let mut input = String::new();
+        for index in 0..=10_000u64 {
+            let payload = if index == 0 {
+                Body::NodeCreated {
+                    node: producer.clone(),
+                    num: 1,
+                    kind: Kind::Task,
+                    title: "Produce deliveries".into(),
+                    why: String::new(),
+                    parent: None,
+                    blocks: false,
+                    refs: vec![],
+                    governs: vec![],
+                    arms: vec![],
+                    against: None,
+                }
+            } else {
+                let revision = format!("{:026x}", 20_000 + index);
+                Body::ArtifactCaptured {
+                    artifact: format!("{:026x}", 10_000 + index),
+                    revision: revision.clone(),
+                    operation: format!("{:026x}", 30_000 + index),
+                    producer: producer.clone(),
+                    previous: None,
+                    source: "mockup.html".into(),
+                    site: format!("{:026x}", 2),
+                    size: 17,
+                    digest: "a".repeat(64),
+                    object: format!("objects/{revision}.blob"),
+                }
+            };
+            let event = Event {
+                seq: index + 1,
+                id: format!("{:026x}", 40_000 + index),
+                ts: "2026-01-01T00:00:00Z".into(),
+                actor: "opaque".into(),
+                lane: crate::lane::MAIN.into(),
+                payload,
+            };
+            input.push_str(&serde_json::to_string(&event).unwrap());
+            input.push('\n');
+        }
+        let ((result, receipts), peak) = crate::test_alloc::measure(|| {
+            let mut receipts = 0;
+            let result = visit_events(&mut std::io::Cursor::new(input.as_bytes()), true, |event| {
+                if matches!(event.payload, Body::ArtifactCaptured { .. }) {
+                    receipts += 1;
+                }
+            });
+            (result, receipts)
+        });
+        assert_eq!(result.unwrap(), 0);
+        assert_eq!(receipts, 10_000);
+        eprintln!("Streaming receipt parser auxiliary peak: {peak} bytes.");
+        assert!(
+            peak <= 2 * 1024 * 1024,
+            "receipt parser allocated {peak} bytes"
+        );
+        let root = crate::artifacts::standalone_root("stream-fold");
+        let mut store = Store::create(&root).unwrap();
+        fs::write(store.log(), input).unwrap();
+        let (events, broken) = store.read_all().unwrap();
+        let expected = crate::model::fold(&events, broken);
+        let actual = store.fold_for_capture().unwrap();
+        assert_eq!(actual.seq, expected.seq);
+        assert_eq!(actual.broken_lines, expected.broken_lines);
+        assert_eq!(
+            serde_json::to_string(&actual.artifact_history).unwrap(),
+            serde_json::to_string(&expected.artifact_history).unwrap()
+        );
+        assert!(actual
+            .artifact_projection
+            .is_valid(actual.artifact_history.len()));
+        drop(store);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_retained_reader_does_not_bypass_a_fresh_writers_readonly_denial() {
+        struct Fixture {
+            root: PathBuf,
+            log: PathBuf,
+            permissions: fs::Permissions,
+        }
+        impl Drop for Fixture {
+            fn drop(&mut self) {
+                fs::set_permissions(&self.log, self.permissions.clone()).ok();
+                fs::remove_dir_all(&self.root).ok();
+            }
+        }
+        let root = crate::artifacts::standalone_root("readonly-log");
+        let mut store = Store::create(&root).unwrap();
+        let log = store.log();
+        let fixture = Fixture {
+            root,
+            log: log.clone(),
+            permissions: fs::metadata(&log).unwrap().permissions(),
+        };
+        store.read_authoritative().unwrap();
+        let before = fs::read(&log).unwrap();
+        let mut permissions = fixture.permissions.clone();
+        permissions.set_readonly(true);
+        fs::set_permissions(&log, permissions).unwrap();
+        let lock = store.lock_for_write().unwrap();
+        let denied = store
+            .append(
+                &lock,
+                crate::lane::MAIN,
+                vec![crate::event::Body::NodeNoted {
+                    node: "n".into(),
+                    note: "denied".into(),
+                }],
+                0,
+                false,
+            )
+            .err()
+            .expect("a fresh append handle bypassed readonly permissions");
+        assert_eq!(denied.kind(), std::io::ErrorKind::PermissionDenied);
+        assert_eq!(fs::read(&log).unwrap(), before);
+        drop(lock);
+        drop(store);
+        drop(fixture);
+    }
 
     #[test]
     fn automatic_custody_compatibility_survives_older_events_lanes_and_config_rebuild() {
@@ -1962,6 +2834,87 @@ mod tests {
             "{}",
             f.message()
         );
+    }
+
+    #[test]
+    fn append_preserves_exact_truncated_tail_bytes_and_offsets() {
+        for empty_body in [false, true] {
+            let root = std::env::temp_dir().join(format!("vivac-append-tail-{}", id::ulid()));
+            let mut store = Store::create(&root).unwrap();
+            let tail = b"{\"payload\":";
+            fs::write(store.log(), tail).unwrap();
+            #[cfg(windows)]
+            store.read_authoritative().unwrap();
+            let lock = store.lock_for_write().unwrap();
+            let body = if empty_body {
+                vec![]
+            } else {
+                vec![crate::event::Body::NodeNoted {
+                    node: id::ulid(),
+                    note: "Record selected work".into(),
+                }]
+            };
+            let appended = store
+                .append(&lock, crate::lane::MAIN, body, 7, false)
+                .unwrap();
+            let mut expected = tail.to_vec();
+            expected.push(b'\n');
+            for event in &appended.events {
+                expected.extend(serde_json::to_vec(event).unwrap());
+                expected.push(b'\n');
+                assert_eq!(event.seq, 8);
+            }
+            assert_eq!(fs::read(store.log()).unwrap(), expected);
+            assert_eq!(appended.previous_len, tail.len() as u64);
+            assert_eq!(appended.last_line_offset, tail.len() as u64 + 1);
+            assert_eq!(appended.end_offset, expected.len() as u64);
+            let second = store
+                .append(&lock, crate::lane::MAIN, vec![], 8, false)
+                .unwrap();
+            assert_eq!(fs::read(store.log()).unwrap(), expected);
+            assert_eq!(second.previous_len, expected.len() as u64);
+            assert_eq!(second.last_line_offset, expected.len() as u64);
+            assert_eq!(second.end_offset, expected.len() as u64);
+            drop(lock);
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn append_to_an_empty_log_has_no_prefix_byte_and_exact_event_offsets() {
+        let root = std::env::temp_dir().join(format!("vivac-append-empty-{}", id::ulid()));
+        let mut store = Store::create(&root).unwrap();
+        #[cfg(windows)]
+        store.read_authoritative().unwrap();
+        let lock = store.lock_for_write().unwrap();
+        let empty = store
+            .append(&lock, crate::lane::MAIN, vec![], 0, false)
+            .unwrap();
+        assert_eq!(fs::read(store.log()).unwrap(), b"");
+        assert_eq!(
+            (empty.previous_len, empty.last_line_offset, empty.end_offset),
+            (0, 0, 0)
+        );
+        let appended = store
+            .append(
+                &lock,
+                crate::lane::MAIN,
+                vec![crate::event::Body::NodeNoted {
+                    node: id::ulid(),
+                    note: "Record selected work".into(),
+                }],
+                0,
+                false,
+            )
+            .unwrap();
+        let mut expected = serde_json::to_vec(&appended.events[0]).unwrap();
+        expected.push(b'\n');
+        assert_eq!(fs::read(store.log()).unwrap(), expected);
+        assert_eq!(appended.previous_len, 0);
+        assert_eq!(appended.last_line_offset, 0);
+        assert_eq!(appended.end_offset, expected.len() as u64);
+        drop(lock);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -2871,5 +3824,117 @@ mod tests {
         assert!(c.closed_to(Some("another")));
         let own = c.project_id.clone();
         assert!(!c.closed_to(Some(&own)));
+    }
+
+    fn captured_artifact() -> crate::event::Body {
+        crate::event::Body::ArtifactCaptured {
+            artifact: id::ulid(),
+            revision: id::ulid(),
+            operation: id::ulid(),
+            producer: id::ulid(),
+            previous: None,
+            source: "mockup.html".into(),
+            site: "opaque-site".into(),
+            size: 17,
+            digest: "a".repeat(64),
+            object: "objects/revision".into(),
+        }
+    }
+
+    #[test]
+    fn artifact_config_sentence_round_trips_and_is_known() {
+        let sentence =
+            "this tree holds artifact custody, and this vivac is too old to read it: update vivac";
+        let version = serde_json::to_value(ConfigVersion::Artifacts).unwrap();
+        assert_eq!(version, sentence);
+        check_config_version(Some(&version)).unwrap();
+        assert_eq!(
+            serde_json::from_value::<ConfigVersion>(version).unwrap(),
+            ConfigVersion::Artifacts
+        );
+    }
+
+    #[test]
+    fn artifact_config_lock_survives_agent_events_lanes_and_regeneration_in_either_order() {
+        for artifact_first in [false, true] {
+            let tmp = std::env::temp_dir().join(format!("vivac-artifact-config-{}", id::ulid()));
+            let mut store = Store::create(&tmp).unwrap();
+            let lock = store.lock_for_write().unwrap();
+            let automatic = crate::event::Body::AgentAutomationConfigured {
+                node: id::ulid(),
+                enabled: true,
+            };
+            let events = if artifact_first {
+                vec![captured_artifact(), automatic.clone()]
+            } else {
+                vec![automatic.clone(), captured_artifact()]
+            };
+            for (seq, event) in events.into_iter().enumerate() {
+                store
+                    .append(&lock, crate::lane::MAIN, vec![event], seq as u64, false)
+                    .unwrap();
+            }
+            assert_eq!(store.config.version, ConfigVersion::Artifacts);
+            let bound = crate::event::Body::AgentBound {
+                agent: id::ulid(),
+                harness: "codex".into(),
+                path: ".codex/agents/reviewer.toml".into(),
+                baseline: None,
+            };
+            store
+                .append(&lock, crate::lane::MAIN, vec![bound, automatic], 2, false)
+                .unwrap();
+            store.lock_lanes_in_config(&lock).unwrap();
+            assert_eq!(store.config.version, ConfigVersion::Artifacts);
+            let raw = fs::read_to_string(tmp.join(DIR).join(CONFIG)).unwrap();
+            assert_eq!(read_config(&raw).unwrap().version, ConfigVersion::Artifacts);
+            drop(lock);
+            fs::remove_file(tmp.join(DIR).join(CONFIG)).unwrap();
+            assert_eq!(
+                Store::open(tmp.clone()).unwrap().config.version,
+                ConfigVersion::Artifacts
+            );
+            fs::remove_dir_all(tmp).unwrap();
+        }
+    }
+
+    #[test]
+    fn artifact_config_regeneration_prioritizes_custody_over_recorded_prompts() {
+        for artifact_first in [false, true] {
+            let tmp =
+                std::env::temp_dir().join(format!("vivac-artifact-prompt-config-{}", id::ulid()));
+            let store = Store::create(&tmp).unwrap();
+            let capture = serde_json::json!({"payload": captured_artifact()}).to_string();
+            let prompt = serde_json::json!({"payload": {
+                "type": "agent.recorded", "definition": {"prompt": {"source": "prompts/reviewer.md"}}
+            }}).to_string();
+            let lines = if artifact_first {
+                [capture, prompt]
+            } else {
+                [prompt, capture]
+            };
+            fs::write(store.log(), lines.join("\n")).unwrap();
+            assert_eq!(regenerated_version(&tmp), ConfigVersion::Artifacts);
+            fs::remove_dir_all(tmp).unwrap();
+        }
+    }
+
+    #[test]
+    fn artifact_config_is_locked_before_its_first_event_is_appended() {
+        let tmp = std::env::temp_dir().join(format!("vivac-artifact-first-config-{}", id::ulid()));
+        let mut store = Store::create(&tmp).unwrap();
+        let lock = store.lock_for_write().unwrap();
+        store
+            .lock_if_needed([captured_artifact()].iter(), false)
+            .unwrap();
+        assert_eq!(
+            read_config(&fs::read_to_string(tmp.join(DIR).join(CONFIG)).unwrap())
+                .unwrap()
+                .version,
+            ConfigVersion::Artifacts
+        );
+        assert_eq!(store.read_all().unwrap().0.len(), 0);
+        drop(lock);
+        fs::remove_dir_all(tmp).unwrap();
     }
 }

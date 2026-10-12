@@ -118,10 +118,8 @@ fn initialize_answers_with_the_server_and_its_version() {
     assert!(r["result"]["capabilities"]["tools"].is_object(), "{r}");
 }
 
-/// Fifteen, and no more. Every tool costs context in every session the
-/// agent ever opens, so the list is a budget and not a catalogue: five
-/// reads plus the ten writes `t118`, `t411`, `t426` and `d776` add between
-/// them, and nothing past that.
+/// Every tool costs context in every session the agent opens. The declared
+/// list includes the core reads and writes, agent custody and artifact custody.
 #[test]
 fn the_tool_list_has_only_the_declared_tools() {
     let c = seeded("list");
@@ -136,6 +134,7 @@ fn the_tool_list_has_only_the_declared_tools() {
             "vivac_add",
             "vivac_agents",
             "vivac_arm",
+            "vivac_artifacts",
             "vivac_brief",
             "vivac_decide",
             "vivac_declare",
@@ -2929,7 +2928,8 @@ fn agent_review_schema_exposes_shared_plans_without_more_tools() {
     let mut s = hello(&c);
     let list = s.ask(r#"{"jsonrpc":"2.0","id":94,"method":"tools/list"}"#);
     let tools = list["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 16);
+    assert_eq!(tools.len(), 17);
+    assert!(tools.iter().any(|tool| tool["name"] == "vivac_artifacts"));
     let tool = tools
         .iter()
         .find(|tool| tool["name"] == "vivac_agents")

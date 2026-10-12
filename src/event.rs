@@ -523,6 +523,19 @@ pub enum Body {
     /// run `setup`: that is what keeps 0.11 able to read them (§2.6).
     #[serde(rename = "where.changed")]
     WhereChanged { repos: Vec<WhereRepo> },
+    #[serde(rename = "artifact.captured")]
+    ArtifactCaptured {
+        artifact: String,
+        revision: String,
+        operation: String,
+        producer: String,
+        previous: Option<String>,
+        source: String,
+        site: String,
+        size: u64,
+        digest: String,
+        object: String,
+    },
     #[serde(rename = "agent.automation.configured")]
     AgentAutomationConfigured { node: String, enabled: bool },
     #[serde(rename = "agent.recorded")]
@@ -593,6 +606,7 @@ impl Body {
         "lane.declared",
         "lane.claimed",
         "where.changed",
+        "artifact.captured",
         "agent.automation.configured",
         "agent.recorded",
         "agent.bound",
@@ -674,6 +688,7 @@ mod tests {
             Body::LaneDeclared { .. } => "lane.declared",
             Body::LaneClaimed { .. } => "lane.claimed",
             Body::WhereChanged { .. } => "where.changed",
+            Body::ArtifactCaptured { .. } => "artifact.captured",
             Body::AgentAutomationConfigured { .. } => "agent.automation.configured",
             Body::AgentRecorded { .. } => "agent.recorded",
             Body::AgentBound { .. } => "agent.bound",
@@ -685,6 +700,18 @@ mod tests {
 
     fn one_of_each() -> Vec<Body> {
         vec![
+            Body::ArtifactCaptured {
+                artifact: "a".into(),
+                revision: "r".into(),
+                operation: "o".into(),
+                producer: "n".into(),
+                previous: None,
+                source: "mockup.html".into(),
+                site: "s".into(),
+                size: 17,
+                digest: "a".repeat(64),
+                object: "objects/r".into(),
+            },
             Body::AgentAutomationConfigured {
                 node: "n".into(),
                 enabled: true,
@@ -1115,5 +1142,26 @@ mod tests {
                 "{tag} was refused as an event type this version does not know"
             );
         }
+    }
+
+    #[test]
+    fn artifact_capture_round_trips_only_custody_metadata() {
+        let body = Body::ArtifactCaptured {
+            artifact: "artifact-id".into(),
+            revision: "revision-id".into(),
+            operation: "operation-id".into(),
+            producer: "producer-id".into(),
+            previous: Some("previous-id".into()),
+            source: "mockup.html".into(),
+            site: "opaque-site".into(),
+            size: 17,
+            digest: "a".repeat(64),
+            object: "objects/revision-id".into(),
+        };
+        let encoded = serde_json::to_value(&body).unwrap();
+        assert_eq!(encoded.as_object().unwrap().len(), 11);
+        assert_eq!(encoded["type"], "artifact.captured");
+        assert_eq!(encoded["previous"], "previous-id");
+        assert_eq!(serde_json::from_value::<Body>(encoded).unwrap(), body);
     }
 }

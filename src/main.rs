@@ -13,6 +13,7 @@
 mod agents;
 mod anchor;
 mod args;
+mod artifacts;
 mod brief;
 mod changes;
 mod check;
@@ -42,6 +43,8 @@ mod session;
 mod setup;
 mod store;
 mod style;
+#[cfg(test)]
+mod test_alloc;
 mod update;
 mod web;
 mod width;
@@ -182,6 +185,17 @@ const USAGE: &str = r#"vivac - provenance of work
     configuration differences. It applies only the plan you review and confirm.
     Setup connects harnesses; it does not import or synchronize their agents.
 
+  Local artifact custody
+
+    vivac artifacts [--all] [--json]         selected deliveries; no byte checks
+    vivac artifacts capture <path> --from <node> [--artifact <id>] [--json]
+                                            retain guarded UTF-8 locally, up to 10 MiB
+    vivac artifacts show <id> [--revision <id>] [--json]
+    vivac artifacts check <id> [--revision <id>] [--json]
+    vivac artifacts check --store [--json]    check retained bytes and unrecorded objects
+    vivac artifacts restore <id> --revision <id> --to <new-path> [--json]
+    vivac artifacts restore --orphan <revision-id> --to <new-path> [--json]
+
   Session
 
     vivac session start [--hook]              the brief, ready to inject
@@ -319,6 +333,7 @@ const COMMANDS: &[&str] = &[
     "check",
     "doctor",
     "agents",
+    "artifacts",
     "session",
     "mcp",
     "web",
@@ -611,6 +626,9 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
 
     if cmd == "agents" {
         return agents::run(&cwd, a);
+    }
+    if cmd == "artifacts" {
+        return artifacts::run(&cwd, a);
     }
 
     // Valid options per command. One that is not here is an error and not

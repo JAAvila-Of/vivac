@@ -37,6 +37,10 @@ unicode-normalization = "0.1"
 # a second time. RustCrypto's own, +1 crate.
 sha2 = "0.10"
 
+# Artifact access stays beneath opened directory handles on every platform.
+cap-std = "=4.0.3"
+cap-fs-ext = "=4.0.3"
+
 # `f443`: titles are cut and padded by what a terminal shows. A cut that
 # splits a grapheme drops an accent or leaves half a flag, and a column
 # padded by `char` drifts right after every CJK title. Both need Unicode's
@@ -53,6 +57,10 @@ serde_json = "1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.189"
+
+[target.'cfg(windows)'.dependencies]
+# Compare volume and 128-bit file identities through the maintained OS binding.
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
 
 [profile.release]
 opt-level = 3

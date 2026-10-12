@@ -2,8 +2,7 @@
 
 The [performance pillar](PILLARS.md) gives a read **50 ms** and a write
 **5 ms**. What follows is every number behind the summary in the
-[README](../README.md#what-it-costs), including the two places the budget is
-missed.
+[README](../README.md#what-it-costs), including measured budget misses.
 
 Measured on **18 September 2026** at ten thousand nodes, 200 calls per cell,
 p50 / p99 in milliseconds, on a tree with its derived index in place — which
@@ -77,6 +76,219 @@ shape of the miss says where it comes from: the tail is already there with no
 repositories declared at all, where the work itself takes 1.4 ms. It belongs
 to the filesystem rather than to this program, which is a reason to publish it
 rather than to leave it out.
+
+## Local artifact custody
+
+Measured during implementation on **11 October 2026**, with Rust
+`1.94.1 (e408947bf 2026-03-25)`, on Windows and an external NTFS fixture.
+These measurements do not replace the older ordinary-write results above.
+
+The ignored Rust benchmark uses 10,000 prior distinct artifact receipts and
+100 new receipt commits. It excludes retaining file bytes, which happens
+before the write lock, and includes the lock, validation, actual append,
+response and unlock. Its synthetic receipts do not demonstrate file capture.
+The release test binary also includes the test allocation counter.
+
+| Initial release test measurement | Result |
+|---|---:|
+| Complete receipt commit, p50 | 6.2101 ms |
+| Complete receipt commit, p99 | 13.2288 ms |
+| Complete receipt commit, maximum | 13.4189 ms |
+| Complete receipt commit, peak auxiliary heap | 30,230 bytes |
+| Ordinary node note baseline, p99 | 8.2353 ms |
+| Resident `Project.write` receipt route, p99 | 7.3864 ms |
+
+**This initial receipt commit did not meet the p99 < 5 ms budget on this machine.**
+The ordinary-write baseline and resident route also missed it. The resident
+route used 10,200 prior receipts and one producer; its peak auxiliary heap was
+10,430 bytes. Neither result authorizes skipping
+integrity checks or increasing the budget. Debug probes on both C: and H:
+also missed the budget; they locate costs but are not release compliance
+measurements.
+
+A later Windows release run retained an authoritative read-only log handle
+while opening a fresh writer for every append. With the same 10,000-receipt,
+100-commit fixture, complete receipt p50 was 0.337 ms, p99 was 0.5822 ms and
+maximum was 0.5847 ms; peak auxiliary heap was 30,234 bytes. The resident
+`Project.write` route measured p99 at 0.6195 ms. A node note in the capture
+context measured p99 at 0.4813 ms; this is not a measurement of ordinary
+indexed CLI startup. These stable-log measurements meet the receipt budget.
+
+A separate concurrent run appended one valid external node note before each
+of 100 receipt commits, outside the timer and allocation counter. It verified
+all note and receipt sequences, but measured receipt p99 at 104.1996 ms and
+peak auxiliary heap at 10,615,890 bytes. It failed both budgets: the CLI
+rebuilt the tree under the lock when the log changed. The stable-log results
+do not establish compliance for this concurrent case.
+
+After replacing the CLI refold under the lock with a complete bounded tail
+refresh, a release run measured the same 100 external-note/receipt pairs:
+p50 0.6039 ms, p99 0.8001 ms, maximum 1.1469 ms and peak auxiliary heap
+614,503 bytes. All pairs and their sequences were verified before the budget
+assertions. The stable-log route measured p50 0.4316 ms, p99 0.6925 ms,
+maximum 0.6983 ms and peak auxiliary heap 30,234 bytes. Both runs meet the
+receipt time and auxiliary-memory budgets in this Windows environment.
+
+The resident MCP receipt route was measured separately with the same 100
+external-note/receipt pairs. Complete `Project.write`, including its stale
+refresh, append, response, unlock and resident log bookkeeping, measured p50
+0.654 ms, p99 1.0764 ms, maximum 5.1692 ms and peak auxiliary heap 10,305
+bytes. Both the resident log and disk log retained every pair and sequence.
+The maximum exceeded 5 ms and remains included; the budget is a p99 bound.
+This measures the resident receipt route, excluding initial project loading,
+retaining file bytes and MCP tool-envelope serialization.
+
+Functional tests also measured confirmation at the exact refresh limits:
+65,536 bytes with two events peaked at 614,562 auxiliary bytes; 64 events
+with 12,472 bytes peaked at 620,452 bytes. These tests verify the memory bound,
+not the receipt p99. The refresh rejects larger or incomplete changes rather
+than applying a prefix or rebuilding the tree under the lock.
+
+Allocation tests count additional live heap on the calling thread after
+loading the tree and constructing the request. They do not measure process
+RSS, other-thread allocations or Git child-process memory. Git preflight
+additionally uses one short-lived thread requesting a 128 KiB stack; its
+prefix output is limited to 4 KiB with an 8 KiB read buffer. Receipt commits
+and the measured store check do not start that thread. A store check hashes
+all 10,000 retained objects in its fixture even
+when it displays only 20 details; its measured peak auxiliary heap is
+1,468,048 bytes. Reading one metadata page over resident MCP peaks at 10,470
+bytes. The streaming content guard peaks at 262,144 bytes of auxiliary heap;
+its separately bounded stack buffer is 131,072 bytes.
+
+Reproduce the receipt measurement with:
+
+```sh
+cargo clean -p vivac
+cargo test --locked --release measure_one_hundred_complete_receipt_commits_with_ten_thousand_prior_artifacts -- --ignored --nocapture --test-threads=1
+cargo test --locked --release measure_one_hundred_receipt_commits_after_external_writes -- --ignored --nocapture --test-threads=1
+cargo test --locked --release measure_one_hundred_resident_receipt_commits_after_external_writes -- --ignored --nocapture --test-threads=1
+```
+
+For complete file capture, `tools/measure-artifact-custody.py` runs the Rust
+binary in fresh processes against exact 1 MiB and 10 MiB synthetic UTF-8 files.
+It verifies retained sizes and digests after every sample. The default fixture
+is a Git repository, so custody preflight checks are included. Use an external
+temporary directory: the script refuses ancestors containing an existing
+Vivac project. Record the binary profile, compiler and verified filesystem:
+
+```sh
+python tools/measure-artifact-custody.py target/release/vivac --samples 100 --profile release --rust-build "<rustc --version>" --filesystem "<verified filesystem>" --output /external/path/capture-results.json
+```
+
+The script reports every sample and exits nonzero if either capture budget
+is missed. A passing unit-test exit code is not proof of a timing budget;
+the receipt benchmark explicitly reports its timing result.
+
+On the same date, the production release binary was measured on Windows 11
+10.0.26200, on C: NTFS, with the Git fixture and 100 fresh processes per size.
+The binary SHA-256 was
+`d151aa5490c6785a3c017fba0d0f7855a45fce044fe29006c07eabfd942c4d86`.
+
+| Complete capture | p50 (ms) | p99 (ms) | Maximum (ms) | Budget |
+|---|---:|---:|---:|---|
+| 1 MiB | 359.88765 | 1493.1933 | 1502.4693 | misses 500 ms |
+| 10 MiB | 700.06395 | 840.0416 | 909.9241 | meets 2000 ms |
+
+The first three 1 MiB captures were its three slowest samples. They are
+included in the result; subsequent speed does not erase the cold calls a
+person can encounter. The 10 MiB phase ran after the 1 MiB phase in the same
+fixture. The script exited 1 because the 1 MiB budget was missed.
+
+After the authoritative capture loader and fresh append changes, another
+production release run used the same Windows build, C: NTFS, Git fixture and
+100 fresh processes per size. Its binary SHA-256 was
+`1e199b505ea87eac89176f775f0942560e3772010e717c26a3d3eb49c51affea`.
+
+| Complete capture | p50 (ms) | p99 (ms) | Maximum (ms) | Budget |
+|---|---:|---:|---:|---|
+| 1 MiB | 358.8445 | 486.5926 | 544.7317 | meets 500 ms |
+| 10 MiB | 783.96445 | 1482.0935 | 1520.8508 | meets 2000 ms |
+
+All initial samples are included. The 1 MiB maximum exceeded 500 ms; the
+budget is a p99 bound, not a guarantee for every call. The 10 MiB phase again
+followed the 1 MiB phase in the same fixture. This run does not cover writes
+from another process during capture.
+
+A final Windows production run after the bounded concurrent-refresh changes
+used the same compiler, C: NTFS, Git fixture and 100 fresh processes per size.
+Its binary SHA-256 was
+`fd78df8d11355109a2f3e3c698a2788bd48157abeb3b9086a1af028313f943c0`.
+
+| Complete capture | p50 (ms) | p99 (ms) | Maximum (ms) | Budget |
+|---|---:|---:|---:|---|
+| 1 MiB | 369.42955 | 547.2441 | 598.3838 | misses 500 ms |
+| 10 MiB | 757.23825 | 1089.0896 | 1140.9693 | meets 2000 ms |
+
+Every sample remains included. This run exited 1: passing receipt commits and
+the earlier complete-capture run do not demonstrate compliance for this
+production binary. The 10 MiB phase followed the 1 MiB phase in one fixture.
+Another Rust 1.88 Cargo workspace test process was present on the machine
+during this run. This observation does not establish the cause of the miss
+and does not remove any samples from the result.
+
+The next Windows run parallelized the independent prefix and ignore queries
+at each Git preflight, retaining every validation boundary. It used the same
+compiler, filesystem, Git fixture and 100 fresh processes per size. Its
+production binary SHA-256 was
+`541469ee6aa0cb88a311f95224cb1df4a248dae7fb2981815f4191f9a0b13682`.
+
+| Complete capture | p50 (ms) | p99 (ms) | Maximum (ms) | Budget |
+|---|---:|---:|---:|---|
+| 1 MiB | 299.6059 | 525.355 | 542.7037 | misses 500 ms |
+| 10 MiB | 671.7452 | 913.2691 | 970.2335 | meets 2000 ms |
+
+All samples remain included. This run exited 1. The lower median does not
+demonstrate compliance with the complete-capture p99 budget.
+
+The Linux run used Rust 1.89.0 (`29483883e`, 2025-08-04), a Debian container
+under WSL2 kernel 5.15.167.4 and overlayfs, with a normal user rather than
+container root. It used the same Git fixture and 100 fresh processes per size,
+without dropping initial samples. The production release binary SHA-256 was
+`09412d11e424f9d5a66439b6a438ff6e35da767b995075d6f753bbef48427cb0`.
+
+| Complete capture | p50 (ms) | p99 (ms) | Maximum (ms) | Budget |
+|---|---:|---:|---:|---|
+| 1 MiB | 57.119 | 69.568 | 71.025 | meets 500 ms |
+| 10 MiB | 373.921 | 420.400 | 435.691 | meets 2000 ms |
+
+The Linux release test benchmark, with 10,000 prior receipts and 100 commits,
+measured complete receipt p99 at 0.051751 ms and the resident `Project.write`
+route at 0.085406 ms. The ordinary note baseline was 0.055137 ms. The receipt
+benchmark's peak auxiliary heap was 30,214 bytes. These results meet the
+receipt budget in this environment. They do not establish performance on a
+native Linux filesystem, macOS or Windows. This Linux run preceded the later
+Windows capture-loader changes and is not a verification of those changes.
+
+A later Linux run included the bounded capture loader and concurrent tail
+refresh. It used the same Rust 1.89.0 compiler, normal container user,
+overlayfs and 100-process Git fixture. The production binary SHA-256 was
+`8b5dd20b3189ed71a7ed9538530b0adc7740678504b51efc65310ab1294e6475`.
+
+| Complete capture | p50 (ms) | p99 (ms) | Maximum (ms) | Budget |
+|---|---:|---:|---:|---|
+| 1 MiB | 58.291004 | 101.216669 | 113.721984 | meets 500 ms |
+| 10 MiB | 386.516065 | 448.007066 | 506.43832 | meets 2000 ms |
+
+The stable receipt benchmark measured p99 0.170201 ms and peak auxiliary heap
+30,214 bytes. With one external note before each of 100 commits, the CLI
+receipt route measured p99 0.080947 ms and 614,533 bytes; resident
+`Project.write` measured p99 0.114723 ms and 10,351 bytes. Every note and
+receipt sequence was verified. These runs included all samples and met both
+receipt budgets; they preceded the parallel Git-query change.
+
+After that Git-query change, the Linux fixture passed again with the same
+compiler and filesystem and 100 fresh processes per size. Its production
+binary SHA-256 was
+`ac9716b01218a6e2441f43e24897a946f1c0717e1babb68b82cf47b65383cc0c`.
+
+| Complete capture | p50 (ms) | p99 (ms) | Maximum (ms) | Budget |
+|---|---:|---:|---:|---|
+| 1 MiB | 53.409253 | 78.09799 | 82.162055 | meets 500 ms |
+| 10 MiB | 385.74916 | 465.95884 | 472.006428 | meets 2000 ms |
+
+All samples remain included. This container result does not establish
+compliance on Windows or native macOS.
 
 ## Context
 

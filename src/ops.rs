@@ -144,6 +144,7 @@ pub struct Ctx {
     /// at the folder a tree moved out of, would have been refused by a
     /// check built to catch the folder with no file at all.
     lane_assumed: bool,
+    capture_loading: bool,
 }
 
 impl Ctx {
@@ -195,6 +196,7 @@ impl Ctx {
             pending_lane: whose_lane.pending_lane,
             caller_declared: whose_lane.caller_declared,
             lane_assumed: whose_lane.lane_assumed,
+            capture_loading: false,
         };
         ctx.adopt(tree);
         ctx
@@ -213,6 +215,16 @@ impl Ctx {
     /// (`LOADING.md` §4, "when it is rewritten").
     pub fn load_for_write(store: Store, whose: Whose) -> Result<Ctx, Failure> {
         Ctx::load_opt(store, false, whose)
+    }
+
+    pub(crate) fn load_for_capture(mut store: Store, whose: Whose) -> Result<Ctx, Failure> {
+        let tree = store.fold_for_capture()?;
+        let seen = store.capture_seen()?;
+        let tree_has_lanes = tree.has_a_declared_lane();
+        let whose_lane = resolve_whose(whose, &tree, tree_has_lanes, &store.root);
+        let mut ctx = Ctx::finish(store, tree, seen, whose_lane);
+        ctx.capture_loading = true;
+        Ok(ctx)
     }
 
     fn load_opt(store: Store, allow_index_refresh: bool, whose: Whose) -> Result<Ctx, Failure> {
@@ -237,6 +249,11 @@ impl Ctx {
     /// anyway.
     pub fn load_with_log(store: Store, whose: Whose) -> Result<(Ctx, Vec<Event>), Failure> {
         let seen = crate::store::fingerprint(&store.log());
+        #[cfg(windows)]
+        let mut store = store;
+        #[cfg(windows)]
+        let (events, broken) = store.read_authoritative()?;
+        #[cfg(not(windows))]
         let (events, broken) = store.read_all()?;
         let tree = fold(&events, broken);
         let tree_has_lanes = tree.has_a_declared_lane();
@@ -303,16 +320,65 @@ impl Ctx {
     /// holding the tree, which is the same bug the argument to `append` exists
     /// to make impossible.
     pub fn lock_for_write(&mut self) -> Result<bool, Failure> {
+        self.take_write_lock(true)
+    }
+
+    /// Project refreshes its tree and log together under this same lock.
+    pub(crate) fn lock_for_project_write(&mut self) -> Result<bool, Failure> {
+        self.take_write_lock(false)
+    }
+
+    fn take_write_lock(&mut self, refresh: bool) -> Result<bool, Failure> {
         if self.lock.is_some() {
             return Ok(false);
         }
+        self.check_write_lane()?;
+        let lock = self.store.lock_for_write()?;
+        let now = crate::store::fingerprint(&self.store.log());
+        #[cfg(windows)]
+        let requires_refold = self.store.needs_log_refold();
+        #[cfg(not(windows))]
+        let requires_refold = false;
+        if refresh && self.capture_loading {
+            let events = self
+                .store
+                .refresh_capture(&lock, now.0 == self.seen.0 && now.1 != self.seen.1)?;
+            if !events.is_empty() {
+                for event in events {
+                    self.tree
+                        .apply(event.seq, &event.ts, &event.lane, &event.payload);
+                }
+                self.tree.sort_nodes();
+            }
+            self.seen = now;
+        } else if refresh && (now != self.seen || requires_refold) {
+            #[cfg(windows)]
+            if self.store.has_log_reader() || requires_refold {
+                let mut store = Store::open_strict(self.store.root.clone())?;
+                let (events, broken) = store.read_authoritative()?;
+                self.adopt(fold(&events, broken));
+                self.store = store;
+            } else {
+                self.adopt(crate::index::load(&self.store, false)?);
+            }
+            #[cfg(not(windows))]
+            self.adopt(crate::index::load(&self.store, false)?);
+            self.seen = now;
+        }
+        self.check_write_lane()?;
+        self.lock = Some(lock);
+        Ok(true)
+    }
+
+    /// Rechecked after a resident refresh while no other writer can append.
+    pub(crate) fn check_write_lane(&self) -> Result<(), Failure> {
         // `t594` §2.3 rule 3, and §6.9: a folder that holds the tree, has
         // no lane file of its own and answers as `main` only because
         // nothing said otherwise is fine -- until some other folder has
         // claimed `main` for itself (`lane.claimed`, `d597`), at which
         // point this one can still be read but must not write. Checked
-        // before the lock is even taken, so a read never pays for it and a
-        // refusal never has to let go of one. `caller_declared` exempts a
+        // before taking the lock and again after refreshing under it.
+        // A read never pays for it. `caller_declared` exempts a
         // lane the caller already named outright (`Whose::Declared`):
         // `setup` is the only caller that ever sets it, and it is the
         // very command §6.9's own message sends you to -- refusing it too
@@ -334,18 +400,7 @@ impl Ctx {
         {
             return Err(Failure::not_a_lane());
         }
-        let lock = self.store.lock_for_write()?;
-        let now = crate::store::fingerprint(&self.store.log());
-        if now != self.seen {
-            // `adopt`, not a direct assignment (`t594`):
-            // this is the reload a second writer's append forces, and it
-            // used to leave this context reading `main` while its store
-            // kept signing as whatever lane it actually is.
-            self.adopt(crate::index::load(&self.store, false)?);
-            self.seen = now;
-        }
-        self.lock = Some(lock);
-        Ok(true)
+        Ok(())
     }
 
     /// Whether this context currently holds the write lock. Only the tests
@@ -1260,6 +1315,7 @@ struct Born<'a> {
 /// way (`add` defaults `why` with `.opt_or`, `push` demands it), so the
 /// reading stays with each caller and only the shared write comes here.
 fn born(ctx: &Ctx, b: Born) -> Result<(Body, u64, String, bool), Failure> {
+    crate::artifacts::validate_references(&ctx.tree, &b.refs)?;
     let mut fields: Vec<(&str, &str)> = vec![("title", b.title), ("why", b.why)];
     fields.extend(b.refs.iter().map(|r| ("ref", r.as_str())));
     fields.extend(b.governs.iter().map(|g| ("governs", g.as_str())));
@@ -2966,6 +3022,67 @@ mod tests {
         let tmp = std::env::temp_dir().join(format!("vivac-ops-{name}-{}", id::ulid()));
         let store = Store::create(&tmp).unwrap();
         (TmpDir(tmp), Ctx::load(store, Whose::Founding).unwrap())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn an_authoritative_context_rejects_an_identically_stamped_replacement_before_refolding() {
+        let tmp = TmpDir(crate::artifacts::standalone_root("replaced-context"));
+        let mut store = Store::create(&tmp.0).unwrap();
+        let log = store.log();
+        let lock = store.lock_for_write().unwrap();
+        store
+            .append(
+                &lock,
+                crate::lane::MAIN,
+                vec![Body::NodeNoted {
+                    node: "n".into(),
+                    note: "old".into(),
+                }],
+                9,
+                false,
+            )
+            .unwrap();
+        drop(lock);
+        let (mut ctx, mut events) = Ctx::load_with_log(store, Whose::Founding).unwrap();
+        let stamp = std::fs::metadata(&log).unwrap().modified().unwrap();
+        let fingerprint = crate::store::fingerprint(&log);
+        events[0].seq = 20;
+        events[0].payload = Body::NodeNoted {
+            node: "n".into(),
+            note: "new".into(),
+        };
+        let mut replacement = serde_json::to_vec(&events[0]).unwrap();
+        replacement.push(b'\n');
+        crate::store::replace_whole(&log, &tmp.0.join("replacement"), &replacement).unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&log)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(stamp))
+            .unwrap();
+        assert_eq!(crate::store::fingerprint(&log), fingerprint);
+        let body = || Body::NodeNoted {
+            node: "n".into(),
+            note: "next".into(),
+        };
+        ctx.lock_for_write().unwrap();
+        let first = ctx.emit(vec![body()]);
+        ctx.unlock();
+        assert!(
+            first.is_err(),
+            "a replacement was appended using the previous tree"
+        );
+        assert_eq!(std::fs::read(&log).unwrap(), replacement);
+        ctx.lock_for_write().unwrap();
+        ctx.emit(vec![body()]).unwrap();
+        ctx.unlock();
+        let (recorded, broken) = ctx.store.read_all().unwrap();
+        assert_eq!(broken, 0);
+        assert_eq!(
+            recorded.iter().map(|event| event.seq).collect::<Vec<_>>(),
+            vec![20, 21]
+        );
     }
 
     #[test]
