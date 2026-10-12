@@ -8,11 +8,11 @@ const LIMIT: u64 = 16 * 1024;
 const JSON: &str = "application/json; charset=utf-8";
 const CSP: &str = "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'";
 
-fn headers() -> Vec<tiny_http::Header> {
+fn headers(referrer_policy: &str) -> Vec<tiny_http::Header> {
     vec![
         header("Content-Security-Policy", CSP),
         header("X-Content-Type-Options", "nosniff"),
-        header("Referrer-Policy", "no-referrer"),
+        header("Referrer-Policy", referrer_policy),
         header("Cache-Control", "no-store"),
     ]
 }
@@ -21,7 +21,13 @@ fn respond(request: tiny_http::Request, status: u16, content_type: &str, body: S
     let mut response = tiny_http::Response::from_string(body)
         .with_status_code(status)
         .with_header(header("Content-Type", content_type));
-    for h in headers() {
+    // The form keeps its `Origin` without sending a `Referer` to another origin.
+    let referrer_policy = if status == 200 && content_type == super::HTML {
+        "same-origin"
+    } else {
+        "no-referrer"
+    };
+    for h in headers(referrer_policy) {
         response = response.with_header(h);
     }
     let _ = request.respond(response);
@@ -200,7 +206,7 @@ pub(super) fn serve(
                 let size = reader.size() as usize;
                 let response = tiny_http::Response::new(
                     tiny_http::StatusCode(200),
-                    headers(),
+                    headers("no-referrer"),
                     reader,
                     Some(size),
                     None,
@@ -234,7 +240,7 @@ fn page(id: &str, name: &str, token: &str) -> String {
     let bootstrap = json!({"token":token,"base":format!("/p/{id}/artifacts"),"project_base":format!("/p/{id}"),"project_name":name}).to_string().replace('<', "\\u003c").replace('>', "\\u003e").replace('&', "\\u0026");
     format!(
         r#"<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Artifacts - {name}</title>{FAVICON}<style>{WEB_CSS}
-{css}</style></head><body><main class="page artifact-page"><p class="crumb"><a href="/p/{id}/">Today</a> / Artifacts</p><nav class="project-sections" aria-label="Project sections"><a href="/p/{id}/">Today</a><a href="/p/{id}/tree">Map</a><a href="/p/{id}/agents">Agents</a><span aria-current="page">Artifacts</span></nav><header><h1>Artifacts</h1><p>{name}</p></header><p class="promise">Find saved deliveries, the work that produced them, and the exact revisions referenced by decisions.</p><p id="message" role="status" aria-live="polite"></p><div class="filters"><label>Scope <select id="scope"><option value="all">Whole project</option><option value="focus">Focus lineage</option><option value="from">From node</option></select></label><label>Node alias or ID <input id="from" hidden disabled></label><label>Search this page <input id="search" type="search"></label><button id="capture" type="button">Capture delivery</button><button id="capabilities" type="button">Supported types</button></div><section id="inventory"><div class="panel table-wrap"><table><thead><tr><th>Delivery</th><th>Latest revision</th><th>Decision references</th><th>Integrity</th></tr></thead><tbody id="rows"></tbody></table></div><div class="pagination"><button id="prev-page" type="button">Previous page</button><button id="next-page" type="button">Next page</button></div></section><section id="detail" hidden><button id="back" type="button">Back to inventory</button><div class="workspace"><aside class="panel" id="revisions"></aside><article class="panel" id="revision-content"></article></div></section><dialog id="dialog"><div id="dialog-content"></div></dialog><footer>The same operations in a terminal: <code>vivac artifacts</code></footer></main><script type="application/json" id="bootstrap">{bootstrap}</script><script>{script}</script></body></html>"#,
+{css}</style></head><body><main class="page artifact-page"><p class="crumb"><a href="/p/{id}/">Today</a> / Artifacts</p><nav class="project-sections" aria-label="Project sections"><a href="/p/{id}/">Today</a><a href="/p/{id}/tree">Map</a><a href="/p/{id}/agents">Agents</a><span aria-current="page">Artifacts</span></nav><header><h1>Artifacts</h1><p>{name}</p></header><p class="promise">Find saved deliveries, the work that produced them, and the exact revisions referenced by decisions.</p><p id="message" role="status" aria-live="polite"></p><div class="filters"><label>Scope <select id="scope"><option value="all">Whole project</option><option value="focus">Focus lineage</option><option value="from">From node</option></select></label><label id="from-label" hidden>Node alias or ID <input id="from" hidden disabled></label><label>Search this page <input id="search" type="search"></label><button id="capture" type="button">Capture delivery</button><button id="capabilities" type="button">Supported types</button></div><section id="inventory"><div class="panel table-wrap"><table><thead><tr><th>Delivery</th><th>Latest revision</th><th>Decision references</th><th>Integrity</th></tr></thead><tbody id="rows"></tbody></table></div><div class="pagination"><button id="prev-page" type="button">Previous page</button><button id="next-page" type="button">Next page</button></div></section><section id="detail" hidden><button id="back" type="button">Back to inventory</button><div class="workspace"><aside class="panel" id="revisions"></aside><article class="panel" id="revision-content"></article></div></section><dialog id="dialog"><div id="dialog-content"></div></dialog><footer>The same operations in a terminal: <code>vivac artifacts</code></footer></main><script type="application/json" id="bootstrap">{bootstrap}</script><script>{script}</script></body></html>"#,
         name = escape(name),
         id = escape(id),
         css = include_str!("artifacts.css"),

@@ -298,11 +298,11 @@
   });
   $('back').addEventListener('click', () => { if (writing) return; ++detailGeneration; selected = null; $('detail').hidden = true; $('inventory').hidden = false; saveFragment(); loadList(offset); });
   $('search').addEventListener('input', inventory);
-  $('scope').addEventListener('change', () => { $('from').hidden = $('scope').value !== 'from'; $('from').disabled = $('scope').value !== 'from'; loadList(0); });
+  $('scope').addEventListener('change', () => { $('from-label').hidden = $('scope').value !== 'from'; $('from').hidden = $('scope').value !== 'from'; $('from').disabled = $('scope').value !== 'from'; loadList(0); });
   $('from').addEventListener('change', () => { if ($('scope').value === 'from') loadList(0); });
   $('prev-page').addEventListener('click', () => loadList(Math.max(0, offset - 20)));
   $('next-page').addEventListener('click', () => { if (next != null) loadList(next); });
-  if (fragment.get('from')) { $('scope').value = 'from'; $('from').value = fragment.get('from'); $('from').hidden = false; $('from').disabled = false; }
+  if (fragment.get('from')) { $('scope').value = 'from'; $('from').value = fragment.get('from'); $('from-label').hidden = false; $('from').hidden = false; $('from').disabled = false; }
   loadList(0);
   if (fragment.get('artifact')) openArtifact(fragment.get('artifact'), fragment.get('revision'), null);
 })();

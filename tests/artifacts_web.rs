@@ -95,6 +95,9 @@ impl Server {
             response.starts_with(&format!("HTTP/1.1 {status}")),
             "{response}"
         );
+        assert!(response
+            .to_ascii_lowercase()
+            .contains("referrer-policy: no-referrer\r\n"));
         json_body(&response)
     }
 }
@@ -153,6 +156,9 @@ fn page_operations_and_download_refuse_unreviewed_requests() {
     let path = format!("{}artifacts", server.path);
     let page = server.call("GET", &path, "", "");
     assert!(page.starts_with("HTTP/1.1 200"), "{page}");
+    assert!(page
+        .to_ascii_lowercase()
+        .contains("referrer-policy: same-origin\r\n"));
     assert!(page.contains("form-action 'self'"));
     assert!(page.contains("id=\"rows\""));
     let before = c.log();
@@ -286,6 +292,9 @@ fn exact_download_survives_newer_revision_and_source_loss_but_refuses_corruption
     assert!(response
         .to_ascii_lowercase()
         .contains("content-disposition: attachment;"));
+    assert!(response
+        .to_ascii_lowercase()
+        .contains("referrer-policy: no-referrer\r\n"));
     assert_eq!(
         response.split_once("\r\n\r\n").unwrap().1,
         "first saved delivery"
@@ -330,6 +339,18 @@ fn exact_download_survives_newer_revision_and_source_loss_but_refuses_corruption
     assert!(server
         .call("POST", &path, &foreign, &body)
         .starts_with("HTTP/1.1 403"));
+    let opaque = headers.replace(
+        &format!("Origin: http://127.0.0.1:{}", server.port),
+        "Origin: null",
+    );
+    let response = server.call("POST", &path, &opaque, &body);
+    assert!(response.starts_with("HTTP/1.1 403"), "{response}");
+    assert!(response
+        .to_ascii_lowercase()
+        .contains("referrer-policy: no-referrer\r\n"));
+    assert!(!response
+        .to_ascii_lowercase()
+        .contains("content-disposition:"));
     let unknown = body.replace(
         first["artifact"].as_str().unwrap(),
         "01aaaaaaaaaaaaaaaaaaaaaaaa",

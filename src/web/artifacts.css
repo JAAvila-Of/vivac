@@ -11,9 +11,11 @@
 .artifact-page label input,.artifact-page label select { display:block; width:100%; margin-top:.3rem; }
 .artifact-page .toolbar,.artifact-page .filters,.artifact-page .actions { display:flex; gap:.7rem; flex-wrap:wrap; align-items:end; }
 .artifact-page .toolbar { justify-content:space-between; margin:1.3rem 0; }
+.artifact-page .filters { margin-bottom:1rem; }
 .artifact-page .filters input { max-width:18rem; }
 .artifact-page .panel { background:var(--panel); border:1px solid var(--sep); border-radius:10px; overflow:hidden; }
 .artifact-page .table-wrap { overflow:auto; }
+.artifact-page #inventory .pagination { margin-top:1rem; }
 .artifact-page table { border-collapse:collapse; width:100%; min-width:710px; text-align:left; }
 .artifact-page th,.artifact-page td { padding:1rem; border-bottom:1px solid var(--sep); vertical-align:top; }
 .artifact-page thead th { color:var(--ink-soft); font-size:.85rem; font-weight:500; }

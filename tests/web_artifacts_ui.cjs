@@ -21,7 +21,7 @@ class Element {
   reportValidity() { return !!this.value; }
 }
 const document = { elements: {}, createElement(tag) { return new Element(tag, this); }, getElementById(id) { return this.elements[id]; } };
-for (const id of ['bootstrap', 'inventory', 'detail', 'rows', 'revision-content', 'revisions', 'message', 'scope', 'from', 'search', 'next-page', 'prev-page', 'capture', 'capabilities', 'back', 'dialog', 'dialog-content']) {
+for (const id of ['bootstrap', 'inventory', 'detail', 'rows', 'revision-content', 'revisions', 'message', 'scope', 'from-label', 'from', 'search', 'next-page', 'prev-page', 'capture', 'capabilities', 'back', 'dialog', 'dialog-content']) {
   const element = document.createElement('div'); element.id = id;
 }
 document.elements.bootstrap.textContent = JSON.stringify({ token: 'abc', base: '/p/project/artifacts', project_base: '/p/project' });
