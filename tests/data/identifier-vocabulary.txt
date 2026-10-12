@@ -1449,7 +1449,6 @@ newest
 newline
 next
 nfd
-ng
 no
 nobody
 node
@@ -1471,6 +1470,7 @@ normalization
 normalize
 normalized
 normalizes
+norway
 not
 note
 noted

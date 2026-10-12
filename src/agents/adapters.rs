@@ -503,7 +503,7 @@ impl Adapter for ClaudeCode {
             offset += line.len();
             if line.trim_end_matches(['\r', '\n']) == "---" {
                 let values: BTreeMap<String, Value> =
-                    serde_yaml_ng::from_str(&rest[..offset - line.len()])
+                    serde_norway::from_str(&rest[..offset - line.len()])
                         .map_err(|_| Failure::usage("Native description could not be read."))?;
                 description = values
                     .get("description")
@@ -594,7 +594,7 @@ impl Adapter for ClaudeCode {
             None
         });
         if let Some(values) =
-            yaml.and_then(|s| serde_yaml_ng::from_str::<BTreeMap<String, Value>>(s).ok())
+            yaml.and_then(|s| serde_norway::from_str::<BTreeMap<String, Value>>(s).ok())
         {
             metadata(
                 &mut candidate,
@@ -631,7 +631,7 @@ impl Adapter for ClaudeCode {
         if assignment.effort != "inherit" {
             values.insert("effort".into(), Value::String(assignment.effort.clone()));
         }
-        let yaml = serde_yaml_ng::to_string(&values)
+        let yaml = serde_norway::to_string(&values)
             .map_err(|_| Failure::usage("The agent assignment cannot be rendered as YAML."))?;
         if let Some(prompt) = prompt {
             return Ok(format!(
