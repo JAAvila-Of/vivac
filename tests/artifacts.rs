@@ -72,6 +72,82 @@ fn capture(sandbox: &Sandbox, path: &str) -> Value {
 }
 
 #[test]
+fn capabilities_need_no_project_and_ignore_an_unreadable_tree() {
+    let sandbox = Sandbox::new_empty("artifact-capabilities");
+    assert_isolated(&sandbox.0.canonicalize().unwrap());
+    let expected = value(&sandbox, &["artifacts", "capabilities", "--json"]);
+    assert_eq!(expected["operation"], "capabilities");
+    assert_eq!(expected["schema_version"], 1);
+    assert_eq!(expected["scope"], "engine");
+    assert_eq!(
+        expected["delivery_types"]["file"]["formats"],
+        serde_json::json!(["utf8_text"])
+    );
+    assert_eq!(
+        expected["delivery_types"]["file"]["max_bytes"],
+        10 * 1024 * 1024
+    );
+    assert_eq!(
+        expected["limits"]["max_file_bytes"],
+        expected["delivery_types"]["file"]["max_bytes"]
+    );
+    assert_eq!(
+        expected["limits"]["max_revision_bytes"],
+        expected["limits"]["max_file_bytes"]
+    );
+    assert_eq!(expected["limits"]["max_files_per_revision"], 1);
+    assert_eq!(expected["limits"]["max_page_size"], 100);
+    assert_eq!(expected["delivery_types"]["file"]["supported"], true);
+    for kind in ["bundle", "sqlite_snapshot"] {
+        assert_eq!(expected["delivery_types"][kind]["supported"], false);
+        assert!(!expected["delivery_types"][kind]["reason"]
+            .as_str()
+            .unwrap()
+            .trim()
+            .is_empty());
+    }
+    assert_eq!(expected["execution"]["provided"], false);
+    assert_eq!(expected["bytes_checked"], false);
+    assert_eq!(expected["event_recorded"], false);
+    assert!(!sandbox.0.join(".vivac").exists());
+    assert!(!sandbox.0.join(".vivac-artifacts").exists());
+    assert!(sandbox.ok(&["artifacts", "capabilities"]).contains("UTF-8"));
+
+    sandbox.ok(&["init", "--yes"]);
+    let events = sandbox.0.join(".vivac").join("events");
+    fs::write(&events, b"Unreadable synthetic log\n").unwrap();
+    let before = fs::read(&events).unwrap();
+    assert_eq!(
+        value(&sandbox, &["artifacts", "capabilities", "--json"]),
+        expected
+    );
+    assert_eq!(fs::read(&events).unwrap(), before);
+    assert!(!sandbox.0.join(".vivac-artifacts").exists());
+}
+
+#[test]
+fn capabilities_reject_project_and_delivery_arguments_without_creating_storage() {
+    let sandbox = Sandbox::new_empty("artifact-capabilities-arguments");
+    assert_isolated(&sandbox.0.canonicalize().unwrap());
+    for extra in [
+        vec!["extra"],
+        vec!["--all"],
+        vec!["--from", "g1"],
+        vec!["--limit", "1"],
+        vec!["--unknown"],
+    ] {
+        let mut args = vec!["artifacts", "capabilities", "--json"];
+        args.extend(extra);
+        let (output, code) = sandbox.run(&args);
+        assert_ne!(code, 0, "{output}");
+        let refused: Value = serde_json::from_str(&output).unwrap();
+        assert!(refused["error"].as_str().unwrap().contains("argument"));
+    }
+    assert!(!sandbox.0.join(".vivac").exists());
+    assert!(!sandbox.0.join(".vivac-artifacts").exists());
+}
+
+#[test]
 fn revisions_survive_source_loss_and_decisions_keep_the_reviewed_reference() {
     let sandbox = seeded("artifact-revisions");
     let first = b"<html><h1>First selected delivery</h1></html>\n";

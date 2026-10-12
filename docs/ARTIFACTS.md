@@ -149,8 +149,75 @@ that original receipt; contradictory retries are refused.
 
 ## MCP
 
-`vivac_artifacts` exposes `list`, `show`, `capture`, `check` and `restore` with
+`vivac_artifacts` exposes `list`, `show`, `capture`, `check`, `restore` and
+`capabilities` with
 the same file custody guards and local scope as the CLI. Capture requires
 `path` and `from`; restore requires `to`. Replies contain `exit_code` and
 structured `result`.
 File bodies are never returned through MCP or added to the tree.
+
+## Discover capture support
+
+```sh
+vivac artifacts capabilities --json
+```
+
+The query reports the installed engine's supported delivery types, effective
+size and pagination limits, and execution policy. It works outside a project
+and does not load the provenance tree or inspect file bodies. MCP exposes the
+same result through `vivac_artifacts` with `operation: "capabilities"`.
+
+The current engine retains one UTF-8 file per revision, up to 10 MiB. A
+self-contained HTML file can include JavaScript and remain a single delivery.
+Complete multi-file bundles and SQLite snapshots are unsupported. Recognizing
+their filenames does not make them eligible for custody. Retaining a supported
+code file does not prove that an entire application can be recovered or run.
+Vivac does not execute deliveries or install their runtime dependencies.
+
+## Incorporate existing deliveries with a skill
+
+`vivac setup claude-code` and `vivac setup codex` install the optional
+`vivac-artifacts` workflow in their native project skill directories. Setup
+installs instructions; it does not search for or capture existing deliveries.
+Ask your harness to use the skill with selected paths, for example:
+
+> Use vivac-artifacts to review designs/checkout.html and retain it if the
+> installed engine supports it. Propose the producer before capturing.
+
+The workflow checks installed capabilities, preserves the person's selection
+and uses the artifact engine for capture. If the historical producer is unknown,
+it records the incorporation task without inventing the delivery's origin.
+It can also retain a reviewed new revision of an existing identity. File
+bodies stay outside the log; custody does not execute content or approve it.
+
+For direct operation, use `vivac artifacts` or the project's Artifacts page.
+Unchanged skills written by setup can be refreshed by setup and removed by
+`vivac setup codex --undo` or `vivac setup claude-code --undo`; local edits and
+foreign copies are preserved.
+
+## Manage deliveries in the web
+
+Open a project in `vivac web`, then choose **Artifacts**. The inventory shows
+the latest delivery and decisions referencing its revisions separately. An
+earlier decision reference does not apply to a newer delivery. The node's
+lineage page also links to deliveries in that scope.
+
+Select an artifact to inspect a particular revision, its producer and its
+references. Integrity checks are explicit and show when they ran; metadata
+alone does not prove the state of the working file or retained copy. Capture
+requires a project-relative source and producer node. A new revision continues
+the latest revision reported by the engine, preserving the selected older one.
+Restore creates a new project-relative destination and refuses occupied paths.
+
+Download recovers the exact selected revision as an attachment. The engine
+copies and verifies it incrementally into a private temporary file and removes
+its name before sending bytes. The browser streams the attachment without
+opening it inside vivac; the server does not buffer the whole delivery. A
+failed verification or unsupported unlink operation refuses the download. A
+crash during preparation can leave a temporary object for a store check to
+report. Download and restore do not create new receipts or imply approval.
+
+Operations require the web session and same-origin authorization. A failed
+network response does not prove that a capture was never recorded; inspect
+the revisions before retrying an uncertain capture. Supported types and
+limits come from the installed engine's capabilities query.

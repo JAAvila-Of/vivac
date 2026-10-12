@@ -465,6 +465,7 @@ fn plan_items(
     prompt_missing: bool,
     skill_file_state: &SkillState,
     agents_skill: &super::agents_skill::Skill,
+    artifacts_skill: &super::agents_skill::Skill,
 ) -> Vec<PlanItem> {
     let (config_verb, config_what) = match config_state {
         ConfigState::Create => ("create", "the \"vivac\" server"),
@@ -541,6 +542,7 @@ fn plan_items(
         hooks_item,
         PlanItem::new(skill_verb, SKILL_LABEL, skill_what),
         agents_skill.plan(),
+        artifacts_skill.plan(),
     ]
 }
 
@@ -571,9 +573,13 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     let hooks = read_json(&target.hooks);
     let skill_raw = std::fs::read_to_string(&target.skill).ok();
     let agents_skill = super::agents_skill::Skill::read(here, super::agents_skill::CODEX_LABEL);
+    let artifacts_skill = super::artifacts_skill::read(here, super::artifacts_skill::CODEX_LABEL);
 
     let mut conflicts: Vec<String> = Vec::new();
     if let Some(conflict) = agents_skill.conflict() {
+        conflicts.push(conflict);
+    }
+    if let Some(conflict) = artifacts_skill.conflict() {
         conflicts.push(conflict);
     }
 
@@ -632,7 +638,8 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     let nothing_to_write = !config_needs_write
         && !hooks_needs_write
         && !skill_missing_or_replaceable
-        && !agents_skill.needs_write();
+        && !agents_skill.needs_write()
+        && !artifacts_skill.needs_write();
 
     let plan_block = format!(
         "{}{}",
@@ -651,6 +658,7 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
                 prompt_missing,
                 &skill_file_state,
                 &agents_skill,
+                &artifacts_skill,
             ),
         )
     );
@@ -770,6 +778,7 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     }
 
     agents_skill.write(&mut writes);
+    artifacts_skill.write(&mut writes);
     super::commit(&writes)?;
 
     // Bookkeeping, not a write this promise is about (`note_registry`'s
@@ -806,6 +815,7 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
     let hooks = read_json(&target.hooks);
     let skill_raw = std::fs::read_to_string(&target.skill).ok();
     let agents_skill = super::agents_skill::Skill::read(here, super::agents_skill::CODEX_LABEL);
+    let artifacts_skill = super::artifacts_skill::read(here, super::artifacts_skill::CODEX_LABEL);
 
     let mut conflicts: Vec<String> = Vec::new();
     if let Some((line, col)) = hooks.parse_error {
@@ -852,7 +862,8 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
         && !stop_ours
         && !prompt_ours
         && !skill_ours
-        && !agents_skill.ours();
+        && !agents_skill.ours()
+        && !artifacts_skill.ours();
     if nothing_to_undo {
         outln!("Nothing to undo: none of what setup writes is here.");
         return Ok(0);
@@ -951,6 +962,7 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
         hooks_item,
         PlanItem::new(skill_verb, SKILL_LABEL, skill_what),
         agents_skill.undo_plan(),
+        artifacts_skill.undo_plan(),
     ];
     let mut s = heading(Stream::Out, "vivac setup codex --undo", here);
     s.push_str(&render_items(Stream::Out, &items));
@@ -1038,8 +1050,10 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
     }
 
     agents_skill.delete(&mut writes);
+    artifacts_skill.delete(&mut writes);
     super::commit(&writes)?;
     agents_skill.clean_empty_directory();
+    artifacts_skill.clean_empty_directory();
 
     // Best-effort, and only once the commit above is known to have
     // succeeded: an empty directory left behind costs nothing to leave for

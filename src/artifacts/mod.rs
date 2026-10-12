@@ -14,6 +14,26 @@ use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
+const MAX_FILE_BYTES: u64 = 10 * 1024 * 1024;
+const MAX_PAGE_SIZE: usize = 100;
+
+fn capabilities() -> Value {
+    json!({
+        "operation": "capabilities",
+        "schema_version": 1,
+        "scope": "engine",
+        "delivery_types": {
+            "file": {"supported": true, "formats": ["utf8_text"], "max_bytes": MAX_FILE_BYTES},
+            "bundle": {"supported": false, "reason": "Complete multi-file revision capture is not supported."},
+            "sqlite_snapshot": {"supported": false, "reason": "Database-specific inspection and consistent snapshot capture are not supported."}
+        },
+        "limits": {"max_file_bytes": MAX_FILE_BYTES, "max_revision_bytes": MAX_FILE_BYTES, "max_files_per_revision": 1, "max_page_size": MAX_PAGE_SIZE},
+        "execution": {"provided": false},
+        "bytes_checked": false,
+        "event_recorded": false
+    })
+}
+
 #[derive(Serialize)]
 struct Revision<'a> {
     artifact: &'a str,
@@ -164,7 +184,7 @@ fn metadata(revision: &Revision) -> Result<(), Failure> {
             .previous
             .as_ref()
             .is_some_and(|value| !valid_id(value))
-        || revision.size > 10 * 1024 * 1024
+        || revision.size > MAX_FILE_BYTES
         || revision.digest.len() != 64
         || !revision
             .digest
@@ -270,21 +290,20 @@ fn required<'a>(args: &'a Args, key: &str) -> Result<&'a str, Failure> {
 fn validate(args: &Args) -> Result<&str, Failure> {
     let operation = args.positional(0).unwrap_or("list");
     let allowed: &[&str] = match operation {
+        "capabilities" => &["json"],
         "list" => &["json", "all", "from", "limit", "offset"],
         "show" => &["json", "revision", "limit", "offset"],
         "capture" => &["json", "from", "artifact", "previous", "operation"],
         "check" if args.has("store") => &["json", "revision", "store", "limit", "offset"],
         "check" => &["json", "revision", "store"],
         "restore" => &["json", "revision", "to", "orphan"],
-        _ => {
-            return Err(Failure::usage(
-                "Unknown artifact operation; use list, show, capture, check or restore.",
-            ))
-        }
+        _ => return Err(Failure::usage(
+            "Unknown artifact operation; use capabilities, list, show, capture, check or restore.",
+        )),
     };
     if !args.unknown(allowed).is_empty()
         || !args
-            .extra(if operation == "list" {
+            .extra(if operation == "list" || operation == "capabilities" {
                 usize::from(args.positional(0).is_some())
             } else {
                 2
@@ -355,10 +374,57 @@ fn describe(tree: &Tree, revision: &Revision) -> Value {
         revision.artifact, revision.revision
     ));
     value["retained_check"] = json!("unverified");
+    if let Some(producer) = tree.node(revision.producer) {
+        value["producer_node"] =
+            json!({"node":producer.id,"alias":producer.alias(),"title":producer.title(tree)});
+    }
     let (references, total) = references(tree, revision);
     value["decision_references"] = json!(references);
     value["decision_references_total"] = json!(total);
     value["decision_references_truncated"] = json!(total > 100);
+    value
+}
+
+fn artifact_references(tree: &Tree, ledger: &Ledger, artifact: &str) -> (Vec<Value>, usize) {
+    let mut entries = Vec::new();
+    let mut total = 0;
+    for node in tree
+        .nodes_iter()
+        .filter(|node| node.kind == crate::event::Kind::Decision)
+    {
+        let refs = node.refs(tree);
+        for (index, reference) in refs.iter().enumerate() {
+            if refs[..index].contains(reference) {
+                continue;
+            }
+            let Some((identity, revision)) = reference
+                .strip_prefix("artifact:")
+                .and_then(|reference| reference.split_once('@'))
+            else {
+                continue;
+            };
+            if identity != artifact
+                || ledger
+                    .get(revision)
+                    .is_none_or(|revision| revision.artifact != artifact)
+            {
+                continue;
+            }
+            total += 1;
+            if entries.len() < 100 {
+                entries.push(json!({"revision":revision,"node":node.id,"alias":node.alias(),"kind":node.kind.word(),"state":node.state.word(node.kind)}));
+            }
+        }
+    }
+    (entries, total)
+}
+
+fn describe_list(tree: &Tree, ledger: &Ledger, revision: &Revision) -> Value {
+    let mut value = describe(tree, revision);
+    let (references, total) = artifact_references(tree, ledger, revision.artifact);
+    value["artifact_decision_references"] = json!(references);
+    value["artifact_decision_references_total"] = json!(total);
+    value["artifact_decision_references_truncated"] = json!(total > 100);
     value
 }
 
@@ -371,7 +437,7 @@ fn list(ctx: &Ctx, ledger: &Ledger, args: &Args) -> Result<Value, Failure> {
     };
     let limit = number("limit", 20)?;
     let offset = number("offset", 0)?;
-    if !(1..=100).contains(&limit) {
+    if !(1..=MAX_PAGE_SIZE).contains(&limit) {
         return Err(Failure::usage(
             "Artifact page limit must be between 1 and 100.",
         ));
@@ -410,7 +476,7 @@ fn list(ctx: &Ctx, ledger: &Ledger, args: &Args) -> Result<Value, Failure> {
     let entries: Vec<_> = selected()
         .skip(offset)
         .take(limit)
-        .map(|r| describe(&ctx.tree, &r))
+        .map(|r| describe_list(&ctx.tree, ledger, &r))
         .collect();
     let next = offset.saturating_add(entries.len());
     Ok(
@@ -559,7 +625,7 @@ fn check(ctx: &Ctx, ledger: &Ledger, args: &Args) -> Result<(Value, i32), Failur
         };
         let limit = number("limit", 20)?;
         let offset = number("offset", 0)?;
-        if !(1..=100).contains(&limit) {
+        if !(1..=MAX_PAGE_SIZE).contains(&limit) {
             return Err(Failure::usage(
                 "Artifact page limit must be between 1 and 100.",
             ));
@@ -694,6 +760,9 @@ fn restore(ctx: &Ctx, ledger: &Ledger, args: &Args) -> Result<Value, Failure> {
 
 fn execute(cwd: &Path, args: &Args) -> Result<(Value, i32), Failure> {
     let operation = validate(args)?;
+    if operation == "capabilities" {
+        return Ok((capabilities(), 0));
+    }
     let diagnose = (operation == "check" && args.has("store"))
         || (operation == "restore" && args.has("orphan"));
     let mut ctx = context(cwd, diagnose, operation == "capture")?;
@@ -730,7 +799,7 @@ fn execute_read(ctx: &Ctx, args: &Args) -> Result<(Value, i32), Failure> {
             };
             let limit = parse("limit", 20)?;
             let offset = parse("offset", 0)?;
-            if !(1..=100).contains(&limit) {
+            if !(1..=MAX_PAGE_SIZE).contains(&limit) {
                 return Err(Failure::usage(
                     "Artifact page limit must be between 1 and 100.",
                 ));
@@ -753,7 +822,7 @@ fn execute_read(ctx: &Ctx, args: &Args) -> Result<(Value, i32), Failure> {
                 .collect();
             let next = offset.saturating_add(entries.len());
             Ok((
-                json!({"operation":"show","artifact":selected.artifact,"revisions":entries,"bytes_checked":false,"total":total,"next_offset":if next<total {Some(next)} else {None}}),
+                json!({"operation":"show","artifact":selected.artifact,"latest_revision":ledger.latest(selected.artifact).map(|revision| revision.revision),"revisions":entries,"bytes_checked":false,"total":total,"next_offset":if next<total {Some(next)} else {None}}),
                 0,
             ))
         }
@@ -789,6 +858,9 @@ pub(crate) fn run_project_value(
 ) -> (Value, i32) {
     let result = (|| {
         let operation = validate(args)?;
+        if operation == "capabilities" {
+            return Ok((capabilities(), 0));
+        }
         if operation == "capture" {
             let ctx = project.current()?;
             if ctx.tree.broken_lines != 0 {
@@ -809,6 +881,51 @@ pub(crate) fn run_project_value(
     envelope(result)
 }
 
+pub(crate) use files::Download;
+
+pub(crate) fn project_download(
+    project: &mut crate::project::Project,
+    artifact: &str,
+    revision: &str,
+) -> Result<(Download, String), Failure> {
+    if !valid_id(artifact) || !valid_id(revision) {
+        return Err(Failure::usage("Invalid artifact or revision identifier."));
+    }
+    let ctx = project.current()?;
+    if ctx.tree.broken_lines != 0 {
+        return Err(Failure::Model(
+            "Artifact custody refuses an unreadable event log.".into(),
+        ));
+    }
+    let ledger = replay(&ctx.tree)?;
+    let selected = ledger
+        .get(revision)
+        .filter(|selected| selected.artifact == artifact)
+        .ok_or_else(|| Failure::usage("This revision does not belong to the selected artifact."))?;
+    let filename = selected
+        .source
+        .rsplit('/')
+        .next()
+        .filter(|name| {
+            !name.is_empty()
+                && *name != "."
+                && *name != ".."
+                && name.len() <= 128
+                && name
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+        })
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("{revision}.bin"));
+    let reader = files::download(
+        &ctx.lane_dir,
+        selected.object,
+        selected.digest,
+        selected.size,
+    )?;
+    Ok((reader, filename))
+}
+
 pub fn run(cwd: &Path, args: &Args) -> Result<i32, Failure> {
     let (value, code) = run_value(cwd, args);
     if args.has("json") {
@@ -822,6 +939,12 @@ pub fn run(cwd: &Path, args: &Args) -> Result<i32, Failure> {
 fn print(value: &Value) -> Result<(), Failure> {
     if let Some(message) = value["error"].as_str() {
         crate::output::outln!("Refused: {message}");
+        return Ok(());
+    }
+    if value["operation"] == "capabilities" {
+        let max_mib = MAX_FILE_BYTES / (1024 * 1024);
+        crate::output::outln!("Artifacts: one UTF-8 text file per revision, up to {max_mib} MiB; pages up to {MAX_PAGE_SIZE}.");
+        crate::output::outln!("Bundles, database snapshots and execution are not supported.");
         return Ok(());
     }
     crate::output::outln!(
@@ -885,6 +1008,12 @@ pub(crate) fn request_args(value: &Value) -> Result<Args, Failure> {
     let object = value
         .as_object()
         .ok_or_else(|| Failure::usage("Invalid artifact request arguments."))?;
+    if object.get("operation").and_then(Value::as_str) == Some("capabilities") && object.len() != 1
+    {
+        return Err(Failure::usage(
+            "Capabilities does not take additional arguments.",
+        ));
+    }
     if object.keys().any(|key| !fields.contains(&key.as_str())) {
         return Err(Failure::usage("Invalid artifact request arguments."));
     }
@@ -1160,6 +1289,112 @@ mod tests {
         assert_eq!(described["decision_references_total"], 125);
         assert_eq!(described["decision_references_truncated"], true);
         assert!(described.get("approval").is_none());
+        let listed = describe_list(&tree, &ledger, &ledger.get(&revision).unwrap());
+        assert_eq!(
+            listed["artifact_decision_references"]
+                .as_array()
+                .unwrap()
+                .len(),
+            100
+        );
+        assert_eq!(listed["artifact_decision_references_total"], 125);
+        assert_eq!(listed["artifact_decision_references_truncated"], true);
+        assert_eq!(
+            listed["artifact_decision_references"][0]["revision"],
+            revision
+        );
+    }
+
+    #[test]
+    fn artifact_decisions_credit_only_existing_revisions_of_the_same_delivery() {
+        let mut tree = Tree::default();
+        let artifact = crate::id::ulid();
+        let foreign = crate::id::ulid();
+        let first = crate::id::ulid();
+        let second = crate::id::ulid();
+        let other = crate::id::ulid();
+        let producer = crate::id::ulid();
+        let reference = format!("artifact:{artifact}@{first}");
+        for (num, kind, refs) in [
+            (1, crate::event::Kind::Task, vec![reference.clone()]),
+            (
+                2,
+                crate::event::Kind::Decision,
+                vec![
+                    reference.clone(),
+                    reference,
+                    format!("artifact:{artifact}@{other}"),
+                    format!("artifact:{foreign}@{first}"),
+                    format!("artifact:{artifact}@{}", crate::id::ulid()),
+                ],
+            ),
+            (
+                3,
+                crate::event::Kind::Decision,
+                vec![format!("artifact:{artifact}@{second}")],
+            ),
+        ] {
+            tree.apply(
+                num,
+                "2026-10-11T00:00:00Z",
+                crate::lane::MAIN,
+                &Body::NodeCreated {
+                    node: if num == 1 {
+                        producer.clone()
+                    } else {
+                        crate::id::ulid()
+                    },
+                    num,
+                    kind,
+                    title: "Review selected delivery".into(),
+                    why: String::new(),
+                    parent: None,
+                    blocks: false,
+                    refs,
+                    governs: vec![],
+                    arms: vec![],
+                    against: None,
+                },
+            );
+        }
+        for (seq, identity, revision, previous) in [
+            (4, artifact.clone(), first.clone(), None),
+            (5, artifact.clone(), second.clone(), Some(first.clone())),
+            (6, foreign, other, None),
+        ] {
+            tree.apply(
+                seq,
+                "2026-10-11T00:00:00Z",
+                crate::lane::MAIN,
+                &Body::ArtifactCaptured {
+                    artifact: identity,
+                    revision: revision.clone(),
+                    operation: crate::id::ulid(),
+                    producer: producer.clone(),
+                    previous,
+                    source: "delivery.txt".into(),
+                    site: crate::id::ulid(),
+                    size: 17,
+                    digest: "a".repeat(64),
+                    object: format!("objects/{revision}.blob"),
+                },
+            );
+        }
+        let ledger = replay(&tree).unwrap();
+        let listed = describe_list(&tree, &ledger, &ledger.latest(&artifact).unwrap());
+        assert_eq!(listed["revision"], second);
+        assert_eq!(listed["artifact_decision_references_total"], 2);
+        assert_eq!(listed["artifact_decision_references_truncated"], false);
+        let refs = listed["artifact_decision_references"].as_array().unwrap();
+        assert!(refs
+            .iter()
+            .any(|entry| entry["revision"] == first && entry["alias"] == "d2"));
+        assert!(refs
+            .iter()
+            .any(|entry| entry["revision"] == second && entry["alias"] == "d3"));
+        assert!(refs
+            .iter()
+            .all(|entry| entry["kind"] == "decision" && entry.get("title").is_none()));
     }
 
     #[test]
@@ -1262,6 +1497,103 @@ mod tests {
         assert_eq!(ledger.projection.unwrap().operations_count(), 10_000);
         let last = format!("{:026x}", 29_999);
         assert_eq!(ledger.get(&last).unwrap().source, "mockup.html");
+    }
+
+    #[test]
+    #[ignore = "Run explicitly in release mode to measure resident metadata reads."]
+    fn measure_resident_inventory_with_ten_thousand_artifacts_and_decisions() {
+        let root = standalone_root("artifact-inventory-benchmark");
+        let store = Store::create(&root).unwrap();
+        let mut ctx = Ctx::load_for_write(store, Whose::Founding).unwrap();
+        let producer = format!("{:026x}", 1);
+        ctx.tree.apply(
+            1,
+            "2026-10-11T00:00:00Z",
+            crate::lane::MAIN,
+            &Body::NodeCreated {
+                node: producer.clone(),
+                num: 1,
+                kind: crate::event::Kind::Task,
+                title: "Produce selected deliveries".into(),
+                why: String::new(),
+                parent: None,
+                blocks: false,
+                refs: vec![],
+                governs: vec![],
+                arms: vec![],
+                against: None,
+            },
+        );
+        for index in 0..10_000u64 {
+            let artifact = format!("{:026x}", 10_000 + index);
+            let revision = format!("{:026x}", 20_000 + index);
+            ctx.tree.apply(
+                index + 2,
+                "2026-10-11T00:00:00Z",
+                crate::lane::MAIN,
+                &Body::NodeCreated {
+                    node: format!("{:026x}", 100_000 + index),
+                    num: index + 2,
+                    kind: crate::event::Kind::Decision,
+                    title: "Reference selected delivery".into(),
+                    why: String::new(),
+                    parent: None,
+                    blocks: false,
+                    refs: vec![format!("artifact:{artifact}@{revision}")],
+                    governs: vec![],
+                    arms: vec![],
+                    against: None,
+                },
+            );
+            ctx.tree.artifact_history.push((
+                "main".into(),
+                Body::ArtifactCaptured {
+                    artifact,
+                    revision: revision.clone(),
+                    operation: format!("{:026x}", 30_000 + index),
+                    producer: producer.clone(),
+                    previous: None,
+                    source: "delivery.txt".into(),
+                    site: format!("{:026x}", 2),
+                    size: 17,
+                    digest: "a".repeat(64),
+                    object: format!("objects/{revision}.blob"),
+                },
+            ));
+        }
+        ctx.tree.rebuild_artifact_projection();
+        let args = Args::parse(vec!["list".into(), "--all".into()]).unwrap();
+        let mut durations = Vec::with_capacity(100);
+        let mut peak = 0;
+        for _ in 0..100 {
+            let ((value, duration), allocated) = crate::test_alloc::measure(|| {
+                let started = std::time::Instant::now();
+                let ledger = replay(&ctx.tree).unwrap();
+                let value = list(&ctx, &ledger, &args).unwrap();
+                (value, started.elapsed())
+            });
+            assert_eq!(value["total"], 10_000);
+            assert_eq!(value["artifacts"].as_array().unwrap().len(), 20);
+            assert!(value["artifacts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|entry| entry["artifact_decision_references_total"] == 1));
+            durations.push(duration);
+            peak = peak.max(allocated);
+        }
+        durations.sort();
+        eprintln!("Resident artifact inventory metadata: 100 release samples, 10000 artifacts and 10000 decisions, page of 20; p50={:?}, p99={:?}, peak auxiliary={peak} bytes. Includes replay validation and LIST metadata construction. Context loading, socket handling, serialization and byte inspection are excluded.", durations[49], durations[98]);
+        assert!(
+            peak <= 2 * 1024 * 1024,
+            "inventory metadata allocated {peak} auxiliary bytes"
+        );
+        assert!(
+            durations[98] < std::time::Duration::from_millis(50),
+            "resident inventory metadata exceeded its fifty millisecond p99 budget"
+        );
+        drop(ctx);
+        fs::remove_dir_all(root).unwrap();
     }
 
     fn store_check_fixture(count: u64) -> (std::path::PathBuf, Ctx) {

@@ -124,9 +124,9 @@ const TOOLS: &[Tool] = &[
         name: "vivac_artifacts",
         title: "Retain selected artifact deliveries",
         read_only: false,
-        description: "Capture selected project-relative UTF-8 deliveries locally, outside the provenance tree. Operations mirror vivac artifacts: list, show, capture, check and restore. Capture requires path and an explicit producer from; use artifact to deliver a new revision, never merge by filename. List defaults to focus lineage; all lists the project. Returned references pin artifact identity and revision; recording a delivery does not approve it or prove a source snapshot. Review the retained copy and reference that revision in a decision. Check explicitly compares bytes; metadata listings remain unverified. Restore writes a new destination only and never overwrites. Store check reports unrecorded objects without inventing provenance; orphan restore rescues their bytes without recording a delivery. No network, execution, folder watching or automatic binary import. Content must pass sensitive-value guards; the size limit is 10 MiB.",
+        description: "Capture selected project-relative UTF-8 deliveries locally, outside the provenance tree. Operations mirror vivac artifacts: capabilities, list, show, capture, check and restore. Capabilities reports engine formats and limits without reading project state; it takes no other arguments. Capture requires path and an explicit producer from; use artifact to deliver a new revision, never merge by filename. List defaults to focus lineage; all lists the project. Returned references pin artifact identity and revision; recording a delivery does not approve it or prove a source snapshot. Review the retained copy and reference that revision in a decision. Check explicitly compares bytes; metadata listings remain unverified. Restore writes a new destination only and never overwrites. Store check reports unrecorded objects without inventing provenance; orphan restore rescues their bytes without recording a delivery. No network, execution, folder watching or automatic binary import. Content must pass sensitive-value guards; the size limit is 10 MiB.",
         args: &[
-            Arg { name:"operation",kind:ArgKind::Str,required:true,description:"list, show, capture, check or restore." },
+            Arg { name:"operation",kind:ArgKind::Str,required:true,description:"capabilities, list, show, capture, check or restore." },
             Arg { name:"artifact",kind:ArgKind::Str,required:false,description:"Stable artifact identity, never inferred from a filename." },
             Arg { name:"path",kind:ArgKind::Str,required:false,description:"Selected project-relative source; capture only." },
             Arg { name:"from",kind:ArgKind::Str,required:false,description:"Producer node for capture, or scope node for list." },
@@ -1023,8 +1023,14 @@ fn schema(t: &Tool) -> Value {
         ]);
     }
     if t.name == "vivac_artifacts" {
-        properties.get_mut("operation").unwrap()["enum"] =
-            json!(["list", "show", "capture", "check", "restore"]);
+        properties.get_mut("operation").unwrap()["enum"] = json!([
+            "capabilities",
+            "list",
+            "show",
+            "capture",
+            "check",
+            "restore"
+        ]);
     }
     let mut annotations = json!({
         "readOnlyHint": t.read_only,

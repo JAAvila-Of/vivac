@@ -138,7 +138,14 @@ fn artifact_tool_discovery_declares_the_selected_operations() {
         .expect("artifact tool is discoverable");
     let properties = &tool["inputSchema"]["properties"];
     let operations = properties["operation"]["enum"].as_array().unwrap();
-    for operation in ["capture", "list", "show", "check", "restore"] {
+    for operation in [
+        "capabilities",
+        "capture",
+        "list",
+        "show",
+        "check",
+        "restore",
+    ] {
         assert!(operations.contains(&json!(operation)), "{tool}");
     }
     for name in [
@@ -153,6 +160,49 @@ fn artifact_tool_discovery_declares_the_selected_operations() {
     ] {
         assert!(properties.get(name).is_some(), "missing {name}: {tool}");
     }
+}
+
+#[test]
+fn capabilities_do_not_refresh_a_resident_project_and_match_the_cli() {
+    let sandbox = seeded("artifact-mcp-capabilities");
+    let expected = cli(&sandbox, &["artifacts", "capabilities", "--json"]);
+    let mut server = Server::start(&sandbox);
+    let first = server.artifacts(json!({"operation":"capabilities"}));
+    assert_eq!(first["exit_code"], 0);
+    assert_eq!(first["result"], expected);
+    let config = sandbox.0.join(".vivac").join("config");
+    let events = sandbox.0.join(".vivac").join("events");
+    fs::write(&config, b"Unreadable synthetic config\n").unwrap();
+    fs::write(&events, b"Unreadable synthetic log\n").unwrap();
+    let after = server.artifacts(json!({"operation":"capabilities"}));
+    assert_eq!(after, first);
+    assert_eq!(fs::read(&config).unwrap(), b"Unreadable synthetic config\n");
+    assert_eq!(fs::read(&events).unwrap(), b"Unreadable synthetic log\n");
+    assert!(!sandbox.0.join(".vivac-artifacts").exists());
+}
+
+#[test]
+fn capabilities_refuse_additional_mcp_parameters() {
+    let sandbox = seeded("artifact-mcp-capabilities-arguments");
+    let mut server = Server::start(&sandbox);
+    for (key, value) in [
+        ("artifact", json!(OPERATION)),
+        ("path", json!("design.html")),
+        ("from", json!("g1")),
+        ("all", json!(false)),
+        ("limit", json!(1)),
+        ("revision", Value::Null),
+        ("unknown", json!(true)),
+    ] {
+        let mut arguments = json!({"operation":"capabilities"});
+        arguments[key] = value;
+        let reply = server.ask(
+            "tools/call",
+            json!({"name":"vivac_artifacts","arguments":arguments}),
+        );
+        assert_eq!(reply["result"]["isError"], true, "{reply}");
+    }
+    assert!(!sandbox.0.join(".vivac-artifacts").exists());
 }
 
 #[test]

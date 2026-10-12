@@ -98,7 +98,7 @@ fn random_hex(bytes: usize) -> Result<String, Failure> {
 /// The length mismatch is folded into the same accumulator rather than
 /// checked with a short-circuiting `!=` up front, so a guess of the wrong
 /// length costs the same as one of the right length.
-fn constant_time_eq(a: &str, b: &str) -> bool {
+pub(super) fn constant_time_eq(a: &str, b: &str) -> bool {
     let a = a.as_bytes();
     let b = b.as_bytes();
     let mut diff: u8 = (a.len() != b.len()) as u8;

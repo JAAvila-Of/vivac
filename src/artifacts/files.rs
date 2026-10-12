@@ -2,7 +2,7 @@ use crate::failure::Failure;
 use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
 use cap_std::fs::{Dir, File, Metadata, OpenOptions};
 use sha2::{Digest, Sha256};
-use std::io::{self, Read, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path};
 use std::process::{Command, Stdio};
 
@@ -13,6 +13,76 @@ pub struct Retained {
     pub site: String,
 }
 const STORE: &str = ".vivac-artifacts";
+
+pub(crate) struct Download {
+    reader: File,
+    size: u64,
+}
+
+impl Download {
+    pub(crate) fn size(&self) -> u64 {
+        self.size
+    }
+}
+
+impl Read for Download {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        self.reader.read(buffer)
+    }
+}
+
+pub(crate) fn download(
+    root: &Path,
+    object: &str,
+    digest: &str,
+    size: u64,
+) -> Result<Download, Failure> {
+    object_path(object)?;
+    let root_dir = open_root(root)?;
+    let store = store(&root_dir, false)?;
+    let objects = directory(&store, "objects", false)?;
+    let mut saved = regular(&store, object)?;
+    let before = saved.metadata()?;
+    #[cfg(windows)]
+    let before_identity = file_identity(&saved)?;
+    let temporary = format!(".tmp-{}", crate::id::ulid());
+    check_git(root, object, &temporary)?;
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .follow(FollowSymlinks::No);
+    let mut staged = objects.open_with(&temporary, &options)?;
+    let result = (|| {
+        check_git(root, object, &temporary)?;
+        let receipt = super::guard::copy_checked(&mut saved, &mut staged)?;
+        matching(&receipt.digest, receipt.size, digest, size)?;
+        unchanged(&before, &saved.metadata()?)?;
+        let current = regular(&store, object)?;
+        unchanged(&before, &current.metadata()?)?;
+        #[cfg(windows)]
+        {
+            same_source(&saved, &current)?;
+            if before_identity != file_identity(&saved)? {
+                return Err(Failure::usage(
+                    "The retained artifact identity changed while preparing the download.",
+                ));
+            }
+        }
+        check_git(root, object, &temporary)?;
+        staged.seek(SeekFrom::Start(0))?;
+        objects.remove_file(&temporary)?;
+        Ok(Download {
+            reader: staged,
+            size: receipt.size,
+        })
+    })();
+    if result.is_err() {
+        let _ = objects.remove_file(&temporary);
+    }
+    result
+}
 
 pub fn capture(root: &Path, source: &str, revision: &str) -> Result<Retained, Failure> {
     source_path(source)?;
@@ -447,8 +517,7 @@ fn temporary(dir: &Dir) -> Result<(String, File), Failure> {
 }
 
 fn hash(file: &mut File) -> Result<(String, u64), Failure> {
-    const SIZE_LIMIT: u64 = 10 * 1024 * 1024;
-    if file.metadata()?.len() > SIZE_LIMIT {
+    if file.metadata()?.len() > super::MAX_FILE_BYTES {
         return Err(Failure::usage("Artifact files must not exceed 10 MiB."));
     }
     let mut digest = Sha256::new();
@@ -461,7 +530,7 @@ fn hash(file: &mut File) -> Result<(String, u64), Failure> {
         }
         digest.update(&buffer[..count]);
         size += count as u64;
-        if size > SIZE_LIMIT {
+        if size > super::MAX_FILE_BYTES {
             return Err(Failure::usage("Artifact files must not exceed 10 MiB."));
         }
     }
@@ -851,6 +920,67 @@ mod tests {
             b"safe artifact"
         );
     }
+
+    #[test]
+    fn prepared_download_is_unnamed_and_independent_of_later_retained_changes() {
+        let dir = Scratch::new();
+        fs::write(dir.0.join("source.txt"), b"selected saved delivery").unwrap();
+        let saved = capture(&dir.0, "source.txt", REVISION).unwrap();
+        let mut reader = download(&dir.0, &saved.object, &saved.digest, saved.size).unwrap();
+        assert_eq!(reader.size(), saved.size);
+        assert_eq!(objects(&dir.0).unwrap().len(), 1);
+        fs::write(
+            dir.0.join(STORE).join(&saved.object),
+            b"later retained modification",
+        )
+        .unwrap();
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, b"selected saved delivery");
+        assert!(download(&dir.0, &saved.object, &saved.digest, saved.size).is_err());
+        assert_eq!(objects(&dir.0).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn maximum_download_uses_bounded_auxiliary_memory_and_leaves_no_temporary() {
+        let dir = Scratch::new();
+        let mut source = fs::File::create(dir.0.join("source.txt")).unwrap();
+        let block = [b' '; 64 * 1024];
+        for _ in 0..160 {
+            source.write_all(&block).unwrap();
+        }
+        drop(source);
+        let saved = capture(&dir.0, "source.txt", REVISION).unwrap();
+        let (result, peak) = crate::test_alloc::measure(|| {
+            download(&dir.0, &saved.object, &saved.digest, saved.size)
+        });
+        let mut reader = result.unwrap();
+        assert_eq!(reader.size(), super::super::MAX_FILE_BYTES);
+        assert!(
+            peak + 128 * 1024 <= 2 * 1024 * 1024,
+            "download allocated {peak} auxiliary bytes"
+        );
+        assert_eq!(io::copy(&mut reader, &mut io::sink()).unwrap(), saved.size);
+        assert_eq!(objects(&dir.0).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn download_refuses_paths_and_git_tracking_before_staging() {
+        let dir = Scratch::new();
+        fs::write(dir.0.join("source.txt"), b"safe selected delivery").unwrap();
+        let saved = capture(&dir.0, "source.txt", REVISION).unwrap();
+        for object in [
+            "../outside",
+            "objects/../../source.txt",
+            "objects/not-an-id.blob",
+        ] {
+            assert!(download(&dir.0, object, &saved.digest, saved.size).is_err());
+        }
+        git(&dir.0, &["init", "--quiet"]);
+        git(&dir.0, &["add", "--force", ".vivac-artifacts"]);
+        assert!(download(&dir.0, &saved.object, &saved.digest, saved.size).is_err());
+        assert_eq!(objects(&dir.0).unwrap().len(), 1);
+    }
     #[test]
     fn source_replaced_after_open_is_rejected_without_published_or_temporary_bytes() {
         let dir = Scratch::new();
@@ -1111,6 +1241,29 @@ mod tests {
         std::os::unix::fs::symlink(outside.0.join("source.txt"), dir.0.join("leaf.txt")).unwrap();
         assert!(inspect(&dir.0, "parent/source.txt").is_err());
         assert!(inspect(&dir.0, "leaf.txt").is_err());
+        fs::write(dir.0.join("source.txt"), b"safe selected delivery").unwrap();
+        let saved = capture(&dir.0, "source.txt", REVISION).unwrap();
+        fs::remove_file(dir.0.join(STORE).join(&saved.object)).unwrap();
+        std::os::unix::fs::symlink(
+            outside.0.join("source.txt"),
+            dir.0.join(STORE).join(&saved.object),
+        )
+        .unwrap();
+        assert!(download(&dir.0, &saved.object, &saved.digest, saved.size).is_err());
+        assert!(objects(&dir.0).is_err());
+        let entries: Vec<_> = fs::read_dir(dir.0.join(STORE).join("objects"))
+            .unwrap()
+            .map(|entry| entry.unwrap())
+            .collect();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].file_name(), format!("{REVISION}.blob").as_str());
+        assert!(fs::symlink_metadata(entries[0].path())
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert!(!entries
+            .iter()
+            .any(|entry| entry.file_name().to_string_lossy().starts_with(".tmp-")));
     }
     #[cfg(windows)]
     #[test]

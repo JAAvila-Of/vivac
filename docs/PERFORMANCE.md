@@ -290,6 +290,40 @@ binary SHA-256 was
 All samples remain included. This container result does not establish
 compliance on Windows or native macOS.
 
+### Artifact web metadata and downloads
+
+The web inventory uses the same resident LIST metadata construction as CLI
+and MCP. Run its release benchmark explicitly:
+
+```sh
+cargo test --locked --release --bin vivac -- --ignored --exact artifacts::tests::measure_resident_inventory_with_ten_thousand_artifacts_and_decisions --nocapture
+cargo test --locked --release --bin vivac maximum_download_uses_bounded_auxiliary_memory_and_leaves_no_temporary -- --nocapture
+```
+
+On Windows on 12 October 2026, 100 samples with 10,000 retained artifacts,
+10,000 decisions and a page of 20 measured p50 24.358 ms, p99 30.835 ms and
+218,887 bytes of peak auxiliary heap. All samples are included. The measured
+region includes replay validation, producer metadata and decision references
+to any retained revision. Context loading, HTTP handling, serialization and
+file-byte inspection are excluded; this is not an end-to-end page latency.
+The resident metadata budget is p99 below 50 ms and auxiliary heap at most
+2 MiB, excluding the loaded tree.
+
+The release download test copies and verifies a 10 MiB retained object,
+then reads the same unnamed handle. It asserts at most 2 MiB of auxiliary
+heap, including a 128 KiB allowance for the Git-query thread, and no remaining
+temporary name. A separate unit test verifies that changing the original
+object after preparation does not change bytes read from the download handle.
+The Windows run passed. This test does not measure browser memory or network
+latency and does not establish the separate capture latency budget.
+
+The corresponding Linux run on the same date used Rust 1.89.0, a normal
+container user and overlayfs. With the same 100-sample resident fixture, it
+measured p50 19.605422 ms, p99 34.173547 ms and 218,887 bytes of peak auxiliary
+heap. The 10 MiB release download test also passed. These container results
+do not establish native macOS compliance or clear the earlier Windows
+capture latency result.
+
 ## Context
 
 Context is the budget that actually binds an agent, so the payloads are

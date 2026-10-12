@@ -791,9 +791,13 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     let settings = read_json(&paths.settings);
     let mcp = read_json(&paths.mcp);
     let agents_skill = super::agents_skill::Skill::read(here, super::agents_skill::CLAUDE_LABEL);
+    let artifacts_skill = super::artifacts_skill::read(here, super::artifacts_skill::CLAUDE_LABEL);
 
     let mut conflicts: Vec<String> = Vec::new();
     if let Some(conflict) = agents_skill.conflict() {
+        conflicts.push(conflict);
+    }
+    if let Some(conflict) = artifacts_skill.conflict() {
         conflicts.push(conflict);
     }
     if let Some((line, col)) = settings.parse_error {
@@ -868,6 +872,7 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         && !mcp_missing
         && !skill_missing_or_replaceable
         && !agents_skill.needs_write()
+        && !artifacts_skill.needs_write()
         && !legacy_present
         && bundle.outcome == opening_bundle::Outcome::Current;
 
@@ -890,6 +895,7 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
             &mcp_server_state,
             &skill_file_state,
             &agents_skill,
+            &artifacts_skill,
         ),
     ));
 
@@ -1020,6 +1026,7 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     }
 
     agents_skill.write(&mut writes);
+    artifacts_skill.write(&mut writes);
     let bundle_changed = bundle.outcome != opening_bundle::Outcome::Current;
     let applied = bundle.with_writes(writes)?.commit()?;
     print_bundle_cleanup(&applied);
@@ -1090,6 +1097,7 @@ fn plan_items(
     mcp_server_state: &McpState,
     skill_file_state: &SkillState,
     agents_skill: &super::agents_skill::Skill,
+    artifacts_skill: &super::agents_skill::Skill,
 ) -> Vec<PlanItem> {
     let mut items = Vec::new();
 
@@ -1156,6 +1164,7 @@ fn plan_items(
     };
     items.push(PlanItem::new(skill_verb, SKILL_LABEL, skill_what));
     items.push(agents_skill.plan());
+    items.push(artifacts_skill.plan());
 
     items
 }
@@ -1516,6 +1525,7 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
     let settings = read_json(&paths.settings);
     let mcp = read_json(&paths.mcp);
     let agents_skill = super::agents_skill::Skill::read(here, super::agents_skill::CLAUDE_LABEL);
+    let artifacts_skill = super::artifacts_skill::read(here, super::artifacts_skill::CLAUDE_LABEL);
 
     let mut conflicts: Vec<String> = Vec::new();
     if let Some((line, col)) = settings.parse_error {
@@ -1584,6 +1594,7 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
         && !mcp_ours
         && !skill_ours
         && !agents_skill.ours()
+        && !artifacts_skill.ours()
         && !guard_ours
         && bundle.writes.is_empty()
         && !bundle_kept;
@@ -1668,6 +1679,7 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
         PlanItem::new(mcp_verb, MCP_LABEL, mcp_what),
         PlanItem::new(skill_verb, SKILL_LABEL, skill_what),
         agents_skill.undo_plan(),
+        artifacts_skill.undo_plan(),
     ];
     let mut items = items;
     items.extend(bundle_items(&bundle, here));
@@ -1781,9 +1793,11 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
     }
 
     agents_skill.delete(&mut writes);
+    artifacts_skill.delete(&mut writes);
     let applied = bundle.with_writes(writes)?.commit()?;
     print_bundle_cleanup(&applied);
     agents_skill.clean_empty_directory();
+    artifacts_skill.clean_empty_directory();
 
     // Best-effort, and only once the commit above is known to have
     // succeeded: an empty directory left behind costs nothing to leave for

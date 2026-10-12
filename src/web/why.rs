@@ -241,12 +241,14 @@ pub(super) fn why_page(
          <p class=\"promise\">The shape of the path at a glance: how deep it goes, \
          where it branched, and what was still open at each step.</p>\n\
          <main>\n<ol class=\"spine\">\n{spine}</ol>\n</main>\n\
+         <p class=\"onward\"><a href=\"/p/{p}/artifacts#from={node}\">Artifacts from this node</a></p>\n\
          <footer>The same reading in a terminal: \
          <code>vivac why {alias} --full</code></footer>\n\
          </div></body></html>\n",
         alias = escape(&target.alias()),
         name_t = escape(name),
         p = escape(project),
+        node = escape(&target.id),
         css = super::WEB_CSS,
     ))
 }

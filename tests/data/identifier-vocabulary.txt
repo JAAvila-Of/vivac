@@ -528,6 +528,7 @@ creates
 creating
 creation
 credential
+credit
 crlf
 crockford
 cross
@@ -580,9 +581,11 @@ declarations
 declare
 declared
 declares
+declined
 decode
 decoded
 decodes
+decoding
 decomposed
 dedup
 deep
@@ -869,6 +872,7 @@ ffi
 field
 fields
 file
+filename
 fileno
 files
 filesystem
@@ -1456,6 +1460,7 @@ noncanonical
 none
 nonempty
 nonexistent
+noninteractive
 nonterminal
 nonzero
 noon
@@ -1599,6 +1604,7 @@ panics
 paragraph
 paragraphs
 parallel
+parameters
 params
 parent
 parents
@@ -2218,6 +2224,7 @@ stable
 stack
 stacks
 staged
+staging
 stale
 stamp
 stamped
@@ -2498,6 +2505,7 @@ unlocked
 unlocks
 unmanaged
 unmarked
+unnamed
 unreachable
 unreadable
 unrecognised
@@ -2508,6 +2516,7 @@ unrepresentable
 unresolved
 unrestorable
 unrestored
+unreviewed
 unsafe
 unstable
 unstack

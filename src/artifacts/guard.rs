@@ -7,7 +7,6 @@ use crate::redact::{self, Finding};
 
 const CHUNK_SIZE: usize = 64 * 1024;
 const TOKEN_LIMIT: usize = 64 * 1024;
-const SIZE_LIMIT: u64 = 10 * 1024 * 1024;
 
 #[derive(Debug)]
 pub struct Receipt {
@@ -38,7 +37,7 @@ pub fn copy_checked(mut reader: impl Read, mut writer: impl Write) -> Result<Rec
             break;
         }
         size += count as u64;
-        if size > SIZE_LIMIT {
+        if size > super::MAX_FILE_BYTES {
             return Err(Failure::usage("Artifact content exceeds the 10 MiB limit."));
         }
         let available = pending + count;
