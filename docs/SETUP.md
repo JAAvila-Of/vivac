@@ -45,6 +45,8 @@ anything is written.
 | `.claude/skills/vivac-opening/` | the experimental opening module: `.claude-plugin/plugin.json`, `hooks/hooks.json`, `hooks/register.mjs`, and an ownership receipt, `.vivac-owned.json` |
 | `.mcp.json` | the server, which runs `vivac mcp` |
 | `.claude/skills/vivac-migrate/` | the skill an agent follows to bring another record into the tree — see [Migrating](MIGRATING.md) |
+| `.claude/skills/vivac-agents/` | selected agent transfers and synchronization — see [Agent custody](AGENT-CUSTODY.md) |
+| `.claude/skills/vivac-artifacts/` | selected existing deliveries and reviewed revisions — see [Artifact custody](ARTIFACTS.md); setup does not capture files |
 
 Everything goes into the project and nowhere else. `.vivac/` is not on the
 list: the tree is `vivac init`'s, and setup neither writes it nor removes
@@ -127,12 +129,13 @@ vivac setup codex
 
 The same pieces, in the three places Codex reads inside a project:
 `.codex/config.toml` gets the server, `.codex/hooks.json` gets `SessionStart`,
-`UserPromptSubmit` and `Stop` running the session commands, and `.agents/skills/vivac-migrate/`
-gets the same skill file. Nothing goes in your own configuration directory.
+`UserPromptSubmit` and `Stop` running the session commands, and `.agents/skills/`
+gets the same `vivac-migrate`, `vivac-agents` and `vivac-artifacts` workflows.
+Nothing goes in your own configuration directory.
 
 It refuses where there is no tree, and that refusal is the same argument
-that used to make setup plant one: a project with the three files and no
-tree has three hooks that exit 0 in silence for ever, and nobody finds out.
+that used to make setup plant one: a project with integration files and no
+tree has hooks that exit 0 in silence for ever, and nobody finds out.
 Leaving that behind is not a cheaper setup, it is setup undone. So the
 requirement stands and only the means changed — it names the `vivac init`
 to run, and writes nothing until the tree is there.

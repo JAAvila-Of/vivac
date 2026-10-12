@@ -119,7 +119,8 @@ const MAGIC: u64 = u64::from_le_bytes(*b"vivacIDX");
 // `u64`, written last. A version-18 node record ends where it begins, so it
 // is refused rather than read as a node with no notes.
 // Version 20 preserves lane-scoped agent custody history in a bounded section.
-const FORMAT_VERSION: u32 = 20;
+// Version 21 adds a separate bounded section for artifact custody history.
+const FORMAT_VERSION: u32 = 21;
 const ULID_LEN: usize = 26;
 const SPAN_LEN: usize = 8;
 const FLAG_RECORD_LEN: usize = 1 + SPAN_LEN;
@@ -610,6 +611,8 @@ struct Header {
     other_focus_offset: u64,
     agent_history_offset: u64,
     agent_history_len: u64,
+    artifact_history_offset: u64,
+    artifact_history_len: u64,
     text_offset: u64,
     text_len: u64,
     file_len: u64,
@@ -664,6 +667,8 @@ impl Header {
             other_focus_offset: c.u64()?,
             agent_history_offset: c.u64()?,
             agent_history_len: c.u64()?,
+            artifact_history_offset: c.u64()?,
+            artifact_history_len: c.u64()?,
             text_offset: c.u64()?,
             text_len: c.u64()?,
             file_len: c.u64()?,
@@ -714,9 +719,15 @@ impl Header {
             .checked_add(self.agent_history_len)?;
         if self.agent_history_offset < header_len() as u64
             || self.agent_history_offset < self.other_focus_offset
-            || history_end != self.text_offset
+            || history_end != self.artifact_history_offset
             || usize::try_from(history_end).ok()? > len
         {
+            return None;
+        }
+        let artifact_end = self
+            .artifact_history_offset
+            .checked_add(self.artifact_history_len)?;
+        if artifact_end != self.text_offset || usize::try_from(artifact_end).ok()? > len {
             return None;
         }
         let text_end = self.text_offset.checked_add(self.text_len)?;
@@ -792,6 +803,8 @@ fn write_header(buf: &mut Vec<u8>, h: &Header) {
     write_u64(buf, h.other_focus_offset);
     write_u64(buf, h.agent_history_offset);
     write_u64(buf, h.agent_history_len);
+    write_u64(buf, h.artifact_history_offset);
+    write_u64(buf, h.artifact_history_len);
     write_u64(buf, h.text_offset);
     write_u64(buf, h.text_len);
     write_u64(buf, h.file_len);
@@ -838,6 +851,8 @@ fn header_len() -> usize {
         other_focus_offset: 0,
         agent_history_offset: 0,
         agent_history_len: 0,
+        artifact_history_offset: 0,
+        artifact_history_len: 0,
         text_offset: 0,
         text_len: 0,
         file_len: 0,
@@ -1820,6 +1835,21 @@ fn build_tree(bytes: &[u8], header: &Header) -> Option<Tree> {
     }) {
         return None;
     }
+    let start = usize::try_from(header.artifact_history_offset).ok()?;
+    let end = usize::try_from(
+        header
+            .artifact_history_offset
+            .checked_add(header.artifact_history_len)?,
+    )
+    .ok()?;
+    let artifact_history: Vec<(String, crate::event::Body)> =
+        serde_json::from_slice(bytes.get(start..end)?).ok()?;
+    if artifact_history
+        .iter()
+        .any(|(_, body)| !matches!(body, crate::event::Body::ArtifactCaptured { .. }))
+    {
+        return None;
+    }
     let text = parse_text(bytes, header)?;
     Some(Tree::from_parts(RawParts {
         text,
@@ -1832,6 +1862,7 @@ fn build_tree(bytes: &[u8], header: &Header) -> Option<Tree> {
         own_focus,
         other_focus,
         agent_history,
+        artifact_history,
         next_vivac_num: header.next_vivac_num,
         seq: header.seq,
         next_num: header.next_num,
@@ -1904,6 +1935,8 @@ fn encode(
     }
     let agent_history_buf = serde_json::to_vec(&tree.agent_history)
         .expect("Agent history contains only JSON event bodies.");
+    let artifact_history_buf = serde_json::to_vec(&tree.artifact_history)
+        .expect("Artifact history contains only JSON event bodies.");
     let text = tree.raw_text();
     let text_bytes = text.as_bytes();
 
@@ -1922,7 +1955,9 @@ fn encode(
     let other_focus_offset = own_focus_offset + own_focus_buf.len() as u64;
     let agent_history_offset = other_focus_offset + other_focus_buf.len() as u64;
     let agent_history_len = agent_history_buf.len() as u64;
-    let text_offset = agent_history_offset + agent_history_len;
+    let artifact_history_offset = agent_history_offset + agent_history_len;
+    let artifact_history_len = artifact_history_buf.len() as u64;
+    let text_offset = artifact_history_offset + artifact_history_len;
     let file_len = text_offset + text_bytes.len() as u64;
 
     let (has_last, last_line_offset, last_ulid, last_seq) = match last {
@@ -1973,6 +2008,8 @@ fn encode(
         other_focus_offset,
         agent_history_offset,
         agent_history_len,
+        artifact_history_offset,
+        artifact_history_len,
         text_offset,
         text_len: text_bytes.len() as u64,
         file_len,
@@ -1994,6 +2031,7 @@ fn encode(
     out.extend_from_slice(&own_focus_buf);
     out.extend_from_slice(&other_focus_buf);
     out.extend_from_slice(&agent_history_buf);
+    out.extend_from_slice(&artifact_history_buf);
     out.extend_from_slice(text_bytes);
     out
 }
@@ -3491,13 +3529,14 @@ mod tests {
         ] {
             let mut header = Header::parse(&valid).unwrap();
             header.agent_history_len = section.len() as u64;
-            header.text_offset = header.agent_history_offset + header.agent_history_len;
+            header.artifact_history_offset = header.agent_history_offset + header.agent_history_len;
+            header.text_offset = header.artifact_history_offset + header.artifact_history_len;
             header.file_len = header.text_offset + header.text_len;
             let mut bytes = Vec::new();
             write_header(&mut bytes, &header);
             bytes.extend_from_slice(&valid[header_len()..original.agent_history_offset as usize]);
             bytes.extend_from_slice(&section);
-            bytes.extend_from_slice(&valid[original.text_offset as usize..]);
+            bytes.extend_from_slice(&valid[original.artifact_history_offset as usize..]);
             let header = Header::parse(&bytes).unwrap();
             assert!(build_tree(&bytes, &header).is_none());
         }
@@ -3738,5 +3777,265 @@ mod tests {
             "allow_persist=false must never create the index"
         );
         std::fs::remove_dir_all(&store.root).ok();
+    }
+
+    fn artifact_event(seq: u32, previous: Option<String>) -> Event {
+        Event {
+            seq: u64::from(seq),
+            id: fixed_id(seq),
+            ts: "2026-10-11T00:00:00Z".into(),
+            actor: "opaque-actor".into(),
+            lane: "delivery-lane".into(),
+            payload: Body::ArtifactCaptured {
+                artifact: fixed_id(90),
+                revision: fixed_id(seq + 100),
+                operation: fixed_id(seq + 200),
+                producer: fixed_id(1),
+                previous,
+                source: "mockup.html".into(),
+                site: "opaque-site".into(),
+                size: 17,
+                digest: "a".repeat(64),
+                object: format!("objects/{}", fixed_id(seq + 100)),
+            },
+        }
+    }
+
+    fn projection_artifact_event(seq: u32, previous: Option<String>) -> Event {
+        let mut event = artifact_event(seq, previous);
+        let Body::ArtifactCaptured {
+            site,
+            revision,
+            object,
+            ..
+        } = &mut event.payload
+        else {
+            unreachable!()
+        };
+        *site = fixed_id(500);
+        *object = format!("objects/{revision}.blob");
+        event
+    }
+
+    fn artifact_projection_producer() -> Event {
+        created(
+            1,
+            &fixed_id(1),
+            1,
+            Kind::Task,
+            None,
+            "Delivery producer",
+            vec![],
+            vec![],
+        )
+    }
+
+    #[test]
+    fn artifact_projection_is_rebuilt_on_index_loading_and_extended_by_tail_events() {
+        let store = tmp_store("artifact-projection");
+        write_raw_locked(
+            &store,
+            &[
+                artifact_projection_producer(),
+                projection_artifact_event(2, None),
+            ],
+        );
+        let fresh = load(&store, true).unwrap();
+        assert!(fresh
+            .artifact_projection
+            .is_valid(fresh.artifact_history.len()));
+        let index_before = fs::read(store.index_path()).unwrap();
+        let cached = load(&store, false).unwrap();
+        assert!(cached
+            .artifact_projection
+            .is_valid(cached.artifact_history.len()));
+        assert_eq!(
+            cached.artifact_projection.revision_index(&fixed_id(102)),
+            Some(0)
+        );
+        assert_eq!(
+            cached.artifact_projection.operation_index(&fixed_id(202)),
+            Some(0)
+        );
+        write_raw_locked(&store, &[projection_artifact_event(3, Some(fixed_id(102)))]);
+        let tail = load(&store, false).unwrap();
+        assert!(tail
+            .artifact_projection
+            .is_valid(tail.artifact_history.len()));
+        assert_eq!(tail.artifact_projection.count(), 2);
+        assert_eq!(
+            tail.artifact_projection.latest_index(&fixed_id(90)),
+            Some(1)
+        );
+        assert_eq!(
+            tail.artifact_projection.operation_index(&fixed_id(203)),
+            Some(1)
+        );
+        assert_eq!(fs::read(store.index_path()).unwrap(), index_before);
+        let persisted = load(&store, true).unwrap();
+        let reloaded = load(&store, false).unwrap();
+        assert!(reloaded
+            .artifact_projection
+            .is_valid(reloaded.artifact_history.len()));
+        assert_eq!(reloaded.artifact_history, persisted.artifact_history);
+        assert_eq!(
+            reloaded.artifact_projection.latest_index(&fixed_id(90)),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn artifact_projection_uses_final_index_nodes_for_later_producer_creation() {
+        let tree = fold(
+            &[
+                projection_artifact_event(2, None),
+                artifact_projection_producer(),
+            ],
+            0,
+        );
+        let bytes = encode(&tree, 0, 0, 0, None);
+        let header = Header::parse(&bytes).unwrap();
+        assert_eq!(
+            u32::from_le_bytes(bytes[8..12].try_into().unwrap()),
+            FORMAT_VERSION
+        );
+        let loaded = build_tree(&bytes, &header).unwrap();
+        assert!(loaded
+            .artifact_projection
+            .is_valid(loaded.artifact_history.len()));
+        assert_eq!(
+            loaded.artifact_projection.latest_index(&fixed_id(90)),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn artifact_projection_rejects_forged_index_metadata_without_discarding_diagnostic_history() {
+        let mut forged = projection_artifact_event(2, None);
+        let Body::ArtifactCaptured { source, .. } = &mut forged.payload else {
+            unreachable!()
+        };
+        *source = "person@example.com/mockup.html".into();
+        let tree = fold(&[artifact_projection_producer(), forged], 0);
+        let bytes = encode(&tree, 0, 0, 0, None);
+        let header = Header::parse(&bytes).unwrap();
+        let loaded =
+            build_tree(&bytes, &header).expect("invalid custody remains available for diagnosis");
+        assert_eq!(loaded.artifact_history.len(), 1);
+        assert!(!loaded
+            .artifact_projection
+            .is_valid(loaded.artifact_history.len()));
+        assert!(crate::artifacts::validate_references(
+            &loaded,
+            &[format!("artifact:{}@{}", fixed_id(90), fixed_id(102))]
+        )
+        .is_err());
+        assert!(loaded
+            .artifact_projection
+            .revision_index(&fixed_id(102))
+            .is_none());
+    }
+
+    #[test]
+    fn artifact_history_round_trips_without_falling_back_to_the_log() {
+        let events = vec![
+            artifact_event(1, None),
+            artifact_event(2, Some(fixed_id(101))),
+        ];
+        let mut events = events;
+        let mut agent = artifact_event(3, None);
+        agent.lane = "agent-lane".into();
+        agent.payload = Body::AgentBound {
+            agent: fixed_id(80),
+            harness: "codex".into(),
+            path: ".codex/agents/reviewer.toml".into(),
+            baseline: None,
+        };
+        events.push(agent);
+        let tree = fold(&events, 0);
+        let bytes = encode(&tree, 0, 0, 0, None);
+        let header = Header::parse(&bytes).unwrap();
+        let loaded = build_tree(&bytes, &header).unwrap();
+        assert_eq!(loaded.artifact_history.len(), 2);
+        assert_eq!(loaded.artifact_history, tree.artifact_history);
+        assert_eq!(loaded.agent_history.len(), 1);
+        assert_eq!(loaded.agent_history, tree.agent_history);
+        assert_eq!(snapshot(&loaded), snapshot(&tree));
+    }
+
+    #[test]
+    fn artifact_history_survives_index_loading_and_tail_replay() {
+        let store = tmp_store("artifact-history");
+        let first = artifact_event(1, None);
+        write_raw_locked(&store, std::slice::from_ref(&first));
+        let fresh = load(&store, true).unwrap();
+        assert_eq!(fresh.artifact_history, vec![(first.lane, first.payload)]);
+        assert_eq!(
+            load(&store, false).unwrap().artifact_history,
+            fresh.artifact_history
+        );
+        let index = fs::read(store.index_path()).unwrap();
+        let next = artifact_event(2, Some(fixed_id(101)));
+        write_raw_locked(&store, std::slice::from_ref(&next));
+        let tail = load(&store, false).unwrap();
+        assert_eq!(tail.artifact_history.len(), 2);
+        assert_eq!(tail.artifact_history[1], (next.lane, next.payload));
+        assert_eq!(fs::read(store.index_path()).unwrap(), index);
+        fs::remove_file(store.index_path()).unwrap();
+        assert_eq!(
+            load(&store, false).unwrap().artifact_history,
+            tail.artifact_history
+        );
+        fs::remove_dir_all(&store.root).unwrap();
+    }
+
+    #[test]
+    fn an_invalid_artifact_section_is_never_silently_loaded() {
+        let valid = encode(&Tree::default(), 0, 0, 0, None);
+        let original = Header::parse(&valid).unwrap();
+        for section in [
+            b"invalid".to_vec(),
+            serde_json::to_vec(&vec![(
+                "main",
+                Body::AgentBound {
+                    agent: fixed_id(1),
+                    harness: "codex".into(),
+                    path: "agent.toml".into(),
+                    baseline: None,
+                },
+            )])
+            .unwrap(),
+        ] {
+            let mut header = Header::parse(&valid).unwrap();
+            header.artifact_history_len = section.len() as u64;
+            header.text_offset = header.artifact_history_offset + header.artifact_history_len;
+            header.file_len = header.text_offset + header.text_len;
+            let mut bytes = Vec::new();
+            write_header(&mut bytes, &header);
+            bytes
+                .extend_from_slice(&valid[header_len()..original.artifact_history_offset as usize]);
+            bytes.extend_from_slice(&section);
+            bytes.extend_from_slice(&valid[original.text_offset as usize..]);
+            let header = Header::parse(&bytes).unwrap();
+            assert!(build_tree(&bytes, &header).is_none());
+        }
+        let mut header = Header::parse(&valid).unwrap();
+        header.artifact_history_len = u64::MAX;
+        assert!(header.check_bounds(valid.len()).is_none());
+    }
+
+    #[test]
+    fn a_version_20_index_is_rebuilt_with_artifact_history() {
+        let store = tmp_store("version-20-artifacts");
+        let event = artifact_event(1, None);
+        write_raw_locked(&store, std::slice::from_ref(&event));
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&MAGIC.to_le_bytes());
+        bytes.extend_from_slice(&20u32.to_le_bytes());
+        bytes.extend_from_slice(&[0u8; 200]);
+        fs::write(store.index_path(), &bytes).unwrap();
+        let got = load(&store, false).unwrap();
+        assert_eq!(got.artifact_history, vec![(event.lane, event.payload)]);
+        fs::remove_dir_all(&store.root).unwrap();
     }
 }

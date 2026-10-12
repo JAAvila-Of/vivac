@@ -47,6 +47,7 @@ jobs:
           package-manager-cache: false
       - run: node --test tests/claude_opening_module.mjs
       - run: node tests/web_map_ui.cjs
+      - run: node tests/web_artifacts_ui.cjs
 
   lint:
     runs-on: ubuntu-latest

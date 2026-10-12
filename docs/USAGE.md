@@ -353,6 +353,13 @@ because nobody had gone to look at the neighbour.
 
 ## The maintainer looks
 
+The Artifacts page belongs to each project. It connects saved deliveries to
+their producer and decisions referencing exact revisions, including older
+ones. Select a revision before checking, restoring or downloading it. Capture
+and restore use the same engine as `vivac artifacts`; download verifies an
+exact retained revision before sending it as an attachment. See
+[Artifact custody](ARTIFACTS.md) for supported types and limits.
+
 The Agents page compares current native prompts, models and settings across
 configured project harnesses. It makes differences visible before you choose
 which version to preserve. Review and apply use the same operations as

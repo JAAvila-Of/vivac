@@ -25,7 +25,7 @@
 //! and taking its place means being reachable through the same door, in the
 //! tool list, with a schema.
 //!
-//! **Five reads, ten writes and agent custody.** The reads answer `brief`,
+//! **Five reads, ten writes, agent custody and artifact custody.** The reads answer `brief`,
 //! `find`, `why`, `open` and `rules` -- the last one `t411`'s own pull,
 //! since a rule nobody pulls on is a rule that might as well not be there.
 //! The writes are `push`, `pop`, `done`, `add`, `decide`, `note`, `park`,
@@ -59,6 +59,7 @@ const PROTOCOL: &str = "2025-06-18";
 #[derive(Clone, Copy)]
 enum ArgKind {
     Str,
+    Int,
     Bool,
     List,
     Object,
@@ -80,6 +81,7 @@ impl ArgKind {
     fn word(self) -> &'static str {
         match self {
             ArgKind::Str => "string",
+            ArgKind::Int => "integer",
             ArgKind::Bool => "boolean",
             ArgKind::List => "list",
             ArgKind::Object => "object",
@@ -118,6 +120,27 @@ struct Tool {
 /// six write ops -- `block`, `promote`, `abandon`, `focus`, `flag`,
 /// `restore` -- stay off this list on purpose; see the module doc.
 const TOOLS: &[Tool] = &[
+    Tool {
+        name: "vivac_artifacts",
+        title: "Retain selected artifact deliveries",
+        read_only: false,
+        description: "Capture selected project-relative UTF-8 deliveries locally, outside the provenance tree. Operations mirror vivac artifacts: capabilities, list, show, capture, check and restore. Capabilities reports engine formats and limits without reading project state; it takes no other arguments. Capture requires path and an explicit producer from; use artifact to deliver a new revision, never merge by filename. List defaults to focus lineage; all lists the project. Returned references pin artifact identity and revision; recording a delivery does not approve it or prove a source snapshot. Review the retained copy and reference that revision in a decision. Check explicitly compares bytes; metadata listings remain unverified. Restore writes a new destination only and never overwrites. Store check reports unrecorded objects without inventing provenance; orphan restore rescues their bytes without recording a delivery. No network, execution, folder watching or automatic binary import. Content must pass sensitive-value guards; the size limit is 10 MiB.",
+        args: &[
+            Arg { name:"operation",kind:ArgKind::Str,required:true,description:"capabilities, list, show, capture, check or restore." },
+            Arg { name:"artifact",kind:ArgKind::Str,required:false,description:"Stable artifact identity, never inferred from a filename." },
+            Arg { name:"path",kind:ArgKind::Str,required:false,description:"Selected project-relative source; capture only." },
+            Arg { name:"from",kind:ArgKind::Str,required:false,description:"Producer node for capture, or scope node for list." },
+            Arg { name:"revision",kind:ArgKind::Str,required:false,description:"Exact retained revision for show, check or restore." },
+            Arg { name:"previous",kind:ArgKind::Str,required:false,description:"Expected previous revision for capture." },
+            Arg { name:"operation_id",kind:ArgKind::Str,required:false,description:"Opaque ULID for retrying one capture without recapturing bytes." },
+            Arg { name:"to",kind:ArgKind::Str,required:false,description:"New project-relative destination for restore." },
+            Arg { name:"orphan",kind:ArgKind::Str,required:false,description:"Unrecorded retained object identity for explicit rescue." },
+            Arg { name:"all",kind:ArgKind::Bool,required:false,description:"List the whole project, instead of focus lineage." },
+            Arg { name:"store",kind:ArgKind::Bool,required:false,description:"Check the retained store explicitly; takes no artifact identity." },
+            Arg { name:"limit",kind:ArgKind::Int,required:false,description:"List page size, between 1 and 100." },
+            Arg { name:"offset",kind:ArgKind::Int,required:false,description:"Nonnegative list offset." },
+        ],
+    },
     Tool {
         name: "vivac_agents",
         title: "Manage project agent custody",
@@ -948,6 +971,10 @@ fn schema(t: &Tool) -> Value {
             ArgKind::Str => {
                 entry.insert("type".to_string(), json!("string"));
             }
+            ArgKind::Int => {
+                entry.insert("type".to_string(), json!("integer"));
+                entry.insert("minimum".to_string(), json!(0));
+            }
             ArgKind::Bool => {
                 entry.insert("type".to_string(), json!("boolean"));
             }
@@ -993,6 +1020,16 @@ fn schema(t: &Tool) -> Value {
             "apply",
             "compare",
             "assist"
+        ]);
+    }
+    if t.name == "vivac_artifacts" {
+        properties.get_mut("operation").unwrap()["enum"] = json!([
+            "capabilities",
+            "list",
+            "show",
+            "capture",
+            "check",
+            "restore"
         ]);
     }
     let mut annotations = json!({
@@ -1188,6 +1225,11 @@ fn call(project: &mut Project, params: &Value) -> Result<String, Failure> {
     // point the CLI refuses an unknown flag at. `arguments` is the only
     // place a caller's own keys live -- `_meta` sits beside it in `params`,
     // never inside it, so a protocol-level field never reaches this check.
+    if name == "vivac_artifacts" {
+        let args = crate::artifacts::request_args(&params["arguments"])?;
+        let (value, code) = crate::artifacts::run_project_value(project, &args);
+        return pretty(json!({"exit_code":code,"result":value}));
+    }
     if name == "vivac_agents" {
         let result = crate::agents::request_args(&params["arguments"]).and_then(|args| {
             let cwd = project.current()?.lane_dir.clone();
@@ -2024,6 +2066,94 @@ mod resident_write_tests {
             log.iter().any(|e| matches!(&e.payload,
                 crate::event::Body::NodeCreated { title, .. } if title == "From another process")),
             "what the other process wrote must reach the events this Project keeps beside the tree"
+        );
+        cleanup(&root);
+    }
+
+    #[test]
+    fn a_write_after_an_external_delivery_applies_the_tail_once() {
+        let (root, mut project) = temp_project("delivery-tail");
+        project
+            .write(|ctx| ops::add(ctx, add("Produce a delivery")))
+            .unwrap();
+        let mut other = crate::ops::Ctx::load_for_write(
+            Store::open(root.clone()).unwrap(),
+            ops::Whose::Founding,
+        )
+        .unwrap();
+        let producer = other.tree.resolve("g1").unwrap().id.clone();
+        let revision = crate::id::ulid();
+        other.lock_for_write().unwrap();
+        other
+            .emit(vec![crate::event::Body::ArtifactCaptured {
+                artifact: crate::id::ulid(),
+                revision: revision.clone(),
+                operation: crate::id::ulid(),
+                producer,
+                previous: None,
+                source: "delivery.html".into(),
+                site: crate::id::ulid(),
+                size: 17,
+                digest: "a".repeat(64),
+                object: format!("objects/{revision}.blob"),
+            }])
+            .unwrap();
+        other.unlock();
+        project
+            .write(|ctx| ops::add(ctx, add("Continue after the delivery")))
+            .unwrap();
+        assert_eq!(project.current().unwrap().tree.artifact_history.len(), 1);
+        assert_resident_matches_fresh_fold(&root, &mut project);
+        cleanup(&root);
+    }
+
+    #[test]
+    fn artifact_metadata_tools_reuse_the_loaded_tree_with_bounded_memory() {
+        let (root, mut project) = temp_project("artifact-memory");
+        project
+            .write(|ctx| ops::add(ctx, add("Produce selected deliveries")))
+            .unwrap();
+        let producer = project
+            .current()
+            .unwrap()
+            .tree
+            .resolve("g1")
+            .unwrap()
+            .id
+            .clone();
+        let mut bodies = Vec::with_capacity(10_000);
+        for _ in 0..10_000 {
+            let revision = crate::id::ulid();
+            bodies.push(crate::event::Body::ArtifactCaptured {
+                artifact: crate::id::ulid(),
+                revision: revision.clone(),
+                operation: crate::id::ulid(),
+                producer: producer.clone(),
+                previous: None,
+                source: "delivery.html".into(),
+                site: crate::id::ulid(),
+                size: 17,
+                digest: "a".repeat(64),
+                object: format!("objects/{revision}.blob"),
+            });
+        }
+        project.write(|ctx| ctx.emit(bodies)).unwrap();
+        let (reply, peak) = crate::test_alloc::measure(|| {
+            call_tool(
+                &mut project,
+                "vivac_artifacts",
+                json!({"operation":"list","all":true,"limit":1}),
+            )
+        });
+        assert_eq!(reply["exit_code"], 0);
+        assert_eq!(reply["result"]["total"], 10_000);
+        assert_eq!(reply["result"]["artifacts"].as_array().unwrap().len(), 1);
+        assert!(
+            peak <= 2 * 1024 * 1024,
+            "artifact tool auxiliary heap: {peak}"
+        );
+        eprintln!(
+            "Resident artifact metadata tool auxiliary heap: {peak} bytes for 10000 deliveries."
         );
         cleanup(&root);
     }

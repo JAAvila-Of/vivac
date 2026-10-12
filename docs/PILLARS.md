@@ -137,6 +137,16 @@ are in the `README`.
 | `brief` / `open` / `tree`, counted in **open fronts** and not in nodes | **< 50 ms** | the same reading; what these three walk is the open part of the tree |
 | text search | **< 100 ms** | same |
 | semantic search | off the critical path | see the arbitration above |
+| explicitly retaining a selected UTF-8 delivery | **p99 < 500 ms at 1 MiB; < 2 s at 10 MiB** | a requested file operation, outside ordinary writes and hooks |
+
+Local artifact retention accepts at most 10 MiB of UTF-8 text in this increment.
+Artifact operations use at most 2 MiB of auxiliary memory, excluding the
+already loaded tree and bounded response metadata. Inspection is never shortened
+to meet a budget: unsupported input or an exceeded inspection bound is refused.
+The receipt append still follows the ordinary write budget; copying and checking
+file bytes happen before acquiring the tree's write lock. Measurements must name
+the Rust build, filesystem, fixture and sample count; earlier Python probes do
+not demonstrate compliance.
 
 **The third row used to be half of the second, and it counted the wrong
 thing.** The ceiling read *`why` / `tree` over 10,000 nodes*, and what `brief`,
@@ -255,7 +265,7 @@ tree is a map of where a system is weak and not yet fixed.**
   prefixes (`sqa_`, `squ_`, `ghp_`, `sk-`, `AKIA`, PEM headers) and high-entropy
   strings. In doubt, refuse the write and say why; never store in silence.
 - **The user's personal data is never stored.** No email, no name, no home path.
-- **File contents are never stored.** Only paths, references and prose about
+- **File contents never enter the provenance tree.** Only paths, references and prose about
   what was decided. It is the strongest guard of all because it bounds the blast
   radius of a leak to "what was being worked on", never to "what the code is".
   A write that opens a fenced code block is refused. The fence is the whole rule
@@ -268,6 +278,15 @@ tree is a map of where a system is weak and not yet fixed.**
   between native configuration files. It never stores the prompt in the tree.
   Sensitive values are refused before transfer; fenced examples are allowed in
   native prompts, not in log prose.
+  Selected artifact deliveries may retain local revision files in a separate
+  project store. The tree records identities, producer references, sizes and
+  digests, never the delivered bytes or extracted fragments. Retention must
+  inspect supported content for sensitive values before storing it, refuse
+  unsupported content, and stay outside ordinary tree writes and session hooks.
+  Copies are excluded from Git by default and are never uploaded automatically.
+  A retained revision is not an approval, a filesystem snapshot or a backup of
+  the disk. Human review names the exact retained revision. Secret and personal
+  data guards still apply; local retention has no bypass or force option.
 - **No telemetry.** The binary does not phone home. Ever.
 
   Phoning home is the binary reaching the network on its own account: to

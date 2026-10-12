@@ -2,7 +2,17 @@ use super::claude_code::{extract_marker, SkillState};
 use crate::plan::PlanItem;
 use std::path::{Path, PathBuf};
 
-const CONTENT: &str = include_str!("agents-skill.md");
+pub(super) struct Definition {
+    pub(super) name: &'static str,
+    pub(super) content: &'static str,
+    pub(super) create_description: &'static str,
+}
+
+static AGENTS: Definition = Definition {
+    name: "vivac-agents",
+    content: include_str!("agents-skill.md"),
+    create_description: "how agents work with vivac",
+};
 pub(super) const CLAUDE_LABEL: &str = ".claude/skills/vivac-agents/SKILL.md";
 pub(super) const CODEX_LABEL: &str = ".agents/skills/vivac-agents/SKILL.md";
 
@@ -10,20 +20,21 @@ pub(super) fn installed(here: &Path, label: &'static str) -> bool {
     matches!(Skill::read(here, label).state, SkillState::Same)
 }
 
-fn text() -> String {
-    let end = CONTENT
+fn text(definition: &Definition) -> String {
+    let end = definition
+        .content
         .strip_prefix("---\n")
         .unwrap()
         .find("\n---\n")
         .unwrap()
         + 9;
-    let (frontmatter, body) = CONTENT.split_at(end);
-    let fingerprint = super::fnv1a64(CONTENT.as_bytes());
+    let (frontmatter, body) = definition.content.split_at(end);
+    let fingerprint = super::fnv1a64(definition.content.as_bytes());
     format!("{frontmatter}<!-- written by vivac setup; fingerprint {fingerprint:016x}; setup removes it with --undo while the text is unchanged -->\n{body}")
 }
 
-fn state(existing: &str) -> SkillState {
-    if existing == text() {
+fn state(existing: &str, definition: &Definition) -> SkillState {
+    if existing == text(definition) {
         return SkillState::Same;
     }
     let Some((claimed, content)) = extract_marker(existing) else {
@@ -36,7 +47,7 @@ fn state(existing: &str) -> SkillState {
         header
             .lines()
             .filter(|line| line.starts_with("name:"))
-            .eq(["name: vivac-agents"])
+            .eq([format!("name: {}", definition.name)])
     });
     if ours && u64::from_str_radix(&claimed, 16).ok() == Some(super::fnv1a64(content.as_bytes())) {
         SkillState::Replaceable
@@ -48,16 +59,26 @@ fn state(existing: &str) -> SkillState {
 pub(super) struct Skill {
     path: PathBuf,
     label: &'static str,
+    definition: &'static Definition,
     state: SkillState,
     original: Option<Vec<u8>>,
 }
 
 impl Skill {
     pub(super) fn read(here: &Path, label: &'static str) -> Self {
+        Self::read_with(here, label, &AGENTS)
+    }
+
+    pub(super) fn read_with(
+        here: &Path,
+        label: &'static str,
+        definition: &'static Definition,
+    ) -> Self {
         let path = here.join(label);
         let mut skill = Self {
             path,
             label,
+            definition,
             state: SkillState::Missing,
             original: None,
         };
@@ -85,7 +106,7 @@ impl Skill {
         match std::fs::read(&skill.path) {
             Ok(bytes) => {
                 skill.state = std::str::from_utf8(&bytes)
-                    .map(state)
+                    .map(|existing| state(existing, definition))
                     .unwrap_or(SkillState::Conflict);
                 skill.original = Some(bytes);
             }
@@ -96,7 +117,7 @@ impl Skill {
 
     pub(super) fn conflict(&self) -> Option<String> {
         matches!(self.state, SkillState::Conflict).then(|| format!(
-            "{} cannot be replaced: it is unreadable, uses a link, or is not an unchanged vivac-agents skill written by setup.", self.label
+            "{} cannot be replaced: it is unreadable, uses a link, or is not an unchanged {} skill written by setup.", self.label, self.definition.name
         ))
     }
 
@@ -110,7 +131,7 @@ impl Skill {
 
     pub(super) fn plan(&self) -> PlanItem {
         let (verb, what) = match self.state {
-            SkillState::Missing => ("create", "how agents work with vivac"),
+            SkillState::Missing => ("create", self.definition.create_description),
             SkillState::Same => ("keep", "already there"),
             SkillState::Replaceable => ("replace", "the copy an earlier vivac wrote"),
             SkillState::Conflict => unreachable!("a skill conflict never reaches the plan"),
@@ -130,7 +151,7 @@ impl Skill {
         if self.needs_write() {
             writes.push(super::PlannedWrite::write(
                 self.path.clone(),
-                text(),
+                text(self.definition),
                 self.original.clone(),
             ));
         }

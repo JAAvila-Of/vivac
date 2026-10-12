@@ -195,7 +195,7 @@ fn is_fence_close(line: &str, marker: char, min_run: usize) -> bool {
     run >= min_run && rest[run..].chars().all(char::is_whitespace)
 }
 
-fn check_token(field: &str, tok: &str) -> Option<Finding> {
+pub(crate) fn check_token(field: &str, tok: &str) -> Option<Finding> {
     let finding = |rule, advice| {
         Some(Finding {
             rule,
@@ -233,14 +233,18 @@ fn check_token(field: &str, tok: &str) -> Option<Finding> {
     None
 }
 
-/// Splits on whitespace and on the signs that are never part of a
-/// credential. Dashes, dots, slashes and underscores are kept, because they are.
-fn tokens(text: &str) -> impl Iterator<Item = &str> {
+pub(crate) fn is_token_separator(c: char) -> bool {
     const SEPARATORS: &[char] = &[
         ',', ';', '"', '\'', '(', ')', '[', ']', '{', '}', '<', '>', '`',
     ];
+    c.is_whitespace() || SEPARATORS.contains(&c)
+}
+
+/// Splits on whitespace and on the signs that are never part of a
+/// credential. Dashes, dots, slashes and underscores are kept, because they are.
+pub(crate) fn tokens(text: &str) -> impl Iterator<Item = &str> {
     const EDGES: &[char] = &['.', ':', '!', '?'];
-    text.split(|c: char| c.is_whitespace() || SEPARATORS.contains(&c))
+    text.split(is_token_separator)
         .map(|t| t.trim_matches(|c: char| EDGES.contains(&c)))
         .filter(|t| !t.is_empty())
 }

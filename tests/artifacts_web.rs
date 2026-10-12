@@ -1,0 +1,438 @@
+mod common;
+use common::Sandbox;
+use serde_json::{json, Value};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::TcpStream;
+use std::process::{Child, Command, Stdio};
+
+struct Server {
+    child: Child,
+    port: u16,
+    cookie: String,
+    path: String,
+}
+impl Drop for Server {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+impl Server {
+    fn start(c: &Sandbox) -> Self {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_vivac"))
+            .current_dir(&c.0)
+            .env("VIVAC_HOME", c.global_home())
+            .args(["web", "--port", "0", "--no-open"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let mut reader = BufReader::new(child.stdout.take().unwrap());
+        let boot = loop {
+            let mut line = String::new();
+            assert!(reader.read_line(&mut line).unwrap() > 0);
+            if line.contains("?k=") {
+                break line[line.find("http://").unwrap()..].trim().to_string();
+            }
+        };
+        let authority = boot.trim_start_matches("http://");
+        let (host, path) = authority.split_once('/').unwrap();
+        let port = host.rsplit(':').next().unwrap().parse().unwrap();
+        let mut server = Self {
+            child,
+            port,
+            cookie: String::new(),
+            path: String::new(),
+        };
+        let response = server.call("GET", &format!("/{path}"), "", "");
+        server.cookie = response
+            .lines()
+            .find_map(|line| {
+                line.strip_prefix("Set-Cookie: ")
+                    .or_else(|| line.strip_prefix("set-cookie: "))
+            })
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap()
+            .to_string();
+        server.path = response
+            .lines()
+            .find_map(|line| {
+                line.strip_prefix("Location: ")
+                    .or_else(|| line.strip_prefix("location: "))
+            })
+            .unwrap()
+            .trim()
+            .to_string();
+        server
+    }
+    fn call(&self, method: &str, path: &str, headers: &str, body: &str) -> String {
+        let mut stream = TcpStream::connect(("127.0.0.1", self.port)).unwrap();
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+            .unwrap();
+        write!(stream,"{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nCookie: {}\r\nConnection: close\r\nContent-Length: {}\r\n{headers}\r\n{body}",self.port,self.cookie,body.len()).unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).unwrap();
+        response
+    }
+    fn headers(&self) -> String {
+        let token = self.cookie.split_once('=').unwrap().1;
+        format!("Content-Type: application/json\r\nOrigin: http://127.0.0.1:{}\r\nX-Vivac-Token: {token}\r\n", self.port)
+    }
+    fn artifacts_path(&self, operation: &str) -> String {
+        format!("{}artifacts/{operation}", self.path)
+    }
+    fn post(&self, operation: &str, body: &Value, status: u16) -> Value {
+        let response = self.call(
+            "POST",
+            &self.artifacts_path(operation),
+            &self.headers(),
+            &body.to_string(),
+        );
+        assert!(
+            response.starts_with(&format!("HTTP/1.1 {status}")),
+            "{response}"
+        );
+        assert!(response
+            .to_ascii_lowercase()
+            .contains("referrer-policy: no-referrer\r\n"));
+        json_body(&response)
+    }
+}
+
+fn json_body(response: &str) -> Value {
+    serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap()
+}
+
+fn cli(c: &Sandbox, args: &[&str]) -> Value {
+    let (body, code) = c.run(args);
+    assert_eq!(code, 0, "{body}");
+    serde_json::from_str(&body).unwrap()
+}
+
+fn assert_isolated(root: &std::path::Path) {
+    let crate_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .canonicalize()
+        .unwrap();
+    let workspace = crate_root
+        .parent()
+        .filter(|parent| parent.parent().is_some())
+        .unwrap_or(&crate_root);
+    assert!(
+        !root.starts_with(workspace),
+        "artifact fixtures must be outside the workspace"
+    );
+    assert!(
+        !root
+            .ancestors()
+            .skip(1)
+            .any(|parent| ["config", "events", "lane"]
+                .into_iter()
+                .any(|name| parent.join(".vivac").join(name).exists())),
+        "artifact fixtures must not inherit a tree"
+    );
+}
+
+fn seeded(name: &str) -> Sandbox {
+    let sandbox = Sandbox::new_empty(name);
+    let root = sandbox.0.canonicalize().unwrap();
+    assert_isolated(&root);
+    sandbox.ok(&["init", "--yes"]);
+    sandbox.ok(&[
+        "push",
+        "Review the selected delivery",
+        "--why",
+        "retain the reviewed revision",
+    ]);
+    sandbox
+}
+
+#[test]
+fn page_operations_and_download_refuse_unreviewed_requests() {
+    let c = seeded("artifacts-web-gates");
+    let server = Server::start(&c);
+    let path = format!("{}artifacts", server.path);
+    let page = server.call("GET", &path, "", "");
+    assert!(page.starts_with("HTTP/1.1 200"), "{page}");
+    assert!(page
+        .to_ascii_lowercase()
+        .contains("referrer-policy: same-origin\r\n"));
+    assert!(page.contains("form-action 'self'"));
+    assert!(page.contains("id=\"rows\""));
+    let before = c.log();
+    for method in ["GET", "OPTIONS", "PUT"] {
+        assert!(server
+            .call(method, &format!("{path}/list"), "", "")
+            .starts_with("HTTP/1.1 405"));
+    }
+    assert!(server
+        .call(
+            "POST",
+            &format!("{path}/list"),
+            "Content-Type: application/json\r\n",
+            "{}"
+        )
+        .starts_with("HTTP/1.1 403"));
+    server.post("list", &json!({"operation":"list","extra":true}), 400);
+    server.post("list", &json!({"operation":"capture"}), 400);
+    assert!(server
+        .call(
+            "POST",
+            &format!("{path}/list?extra=1"),
+            &server.headers(),
+            "{}"
+        )
+        .starts_with("HTTP/1.1 404"));
+    assert!(server
+        .call(
+            "POST",
+            &format!("{path}/list"),
+            &server.headers(),
+            &"x".repeat(16 * 1024 + 1)
+        )
+        .starts_with("HTTP/1.1 413"));
+    let cross = server
+        .headers()
+        .replace("Origin: http://127.0.0.1:", "Origin: http://localhost:");
+    assert!(server
+        .call("POST", &format!("{path}/list"), &cross, "{}")
+        .starts_with("HTTP/1.1 403"));
+    assert_eq!(
+        server.post("capabilities", &json!({"operation":"capabilities"}), 200)["operation"],
+        "capabilities"
+    );
+    assert_eq!(before, c.log());
+}
+
+#[test]
+fn exact_download_survives_newer_revision_and_source_loss_but_refuses_corruption() {
+    let c = seeded("artifacts-web-download");
+    std::fs::write(c.0.join("delivery.txt"), b"first saved delivery").unwrap();
+    let first = cli(
+        &c,
+        &[
+            "artifacts",
+            "capture",
+            "delivery.txt",
+            "--from",
+            "g1",
+            "--json",
+        ],
+    )["delivery"]
+        .clone();
+    c.ok(&[
+        "decide",
+        "Accept the first delivery",
+        "--reason",
+        "Review the selected saved revision",
+        "--ref",
+        first["reference"].as_str().unwrap(),
+    ]);
+    std::fs::write(c.0.join("delivery.txt"), b"second saved delivery").unwrap();
+    let second = cli(
+        &c,
+        &[
+            "artifacts",
+            "capture",
+            "delivery.txt",
+            "--from",
+            "g1",
+            "--artifact",
+            first["artifact"].as_str().unwrap(),
+            "--previous",
+            first["revision"].as_str().unwrap(),
+            "--json",
+        ],
+    )["delivery"]
+        .clone();
+    std::fs::remove_file(c.0.join("delivery.txt")).unwrap();
+    let mut server = Server::start(&c);
+    let headers = format!(
+        "Content-Type: application/x-www-form-urlencoded\r\nOrigin: http://127.0.0.1:{}\r\n",
+        server.port
+    );
+    let body = format!(
+        "artifact={}&revision={}&token={}",
+        first["artifact"].as_str().unwrap(),
+        first["revision"].as_str().unwrap(),
+        server.cookie.split_once('=').unwrap().1
+    );
+    let path = server.artifacts_path("download");
+    let inventory = server.post("list", &json!({"operation":"list","all":true}), 200);
+    assert_eq!(inventory["artifacts"][0]["revision"], second["revision"]);
+    assert_eq!(
+        inventory["artifacts"][0]["artifact_decision_references"][0]["revision"],
+        first["revision"]
+    );
+    assert_eq!(
+        inventory["artifacts"][0]["artifact_decision_references"][0]["alias"],
+        "d2"
+    );
+    assert_eq!(
+        inventory["artifacts"][0]["artifact_decision_references_total"],
+        1
+    );
+    let selected = server.post(
+        "show",
+        &json!({"operation":"show","artifact":first["artifact"],"revision":first["revision"]}),
+        200,
+    );
+    assert_eq!(selected["revisions"][0]["revision"], first["revision"]);
+    assert_eq!(selected["latest_revision"], second["revision"]);
+    let response = server.call("POST", &path, &headers, &body);
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    assert!(response
+        .to_ascii_lowercase()
+        .contains("content-type: application/octet-stream\r\n"));
+    assert!(response
+        .to_ascii_lowercase()
+        .contains("x-content-type-options: nosniff\r\n"));
+    assert!(response
+        .to_ascii_lowercase()
+        .contains("content-disposition: attachment;"));
+    assert!(response
+        .to_ascii_lowercase()
+        .contains("referrer-policy: no-referrer\r\n"));
+    assert_eq!(
+        response.split_once("\r\n\r\n").unwrap().1,
+        "first saved delivery"
+    );
+    let cookie = std::mem::take(&mut server.cookie);
+    let header_token = format!(
+        "{headers}X-Vivac-Token: {}\r\n",
+        cookie.split_once('=').unwrap().1
+    );
+    assert!(server
+        .call("POST", &path, &header_token, &body)
+        .starts_with("HTTP/1.1 403"));
+    server.cookie = cookie;
+    for invalid in [
+        format!("{body}&extra=1"),
+        format!("{body}&artifact=x"),
+        body.replace("artifact=", "artifact=%"),
+        body.replace("token=", "token=+"),
+    ] {
+        let response = server.call("POST", &path, &headers, &invalid);
+        assert!(response.starts_with("HTTP/1.1 400"), "{response}");
+        assert!(!response
+            .to_ascii_lowercase()
+            .contains("content-disposition:"));
+    }
+    let wrong_token = body.replace("token=", "token=0");
+    assert!(server
+        .call("POST", &path, &headers, &wrong_token)
+        .starts_with("HTTP/1.1 400"));
+    let mut wrong = body.clone().into_bytes();
+    let last = wrong.last_mut().unwrap();
+    *last = if *last == b'0' { b'1' } else { b'0' };
+    assert!(server
+        .call(
+            "POST",
+            &path,
+            &headers,
+            std::str::from_utf8(&wrong).unwrap()
+        )
+        .starts_with("HTTP/1.1 403"));
+    let foreign = headers.replace("Origin: http://127.0.0.1:", "Origin: http://localhost:");
+    assert!(server
+        .call("POST", &path, &foreign, &body)
+        .starts_with("HTTP/1.1 403"));
+    let opaque = headers.replace(
+        &format!("Origin: http://127.0.0.1:{}", server.port),
+        "Origin: null",
+    );
+    let response = server.call("POST", &path, &opaque, &body);
+    assert!(response.starts_with("HTTP/1.1 403"), "{response}");
+    assert!(response
+        .to_ascii_lowercase()
+        .contains("referrer-policy: no-referrer\r\n"));
+    assert!(!response
+        .to_ascii_lowercase()
+        .contains("content-disposition:"));
+    let unknown = body.replace(
+        first["artifact"].as_str().unwrap(),
+        "01aaaaaaaaaaaaaaaaaaaaaaaa",
+    );
+    assert!(server
+        .call("POST", &path, &headers, &unknown)
+        .starts_with("HTTP/1.1 400"));
+    assert!(server
+        .call(
+            "POST",
+            &path,
+            &server.headers(),
+            &json!({"artifact":first["artifact"],"revision":first["revision"]}).to_string()
+        )
+        .starts_with("HTTP/1.1 415"));
+    std::fs::write(
+        c.0.join(".vivac-artifacts/objects")
+            .join(format!("{}.blob", first["revision"].as_str().unwrap())),
+        b"modified saved bytes",
+    )
+    .unwrap();
+    let response = server.call("POST", &path, &headers, &body);
+    assert!(!response.starts_with("HTTP/1.1 200"), "{response}");
+    assert!(!response
+        .to_ascii_lowercase()
+        .contains("content-disposition:"));
+    assert!(!response.contains("modified saved bytes"));
+    assert!(response.contains(&format!(
+        "#artifact={}&amp;revision={}",
+        first["artifact"].as_str().unwrap(),
+        first["revision"].as_str().unwrap()
+    )));
+    assert!(!std::fs::read_dir(c.0.join(".vivac-artifacts/objects"))
+        .unwrap()
+        .any(|entry| entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".tmp-")));
+}
+
+#[test]
+fn web_reads_match_cli_and_capabilities_do_not_refresh_a_broken_log() {
+    let c = seeded("artifacts-web-shared-engine");
+    std::fs::write(c.0.join("delivery.txt"), b"saved delivery").unwrap();
+    let saved = cli(
+        &c,
+        &[
+            "artifacts",
+            "capture",
+            "delivery.txt",
+            "--from",
+            "g1",
+            "--json",
+        ],
+    )["delivery"]
+        .clone();
+    let server = Server::start(&c);
+    let expected = cli(&c, &["artifacts", "list", "--all", "--json"]);
+    let listed = server.post("list", &json!({"operation":"list","all":true}), 200);
+    assert_eq!(listed, expected);
+    assert_eq!(listed["artifacts"][0]["producer_node"]["alias"], "g1");
+    let shown = server.post(
+        "show",
+        &json!({"operation":"show","artifact":saved["artifact"],"revision":saved["revision"]}),
+        200,
+    );
+    assert_eq!(shown["revisions"][0]["reference"], saved["reference"]);
+    assert_eq!(shown["revisions"][0]["producer"], saved["producer"]);
+    let before = c.log();
+    let mut log = std::fs::OpenOptions::new()
+        .append(true)
+        .open(c.0.join(".vivac/events"))
+        .unwrap();
+    log.write_all(b"broken event line\n").unwrap();
+    drop(log);
+    let page = server.call("GET", &format!("{}artifacts", server.path), "", "");
+    assert!(page.starts_with("HTTP/1.1 200"), "{page}");
+    assert_eq!(
+        server.post("capabilities", &json!({"operation":"capabilities"}), 200)["operation"],
+        "capabilities"
+    );
+    server.post("list", &json!({"operation":"list","all":true}), 409);
+    assert_eq!(c.log(), format!("{before}broken event line\n"));
+}

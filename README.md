@@ -224,7 +224,11 @@ browser: which one moved and which has been sitting still, what changed in
 one while you were away, a node's whole lineage, and the whole tree. Its Agents
 page compares native versions across harnesses and applies an explicitly reviewed
 synchronization plan through the same operations as `vivac agents sync`. It is
-where you see the state of each item for yourself, and where you catch what
+also where the Artifacts page connects retained deliveries to their producer
+and decisions referencing exact revisions. Checks, capture and restore use
+the artifact engine; downloads verify the selected revision before sending it
+as an attachment. See [Artifact custody](docs/ARTIFACTS.md). This is where you
+see the state of each item for yourself, and where you catch what
 the agent let pass.
 
 <picture>
@@ -379,13 +383,18 @@ in, it only says what to type.
 ## The first five minutes
 
 **1.** In the folder you open your agent in. The first plants the tree, the
-second gives your agent the hooks, the opening module, the server and the skill. Both show every
+second gives your agent the hooks, the opening module, the server and the skills. Both show every
 file they will touch, and the exact command each hook will run, and then ask:
 
 ```sh
 vivac init
 vivac setup claude-code
 ```
+
+Use `vivac setup codex` for Codex. Setup also installs `vivac-artifacts` for
+incorporating selected existing deliveries or retaining a reviewed new
+revision. It does not capture files automatically. See
+[Artifact custody](docs/ARTIFACTS.md).
 
 **2.** Start the first thread. You were going to say what you are doing
 anyway; saying it here is what creates the edge, for free:
@@ -508,6 +517,7 @@ Not there yet: team mode. The project is in `0.x` and
 | [**Versioning**](docs/VERSIONING.md) | what breaks when, and what keeps `1.0` away |
 | [**Where it sits**](docs/POSITION.md) | what each category of tool stores, and where each is better than this |
 | [**Pillars**](docs/PILLARS.md) | the four arbiters every decision here is judged against |
+| [**Artifact custody**](docs/ARTIFACTS.md) | retain selected local text deliveries, reference exact revisions and recover their bytes |
 
 ## Licence
 

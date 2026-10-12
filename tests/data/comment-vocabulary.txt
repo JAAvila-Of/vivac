@@ -33,6 +33,7 @@ accumulated
 accumulates
 accumulating
 accumulator
+acquired
 acronym
 across
 act
@@ -106,6 +107,7 @@ alive
 aliveness
 all
 allocated
+allocation
 allow
 allowed
 allows
@@ -212,6 +214,7 @@ arrived
 arrives
 arriving
 article
+artifact
 as
 ascending
 ascii
@@ -265,6 +268,7 @@ authenticates
 author
 authored
 authorised
+authoritative
 authority
 authorize
 authorized
@@ -341,6 +345,7 @@ belonged
 belonging
 belongs
 below
+benchmark
 bend
 beneath
 benefit
@@ -809,6 +814,7 @@ copied
 copies
 copy
 copyable
+core
 corner
 corpus
 correct
@@ -972,6 +978,7 @@ deliberately
 delimited
 delimiting
 delivered
+deliveries
 delivering
 delta
 demand
@@ -1040,6 +1047,7 @@ diacritic
 diacritical
 diacritics
 diagnose
+diagnosis
 diagramas
 did
 die
@@ -1262,6 +1270,7 @@ entries
 entropy
 entry
 enum
+enumeration
 enums
 env
 envelope
@@ -1615,6 +1624,7 @@ glance
 glibc
 glob
 global
+globalalloc
 globs
 glue
 glued
@@ -1877,6 +1887,7 @@ inherited
 inheriting
 inherits
 init
+initialization
 inject
 injected
 injecting
@@ -1919,6 +1930,7 @@ integration
 intel
 intended
 intent
+intentionally
 interaction
 interactive
 intercepted
@@ -1961,6 +1973,7 @@ inverted
 invisible
 invite
 invites
+invocation
 invoke
 invoked
 involved
@@ -2213,6 +2226,7 @@ macro
 made
 magic
 main
+maintained
 maintainer
 maintains
 make
@@ -2659,6 +2673,7 @@ paste
 pastes
 patched
 path
+pathname
 paths
 pattern
 pause
@@ -2666,6 +2681,7 @@ pay
 paying
 payload
 pays
+peak
 penalizes
 pending
 people
@@ -2873,6 +2889,7 @@ proposing
 prose
 protect
 protection
+protects
 protocol
 prototype
 provable
@@ -3064,6 +3081,7 @@ ref
 reference
 referenced
 references
+refers
 refining
 refixed
 reflowed
@@ -3072,6 +3090,7 @@ reforms
 refresh
 refreshed
 refreshes
+refreshing
 refs
 refusal
 refusals
@@ -3130,6 +3149,7 @@ relying
 rem
 remain
 remaining
+remains
 remedy
 remember
 remembered
@@ -3245,6 +3265,7 @@ rests
 result
 results
 resume
+retain
 retains
 retirable
 retired
@@ -3270,6 +3291,7 @@ reviewed
 reviewer
 reviews
 revision
+revisions
 revisited
 revisiting
 revisits
@@ -3288,6 +3310,7 @@ ride
 rides
 riding
 right
+rights
 ring
 risk
 road
@@ -3762,6 +3785,7 @@ submission
 submodule
 subprocess
 subsequence
+subsequent
 subset
 substitute
 substitutes
@@ -3795,6 +3819,8 @@ superseded
 supersedes
 superseding
 superset
+supplied
+supplies
 supply
 support
 supported
@@ -3874,7 +3900,6 @@ taxative
 teach
 teaches
 team
-tear
 tearing
 technical
 technically
@@ -4031,6 +4056,7 @@ trap
 travel
 travelling
 travels
+traversal
 treat
 treated
 treating
@@ -4271,6 +4297,7 @@ verification
 verified
 verifies
 verify
+verifying
 version
 versioned
 versus
@@ -4410,6 +4437,7 @@ wrapped
 wrapper
 wrapping
 wraps
+writable
 write
 writer
 writers

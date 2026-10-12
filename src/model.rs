@@ -547,6 +547,8 @@ pub struct Tree {
     /// `Tree::apply`'s own `Body::WhereChanged` arm is the only writer.
     pub wheres: Vec<Where>,
     pub(crate) agent_history: Vec<(String, Body)>,
+    pub(crate) artifact_history: Vec<(String, Body)>,
+    pub(crate) artifact_projection: crate::artifacts::projection::Projection,
     pub next_vivac_num: u64,
     pub seq: u64,
     pub next_num: u64,
@@ -608,6 +610,18 @@ pub fn fold(events: &[Event], broken: usize) -> Tree {
 }
 
 impl Tree {
+    pub(crate) fn rebuild_artifact_projection(&mut self) {
+        let mut projection = crate::artifacts::projection::Projection::default();
+        for (index, (lane, body)) in self.artifact_history.iter().enumerate() {
+            let producer_exists = match body {
+                Body::ArtifactCaptured { producer, .. } => self.node(producer).is_some(),
+                _ => false,
+            };
+            projection.observe(lane, body, &self.artifact_history[..index], producer_exists);
+        }
+        self.artifact_projection = projection;
+    }
+
     /// Applies one event.
     ///
     /// The fold uses it at startup and so does `emit`, right after writing.
@@ -841,6 +855,7 @@ impl Tree {
                     },
                 );
                 self.ulid_index.insert(node.clone(), *num);
+                self.artifact_projection.resolve_producer(node);
                 self.next_num = self.next_num.max(*num + 1);
                 // `d945`: something filed under the parent, so its notes are
                 // no longer notes with nothing filed under them.
@@ -1081,6 +1096,16 @@ impl Tree {
                     lane: lane.to_string(),
                     repos: repos.clone(),
                 });
+            }
+            Body::ArtifactCaptured { producer, .. } => {
+                let producer_exists = self.node(producer).is_some();
+                self.artifact_projection.observe(
+                    lane,
+                    body,
+                    &self.artifact_history,
+                    producer_exists,
+                );
+                self.artifact_history.push((lane.to_string(), body.clone()));
             }
             Body::AgentRecorded { .. }
             | Body::AgentBound { .. }
@@ -1633,6 +1658,7 @@ pub(crate) struct RawParts {
     pub vivacs: Vec<Vivac>,
     pub wheres: Vec<Where>,
     pub agent_history: Vec<(String, Body)>,
+    pub artifact_history: Vec<(String, Body)>,
     pub own_focus: OwnFocus,
     pub other_focus: OtherFocus,
     pub next_vivac_num: u64,
@@ -1671,7 +1697,7 @@ impl Tree {
             }
             nodes.insert(n.num, n);
         }
-        Tree {
+        let mut tree = Tree {
             text: p.text,
             spans: p.spans,
             nodes,
@@ -1682,6 +1708,8 @@ impl Tree {
             vivacs: p.vivacs,
             wheres: p.wheres,
             agent_history: p.agent_history,
+            artifact_history: p.artifact_history,
+            artifact_projection: crate::artifacts::projection::Projection::default(),
             own_focus: p.own_focus,
             other_focus: p.other_focus,
             next_vivac_num: p.next_vivac_num,
@@ -1696,7 +1724,9 @@ impl Tree {
             // a fact about the tree itself. Whoever loads it calls
             // `for_lane` (`t594`).
             lane: None,
-        }
+        };
+        tree.rebuild_artifact_projection();
+        tree
     }
 
     /// The arena verbatim, for the derived index to write out. A span handed
@@ -3231,5 +3261,242 @@ mod tests {
         let tree = fold(&events, 0);
         assert_eq!(tree.lanes["main"].since_spoken, 2);
         assert_eq!(tree.lanes["other"].since_spoken, 1);
+    }
+
+    fn artifact_projection_id(value: u32) -> String {
+        format!("{value:026}")
+    }
+
+    fn artifact_projection_producer() -> Event {
+        let mut event = node(1, 1, Kind::Task, None);
+        let Body::NodeCreated { node, .. } = &mut event.payload else {
+            unreachable!()
+        };
+        *node = artifact_projection_id(1);
+        event
+    }
+
+    fn artifact_projection_delivery(seq: u32, previous: Option<String>) -> Event {
+        let revision = artifact_projection_id(seq + 100);
+        Event {
+            seq: seq.into(),
+            id: format!("e{seq}"),
+            ts: TS.into(),
+            actor: "opaque-actor".into(),
+            lane: "delivery-lane".into(),
+            payload: Body::ArtifactCaptured {
+                artifact: artifact_projection_id(90),
+                revision: revision.clone(),
+                operation: artifact_projection_id(seq + 200),
+                producer: artifact_projection_id(1),
+                previous,
+                source: "mockup.html".into(),
+                site: artifact_projection_id(500),
+                size: 17,
+                digest: "a".repeat(64),
+                object: format!("objects/{revision}.blob"),
+            },
+        }
+    }
+
+    #[test]
+    fn artifact_projection_tracks_valid_incremental_deliveries() {
+        let mut tree = fold(&[artifact_projection_producer()], 0);
+        assert!(tree.artifact_projection.is_valid(0));
+        let first = artifact_projection_delivery(2, None);
+        tree.apply(first.seq, &first.ts, &first.lane, &first.payload);
+        assert!(tree
+            .artifact_projection
+            .is_valid(tree.artifact_history.len()));
+        assert_eq!(
+            tree.artifact_projection
+                .revision_index(&artifact_projection_id(102)),
+            Some(0)
+        );
+        assert_eq!(
+            tree.artifact_projection
+                .operation_index(&artifact_projection_id(202)),
+            Some(0)
+        );
+        let second = artifact_projection_delivery(3, Some(artifact_projection_id(102)));
+        tree.apply(second.seq, &second.ts, &second.lane, &second.payload);
+        assert!(tree
+            .artifact_projection
+            .is_valid(tree.artifact_history.len()));
+        assert_eq!(
+            tree.artifact_projection
+                .latest_index(&artifact_projection_id(90)),
+            Some(1)
+        );
+        assert_eq!(tree.artifact_projection.count(), 2);
+        assert_eq!(tree.artifact_projection.latest_count(), 1);
+        assert_eq!(tree.artifact_projection.operations_count(), 2);
+        assert_eq!(
+            tree.artifact_projection.revisions().collect::<Vec<_>>(),
+            vec![
+                (artifact_projection_id(102).as_str(), 0),
+                (artifact_projection_id(103).as_str(), 1)
+            ]
+        );
+        assert_eq!(
+            tree.artifact_projection.latest().collect::<Vec<_>>(),
+            vec![(artifact_projection_id(90).as_str(), 1)]
+        );
+    }
+
+    #[test]
+    fn artifact_projection_rejects_duplicate_ids_forks_and_sensitive_metadata_permanently() {
+        let initial = vec![
+            artifact_projection_producer(),
+            artifact_projection_delivery(2, None),
+        ];
+        for case in 0..4 {
+            let mut tree = fold(&initial, 0);
+            let mut bad = artifact_projection_delivery(3, Some(artifact_projection_id(102)));
+            let Body::ArtifactCaptured {
+                revision,
+                operation,
+                previous,
+                source,
+                object,
+                ..
+            } = &mut bad.payload
+            else {
+                unreachable!()
+            };
+            match case {
+                0 => {
+                    *revision = artifact_projection_id(102);
+                    *object = format!("objects/{revision}.blob");
+                }
+                1 => *operation = artifact_projection_id(202),
+                2 => *previous = None,
+                3 => *source = "person@example.com/mockup.html".into(),
+                _ => unreachable!(),
+            }
+            tree.apply(bad.seq, &bad.ts, &bad.lane, &bad.payload);
+            assert_eq!(tree.artifact_history.len(), 2);
+            assert!(
+                !tree
+                    .artifact_projection
+                    .is_valid(tree.artifact_history.len()),
+                "case {case}"
+            );
+            assert!(crate::artifacts::validate_references(
+                &tree,
+                &[format!(
+                    "artifact:{}@{}",
+                    artifact_projection_id(90),
+                    artifact_projection_id(102)
+                )]
+            )
+            .is_err());
+            let later = artifact_projection_delivery(4, Some(artifact_projection_id(102)));
+            tree.apply(later.seq, &later.ts, &later.lane, &later.payload);
+            assert!(
+                !tree
+                    .artifact_projection
+                    .is_valid(tree.artifact_history.len()),
+                "case {case}"
+            );
+        }
+    }
+
+    #[test]
+    fn artifact_projection_resolves_a_producer_created_after_delivery() {
+        let first = artifact_projection_delivery(2, None);
+        let mut tree = fold(&[first], 0);
+        assert!(!tree
+            .artifact_projection
+            .is_valid(tree.artifact_history.len()));
+        assert_eq!(
+            tree.artifact_projection
+                .revision_index(&artifact_projection_id(102)),
+            Some(0)
+        );
+        let producer = artifact_projection_producer();
+        tree.apply(3, &producer.ts, &producer.lane, &producer.payload);
+        assert!(tree
+            .artifact_projection
+            .is_valid(tree.artifact_history.len()));
+        tree.rebuild_artifact_projection();
+        assert!(tree
+            .artifact_projection
+            .is_valid(tree.artifact_history.len()));
+        assert_eq!(
+            tree.artifact_projection
+                .revision_index(&artifact_projection_id(102)),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn artifact_projection_requires_rebuild_after_history_changes_outside_the_fold() {
+        let mut tree = fold(
+            &[
+                artifact_projection_producer(),
+                artifact_projection_delivery(2, None),
+            ],
+            0,
+        );
+        let next = artifact_projection_delivery(3, Some(artifact_projection_id(102)));
+        tree.artifact_history.push((next.lane, next.payload));
+        assert!(!tree
+            .artifact_projection
+            .is_valid(tree.artifact_history.len()));
+        tree.rebuild_artifact_projection();
+        assert!(tree
+            .artifact_projection
+            .is_valid(tree.artifact_history.len()));
+        assert_eq!(
+            tree.artifact_projection
+                .latest_index(&artifact_projection_id(90)),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn artifact_capture_preserves_provenance_without_changing_node_references() {
+        let mut events = vec![node(1, 1, Kind::Task, None)];
+        let Body::NodeCreated { refs, .. } = &mut events[0].payload else {
+            unreachable!()
+        };
+        refs.push("existing-reference".into());
+        let before = fold(&events, 0);
+        let body = Body::ArtifactCaptured {
+            artifact: "artifact-id".into(),
+            revision: "revision-id".into(),
+            operation: "operation-id".into(),
+            producer: "n1".into(),
+            previous: None,
+            source: "mockup.html".into(),
+            site: "local-site".into(),
+            size: 17,
+            digest: "a".repeat(64),
+            object: "objects/revision-id".into(),
+        };
+        let mut captured = events[0].clone();
+        captured.seq = 2;
+        captured.id = "e2".into();
+        captured.lane = "delivery-lane".into();
+        captured.payload = body.clone();
+        events.push(captured);
+        let tree = fold(&events, 0);
+        assert_eq!(tree.artifact_history, vec![("delivery-lane".into(), body)]);
+        assert!(tree.agent_history.is_empty());
+        assert_eq!(
+            tree.node("n1").unwrap().refs(&tree),
+            vec!["existing-reference"]
+        );
+        assert_eq!(tree.total(), before.total());
+        assert_eq!(
+            tree.lanes["main"].seq_change,
+            before.lanes["main"].seq_change
+        );
+        assert_eq!(tree.lanes["delivery-lane"].seq_wrote, 2);
+        assert_eq!(tree.lanes["delivery-lane"].seq_change, 2);
+        assert_eq!(tree.lanes["delivery-lane"].seg_events, 1);
+        assert_eq!(tree.lanes["delivery-lane"].since_spoken, 1);
+        assert!(tree.lanes["delivery-lane"].written.is_empty());
     }
 }

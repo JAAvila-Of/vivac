@@ -21,6 +21,7 @@
 //! page, so no working directory can take it out of reach.
 
 mod agents;
+mod artifacts;
 mod gate;
 mod map;
 mod today;
@@ -124,6 +125,7 @@ pub(crate) fn alias_link(project: &str, alias: &str) -> String {
 /// What an admitted request is asking for. The gate has already said the
 /// request may be answered; this says what with.
 enum Route<'a> {
+    Artifacts(&'a str, &'a str),
     Agents(&'a str, &'a str),
     /// `GET /` -- the index of projects.
     Index,
@@ -147,6 +149,7 @@ enum Route<'a> {
 /// parser to the one path security is watching, which is exactly what
 /// `d138` refused to do for headers.
 fn route(path: &str) -> Route<'_> {
+    let has_query = path.contains('?');
     let (path, query) = match path.split_once('?') {
         Some((p, q)) => (p, q),
         None => (path, ""),
@@ -172,6 +175,23 @@ fn route(path: &str) -> Route<'_> {
                 } else if let Some(operation) = tail.strip_prefix("agents/") {
                     if matches!(operation, "inventory" | "plan" | "apply" | "compare") {
                         return Route::Agents(id, operation);
+                    }
+                } else if tail == "artifacts" && !has_query {
+                    return Route::Artifacts(id, "");
+                } else if let Some(operation) = tail.strip_prefix("artifacts/") {
+                    if !has_query
+                        && matches!(
+                            operation,
+                            "capabilities"
+                                | "list"
+                                | "show"
+                                | "capture"
+                                | "check"
+                                | "restore"
+                                | "download"
+                        )
+                    {
+                        return Route::Artifacts(id, operation);
                     }
                 } else if tail == "tree" {
                     return Route::Tree(id, query);
@@ -307,6 +327,12 @@ fn handle(
     match gate.admit(&incoming) {
         Verdict::Boot => boot_redirect(request, gate.token(), landing),
         Verdict::Serve => match route(&path) {
+            Route::Artifacts(id, operation) => match registry.named(id) {
+                Named::One(i) => {
+                    artifacts::serve(request, id, registry.at(i), operation, gate.token())
+                }
+                other => not_one(request, registry, other),
+            },
             // `d809`: `/` always answers the index -- with a landing project
             // or without one, with one project or with many. It used to hand
             // out `d199`'s redirect instead, whenever the working directory

@@ -14,6 +14,7 @@
 
 mod agents_notice;
 mod agents_skill;
+mod artifacts_skill;
 mod claude_code;
 mod codex;
 pub(crate) mod doctor;

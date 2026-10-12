@@ -88,6 +88,7 @@ pub struct Moved<'a> {
 /// stretch where nothing happened.
 #[derive(Default)]
 pub struct Tail {
+    pub artifacts: usize,
     pub focus_moves: usize,
     pub notes: usize,
     pub flags_cleared: usize,
@@ -199,6 +200,10 @@ pub fn collect<'a>(tree: &'a Tree, log: &[Event], since_seq: u64) -> Changed<'a>
             },
             Body::AgainstAdded { node, .. } => match tree.node(node) {
                 Some(_) => result.tail.declarations += 1,
+                None => result.tail.unreadable += 1,
+            },
+            Body::ArtifactCaptured { producer, .. } => match tree.node(producer) {
+                Some(_) => result.tail.artifacts += 1,
                 None => result.tail.unreadable += 1,
             },
             // Not naming a node: nothing to check against the tree.
@@ -383,6 +388,13 @@ pub(crate) fn tail_phrase(tail: &Tail) -> Option<String> {
             "{} late declaration{}",
             tail.declarations,
             plural(tail.declarations)
+        ));
+    }
+    if tail.artifacts > 0 {
+        parts.push(format!(
+            "{} artifact deliver{}",
+            tail.artifacts,
+            if tail.artifacts == 1 { "y" } else { "ies" }
         ));
     }
     if tail.unreadable > 0 {
@@ -631,6 +643,7 @@ fn as_json(tree: &Tree, result: &Changed) -> serde_json::Value {
             "edge_changes": result.tail.edges,
             "arm_changes": result.tail.arms,
             "late_declarations": result.tail.declarations,
+            "artifact_deliveries": result.tail.artifacts,
             "unreadable": result.tail.unreadable,
         },
     })
