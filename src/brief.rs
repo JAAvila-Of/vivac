@@ -490,6 +490,7 @@ const BRIEF_HEADINGS: &[&str] = &[
     "UNTOUCHED FOR A WHILE",
     OTHER_LANES_TITLE,
     "AGENT CUSTODY",
+    "ARTIFACT DELIVERIES",
     "WRITE AT THESE SEAMS",
     "OPEN GOALS",
 ];
@@ -1685,6 +1686,22 @@ pub fn to_text(
     // block that tells an agent when to write would be worse than the
     // brief running long.
     if for_hook {
+        s.push(Section::fixed(heading(
+            "ARTIFACT DELIVERIES",
+            [
+                "For artifacts you create or modify as task deliveries, use",
+                "vivac-artifacts by default unless the person asks otherwise.",
+                "Create a project file, retain it through vivac_artifacts or",
+                "vivac artifacts with its producing node, then return the exact",
+                "revision reference before handing it back. Continue a known",
+                "artifact as a new revision. Check installed support; report",
+                "unsupported or refused custody. Skip temporary drafts and",
+                "unselected existing files. Custody is not human approval.",
+            ]
+            .iter()
+            .map(|line| format!("  {line}"))
+            .collect(),
+        )));
         s.push(Section::fixed(heading(
             "AGENT CUSTODY",
             AGENT_CUSTODY.iter().map(|line| line.to_string()).collect(),
