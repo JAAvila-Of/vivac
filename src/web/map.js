@@ -188,6 +188,56 @@
     return links("Beside it", beside) + links("Under it", under);
   }
 
+  function artifactLinks(n) {
+    var out = "";
+    [["Produced here", n.ap || []], ["Referenced here", n.ar || []]].forEach(function (group) {
+      if (!group[1].length) return;
+      out += "<h3>" + group[0] + '</h3><ul class="artifact-links">';
+      group[1].forEach(function (link) {
+        out += '<li><a href="/p/' + encodeURIComponent(project) + '/artifacts#artifact=' +
+          encodeURIComponent(link.artifact) + '&amp;revision=' + encodeURIComponent(link.revision) + '">' +
+          esc(link.source) + ' - revision ' + esc(link.revision) + '</a></li>';
+      });
+      out += "</ul>";
+    });
+    if (n.at) out += '<p>' + esc(n.ac) + ' deliveries. This list is limited. <a href="/p/' + encodeURIComponent(project) + '/artifacts">See all project artifacts</a>.</p>';
+    return out;
+  }
+
+  var railViewport = document.querySelector(".rail-viewport");
+  function panControls() {
+    return '<span class="pan-controls"><button type="button" data-pan="earlier">Earlier levels</button> <button type="button" data-pan="later">Later levels</button></span>';
+  }
+  function updatePanControls() {
+    if (!railViewport) return;
+    document.querySelectorAll("[data-pan]").forEach(function (button) {
+      button.disabled = button.dataset.pan === "earlier" ? railViewport.scrollLeft <= 0 :
+        railViewport.scrollLeft + railViewport.clientWidth >= railViewport.scrollWidth - 1;
+    });
+  }
+  if (railViewport) {
+    document.querySelectorAll(".pan-controls[hidden]").forEach(function (element) { element.hidden = false; });
+    railViewport.addEventListener("scroll", updatePanControls);
+    window.addEventListener("resize", updatePanControls);
+    document.addEventListener("click", function (event) {
+      var button = event.target.closest("[data-pan]");
+      if (!button || button.disabled) return;
+      railViewport.scrollLeft += (button.dataset.pan === "earlier" ? -1 : 1) * railViewport.clientWidth;
+      updatePanControls();
+    });
+    updatePanControls();
+  }
+
+  function revealDepth(n) {
+    var viewport = document.querySelector(".rail-viewport");
+    if (!viewport) return;
+    var svg = gutters.find(function (element) { return element.getBoundingClientRect().width > 0; });
+    if (!svg) return;
+    var x = +svg.dataset.origin + n.d * +svg.dataset.step;
+    if (x - 10 < viewport.scrollLeft) viewport.scrollLeft = Math.max(0, x - 10);
+    else if (x + 10 > viewport.scrollLeft + viewport.clientWidth) viewport.scrollLeft = x + 10 - viewport.clientWidth;
+  }
+
   function card(n) {
     var pairs = [
       ["line", n.ln || "a short branch"],
@@ -232,6 +282,7 @@
     });
     map.classList.add("routing");
     drawRoute(route);
+    revealDepth(n);
 
     panel.innerHTML =
       '<div class="sheet"><span class="grab"></span>' +
@@ -241,11 +292,13 @@
       (n.b ? " · blocks its parent" : "") +
       (n.fc ? " · FALSE CLOSE" : "") + "</p>" +
       "<h2>" + esc(n.t) + "</h2>" +
+      panControls() +
       section("Why it was born", n.w) +
       section("Outcome", n.o) +
       section("Return date", n.u ? (n.du ? "Back since " + n.u : "Until " + n.u) : "") +
       waiting(n) +
       notes(n) +
+      artifactLinks(n) +
       around(i) +
       "<h3>The route here · " + route.length + " stops</h3>" +
       '<ol class="plain route-list">' +
@@ -267,6 +320,7 @@
        asked for a node, never when the keyboard is walking the list. */
     if (!quiet) panel.classList.add("open");
     at = i;
+    updatePanControls();
 
     /* The selection goes into the address bar, so folding something -- which
        reloads the page -- comes back to the node you were reading, and so a
@@ -511,6 +565,7 @@
     if (!alias) return;
     for (var i = 0; i < D.length; i++) {
       if (D[i].a === alias) {
+        revealDepth(D[i]);
         jump(i, true);
         return;
       }

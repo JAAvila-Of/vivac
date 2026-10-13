@@ -68,6 +68,18 @@ they ran. A matching digest proves those bytes match the receipt; it does not
 prove that a person approved them or that a harness used them. Source paths
 recorded at another site are not checked against an unrelated local file.
 
+The map marks nodes with compact note and artifact counts. Their icons have
+distinct shapes and accessible labels. A node's artifact detail separates
+revisions produced there from exact revisions referenced by the node; a later
+delivery does not replace an earlier reference.
+
+The Artifacts page keeps the last explicit check in the current browser tab's
+session, including its date, retained-copy result and source result. Refreshing
+the page can show that previous observation; it does not check bytes again.
+Observations belong to the selected project, site and exact revision, and are
+not recorded as approvals or written to the provenance log. If browser session
+storage is unavailable, observations remain available only in the current page.
+
 Store checks inspect every receipt and object even when their detail lists are
 paged. A damaged revision outside the displayed page still makes the check
 fail. Each detail category reports its total; `next_offset` continues the lists.

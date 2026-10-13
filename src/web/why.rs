@@ -174,9 +174,17 @@ fn facts(tree: &Tree, ag: &Aggregates, n: &Node) -> String {
 /// Every step but the one you are on links to its own lineage, so the
 /// drawing is also how you walk up the path. The step you are on does not:
 /// a link back to the page you are reading teaches nothing.
-fn step(project: &str, tree: &Tree, ag: &Aggregates, full: &Full, n: &Node, here: bool) -> String {
+fn step(
+    project: &str,
+    tree: &Tree,
+    ag: &Aggregates,
+    full: &Full,
+    n: &Node,
+    context: (bool, Option<&super::artifact_links::Links<'_>>),
+) -> String {
     // `f807`: a leading space, or the mark reads glued to the title beside
     // it -- "...diagramas de usoyou are here".
+    let (here, artifacts) = context;
     let mark = if here {
         " <span class=\"here-mark\">you are here</span>"
     } else {
@@ -189,10 +197,13 @@ fn step(project: &str, tree: &Tree, ag: &Aggregates, full: &Full, n: &Node, here
     };
     format!(
         "<li{cls}>\n<span class=\"alias\">{alias}</span>\n<div class=\"what\">\n\
-         <p class=\"title\">{title}{mark}</p>\n{facts}{weight}</div>\n</li>\n",
+         <p class=\"title\">{title}{mark}</p>\n{facts}{weight}{artifacts}</div>\n</li>\n",
         cls = if here { " class=\"here\"" } else { "" },
         title = escape(n.title(tree)),
         facts = facts(tree, ag, n),
+        artifacts = artifacts
+            .map(|links| super::artifact_links::html(project, links))
+            .unwrap_or_default(),
         weight = weight(
             project,
             tree,
@@ -220,12 +231,22 @@ pub(super) fn why_page(
     // tree, and a seven-step spine would otherwise walk it seven times for
     // an answer that does not change between them.
     let ag = tree.aggregates();
+    let artifacts = super::artifact_links::project(tree);
     let path = tree.ancestors(target.num);
     let last = path.len().saturating_sub(1);
     let spine: String = path
         .iter()
         .enumerate()
-        .map(|(i, n)| step(project, tree, &ag, &full, n, i == last))
+        .map(|(i, n)| {
+            step(
+                project,
+                tree,
+                &ag,
+                &full,
+                n,
+                (i == last, artifacts.get(&n.num)),
+            )
+        })
         .collect();
 
     Some(format!(

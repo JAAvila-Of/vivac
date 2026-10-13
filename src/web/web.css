@@ -818,8 +818,8 @@ a.tool {
    station points at the wrong row. */
 .map {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) 25rem;
-  grid-template-rows: auto 1fr;
+  grid-template-columns: minmax(0, 214px) minmax(0, 1fr) 25rem;
+  grid-template-rows: 1.4rem 1fr;
 }
 
 .heads {
@@ -1344,7 +1344,8 @@ li.stop.faded {
 
 @media (max-width: 860px) {
   .map {
-    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-columns: minmax(0, 104px) minmax(0, 1fr);
+    grid-template-rows: 0 1fr;
   }
 
   .rails.wide {
@@ -1458,3 +1459,19 @@ details > .detail {
     transition: none;
   }
 }
+
+.rail-viewport { grid-column: 1; grid-row: 1 / 3; overflow-x: auto; overflow-y: hidden; padding-bottom: 16px; }
+.rail-content { width: max-content; }
+.rail-content .heads { width: 100%; }
+.rail-content .gutter { width: max-content; }
+.metadata-badges { grid-column: 3; display: flex; gap: 0.3rem; }
+.metadata-badge { display: inline-flex; align-items: center; gap: 0.18rem; font: 0.68rem var(--mono); }
+.metadata-badge svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.2; }
+.note-badge { color: var(--warn); }
+.artifact-badge { color: var(--accent); }
+.artifact-links { overflow-wrap: anywhere; padding-left: 1rem; }
+
+.pan-controls { display: inline-flex; gap: 0.25rem; }
+.pan-controls[hidden] { display: none; }
+.pan-controls button { font: 0.7rem var(--mono); color: var(--ink); background: var(--panel); border: 1px solid var(--rule); border-radius: 4px; padding: 0.2rem; }
+.pan-controls button:disabled { color: var(--ink-faint); }

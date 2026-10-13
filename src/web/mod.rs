@@ -21,6 +21,7 @@
 //! page, so no working directory can take it out of reach.
 
 mod agents;
+mod artifact_links;
 mod artifacts;
 mod gate;
 mod map;

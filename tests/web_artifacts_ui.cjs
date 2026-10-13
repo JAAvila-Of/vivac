@@ -27,7 +27,7 @@ for (const id of ['bootstrap', 'inventory', 'detail', 'rows', 'revision-content'
 document.elements.bootstrap.textContent = JSON.stringify({ token: 'abc', base: '/p/project/artifacts', project_base: '/p/project' });
 document.elements.scope.value = 'all';
 const requests = [];
-const revision = (id, source = 'layout.html') => ({ artifact: 'artifact', revision: id, source, producer: 'node', size: 50, digest: 'abc', decision_references: [] });
+const revision = (id, source = 'layout.html') => ({ artifact: 'artifact', revision: id, site: 'site-a', source, producer: 'node', size: 50, digest: 'a'.repeat(64), decision_references: [] });
 const latest = revision('r2');
 latest.artifact_decision_references = [{ revision: 'r1', node: 'decision', alias: 'd1', kind: 'decision', state: 'closed' }];
 latest.artifact_decision_references_total = 1;
@@ -43,7 +43,7 @@ const fetch = async (url, options) => {
     result = { artifacts: [latest], total: 1, next_offset: null };
   }
   if (body.operation === 'show') result = { revisions: body.revision ? [revision(body.revision)] : [revision('r1'), latest, ...(head === 'r3' ? [revision('r3')] : [])], latest_revision: head, total: 2, next_offset: null };
-  if (body.operation === 'check') result = { retained: { status: 'matches' }, source: { status: 'foreign_site' }, checked_at: 'actual-time' };
+  if (body.operation === 'check') result = { artifact: body.artifact, revision: body.revision, retained: { status: 'matches' }, source: { status: 'foreign_site' }, checked_at: '2026-10-13T03:30:04Z' };
   if (body.operation === 'restore') result = { error: 'Destination already exists.' };
   if (body.operation === 'capture') {
     if (captureNetworkFailure === true) throw new TypeError('Failed to fetch');
@@ -55,7 +55,9 @@ const fetch = async (url, options) => {
     return { exit_code: result.error ? 1 : 0, result };
   } };
 };
-const context = { document, fetch, URLSearchParams, location: { hash: '#artifact=artifact&revision=r1' }, history: { replaceState() {} }, console };
+const stored = new Map();
+const sessionStorage = { getItem: key => stored.get(key) || null, setItem: (key, value) => stored.set(key, value) };
+const context = { document, fetch, sessionStorage, URLSearchParams, location: { hash: '#artifact=artifact&revision=r1' }, history: { replaceState() {} }, console };
 vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/web/artifacts.js'), 'utf8'), context);
 const settle = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
 const all = root => [root, ...root.children.flatMap(all)];
@@ -81,10 +83,107 @@ const button = text => all(document.elements['revision-content']).find(e => e.ta
   await button('Check selected revision').click(); await settle();
   assert.equal(requests.at(-1).body.revision, 'r1');
   assert.match(document.elements['revision-content'].textContent, /unknown.*other site/i);
+  const checksBeforeReload = requests.filter(r => r.body.operation === 'check').length;
+  async function reload(overrides = {}) {
+    const copy = { elements: {}, createElement: document.createElement, getElementById: document.getElementById };
+    for (const id of Object.keys(document.elements)) { const e = copy.createElement('div'); e.id = id; }
+    copy.elements.bootstrap.textContent = JSON.stringify({ token: 'different-token', base: '/p/project/artifacts', project_base: overrides.project || '/p/project' });
+    copy.elements.scope.value = 'all';
+    vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/web/artifacts.js'), 'utf8'), {
+      ...context, document: copy, sessionStorage: overrides.storage || sessionStorage,
+      fetch: overrides.fetch || fetch, location: { hash: '#artifact=artifact&revision=' + (overrides.revision || 'r1') }
+    });
+    await settle(); return copy;
+  }
+  const reloaded = await reload();
+  assert.match(reloaded.elements['revision-content'].textContent, /Last checked 2026-10-13T03:30:04Z/);
+  assert.match(reloaded.elements['revision-content'].textContent, /Not rechecked since/);
+  assert.equal(requests.filter(r => r.body.operation === 'check').length, checksBeforeReload, 'Reload must not read bytes automatically');
+  const originalStored = new Map(stored);
+  assert(![...stored.values()].join('').includes('different-token'));
+  assert(![...stored.values()].join('').includes('layout.html'));
+  for (const overrides of [{ project: '/p/other' }, { revision: 'r2' }, { storage: { getItem() { throw Error('blocked'); }, setItem() { throw Error('blocked'); } } }]) {
+    const isolated = await reload(overrides);
+    assert.match(isolated.elements['revision-content'].textContent, /Not checked/);
+  }
+  for (const value of ['not json', JSON.stringify({ version: 99, entries: [] }), JSON.stringify({ version: 1, entries: [{ retained: 'matches', source: 'matches', checked_at: 'bad' }] })]) {
+    for (const key of stored.keys()) stored.set(key, value);
+    assert.match((await reload()).elements['revision-content'].textContent, /Not checked/);
+  }
+  stored.clear(); originalStored.forEach((value, key) => stored.set(key, value));
+  const cacheKey = [...stored.keys()][0];
+  const checked = JSON.parse(stored.get(cacheKey)).entries[0];
+  const put = entries => stored.set(cacheKey, JSON.stringify({ version: 1, entries }));
+  for (const change of [{ site: 'site-b' }, { artifact: 'other' }, { digest: 'b'.repeat(64) }, { size: 51 }]) {
+    put([{ ...checked, ...change }]);
+    assert.match((await reload()).elements['revision-content'].textContent, /Not checked/, 'Pinned metadata must isolate observations');
+  }
+  for (const change of [{ retained: 'approved' }, { source: 'unknown' }, { checked_at: '2026-02-30T03:30:04Z' }, { size: -1 }, { digest: 'invalid' }, { token: 'must-not-load' }, { site: 'C:/absolute/path' }]) {
+    put([{ ...checked, ...change }]);
+    assert.match((await reload()).elements['revision-content'].textContent, /Not checked/, 'Malformed cached observations must be ignored');
+  }
+  for (const suffix of ['Z', '.000Z', '.1Z', '.12Z', '.123Z']) {
+    const checkedAt = '2026-10-13T03:30:04' + suffix;
+    put([{ ...checked, checked_at: checkedAt }]);
+    assert((await reload()).elements['revision-content'].textContent.includes('Last checked ' + checkedAt), 'Valid fractional timestamps must remain historical observations');
+  }
+  for (const status of ['changed', 'missing', 'read_failed']) {
+    put([{ ...checked, retained: status, source: status }]);
+    assert.match((await reload()).elements['revision-content'].textContent, new RegExp('Retained: ' + status.replace('_', ' ') + '.*Last checked'));
+  }
+  put(Array.from({ length: 200 }, (_, i) => ({ ...checked, revision: 'cached-' + i })));
+  const bounded = await reload();
+  await all(bounded.elements['revision-content']).find(e => e.tagName === 'BUTTON' && e.textContent === 'Check selected revision').click(); await settle();
+  const boundedEntries = JSON.parse(stored.get(cacheKey)).entries;
+  assert.equal(boundedEntries.length, 200);
+  assert.equal(boundedEntries[0].revision, 'cached-1', 'Oldest observations must be evicted');
+  assert.equal(boundedEntries.at(-1).revision, 'r1');
+  for (const status of ['changed', 'missing', 'read_failed']) {
+    stored.clear();
+    const observed = await reload({ fetch: async (url, options) => {
+      const body = JSON.parse(options.body);
+      if (body.operation !== 'check') return fetch(url, options);
+      return { ok: false, json: async () => ({ result: { artifact: body.artifact, revision: body.revision, retained: { status }, source: { status }, checked_at: '2026-10-13T03:30:04Z' } }) };
+    } });
+    await all(observed.elements['revision-content']).find(e => e.tagName === 'BUTTON' && e.textContent === 'Check selected revision').click(); await settle();
+    assert.match((await reload()).elements['revision-content'].textContent, new RegExp('Retained: ' + status.replace('_', ' ') + '.*Last checked'), 'Non-success check responses must retain observed failures');
+  }
+  put([checked]);
+  const unreachable = await reload({ fetch: async (url, options) => {
+    if (JSON.parse(options.body).operation === 'check') throw Error('offline');
+    return fetch(url, options);
+  } });
+  await all(unreachable.elements['revision-content']).find(e => e.tagName === 'BUTTON' && e.textContent === 'Check selected revision').click(); await settle();
+  assert.match(unreachable.elements['revision-content'].textContent, /Last checked.*response was not received/);
+  assert.deepEqual(JSON.parse(stored.get(cacheKey)).entries, [checked], 'Network errors must not invent an observation');
+  let finishCheck;
+  const delayed = await reload({ fetch: async (url, options) => {
+    if (JSON.parse(options.body).operation === 'check') return new Promise(resolve => { finishCheck = resolve; });
+    return fetch(url, options);
+  } });
+  all(delayed.elements['revision-content']).find(e => e.tagName === 'BUTTON' && e.textContent === 'Check selected revision').click();
+  await settle(); await delayed.elements.back.click(); await settle();
+  finishCheck({ ok: true, json: async () => ({ result: { artifact: 'artifact', revision: 'r1', retained: { status: 'missing' }, source: { status: 'missing' }, checked_at: '2026-10-13T03:30:05Z' } }) });
+  await settle();
+  assert.deepEqual(JSON.parse(stored.get(cacheKey)).entries, [checked], 'Late results after navigation must preserve generation guards');
+  const blocked = await reload({ storage: { getItem() { throw Error('blocked'); }, setItem() { throw Error('blocked'); } } });
+  await all(blocked.elements['revision-content']).find(e => e.tagName === 'BUTTON' && e.textContent === 'Check selected revision').click(); await settle();
+  await blocked.elements.back.click(); await settle();
+  await all(blocked.elements.rows).find(e => e.tagName === 'BUTTON').click(); await settle();
+  await all(blocked.elements.revisions).find(e => e.tagName === 'BUTTON' && e.textContent.includes('r1')).click(); await settle();
+  assert.match(blocked.elements['revision-content'].textContent, /Last checked/, 'Blocked storage must preserve in-view observations');
+  const inventoryChecked = await reload({ revision: 'r2' });
+  await all(inventoryChecked.elements['revision-content']).find(e => e.tagName === 'BUTTON' && e.textContent === 'Check selected revision').click(); await settle();
+  await inventoryChecked.elements.back.click(); await settle();
+  assert.match(inventoryChecked.elements.rows.textContent, /Last checked.*Not rechecked since/, 'Inventory must show its exact revision observation');
+  const restoredObservation = document.elements['revision-content'].textContent;
   const form = all(document.elements['revision-content']).find(e => e.tagName === 'FORM');
   assert.equal(form.method, 'post'); assert.equal(form.target, '_blank');
   assert.equal(form.children.find(e => e.name === 'revision').value, 'r1');
+  form.listeners.submit?.();
+  assert.equal(document.elements['revision-content'].textContent, restoredObservation, 'Download must preserve historical observations');
   await button('Restore selected revision').click();
+  assert.equal(document.elements['revision-content'].textContent, restoredObservation, 'Restore must preserve historical observations');
   document.elements['restore-path'].value = 'occupied.html';
   await document.elements['restore-confirm'].click(); await settle();
   assert.equal(requests.at(-1).body.revision, 'r1');
@@ -117,7 +216,7 @@ const button = text => all(document.elements['revision-content']).find(e => e.ta
   assert.equal(capture.body.previous, 'r3', 'An old selection must continue the authoritative latest head');
   assert.equal(capture.body.artifact, 'artifact');
   assert.match(document.elements['revision-content'].textContent, /r3.*Selected/);
-  assert(!document.elements['revision-content'].textContent.includes('actual-time'), 'A capture must clear transient checks');
+  assert(!document.elements['revision-content'].textContent.includes('2026-10-13T03:30:04Z'), 'A new revision must not inherit another revision check');
   caps.delivery_types.file.max_bytes = 1572864;
   await button('Capture a new revision').click(); await settle();
   document.elements['capture-path'].value = 'next.html'; document.elements['capture-producer'].value = 't2';

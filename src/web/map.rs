@@ -768,7 +768,14 @@ fn gutter(tree: &Tree, map: &Map, lane: &Lane, fold: &Fold) -> String {
 /// The list beside the drawing: one row per node, in the same order, at the
 /// same offset. Flat, and `d387`'s reason still holds -- a row's meaning is
 /// its rail, and an indent would say the same thing twice and worse.
-fn rows(project: &str, tree: &Tree, map: &Map, ag: &Aggregates, fold: &Fold) -> String {
+fn rows(
+    project: &str,
+    tree: &Tree,
+    map: &Map,
+    ag: &Aggregates,
+    fold: &Fold,
+    artifacts: &HashMap<u64, super::artifact_links::Links<'_>>,
+) -> String {
     let mut out = String::from("<ol class=\"stops\">\n");
     for (i, s) in map.drawn() {
         let n = s.node;
@@ -788,10 +795,19 @@ fn rows(project: &str, tree: &Tree, map: &Map, ag: &Aggregates, fold: &Fold) -> 
         if fold.hides(n) || (s.fan > 0 && fold.cuts(s.depth)) {
             class.push_str(" folded");
         }
-        let notes = match n.notes.len() {
-            0 | 1 => String::new(),
-            many => format!("<span class=\"notes\">{many} notes</span>"),
-        };
+        let notes =
+            if n.notes.is_empty() && artifacts.get(&n.num).map_or(0, |links| links.count) == 0 {
+                String::new()
+            } else {
+                format!(
+                    "<span class=\"metadata-badges\">{}{}</span>",
+                    super::artifact_links::badge(n.notes.len(), false),
+                    super::artifact_links::badge(
+                        artifacts.get(&n.num).map_or(0, |links| links.count),
+                        true
+                    )
+                )
+            };
         let fan = match s.fan {
             0 => String::new(),
             c => format!("<span class=\"fan\">{c}</span>"),
@@ -849,7 +865,7 @@ fn legend(map: &Map) -> String {
             n = map.lines.chains[line].len(),
         ));
     }
-    out.push_str("</div>\n");
+    out.push_str(&format!("<span class=\"badge-key\"><span class=\"metadata-badge note-badge\">{} Notes</span> / <span class=\"metadata-badge artifact-badge\">{} Artifacts</span></span></div>\n", super::artifact_links::icon(false), super::artifact_links::icon(true)));
     out
 }
 
@@ -866,7 +882,26 @@ fn legend(map: &Map) -> String {
 /// legal JSON string: legal JSON can still contain the four characters that
 /// end a `<script>` element, and a tree is allowed to hold a node called
 /// `</script>`.
+#[cfg(test)]
 fn payload(project: &str, tree: &Tree, map: &Map, ag: &Aggregates, fold: &Fold) -> String {
+    payload_with_links(
+        project,
+        tree,
+        map,
+        ag,
+        fold,
+        &super::artifact_links::project(tree),
+    )
+}
+
+fn payload_with_links(
+    project: &str,
+    tree: &Tree,
+    map: &Map,
+    ag: &Aggregates,
+    fold: &Fold,
+    artifacts: &HashMap<u64, super::artifact_links::Links<'_>>,
+) -> String {
     let today = crate::clock::today_local();
     let stops: Vec<serde_json::Value> = map
         .stops
@@ -894,6 +929,10 @@ fn payload(project: &str, tree: &Tree, map: &Map, ag: &Aggregates, fold: &Fold) 
                     .iter()
                     .map(|(at, text)| json!({"at": at, "n": text}))
                     .collect::<Vec<_>>(),
+                "ap": artifacts.get(&n.num).map(|links| &links.produced),
+                "ar": artifacts.get(&n.num).map(|links| &links.referenced),
+                "ac": artifacts.get(&n.num).map_or(0, |links| links.count),
+                "at": artifacts.get(&n.num).is_some_and(|links| links.truncated),
                 "rf": n.refs(tree),
                 "gv": n.governs(tree),
                 // `d797`: the same local date the CLI and the other pages
@@ -1182,13 +1221,14 @@ pub(super) fn map_page(project: &str, name: &str, tree: &Tree, query: &str) -> S
         },
     };
 
+    let artifacts = super::artifact_links::project(tree);
     let body = format!(
-        "<div class=\"map\">\n{heads}<div class=\"gutter\">{wide}{narrow}</div>\n\
+        "<div class=\"map\">\n<div class=\"rail-viewport\" tabindex=\"0\" aria-label=\"Tree levels\"><div class=\"rail-content\">{heads}<div class=\"gutter\">{wide}{narrow}</div></div></div>\n\
          {rows}<aside id=\"detail\" class=\"detail\">{key}</aside>\n</div>\n",
         heads = heads(tree, &fold, &WIDE),
         wide = gutter(tree, &map, &WIDE, &fold),
         narrow = gutter(tree, &map, &NARROW, &fold),
-        rows = rows(project, tree, &map, &ag, &fold),
+        rows = rows(project, tree, &map, &ag, &fold, &artifacts),
         key = key(tree),
     );
 
@@ -1197,7 +1237,7 @@ pub(super) fn map_page(project: &str, name: &str, tree: &Tree, query: &str) -> S
         name,
         body,
         format!(
-            "<p class=\"stats\">{stats}</p>\n{legend}<div class=\"tools\">{here}{shut}{back}\
+            "<p class=\"stats\">{stats}</p>\n{legend}<div class=\"tools\"><span class=\"pan-controls\" hidden><button type=\"button\" data-pan=\"earlier\">Earlier levels</button> <button type=\"button\" data-pan=\"later\">Later levels</button></span>{here}{shut}{back}\
              <input id=\"find\" type=\"search\" \
              placeholder=\"Find in alias, title and why…\" \
              aria-label=\"Find a station\">\
@@ -1208,7 +1248,7 @@ pub(super) fn map_page(project: &str, name: &str, tree: &Tree, query: &str) -> S
             legend = legend(&map),
             depths = depths(tree, &fold),
         ),
-        payload(project, tree, &map, &ag, &fold),
+        payload_with_links(project, tree, &map, &ag, &fold, &artifacts),
         MAP_JS.to_string(),
     )
 }

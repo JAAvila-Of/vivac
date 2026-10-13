@@ -14,6 +14,55 @@
   const basename = source => String(source).split(/[\\/]/).pop();
   const typeLabel = type => ({ file: 'Single UTF-8 file', bundle: 'Bundle', sqlite_snapshot: 'SQLite data' })[type] || type;
   const formats = values => (values || []).map(value => value === 'utf8_text' ? 'UTF-8 text' : value).join(', ');
+  const observationStorageKey = 'vivac.artifact-checks.v1';
+  const observations = new Map();
+  const observationFields = ['project', 'site', 'artifact', 'revision', 'digest', 'size', 'retained', 'source', 'checked_at'];
+  const knownStatuses = ['matches', 'changed', 'missing', 'read_failed', 'foreign_site'];
+  const identityValue = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
+  function validObservation(value) {
+    return value && typeof value === 'object' && !Array.isArray(value)
+      && Object.keys(value).length === observationFields.length && observationFields.every(field => Object.hasOwn(value, field))
+      && typeof value.project === 'string' && /^\/[A-Za-z0-9/_-]{1,256}$/.test(value.project)
+      && ['site', 'artifact', 'revision'].every(field => identityValue(value[field]))
+      && typeof value.digest === 'string' && /^[a-f0-9]{64}$/.test(value.digest)
+      && Number.isSafeInteger(value.size) && value.size >= 0
+      && knownStatuses.filter(status => status !== 'foreign_site').includes(value.retained) && knownStatuses.includes(value.source)
+      && typeof value.checked_at === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(value.checked_at)
+      && Number.isFinite(Date.parse(value.checked_at))
+      && new Date(value.checked_at).toISOString() === value.checked_at.replace(/(?:\.(\d{1,3}))?Z$/, (_, fraction) => '.' + (fraction || '').padEnd(3, '0') + 'Z');
+  }
+  function observationKey(value) {
+    return JSON.stringify([value.project, value.site, value.artifact, value.revision, value.digest, value.size]);
+  }
+  try {
+    const raw = sessionStorage.getItem(observationStorageKey);
+    if (raw && raw.length <= 200000) {
+      const cache = JSON.parse(raw);
+      if (cache && cache.version === 1 && Object.keys(cache).length === 2 && Array.isArray(cache.entries) && cache.entries.length <= 200) {
+        cache.entries.filter(validObservation).forEach(value => observations.set(observationKey(value), value));
+      }
+    }
+  } catch (_) { /* The current view remains usable when session storage is unavailable. */ }
+  function observationFor(entry) {
+    return observations.get(observationKey(Object.assign({ project: config.project_base }, entry)));
+  }
+  function rememberObservation(entry, result) {
+    if (result.artifact !== entry.artifact || result.revision !== entry.revision) return null;
+    const value = { project: config.project_base, site: entry.site, artifact: entry.artifact, revision: entry.revision,
+      digest: entry.digest, size: entry.size, retained: result.retained?.status, source: result.source?.status, checked_at: result.checked_at };
+    if (!validObservation(value)) return null;
+    const key = observationKey(value); observations.delete(key); observations.set(key, value);
+    while (observations.size > 200) observations.delete(observations.keys().next().value);
+    try { sessionStorage.setItem(observationStorageKey, JSON.stringify({ version: 1, entries: [...observations.values()] })); }
+    catch (_) { /* Keep the observation in this view when session storage cannot be written. */ }
+    return value;
+  }
+  function observationText(value) {
+    if (!value) return 'Not checked in this view. Integrity does not imply approval.';
+    const describe = status => ({ matches: 'matches', changed: 'changed', missing: 'missing', read_failed: 'read failed', foreign_site: 'unknown — source belongs to another site' })[status];
+    return 'Retained: ' + describe(value.retained) + '. Source: ' + describe(value.source) + '. Last checked ' + value.checked_at
+      + '. Not rechecked since. Integrity does not imply approval.';
+  }
   function sizeLabel(bytes) {
     if (!Number.isFinite(bytes)) return 'Not specified';
     return bytes >= 1024 * 1024 ? Number((bytes / (1024 * 1024)).toFixed(2)) + ' MiB (' + bytes + ' bytes)' : bytes + ' bytes';
@@ -90,7 +139,7 @@
       delivery.append(open, producer(entry));
       const identity = element('td'); identity.append(element('strong', short(entry.revision) + ' · Latest'), element('p', entry.source, 'small muted'));
       const refs = element('td'); refs.append(inventoryReferences(entry));
-      const integrity = element('td'); integrity.append(element('span', 'Not checked in this view', 'status'), element('p', 'Check a selected revision', 'small muted'));
+      const integrity = element('td'); integrity.append(element('span', observationText(observationFor(entry)), 'status'), element('p', 'Check a selected revision', 'small muted'));
       row.append(delivery, identity, refs, integrity); $('rows').append(row);
     });
     if (!shown.length) { const row = element('tr'), cell = element('td', page.length ? 'No deliveries match this page search.' : 'No deliveries in this scope.'); cell.colSpan = 4; row.append(cell); $('rows').append(row); }
@@ -187,23 +236,23 @@
     const facts = element('div', undefined, 'facts');
     facts.append(element('p', entry.size + ' bytes'), element('p', 'Digest: ' + entry.digest, 'mono'), element('p', 'Producer'), producer(entry)); box.append(facts);
     box.append(element('h3', 'References to this revision'), references(entry), element('p', 'A reference is not inferred approval. Integrity checks do not approve a delivery.', 'small muted'));
-    const status = element('div', 'Not checked in this view.', 'notice'); status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite'); box.append(status);
+    const status = element('div', observationText(observationFor(entry)), 'notice'); status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite'); box.append(status);
     const actions = element('div', undefined, 'actions');
     const check = button('Check selected revision', async () => {
       const generation = detailGeneration; check.disabled = true; status.textContent = 'Checking retained bytes and source…';
       try {
         const result = await request('check', { artifact: entry.artifact, revision: entry.revision });
         if (generation !== detailGeneration || selected !== entry) return;
-        const describe = value => ({ matches: 'matches', changed: 'changed', missing: 'missing', read_failed: 'read failed', foreign_site: 'unknown — source belongs to another site' })[value.status] || 'unknown';
-        status.textContent = 'Retained: ' + describe(result.retained) + '. Source: ' + describe(result.source) + '. Checked at ' + result.checked_at + '. Integrity does not imply approval.';
-      } catch (error) { if (generation === detailGeneration && selected === entry) status.textContent = error.message; }
+        const observation = rememberObservation(entry, result);
+        status.textContent = observation ? observationText(observation) : observationText(observationFor(entry)) + ' The check response could not be validated.';
+        inventory();
+      } catch (error) { if (generation === detailGeneration && selected === entry) status.textContent = observationText(observationFor(entry)) + ' ' + error.message; }
       finally { check.disabled = false; }
     });
-    const capture = button('Capture a new revision', () => { status.textContent = 'Not checked in this view.'; captureDialog(true); });
+    const capture = button('Capture a new revision', () => captureDialog(true));
     capture.disabled = !latest;
-    actions.append(check, button('Restore selected revision', () => { status.textContent = 'Not checked in this view.'; restoreDialog(entry); }), capture);
+    actions.append(check, button('Restore selected revision', () => restoreDialog(entry)), capture);
     const form = element('form'); form.method = 'post'; form.action = config.base + '/download'; form.target = '_blank';
-    form.addEventListener('submit', () => { status.textContent = 'Not checked in this view.'; });
     for (const [name, value] of Object.entries({ artifact: entry.artifact, revision: entry.revision, token: config.token })) { const input = element('input'); input.type = 'hidden'; input.name = name; input.value = value; form.append(input); }
     const download = element('button', 'Download selected revision'); download.type = 'submit'; form.append(download); actions.append(form); box.append(actions);
   }

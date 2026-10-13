@@ -2502,6 +2502,7 @@ objected
 objectives
 objects
 observable
+observation
 observe
 observed
 obvious
@@ -4128,6 +4129,7 @@ unambiguous
 unanchored
 unapplied
 unasked
+unavailable
 unblocking
 unblocks
 unborn
