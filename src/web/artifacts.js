@@ -137,6 +137,7 @@
       const row = element('tr'), delivery = element('th'); delivery.scope = 'row';
       const open = button(basename(entry.source), () => openArtifact(entry.artifact, entry.revision, entry.revision)); open.className = 'file-link';
       delivery.append(open, producer(entry));
+      delivery.append(previewAction(entry, 'Preview latest revision'));
       const identity = element('td'); identity.append(element('strong', short(entry.revision) + ' · Latest'), element('p', entry.source, 'small muted'));
       const refs = element('td'); refs.append(inventoryReferences(entry));
       const integrity = element('td'); integrity.append(element('span', observationText(observationFor(entry)), 'status'), element('p', 'Check a selected revision', 'small muted'));
@@ -252,9 +253,18 @@
     const capture = button('Capture a new revision', () => captureDialog(true));
     capture.disabled = !latest;
     actions.append(check, button('Restore selected revision', () => restoreDialog(entry)), capture);
-    const form = element('form'); form.method = 'post'; form.action = config.base + '/download'; form.target = '_blank';
+    actions.append(nativeForm(entry, 'download', 'Download selected revision'), previewAction(entry, 'Preview selected revision', true)); box.append(actions);
+  }
+  function nativeForm(entry, operation, label) {
+    const form = element('form'); form.method = 'post'; form.action = config.base + '/' + operation; form.target = '_blank'; form.rel = 'noopener';
     for (const [name, value] of Object.entries({ artifact: entry.artifact, revision: entry.revision, token: config.token })) { const input = element('input'); input.type = 'hidden'; input.name = name; input.value = value; form.append(input); }
-    const download = element('button', 'Download selected revision'); download.type = 'submit'; form.append(download); actions.append(form); box.append(actions);
+    const submit = element('button', label); submit.type = 'submit'; form.append(submit); return form;
+  }
+  function previewAction(entry, label, explainFormat = false) {
+    if (!/\.html?$/i.test(entry.source)) return element(explainFormat ? 'p' : 'span', explainFormat ? 'Only retained HTML files can be previewed.' : '', 'small muted');
+    if (!capabilities) return element('p', 'Checking preview support…', 'small muted');
+    if (capabilities.execution?.provided !== true || capabilities.execution?.scope !== 'retained_html_preview') return element('p', 'Preview is not supported by this engine.', 'small muted');
+    return nativeForm(entry, 'preview', label);
   }
   function modal(title) {
     dialogFocus = document.activeElement;
@@ -342,7 +352,10 @@
     try {
       const caps = await getCapabilities(); modal('Supported types');
       Object.entries(caps.delivery_types).forEach(([type, capability]) => $('dialog-content').append(element('h3', typeLabel(type)), element('p', capability.supported ? 'Supported. Formats: ' + formats(capability.formats) + '. Maximum size: ' + sizeLabel(capability.max_bytes) + '.' : capability.reason)));
-      $('dialog-content').append(element('p', 'Execution provided: ' + caps.execution.provided + '.'), button('Close', () => $('dialog').close()));
+      let execution = 'Execution: support unknown.';
+      if (caps.execution?.provided === false) execution = 'Execution: not provided by this engine.';
+      if (caps.execution?.provided === true) execution = caps.execution.scope === 'retained_html_preview' ? 'Execution: restricted preview of retained HTML revisions. Complete network isolation is not guaranteed.' : 'Execution: not supported in this view.';
+      $('dialog-content').append(element('p', execution), button('Close', () => $('dialog').close()));
     } catch (error) { note(error.message); }
   });
   $('back').addEventListener('click', () => { if (writing) return; ++detailGeneration; selected = null; $('detail').hidden = true; $('inventory').hidden = false; saveFragment(); loadList(offset); });
@@ -353,5 +366,6 @@
   $('next-page').addEventListener('click', () => { if (next != null) loadList(next); });
   if (fragment.get('from')) { $('scope').value = 'from'; $('from').value = fragment.get('from'); $('from-label').hidden = false; $('from').hidden = false; $('from').disabled = false; }
   loadList(0);
+  getCapabilities().then(() => { inventory(); if (selected) renderRevision(); }).catch(error => note(error.message));
   if (fragment.get('artifact')) openArtifact(fragment.get('artifact'), fragment.get('revision'), null);
 })();

@@ -1,6 +1,7 @@
 //! Selected local deliveries retain bytes outside the provenance tree.
 mod files;
 mod guard;
+pub(crate) mod preview;
 pub(crate) mod projection;
 
 use crate::args::Args;
@@ -28,7 +29,19 @@ fn capabilities() -> Value {
             "sqlite_snapshot": {"supported": false, "reason": "Database-specific inspection and consistent snapshot capture are not supported."}
         },
         "limits": {"max_file_bytes": MAX_FILE_BYTES, "max_revision_bytes": MAX_FILE_BYTES, "max_files_per_revision": 1, "max_page_size": MAX_PAGE_SIZE},
-        "execution": {"provided": false},
+        "execution": {
+            "provided": true,
+            "scope": "retained_html_preview",
+            "network_isolation": false,
+            "approval_implied": false,
+            "sandbox": "allow-scripts",
+            "external_subresources": false,
+            "eval": false,
+            "server_lifetime_seconds": 900,
+            "max_simultaneous_servers": 4,
+            "request_timeout_seconds": 2,
+            "response_timeout_seconds": 10
+        },
         "bytes_checked": false,
         "event_recorded": false
     })
@@ -297,8 +310,9 @@ fn validate(args: &Args) -> Result<&str, Failure> {
         "check" if args.has("store") => &["json", "revision", "store", "limit", "offset"],
         "check" => &["json", "revision", "store"],
         "restore" => &["json", "revision", "to", "orphan"],
+        "preview" => &["json", "revision", "no-open"],
         _ => return Err(Failure::usage(
-            "Unknown artifact operation; use capabilities, list, show, capture, check or restore.",
+            "Unknown artifact operation; use capabilities, list, show, capture, check, restore or preview.",
         )),
     };
     if !args.unknown(allowed).is_empty()
@@ -310,10 +324,21 @@ fn validate(args: &Args) -> Result<&str, Failure> {
             })
             .is_empty()
         || allowed.iter().any(|key| {
-            !["json", "all", "store"].contains(key) && args.has(key) && args.list(key).len() != 1
+            !["json", "all", "store", "no-open"].contains(key)
+                && args.has(key)
+                && args.list(key).len() != 1
         })
     {
         return Err(Failure::usage("Unsupported or repeated artifact argument."));
+    }
+    if operation == "preview" {
+        let artifact = args
+            .positional(1)
+            .ok_or_else(|| Failure::usage("A stable artifact identity is required."))?;
+        let revision = required(args, "revision")?;
+        if !valid_id(artifact) || !valid_id(revision) {
+            return Err(Failure::usage("Invalid artifact or revision identifier."));
+        }
     }
     if operation == "check"
         && args.has("store")
@@ -760,6 +785,11 @@ fn restore(ctx: &Ctx, ledger: &Ledger, args: &Args) -> Result<Value, Failure> {
 
 fn execute(cwd: &Path, args: &Args) -> Result<(Value, i32), Failure> {
     let operation = validate(args)?;
+    if operation == "preview" {
+        return Err(Failure::usage(
+            "Artifact preview is interactive; use the CLI or web.",
+        ));
+    }
     if operation == "capabilities" {
         return Ok((capabilities(), 0));
     }
@@ -774,6 +804,11 @@ fn execute(cwd: &Path, args: &Args) -> Result<(Value, i32), Failure> {
 
 fn execute_read(ctx: &Ctx, args: &Args) -> Result<(Value, i32), Failure> {
     let operation = validate(args)?;
+    if operation == "preview" {
+        return Err(Failure::usage(
+            "Artifact preview is interactive; use the CLI or web.",
+        ));
+    }
     let diagnose = (operation == "check" && args.has("store"))
         || (operation == "restore" && args.has("orphan"));
     if ctx.tree.broken_lines != 0 && !diagnose {
@@ -858,6 +893,11 @@ pub(crate) fn run_project_value(
 ) -> (Value, i32) {
     let result = (|| {
         let operation = validate(args)?;
+        if operation == "preview" {
+            return Err(Failure::usage(
+                "Artifact preview is interactive; use the CLI or web.",
+            ));
+        }
         if operation == "capabilities" {
             return Ok((capabilities(), 0));
         }
@@ -883,11 +923,55 @@ pub(crate) fn run_project_value(
 
 pub(crate) use files::Download;
 
-pub(crate) fn project_download(
+pub(crate) struct PreviewRevision {
+    pub(crate) reader: Download,
+    pub(crate) artifact: String,
+    pub(crate) revision: String,
+    pub(crate) source: String,
+    pub(crate) producer: String,
+    pub(crate) digest: String,
+}
+
+pub(crate) fn project_preview(
     project: &mut crate::project::Project,
     artifact: &str,
     revision: &str,
-) -> Result<(Download, String), Failure> {
+) -> Result<PreviewRevision, Failure> {
+    let (ctx, selected) = project_revision(project, artifact, revision)?;
+    preview_revision(ctx, selected)
+}
+
+fn preview_revision(ctx: &Ctx, selected: Revision<'_>) -> Result<PreviewRevision, Failure> {
+    if !selected
+        .source
+        .rsplit_once('.')
+        .is_some_and(|(_, extension)| {
+            extension.eq_ignore_ascii_case("html") || extension.eq_ignore_ascii_case("htm")
+        })
+    {
+        return Err(Failure::usage("Only retained HTML files can be previewed."));
+    }
+    let reader = files::download(
+        &ctx.lane_dir,
+        selected.object,
+        selected.digest,
+        selected.size,
+    )?;
+    Ok(PreviewRevision {
+        reader,
+        artifact: selected.artifact.to_owned(),
+        revision: selected.revision.to_owned(),
+        source: selected.source.to_owned(),
+        producer: selected.producer.to_owned(),
+        digest: selected.digest.to_owned(),
+    })
+}
+
+fn project_revision<'a>(
+    project: &'a mut crate::project::Project,
+    artifact: &str,
+    revision: &str,
+) -> Result<(&'a Ctx, Revision<'a>), Failure> {
     if !valid_id(artifact) || !valid_id(revision) {
         return Err(Failure::usage("Invalid artifact or revision identifier."));
     }
@@ -902,6 +986,15 @@ pub(crate) fn project_download(
         .get(revision)
         .filter(|selected| selected.artifact == artifact)
         .ok_or_else(|| Failure::usage("This revision does not belong to the selected artifact."))?;
+    Ok((ctx, selected))
+}
+
+pub(crate) fn project_download(
+    project: &mut crate::project::Project,
+    artifact: &str,
+    revision: &str,
+) -> Result<(Download, String), Failure> {
+    let (ctx, selected) = project_revision(project, artifact, revision)?;
     let filename = selected
         .source
         .rsplit('/')
@@ -926,7 +1019,55 @@ pub(crate) fn project_download(
     Ok((reader, filename))
 }
 
+fn start_preview(cwd: &Path, args: &Args) -> Result<(preview::Preview, Value), Failure> {
+    validate(args)?;
+    let selected = {
+        let ctx = context(cwd, false, false)?;
+        let ledger = replay(&ctx.tree)?;
+        preview_revision(&ctx, revision(&ledger, args)?)?
+    };
+    let mut value = json!({
+            "operation": "preview",
+            "artifact": selected.artifact,
+            "revision": selected.revision,
+            "source": selected.source,
+            "producer": selected.producer,
+            "digest": selected.digest,
+            "size": selected.reader.size(),
+            "network_isolation": false,
+            "approval_implied": false
+    });
+    let preview = preview::start(selected)?;
+    value["url"] = json!(preview.url());
+    Ok((preview, value))
+}
+
 pub fn run(cwd: &Path, args: &Args) -> Result<i32, Failure> {
+    if args.positional(0) == Some("preview") {
+        let (preview, value) = match start_preview(cwd, args) {
+            Ok(ready) => ready,
+            Err(error) => {
+                let (value, code) = envelope(Err(error));
+                if args.has("json") {
+                    crate::render::print_json(value)?;
+                } else {
+                    print(&value)?;
+                }
+                return Ok(code);
+            }
+        };
+        if args.has("json") {
+            crate::render::print_json(value)?;
+        } else {
+            crate::output::outln!("{}", preview.url());
+        }
+        crate::output::flush();
+        if !args.has("no-open") {
+            crate::web::open_browser(preview.url());
+        }
+        preview.wait();
+        return Ok(0);
+    }
     let (value, code) = run_value(cwd, args);
     if args.has("json") {
         crate::render::print_json(value)?;
@@ -944,7 +1085,7 @@ fn print(value: &Value) -> Result<(), Failure> {
     if value["operation"] == "capabilities" {
         let max_mib = MAX_FILE_BYTES / (1024 * 1024);
         crate::output::outln!("Artifacts: one UTF-8 text file per revision, up to {max_mib} MiB; pages up to {MAX_PAGE_SIZE}.");
-        crate::output::outln!("Bundles, database snapshots and execution are not supported.");
+        crate::output::outln!("Bundles and database snapshots are not supported. Retained HTML preview runs with browser restrictions; complete network isolation is not guaranteed.");
         return Ok(());
     }
     crate::output::outln!(
@@ -1008,6 +1149,11 @@ pub(crate) fn request_args(value: &Value) -> Result<Args, Failure> {
     let object = value
         .as_object()
         .ok_or_else(|| Failure::usage("Invalid artifact request arguments."))?;
+    if object.get("operation").and_then(Value::as_str) == Some("preview") {
+        return Err(Failure::usage(
+            "Artifact preview is interactive; use the CLI or web.",
+        ));
+    }
     if object.get("operation").and_then(Value::as_str) == Some("capabilities") && object.len() != 1
     {
         return Err(Failure::usage(
@@ -1146,6 +1292,259 @@ mod tests {
     use super::*;
     use std::fs;
     use std::io::Write;
+
+    #[test]
+    fn preview_cli_requires_an_exact_revision_and_rejects_unrelated_flags() {
+        let artifact = crate::id::ulid();
+        let revision = crate::id::ulid();
+        let valid = Args::parse(vec![
+            "preview".into(),
+            artifact.clone(),
+            format!("--revision={revision}"),
+            "--no-open".into(),
+            "--json".into(),
+        ])
+        .unwrap();
+        assert_eq!(validate(&valid).unwrap(), "preview");
+        for words in [
+            vec!["preview".into(), artifact.clone()],
+            vec![
+                "preview".into(),
+                artifact.clone(),
+                "--revision=latest".into(),
+            ],
+            vec![
+                "preview".into(),
+                artifact.clone(),
+                format!("--revision={revision}"),
+                format!("--revision={revision}"),
+            ],
+            vec![
+                "preview".into(),
+                artifact.clone(),
+                format!("--revision={revision}"),
+                "--all".into(),
+            ],
+            vec![
+                "preview".into(),
+                artifact.clone(),
+                format!("--revision={revision}"),
+                "extra".into(),
+            ],
+            vec!["preview".into(), format!("--revision={revision}")],
+        ] {
+            assert!(validate(&Args::parse(words).unwrap()).is_err());
+        }
+        assert!(Args::parse(vec!["--no-open=true".into()]).is_err());
+        assert!(Args::parse(vec!["--json=true".into()]).is_err());
+    }
+
+    #[test]
+    fn preview_is_interactive_and_never_runs_through_value_or_mcp_paths() {
+        let mut fixture = PreviewFixture::new("mockup.html");
+        let args = Args::parse(vec![
+            "preview".into(),
+            fixture.delivery["artifact"].as_str().unwrap().into(),
+            format!(
+                "--revision={}",
+                fixture.delivery["revision"].as_str().unwrap()
+            ),
+        ])
+        .unwrap();
+        let (value, code) = run_project_value(&mut fixture.project, &args);
+        assert_eq!(code, 2);
+        assert!(value["error"].as_str().unwrap().contains("interactive"));
+        let (value, code) = run_value(&fixture.root, &args);
+        assert_eq!(code, 2);
+        assert!(value["error"].as_str().unwrap().contains("interactive"));
+        let error = request_args(&json!({"operation":"preview","artifact":fixture.delivery["artifact"],"revision":fixture.delivery["revision"]})).unwrap_err();
+        assert!(error.message().contains("interactive"));
+        let execution = capabilities()["execution"].clone();
+        assert_eq!(execution["provided"], true);
+        assert_eq!(execution["scope"], "retained_html_preview");
+        assert_eq!(execution["network_isolation"], false);
+    }
+
+    struct PreviewFixture {
+        project: crate::project::Project,
+        root: PreviewRoot,
+        delivery: Value,
+    }
+
+    struct PreviewRoot(std::path::PathBuf);
+
+    impl std::ops::Deref for PreviewRoot {
+        type Target = std::path::PathBuf;
+
+        fn deref(&self) -> &Self::Target {
+            &self.0
+        }
+    }
+
+    impl Drop for PreviewRoot {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    impl PreviewFixture {
+        fn new(source: &str) -> Self {
+            let (root, mut ctx, producer) = capture_commit_fixture();
+            if source != "mockup.html" {
+                fs::rename(root.join("mockup.html"), root.join(source)).unwrap();
+            }
+            let args = Args::parse(vec![
+                "capture".into(),
+                source.into(),
+                format!("--from={producer}"),
+            ])
+            .unwrap();
+            let delivery = capture(&mut ctx, &args).unwrap()["delivery"].clone();
+            ctx.unlock();
+            drop(ctx);
+            let project = crate::project::Project::open(
+                root.clone(),
+                "Preview fixture".into(),
+                "preview-fixture".into(),
+                Whose::Founding,
+            )
+            .unwrap();
+            Self {
+                project,
+                root: PreviewRoot(root),
+                delivery,
+            }
+        }
+
+        fn preview(&mut self) -> Result<PreviewRevision, Failure> {
+            project_preview(
+                &mut self.project,
+                self.delivery["artifact"].as_str().unwrap(),
+                self.delivery["revision"].as_str().unwrap(),
+            )
+        }
+    }
+
+    #[test]
+    fn preview_selects_the_exact_old_revision_after_new_capture_and_source_deletion() {
+        use std::io::Read;
+        let mut fixture = PreviewFixture::new("mockup.html");
+        fs::write(
+            fixture.root.join("mockup.html"),
+            b"<html>Later delivery</html>",
+        )
+        .unwrap();
+        let args = Args::parse(vec![
+            "capture".into(),
+            "mockup.html".into(),
+            format!("--from={}", fixture.delivery["producer"].as_str().unwrap()),
+            format!(
+                "--artifact={}",
+                fixture.delivery["artifact"].as_str().unwrap()
+            ),
+            format!(
+                "--previous={}",
+                fixture.delivery["revision"].as_str().unwrap()
+            ),
+        ])
+        .unwrap();
+        let later = fixture.project.write(|ctx| capture(ctx, &args)).unwrap();
+        assert_ne!(later["delivery"]["revision"], fixture.delivery["revision"]);
+        fs::remove_file(fixture.root.join("mockup.html")).unwrap();
+        let mut selected = fixture.preview().unwrap();
+        assert_eq!(
+            selected.artifact,
+            fixture.delivery["artifact"].as_str().unwrap()
+        );
+        assert_eq!(
+            selected.revision,
+            fixture.delivery["revision"].as_str().unwrap()
+        );
+        assert_eq!(selected.source, "mockup.html");
+        assert_eq!(
+            selected.producer,
+            fixture.delivery["producer"].as_str().unwrap()
+        );
+        assert_eq!(
+            selected.digest,
+            fixture.delivery["digest"].as_str().unwrap()
+        );
+        assert_eq!(
+            selected.reader.size(),
+            fixture.delivery["size"].as_u64().unwrap()
+        );
+        let mut bytes = Vec::new();
+        selected.reader.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, b"<html>Selected delivery</html>");
+    }
+
+    #[test]
+    fn preview_refuses_a_revision_from_another_artifact() {
+        let mut fixture = PreviewFixture::new("mockup.html");
+        let error = project_preview(
+            &mut fixture.project,
+            &crate::id::ulid(),
+            fixture.delivery["revision"].as_str().unwrap(),
+        )
+        .err()
+        .expect("the wrong artifact must be refused");
+        assert_eq!(
+            error.message(),
+            "This revision does not belong to the selected artifact."
+        );
+    }
+
+    #[test]
+    fn preview_refuses_missing_or_corrupted_retained_bytes() {
+        for missing in [false, true] {
+            let mut fixture = PreviewFixture::new("mockup.html");
+            let object = fixture
+                .root
+                .join(".vivac-artifacts")
+                .join(fixture.delivery["object"].as_str().unwrap());
+            if missing {
+                fs::remove_file(object).unwrap();
+            } else {
+                fs::write(object, b"<html>Changed delivery!</html>").unwrap();
+            }
+            assert!(fixture.preview().is_err());
+            assert!(!fs::read_dir(fixture.root.join(".vivac-artifacts/objects"))
+                .unwrap()
+                .any(|entry| entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".tmp-")));
+        }
+    }
+
+    #[test]
+    fn preview_checks_the_html_suffix_before_attempting_a_retained_copy() {
+        let mut fixture = PreviewFixture::new("mockup.txt");
+        fs::remove_file(
+            fixture
+                .root
+                .join(".vivac-artifacts")
+                .join(fixture.delivery["object"].as_str().unwrap()),
+        )
+        .unwrap();
+        let error = fixture
+            .preview()
+            .err()
+            .expect("text delivery must be refused");
+        assert_eq!(
+            error.message(),
+            "Only retained HTML files can be previewed."
+        );
+    }
+
+    #[test]
+    fn preview_accepts_html_suffixes_without_case_sensitivity() {
+        for source in ["mockup.HTML", "mockup.hTm"] {
+            let mut fixture = PreviewFixture::new(source);
+            assert_eq!(fixture.preview().unwrap().source, source);
+        }
+    }
 
     #[test]
     fn an_incomplete_log_checks_surviving_receipts_without_claiming_orphans() {

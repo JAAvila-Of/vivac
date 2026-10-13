@@ -357,7 +357,9 @@ The Artifacts page belongs to each project. It connects saved deliveries to
 their producer and decisions referencing exact revisions, including older
 ones. Select a revision before checking, restoring or downloading it. Capture
 and restore use the same engine as `vivac artifacts`; download verifies an
-exact retained revision before sending it as an attachment. See
+exact retained revision before sending it as an attachment. HTML preview opens
+the exact retained revision in a restricted browser view separate from the
+Vivac session; opening a preview does not approve the revision. See
 [Artifact custody](ARTIFACTS.md) for supported types and limits.
 
 The Agents page compares current native prompts, models and settings across

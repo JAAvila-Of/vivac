@@ -55,7 +55,7 @@ fn opaque_id(value: &str) -> bool {
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
 }
 
-fn download_fields(body: &[u8]) -> Option<(&str, &str, &str)> {
+fn native_fields(body: &[u8]) -> Option<(&str, &str, &str)> {
     if !body.is_ascii() || body.iter().any(|byte| matches!(byte, b'%' | b'+')) {
         return None;
     }
@@ -99,6 +99,48 @@ fn download_failure(
     respond(request, code, super::HTML, format!("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Download refused</title>{FAVICON}<style>{WEB_CSS}</style></head><body><main class=\"page\"><h1>Download refused</h1><p>The selected revision could not be downloaded safely. Check its retained bytes before trying again.</p><p><a href=\"{}\">Back to the selected revision</a></p></main></body></html>", escape(&back)));
 }
 
+fn preview_failure(
+    request: tiny_http::Request,
+    code: u16,
+    base: &str,
+    selected: Option<(&str, &str)>,
+    message: &str,
+) {
+    let back = match selected {
+        Some((artifact, revision)) => format!("{base}#artifact={artifact}&revision={revision}"),
+        None => base.to_owned(),
+    };
+    respond(request, code, super::HTML, format!("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Preview refused</title>{FAVICON}<style>{WEB_CSS}</style></head><body><main class=\"page\"><h1>Preview refused</h1><p>{}</p><p><a href=\"{}\">Back to the selected revision</a></p></main></body></html>", escape(message), escape(&back)));
+}
+
+fn native_failure(
+    request: tiny_http::Request,
+    code: u16,
+    base: &str,
+    selected: Option<(&str, &str)>,
+    preview: bool,
+    message: &str,
+) {
+    if preview {
+        preview_failure(request, code, base, selected, message);
+    } else {
+        download_failure(request, code, base, selected);
+    }
+}
+
+fn open_preview(request: tiny_http::Request, url: &str) {
+    let url = escape(url);
+    let body = format!("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><meta http-equiv=\"refresh\" content=\"0;url={url}\"><title>Opening preview</title>{FAVICON}<style>{WEB_CSS}</style></head><body><main class=\"page\"><h1>Opening preview</h1><p>Opening the retained revision in an isolated preview.</p><p><a href=\"{url}\">Open isolated preview</a></p></main></body></html>");
+    let response = tiny_http::Response::from_string(body)
+        .with_header(header("Content-Type", super::HTML))
+        .with_header(header("Content-Security-Policy", "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; form-action 'none'; frame-ancestors 'none'; base-uri 'none'"))
+        .with_header(header("X-Content-Type-Options", "nosniff"))
+        .with_header(header("Referrer-Policy", "no-referrer"))
+        .with_header(header("Cache-Control", "no-store"))
+        .with_header(header("Cross-Origin-Opener-Policy", "same-origin"));
+    let _ = request.respond(response);
+}
+
 pub(super) fn serve(
     mut request: tiny_http::Request,
     id: &str,
@@ -118,28 +160,71 @@ pub(super) fn serve(
     if operation.is_empty() {
         return respond(request, 200, super::HTML, page(id, &project.name, token));
     }
-    let download = operation == "download";
-    if download {
-        let cookie = header_value(request.headers(), "cookie").unwrap_or("");
-        let supplied = cookie
-            .split(';')
+    let preview = operation == "preview";
+    let native = operation == "download" || preview;
+    if native {
+        let mut supplied = request
+            .headers()
+            .iter()
+            .filter(|header| header.field.equiv("cookie"))
+            .flat_map(|header| header.value.as_str().split(';'))
             .filter_map(|part| part.trim().split_once('='))
             .filter(|(name, _)| *name == super::SESSION_COOKIE)
-            .map(|(_, value)| value)
-            .collect::<Vec<_>>();
-        if supplied.len() != 1 || !same_token(supplied[0], token) {
-            return download_failure(request, 403, &base, None);
+            .map(|(_, value)| value);
+        if !supplied
+            .next()
+            .is_some_and(|value| same_token(value, token))
+            || supplied.next().is_some()
+        {
+            return native_failure(
+                request,
+                403,
+                &base,
+                None,
+                preview,
+                "Same-origin review token required.",
+            );
         }
     }
-    let host = header_value(request.headers(), "host").unwrap_or("");
-    if header_value(request.headers(), "origin") != Some(format!("http://{host}").as_str()) {
-        return if download {
-            download_failure(request, 403, &base, None)
+    let mut hosts = request
+        .headers()
+        .iter()
+        .filter(|header| header.field.equiv("host"));
+    let host = hosts
+        .next()
+        .map(|header| header.value.as_str())
+        .unwrap_or("");
+    if native && hosts.next().is_some() {
+        return native_failure(
+            request,
+            403,
+            &base,
+            None,
+            preview,
+            "A single loopback Host is required.",
+        );
+    }
+    let mut origins = request
+        .headers()
+        .iter()
+        .filter(|header| header.field.equiv("origin"));
+    if origins.next().map(|header| header.value.as_str()) != Some(format!("http://{host}").as_str())
+        || origins.next().is_some()
+    {
+        return if native {
+            native_failure(
+                request,
+                403,
+                &base,
+                None,
+                preview,
+                "Same-origin review token required.",
+            )
         } else {
             refuse(request, 403, "Same-origin review token required.")
         };
     }
-    if !download
+    if !native
         && !same_token(
             header_value(request.headers(), "x-vivac-token").unwrap_or(""),
             token,
@@ -147,18 +232,32 @@ pub(super) fn serve(
     {
         return refuse(request, 403, "Same-origin review token required.");
     }
-    let expected_type = if download {
+    let expected_type = if native {
         "application/x-www-form-urlencoded"
     } else {
         "application/json"
     };
-    if header_value(request.headers(), "content-type")
+    let mut content_types = request
+        .headers()
+        .iter()
+        .filter(|header| header.field.equiv("content-type"));
+    if content_types
+        .next()
+        .map(|header| header.value.as_str())
         .and_then(|value| value.split(';').next())
         .map(str::trim)
         != Some(expected_type)
+        || content_types.next().is_some()
     {
-        return if download {
-            download_failure(request, 415, &base, None)
+        return if native {
+            native_failure(
+                request,
+                415,
+                &base,
+                None,
+                preview,
+                "Native form content required.",
+            )
         } else {
             refuse(request, 415, "JSON content required.")
         };
@@ -167,8 +266,8 @@ pub(super) fn serve(
         .body_length()
         .is_some_and(|size| size as u64 > LIMIT)
     {
-        return if download {
-            download_failure(request, 413, &base, None)
+        return if native {
+            native_failure(request, 413, &base, None, preview, "Request too large.")
         } else {
             refuse(request, 413, "Request too large.")
         };
@@ -180,26 +279,65 @@ pub(super) fn serve(
         .read_to_end(&mut body)
         .is_err()
     {
-        return if download {
-            download_failure(request, 400, &base, None)
+        return if native {
+            native_failure(
+                request,
+                400,
+                &base,
+                None,
+                preview,
+                "Invalid artifact preview or download request.",
+            )
         } else {
             refuse(request, 400, "Request could not be read.")
         };
     }
     if body.len() as u64 > LIMIT {
-        return if download {
-            download_failure(request, 413, &base, None)
+        return if native {
+            native_failure(request, 413, &base, None, preview, "Request too large.")
         } else {
             refuse(request, 413, "Request too large.")
         };
     }
-    if download {
-        let Some((artifact, revision, supplied)) = download_fields(&body) else {
-            return download_failure(request, 400, &base, None);
+    if native {
+        let Some((artifact, revision, supplied)) = native_fields(&body) else {
+            return native_failure(
+                request,
+                400,
+                &base,
+                None,
+                preview,
+                "Invalid artifact preview or download request.",
+            );
         };
         let selected = Some((artifact, revision));
         if !same_token(supplied, token) {
-            return download_failure(request, 403, &base, selected);
+            return native_failure(
+                request,
+                403,
+                &base,
+                selected,
+                preview,
+                "Same-origin review token required.",
+            );
+        }
+        if preview {
+            return match crate::artifacts::project_preview(project, artifact, revision)
+                .and_then(crate::artifacts::preview::start)
+            {
+                Ok(preview) => {
+                    open_preview(request, preview.url());
+                }
+                Err(error) => {
+                    let code = status(error.code());
+                    let message = match error {
+                        crate::failure::Failure::Usage(message) | crate::failure::Failure::Model(message) => message,
+                        crate::failure::Failure::Redaction(_) => "Sensitive or unsupported artifact data was refused.".to_owned(),
+                        _ => "The retained revision could not be prepared safely. Check its retained bytes and file access before trying again.".to_owned(),
+                    };
+                    preview_failure(request, code, &base, selected, &message)
+                }
+            };
         }
         return match crate::artifacts::project_download(project, artifact, revision) {
             Ok((reader, filename)) => {
@@ -257,7 +395,7 @@ mod tests {
         let artifact = "01arz3ndektsv4rrffq69g5fav";
         let token = "a".repeat(64);
         let valid = format!("artifact={artifact}&revision={artifact}&token={token}");
-        assert!(download_fields(valid.as_bytes()).is_some());
+        assert!(native_fields(valid.as_bytes()).is_some());
         for body in [
             format!("{valid}&extra=x"),
             format!("{valid}&token={token}"),
@@ -266,7 +404,7 @@ mod tests {
             valid.replace(artifact, "../outside"),
             valid.replace("revision=", "revision=ÃƒÂ©"),
         ] {
-            assert!(download_fields(body.as_bytes()).is_none());
+            assert!(native_fields(body.as_bytes()).is_none());
         }
     }
 

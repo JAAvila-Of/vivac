@@ -72,6 +72,97 @@ fn capture(sandbox: &Sandbox, path: &str) -> Value {
 }
 
 #[test]
+fn preview_cli_json_reports_invalid_arguments_without_starting_a_view() {
+    let sandbox = seeded("artifact-preview-json-arguments");
+    fs::write(
+        sandbox.0.join("design.html"),
+        b"<html>selected delivery</html>",
+    )
+    .unwrap();
+    let delivery = capture(&sandbox, "design.html");
+    let artifact = delivery["artifact"].as_str().unwrap();
+    let revision = delivery["revision"].as_str().unwrap();
+    let events = sandbox.0.join(".vivac/events");
+    let before = fs::read(&events).unwrap();
+    for args in [
+        vec![
+            "artifacts",
+            "preview",
+            artifact,
+            "--revision",
+            revision,
+            "--unknown",
+            "--json",
+        ],
+        vec![
+            "artifacts",
+            "preview",
+            artifact,
+            "--revision",
+            revision,
+            "--revision",
+            revision,
+            "--json",
+        ],
+        vec!["artifacts", "preview", artifact, "--json"],
+        vec![
+            "artifacts",
+            "preview",
+            artifact,
+            "--revision",
+            "latest",
+            "--json",
+        ],
+    ] {
+        let (output, code) = sandbox.run(&args);
+        assert_ne!(code, 0);
+        let refused: Value = serde_json::from_str(&output)
+            .expect("preview failures must retain the JSON error contract");
+        assert_eq!(refused["exit_code"], code);
+        assert!(!refused["error"].as_str().unwrap().is_empty());
+        assert!(refused.get("url").is_none());
+        assert!(!output.contains("selected delivery"));
+    }
+    assert_eq!(fs::read(events).unwrap(), before);
+}
+
+#[test]
+fn preview_cli_json_reports_unsupported_and_corrupted_deliveries_without_body_or_url() {
+    let sandbox = seeded("artifact-preview-json-bytes");
+    for source in ["design.txt", "design.html"] {
+        fs::write(sandbox.0.join(source), b"<html>selected delivery</html>").unwrap();
+        let delivery = capture(&sandbox, source);
+        if source.ends_with("html") {
+            fs::write(
+                sandbox
+                    .0
+                    .join(".vivac-artifacts")
+                    .join(delivery["object"].as_str().unwrap()),
+                b"<html>changed retained data</html>",
+            )
+            .unwrap();
+        }
+        let (output, code) = sandbox.run(&[
+            "artifacts",
+            "preview",
+            delivery["artifact"].as_str().unwrap(),
+            "--revision",
+            delivery["revision"].as_str().unwrap(),
+            "--json",
+            "--no-open",
+        ]);
+        assert_ne!(code, 0);
+        let refused: Value = serde_json::from_str(&output)
+            .expect("preview byte refusals must retain the JSON error contract");
+        assert_eq!(refused["exit_code"], code);
+        assert!(!refused["error"].as_str().unwrap().is_empty());
+        assert!(refused.get("url").is_none());
+        assert!(!output.contains("selected delivery"));
+        assert!(!output.contains("changed retained data"));
+    }
+}
+
+#[test]
 fn capabilities_need_no_project_and_ignore_an_unreadable_tree() {
     let sandbox = Sandbox::new_empty("artifact-capabilities");
     assert_isolated(&sandbox.0.canonicalize().unwrap());
@@ -106,7 +197,9 @@ fn capabilities_need_no_project_and_ignore_an_unreadable_tree() {
             .trim()
             .is_empty());
     }
-    assert_eq!(expected["execution"]["provided"], false);
+    assert_eq!(expected["execution"]["provided"], true);
+    assert_eq!(expected["execution"]["scope"], "retained_html_preview");
+    assert_eq!(expected["execution"]["network_isolation"], false);
     assert_eq!(expected["bytes_checked"], false);
     assert_eq!(expected["event_recorded"], false);
     assert!(!sandbox.0.join(".vivac").exists());

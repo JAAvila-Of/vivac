@@ -1748,6 +1748,7 @@ helps
 here
 heuristic
 hex
+hexadecimal
 hid
 hidden
 hide
@@ -2198,6 +2199,7 @@ looks
 lookup
 lookups
 loop
+loopback
 loose
 looser
 lose
