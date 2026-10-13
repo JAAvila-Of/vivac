@@ -823,6 +823,7 @@ exceeded
 exceeds
 except
 excessive
+exchange
 exclude
 excluded
 excludes
@@ -2662,6 +2663,7 @@ warning
 warns
 was
 way
+weak
 web
 week
 weight

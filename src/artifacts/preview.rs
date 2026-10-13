@@ -18,14 +18,23 @@ struct Slot;
 
 impl Slot {
     fn reserve() -> Result<Self, Failure> {
-        ACTIVE
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |active| {
-                (active < 4).then_some(active + 1)
-            })
-            .map(|_| Self)
-            .map_err(|_| {
-                Failure::usage("At most four retained HTML preview servers can be active at once.")
-            })
+        let mut active = ACTIVE.load(Ordering::Acquire);
+        loop {
+            if active >= 4 {
+                return Err(Failure::usage(
+                    "At most four retained HTML preview servers can be active at once.",
+                ));
+            }
+            match ACTIVE.compare_exchange_weak(
+                active,
+                active + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return Ok(Self),
+                Err(observed) => active = observed,
+            }
+        }
     }
 }
 
@@ -700,7 +709,7 @@ mod tests {
             } else {
                 socket.write_all(b"GET /").unwrap();
             }
-            for byte in [b'x', b'y'] {
+            for byte in *b"xy" {
                 std::thread::sleep(Duration::from_millis(800));
                 socket.write_all(&[byte]).unwrap();
             }
