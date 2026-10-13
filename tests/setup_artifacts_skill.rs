@@ -7,6 +7,19 @@ const HARNESSES: [(&str, &str); 2] = [
     ("codex", ".agents/skills/vivac-artifacts/SKILL.md"),
 ];
 
+fn assert_artifacts_advice(output: &str, harness: &str) {
+    let (name, other) = if harness == "claude-code" {
+        ("Claude Code", "Codex")
+    } else {
+        ("Codex", "Claude Code")
+    };
+    assert!(output.contains(&format!("\nExisting artifacts: ask {name}:\n\n  Use the vivac-artifacts skill to bring selected existing artifacts into vivac.\n")), "{output}");
+    assert!(
+        !output.contains(&format!("Existing artifacts: ask {other}:")),
+        "{output}"
+    );
+}
+
 fn snapshot(root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
     fn visit(root: &Path, path: &Path, files: &mut Vec<(PathBuf, Vec<u8>)>) {
         if !path.exists() {
@@ -70,7 +83,9 @@ fn setup_and_undo_dry_runs_leave_project_and_registry_unchanged() {
             let registry = snapshot(c.global_home());
             let output = c.ok(&["setup", harness, "--dry-run"]);
             assert!(output.contains(label), "{output}");
-            c.ok(&["setup", harness, "--undo", "--dry-run"]);
+            assert!(!output.contains("Existing artifacts:"), "{output}");
+            let output = c.ok(&["setup", harness, "--undo", "--dry-run"]);
+            assert!(!output.contains("Existing artifacts:"), "{output}");
             assert_eq!(snapshot(&c.0), before);
             assert_eq!(snapshot(c.global_home()), registry);
         }
@@ -81,12 +96,15 @@ fn setup_and_undo_dry_runs_leave_project_and_registry_unchanged() {
 fn idempotence_preserves_bytes_and_missing_skill_is_reinstalled() {
     for (harness, label) in HARNESSES {
         let c = Sandbox::new_seeded("artifacts-idempotent");
-        c.ok(&["setup", harness, "--yes"]);
+        let output = c.ok(&["setup", harness, "--yes"]);
+        assert_artifacts_advice(&output, harness);
         let before = snapshot(&c.0);
-        c.ok(&["setup", harness, "--yes"]);
+        let output = c.ok(&["setup", harness, "--yes"]);
+        assert_artifacts_advice(&output, harness);
         assert_eq!(snapshot(&c.0), before);
         std::fs::remove_file(c.0.join(label)).unwrap();
-        c.ok(&["setup", harness, "--yes"]);
+        let output = c.ok(&["setup", harness, "--yes"]);
+        assert_artifacts_advice(&output, harness);
         assert_eq!(snapshot(&c.0), before);
     }
 }
@@ -100,7 +118,9 @@ fn unchanged_previous_copy_is_upgraded_but_edited_copy_blocks_all_writes() {
         put(&path, previous.as_bytes());
         let preview = c.ok(&["setup", harness, "--dry-run"]);
         assert!(preview.contains("replace"), "{preview}");
-        c.ok(&["setup", harness, "--yes"]);
+        assert!(!preview.contains("Existing artifacts:"), "{preview}");
+        let output = c.ok(&["setup", harness, "--yes"]);
+        assert_artifacts_advice(&output, harness);
         assert_ne!(std::fs::read_to_string(&path).unwrap(), previous);
 
         let c = Sandbox::new_seeded("artifacts-edited");
@@ -113,6 +133,7 @@ fn unchanged_previous_copy_is_upgraded_but_edited_copy_blocks_all_writes() {
         let (output, code) = c.run(&["setup", harness, "--yes"]);
         assert_ne!(code, 0, "{output}");
         assert!(output.contains(label), "{output}");
+        assert!(!output.contains("Existing artifacts:"), "{output}");
         assert_eq!(snapshot(&c.0), before);
         assert_eq!(snapshot(c.global_home()), registry);
     }
@@ -152,7 +173,8 @@ fn undo_removes_only_own_unchanged_skill_and_keeps_the_tree_and_other_harness() 
             .unwrap()
             .1;
         let other = std::fs::read(c.0.join(other_label)).unwrap();
-        c.ok(&["setup", harness, "--undo", "--yes"]);
+        let output = c.ok(&["setup", harness, "--undo", "--yes"]);
+        assert!(!output.contains("Existing artifacts:"), "{output}");
         assert!(!c.0.join(label).exists());
         assert!(!c.0.join(label).parent().unwrap().exists());
         assert_eq!(std::fs::read(c.0.join(other_label)).unwrap(), other);
@@ -339,6 +361,7 @@ fn existing_config_conflicts_never_install_either_skill() {
         let registry = snapshot(c.global_home());
         let (output, code) = c.run(&["setup", harness, "--yes"]);
         assert_ne!(code, 0, "{output}");
+        assert!(!output.contains("Existing artifacts:"), "{output}");
         assert_eq!(snapshot(&c.0), before);
         assert_eq!(snapshot(c.global_home()), registry);
         assert!(!c.0.join(label).exists());
@@ -351,16 +374,19 @@ fn existing_config_conflicts_never_install_either_skill() {
 
 #[test]
 fn declined_noninteractive_setup_and_undo_leave_project_and_registry_unchanged() {
-    for (harness, _) in HARNESSES {
+    for (harness, label) in HARNESSES {
         let c = Sandbox::new_seeded("artifacts-declined");
         for installed in [false, true] {
             if installed {
                 c.ok(&["setup", harness, "--yes"]);
+                std::fs::remove_file(c.0.join(label)).unwrap();
             }
             let before = snapshot(&c.0);
             let registry = snapshot(c.global_home());
-            c.run_stdin(&["setup", harness], "n\n");
-            c.run_stdin(&["setup", harness, "--undo"], "n\n");
+            let (output, _) = c.run_stdin(&["setup", harness], "n\n");
+            assert!(!output.contains("Existing artifacts:"), "{output}");
+            let (output, _) = c.run_stdin(&["setup", harness, "--undo"], "n\n");
+            assert!(!output.contains("Existing artifacts:"), "{output}");
             assert_eq!(snapshot(&c.0), before);
             assert_eq!(snapshot(c.global_home()), registry);
         }
