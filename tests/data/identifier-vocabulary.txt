@@ -17,6 +17,7 @@ acceptance
 accepted
 accepts
 access
+accessible
 accessor
 across
 action
@@ -186,6 +187,7 @@ backslash
 backtick
 backwards
 bad
+badge
 bare
 base
 base64
@@ -1091,6 +1093,7 @@ i16
 i32
 i64
 icanon
+icon
 icons
 id
 id2
@@ -1733,6 +1736,7 @@ proceeds
 process
 processed
 processing
+produced
 producer
 producers
 product
@@ -1854,6 +1858,7 @@ redirecting
 redirects
 ref
 reference
+referenced
 references
 referrer
 refname
