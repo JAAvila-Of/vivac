@@ -87,6 +87,49 @@ Unrecorded-object and temporary-file pages follow filesystem enumeration order.
 Changing the store between requests can change those pages; this is an inventory
 check, not a directory snapshot.
 
+## Preview an exact HTML revision
+
+```sh
+vivac artifacts preview <artifact-id> --revision <revision-id>
+vivac artifacts preview <artifact-id> --revision <revision-id> --no-open --json
+```
+
+Preview verifies and serves the selected retained `.html` or `.htm` revision,
+including an earlier revision whose source has changed or disappeared. It
+does not serve the current source or inherit an approval. The CLI prints the
+preview URL and stays running until the preview is closed or stops accepting
+requests. `--no-open` leaves opening that URL to the caller.
+
+On the Artifacts page, **Preview latest revision** opens the revision named by
+that table row. **Preview selected revision** opens the exact revision shown
+in the detail, including an earlier revision. Both open a separate preview
+page; **Run HTML** starts its JavaScript. Checking integrity and downloading
+an attachment remain separate actions.
+
+The preview server listens only on loopback, at a separate origin from the
+authenticated Vivac web interface. It exposes the verified delivery rather
+than project-file or tree APIs. The HTML runs in a sandboxed frame without
+access to Vivac's session or storage. Browser policies restrict outgoing
+connections, external resources, form submissions, nested frames, popups and
+artifact-initiated downloads. Inline JavaScript and styles, and embedded
+images, fonts and media can support a self-contained interactive mockup.
+
+These browser restrictions do not guarantee complete network isolation.
+Preview is not a virtual machine, a general application runtime or a proof
+that the HTML is safe. Dependencies on external files, APIs, persistent
+storage or a backend can prevent the delivery from functioning completely.
+Vivac does not install those dependencies.
+
+At most four preview servers can be active in one Vivac process, each handling
+one connection at a time. Each server expires after fifteen minutes. Requests
+have a two-second deadline and responses a ten-second deadline, both shortened by
+the preview's expiry. **Close preview** ends the view and releases its verified
+reader. Closing can wait for the current request or response deadline.
+Closing a browser tab alone does not stop its preview server; stopping the
+owning Vivac process ends it.
+The server's expiry does not stop JavaScript already loaded in a browser tab.
+Close that tab to stop the loaded HTML.
+
 ## Limits and refusals
 
 The first implementation accepts UTF-8 text up to 10 MiB. Invalid UTF-8,
@@ -184,7 +227,8 @@ self-contained HTML file can include JavaScript and remain a single delivery.
 Complete multi-file bundles and SQLite snapshots are unsupported. Recognizing
 their filenames does not make them eligible for custody. Retaining a supported
 code file does not prove that an entire application can be recovered or run.
-Vivac does not execute deliveries or install their runtime dependencies.
+The engine offers restricted browser preview for retained HTML revisions.
+It does not provide general application execution or install runtime dependencies.
 
 ## Deliver new work and incorporate existing artifacts
 

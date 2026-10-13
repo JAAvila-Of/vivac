@@ -393,6 +393,219 @@ fn exact_download_survives_newer_revision_and_source_loss_but_refuses_corruption
 }
 
 #[test]
+fn preview_opens_exact_retained_html_and_preserves_native_gates() {
+    let c = seeded("artifacts-web-preview");
+    std::fs::write(
+        c.0.join("layout.HTML"),
+        b"<!doctype html><p>first retained view</p>",
+    )
+    .unwrap();
+    let first = cli(
+        &c,
+        &[
+            "artifacts",
+            "capture",
+            "layout.HTML",
+            "--from",
+            "g1",
+            "--json",
+        ],
+    )["delivery"]
+        .clone();
+    std::fs::write(c.0.join("layout.HTML"), b"<!doctype html><p>newer view</p>").unwrap();
+    cli(
+        &c,
+        &[
+            "artifacts",
+            "capture",
+            "layout.HTML",
+            "--from",
+            "g1",
+            "--artifact",
+            first["artifact"].as_str().unwrap(),
+            "--previous",
+            first["revision"].as_str().unwrap(),
+            "--json",
+        ],
+    );
+    std::fs::remove_file(c.0.join("layout.HTML")).unwrap();
+    let mut server = Server::start(&c);
+    let headers = format!(
+        "Content-Type: application/x-www-form-urlencoded\r\nOrigin: http://127.0.0.1:{}\r\n",
+        server.port
+    );
+    let body = format!(
+        "artifact={}&revision={}&token={}",
+        first["artifact"].as_str().unwrap(),
+        first["revision"].as_str().unwrap(),
+        server.cookie.split_once('=').unwrap().1
+    );
+    let path = server.artifacts_path("preview");
+    let response = server.call("POST", &path, &headers, &body);
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    assert!(response.contains("http-equiv=\"refresh\""));
+    assert!(response.contains("Opening preview"));
+    assert!(response.contains("Open isolated preview"));
+    let location = response
+        .split_once("content=\"0;url=")
+        .unwrap()
+        .1
+        .split_once('"')
+        .unwrap()
+        .0;
+    assert!(location.starts_with("http://localhost:"), "{location}");
+    assert!(!location.starts_with(&format!("http://127.0.0.1:{}", server.port)));
+    assert!(!location.contains(server.cookie.split_once('=').unwrap().1));
+    assert!(response.contains(&format!("href=\"{location}\"")));
+    assert!(!response.to_ascii_lowercase().contains("location:"));
+    assert!(!response.contains(server.cookie.split_once('=').unwrap().1));
+    assert!(!response.contains("first retained view"));
+    let (authority, preview_path) = location
+        .trim_start_matches("http://")
+        .split_once('/')
+        .unwrap();
+    assert_eq!(preview_path.len(), 64);
+    assert!(preview_path
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)));
+    let port: u16 = authority.rsplit(':').next().unwrap().parse().unwrap();
+    let mut preview_stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    preview_stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+        .unwrap();
+    write!(
+        preview_stream,
+        "GET /{preview_path} HTTP/1.1\r\nHost: {authority}\r\nConnection: close\r\n\r\n"
+    )
+    .unwrap();
+    let mut wrapper = String::new();
+    preview_stream.read_to_string(&mut wrapper).unwrap();
+    assert!(wrapper.starts_with("HTTP/1.1 200"), "{wrapper}");
+    assert!(wrapper.contains(first["revision"].as_str().unwrap()));
+    assert!(wrapper.contains("Run HTML"));
+    assert!(
+        !wrapper.contains("first retained view"),
+        "The wrapper must not run the retained HTML before Run HTML"
+    );
+    for required in [
+        "referrer-policy: no-referrer",
+        "cache-control: no-store",
+        "cross-origin-opener-policy: same-origin",
+        "script-src 'none'",
+        "form-action 'none'",
+    ] {
+        assert!(response.to_ascii_lowercase().contains(required));
+    }
+    let cookie = std::mem::take(&mut server.cookie);
+    let no_session = server.call("POST", &path, &headers, &body);
+    assert!(no_session.starts_with("HTTP/1.1 401"), "{no_session}");
+    let header_token = format!(
+        "{headers}X-Vivac-Token: {}\r\n",
+        cookie.split_once('=').unwrap().1
+    );
+    let no_cookie = server.call("POST", &path, &header_token, &body);
+    assert!(no_cookie.starts_with("HTTP/1.1 403"), "{no_cookie}");
+    server.cookie = cookie;
+    for invalid in [
+        format!("{body}&artifact=x"),
+        format!("{body}&extra=x"),
+        body.replace("token=", "token=+"),
+    ] {
+        assert!(server
+            .call("POST", &path, &headers, &invalid)
+            .starts_with("HTTP/1.1 400"));
+    }
+    let duplicate_cookie = format!("{headers}Cookie: {}\r\n", server.cookie);
+    let duplicate_origin = format!("{headers}Origin: http://127.0.0.1:{}\r\n", server.port);
+    let duplicate_host = format!("{headers}Host: 127.0.0.1:{}\r\n", server.port);
+    for operation in ["download", "preview"] {
+        for duplicates in [&duplicate_cookie, &duplicate_origin, &duplicate_host] {
+            assert!(server
+                .call("POST", &server.artifacts_path(operation), duplicates, &body)
+                .starts_with("HTTP/1.1 403"));
+        }
+        let duplicate_type =
+            format!("{headers}Content-Type: application/x-www-form-urlencoded\r\n");
+        assert!(server
+            .call(
+                "POST",
+                &server.artifacts_path(operation),
+                &duplicate_type,
+                &body
+            )
+            .starts_with("HTTP/1.1 415"));
+    }
+    assert!(server
+        .call("GET", &path, &headers, "")
+        .starts_with("HTTP/1.1 405"));
+    assert!(server
+        .call("POST", &path, &server.headers(), &body)
+        .starts_with("HTTP/1.1 415"));
+    assert!(server
+        .call("POST", &path, &headers, &"x".repeat(16 * 1024 + 1))
+        .starts_with("HTTP/1.1 413"));
+    let mut wrong_token = body.clone().into_bytes();
+    let last = wrong_token.last_mut().unwrap();
+    *last = if *last == b'0' { b'1' } else { b'0' };
+    assert!(server
+        .call(
+            "POST",
+            &path,
+            &headers,
+            std::str::from_utf8(&wrong_token).unwrap()
+        )
+        .starts_with("HTTP/1.1 403"));
+    let foreign = headers.replace("Origin: http://127.0.0.1:", "Origin: http://localhost:");
+    assert!(server
+        .call("POST", &path, &foreign, &body)
+        .starts_with("HTTP/1.1 403"));
+    let wrong_artifact = body.replace(
+        first["artifact"].as_str().unwrap(),
+        "01aaaaaaaaaaaaaaaaaaaaaaaa",
+    );
+    assert!(server
+        .call("POST", &path, &headers, &wrong_artifact)
+        .starts_with("HTTP/1.1 400"));
+    std::fs::write(c.0.join("text.txt"), b"retained plain text").unwrap();
+    let text = cli(
+        &c,
+        &["artifacts", "capture", "text.txt", "--from", "g1", "--json"],
+    )["delivery"]
+        .clone();
+    let text_body = format!(
+        "artifact={}&revision={}&token={}",
+        text["artifact"].as_str().unwrap(),
+        text["revision"].as_str().unwrap(),
+        server.cookie.split_once('=').unwrap().1
+    );
+    let other_artifact = body.replace(
+        first["artifact"].as_str().unwrap(),
+        text["artifact"].as_str().unwrap(),
+    );
+    assert!(server
+        .call("POST", &path, &headers, &other_artifact)
+        .starts_with("HTTP/1.1 400"));
+    let unsupported = server.call("POST", &path, &headers, &text_body);
+    assert!(unsupported.starts_with("HTTP/1.1 400"), "{unsupported}");
+    assert!(unsupported.contains("Only retained HTML files can be previewed."));
+    std::fs::write(
+        c.0.join(".vivac-artifacts/objects")
+            .join(format!("{}.blob", first["revision"].as_str().unwrap())),
+        b"corrupted retained HTML",
+    )
+    .unwrap();
+    let refused = server.call("POST", &path, &headers, &body);
+    assert!(!refused.starts_with("HTTP/1.1 200"), "{refused}");
+    assert!(refused.contains("Preview refused"));
+    assert!(!refused.contains("corrupted retained HTML"));
+    assert!(refused.contains(&format!(
+        "#artifact={}&amp;revision={}",
+        first["artifact"].as_str().unwrap(),
+        first["revision"].as_str().unwrap()
+    )));
+}
+
+#[test]
 fn web_reads_match_cli_and_capabilities_do_not_refresh_a_broken_log() {
     let c = seeded("artifacts-web-shared-engine");
     std::fs::write(c.0.join("delivery.txt"), b"saved delivery").unwrap();

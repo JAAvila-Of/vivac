@@ -32,7 +32,7 @@ const latest = revision('r2');
 latest.artifact_decision_references = [{ revision: 'r1', node: 'decision', alias: 'd1', kind: 'decision', state: 'closed' }];
 latest.artifact_decision_references_total = 1;
 let head = 'r2', captureNetworkFailure = false, captureConflict = false, deliveryHead = 'r3';
-const caps = { delivery_types: { file: { supported: true, formats: ['utf8_text'], max_bytes: 99 }, bundle: { supported: false, reason: 'Not supported' } }, execution: { provided: false } };
+const caps = { delivery_types: { file: { supported: true, formats: ['utf8_text'], max_bytes: 99 }, bundle: { supported: false, reason: 'Not supported' } }, execution: { provided: true, scope: 'retained_html_preview' } };
 let pendingList = null;
 const fetch = async (url, options) => {
   const body = JSON.parse(options.body); requests.push({ url, body, options });
@@ -64,6 +64,19 @@ const all = root => [root, ...root.children.flatMap(all)];
 const button = text => all(document.elements['revision-content']).find(e => e.tagName === 'BUTTON' && e.textContent === text);
 (async () => {
   await settle();
+  const previewForm = (root, label) => all(root).find(e => e.tagName === 'FORM' && e.children.some(child => child.textContent === label));
+  const assertPreview = (form, expectedRevision) => {
+    assert(form, 'HTML revisions must offer an exact native preview form');
+    assert.equal(form.action, '/p/project/artifacts/preview');
+    assert.equal(form.method, 'post'); assert.equal(form.target, '_blank'); assert.equal(form.rel, 'noopener');
+    assert.deepEqual(Object.fromEntries(form.children.filter(e => e.tagName === 'INPUT').map(e => [e.name, e.value])), { artifact: 'artifact', revision: expectedRevision, token: 'abc' });
+  };
+  assertPreview(previewForm(document.elements.rows, 'Preview latest revision'), 'r2');
+  assertPreview(previewForm(document.elements['revision-content'], 'Preview selected revision'), 'r1');
+  await document.elements.capabilities.click(); await settle();
+  assert.match(document.elements['dialog-content'].textContent, /Execution: restricted preview of retained HTML revisions\. Complete network isolation is not guaranteed\./);
+  assert(!document.elements['dialog-content'].textContent.includes('retained_html_preview'));
+  document.elements.dialog.close();
   assert.match(document.elements.revisions.textContent, /r1.*Selected/);
   assert.match(document.elements.revisions.textContent, /r2.*Latest/, 'A direct old revision link must identify the authoritative latest head');
   assert.match(document.elements.rows.textContent, /r1.*d1.*Earlier/, 'Inventory must retain earlier decision references');
@@ -95,6 +108,34 @@ const button = text => all(document.elements['revision-content']).find(e => e.ta
     });
     await settle(); return copy;
   }
+  for (const [execution, message] of [[{ provided: false }, 'Execution: not provided by this engine.'], [{ provided: true, scope: 'other' }, 'Execution: not supported in this view.'], [undefined, 'Execution: support unknown.']]) {
+    caps.execution = execution;
+    const unsupported = await reload();
+    assert(!previewForm(unsupported.elements.rows, 'Preview latest revision'));
+    assert(!previewForm(unsupported.elements['revision-content'], 'Preview selected revision'));
+    assert.match(unsupported.elements['revision-content'].textContent, /Preview is not supported/);
+    await unsupported.elements.capabilities.click(); await settle();
+    assert(unsupported.elements['dialog-content'].textContent.includes(message));
+    unsupported.elements.dialog.close();
+  }
+  caps.execution = { provided: true, scope: 'retained_html_preview' };
+  const originalSource = latest.source; latest.source = 'layout.HTM';
+  assert(previewForm((await reload({ revision: 'r2' })).elements.rows, 'Preview latest revision'), 'HTML suffix matching must ignore case');
+  latest.source = originalSource;
+  const twoRows = await reload({ fetch: async (url, options) => {
+    if (JSON.parse(options.body).operation !== 'list') return fetch(url, options);
+    return { ok: true, json: async () => ({ result: { artifacts: [latest, { ...revision('other-head'), artifact: 'other-artifact' }], total: 2, next_offset: null } }) };
+  } });
+  const rowForms = all(twoRows.elements.rows).filter(e => e.tagName === 'FORM');
+  assert.equal(rowForms.length, 2);
+  assert.equal(rowForms[1].children.find(e => e.name === 'artifact').value, 'other-artifact');
+  assert.equal(rowForms[1].children.find(e => e.name === 'revision').value, 'other-head', 'Each row must preview its own exact latest revision');
+  const htmlSource = latest.source; latest.source = 'layout.txt';
+  const textOnly = await reload({ revision: 'r2' });
+  assert(!previewForm(textOnly.elements.rows, 'Preview latest revision'));
+  assert(!previewForm(textOnly.elements['revision-content'], 'Preview selected revision'));
+  assert.match(textOnly.elements['revision-content'].textContent, /Only retained HTML/);
+  latest.source = htmlSource;
   const reloaded = await reload();
   assert.match(reloaded.elements['revision-content'].textContent, /Last checked 2026-10-13T03:30:04Z/);
   assert.match(reloaded.elements['revision-content'].textContent, /Not rechecked since/);

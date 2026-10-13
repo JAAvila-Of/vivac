@@ -39,6 +39,7 @@
 .artifact-page .notice { background:var(--chip); padding:1rem; border-radius:6px; margin:1rem 0; }
 .artifact-page .actions { margin-top:1.2rem; }
 .artifact-page .actions form { margin:0; }
+.artifact-page tbody th form { margin-top:.7rem; }
 .artifact-page #message { color:var(--ink-soft); margin:1rem 0; }
 .artifact-page dialog { color:var(--ink); background:var(--panel); border:1px solid var(--rule); border-radius:12px; padding:1.5rem; width:min(36rem,calc(100vw - 2rem)); max-height:85vh; overflow:auto; }
 .artifact-page dialog::backdrop { background:rgba(0,0,0,.4); }

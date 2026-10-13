@@ -195,6 +195,8 @@ const USAGE: &str = r#"vivac - provenance of work
     vivac artifacts check <id> [--revision <id>] [--json]
     vivac artifacts check --store [--json]    check retained bytes and unrecorded objects
     vivac artifacts restore <id> --revision <id> --to <new-path> [--json]
+    vivac artifacts preview <id> --revision <id> [--no-open] [--json]
+                                            open a retained HTML revision in a restricted browser view
     vivac artifacts restore --orphan <revision-id> --to <new-path> [--json]
 
   Session

@@ -190,6 +190,7 @@ fn route(path: &str) -> Route<'_> {
                                 | "check"
                                 | "restore"
                                 | "download"
+                                | "preview"
                         )
                     {
                         return Route::Artifacts(id, operation);
@@ -470,11 +471,12 @@ fn handle(
 ///
 /// The Windows branch hands the URL to `cmd`, which parses it again after
 /// this process has finished quoting it. That is safe for exactly one
-/// reason: `Gate::boot_url` builds `http://127.0.0.1:<port>/?k=<hex>` and
-/// nothing else, so the string carries no `&` for `cmd` to read as a
+/// reason: `Gate::boot_url` and artifact preview URLs contain only a
+/// fixed loopback host, a numeric port and hexadecimal keys. The string
+/// carries no `&` for `cmd` to read as a
 /// separator. A second query parameter would break that, and would have to
 /// reach the browser some other way.
-fn open_browser(url: &str) {
+pub(crate) fn open_browser(url: &str) {
     let launched = if cfg!(target_os = "windows") {
         std::process::Command::new("cmd")
             .args(["/C", "start", "", url])

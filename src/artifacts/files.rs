@@ -23,6 +23,10 @@ impl Download {
     pub(crate) fn size(&self) -> u64 {
         self.size
     }
+
+    pub(crate) fn rewind(&mut self) -> io::Result<()> {
+        self.reader.seek(SeekFrom::Start(0)).map(|_| ())
+    }
 }
 
 impl Read for Download {
@@ -939,6 +943,32 @@ mod tests {
         assert_eq!(bytes, b"selected saved delivery");
         assert!(download(&dir.0, &saved.object, &saved.digest, saved.size).is_err());
         assert_eq!(objects(&dir.0).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn preview_download_rewind_reads_the_same_private_bytes_after_source_changes() {
+        let dir = Scratch::new();
+        fs::write(dir.0.join("source.txt"), b"selected saved delivery").unwrap();
+        let saved = capture(&dir.0, "source.txt", REVISION).unwrap();
+        let mut reader = download(&dir.0, &saved.object, &saved.digest, saved.size).unwrap();
+        let mut first = Vec::new();
+        reader.read_to_end(&mut first).unwrap();
+        fs::write(dir.0.join("source.txt"), b"changed source").unwrap();
+        fs::write(
+            dir.0.join(STORE).join(&saved.object),
+            b"changed retained bytes",
+        )
+        .unwrap();
+        reader.rewind().unwrap();
+        let mut second = Vec::new();
+        reader.read_to_end(&mut second).unwrap();
+        assert_eq!(first, b"selected saved delivery");
+        assert_eq!(second, first);
+        reader.rewind().unwrap();
+        let mut prefix = [0; 8];
+        reader.read_exact(&mut prefix).unwrap();
+        assert_eq!(&prefix, b"selected");
+        assert_eq!(objects(&dir.0).unwrap(), vec![saved.object]);
     }
 
     #[test]

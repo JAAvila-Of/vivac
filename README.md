@@ -227,8 +227,9 @@ synchronization plan through the same operations as `vivac agents sync`. It is
 also where the Artifacts page connects retained deliveries to their producer
 and decisions referencing exact revisions. Checks, capture and restore use
 the artifact engine; downloads verify the selected revision before sending it
-as an attachment. See [Artifact custody](docs/ARTIFACTS.md). This is where you
-see the state of each item for yourself, and where you catch what
+as an attachment. HTML revisions can also open in a restricted browser preview
+separate from the Vivac session. See [Artifact custody](docs/ARTIFACTS.md). This
+is where you see the state of each item for yourself, and where you catch what
 the agent let pass.
 
 <picture>

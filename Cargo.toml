@@ -24,6 +24,9 @@ getrandom = "0.2"
 # vetoed it: the three defenses in `WEB.md` §4.1 are header parsing, and
 # that is not code to write twice.
 tiny_http = "0.12"
+# The isolated HTML preview bounds socket lifetimes and connections itself.
+# Use a maintained HTTP parser rather than duplicating header parsing.
+httparse = "1.10"
 
 # `f577`: search folds diacritics, so `dueno` finds `dueño`. Folding needs
 # canonical decomposition, which std does not have, and hand-writing

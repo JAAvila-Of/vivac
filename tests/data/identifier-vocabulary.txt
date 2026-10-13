@@ -19,6 +19,8 @@ accepts
 access
 accessible
 accessor
+acq
+acquire
 across
 action
 active
@@ -32,7 +34,9 @@ added
 additional
 additions
 addr
+address
 adds
+admission
 admit
 admits
 admitted
@@ -162,6 +166,7 @@ atomic
 atomically
 attached
 attempt
+attempting
 attempts
 attr
 attribute
@@ -347,6 +352,7 @@ change
 changed
 changes
 changing
+channel
 char
 character
 characters
@@ -403,6 +409,7 @@ cloned
 cloning
 close
 closed
+closer
 closes
 closing
 cls
@@ -471,6 +478,7 @@ conflict
 conflicts
 connect
 connection
+connections
 connector
 consecutive
 console
@@ -510,6 +518,7 @@ core
 corner
 correctly
 corrupt
+corrupted
 corruption
 cors
 could
@@ -777,6 +786,7 @@ enum
 enumerate
 env
 envelope
+eof
 eol
 epoch
 eprintln
@@ -832,6 +842,8 @@ expand
 expect
 expected
 expecting
+expires
+expiry
 explains
 explanation
 explicit
@@ -1077,6 +1089,7 @@ honor
 hook
 hooks
 host
+hosts
 hour
 hours
 how
@@ -1087,6 +1100,7 @@ hrefs
 hs
 html
 http
+httparse
 hub
 huge
 human
@@ -1171,6 +1185,7 @@ int
 intact
 integer
 intent
+interactive
 interleaved
 intern
 interrupted
@@ -1269,6 +1284,7 @@ lexically
 lflag
 li
 libc
+lifetime
 lifts
 light
 like
@@ -1418,6 +1434,7 @@ moved
 moves
 moving
 mp
+mpsc
 ms
 msg
 mtime
@@ -1461,6 +1478,7 @@ node
 nodes
 nofollow
 non
+nonblocking
 noncanonical
 none
 nonempty
@@ -1551,6 +1569,7 @@ orig
 origin
 original
 originals
+origins
 orphan
 orphaned
 orphans
@@ -1671,6 +1690,7 @@ pin
 pinned
 pipe
 piped
+pipelined
 pixel
 place
 placed
@@ -1824,6 +1844,7 @@ reading
 readme
 readonly
 reads
+ready
 real
 realloc
 reason
@@ -1834,6 +1855,9 @@ rebuild
 rebuilt
 receipt
 receipts
+receive
+received
+receiver
 reception
 recognise
 recognised
@@ -2013,6 +2037,8 @@ revision
 revisions
 revived
 revoked
+rewind
+rewinds
 rewrite
 rewritten
 rfc3339
@@ -2042,6 +2068,7 @@ rule
 ruler
 rules
 run
+runner
 running
 runs
 runtime
@@ -2103,15 +2130,20 @@ select
 selected
 selection
 selector
+selects
 self
+send
+sender
 sense
 sensitive
+sensitivity
 sentence
 sentences
 sentinel
 sentinels
 sep
 separate
+separates
 separator
 separators
 seq
@@ -2155,6 +2187,7 @@ show
 shown
 shows
 shut
+shutdown
 sibling
 siblings
 sid
@@ -2190,6 +2223,7 @@ sleep
 slice
 slot
 slots
+slow
 slug
 slugs
 small
@@ -2304,6 +2338,7 @@ successful
 successor
 such
 suffix
+suffixes
 sum
 summarize
 summary
@@ -2595,6 +2630,7 @@ versions
 very
 via
 view
+views
 virtual
 visible
 visit
@@ -2672,6 +2708,7 @@ word
 words
 work
 worked
+worker
 workflow
 working
 works
@@ -2682,6 +2719,7 @@ world
 would
 wrap
 wrapped
+wrapper
 wrapping
 wraps
 write
