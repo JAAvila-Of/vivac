@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.6](https://github.com/JAAvila-Of/vivac/compare/v0.19.5...v0.19.6) - 2026-10-13
+
+### Added
+
+- *(artifacts)* guide new deliveries into custody by default ([#282](https://github.com/JAAvila-Of/vivac/pull/282))
+
+### Fixed
+
+- *(web)* clarify artifact context and deep map navigation ([#281](https://github.com/JAAvila-Of/vivac/pull/281))
+- *(setup)* explain existing artifact incorporation
+
 ## [0.19.5](https://github.com/JAAvila-Of/vivac/compare/v0.19.4...v0.19.5) - 2026-10-12
 
 ### Added

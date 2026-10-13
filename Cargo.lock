@@ -490,7 +490,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vivac"
-version = "0.19.5"
+version = "0.19.6"
 dependencies = [
  "cap-fs-ext",
  "cap-std",
