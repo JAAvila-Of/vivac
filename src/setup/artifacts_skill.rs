@@ -13,3 +13,11 @@ static ARTIFACTS: Definition = Definition {
 pub(super) fn read(here: &Path, label: &'static str) -> Skill {
     Skill::read_with(here, label, &ARTIFACTS)
 }
+
+pub(super) fn advice(harness: super::Harness) -> String {
+    let name = match harness {
+        super::Harness::ClaudeCode => "Claude Code",
+        super::Harness::Codex => "Codex",
+    };
+    format!("\nExisting artifacts: ask {name}:\n\n  Use the vivac-artifacts skill to bring selected existing artifacts into vivac.\n")
+}

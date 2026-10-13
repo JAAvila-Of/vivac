@@ -935,6 +935,10 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
                 "Nothing to write: this project is already set up."
             )
         );
+        print!(
+            "{}",
+            super::artifacts_skill::advice(super::Harness::ClaudeCode)
+        );
         return Ok(0);
     }
 
@@ -1065,6 +1069,10 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     // `f790`: the migrate advice moved off `init` and onto the first
     // successful `setup` of a lane that has not brought anything in yet.
     print!("{}", migrate_advice(roots));
+    print!(
+        "{}",
+        super::artifacts_skill::advice(super::Harness::ClaudeCode)
+    );
     Ok(0)
 }
 
