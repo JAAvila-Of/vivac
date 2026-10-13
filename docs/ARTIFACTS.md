@@ -186,11 +186,22 @@ their filenames does not make them eligible for custody. Retaining a supported
 code file does not prove that an entire application can be recovered or run.
 Vivac does not execute deliveries or install their runtime dependencies.
 
-## Incorporate existing deliveries with a skill
+## Deliver new work and incorporate existing artifacts
 
-`vivac setup claude-code` and `vivac setup codex` install the optional
-`vivac-artifacts` workflow in their native project skill directories. Setup
-installs instructions; it does not search for or capture existing deliveries.
+`vivac setup claude-code` and `vivac setup codex` install the
+`vivac-artifacts` workflow in their native project skill directories. The session
+orientation asks the agent to use it by default when creating or modifying an
+artifact as a task delivery, unless the person asks otherwise. The agent creates
+the project file with its authoring tools, captures it with its actual producer
+node and returns the exact retained revision. Later changes to a known artifact
+become new revisions of the same identity. Temporary drafts and ordinary source
+edits are outside this default.
+
+This is agent guidance, not automatic filesystem capture. Hooks do not inspect
+or retain delivery bytes. Unsupported formats and capture refusals must be
+reported; custody does not imply human approval. Setup installs instructions;
+it does not search for or capture existing deliveries.
+
 Ask your harness to use the skill with selected paths, for example:
 
 > Use vivac-artifacts to review designs/checkout.html and retain it if the

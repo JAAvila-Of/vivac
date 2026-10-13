@@ -160,6 +160,28 @@ fn acceptance_matrix(harness: &str, nested: bool) {
         configured_opening(&sandbox, &cwd, harness);
     }
 
+    let baseline = run(
+        &sandbox,
+        &cwd,
+        &["session", "start", "--hook"],
+        Some(&json!({})),
+    );
+    let baseline = String::from_utf8(baseline.stdout).unwrap();
+    let deliveries_start = baseline
+        .find(" ARTIFACT DELIVERIES\n")
+        .expect("artifact delivery guidance missing from the plain hook");
+    let custody_start = baseline
+        .find(" AGENT CUSTODY\n")
+        .expect("agent custody guidance missing from the plain hook");
+    assert!(deliveries_start < custody_start, "{baseline}");
+    let deliveries = &baseline[deliveries_start..custody_start];
+    assert!(deliveries.contains("vivac-artifacts"), "{deliveries}");
+    assert!(
+        deliveries.contains("Custody is not human approval."),
+        "{deliveries}"
+    );
+    let initial_openings = opening_events(&sandbox).len();
+
     let mut sentinels = Vec::new();
     for source in OPENING_SOURCES {
         let pillar_title = format!(
@@ -222,11 +244,20 @@ fn acceptance_matrix(harness: &str, nested: bool) {
             "PILLARS",
             "INVARIANTS",
             "Before deciding or reviewing, run vivac rules for full bodies and rules.",
+            "ARTIFACT DELIVERIES",
             "AGENT CUSTODY",
             "WRITE AT THESE SEAMS",
         ] {
             assert!(context.contains(required), "missing {required}: {context}");
         }
+        let deliveries_start = context.find(" ARTIFACT DELIVERIES\n").unwrap();
+        let custody_start = context.find(" AGENT CUSTODY\n").unwrap();
+        assert!(deliveries_start < custody_start, "{context}");
+        assert_eq!(
+            &context[deliveries_start..custody_start],
+            deliveries,
+            "{harness} {source} did not transport the complete delivery guidance"
+        );
         let rules_output = run(&sandbox, &cwd, &["rules", "--json"], None);
         let rules: Value = serde_json::from_slice(&rules_output.stdout).unwrap();
         for (pillar_title, constraint_title, pillar_body, constraint_body) in &sentinels {
@@ -252,7 +283,11 @@ fn acceptance_matrix(harness: &str, nested: bool) {
         }
         assert!(!context.contains("Alternate tree mandate"), "{context}");
         let openings = opening_events(&sandbox);
-        assert_eq!(openings.len(), sentinels.len(), "{openings:?}");
+        assert_eq!(
+            openings.len(),
+            initial_openings + sentinels.len(),
+            "{openings:?}"
+        );
         let last = &openings.last().unwrap()["payload"];
         assert_eq!(last["source"], source);
         assert_eq!(last["session"], session);

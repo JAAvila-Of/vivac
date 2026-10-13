@@ -1779,3 +1779,64 @@ fn agent_custody_is_absent_from_a_persons_session_start() {
     assert!(!out.contains("AGENT CUSTODY"), "{out}");
     assert_eq!(c.log(), before);
 }
+
+#[test]
+fn artifact_delivery_guidance_survives_a_tiny_budget_without_capturing_files() {
+    let c = Sandbox::new_seeded("artifact-delivery-hook");
+    let candidates = c.0.join("deliveries");
+    std::fs::create_dir_all(&candidates).unwrap();
+    std::fs::write(candidates.join("report.md"), "Completed task report.\n").unwrap();
+    std::fs::write(candidates.join("draft.txt"), "Temporary draft.\n").unwrap();
+    let candidates_before = directory_snapshot(&candidates);
+    let before = c.log();
+    let mut full_block: Option<String> = None;
+    for args in [
+        vec!["session", "start", "--hook"],
+        vec!["session", "start", "--hook", "--budget", "1"],
+    ] {
+        let (out, code) = c.run_stdin(&args, "{}");
+        assert_eq!(code, 0, "{out}");
+        let start = out
+            .find(" ARTIFACT DELIVERIES\n")
+            .expect("artifact delivery guidance missing");
+        let end = out
+            .find(" AGENT CUSTODY\n")
+            .expect("agent custody guidance missing");
+        assert!(start < end, "{out}");
+        let block = &out[start..end];
+        assert!(block.contains("vivac-artifacts by default"), "{block}");
+        assert!(block.contains("producing node"), "{block}");
+        assert!(block.contains("revision reference"), "{block}");
+        assert!(block.contains("Custody is not human approval."), "{block}");
+        if let Some(full_block) = &full_block {
+            assert_eq!(
+                block, full_block,
+                "the token budget truncated delivery guidance"
+            );
+        } else {
+            full_block = Some(block.to_string());
+        }
+        assert_eq!(directory_snapshot(&candidates), candidates_before);
+        assert!(!c.0.join(".vivac-artifacts").exists());
+        let after = c.log();
+        assert!(after.starts_with(&before));
+        for event in after[before.len()..].lines() {
+            let event: serde_json::Value = serde_json::from_str(event).unwrap();
+            assert_eq!(event["payload"]["type"], "session.started", "{event}");
+        }
+        assert!(!after.contains("artifact.captured"), "{after}");
+    }
+}
+
+#[test]
+fn artifact_delivery_guidance_is_absent_from_person_facing_reads() {
+    let c = Sandbox::new_seeded("artifact-delivery-no-hook");
+    let before = c.log();
+    for args in [vec!["session", "start"], vec!["brief"]] {
+        let out = c.ok(&args);
+        assert!(!out.contains("ARTIFACT DELIVERIES"), "{out}");
+        assert!(!out.contains("vivac-artifacts"), "{out}");
+        assert_eq!(c.log(), before);
+    }
+    assert!(!c.0.join(".vivac-artifacts").exists());
+}

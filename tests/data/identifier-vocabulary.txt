@@ -317,6 +317,7 @@ capped
 caps
 capture
 captured
+capturing
 card
 cargo
 carried
@@ -849,6 +850,7 @@ extras
 eye
 f32
 f64
+facing
 facts
 fail
 failed
@@ -1008,6 +1010,7 @@ guards
 guess
 guessed
 guessing
+guidance
 gutter
 had
 half

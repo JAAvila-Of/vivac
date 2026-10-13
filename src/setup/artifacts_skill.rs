@@ -7,7 +7,7 @@ pub(super) const CODEX_LABEL: &str = ".agents/skills/vivac-artifacts/SKILL.md";
 static ARTIFACTS: Definition = Definition {
     name: "vivac-artifacts",
     content: include_str!("artifacts-skill.md"),
-    create_description: "optional guidance for selected artifact deliveries",
+    create_description: "guidance for new and selected existing artifact deliveries",
 };
 
 pub(super) fn read(here: &Path, label: &'static str) -> Skill {
