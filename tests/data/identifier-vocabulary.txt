@@ -2441,6 +2441,7 @@ sync
 synchronize
 synchronous
 sys
+syscall
 system
 t2
 table

@@ -188,7 +188,8 @@ fn publish_exclusive(
     // and the nul-terminated names remain alive throughout the native call.
     #[cfg(target_os = "linux")]
     let result = unsafe {
-        libc::renameat2(
+        libc::syscall(
+            libc::SYS_renameat2,
             parent.as_raw_fd(),
             source.as_ptr(),
             destination.as_raw_fd(),
