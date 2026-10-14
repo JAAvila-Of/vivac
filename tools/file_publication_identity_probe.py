@@ -32,6 +32,7 @@ REQUIRED_TESTS = (
     "normal_publish_old_sha",
     "source_name_swap_uses_held_fd",
     "occupied_file_empty_dir_nonempty_dir_symlink_preserved",
+    "dangling_symlink_referent_not_created",
     "moved_parent_fd_receives_publish",
     "platform_source_identity_observation",
 )
@@ -168,7 +169,22 @@ def _require_proc_fd_identity(source_fd: int) -> None:
         raise directory_probe.ProbeUnavailable("/proc/self/fd did not resolve to the held regular file")
 
 
-def _occupied_case(source_fd: int, parent_fd: int, leaf: str, kind: str, api: str) -> bool:
+def _entry_snapshot(parent_fd: int, leaf: str) -> tuple[Any, ...] | None:
+    try:
+        info = directory_probe._lstat_at(parent_fd, leaf)
+    except FileNotFoundError:
+        return None
+    kind = stat.S_IFMT(info.st_mode)
+    detail: Any = None
+    if stat.S_ISREG(info.st_mode):
+        detail = hashlib.sha256(directory_probe._read_file_at(parent_fd, leaf)).hexdigest()
+    elif stat.S_ISLNK(info.st_mode):
+        detail = os.readlink(leaf, dir_fd=parent_fd)
+    return (info.st_dev, info.st_ino, kind, detail)
+
+
+def _occupied_case(source_fd: int, parent_fd: int, leaf: str, kind: str, api: str) -> dict[str, Any]:
+    target_leaf: str | None = None
     if kind in {"empty-directory", "nonempty-directory"}:
         os.mkdir(leaf, 0o700, dir_fd=parent_fd)
         if kind == "nonempty-directory":
@@ -179,34 +195,57 @@ def _occupied_case(source_fd: int, parent_fd: int, leaf: str, kind: str, api: st
                 os.close(child_fd)
     elif kind == "file":
         directory_probe._write_file_at(parent_fd, leaf, b"occupied-file")
-    elif kind == "symlink":
-        os.symlink("held-source", leaf, dir_fd=parent_fd)
+    elif kind in {"symlink", "dangling-symlink"}:
+        target_leaf = "held-source" if kind == "symlink" else "dangling-target"
+        if kind == "symlink":
+            directory_probe._write_file_at(parent_fd, target_leaf, b"occupied-symlink-referent")
+        os.symlink(target_leaf, leaf, dir_fd=parent_fd)
     before = directory_probe._lstat_at(parent_fd, leaf)
     before_identity = (before.st_dev, before.st_ino, before.st_mode)
+    before_snapshot = _entry_snapshot(parent_fd, leaf)
+    target_before = _entry_snapshot(parent_fd, target_leaf) if target_leaf is not None else None
+    api_returned_success = False
+    api_error: int | None = None
     try:
         _publish(source_fd, parent_fd, leaf, api)
-        return False
-    except FileExistsError:
-        pass
+        api_returned_success = True
+    except OSError as exc:
+        api_error = exc.errno
     after = directory_probe._lstat_at(parent_fd, leaf)
-    unchanged = (after.st_dev, after.st_ino, after.st_mode) == before_identity
+    after_snapshot = _entry_snapshot(parent_fd, leaf)
+    destination_unchanged = (
+        (after.st_dev, after.st_ino, after.st_mode) == before_identity
+        and after_snapshot == before_snapshot
+    )
+    target_after = _entry_snapshot(parent_fd, target_leaf) if target_leaf is not None else None
+    target_unchanged = target_after == target_before if target_leaf is not None else None
     if kind == "file":
-        unchanged = unchanged and directory_probe._read_file_at(parent_fd, leaf) == b"occupied-file"
+        destination_unchanged = destination_unchanged and directory_probe._read_file_at(parent_fd, leaf) == b"occupied-file"
     elif kind == "empty-directory":
         child_fd = directory_probe._open_child_directory(parent_fd, leaf)
         try:
-            unchanged = unchanged and os.listdir(child_fd) == []
+            destination_unchanged = destination_unchanged and os.listdir(child_fd) == []
         finally:
             os.close(child_fd)
     elif kind == "nonempty-directory":
         child_fd = directory_probe._open_child_directory(parent_fd, leaf)
         try:
-            unchanged = unchanged and directory_probe._read_file_at(child_fd, "sentinel") == b"occupied-directory"
+            destination_unchanged = destination_unchanged and directory_probe._read_file_at(child_fd, "sentinel") == b"occupied-directory"
         finally:
             os.close(child_fd)
-    else:
-        unchanged = unchanged and stat.S_ISLNK(after.st_mode) and os.readlink(leaf, dir_fd=parent_fd) == "held-source"
-    return unchanged
+    elif target_leaf is not None:
+        destination_unchanged = destination_unchanged and stat.S_ISLNK(after.st_mode) and os.readlink(leaf, dir_fd=parent_fd) == target_leaf
+    passed = not api_returned_success and api_error == errno.EEXIST and destination_unchanged and target_unchanged is not False
+    return {
+        "status": "passed" if passed else "failed",
+        "api_returned_success": api_returned_success,
+        "errno": api_error,
+        "errno_name": errno.errorcode.get(api_error) if api_error is not None else None,
+        "destination_unchanged": destination_unchanged,
+        "target_existed_before": target_before is not None if target_leaf is not None else None,
+        "target_unchanged": target_unchanged,
+        "target_created": target_before is None and target_after is not None if target_leaf is not None else None,
+    }
 
 
 def _run_suite(workspace: Path, root_fd: int, run_fd: int) -> dict[str, Any]:
@@ -299,9 +338,11 @@ def _run_suite(workspace: Path, root_fd: int, run_fd: int) -> dict[str, Any]:
                 )
             }
             payload["tests"]["occupied_file_empty_dir_nonempty_dir_symlink_preserved"] = {
-                "status": "passed" if all(occupied.values()) else "failed",
+                "status": "passed" if all(case["status"] == "passed" for case in occupied.values()) else "failed",
                 "cases": occupied,
             }
+            dangling = _occupied_case(source_fd, occupied_fd, "dangling-link", "dangling-symlink", api)
+            payload["tests"]["dangling_symlink_referent_not_created"] = dangling
         finally:
             os.close(occupied_fd)
 
