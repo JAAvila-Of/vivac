@@ -22,6 +22,7 @@ FIXTURE_ROOT_NAME = "file-publication-probe"
 RUN_PREFIX = "run-"
 LINUX_AT_FDCWD = -100
 LINUX_AT_SYMLINK_FOLLOW = 0x400
+MACOS_CLONE_NOFOLLOW = 0x0001
 MACOS_CLONE_NOOWNERCOPY = 0x0002
 EXIT_OK = 0
 EXIT_FAILED = 1
@@ -119,7 +120,29 @@ def _macos_fclonefileat() -> tuple[Any, int]:
         raise directory_probe.ProbeUnavailable("macOS fclonefileat symbol unavailable") from exc
     function.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint32]
     function.restype = ctypes.c_int
-    return function, MACOS_CLONE_NOOWNERCOPY
+    return function, MACOS_CLONE_NOOWNERCOPY | MACOS_CLONE_NOFOLLOW
+
+
+def _api_observation() -> dict[str, Any]:
+    if sys.platform.startswith("linux"):
+        return {
+            "api_mode": "linux-linkat-procfd",
+            "api_options": {
+                "source_locator": "proc-self-fd",
+                "flags": LINUX_AT_SYMLINK_FOLLOW,
+                "flag_names": ["AT_SYMLINK_FOLLOW"],
+            },
+        }
+    if sys.platform == "darwin":
+        return {
+            "api_mode": "macos-fclonefileat",
+            "api_options": {
+                "source_locator": "held-fd",
+                "flags": MACOS_CLONE_NOOWNERCOPY | MACOS_CLONE_NOFOLLOW,
+                "flag_names": ["CLONE_NOOWNERCOPY", "CLONE_NOFOLLOW"],
+            },
+        }
+    return {"api_mode": None, "api_options": None}
 
 
 def _check_native_error(error: int) -> None:
@@ -249,12 +272,13 @@ def _occupied_case(source_fd: int, parent_fd: int, leaf: str, kind: str, api: st
 
 
 def _run_suite(workspace: Path, root_fd: int, run_fd: int) -> dict[str, Any]:
-    api = "linux-linkat-procfd" if sys.platform.startswith("linux") else "macos-fclonefileat"
+    observation = _api_observation()
+    api = observation["api_mode"]
     payload: dict[str, Any] = {
         "schema": 1,
         "platform": sys.platform,
         "os_release": platform.release(),
-        "api_mode": api,
+        **observation,
         "filesystem": directory_probe._linux_filesystem_name(workspace),
         "tests": {name: {"status": "not_run"} for name in REQUIRED_TESTS},
         "failed": [],
@@ -421,7 +445,7 @@ def main() -> int:
         "schema": 1,
         "platform": sys.platform,
         "os_release": platform.release(),
-        "api_mode": None,
+        **_api_observation(),
         "filesystem": directory_probe._linux_filesystem_name(args.workspace),
         "tests": {name: {"status": "not_run"} for name in REQUIRED_TESTS},
         "failed": [],
@@ -457,12 +481,12 @@ def main() -> int:
         result = common
         result["unavailable"] = [type(exc).__name__]
         result["incomplete"] = [f"required test not run: {name}" for name in REQUIRED_TESTS]
-        result["api_mode"] = "linux-linkat-procfd" if sys.platform.startswith("linux") else "macos-fclonefileat"
+        result.update(_api_observation())
         exit_code = EXIT_INCOMPLETE
     except BaseException as exc:
         result = common
         result["error"] = directory_probe._error_payload(exc)["error"]
-        result["api_mode"] = "linux-linkat-procfd" if sys.platform.startswith("linux") else "macos-fclonefileat"
+        result.update(_api_observation())
         result["incomplete"] = [f"required test status unknown: {name}" for name in REQUIRED_TESTS]
         exit_code = EXIT_ERROR
     finally:

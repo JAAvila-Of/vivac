@@ -38,11 +38,17 @@ regular file. This is a complete experimental fixture, not an adopted bundle
 format or a supported artifact delivery type.
 
 Linux uses `linkat` with a generated `/proc/self/fd` alias and
-`AT_SYMLINK_FOLLOW`; macOS uses `fclonefileat` with the source descriptor. The
+`AT_SYMLINK_FOLLOW`; macOS uses `fclonefileat` with the source descriptor and
+`CLONE_NOFOLLOW | CLONE_NOOWNERCOPY`. The
 probe never accepts a user-supplied proc alias or falls back to the source's
 mutable filename. Required APIs, proc access and filesystem support must be
 available. The macOS operation creates a separate clone; the Linux operation
 creates a link to the held inode.
+
+The macOS experiment explicitly prevents following a destination symlink.
+Both a link to an existing file and a dangling link must be rejected with
+`EEXIST`; neither the link nor its referent may change. The report records the
+options passed to the API. There is no retry without the no-follow option.
 
 The observations compare original bytes with the published file after replacing
 the source name, reject occupied destinations and check a destination parent
@@ -86,6 +92,8 @@ Windows behavior. A report must be associated with the exact tested commit.
 - [Linux hard links and the directory restriction](https://man7.org/linux/man-pages/man2/linkat.2.html).
 - [Linux descriptor aliases and access requirements](https://man7.org/linux/man-pages/man5/proc_pid_fd.5.html).
 - [Apple clonefile and fclonefileat](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/man/man2/clonefile.2).
+- [Apple clone options](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/clonefile.h).
+- [Apple destination lookup implementation](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/vfs/vfs_syscalls.c).
 - [Apple exclusive-renaming volume capability](https://developer.apple.com/documentation/foundation/urlresourcevalues/volumesupportsexclusiverenaming).
 - [Apple syscall declarations](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/syscalls.master).
 - [Python descriptor-based recursive removal](https://docs.python.org/3.12/library/shutil.html#shutil.rmtree).
