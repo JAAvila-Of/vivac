@@ -9,6 +9,46 @@ use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 const BIN: &str = env!("CARGO_BIN_EXE_vivac");
 const OPERATION: &str = "01cccccccccccccccccccccccc";
 
+#[test]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+fn mcp_selected_bundle_matches_cli_and_retry_preserves_original_receipt() {
+    let sandbox = seeded("artifact-mcp-bundle");
+    fs::create_dir_all(sandbox.0.join("app/assets")).unwrap();
+    for (path, bytes) in [
+        ("app/index.html", "<html>Selected static delivery</html>"),
+        ("app/assets/style.css", "body { color: navy; }"),
+        (
+            "app/assets/main.js",
+            "document.title = 'Selected delivery';",
+        ),
+    ] {
+        fs::write(sandbox.0.join(path), bytes).unwrap();
+    }
+    fs::write(sandbox.0.join("selection.json"), serde_json::to_vec(&json!({"root":"app","entrypoint":"index.html","members":["index.html","assets/style.css","assets/main.js"],"requirements":[]})).unwrap()).unwrap();
+    let mut server = Server::start(&sandbox);
+    let first = server.artifacts(json!({"operation":"capture","bundle":"selection.json","from":"g1","operation_id":OPERATION}));
+    assert_eq!(first["exit_code"], 0);
+    assert_eq!(first["result"]["delivery"]["delivery_type"], "bundle");
+    assert_eq!(first["result"]["delivery"]["member_count"], 3);
+    fs::remove_file(sandbox.0.join("selection.json")).unwrap();
+    fs::remove_dir_all(sandbox.0.join("app")).unwrap();
+    let retry = server.artifacts(json!({"operation":"capture","bundle":"selection.json","from":"g1","operation_id":OPERATION}));
+    assert_eq!(
+        retry["result"]["delivery"]["revision"],
+        first["result"]["delivery"]["revision"]
+    );
+    assert_eq!(retry["result"]["already_recorded"], true);
+    let artifact = first["result"]["delivery"]["artifact"].as_str().unwrap();
+    let revision = first["result"]["delivery"]["revision"].as_str().unwrap();
+    server.artifacts(
+        json!({"operation":"restore","artifact":artifact,"revision":revision,"to":"restored"}),
+    );
+    assert!(sandbox.0.join("restored/assets/style.css").is_file());
+    assert!(sandbox.0.join("restored/.vivac-delivery.json").is_file());
+    let refused = server.ask("tools/call", json!({"name":"vivac_artifacts","arguments":{"operation":"capture","bundle":"selection.json","path":"app/index.html","from":"g1"}}));
+    assert_eq!(refused["result"]["isError"], true);
+}
+
 struct Server {
     child: Child,
     input: ChildStdin,

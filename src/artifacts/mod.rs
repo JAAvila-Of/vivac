@@ -1,6 +1,8 @@
 //! Selected local deliveries retain bytes outside the provenance tree.
+pub(crate) mod bundle;
 mod files;
 mod guard;
+mod native;
 pub(crate) mod preview;
 pub(crate) mod projection;
 
@@ -19,18 +21,25 @@ const MAX_FILE_BYTES: u64 = 10 * 1024 * 1024;
 const MAX_PAGE_SIZE: usize = 100;
 
 fn capabilities() -> Value {
+    let bundles = bundle::SUPPORTED;
+    let bundle_capabilities = if bundles {
+        json!({"supported":true,"formats":["html","css","js"],"max_bytes":MAX_FILE_BYTES,"max_members":64,"max_manifest_bytes":65536})
+    } else {
+        json!({"supported":false,"reason":"Complete bundle custody is not supported on this platform."})
+    };
     json!({
         "operation": "capabilities",
         "schema_version": 1,
         "scope": "engine",
         "delivery_types": {
             "file": {"supported": true, "formats": ["utf8_text"], "max_bytes": MAX_FILE_BYTES},
-            "bundle": {"supported": false, "reason": "Complete multi-file revision capture is not supported."},
+            "bundle": bundle_capabilities,
             "sqlite_snapshot": {"supported": false, "reason": "Database-specific inspection and consistent snapshot capture are not supported."}
         },
-        "limits": {"max_file_bytes": MAX_FILE_BYTES, "max_revision_bytes": MAX_FILE_BYTES, "max_files_per_revision": 1, "max_page_size": MAX_PAGE_SIZE},
+        "limits": {"max_file_bytes": MAX_FILE_BYTES, "max_revision_bytes": MAX_FILE_BYTES, "max_files_per_revision": if bundles {64} else {1}, "max_manifest_bytes": if bundles {65536} else {0}, "max_page_size": MAX_PAGE_SIZE},
         "execution": {
             "provided": true,
+            "bundle_preview": bundles,
             "scope": "retained_html_preview",
             "network_isolation": false,
             "approval_implied": false,
@@ -60,24 +69,67 @@ struct Revision<'a> {
     digest: &'a str,
     object: &'a str,
     lane: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    delivery_type: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    selection: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    entrypoint: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    member_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    manifest_bytes: Option<u64>,
 }
 
 impl<'a> Revision<'a> {
     fn from_body(lane: &'a str, body: &'a Body) -> Option<Self> {
-        let Body::ArtifactCaptured {
-            artifact,
-            revision,
-            operation,
-            producer,
-            previous,
-            source,
-            site,
-            size,
-            digest,
-            object,
-        } = body
-        else {
-            return None;
+        let (artifact, revision, operation, producer, previous, source, site, size, digest, object) =
+            match body {
+                Body::ArtifactCaptured {
+                    artifact,
+                    revision,
+                    operation,
+                    producer,
+                    previous,
+                    source,
+                    site,
+                    size,
+                    digest,
+                    object,
+                }
+                | Body::ArtifactBundleCaptured {
+                    artifact,
+                    revision,
+                    operation,
+                    producer,
+                    previous,
+                    source,
+                    site,
+                    size,
+                    digest,
+                    object,
+                    ..
+                } => (
+                    artifact, revision, operation, producer, previous, source, site, size, digest,
+                    object,
+                ),
+                _ => return None,
+            };
+        let (delivery_type, selection, entrypoint, member_count, manifest_bytes) = match body {
+            Body::ArtifactBundleCaptured {
+                selection,
+                entrypoint,
+                member_count,
+                manifest_bytes,
+                ..
+            } => (
+                Some("bundle"),
+                Some(selection.as_str()),
+                Some(entrypoint.as_str()),
+                Some(*member_count),
+                Some(*manifest_bytes),
+            ),
+            _ => (None, None, None, None, None),
         };
         Some(Self {
             artifact,
@@ -91,7 +143,16 @@ impl<'a> Revision<'a> {
             digest,
             object,
             lane,
+            delivery_type,
+            selection,
+            entrypoint,
+            member_count,
+            manifest_bytes,
         })
+    }
+
+    fn is_bundle(&self) -> bool {
+        self.delivery_type == Some("bundle")
     }
 }
 
@@ -203,13 +264,49 @@ fn metadata(revision: &Revision) -> Result<(), Failure> {
             .digest
             .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-        || revision.object != format!("objects/{}.blob", revision.revision)
+        || revision.object
+            != format!(
+                "objects/{}.{}",
+                revision.revision,
+                if revision.is_bundle() {
+                    "bundle"
+                } else {
+                    "blob"
+                }
+            )
         || revision.source.is_empty()
         || revision.source.len() > 4096
     {
         return Err(Failure::Model("Invalid artifact custody metadata.".into()));
     }
     guard_source_reference(revision.source)?;
+    if revision.is_bundle() {
+        let selection = revision
+            .selection
+            .ok_or_else(|| Failure::Model("Missing bundle selection reference.".into()))?;
+        guard_source_reference(selection)?;
+        files::source_path(selection)?;
+        if revision.source != "." {
+            files::source_path(revision.source)?;
+        }
+        let entrypoint = revision
+            .entrypoint
+            .ok_or_else(|| Failure::Model("Missing bundle entrypoint.".into()))?;
+        guard_source_reference(entrypoint)?;
+        bundle::validate_path(entrypoint)?;
+        if !entrypoint
+            .rsplit_once('.')
+            .is_some_and(|(_, extension)| extension.eq_ignore_ascii_case("html"))
+            || !revision
+                .member_count
+                .is_some_and(|count| (1..=64).contains(&count))
+            || !revision
+                .manifest_bytes
+                .is_some_and(|bytes| bytes > 0 && bytes <= 65536 && bytes <= revision.size)
+        {
+            return Err(Failure::Model("Invalid bundle custody metadata.".into()));
+        }
+    }
     if let Some(found) = crate::redact::check_field("artifact reference", revision.lane) {
         return Err(Failure::Redaction(Box::new(found)));
     }
@@ -270,6 +367,10 @@ fn diagnostic_ledger(tree: &Tree) -> Ledger<'_> {
         }
         if tree.node(entry.producer).is_none()
             || latest.get(entry.artifact).copied() != entry.previous
+            || entry
+                .previous
+                .and_then(|id| ledger.get(id))
+                .is_some_and(|previous| previous.is_bundle() != entry.is_bundle())
         {
             ledger.unresolved_receipts += 1;
         }
@@ -306,7 +407,7 @@ fn validate(args: &Args) -> Result<&str, Failure> {
         "capabilities" => &["json"],
         "list" => &["json", "all", "from", "limit", "offset"],
         "show" => &["json", "revision", "limit", "offset"],
-        "capture" => &["json", "from", "artifact", "previous", "operation"],
+        "capture" => &["json", "from", "artifact", "previous", "operation", "bundle"],
         "check" if args.has("store") => &["json", "revision", "store", "limit", "offset"],
         "check" => &["json", "revision", "store"],
         "restore" => &["json", "revision", "to", "orphan"],
@@ -339,6 +440,16 @@ fn validate(args: &Args) -> Result<&str, Failure> {
         if !valid_id(artifact) || !valid_id(revision) {
             return Err(Failure::usage("Invalid artifact or revision identifier."));
         }
+    }
+    if operation == "capture" && (args.has("bundle") == args.positional(1).is_some()) {
+        return Err(Failure::usage(
+            "Capture requires exactly one source path or --bundle selector.",
+        ));
+    }
+    if operation == "capture" && args.has("bundle") && !bundle::SUPPORTED {
+        return Err(Failure::usage(
+            "Complete bundle custody is not supported on this platform.",
+        ));
     }
     if operation == "check"
         && args.has("store")
@@ -515,9 +626,15 @@ enum CapturePlan {
 }
 
 fn prepare_capture(ctx: &Ctx, args: &Args) -> Result<CapturePlan, Failure> {
+    let is_bundle = args.has("bundle");
     let source = args
-        .positional(1)
+        .opt("bundle")
+        .or_else(|| args.positional(1))
         .ok_or_else(|| Failure::usage("Capture requires a project-relative source path."))?;
+    if is_bundle {
+        guard_source_reference(source)?;
+        files::source_path(source)?;
+    }
     let producer = ctx
         .tree
         .resolve(required(args, "from")?)
@@ -535,7 +652,12 @@ fn prepare_capture(ctx: &Ctx, args: &Args) -> Result<CapturePlan, Failure> {
         ));
     }
     if let Some(recorded) = ledger.operation(operation.as_str()) {
-        if recorded.source != source
+        if recorded.is_bundle() != is_bundle
+            || (if is_bundle {
+                recorded.selection
+            } else {
+                Some(recorded.source)
+            }) != Some(source)
             || recorded.producer != producer
             || args
                 .opt("artifact")
@@ -557,6 +679,14 @@ fn prepare_capture(ctx: &Ctx, args: &Args) -> Result<CapturePlan, Failure> {
     if !valid_id(&artifact) {
         return Err(Failure::usage("Artifact identity must be an opaque ULID."));
     }
+    if ledger
+        .latest(artifact.as_str())
+        .is_some_and(|revision| revision.is_bundle() != is_bundle)
+    {
+        return Err(Failure::Model(
+            "An artifact identity cannot change its delivery type.".into(),
+        ));
+    }
     let previous = ledger
         .latest(artifact.as_str())
         .map(|r| r.revision.to_owned());
@@ -570,6 +700,35 @@ fn prepare_capture(ctx: &Ctx, args: &Args) -> Result<CapturePlan, Failure> {
     }
     drop(ledger);
     let revision = crate::id::ulid();
+    if is_bundle {
+        if let Some(found) = crate::redact::check_field(
+            "artifact reference",
+            ctx.lane.as_deref().unwrap_or_default(),
+        ) {
+            return Err(Failure::Redaction(Box::new(found)));
+        }
+        let selection = bundle::load_selection(&ctx.lane_dir, source)?;
+        guard_source_reference(&selection.root)?;
+        bundle::validate_selection(&selection)?;
+        let retained = bundle::capture(&ctx.lane_dir, &selection, &revision)?;
+        let body = Body::ArtifactBundleCaptured {
+            artifact,
+            revision,
+            operation,
+            producer,
+            previous,
+            source: selection.root,
+            selection: source.into(),
+            site: retained.retained.site,
+            size: retained.retained.size,
+            digest: retained.retained.digest,
+            object: retained.retained.object,
+            entrypoint: retained.entrypoint,
+            member_count: retained.members,
+            manifest_bytes: retained.manifest_bytes,
+        };
+        return Ok(CapturePlan::Prepared(Box::new(body)));
+    }
     guard_source_reference(source)?;
     let retained = files::capture(&ctx.lane_dir, source, &revision)?;
     let body = Body::ArtifactCaptured {
@@ -612,6 +771,9 @@ fn commit_capture_with(
     let lane = ctx.lane.clone().unwrap_or_default();
     let entry = Revision::from_body(&lane, &body).expect("capture constructs custody metadata");
     if now.latest(entry.artifact).map(|r| r.revision) != entry.previous
+        || now
+            .latest(entry.artifact)
+            .is_some_and(|revision| revision.is_bundle() != entry.is_bundle())
         || now.operation(entry.operation).is_some()
         || ctx.tree.node(entry.producer).is_none()
     {
@@ -636,6 +798,38 @@ fn checked(result: Result<Option<(String, u64)>, Failure>, revision: &Revision) 
         Ok(Some(_)) => json!({"status":"changed"}),
         Ok(None) => json!({"status":"missing"}),
         Err(error) => json!({"status":"read_failed","exit_code":error.code()}),
+    }
+}
+
+fn bundle_manifest(
+    root: &Path,
+    revision: &Revision,
+    full: bool,
+) -> Result<bundle::Manifest, Failure> {
+    let manifest = if full {
+        bundle::check(root, revision.object, revision.digest, revision.size)?
+    } else {
+        bundle::read_manifest(root, revision.object, revision.digest, revision.size)?
+    };
+    if revision.entrypoint != Some(manifest.entrypoint.as_str())
+        || revision.member_count != Some(manifest.members.len())
+        || revision.manifest_bytes != Some(manifest.manifest_bytes)
+    {
+        return Err(Failure::Model(
+            "Bundle manifest does not match its custody receipt.".into(),
+        ));
+    }
+    Ok(manifest)
+}
+
+fn retained_check(root: &Path, revision: &Revision) -> Value {
+    if revision.is_bundle() {
+        match bundle_manifest(root, revision, true) {
+            Ok(_) => json!({"status":"matches"}),
+            Err(error) => json!({"status":"read_failed","exit_code":error.code()}),
+        }
+    } else {
+        checked(files::inspect_retained(root, revision.object), revision)
     }
 }
 
@@ -666,10 +860,7 @@ fn check(ctx: &Ctx, ledger: &Ledger, args: &Args) -> Result<(Value, i32), Failur
         let mut recorded = Vec::new();
         let recorded_total = ledger.count();
         for (index, revision) in ledger.entries().enumerate() {
-            let retained = checked(
-                files::inspect_retained(&ctx.lane_dir, revision.object),
-                &revision,
-            );
+            let retained = retained_check(&ctx.lane_dir, &revision);
             failed |= retained["status"] != "matches";
             if (offset..page_end).contains(&index) {
                 recorded.push(json!({"artifact":revision.artifact,"revision":revision.revision,"site":revision.site,"local_site":local,"retained":retained}));
@@ -678,6 +869,7 @@ fn check(ctx: &Ctx, ledger: &Ledger, args: &Args) -> Result<(Value, i32), Failur
         let mut orphans = Vec::new();
         let mut unattributed = Vec::new();
         let mut temporary = Vec::new();
+        let mut bundle_objects = Vec::new();
         let mut orphans_total = 0usize;
         let mut unattributed_total = 0usize;
         let mut temporaries_total = 0usize;
@@ -686,20 +878,34 @@ fn check(ctx: &Ctx, ledger: &Ledger, args: &Args) -> Result<(Value, i32), Failur
         files::for_each_object(&ctx.lane_dir, |object| {
             let known = object
                 .strip_prefix("objects/")
-                .and_then(|name| name.strip_suffix(".blob"))
+                .and_then(|name| {
+                    name.strip_suffix(".blob")
+                        .or_else(|| name.strip_suffix(".bundle"))
+                })
                 .and_then(|id| ledger.get(id))
                 .is_some_and(|receipt| receipt.object == object);
             if known {
                 return Ok(());
             }
             failed = true;
-            let (entries, total) = if !object.ends_with(".blob") {
+            let (entries, total) = if !object.ends_with(".blob") && !object.ends_with(".bundle") {
                 (&mut temporary, &mut temporaries_total)
             } else if provenance_complete {
                 (&mut orphans, &mut orphans_total)
             } else {
                 (&mut unattributed, &mut unattributed_total)
             };
+            if object.ends_with(".bundle") {
+                let status = match bundle::inspect_retained(&ctx.lane_dir, &object) {
+                    Ok(Some(_)) => json!({"status":"matches"}),
+                    Ok(None) => json!({"status":"missing"}),
+                    Err(error) => json!({"status":"read_failed","exit_code":error.code()}),
+                };
+                if (offset..page_end).contains(total) {
+                    bundle_objects
+                        .push(json!({"object":object,"retained":status,"provenance":"unknown"}));
+                }
+            }
             if (offset..page_end).contains(total) {
                 entries.push(object);
             }
@@ -715,26 +921,41 @@ fn check(ctx: &Ctx, ledger: &Ledger, args: &Args) -> Result<(Value, i32), Failur
         .into_iter()
         .any(|total| total > page_end)
         .then_some(page_end);
-        return Ok((
-            json!({
-                "operation":"check", "scope":"store", "recorded":recorded,
-                "recorded_total":recorded_total, "orphans":orphans, "orphans_total":orphans_total,
-                "unattributed":unattributed, "unattributed_total":unattributed_total,
-                "temporaries":temporary, "temporaries_total":temporaries_total,
-                "next_offset":next_offset, "log_integrity":if complete {"complete"} else {"incomplete"},
-                "broken_lines":ctx.tree.broken_lines, "provenance_complete":provenance_complete,
-                "invalid_receipts":ledger.invalid_receipts, "ambiguous_receipts":ledger.ambiguous_receipts,
-                "unresolved_receipts":ledger.unresolved_receipts, "provenance_reconstructed":false,
-                "checked_at":crate::clock::now_rfc3339()
-            }),
-            i32::from(failed),
-        ));
+        let mut value = json!({
+            "operation":"check", "scope":"store", "recorded":recorded,
+            "recorded_total":recorded_total, "orphans":orphans, "orphans_total":orphans_total,
+            "unattributed":unattributed, "unattributed_total":unattributed_total,
+            "temporaries":temporary, "temporaries_total":temporaries_total,
+            "next_offset":next_offset, "log_integrity":if complete {"complete"} else {"incomplete"},
+            "broken_lines":ctx.tree.broken_lines, "provenance_complete":provenance_complete,
+            "invalid_receipts":ledger.invalid_receipts, "ambiguous_receipts":ledger.ambiguous_receipts,
+            "unresolved_receipts":ledger.unresolved_receipts, "provenance_reconstructed":false,
+            "checked_at":crate::clock::now_rfc3339()
+        });
+        if !bundle_objects.is_empty() {
+            value["bundle_objects"] = json!(bundle_objects);
+        }
+        return Ok((value, i32::from(failed)));
     }
     let revision = revision(ledger, args)?;
-    let retained = checked(
-        files::inspect_retained(&ctx.lane_dir, revision.object),
-        &revision,
-    );
+    if revision.is_bundle() {
+        let result = bundle_manifest(&ctx.lane_dir, &revision, true);
+        let retained = match &result {
+            Ok(_) => json!({"status":"matches"}),
+            Err(error) => json!({"status":"read_failed","exit_code":error.code()}),
+        };
+        let source = if files::site_id(&ctx.lane_dir)?.as_deref() != Some(revision.site) {
+            json!({"status":"foreign_site","bytes_checked":false})
+        } else if let Ok(manifest) = &result {
+            bundle::source_check(&ctx.lane_dir, revision.source, manifest)
+        } else {
+            json!({"status":"not_checked","bytes_checked":false})
+        };
+        let code = i32::from(retained["status"] != "matches" || source["status"] != "matches");
+        let value = json!({"operation":"check","artifact":revision.artifact,"revision":revision.revision,"source":source,"retained":retained,"checked_at":crate::clock::now_rfc3339(),"approval":"not_inferred"});
+        return Ok((value, code));
+    }
+    let retained = retained_check(&ctx.lane_dir, &revision);
     let source = if files::site_id(&ctx.lane_dir)?.as_deref() == Some(revision.site) {
         checked(files::inspect(&ctx.lane_dir, revision.source), &revision)
     } else {
@@ -755,29 +976,55 @@ fn restore(ctx: &Ctx, ledger: &Ledger, args: &Args) -> Result<Value, Failure> {
                 "Orphan identity must be an opaque revision ULID.",
             ));
         }
-        let object = format!("objects/{orphan}.blob");
         if ctx.tree.artifact_history.iter().any(|(_, body)| {
-            matches!(body, Body::ArtifactCaptured { revision, .. } if revision == orphan)
+            matches!(body, Body::ArtifactCaptured { revision, .. } | Body::ArtifactBundleCaptured { revision, .. } if revision == orphan)
         }) {
             return Err(Failure::usage(
                 "This object has a recorded revision; restore its artifact identity.",
             ));
         }
-        let (digest, size) = files::inspect_retained(&ctx.lane_dir, &object)?
-            .ok_or_else(|| Failure::usage("No unrecorded object has this identity."))?;
-        files::restore(&ctx.lane_dir, &object, &digest, size, to)?;
+        let object = format!("objects/{orphan}.blob");
+        let bundle_object = format!("objects/{orphan}.bundle");
+        let file = files::inspect_retained(&ctx.lane_dir, &object)?;
+        let bundle = bundle::inspect_retained(&ctx.lane_dir, &bundle_object)?;
+        match (file, bundle) {
+            (Some((digest, size)), None) => {
+                files::restore(&ctx.lane_dir, &object, &digest, size, to)?
+            }
+            (None, Some((digest, size))) => {
+                bundle::restore(&ctx.lane_dir, &bundle_object, &digest, size, to)?
+            }
+            (None, None) => return Err(Failure::usage("No unrecorded object has this identity.")),
+            (Some(_), Some(_)) => {
+                return Err(Failure::usage(
+                    "This unrecorded identity is ambiguous; inspect the store.",
+                ))
+            }
+        }
         return Ok(
             json!({"operation":"restore","orphan":orphan,"destination":to,"provenance":"unknown","event_recorded":false}),
         );
     }
     let revision = revision(ledger, args)?;
-    files::restore(
-        &ctx.lane_dir,
-        revision.object,
-        revision.digest,
-        revision.size,
-        to,
-    )?;
+    if revision.is_bundle() {
+        required(args, "revision")?;
+        bundle_manifest(&ctx.lane_dir, &revision, false)?;
+        bundle::restore(
+            &ctx.lane_dir,
+            revision.object,
+            revision.digest,
+            revision.size,
+            to,
+        )?;
+    } else {
+        files::restore(
+            &ctx.lane_dir,
+            revision.object,
+            revision.digest,
+            revision.size,
+            to,
+        )?;
+    }
     Ok(
         json!({"operation":"restore","artifact":revision.artifact,"revision":revision.revision,"destination":to,"event_recorded":false}),
     )
@@ -856,10 +1103,32 @@ fn execute_read(ctx: &Ctx, args: &Args) -> Result<(Value, i32), Failure> {
                 .map(|r| describe(&ctx.tree, &r))
                 .collect();
             let next = offset.saturating_add(entries.len());
-            Ok((
-                json!({"operation":"show","artifact":selected.artifact,"latest_revision":ledger.latest(selected.artifact).map(|revision| revision.revision),"revisions":entries,"bytes_checked":false,"total":total,"next_offset":if next<total {Some(next)} else {None}}),
-                0,
-            ))
+            let mut value = json!({"operation":"show","artifact":selected.artifact,"latest_revision":ledger.latest(selected.artifact).map(|revision| revision.revision),"revisions":entries,"bytes_checked":false,"total":total,"next_offset":if next<total {Some(next)} else {None}});
+            if selected.is_bundle() {
+                value["members_revision"] = json!(selected.revision);
+                match bundle_manifest(&ctx.lane_dir, &selected, false) {
+                    Ok(manifest) => {
+                        let members: Vec<_> =
+                            manifest.members.iter().skip(offset).take(limit).collect();
+                        let next = offset.saturating_add(members.len());
+                        value["members"] = json!(members);
+                        value["total_members"] = json!(manifest.members.len());
+                        value["members_next_offset"] =
+                            json!((next < manifest.members.len()).then_some(next));
+                        value["entrypoint"] = json!(manifest.entrypoint);
+                        value["requirements"] = json!(manifest.requirements);
+                        value["manifest_status"] =
+                            json!({"status":"readable","members_checked":false});
+                    }
+                    Err(error) => {
+                        value["members"] = json!([]);
+                        value["total_members"] = json!(selected.member_count);
+                        value["members_next_offset"] = Value::Null;
+                        value["manifest_status"] = json!({"status":"unavailable","exit_code":error.code(),"members_checked":false});
+                    }
+                }
+            }
+            Ok((value, 0))
         }
         "check" => check(ctx, &ledger, args),
         "restore" => restore(ctx, &ledger, args).map(|value| (value, 0)),
@@ -925,6 +1194,7 @@ pub(crate) use files::Download;
 
 pub(crate) struct PreviewRevision {
     pub(crate) reader: Download,
+    pub(crate) bundle: Option<bundle::PreviewResources>,
     pub(crate) artifact: String,
     pub(crate) revision: String,
     pub(crate) source: String,
@@ -942,6 +1212,27 @@ pub(crate) fn project_preview(
 }
 
 fn preview_revision(ctx: &Ctx, selected: Revision<'_>) -> Result<PreviewRevision, Failure> {
+    if selected.is_bundle() {
+        bundle_manifest(&ctx.lane_dir, &selected, false)?;
+        let (reader, bundle) = bundle::preview(
+            &ctx.lane_dir,
+            selected.object,
+            selected.digest,
+            selected.size,
+        )?;
+        return Ok(PreviewRevision {
+            reader,
+            bundle: Some(bundle),
+            artifact: selected.artifact.to_owned(),
+            revision: selected.revision.to_owned(),
+            source: selected
+                .entrypoint
+                .expect("validated bundle entrypoint")
+                .to_owned(),
+            producer: selected.producer.to_owned(),
+            digest: selected.digest.to_owned(),
+        });
+    }
     if !selected
         .source
         .rsplit_once('.')
@@ -959,6 +1250,7 @@ fn preview_revision(ctx: &Ctx, selected: Revision<'_>) -> Result<PreviewRevision
     )?;
     Ok(PreviewRevision {
         reader,
+        bundle: None,
         artifact: selected.artifact.to_owned(),
         revision: selected.revision.to_owned(),
         source: selected.source.to_owned(),
@@ -995,6 +1287,9 @@ pub(crate) fn project_download(
     revision: &str,
 ) -> Result<(Download, String), Failure> {
     let (ctx, selected) = project_revision(project, artifact, revision)?;
+    if selected.is_bundle() {
+        return Err(Failure::usage("Bundle download is not supported. Restore the complete revision with artifacts restore."));
+    }
     let filename = selected
         .source
         .rsplit('/')
@@ -1084,8 +1379,12 @@ fn print(value: &Value) -> Result<(), Failure> {
     }
     if value["operation"] == "capabilities" {
         let max_mib = MAX_FILE_BYTES / (1024 * 1024);
-        crate::output::outln!("Artifacts: one UTF-8 text file per revision, up to {max_mib} MiB; pages up to {MAX_PAGE_SIZE}.");
-        crate::output::outln!("Bundles and database snapshots are not supported. Retained HTML preview runs with browser restrictions; complete network isolation is not guaranteed.");
+        if bundle::SUPPORTED {
+            crate::output::outln!("Artifacts: UTF-8 files or complete selected HTML/CSS/JS bundles, up to {max_mib} MiB per revision; bundles up to 64 members and 64 KiB manifest; pages up to {MAX_PAGE_SIZE}.");
+        } else {
+            crate::output::outln!("Artifacts: one UTF-8 text file per revision, up to {max_mib} MiB; pages up to {MAX_PAGE_SIZE}. Complete bundle custody is not supported on this platform.");
+        }
+        crate::output::outln!("Database snapshots are not supported. Retained HTML preview runs with browser restrictions; complete network isolation is not guaranteed.");
         return Ok(());
     }
     crate::output::outln!(
@@ -1120,6 +1419,7 @@ pub(crate) fn request_args(value: &Value) -> Result<Args, Failure> {
         operation: &'a str,
         artifact: Option<&'a str>,
         path: Option<&'a str>,
+        bundle: Option<&'a str>,
         from: Option<&'a str>,
         revision: Option<&'a str>,
         previous: Option<&'a str>,
@@ -1135,6 +1435,7 @@ pub(crate) fn request_args(value: &Value) -> Result<Args, Failure> {
         "operation",
         "artifact",
         "path",
+        "bundle",
         "from",
         "revision",
         "previous",
@@ -1181,7 +1482,7 @@ pub(crate) fn request_args(value: &Value) -> Result<Args, Failure> {
     let request = <Request<'_> as serde::Deserialize>::deserialize(value)
         .map_err(|_| Failure::usage("Invalid artifact request arguments."))?;
     if request.operation.len() > 16
-        || [request.path, request.to, request.from]
+        || [request.path, request.bundle, request.to, request.from]
             .into_iter()
             .flatten()
             .any(|value| value.len() > 4096)
@@ -1212,15 +1513,23 @@ pub(crate) fn request_args(value: &Value) -> Result<Args, Failure> {
     } else {
         request.artifact.map(str::to_owned)
     };
-    if operation != "capture" && request.path.is_some() {
-        return Err(Failure::usage("Only capture takes a source path."));
+    if operation != "capture" && (request.path.is_some() || request.bundle.is_some()) {
+        return Err(Failure::usage(
+            "Only capture takes a source path or bundle selector.",
+        ));
     }
     if operation == "capture" {
+        if request.path.is_some() == request.bundle.is_some() {
+            return Err(Failure::usage(
+                "Capture requires exactly one path or bundle selector.",
+            ));
+        }
         if let Some(artifact) = request.artifact {
             flags.push(format!("--artifact={artifact}"));
         }
     }
     for (key, value) in [
+        ("bundle", request.bundle),
         ("from", request.from),
         ("revision", request.revision),
         ("previous", request.previous),
@@ -2308,6 +2617,453 @@ mod tests {
         }
     }
 
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+    const BUNDLE_HTML: &[u8] = b"<html><link rel=stylesheet href=assets/style.css><script src=assets/main.js></script></html>";
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+    const BUNDLE_CSS: &[u8] = b"body { color: navy; }";
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+    const BUNDLE_JS: &[u8] = b"document.title = 'Selected delivery';";
+
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+    fn bundle_commit_fixture() -> (std::path::PathBuf, Ctx, String) {
+        let (root, ctx, producer) = capture_commit_fixture();
+        fs::create_dir_all(root.join("app/assets")).unwrap();
+        for (path, bytes) in [
+            ("index.html", BUNDLE_HTML),
+            ("assets/style.css", BUNDLE_CSS),
+            ("assets/main.js", BUNDLE_JS),
+        ] {
+            fs::write(root.join("app").join(path), bytes).unwrap();
+        }
+        fs::write(root.join("selection.json"), serde_json::to_vec(&json!({
+            "root":"app", "entrypoint":"index.html", "members":["index.html","assets/style.css","assets/main.js"], "requirements":[]
+        })).unwrap()).unwrap();
+        (root, ctx, producer)
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+    fn staged_bundle_delivery(
+        root: &Path,
+        artifact: &str,
+        producer: &str,
+        previous: Option<&str>,
+        operation: &str,
+    ) -> Body {
+        let revision = crate::id::ulid();
+        let selection = bundle::BundleSelection {
+            root: "app".into(),
+            entrypoint: "index.html".into(),
+            members: vec![
+                "index.html".into(),
+                "assets/style.css".into(),
+                "assets/main.js".into(),
+            ],
+            requirements: vec![],
+        };
+        let retained = bundle::capture(root, &selection, &revision).unwrap();
+        Body::ArtifactBundleCaptured {
+            artifact: artifact.into(),
+            revision,
+            operation: operation.into(),
+            producer: producer.into(),
+            previous: previous.map(str::to_owned),
+            source: selection.root,
+            selection: "selection.json".into(),
+            site: retained.retained.site,
+            size: retained.retained.size,
+            digest: retained.retained.digest,
+            object: retained.retained.object,
+            entrypoint: retained.entrypoint,
+            member_count: retained.members,
+            manifest_bytes: retained.manifest_bytes,
+        }
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+    fn assert_rescued_bundle(root: &Path, destination: &str, object: &str) {
+        let destination = root.join(destination);
+        for (path, bytes) in [
+            ("index.html", BUNDLE_HTML),
+            ("assets/style.css", BUNDLE_CSS),
+            ("assets/main.js", BUNDLE_JS),
+        ] {
+            assert_eq!(fs::read(destination.join(path)).unwrap(), bytes);
+        }
+        let retained_manifest = fs::read(
+            root.join(".vivac-artifacts")
+                .join(object)
+                .join(".vivac-delivery.json"),
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read(destination.join(".vivac-delivery.json")).unwrap(),
+            retained_manifest
+        );
+        let manifest: Value = serde_json::from_slice(&retained_manifest).unwrap();
+        assert_eq!(manifest["members"].as_array().unwrap().len(), 3);
+        assert_eq!(manifest["entrypoint"], "index.html");
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+    #[test]
+    fn competing_published_bundles_leave_the_rejected_complete_object_rescuable() {
+        for shared_operation in [false, true] {
+            let (root, mut ctx, producer) = bundle_commit_fixture();
+            let artifact = crate::id::ulid();
+            let first =
+                staged_bundle_delivery(&root, &artifact, &producer, None, &crate::id::ulid());
+            let saved = commit_capture(&mut ctx, first).unwrap();
+            ctx.unlock();
+            let previous = saved["delivery"]["revision"].as_str().unwrap();
+            let mut winner =
+                Ctx::load_for_write(Store::open_strict(root.clone()).unwrap(), Whose::Founding)
+                    .unwrap();
+            let mut loser =
+                Ctx::load_for_write(Store::open_strict(root.clone()).unwrap(), Whose::Founding)
+                    .unwrap();
+            let operation = crate::id::ulid();
+            let winning_body =
+                staged_bundle_delivery(&root, &artifact, &producer, Some(previous), &operation);
+            let winning_revision = Revision::from_body("main", &winning_body)
+                .unwrap()
+                .revision
+                .to_owned();
+            let losing_operation = if shared_operation {
+                operation.clone()
+            } else {
+                crate::id::ulid()
+            };
+            let losing_body = staged_bundle_delivery(
+                &root,
+                &artifact,
+                &producer,
+                Some(previous),
+                &losing_operation,
+            );
+            let losing_revision = Revision::from_body("main", &losing_body)
+                .unwrap()
+                .revision
+                .to_owned();
+            let losing_object = format!("objects/{losing_revision}.bundle");
+            commit_capture(&mut winner, winning_body).unwrap();
+            winner.unlock();
+            let log = fs::read(ctx.store.log()).unwrap();
+            let config_path = root.join(store::DIR).join(store::CONFIG);
+            let config = fs::read(&config_path).unwrap();
+            assert!(commit_capture(&mut loser, losing_body).is_err());
+            loser.unlock();
+            assert_eq!(fs::read(ctx.store.log()).unwrap(), log);
+            assert_eq!(fs::read(&config_path).unwrap(), config);
+            assert_eq!(
+                replay(&loser.tree)
+                    .unwrap()
+                    .latest(&artifact)
+                    .unwrap()
+                    .revision,
+                winning_revision
+            );
+            let ledger = diagnostic_ledger(&loser.tree);
+            let args = Args::parse(vec!["check".into(), "--store".into()]).unwrap();
+            let (inventory, code) = check(&loser, &ledger, &args).unwrap();
+            assert_eq!(code, 1);
+            assert_eq!(inventory["recorded_total"], 2);
+            assert_eq!(inventory["orphans"], json!([losing_object]));
+            assert_eq!(
+                inventory["bundle_objects"][0]["retained"]["status"],
+                "matches"
+            );
+            let rescue = Args::parse(vec![
+                "restore".into(),
+                format!("--orphan={losing_revision}"),
+                "--to=rescue".into(),
+            ])
+            .unwrap();
+            let restored = restore(&loser, &ledger, &rescue).unwrap();
+            assert_eq!(restored["provenance"], "unknown");
+            assert_eq!(restored["event_recorded"], false);
+            assert!(restored.get("producer").is_none());
+            assert_rescued_bundle(&root, "rescue", &losing_object);
+            assert_eq!(fs::read(ctx.store.log()).unwrap(), log);
+            assert_eq!(fs::read(&config_path).unwrap(), config);
+            drop(loser);
+            drop(winner);
+            drop(ctx);
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+    #[test]
+    fn a_bundle_append_failure_keeps_the_complete_object_rescuable_without_a_receipt() {
+        let (root, mut ctx, producer) = bundle_commit_fixture();
+        let body = staged_bundle_delivery(
+            &root,
+            &crate::id::ulid(),
+            &producer,
+            None,
+            &crate::id::ulid(),
+        );
+        let revision = Revision::from_body("main", &body)
+            .unwrap()
+            .revision
+            .to_owned();
+        let object = format!("objects/{revision}.bundle");
+        let log = fs::read(ctx.store.log()).unwrap();
+        let config_path = root.join(store::DIR).join(store::CONFIG);
+        let config = fs::read(&config_path).unwrap();
+        assert!(commit_capture_with(&mut ctx, body, |_, _| Err(Failure::Io(
+            std::io::Error::other("Injected bundle append failure.")
+        )))
+        .is_err());
+        ctx.unlock();
+        assert_eq!(fs::read(ctx.store.log()).unwrap(), log);
+        assert_eq!(fs::read(&config_path).unwrap(), config);
+        let ledger = diagnostic_ledger(&ctx.tree);
+        let args = Args::parse(vec!["check".into(), "--store".into()]).unwrap();
+        let (inventory, code) = check(&ctx, &ledger, &args).unwrap();
+        assert_eq!(code, 1);
+        assert_eq!(inventory["recorded_total"], 0);
+        assert_eq!(inventory["orphans"], json!([object]));
+        assert_eq!(
+            inventory["bundle_objects"][0]["retained"]["status"],
+            "matches"
+        );
+        let rescue = Args::parse(vec![
+            "restore".into(),
+            format!("--orphan={revision}"),
+            "--to=rescue".into(),
+        ])
+        .unwrap();
+        let restored = restore(&ctx, &ledger, &rescue).unwrap();
+        assert_eq!(restored["provenance"], "unknown");
+        assert_eq!(restored["event_recorded"], false);
+        assert!(restored.get("producer").is_none());
+        assert_rescued_bundle(&root, "rescue", &object);
+        assert_eq!(fs::read(ctx.store.log()).unwrap(), log);
+        assert_eq!(fs::read(&config_path).unwrap(), config);
+        drop(ctx);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+    #[test]
+    fn a_partial_bundle_append_preserves_the_exact_tail_and_allows_only_unknown_rescue() {
+        let (root, mut ctx, producer) = bundle_commit_fixture();
+        let artifact = crate::id::ulid();
+        let body = staged_bundle_delivery(&root, &artifact, &producer, None, &crate::id::ulid());
+        let revision = Revision::from_body("main", &body)
+            .unwrap()
+            .revision
+            .to_owned();
+        let object = format!("objects/{revision}.bundle");
+        let mut broken = fs::read(ctx.store.log()).unwrap();
+        broken.extend_from_slice(b"{\"payload\":");
+        let config_path = root.join(store::DIR).join(store::CONFIG);
+        let config = fs::read(&config_path).unwrap();
+        assert!(commit_capture_with(&mut ctx, body, |ctx, _| {
+            fs::OpenOptions::new()
+                .append(true)
+                .open(ctx.store.log())
+                .unwrap()
+                .write_all(b"{\"payload\":")
+                .unwrap();
+            Err(Failure::Io(std::io::Error::other(
+                "Injected partial bundle append failure.",
+            )))
+        })
+        .is_err());
+        ctx.unlock();
+        assert_eq!(fs::read(ctx.store.log()).unwrap(), broken);
+        assert_eq!(fs::read(&config_path).unwrap(), config);
+        let diagnostic =
+            Ctx::load_for_write(Store::open_strict(root.clone()).unwrap(), Whose::Founding)
+                .unwrap();
+        assert_eq!(diagnostic.tree.broken_lines, 1);
+        let ledger = diagnostic_ledger(&diagnostic.tree);
+        let args = Args::parse(vec!["check".into(), "--store".into()]).unwrap();
+        let (inventory, code) = check(&diagnostic, &ledger, &args).unwrap();
+        assert_eq!(code, 1);
+        assert_eq!(inventory["recorded_total"], 0);
+        assert_eq!(inventory["provenance_complete"], false);
+        assert_eq!(inventory["unattributed"], json!([object]));
+        assert_eq!(inventory["orphans"], json!([]));
+        let normal = Args::parse(vec![
+            "restore".into(),
+            artifact,
+            format!("--revision={revision}"),
+            "--to=normal".into(),
+        ])
+        .unwrap();
+        assert!(execute_read(&diagnostic, &normal).is_err());
+        assert!(!root.join("normal").exists());
+        let rescue = Args::parse(vec![
+            "restore".into(),
+            format!("--orphan={revision}"),
+            "--to=rescue".into(),
+        ])
+        .unwrap();
+        let restored = restore(&diagnostic, &ledger, &rescue).unwrap();
+        assert_eq!(restored["provenance"], "unknown");
+        assert_eq!(restored["event_recorded"], false);
+        assert!(restored.get("producer").is_none());
+        assert_rescued_bundle(&root, "rescue", &object);
+        assert_eq!(fs::read(ctx.store.log()).unwrap(), broken);
+        assert_eq!(fs::read(&config_path).unwrap(), config);
+        drop(diagnostic);
+        drop(ctx);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+    #[test]
+    #[ignore = "Invoked by the bundle process interruption test with an isolated fixture."]
+    fn bundle_interruption_child() {
+        let root = std::path::PathBuf::from(
+            std::env::var_os("VIVAC_BUNDLE_INTERRUPTION_ROOT")
+                .expect("an isolated interruption fixture is required"),
+        );
+        assert!(root.is_absolute());
+        let root = root.canonicalize().unwrap();
+        let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .canonicalize()
+            .unwrap();
+        guard_fixture_root(&root, &crate_root);
+        assert!(
+            root.file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .strip_prefix("vivac-artifact-commit-")
+                .is_some_and(valid_id),
+            "the interruption root must be a generated commit fixture"
+        );
+        for (path, bytes) in [
+            ("index.html", BUNDLE_HTML),
+            ("assets/style.css", BUNDLE_CSS),
+            ("assets/main.js", BUNDLE_JS),
+        ] {
+            assert_eq!(fs::read(root.join("app").join(path)).unwrap(), bytes);
+        }
+        let mode = std::env::var("VIVAC_BUNDLE_INTERRUPTION_MODE")
+            .expect("an interruption mode is required");
+        match mode.as_str() {
+            "before_publication" => {
+                let root_handle = files::open_root(&root).unwrap();
+                let custody = files::store(&root_handle, true).unwrap();
+                let objects = files::directory(&custody, "objects", true).unwrap();
+                let preparation = native::Preparation::new(&objects).unwrap();
+                let mut partial = preparation.dir.create("index.html").unwrap();
+                partial
+                    .write_all(b"<html>Partial selected delivery</html>")
+                    .unwrap();
+                partial.sync_all().unwrap();
+                native::sync_preparation(&preparation.dir).unwrap();
+                std::process::exit(86);
+            }
+            "after_publication" => {
+                let ctx = Ctx::load_for_capture(
+                    Store::open_strict(root.clone()).unwrap(),
+                    Whose::Founding,
+                )
+                .unwrap();
+                let producer = ctx.tree.resolve("t1").unwrap().id.clone();
+                staged_bundle_delivery(
+                    &root,
+                    &crate::id::ulid(),
+                    &producer,
+                    None,
+                    &crate::id::ulid(),
+                );
+                std::process::exit(86);
+            }
+            _ => panic!("Unknown bundle interruption mode."),
+        }
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+    #[test]
+    fn interrupted_bundle_preparation_and_publication_remain_diagnosable_and_rescuable() {
+        for mode in ["before_publication", "after_publication"] {
+            let (root, ctx, _) = bundle_commit_fixture();
+            let log = fs::read(ctx.store.log()).unwrap();
+            let config_path = root.join(store::DIR).join(store::CONFIG);
+            let config = fs::read(&config_path).unwrap();
+            drop(ctx);
+            let child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--ignored",
+                    "--exact",
+                    "artifacts::tests::bundle_interruption_child",
+                    "--test-threads=1",
+                ])
+                .env("VIVAC_BUNDLE_INTERRUPTION_ROOT", &root)
+                .env("VIVAC_BUNDLE_INTERRUPTION_MODE", mode)
+                .output()
+                .unwrap();
+            assert_eq!(
+                child.status.code(),
+                Some(86),
+                "interruption mode {mode}: stdout: {}; stderr: {}",
+                String::from_utf8_lossy(&child.stdout),
+                String::from_utf8_lossy(&child.stderr)
+            );
+            let diagnostic =
+                Ctx::load_for_write(Store::open_strict(root.clone()).unwrap(), Whose::Founding)
+                    .unwrap();
+            assert_eq!(diagnostic.tree.broken_lines, 0);
+            let ledger = diagnostic_ledger(&diagnostic.tree);
+            let args = Args::parse(vec!["check".into(), "--store".into()]).unwrap();
+            let (inventory, code) = check(&diagnostic, &ledger, &args).unwrap();
+            assert_eq!(code, 1);
+            assert_eq!(inventory["recorded_total"], 0);
+            assert_eq!(inventory["unattributed_total"], 0);
+            if mode == "before_publication" {
+                assert_eq!(inventory["orphans_total"], 0);
+                assert_eq!(inventory["temporaries_total"], 1);
+                let temporary = inventory["temporaries"][0].as_str().unwrap();
+                assert!(temporary.starts_with("objects/.tmp-bundle-"));
+                assert_eq!(
+                    fs::read(
+                        root.join(".vivac-artifacts")
+                            .join(temporary)
+                            .join("index.html")
+                    )
+                    .unwrap(),
+                    b"<html>Partial selected delivery</html>"
+                );
+                assert!(!root.join("rescue").exists());
+            } else {
+                assert_eq!(inventory["temporaries_total"], 0);
+                assert_eq!(inventory["orphans_total"], 1);
+                assert_eq!(
+                    inventory["bundle_objects"][0]["retained"]["status"],
+                    "matches"
+                );
+                let object = inventory["orphans"][0].as_str().unwrap();
+                let revision = object
+                    .strip_prefix("objects/")
+                    .unwrap()
+                    .strip_suffix(".bundle")
+                    .unwrap();
+                let rescue = Args::parse(vec![
+                    "restore".into(),
+                    format!("--orphan={revision}"),
+                    "--to=rescue".into(),
+                ])
+                .unwrap();
+                let restored = restore(&diagnostic, &ledger, &rescue).unwrap();
+                assert_eq!(restored["provenance"], "unknown");
+                assert_eq!(restored["event_recorded"], false);
+                assert!(restored.get("producer").is_none());
+                assert_rescued_bundle(&root, "rescue", object);
+            }
+            assert_eq!(fs::read(diagnostic.store.log()).unwrap(), log);
+            assert_eq!(fs::read(&config_path).unwrap(), config);
+            drop(diagnostic);
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
     #[test]
     fn oversized_source_references_are_rejected_before_detector_allocation() {
         let source = format!("person@example.com/{}", "x\n".repeat(2 * 1024 * 1024));
@@ -3268,6 +4024,113 @@ mod tests {
         assert!(
             durations[98] < std::time::Duration::from_millis(5),
             "resident receipt commit after an external write exceeded its strict five millisecond p99 budget"
+        );
+    }
+
+    #[test]
+    #[ignore = "Run explicitly in release mode to measure complete receipt commits."]
+    fn measure_one_hundred_complete_bundle_receipt_commits_with_ten_thousand_prior_artifacts() {
+        assert!(
+            std::hint::black_box(!cfg!(debug_assertions)),
+            "bundle receipt measurements require release mode"
+        );
+        let root = standalone_root("bundle-commit-benchmark");
+        let mut store = Store::create(&root).unwrap();
+        let producer = format!("{:026x}", 1);
+        let receipt = |artifact: u64, revision: u64, operation: u64| {
+            let revision = format!("{revision:026x}");
+            Body::ArtifactBundleCaptured {
+                artifact: format!("{artifact:026x}"),
+                revision: revision.clone(),
+                operation: format!("{operation:026x}"),
+                producer: producer.clone(),
+                previous: None,
+                source: "app".into(),
+                selection: "selection.json".into(),
+                site: format!("{:026x}", 2),
+                size: 1024 * 1024,
+                digest: "a".repeat(64),
+                object: format!("objects/{revision}.bundle"),
+                entrypoint: "index.html".into(),
+                member_count: 64,
+                manifest_bytes: 32 * 1024,
+            }
+        };
+        let mut bodies = Vec::with_capacity(10_001);
+        bodies.push(Body::NodeCreated {
+            node: producer.clone(),
+            num: 1,
+            kind: crate::event::Kind::Task,
+            title: "Produce selected deliveries".into(),
+            why: String::new(),
+            parent: None,
+            blocks: false,
+            refs: vec![],
+            governs: vec![],
+            arms: vec![],
+            against: None,
+        });
+        for index in 0..10_000u64 {
+            bodies.push(receipt(10_000 + index, 20_000 + index, 30_000 + index));
+        }
+        let lock = store.lock_for_write().unwrap();
+        store
+            .append(&lock, crate::lane::MAIN, bodies, 0, false)
+            .unwrap();
+        drop(lock);
+        let mut ctx = Ctx::load_for_capture(store, Whose::Founding).unwrap();
+        let samples: Vec<_> = (0..100u64)
+            .map(|index| receipt(60_000 + index, 50_000 + index, 40_000 + index))
+            .collect();
+        let mut durations = Vec::with_capacity(100);
+        let mut peak = 0;
+        for body in samples {
+            let ((result, duration), sample_peak) = crate::test_alloc::measure(|| {
+                let started = std::time::Instant::now();
+                let result = commit_capture(&mut ctx, body);
+                ctx.unlock();
+                (result, started.elapsed())
+            });
+            result.unwrap();
+            durations.push(duration);
+            peak = peak.max(sample_peak);
+        }
+        durations.sort();
+        eprintln!("Complete bundle receipt commit: 100 release samples, 10000 prior distinct bundle receipts, one producer; p50={:?}, p99={:?}, max={:?}, peak auxiliary={peak} bytes. Includes lock, refresh, guards, CAS, append, projection, JSON response construction and unlock. Synthetic metadata describes 64 members, a 32 KiB manifest and 1 MiB total. Fixture setup, tree loading, prepared metadata, retained byte copying and stdout serialization are excluded.", durations[49], durations[98], durations[99]);
+        let (recorded, broken) = ctx.store.read_all().unwrap();
+        let folded_receipts = ctx.tree.artifact_history.len();
+        drop(ctx);
+        fs::remove_dir_all(&root).unwrap();
+        assert_eq!(broken, 0);
+        assert_eq!(recorded.len(), 10_101);
+        assert_eq!(folded_receipts, 10_100);
+        for (index, event) in recorded.iter().enumerate() {
+            assert_eq!(event.seq, index as u64 + 1);
+            if index == 0 {
+                assert!(
+                    matches!(&event.payload, Body::NodeCreated { node, .. } if node == &producer)
+                );
+            } else if index <= 10_000 {
+                let prior = index as u64 - 1;
+                assert_eq!(
+                    event.payload,
+                    receipt(10_000 + prior, 20_000 + prior, 30_000 + prior)
+                );
+            } else {
+                let sample = index as u64 - 10_001;
+                assert_eq!(
+                    event.payload,
+                    receipt(60_000 + sample, 50_000 + sample, 40_000 + sample)
+                );
+            }
+        }
+        assert!(
+            peak <= 2 * 1024 * 1024,
+            "complete bundle receipt commit allocated {peak} auxiliary bytes"
+        );
+        assert!(
+            durations[98] < std::time::Duration::from_millis(5),
+            "complete bundle receipt commit exceeded its strict five millisecond p99 budget"
         );
     }
 

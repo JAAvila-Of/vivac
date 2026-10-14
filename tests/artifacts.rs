@@ -186,17 +186,44 @@ fn capabilities_need_no_project_and_ignore_an_unreadable_tree() {
         expected["limits"]["max_revision_bytes"],
         expected["limits"]["max_file_bytes"]
     );
-    assert_eq!(expected["limits"]["max_files_per_revision"], 1);
+    let bundles = cfg!(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "windows"
+    ));
+    assert_eq!(
+        expected["limits"]["max_files_per_revision"],
+        if bundles { 64 } else { 1 }
+    );
     assert_eq!(expected["limits"]["max_page_size"], 100);
     assert_eq!(expected["delivery_types"]["file"]["supported"], true);
-    for kind in ["bundle", "sqlite_snapshot"] {
-        assert_eq!(expected["delivery_types"][kind]["supported"], false);
-        assert!(!expected["delivery_types"][kind]["reason"]
+    assert_eq!(expected["delivery_types"]["bundle"]["supported"], bundles);
+    assert_eq!(expected["execution"]["bundle_preview"], bundles);
+    if bundles {
+        assert_eq!(
+            expected["delivery_types"]["bundle"]["formats"],
+            serde_json::json!(["html", "css", "js"])
+        );
+        assert_eq!(expected["delivery_types"]["bundle"]["max_members"], 64);
+        assert_eq!(
+            expected["delivery_types"]["bundle"]["max_manifest_bytes"],
+            65536
+        );
+    } else {
+        assert!(!expected["delivery_types"]["bundle"]["reason"]
             .as_str()
             .unwrap()
-            .trim()
             .is_empty());
     }
+    assert_eq!(
+        expected["delivery_types"]["sqlite_snapshot"]["supported"],
+        false
+    );
+    assert!(!expected["delivery_types"]["sqlite_snapshot"]["reason"]
+        .as_str()
+        .unwrap()
+        .trim()
+        .is_empty());
     assert_eq!(expected["execution"]["provided"], true);
     assert_eq!(expected["execution"]["scope"], "retained_html_preview");
     assert_eq!(expected["execution"]["network_isolation"], false);
@@ -215,6 +242,30 @@ fn capabilities_need_no_project_and_ignore_an_unreadable_tree() {
         expected
     );
     assert_eq!(fs::read(&events).unwrap(), before);
+    assert!(!sandbox.0.join(".vivac-artifacts").exists());
+}
+
+#[test]
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+fn unsupported_bundle_capture_is_refused_before_project_or_selector_io() {
+    let sandbox = Sandbox::new_empty("artifact-bundle-platform-refusal");
+    assert_isolated(&sandbox.0.canonicalize().unwrap());
+    let (output, code) = sandbox.run(&[
+        "artifacts",
+        "capture",
+        "--bundle",
+        "missing.json",
+        "--from",
+        "g1",
+        "--json",
+    ]);
+    assert_ne!(code, 0);
+    let result: Value = serde_json::from_str(&output).unwrap();
+    assert!(result["error"]
+        .as_str()
+        .unwrap()
+        .contains("not supported on this platform"));
+    assert!(!sandbox.0.join(".vivac").exists());
     assert!(!sandbox.0.join(".vivac-artifacts").exists());
 }
 

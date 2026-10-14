@@ -594,7 +594,8 @@ fn is_capture(body: &Body) -> bool {
         | Body::ArmAdded { .. }
         | Body::ArmRemoved { .. }
         | Body::AgainstAdded { .. }
-        | Body::ArtifactCaptured { .. } => true,
+        | Body::ArtifactCaptured { .. }
+        | Body::ArtifactBundleCaptured { .. } => true,
         Body::VivacCreated { kind, .. } => *kind == VivacKind::Manual,
         Body::SessionStarted { .. }
         | Body::LaneDeclared { .. }

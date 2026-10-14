@@ -1623,7 +1623,7 @@ fn regenerated_version(root: &Path) -> ConfigVersion {
         };
         match v["payload"]["type"].as_str() {
             Some("lane.declared") | Some("lane.claimed") => lanes = true,
-            Some("artifact.captured") => artifacts = true,
+            Some("artifact.captured") | Some("artifact.bundle_captured") => artifacts = true,
             Some("agent.automation.configured") => automatic_agents = true,
             Some("agent.recorded") if v["payload"]["definition"]["prompt"].is_object() => {
                 automatic_agents = true
@@ -1963,9 +1963,13 @@ impl Store {
         tree_already_governed: bool,
     ) -> std::io::Result<()> {
         if self.config.version != ConfigVersion::Artifacts
-            && body
-                .clone()
-                .any(|b| matches!(b, crate::event::Body::ArtifactCaptured { .. }))
+            && body.clone().any(|b| {
+                matches!(
+                    b,
+                    crate::event::Body::ArtifactCaptured { .. }
+                        | crate::event::Body::ArtifactBundleCaptured { .. }
+                )
+            })
         {
             let locked = Config {
                 version: ConfigVersion::Artifacts,

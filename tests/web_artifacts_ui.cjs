@@ -104,7 +104,7 @@ const button = text => all(document.elements['revision-content']).find(e => e.ta
     copy.elements.scope.value = 'all';
     vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/web/artifacts.js'), 'utf8'), {
       ...context, document: copy, sessionStorage: overrides.storage || sessionStorage,
-      fetch: overrides.fetch || fetch, location: { hash: '#artifact=artifact&revision=' + (overrides.revision || 'r1') }
+      fetch: overrides.fetch || fetch, location: { hash: '#artifact=' + (overrides.artifact || 'artifact') + '&revision=' + (overrides.revision || 'r1') }
     });
     await settle(); return copy;
   }
@@ -122,6 +122,45 @@ const button = text => all(document.elements['revision-content']).find(e => e.ta
   const originalSource = latest.source; latest.source = 'layout.HTM';
   assert(previewForm((await reload({ revision: 'r2' })).elements.rows, 'Preview latest revision'), 'HTML suffix matching must ignore case');
   latest.source = originalSource;
+  const bundleRequests = [];
+  const bundleRevision = id => ({ ...revision(id, 'delivery-root'), artifact: 'bundle-artifact', delivery_type: 'bundle', entrypoint: 'pages/index.html', member_count: 21, selection: 'bundle-selection.json' });
+  const bundleView = await reload({ artifact: 'bundle-artifact', fetch: async (url, options) => {
+    const body = JSON.parse(options.body); bundleRequests.push(body);
+    if (body.operation === 'capabilities') return { ok: true, json: async () => ({ result: { ...caps, delivery_types: { ...caps.delivery_types, bundle: { supported: true, formats: ['html', 'css', 'js'], max_bytes: 10485760 } }, execution: { ...caps.execution, bundle_preview: true } } }) };
+    if (body.operation === 'list') return { ok: true, json: async () => ({ result: { artifacts: [bundleRevision('r2')], total: 1, next_offset: null } }) };
+    if (body.operation === 'show') return { ok: true, json: async () => ({ result: { revisions: body.revision ? [bundleRevision(body.revision)] : [bundleRevision('r1'), bundleRevision('r2')], latest_revision: 'r2', total: 2, next_offset: null, members: body.offset ? [{ path: 'scripts/app.js', bytes: 17, sha256: 'b'.repeat(64), media_type: 'text/javascript' }] : Array.from({ length: 20 }, (_, i) => ({ path: 'styles/file' + i + '.css', bytes: 23, sha256: 'a'.repeat(64), media_type: 'text/css' })), total_members: 21, members_next_offset: body.offset ? null : 20 } }) };
+    if (body.operation === 'capture') return { ok: true, json: async () => ({ result: { delivery: bundleRevision('r3') } }) };
+    if (body.operation === 'check') return { ok: true, json: async () => ({ result: { artifact: body.artifact, revision: body.revision, retained: { status: 'matches' }, source: { status: 'missing' }, checked_at: '2026-10-14T03:30:04Z' } }) };
+    return fetch(url, options);
+  } });
+  await settle();
+  assert.match(bundleView.elements.rows.textContent, /Bundle.*pages\/index.html.*21 members/);
+  assert.match(bundleView.elements['revision-content'].textContent, /Bundle.*pages\/index.html.*21 members/);
+  const bundleForm = previewForm(bundleView.elements['revision-content'], 'Preview selected revision');
+  assert(bundleForm, 'Bundle root names must not need an HTML extension');
+  assert.equal(bundleForm.children.find(e => e.name === 'revision').value, 'r1');
+  assert(!previewForm(bundleView.elements['revision-content'], 'Download selected revision'), 'Bundle download must not masquerade as a single file');
+  assert.match(bundleView.elements['revision-content'].textContent, /Bundle download is not supported/);
+  assert.match(bundleView.elements['revision-content'].textContent, /styles\/file0.css.*text\/css/);
+  assert.match(bundleView.elements['revision-content'].textContent, /Metadata only/);
+  await all(bundleView.elements['revision-content']).find(e => e.tagName === 'BUTTON' && e.textContent === 'Next members').click(); await settle();
+  assert.match(bundleView.elements['revision-content'].textContent, /scripts\/app.js.*text\/javascript/);
+  assert.equal(bundleRequests.at(-1).revision, 'r1');
+  assert.equal(bundleRequests.at(-1).offset, 20);
+  await all(bundleView.elements['revision-content']).find(e => e.tagName === 'BUTTON' && e.textContent === 'Check selected revision').click(); await settle();
+  assert.equal(bundleRequests.at(-1).operation, 'check');
+  assert.equal(bundleRequests.at(-1).revision, 'r1');
+  assert(!Object.hasOwn(bundleRequests.at(-1), 'offset'), 'Integrity checks must cover the whole revision independently of the visible member page');
+  await all(bundleView.elements['revision-content']).find(e => e.tagName === 'BUTTON' && e.textContent === 'Capture a new revision').click(); await settle();
+  assert.equal(bundleView.elements['capture-type'].value, 'bundle');
+  assert.equal(bundleView.elements['capture-path'].value, 'bundle-selection.json');
+  assert.match(bundleView.elements['dialog-content'].textContent, /Bundle selection file/);
+  bundleView.elements['capture-producer'].value = 't1';
+  await bundleView.elements['capture-confirm'].click(); await settle();
+  const bundleCapture = bundleRequests.find(body => body.operation === 'capture');
+  assert.equal(bundleCapture.bundle, 'bundle-selection.json');
+  assert.equal(bundleCapture.previous, 'r2');
+  assert(!Object.hasOwn(bundleCapture, 'path'));
   const twoRows = await reload({ fetch: async (url, options) => {
     if (JSON.parse(options.body).operation !== 'list') return fetch(url, options);
     return { ok: true, json: async () => ({ result: { artifacts: [latest, { ...revision('other-head'), artifact: 'other-artifact' }], total: 2, next_offset: null } }) };

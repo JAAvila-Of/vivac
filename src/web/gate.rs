@@ -149,19 +149,15 @@ impl Gate {
     /// `Host` and has to die before anything looks at the path or compares a
     /// token.
     pub fn admit(&mut self, r: &Incoming) -> Verdict {
-        let host_ok = match r.host {
-            Some(h) => {
-                h == format!("127.0.0.1:{}", self.port) || h == format!("localhost:{}", self.port)
-            }
-            None => false,
-        };
+        let host_ok = r
+            .host
+            .is_some_and(|host| host == format!("127.0.0.1:{}", self.port));
         if !host_ok {
             return Verdict::Deny(Denial::ForeignHost);
         }
 
         if let Some(origin) = r.origin {
-            let origin_ok = origin == format!("http://127.0.0.1:{}", self.port)
-                || origin == format!("http://localhost:{}", self.port);
+            let origin_ok = origin == format!("http://127.0.0.1:{}", self.port);
             if !origin_ok {
                 return Verdict::Deny(Denial::ForeignOrigin);
             }
@@ -244,17 +240,64 @@ mod tests {
     }
 
     #[test]
-    fn the_loopback_host_passes_by_ip_and_by_name() {
+    fn localhost_host_is_refused_before_boot_or_session_credentials() {
+        let mut g = gate();
+        let key = g.boot.clone().unwrap();
+        let path = format!("/?k={key}");
+        let token = g.token().to_string();
+        let jar = format!("vivac_session={token}");
+        let host = format!("localhost:{PORT}");
+        for request in [
+            incoming(&path, Some(&host), None, None),
+            incoming("/", Some(&host), None, Some(&token)),
+            browsing("/", &host, &jar),
+        ] {
+            assert!(is_foreign_host(g.admit(&request)));
+            assert_eq!(g.boot.as_deref(), Some(key.as_str()));
+        }
+        let host = format!("127.0.0.1:{PORT}");
+        assert!(matches!(
+            g.admit(&incoming(&path, Some(&host), None, None)),
+            Verdict::Boot
+        ));
+    }
+
+    #[test]
+    fn localhost_origin_is_refused_without_consuming_the_boot_key() {
+        let mut g = gate();
+        let key = g.boot.clone().unwrap();
+        let path = format!("/?k={key}");
+        let token = g.token().to_string();
+        let jar = format!("vivac_session={token}");
+        let host = format!("127.0.0.1:{PORT}");
+        let origin = format!("http://localhost:{PORT}");
+        for request in [
+            incoming(&path, Some(&host), Some(&origin), None),
+            incoming("/", Some(&host), Some(&origin), Some(&token)),
+            Incoming {
+                path: "/",
+                host: Some(&host),
+                origin: Some(&origin),
+                token: None,
+                cookie: Some(&jar),
+            },
+        ] {
+            assert!(is_foreign_origin(g.admit(&request)));
+            assert_eq!(g.boot.as_deref(), Some(key.as_str()));
+        }
+        assert!(matches!(
+            g.admit(&incoming(&path, Some(&host), None, None)),
+            Verdict::Boot
+        ));
+    }
+
+    #[test]
+    fn the_canonical_loopback_host_passes_by_ip() {
         let mut g = gate();
         let token = g.token().to_string();
         let ip_host = format!("127.0.0.1:{PORT}");
         assert!(matches!(
             g.admit(&incoming("/", Some(&ip_host), None, Some(&token))),
-            Verdict::Serve
-        ));
-        let name_host = format!("localhost:{PORT}");
-        assert!(matches!(
-            g.admit(&incoming("/", Some(&name_host), None, Some(&token))),
             Verdict::Serve
         ));
     }

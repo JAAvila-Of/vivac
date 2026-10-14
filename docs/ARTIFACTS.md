@@ -1,6 +1,7 @@
 # Local artifact custody
 
-An artifact delivery connects a producer node to a selected revision of a file.
+An artifact delivery connects a producer node to a selected file or complete
+static bundle revision.
 Vivac retains that revision locally so it can be recovered after the source
 changes or disappears. The provenance tree holds identities, paths, sizes and
 SHA-256 digests; file contents stay in a separate `.vivac-artifacts/` directory.
@@ -106,8 +107,10 @@ in the detail, including an earlier revision. Both open a separate preview
 page; **Run HTML** starts its JavaScript. Checking integrity and downloading
 an attachment remain separate actions.
 
-The preview server listens only on loopback, at a separate origin from the
-authenticated Vivac web interface. It exposes the verified delivery rather
+The authenticated web interface accepts only its canonical `127.0.0.1` host;
+the preview uses `localhost` on a separate loopback port. The distinct hostnames
+keep Vivac's host-only session cookie out of preview requests. The preview
+exposes the verified delivery rather
 than project-file or tree APIs. The HTML runs in a sandboxed frame without
 access to Vivac's session or storage. Browser policies restrict outgoing
 connections, external resources, form submissions, nested frames, popups and
@@ -130,9 +133,78 @@ owning Vivac process ends it.
 The server's expiry does not stop JavaScript already loaded in a browser tab.
 Close that tab to stop the loaded HTML.
 
+## Complete static bundles
+
+A static bundle retains its explicitly selected HTML, CSS and JavaScript files
+as one complete revision. Its HTML entry point and every member belong to that
+revision; changing, adding, deleting or renaming a member produces another
+complete revision of the same artifact. A decision naming an earlier revision
+does not approve the new one.
+
+Create a project-relative selection file, for example `card.selection.json`:
+
+```json
+{
+  "root": "designs/card",
+  "entrypoint": "pages/index.html",
+  "members": ["pages/index.html", "assets/style.css", "assets/app.js"],
+  "requirements": []
+}
+```
+
+Members are relative to `root`; `.` selects the project root without selecting
+other files automatically. The selector does not supply trusted hashes, artifact
+identities or a producer. Unknown selector fields, globs and implicit directory
+capture are refused. Selection does not prove that an application has all its
+dependencies or that it works.
+
+```sh
+vivac artifacts capture --bundle card.selection.json --from t12 --json
+vivac artifacts capture --bundle card.selection.json --from t18 --artifact <artifact-id> --previous <revision-id> --json
+vivac artifacts show <artifact-id> --revision <revision-id> --limit 20 --offset 0 --json
+vivac artifacts check <artifact-id> --revision <revision-id> --json
+vivac artifacts restore <artifact-id> --revision <revision-id> --to recovered-card --json
+```
+
+`show` pages member metadata and revision history separately, using
+`members_next_offset` and `next_offset`. Listing metadata does not check every
+member. `check` verifies the exact manifest and all members, including members
+outside a displayed page. Missing, changed or unexpected members invalidate the
+complete revision. The source comparison is a separate observation.
+
+Restore requires a new directory. It verifies the bytes it copies, prepares the
+complete delivery and publishes it exclusively; it never merges into an existing
+directory or overwrites a file. It rechecks the visible destination parent's
+identity before publication and refuses a mismatch. The restored
+`.vivac-delivery.json` is verified
+revision metadata, not an application member. Restoration does not create a new
+artifact revision or execute the delivery.
+
+A bundle accepts at most 64 explicitly selected UTF-8 `.html`, `.css` and `.js`
+members. The entry point must be an HTML member. Paths use portable ASCII
+components; ambiguous names, case-insensitive collisions, traversal, Windows
+reserved names and links are refused. The complete revision, including its
+manifest, is limited to 10 MiB; the manifest is limited to 64 KiB. The operation's
+auxiliary memory limit remains 2 MiB. Every member and its metadata pass the
+complete sensitive-value guards.
+
+The preview serves a verified private copy of this exact revision from an
+independent loopback origin. **Run HTML** enables the entry point and declared
+local resources; resource URLs do not carry the preview control key or vivac's
+session token. **Close preview** retains its existing meaning. Custody, integrity,
+human approval and observed execution remain distinct. A single-file download
+does not represent a complete bundle; use directory restoration to recover it.
+
+Local custody is not isolation from another application with the owner's
+authority that directly changes vivac's private preparation, store or process.
+Vivac coordinates its own operations and rejects observed damage and conflicts;
+it does not freeze editable source files or claim a coherent filesystem snapshot.
+Unsupported filesystem operations are refused rather than replaced by an
+overwriting fallback.
+
 ## Limits and refusals
 
-The first implementation accepts UTF-8 text up to 10 MiB. Invalid UTF-8,
+File deliveries accept UTF-8 text up to 10 MiB. Invalid UTF-8,
 oversized input and content recognized by the sensitive-data guard are
 refused. Binary formats are unsupported. The guard examines the complete
 stream without truncating inspection; an oversized token is refused.
@@ -206,8 +278,9 @@ that original receipt; contradictory retries are refused.
 
 `vivac_artifacts` exposes `list`, `show`, `capture`, `check`, `restore` and
 `capabilities` with
-the same file custody guards and local scope as the CLI. Capture requires
-`path` and `from`; restore requires `to`. Replies contain `exit_code` and
+the same custody guards and local scope as the CLI. Capture requires exactly one
+of `path` or `bundle`, and `from`; `bundle` names a project-relative selection
+file. Restore requires `to`. Replies contain `exit_code` and
 structured `result`.
 File bodies are never returned through MCP or added to the tree.
 
@@ -222,10 +295,11 @@ size and pagination limits, and execution policy. It works outside a project
 and does not load the provenance tree or inspect file bodies. MCP exposes the
 same result through `vivac_artifacts` with `operation: "capabilities"`.
 
-The current engine retains one UTF-8 file per revision, up to 10 MiB. A
-self-contained HTML file can include JavaScript and remain a single delivery.
-Complete multi-file bundles and SQLite snapshots are unsupported. Recognizing
-their filenames does not make them eligible for custody. Retaining a supported
+The engine retains a UTF-8 file or a complete selected static bundle per
+revision, up to 10 MiB including bundle metadata. A self-contained HTML file can
+include JavaScript and remain a single delivery. SQLite snapshots and other
+binary formats are unsupported. Recognizing their filenames does not make them
+eligible for custody. Retaining a supported
 code file does not prove that an entire application can be recovered or run.
 The engine offers restricted browser preview for retained HTML revisions.
 It does not provide general application execution or install runtime dependencies.
@@ -276,7 +350,8 @@ requires a project-relative source and producer node. A new revision continues
 the latest revision reported by the engine, preserving the selected older one.
 Restore creates a new project-relative destination and refuses occupied paths.
 
-Download recovers the exact selected revision as an attachment. The engine
+For file deliveries, download recovers the exact selected revision as an
+attachment. Complete bundles use directory restoration instead. The engine
 copies and verifies it incrementally into a private temporary file and removes
 its name before sending bytes. The browser streams the attachment without
 opening it inside vivac; the server does not buffer the whole delivery. A

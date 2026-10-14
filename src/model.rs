@@ -614,7 +614,8 @@ impl Tree {
         let mut projection = crate::artifacts::projection::Projection::default();
         for (index, (lane, body)) in self.artifact_history.iter().enumerate() {
             let producer_exists = match body {
-                Body::ArtifactCaptured { producer, .. } => self.node(producer).is_some(),
+                Body::ArtifactCaptured { producer, .. }
+                | Body::ArtifactBundleCaptured { producer, .. } => self.node(producer).is_some(),
                 _ => false,
             };
             projection.observe(lane, body, &self.artifact_history[..index], producer_exists);
@@ -1097,7 +1098,8 @@ impl Tree {
                     repos: repos.clone(),
                 });
             }
-            Body::ArtifactCaptured { producer, .. } => {
+            Body::ArtifactCaptured { producer, .. }
+            | Body::ArtifactBundleCaptured { producer, .. } => {
                 let producer_exists = self.node(producer).is_some();
                 self.artifact_projection.observe(
                     lane,

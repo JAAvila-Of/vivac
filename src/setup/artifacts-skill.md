@@ -20,9 +20,11 @@ to the delivery, not temporary drafts, ordinary source edits or every file writt
 by an authoring tool. Do not incorporate existing unrelated files by default.
 
 Check installed support before choosing a delivery structure. Create the complete
-delivery as a regular file inside the project, using an appropriate project-relative
-path. Preserve required formats and functionality; do not flatten an unsupported
-bundle or database into an incomplete file just to capture it. If a tool produces
+delivery inside the project using its supported structure and project-relative
+paths. A bundle requires explicit members and an HTML entry point, selected in a
+project-relative JSON file. Preserve required formats and functionality; do not
+flatten an unsupported bundle or database into an incomplete file just to capture
+it. If a tool produces
 only a native artifact with no supported local export, explain that custody is
 unavailable for that delivery.
 
@@ -106,6 +108,24 @@ that artifact identity and the expected previous revision:
 ```sh
 vivac artifacts capture path/to/delivery.html --from t18 --artifact <artifact-id> --previous <revision-id> --json
 ```
+
+When installed capabilities support complete static bundles, create a selection
+file declaring `root`, `entrypoint`, every `members` path relative to that root,
+and `requirements`. Do not include identity, producer or trusted hashes in the
+selector. The selector is preparation metadata, not another delivery by default.
+Capture all members as one revision through the engine:
+
+```sh
+vivac artifacts capture --bundle path/to/selection.json --from t12 --json
+vivac artifacts capture --bundle path/to/selection.json --from t18 --artifact <artifact-id> --previous <revision-id> --json
+```
+
+MCP uses `bundle` for that selection-file path, mutually exclusive with `path`.
+Check and restore name the exact complete revision. Restoring a bundle requires
+a new directory and restores all members and verified revision metadata; it never
+merges into existing files. Unsupported members must not be dropped or captured
+separately while presenting the application as complete. Query installed support;
+the presence of this guidance does not enable bundles in an older engine.
 
 Use real returned node and revision identities, not the example values above.
 Report each successful capture and each refusal separately. A refusal is not a

@@ -45,6 +45,10 @@ impl Projection {
                     self.invalid = true;
                     return;
                 };
+                if previous.is_bundle() != entry.is_bundle() {
+                    self.invalid = true;
+                    return;
+                }
                 Some(previous.revision)
             }
             None => None,

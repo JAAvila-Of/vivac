@@ -13,6 +13,8 @@
   const short = id => String(id).slice(-8);
   const basename = source => String(source).split(/[\\/]/).pop();
   const typeLabel = type => ({ file: 'Single UTF-8 file', bundle: 'Bundle', sqlite_snapshot: 'SQLite data' })[type] || type;
+  const isBundle = entry => entry.delivery_type === 'bundle';
+  const deliveryLabel = entry => isBundle(entry) ? 'Bundle · Entry: ' + entry.entrypoint + ' · ' + entry.member_count + ' members' : typeLabel('file');
   const formats = values => (values || []).map(value => value === 'utf8_text' ? 'UTF-8 text' : value).join(', ');
   const observationStorageKey = 'vivac.artifact-checks.v1';
   const observations = new Map();
@@ -136,7 +138,7 @@
     shown.forEach(entry => {
       const row = element('tr'), delivery = element('th'); delivery.scope = 'row';
       const open = button(basename(entry.source), () => openArtifact(entry.artifact, entry.revision, entry.revision)); open.className = 'file-link';
-      delivery.append(open, producer(entry));
+      delivery.append(open, producer(entry), element('p', deliveryLabel(entry), 'small muted'));
       delivery.append(previewAction(entry, 'Preview latest revision'));
       const identity = element('td'); identity.append(element('strong', short(entry.revision) + ' · Latest'), element('p', entry.source, 'small muted'));
       const refs = element('td'); refs.append(inventoryReferences(entry));
@@ -233,7 +235,7 @@
     renderRail(); saveFragment();
     const entry = selected, box = $('revision-content'); box.replaceChildren();
     selectedLabel = element('p', revisionLabel(entry), 'mono');
-    box.append(element('h2', basename(entry.source)), selectedLabel, element('p', entry.source, 'muted'));
+    box.append(element('h2', basename(entry.source)), selectedLabel, element('p', entry.source, 'muted'), element('p', deliveryLabel(entry), 'small muted'));
     const facts = element('div', undefined, 'facts');
     facts.append(element('p', entry.size + ' bytes'), element('p', 'Digest: ' + entry.digest, 'mono'), element('p', 'Producer'), producer(entry)); box.append(facts);
     box.append(element('h3', 'References to this revision'), references(entry), element('p', 'A reference is not inferred approval. Integrity checks do not approve a delivery.', 'small muted'));
@@ -253,7 +255,37 @@
     const capture = button('Capture a new revision', () => captureDialog(true));
     capture.disabled = !latest;
     actions.append(check, button('Restore selected revision', () => restoreDialog(entry)), capture);
-    actions.append(nativeForm(entry, 'download', 'Download selected revision'), previewAction(entry, 'Preview selected revision', true)); box.append(actions);
+    actions.append(isBundle(entry) ? element('p', 'Bundle download is not supported. Restore the complete selected revision to a new directory.', 'small muted') : nativeForm(entry, 'download', 'Download selected revision'), previewAction(entry, 'Preview selected revision', true)); box.append(actions);
+    if (isBundle(entry)) {
+      const members = element('section', undefined, 'bundle-members');
+      box.append(members); memberPage(entry, members, 0);
+    }
+  }
+  async function memberPage(entry, box, offset) {
+    const generation = detailGeneration;
+    box.textContent = 'Loading member metadata…';
+    box.setAttribute('aria-busy', 'true');
+    try {
+      const result = await request('show', { artifact: entry.artifact, revision: entry.revision, limit: 20, offset });
+      if (generation !== detailGeneration || selected !== entry) return;
+      const members = result.members || [];
+      box.replaceChildren(element('h3', 'Members of this revision'), element('p', 'Metadata only; bytes have not been checked. Check selected revision verifies the complete bundle, regardless of this page.', 'small muted'));
+      const table = element('table'), header = element('tr');
+      for (const label of ['Member path', 'Media type', 'Bytes', 'SHA-256']) header.append(element('th', label));
+      const head = element('thead'); head.append(header); table.append(head);
+      const body = element('tbody');
+      for (const member of members) {
+        const row = element('tr');
+        row.append(element('td', member.path), element('td', member.media_type), element('td', member.bytes), element('td', member.sha256, 'mono')); body.append(row);
+      }
+      table.append(body);
+      const wrap = element('div', undefined, 'table-wrap'); wrap.append(table);
+      const previous = button('Previous members', () => memberPage(entry, box, Math.max(0, offset - 20)));
+      const following = button('Next members', () => memberPage(entry, box, result.members_next_offset));
+      previous.disabled = offset === 0; following.disabled = result.members_next_offset == null;
+      box.append(wrap, element('p', 'Showing ' + members.length + ' of ' + result.total_members + ' members.'), previous, following);
+    } catch (error) { if (generation === detailGeneration && selected === entry) box.textContent = error.message; }
+    finally { box.setAttribute('aria-busy', 'false'); }
   }
   function nativeForm(entry, operation, label) {
     const form = element('form'); form.method = 'post'; form.action = config.base + '/' + operation; form.target = '_blank'; form.rel = 'noopener';
@@ -261,9 +293,10 @@
     const submit = element('button', label); submit.type = 'submit'; form.append(submit); return form;
   }
   function previewAction(entry, label, explainFormat = false) {
-    if (!/\.html?$/i.test(entry.source)) return element(explainFormat ? 'p' : 'span', explainFormat ? 'Only retained HTML files can be previewed.' : '', 'small muted');
+    if (!isBundle(entry) && !/\.html?$/i.test(entry.source)) return element(explainFormat ? 'p' : 'span', explainFormat ? 'Only retained HTML files can be previewed.' : '', 'small muted');
     if (!capabilities) return element('p', 'Checking preview support…', 'small muted');
     if (capabilities.execution?.provided !== true || capabilities.execution?.scope !== 'retained_html_preview') return element('p', 'Preview is not supported by this engine.', 'small muted');
+    if (isBundle(entry) && capabilities.execution.bundle_preview !== true) return element('p', 'Bundle preview is not supported by this engine.', 'small muted');
     return nativeForm(entry, 'preview', label);
   }
   function modal(title) {
@@ -295,18 +328,31 @@
     function describeContinuation() { continuation.textContent = 'Continue latest revision ' + short(previous) + (entry.revision !== previous ? '; the selected older revision stays unchanged.' : '.'); }
     if (continuing) { describeContinuation(); $('dialog-content').append(continuation); }
     const structureLabel = element('label', 'Delivery structure'), types = element('select'); types.id = 'capture-type';
-    Object.entries(caps.delivery_types).forEach(([name, capability]) => { const option = element('option', typeLabel(name) + (capability.supported && name === 'file' ? ' · supported' : ' · ' + (capability.reason || 'Not supported by this capture surface.'))); option.value = name; option.disabled = name !== 'file' || !capability.supported; types.append(option); });
-    types.value = 'file'; structureLabel.append(types); $('dialog-content').append(structureLabel);
-    const path = input('capture-path', 'Project-relative source path', continuing ? entry.source : '');
+    Object.entries(caps.delivery_types).forEach(([name, capability]) => { const available = ['file', 'bundle'].includes(name) && capability.supported; const option = element('option', typeLabel(name) + (available ? ' · supported' : ' · ' + (capability.reason || 'Not supported by this capture surface.'))); option.value = name; option.disabled = !available; types.append(option); });
+    types.value = continuing && isBundle(entry) ? 'bundle' : 'file'; types.disabled = continuing; structureLabel.append(types); $('dialog-content').append(structureLabel);
+    const path = input('capture-path', types.value === 'bundle' ? 'Bundle selection file' : 'Project-relative source path', continuing ? (isBundle(entry) ? entry.selection : entry.source) : '');
+    const selectionHelp = element('p', types.value === 'bundle' ? 'Use a project-relative JSON file declaring the complete delivery.' : '', 'small muted');
+    $('dialog-content').append(selectionHelp);
+    types.addEventListener('change', () => {
+      path.value = '';
+      const label = path.parentNode;
+      if (label) { label.textContent = types.value === 'bundle' ? 'Bundle selection file' : 'Project-relative source path'; label.append(path); }
+      selectionHelp.textContent = types.value === 'bundle' ? 'Use a project-relative JSON file declaring the complete delivery.' : '';
+      describeLimits();
+    });
     const from = input('capture-producer', 'Producer node alias or ID', $('scope').value === 'from' ? $('from').value.trim() : '');
-    const file = caps.delivery_types.file;
-    if (file) $('dialog-content').append(element('p', 'Formats: ' + formats(file.formats) + '. Maximum file size: ' + sizeLabel(file.max_bytes) + '.', 'small muted'));
+    const limits = element('p', '', 'small muted');
+    function describeLimits() {
+      const capability = caps.delivery_types[types.value];
+      limits.textContent = capability ? 'Formats: ' + formats(capability.formats) + '. Maximum ' + (types.value === 'bundle' ? 'revision' : 'file') + ' size: ' + sizeLabel(capability.max_bytes) + '.' : '';
+    }
+    describeLimits(); $('dialog-content').append(limits);
     $('dialog-content').append(element('p', 'Capture retains a delivery locally and records its producer. It does not record approval.'));
     const controls = dialogActions('Capture delivery', async (confirm, status) => {
       if (needsHeadApproval) return;
-      if (types.value !== 'file' || !caps.delivery_types.file?.supported) { status.textContent = 'This delivery structure is not supported.'; return; }
+      if (!['file', 'bundle'].includes(types.value) || !caps.delivery_types[types.value]?.supported) { status.textContent = 'This delivery structure is not supported.'; return; }
       if (!path.value.trim() || !from.value.trim()) { status.textContent = 'Source path and producer node are required.'; (!path.value.trim() ? path : from).focus(); return; }
-      const args = { path: path.value.trim(), from: from.value.trim() };
+      const args = { [types.value === 'bundle' ? 'bundle' : 'path']: path.value.trim(), from: from.value.trim() };
       if (continuing) { args.artifact = entry.artifact; args.previous = previous; }
       writing = true; confirm.disabled = true; controls.cancel.disabled = true; status.textContent = 'Capturing delivery…';
       try { const result = await request('capture', args); const delivery = result.delivery; $('dialog').close(); note('Delivery captured.'); await openArtifact(delivery.artifact, delivery.revision, delivery.revision); }
@@ -335,7 +381,7 @@
   }
   function restoreDialog(entry) {
     modal('Restore ' + short(entry.revision));
-    $('dialog-content').append(element('p', 'Create a new project file from this exact retained revision. The destination must not already exist.'));
+    $('dialog-content').append(element('p', isBundle(entry) ? 'Create a new complete directory from this exact retained revision. The destination must not already exist.' : 'Create a new project file from this exact retained revision. The destination must not already exist.'));
     const path = input('restore-path', 'New project-relative destination');
     const controls = dialogActions('Restore selected revision', async (confirm, status) => {
       if (!path.value.trim()) { status.textContent = 'A new destination is required.'; path.focus(); return; }
@@ -354,7 +400,7 @@
       Object.entries(caps.delivery_types).forEach(([type, capability]) => $('dialog-content').append(element('h3', typeLabel(type)), element('p', capability.supported ? 'Supported. Formats: ' + formats(capability.formats) + '. Maximum size: ' + sizeLabel(capability.max_bytes) + '.' : capability.reason)));
       let execution = 'Execution: support unknown.';
       if (caps.execution?.provided === false) execution = 'Execution: not provided by this engine.';
-      if (caps.execution?.provided === true) execution = caps.execution.scope === 'retained_html_preview' ? 'Execution: restricted preview of retained HTML revisions. Complete network isolation is not guaranteed.' : 'Execution: not supported in this view.';
+      if (caps.execution?.provided === true) execution = caps.execution.scope === 'retained_html_preview' ? 'Execution: restricted preview of retained HTML revisions. Complete network isolation is not guaranteed.' + (caps.execution.bundle_preview === true ? ' Bundle preview serves declared HTML, CSS and JavaScript members.' : '') : 'Execution: not supported in this view.';
       $('dialog-content').append(element('p', execution), button('Close', () => $('dialog').close()));
     } catch (error) { note(error.message); }
   });

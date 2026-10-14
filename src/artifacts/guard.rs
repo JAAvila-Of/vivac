@@ -73,6 +73,20 @@ pub fn copy_checked(mut reader: impl Read, mut writer: impl Write) -> Result<Rec
     })
 }
 
+pub(super) fn copy_checked_limit(
+    reader: impl Read,
+    writer: impl Write,
+    limit: u64,
+) -> Result<Receipt, Failure> {
+    let receipt = copy_checked(reader.take(limit.saturating_add(1)), writer)?;
+    if receipt.size > limit {
+        return Err(Failure::usage(
+            "The complete bundle exceeds its byte budget.",
+        ));
+    }
+    Ok(receipt)
+}
+
 fn flush_token(token: &mut String, output: &mut CheckedOutput<'_>) -> Result<(), Failure> {
     if token.contains("-----BEGIN") {
         return Err(Failure::Redaction(Box::new(Finding {
