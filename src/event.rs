@@ -536,6 +536,23 @@ pub enum Body {
         digest: String,
         object: String,
     },
+    #[serde(rename = "artifact.bundle_captured")]
+    ArtifactBundleCaptured {
+        artifact: String,
+        revision: String,
+        operation: String,
+        producer: String,
+        previous: Option<String>,
+        source: String,
+        selection: String,
+        site: String,
+        size: u64,
+        digest: String,
+        object: String,
+        entrypoint: String,
+        member_count: usize,
+        manifest_bytes: u64,
+    },
     #[serde(rename = "agent.automation.configured")]
     AgentAutomationConfigured { node: String, enabled: bool },
     #[serde(rename = "agent.recorded")]
@@ -607,6 +624,7 @@ impl Body {
         "lane.claimed",
         "where.changed",
         "artifact.captured",
+        "artifact.bundle_captured",
         "agent.automation.configured",
         "agent.recorded",
         "agent.bound",
@@ -689,6 +707,7 @@ mod tests {
             Body::LaneClaimed { .. } => "lane.claimed",
             Body::WhereChanged { .. } => "where.changed",
             Body::ArtifactCaptured { .. } => "artifact.captured",
+            Body::ArtifactBundleCaptured { .. } => "artifact.bundle_captured",
             Body::AgentAutomationConfigured { .. } => "agent.automation.configured",
             Body::AgentRecorded { .. } => "agent.recorded",
             Body::AgentBound { .. } => "agent.bound",
@@ -700,6 +719,22 @@ mod tests {
 
     fn one_of_each() -> Vec<Body> {
         vec![
+            Body::ArtifactBundleCaptured {
+                artifact: "a".into(),
+                revision: "r".into(),
+                operation: "o".into(),
+                producer: "n".into(),
+                previous: None,
+                source: "app".into(),
+                selection: "selection.json".into(),
+                site: "s".into(),
+                size: 1000,
+                digest: "a".repeat(64),
+                object: "objects/r.bundle".into(),
+                entrypoint: "index.html".into(),
+                member_count: 3,
+                manifest_bytes: 500,
+            },
             Body::ArtifactCaptured {
                 artifact: "a".into(),
                 revision: "r".into(),
@@ -1162,6 +1197,37 @@ mod tests {
         assert_eq!(encoded.as_object().unwrap().len(), 11);
         assert_eq!(encoded["type"], "artifact.captured");
         assert_eq!(encoded["previous"], "previous-id");
+        assert_eq!(serde_json::from_value::<Body>(encoded).unwrap(), body);
+    }
+
+    #[test]
+    fn bundle_receipts_use_a_capability_event_that_file_only_readers_reject() {
+        #[derive(serde::Deserialize)]
+        #[serde(tag = "type")]
+        enum FileOnlyReceipt {
+            #[serde(rename = "artifact.captured")]
+            File {},
+        }
+        let body = Body::ArtifactBundleCaptured {
+            artifact: "artifact-id".into(),
+            revision: "revision-id".into(),
+            operation: "operation-id".into(),
+            producer: "producer-id".into(),
+            previous: None,
+            source: "app".into(),
+            selection: "selection.json".into(),
+            site: "opaque-site".into(),
+            size: 1000,
+            digest: "a".repeat(64),
+            object: "objects/revision-id.bundle".into(),
+            entrypoint: "index.html".into(),
+            member_count: 3,
+            manifest_bytes: 500,
+        };
+        let encoded = serde_json::to_value(&body).unwrap();
+        assert_eq!(encoded["type"], "artifact.bundle_captured");
+        assert!(encoded.get("members").is_none());
+        assert!(serde_json::from_value::<FileOnlyReceipt>(encoded.clone()).is_err());
         assert_eq!(serde_json::from_value::<Body>(encoded).unwrap(), body);
     }
 }

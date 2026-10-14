@@ -393,6 +393,176 @@ fn exact_download_survives_newer_revision_and_source_loss_but_refuses_corruption
 }
 
 #[test]
+fn bundle_preview_keeps_the_selected_complete_revision_after_source_and_store_loss() {
+    let c = seeded("artifacts-web-bundle-preview");
+    std::fs::create_dir_all(c.0.join("delivery/pages/scripts")).unwrap();
+    std::fs::create_dir_all(c.0.join("delivery/styles")).unwrap();
+    let html = "<!doctype html><link rel=\"stylesheet\" href=\"../styles/main.css\"><script src=\"scripts/app.js\"></script>";
+    std::fs::write(c.0.join("delivery/pages/index.html"), html).unwrap();
+    std::fs::write(c.0.join("delivery/styles/main.css"), "body { color: red; }").unwrap();
+    std::fs::write(
+        c.0.join("delivery/pages/scripts/app.js"),
+        "window.retained = 'first';",
+    )
+    .unwrap();
+    std::fs::write(
+        c.0.join("selection.json"),
+        json!({
+            "root": "delivery", "entrypoint": "pages/index.html",
+            "members": ["pages/index.html", "styles/main.css", "pages/scripts/app.js"],
+            "requirements": []
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let first = cli(
+        &c,
+        &[
+            "artifacts",
+            "capture",
+            "--bundle",
+            "selection.json",
+            "--from",
+            "g1",
+            "--json",
+        ],
+    )["delivery"]
+        .clone();
+    std::fs::write(
+        c.0.join("delivery/pages/scripts/app.js"),
+        "window.retained = 'second';",
+    )
+    .unwrap();
+    cli(
+        &c,
+        &[
+            "artifacts",
+            "capture",
+            "--bundle",
+            "selection.json",
+            "--from",
+            "g1",
+            "--artifact",
+            first["artifact"].as_str().unwrap(),
+            "--previous",
+            first["revision"].as_str().unwrap(),
+            "--json",
+        ],
+    );
+    std::fs::remove_dir_all(c.0.join("delivery")).unwrap();
+    let mut server = Server::start(&c);
+    let headers = format!(
+        "Content-Type: application/x-www-form-urlencoded\r\nOrigin: http://127.0.0.1:{}\r\n",
+        server.port
+    );
+    let session_token = server.cookie.split_once('=').unwrap().1.to_owned();
+    let body = format!(
+        "artifact={}&revision={}&token={session_token}",
+        first["artifact"].as_str().unwrap(),
+        first["revision"].as_str().unwrap()
+    );
+    let route = server.artifacts_path("preview");
+    let cookie = std::mem::take(&mut server.cookie);
+    let no_session = server.call("POST", &route, &headers, &body);
+    assert!(no_session.starts_with("HTTP/1.1 401"), "{no_session}");
+    let header_token = format!("{headers}X-Vivac-Token: {session_token}\r\n");
+    let no_cookie = server.call("POST", &route, &header_token, &body);
+    assert!(no_cookie.starts_with("HTTP/1.1 403"), "{no_cookie}");
+    for response in [&no_session, &no_cookie] {
+        assert!(!response.contains(&session_token), "{response}");
+        assert!(!response.contains(html), "{response}");
+        assert!(!response.contains("window.retained"), "{response}");
+    }
+    server.cookie = cookie;
+    let refused = server.call("POST", &server.artifacts_path("download"), &headers, &body);
+    assert!(refused.starts_with("HTTP/1.1 400"), "{refused}");
+    assert!(
+        refused.contains("Bundle download is not supported."),
+        "{refused}"
+    );
+    let response = server.call("POST", &route, &headers, &body);
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    assert!(!response.contains(&session_token));
+    let location = response
+        .split_once("content=\"0;url=")
+        .unwrap()
+        .1
+        .split_once('"')
+        .unwrap()
+        .0;
+    let (host, token) = location
+        .strip_prefix("http://")
+        .unwrap()
+        .split_once('/')
+        .unwrap();
+    let port: u16 = host.strip_prefix("localhost:").unwrap().parse().unwrap();
+    let call = |method: &str, path: &str, headers: &str, body: &str| {
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+            .unwrap();
+        write!(
+            stream,
+            "{method} {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n{headers}\r\n{body}"
+        )
+        .unwrap();
+        stream.shutdown(std::net::Shutdown::Write).unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).unwrap();
+        response
+    };
+    std::fs::remove_dir_all(c.0.join(".vivac-artifacts")).unwrap();
+    let wrapper = call("GET", &format!("/{token}"), "", "");
+    assert!(wrapper.contains(first["revision"].as_str().unwrap()));
+    assert!(!wrapper.contains("window.retained"));
+    let control = format!("token={token}");
+    let control_headers = format!("Origin: http://{host}\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\n", control.len());
+    let run = call("POST", "/run", &control_headers, &control);
+    assert!(run.starts_with("HTTP/1.1 303"), "{run}");
+    assert!(!run.contains(token));
+    let entry = run
+        .lines()
+        .find_map(|line| line.strip_prefix("Location: "))
+        .unwrap();
+    let resources = entry.strip_suffix("pages/index.html").unwrap();
+    assert!(resources.starts_with("/assets/"));
+    assert!(!resources.contains(token));
+    for (member, media_type, bytes) in [
+        ("pages/index.html", "text/html", html),
+        ("styles/main.css", "text/css", "body { color: red; }"),
+        (
+            "pages/scripts/app.js",
+            "text/javascript",
+            "window.retained = 'first';",
+        ),
+    ] {
+        let response = call(
+            "GET",
+            &format!("{resources}{member}"),
+            "Origin: null\r\n",
+            "",
+        );
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        assert!(response.ends_with(bytes));
+        assert!(response.contains(&format!("Content-Type: {media_type}; charset=utf-8")));
+        assert!(!response.contains(token));
+        assert!(!response.contains(&session_token));
+    }
+    assert!(
+        call("GET", &format!("{resources}.vivac-delivery.json"), "", "")
+            .starts_with("HTTP/1.1 404")
+    );
+    assert!(call(
+        "POST",
+        "/close",
+        &control_headers.replace(&format!("http://{host}"), "null"),
+        &control
+    )
+    .starts_with("HTTP/1.1 403"));
+    assert!(call("POST", "/close", &control_headers, &control).contains("Preview closed."));
+}
+
+#[test]
 fn preview_opens_exact_retained_html_and_preserves_native_gates() {
     let c = seeded("artifacts-web-preview");
     std::fs::write(

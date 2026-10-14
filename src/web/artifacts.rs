@@ -92,11 +92,21 @@ fn download_failure(
     base: &str,
     selected: Option<(&str, &str)>,
 ) {
+    download_failure_message(request, code, base, selected, "The selected revision could not be downloaded safely. Check its retained bytes before trying again.");
+}
+
+fn download_failure_message(
+    request: tiny_http::Request,
+    code: u16,
+    base: &str,
+    selected: Option<(&str, &str)>,
+    message: &str,
+) {
     let back = match selected {
         Some((artifact, revision)) => format!("{base}#artifact={artifact}&revision={revision}"),
         None => base.to_owned(),
     };
-    respond(request, code, super::HTML, format!("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Download refused</title>{FAVICON}<style>{WEB_CSS}</style></head><body><main class=\"page\"><h1>Download refused</h1><p>The selected revision could not be downloaded safely. Check its retained bytes before trying again.</p><p><a href=\"{}\">Back to the selected revision</a></p></main></body></html>", escape(&back)));
+    respond(request, code, super::HTML, format!("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>Download refused</title>{FAVICON}<style>{WEB_CSS}</style></head><body><main class=\"page\"><h1>Download refused</h1><p>{}</p><p><a href=\"{}\">Back to the selected revision</a></p></main></body></html>", escape(message), escape(&back)));
 }
 
 fn preview_failure(
@@ -356,7 +366,18 @@ pub(super) fn serve(
                 ));
                 let _ = request.respond(response);
             }
-            Err(error) => download_failure(request, status(error.code()), &base, selected),
+            Err(error) => {
+                let code = status(error.code());
+                if let crate::failure::Failure::Usage(message) = &error {
+                    if message
+                        .trim_start()
+                        .starts_with("Bundle download is not supported.")
+                    {
+                        return download_failure_message(request, code, &base, selected, message);
+                    }
+                }
+                download_failure(request, code, &base, selected);
+            }
         };
     }
     let value: Value = match serde_json::from_slice(&body) {

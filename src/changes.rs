@@ -202,7 +202,8 @@ pub fn collect<'a>(tree: &'a Tree, log: &[Event], since_seq: u64) -> Changed<'a>
                 Some(_) => result.tail.declarations += 1,
                 None => result.tail.unreadable += 1,
             },
-            Body::ArtifactCaptured { producer, .. } => match tree.node(producer) {
+            Body::ArtifactCaptured { producer, .. }
+            | Body::ArtifactBundleCaptured { producer, .. } => match tree.node(producer) {
                 Some(_) => result.tail.artifacts += 1,
                 None => result.tail.unreadable += 1,
             },

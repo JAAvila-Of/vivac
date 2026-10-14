@@ -372,6 +372,46 @@ fn up_many(names: &[&str]) -> UpMany {
 }
 
 #[test]
+fn localhost_cannot_boot_or_receive_an_authenticated_web_session() {
+    let s = up("canonical-web-session");
+    let localhost = format!("localhost:{}", s.port());
+    let origin = format!("http://{localhost}");
+    for headers in [
+        vec![("Host", localhost.clone())],
+        vec![("Host", s.host()), ("Origin", origin.clone())],
+    ] {
+        let refused = call(s.port(), &s.boot_path(), &headers);
+        assert_eq!(refused.status, 403, "{}", refused.body);
+        assert!(refused.header("Set-Cookie").is_none());
+    }
+    let boot = call(s.port(), &s.boot_path(), &[("Host", s.host())]);
+    assert_eq!(boot.status, 302, "{}", boot.body);
+    let token = token_from(&boot);
+    let cookie = format!("vivac_session={token}");
+    assert!(!boot
+        .header("Set-Cookie")
+        .unwrap()
+        .to_ascii_lowercase()
+        .contains("domain="));
+    for credential in [("X-Vivac-Token", token), ("Cookie", cookie.clone())] {
+        for headers in [
+            vec![("Host", localhost.clone()), credential.clone()],
+            vec![
+                ("Host", s.host()),
+                ("Origin", origin.clone()),
+                credential.clone(),
+            ],
+        ] {
+            let refused = call(s.port(), "/", &headers);
+            assert_eq!(refused.status, 403, "{}", refused.body);
+            assert!(refused.header("Set-Cookie").is_none());
+        }
+    }
+    let served = call(s.port(), "/", &[("Host", s.host()), ("Cookie", cookie)]);
+    assert_eq!(served.status, 200, "{}", served.body);
+}
+
+#[test]
 fn the_boot_key_hands_over_a_session_cookie_and_redirects() {
     let s = up("boot");
     let a = call(s.port(), &s.boot_path(), &[("Host", s.host())]);

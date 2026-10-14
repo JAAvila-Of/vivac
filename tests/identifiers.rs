@@ -62,7 +62,10 @@ const SPANISH: &str = "tests/data/spanish-vocabulary.txt";
 /// `t594` left behind in `tests/iquorum.rs`. The last of those got a body
 /// in tranche 5, so the crate no longer reaches that macro at all and the
 /// exception went with it.
-const KNOWN_ENGLISH: &[&str] = &["era", "ser", "base"];
+///
+/// `dos` names the Windows error-code family in the native binding
+/// `RtlNtStatusToDosErrorNoTeb`, reached from `src/artifacts/native.rs`.
+const KNOWN_ENGLISH: &[&str] = &["era", "ser", "base", "dos"];
 
 fn root() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))

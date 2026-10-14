@@ -39,6 +39,13 @@ pub(super) fn project(tree: &Tree) -> HashMap<u64, Links<'_>> {
             producer,
             source,
             ..
+        }
+        | Body::ArtifactBundleCaptured {
+            artifact,
+            revision,
+            producer,
+            source,
+            ..
         } = body
         {
             let link = Link {
@@ -192,6 +199,33 @@ mod tests {
             },
         );
     }
+    #[test]
+    fn bundle_receipts_keep_exact_revision_links_on_producer_and_reference() {
+        let mut tree = Tree::default();
+        node(&mut tree, 1, vec![]);
+        node(
+            &mut tree,
+            2,
+            vec![format!("artifact:{}@{}", id(90), id(102))],
+        );
+        for (revision, previous) in [(102, None), (103, Some(id(102)))] {
+            let body: Body = serde_json::from_value(serde_json::json!({
+                "type": "artifact.bundle_captured", "artifact": id(90),
+                "revision": id(revision), "operation": id(revision + 200),
+                "producer": id(1), "previous": previous, "source": "delivery-root",
+                "selection": "selection.json", "site": id(500), "size": 170,
+                "digest": "a".repeat(64), "object": format!("objects/{}.bundle", id(revision)),
+                "entrypoint": "index.html", "member_count": 3, "manifest_bytes": 100
+            }))
+            .unwrap();
+            tree.apply(revision.into(), "2026-10-14T00:00:00Z", "main", &body);
+        }
+        let links = project(&tree);
+        assert_eq!(links[&1].produced[0].revision, id(103));
+        assert_eq!(links[&2].referenced[0].revision, id(102));
+        assert_eq!(links[&2].count, 1);
+    }
+
     #[test]
     fn exact_references_do_not_follow_later_revisions_or_count_twice() {
         let mut tree = Tree::default();

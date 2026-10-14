@@ -20,6 +20,16 @@ pub(crate) struct Download {
 }
 
 impl Download {
+    pub(super) fn from_file(reader: File, size: u64) -> Self {
+        Self { reader, size }
+    }
+
+    pub(crate) fn try_clone(&self) -> io::Result<Self> {
+        Ok(Self {
+            reader: self.reader.try_clone()?,
+            size: self.size,
+        })
+    }
     pub(crate) fn size(&self) -> u64 {
         self.size
     }
@@ -295,6 +305,20 @@ pub fn for_each_object(
             .file_name()
             .into_string()
             .map_err(|_| Failure::usage("Invalid artifact object name."))?;
+        if let Some(id) = name.strip_prefix(".tmp-bundle-") {
+            opaque_id(id)?;
+            reject_link(&objects.symlink_metadata(&name)?)?;
+            objects.open_dir_nofollow(&name)?;
+            visit(format!("objects/{name}"))?;
+            continue;
+        }
+        if let Some(id) = name.strip_suffix(".bundle") {
+            opaque_id(id)?;
+            reject_link(&objects.symlink_metadata(&name)?)?;
+            objects.open_dir_nofollow(&name)?;
+            visit(format!("objects/{name}"))?;
+            continue;
+        }
         if let Some(id) = name.strip_prefix(".tmp-") {
             opaque_id(id)?;
             regular(&objects, &name)?;
@@ -309,7 +333,7 @@ pub fn for_each_object(
     Ok(())
 }
 
-fn source_path(path: &str) -> Result<(), Failure> {
+pub(super) fn source_path(path: &str) -> Result<(), Failure> {
     if path.is_empty()
         || path.contains(['\\', ':'])
         || Path::new(path).is_absolute()
@@ -375,7 +399,7 @@ fn source_path(path: &str) -> Result<(), Failure> {
     Ok(())
 }
 
-fn opaque_id(id: &str) -> Result<(), Failure> {
+pub(super) fn opaque_id(id: &str) -> Result<(), Failure> {
     if id.len() != 26
         || !id
             .bytes()
@@ -396,7 +420,7 @@ fn object_path(path: &str) -> Result<(), Failure> {
     opaque_id(id)
 }
 
-fn open_root(root: &Path) -> Result<Dir, Failure> {
+pub(super) fn open_root(root: &Path) -> Result<Dir, Failure> {
     let absolute = std::path::absolute(root)?;
     let parent_path = absolute
         .parent()
@@ -408,7 +432,7 @@ fn open_root(root: &Path) -> Result<Dir, Failure> {
     Ok(parent.open_dir_nofollow(leaf)?)
 }
 
-fn parent(root: &Dir, path: &str) -> Result<(Dir, String), Failure> {
+pub(super) fn parent(root: &Dir, path: &str) -> Result<(Dir, String), Failure> {
     let mut parts = path.split('/').peekable();
     let mut dir = root.try_clone()?;
     while let Some(part) = parts.next() {
@@ -421,7 +445,7 @@ fn parent(root: &Dir, path: &str) -> Result<(Dir, String), Failure> {
     Err(Failure::usage("Empty artifact path."))
 }
 
-fn regular(root: &Dir, path: &str) -> Result<File, Failure> {
+pub(super) fn regular(root: &Dir, path: &str) -> Result<File, Failure> {
     let (parent, leaf) = parent(root, path)?;
     reject_link(&parent.symlink_metadata(&leaf)?)?;
     let mut options = OpenOptions::new();
@@ -435,7 +459,7 @@ fn regular(root: &Dir, path: &str) -> Result<File, Failure> {
     Ok(file)
 }
 
-fn reject_link(metadata: &Metadata) -> Result<(), Failure> {
+pub(super) fn reject_link(metadata: &Metadata) -> Result<(), Failure> {
     let linked = metadata.file_type().is_symlink();
     #[cfg(windows)]
     let linked = {
@@ -450,7 +474,7 @@ fn reject_link(metadata: &Metadata) -> Result<(), Failure> {
     Ok(())
 }
 
-fn directory(parent: &Dir, name: &str, create: bool) -> Result<Dir, Failure> {
+pub(super) fn directory(parent: &Dir, name: &str, create: bool) -> Result<Dir, Failure> {
     if create {
         match parent.create_dir(name) {
             Ok(()) => sync_directory(parent)?,
@@ -461,7 +485,7 @@ fn directory(parent: &Dir, name: &str, create: bool) -> Result<Dir, Failure> {
     Ok(parent.open_dir_nofollow(name)?)
 }
 
-fn store(root: &Dir, create: bool) -> Result<Dir, Failure> {
+pub(super) fn store(root: &Dir, create: bool) -> Result<Dir, Failure> {
     let store = directory(root, STORE, create)?;
     if create {
         let mut options = OpenOptions::new();
@@ -484,7 +508,7 @@ fn store(root: &Dir, create: bool) -> Result<Dir, Failure> {
     Ok(store)
 }
 
-fn site(store: &Dir) -> Result<String, Failure> {
+pub(super) fn site(store: &Dir) -> Result<String, Failure> {
     let mut options = OpenOptions::new();
     options
         .write(true)
@@ -541,7 +565,12 @@ fn hash(file: &mut File) -> Result<(String, u64), Failure> {
     Ok((format!("{:x}", digest.finalize()), size))
 }
 
-fn matching(actual: &str, actual_size: u64, digest: &str, size: u64) -> Result<(), Failure> {
+pub(super) fn matching(
+    actual: &str,
+    actual_size: u64,
+    digest: &str,
+    size: u64,
+) -> Result<(), Failure> {
     if actual != digest || actual_size != size {
         return Err(Failure::Model(
             "The saved artifact bytes do not match the revision digest and size.".into(),
@@ -550,7 +579,7 @@ fn matching(actual: &str, actual_size: u64, digest: &str, size: u64) -> Result<(
     Ok(())
 }
 
-fn unchanged(before: &Metadata, after: &Metadata) -> Result<(), Failure> {
+pub(super) fn unchanged(before: &Metadata, after: &Metadata) -> Result<(), Failure> {
     let mut changed = before.len() != after.len()
         || before.modified()? != after.modified()?
         || before.created().ok() != after.created().ok();
@@ -576,7 +605,7 @@ fn unchanged(before: &Metadata, after: &Metadata) -> Result<(), Failure> {
 }
 
 #[cfg(windows)]
-fn same_source(first: &File, second: &File) -> Result<(), Failure> {
+pub(super) fn same_source(first: &File, second: &File) -> Result<(), Failure> {
     if file_identity(first)? != file_identity(second)? {
         return Err(Failure::usage(
             "The artifact source was replaced while its bytes were being read.",
@@ -586,7 +615,7 @@ fn same_source(first: &File, second: &File) -> Result<(), Failure> {
 }
 
 #[cfg(windows)]
-fn file_identity(file: &File) -> Result<(u64, [u8; 16]), Failure> {
+pub(super) fn file_identity(file: &File) -> Result<(u64, [u8; 16]), Failure> {
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Storage::FileSystem::{
         FileIdInfo, GetFileInformationByHandleEx, FILE_ID_INFO,
@@ -681,7 +710,7 @@ fn git_output(
     Ok(output)
 }
 
-fn check_tracking(root: &Path) -> Result<bool, Failure> {
+pub(super) fn check_tracking(root: &Path) -> Result<bool, Failure> {
     // A plain project is supported, but a Git marker makes every subsequent
     // Git check mandatory. Errors never turn a repository into a plain project.
     let absolute = std::path::absolute(root)?;
@@ -710,7 +739,7 @@ fn check_tracking(root: &Path) -> Result<bool, Failure> {
     Ok(true)
 }
 
-fn check_git(root: &Path, object: &str, temporary: &str) -> Result<(), Failure> {
+pub(super) fn check_git(root: &Path, object: &str, temporary: &str) -> Result<(), Failure> {
     if !check_tracking(root)? {
         return Ok(());
     }
@@ -793,7 +822,7 @@ fn git_command(root: &Path) -> Command {
     command
 }
 
-fn sync_directory(dir: &Dir) -> Result<(), Failure> {
+pub(super) fn sync_directory(dir: &Dir) -> Result<(), Failure> {
     #[cfg(windows)]
     {
         use cap_fs_ext::OpenOptionsMaybeDirExt;

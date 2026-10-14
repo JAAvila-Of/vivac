@@ -33,6 +33,8 @@ accumulated
 accumulates
 accumulating
 accumulator
+ace
+acl
 acquired
 acronym
 across
@@ -106,7 +108,10 @@ alike
 alive
 aliveness
 all
+allocate
 allocated
+allocates
+allocating
 allocation
 allow
 allowed
@@ -168,6 +173,7 @@ apache
 apart
 api
 apiece
+apis
 apostrophe
 app
 appear
@@ -787,6 +793,7 @@ contiguous
 continuation
 continues
 continuing
+continuously
 contract
 contracts
 contradict
@@ -989,6 +996,7 @@ demonstrates
 denial
 denials
 denied
+denies
 deny
 depend
 depended
@@ -1037,6 +1045,7 @@ detected
 detection
 detector
 detects
+determines
 determinism
 deterministic
 detour
@@ -1107,6 +1116,7 @@ dispatches
 display
 displays
 disposable
+disposition
 disqualified
 dissolved
 dist
@@ -1231,6 +1241,7 @@ elbows
 element
 elements
 eleven
+eligible
 ellipses
 ellipsis
 else
@@ -2300,6 +2311,7 @@ median
 meets
 megabyte
 megabytes
+member
 membership
 memory
 mention
@@ -2507,8 +2519,10 @@ observable
 observation
 observe
 observed
+obtains
 obvious
 occasionally
+occupied
 odd
 of
 off
@@ -2696,6 +2710,7 @@ performs
 period
 permanent
 permission
+permissions
 permit
 permits
 permitting
@@ -2814,6 +2829,7 @@ prefixed
 prefixes
 preflight
 premise
+preparation
 prepares
 prepend
 presence
@@ -2891,6 +2907,7 @@ proposes
 proposing
 prose
 protect
+protected
 protection
 protects
 protocol
@@ -2902,6 +2919,7 @@ proved
 proven
 provenance
 proves
+provides
 proving
 provisional
 provisioning
@@ -2911,6 +2929,7 @@ prune
 pruned
 prunes
 pruning
+pseudohandle
 public
 publication
 publish
@@ -3192,6 +3211,7 @@ repairing
 repairs
 reparent
 reparenting
+reparse
 repeat
 repeatable
 repeated
@@ -3226,6 +3246,7 @@ reproducing
 reproduction
 request
 requested
+requesting
 require
 required
 requires
@@ -3269,6 +3290,7 @@ result
 results
 resume
 retain
+retained
 retains
 retirable
 retired
@@ -3471,6 +3493,7 @@ sequentially
 serde
 serialised
 serialises
+serialization
 serialize
 serialized
 serializes
@@ -3541,6 +3564,7 @@ shunted
 shut
 sibling
 siblings
+sid
 side
 sides
 sideways
@@ -3769,6 +3793,7 @@ strongest
 struck
 struct
 structural
+structure
 stubs
 stuck
 style
@@ -3865,6 +3890,7 @@ symptom
 sync
 synced
 synchronization
+synchronize
 synchronous
 syncing
 syncs
@@ -3920,6 +3946,7 @@ tends
 tens
 term
 terminal
+terminated
 terminus
 terms
 territory

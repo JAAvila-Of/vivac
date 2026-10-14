@@ -19,6 +19,8 @@ accepts
 access
 accessible
 accessor
+ace
+acl
 acq
 acquire
 across
@@ -85,6 +87,7 @@ alternate
 alternatives
 always
 ambient
+ambiguity
 ambiguous
 among
 an
@@ -99,6 +102,7 @@ animations
 annotations
 announced
 announces
+anonymous
 another
 answer
 answered
@@ -122,6 +126,7 @@ applied
 applies
 apply
 applying
+arc
 arch
 archive
 are
@@ -152,6 +157,7 @@ asleep
 assemble
 assert
 assertions
+asset
 assign
 assignment
 assignments
@@ -172,6 +178,7 @@ attr
 attribute
 attributes
 attributing
+authenticated
 authored
 authoritative
 authority
@@ -194,6 +201,7 @@ backwards
 bad
 badge
 bare
+barrier
 base
 base64
 based
@@ -215,6 +223,7 @@ behind
 being
 belongs
 below
+benchmark
 beside
 best
 beta
@@ -284,6 +293,7 @@ build
 builder
 built
 bundle
+bundles
 busy
 but
 bv
@@ -317,6 +327,7 @@ canonical
 canonicalize
 cap
 capabilities
+capability
 capacity
 capped
 caps
@@ -487,6 +498,7 @@ constant
 constraint
 constraints
 consts
+consuming
 cont
 contained
 container
@@ -504,7 +516,9 @@ continuous
 contract
 contracts
 control
+controlled
 controls
+convert
 cookie
 cooldown
 cooled
@@ -540,6 +554,7 @@ creates
 creating
 creation
 credential
+credentials
 credit
 crlf
 crockford
@@ -550,6 +565,7 @@ crumb
 csp
 css
 cst
+cstring
 ctime
 ctx
 cur
@@ -565,6 +581,7 @@ cwd
 cyan
 cycle
 d200
+dacl
 damage
 damaged
 dash
@@ -603,6 +620,7 @@ dedup
 deep
 deepest
 default
+defaulted
 defaults
 definition
 degradation
@@ -619,6 +637,7 @@ delivery
 denial
 denied
 deny
+dependencies
 depth
 depths
 deref
@@ -629,6 +648,7 @@ descendants
 describe
 described
 description
+descriptor
 deserialize
 deserializer
 desired
@@ -642,12 +662,14 @@ detail
 detect
 detected
 detector
+detects
 determinism
 deterministic
 dev
 device
 diacritic
 diacritics
+diagnosable
 diagnose
 diagnosis
 diagnostic
@@ -671,6 +693,7 @@ direction
 directly
 directories
 directory
+dirs
 dirty
 disable
 disabled
@@ -702,7 +725,9 @@ doe
 does
 domain
 done
+dont
 doors
+dos
 dot
 dotdot
 double
@@ -782,6 +807,7 @@ entirely
 entries
 entropy
 entry
+entrypoint
 enum
 enumerate
 env
@@ -824,6 +850,7 @@ exceeds
 except
 excessive
 exchange
+excl
 exclude
 excluded
 excludes
@@ -955,9 +982,11 @@ format
 formats
 formatter
 formed
+forms
 forty
 forward
 found
+foundation
 founding
 four
 fourth
@@ -965,6 +994,7 @@ fp
 fractional
 fragment
 fragments
+free
 frees
 fresh
 from
@@ -982,6 +1012,7 @@ gate
 gates
 generation
 get
+geteuid
 getrandom
 gets
 git
@@ -1054,6 +1085,7 @@ headings
 heads
 heals
 healthy
+heap
 heard
 heaviest
 heavy
@@ -1185,11 +1217,13 @@ instructions
 int
 intact
 integer
+integrity
 intent
 interactive
 interleaved
 intern
 interrupted
+interruption
 into
 invalid
 invalidates
@@ -1311,6 +1345,7 @@ load
 loaded
 loading
 local
+localhost
 localtime
 locate
 located
@@ -1389,7 +1424,10 @@ means
 measure
 measured
 measures
+media
 mem
+member
+members
 memory
 mentioned
 merely
@@ -1408,6 +1446,7 @@ migrating
 migration
 millis
 milliseconds
+mime
 min
 mine
 mint
@@ -1479,16 +1518,20 @@ node
 nodes
 nofollow
 non
+nonalert
 nonblocking
 noncanonical
+nonce
 none
 nonempty
 nonexistent
 noninteractive
+nonoverlapping
 nonterminal
 nonzero
 noon
 nor
+noreplace
 norm
 normal
 normalization
@@ -1506,7 +1549,9 @@ notification
 notify
 noun
 now
+np
 nsec
+nt
 nth
 nudge
 null
@@ -1517,6 +1562,7 @@ nums
 obj
 object
 objects
+observable
 observation
 observations
 observe
@@ -1718,6 +1764,7 @@ pop
 popped
 populated
 port
+portable
 pos
 position
 positional
@@ -1732,6 +1779,7 @@ prefers
 prefix
 prefixes
 preparation
+preparations
 prepare
 prepared
 present
@@ -1787,6 +1835,7 @@ property
 proposal
 proposing
 prose
+protected
 protocol
 prove
 provenance
@@ -1801,6 +1850,7 @@ public
 publication
 publish
 published
+publishes
 pure
 purpose
 push
@@ -1841,6 +1891,7 @@ reaches
 reaching
 read
 reader
+readers
 reading
 readme
 readonly
@@ -1860,6 +1911,7 @@ receive
 received
 receiver
 reception
+recheck
 recognise
 recognised
 recognized
@@ -1935,6 +1987,7 @@ relocated
 relock
 relocks
 rem
+remain
 remaining
 remains
 remedy
@@ -1948,6 +2001,8 @@ removed
 removes
 removing
 rename
+renameat2
+renameatx
 renames
 render
 rendered
@@ -1983,10 +2038,14 @@ repos
 repositories
 repository
 repr
+representative
 request
 requested
 requests
+require
 required
+requirement
+requirements
 requires
 rereading
 rescuable
@@ -2005,6 +2064,8 @@ resized
 resolve
 resolved
 resolves
+resource
+resources
 respects
 respond
 response
@@ -2041,6 +2102,7 @@ revoked
 rewind
 rewinds
 rewrite
+rewriting
 rewritten
 rfc3339
 rfind
@@ -2065,6 +2127,7 @@ rpc
 rposition
 rs
 rsplit
+rtl
 rule
 ruler
 rules
@@ -2104,6 +2167,8 @@ scratch
 screen
 script
 scroll
+sddl
+se
 seam
 seams
 search
@@ -2131,6 +2196,7 @@ select
 selected
 selection
 selector
+selectors
 selects
 self
 send
@@ -2187,6 +2253,7 @@ should
 show
 shown
 shows
+shrink
 shut
 shutdown
 sibling
@@ -2203,6 +2270,7 @@ silence
 silent
 silently
 simulated
+simultaneous
 since
 single
 singular
@@ -2267,6 +2335,7 @@ st
 stable
 stack
 stacks
+stage
 staged
 staging
 stale
@@ -2369,6 +2438,7 @@ switches
 symlink
 symlinks
 sync
+synchronize
 synchronous
 sys
 system
@@ -2391,6 +2461,7 @@ tcgetattr
 tcp
 tcsanow
 tcsetattr
+teb
 tell
 tells
 temp
@@ -2516,6 +2587,7 @@ u16
 u32
 u64
 u8
+uid
 uk
 ulid
 ulids
@@ -2599,6 +2671,7 @@ uses
 using
 usize
 utc
+utf16
 utf8
 uv
 v1
@@ -2607,6 +2680,7 @@ val
 valid
 validate
 validated
+validation
 value
 values
 vanished
@@ -2663,6 +2737,7 @@ warning
 warns
 was
 way
+wdk
 weak
 web
 week
@@ -2711,6 +2786,7 @@ words
 work
 worked
 worker
+workers
 workflow
 working
 works

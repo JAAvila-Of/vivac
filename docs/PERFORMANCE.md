@@ -324,6 +324,49 @@ heap. The 10 MiB release download test also passed. These container results
 do not establish native macOS compliance or clear the earlier Windows
 capture latency result.
 
+## Static bundle custody
+
+Measured on **14 October 2026**, with Rust
+`1.94.1 (e408947bf 2026-03-25)`, Windows x86_64 and fixtures on the
+system drive's NTFS user-temp directory. The release test binary uses the
+test allocation counter. Each case has 100 measured samples; p50 and p99
+use nearest rank. These results do not establish Linux or macOS budgets.
+
+| Complete retention | Members | Total bytes, including manifest | p50 / p99 / max (ms) | Peak auxiliary heap (bytes) |
+|---|---:|---:|---:|---:|
+| 1 MiB | 1 | 1,048,576 | 88.7432 / 157.0263 / 161.9411 | 198,710 |
+| 10 MiB | 1 | 10,485,760 | 746.4015 / 917.4501 / 924.6102 | 198,710 |
+| Many small members | 64 | 1,048,576 | 216.2113 / 382.3627 / 386.1025 | 265,640 |
+
+Retention includes complete UTF-8 and sensitive-content inspection, metadata
+and source-identity checks, Git guards, manifest construction, file synchronization
+and native exclusive publication. The input uses synthetic UTF-8 bodies and
+64 KiB streaming chunks. Fixtures are outside a Git repository; these numbers
+do not measure repository-query overhead. Fixture setup and removal of each measured object are
+outside the timer. Adding the 128 KiB stack allowance keeps all three cases
+below the 2 MiB auxiliary-memory ceiling. Both 1 MiB cases meet the 500 ms p99
+budget; the 10 MiB case meets 2,000 ms. Retention excludes the tree receipt.
+
+A separate benchmark commits 100 receipts over 10,000 prior distinct bundle
+receipts, with one producer. Its p50 / p99 / maximum were
+**0.4074 / 0.6210 / 0.6593 ms**, with **33,498 bytes** peak auxiliary heap.
+Each synthetic receipt describes 64 members, a 32 KiB manifest and a 1 MiB
+delivery. The timer includes the lock, refresh, guards, expected-revision check,
+actual append, projection, JSON response construction and unlock. Fixture setup,
+context loading, prepared metadata, retained-byte copying and stdout serialization
+are excluded. The test checks all recorded event sequences and folded receipts
+after measurement. It meets the strict 5 ms p99 receipt budget and 2 MiB memory
+ceiling; it does not measure process startup, HTTP or member retention.
+
+Reproduce from the repository with the shared Rust command coordinator where
+required by the development environment:
+
+```sh
+cargo clean -p vivac
+cargo test --locked --release --bin vivac artifacts::bundle::tests::retained_bundle_release_benchmark -- --ignored --exact --nocapture --test-threads=1
+cargo test --locked --release --bin vivac artifacts::tests::measure_one_hundred_complete_bundle_receipt_commits_with_ten_thousand_prior_artifacts -- --ignored --exact --nocapture --test-threads=1
+```
+
 ## Context
 
 Context is the budget that actually binds an agent, so the payloads are

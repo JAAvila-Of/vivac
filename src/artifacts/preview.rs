@@ -49,6 +49,8 @@ pub(crate) struct Preview {
     worker: JoinHandle<()>,
     #[cfg(test)]
     stats: std::sync::mpsc::Receiver<usize>,
+    #[cfg(test)]
+    resources: String,
 }
 
 impl Preview {
@@ -67,14 +69,24 @@ pub(crate) fn start(selected: PreviewRevision) -> Result<Preview, Failure> {
 
 fn start_for(selected: PreviewRevision, lifetime: Duration) -> Result<Preview, Failure> {
     let slot = Slot::reserve()?;
-    let mut random = [0; 32];
+    let mut random = [0; 64];
     getrandom::getrandom(&mut random)
         .map_err(|error| Failure::Io(io::Error::other(error.to_string())))?;
-    let token: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
+    let token: String = random[..32]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let resource_nonce: String = random[32..]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
     let listener = TcpListener::bind(("127.0.0.1", 0))?;
     listener.set_nonblocking(true)?;
     let host = format!("localhost:{}", listener.local_addr()?.port());
     let origin = format!("http://{host}");
+    let resources = format!("/assets/{resource_nonce}/");
+    #[cfg(test)]
+    let test_resources = resources.clone();
     let path = format!("/{token}");
     let url = format!("{origin}{path}");
     let deadline = Instant::now() + lifetime.min(LIFETIME);
@@ -88,18 +100,24 @@ fn start_for(selected: PreviewRevision, lifetime: Duration) -> Result<Preview, F
             #[cfg(test)]
             {
                 let (_, peak) = crate::test_alloc::measure(|| {
-                    serve(listener, selected, &host, &origin, &path, &token, deadline)
+                    serve(
+                        listener, selected, &host, &origin, &path, &resources, deadline,
+                    )
                 });
                 let _ = stats_sender.send(peak);
             }
             #[cfg(not(test))]
-            serve(listener, selected, &host, &origin, &path, &token, deadline);
+            serve(
+                listener, selected, &host, &origin, &path, &resources, deadline,
+            );
         })?;
     Ok(Preview {
         url,
         worker,
         #[cfg(test)]
         stats,
+        #[cfg(test)]
+        resources: test_resources,
     })
 }
 
@@ -135,9 +153,21 @@ fn serve(
     host: &str,
     origin: &str,
     path: &str,
-    token: &str,
+    resources: &str,
     deadline: Instant,
 ) {
+    let token = &path[1..];
+    let asset_origin = format!("{origin}{resources}");
+    let child_policy = CHILD_POLICY
+        .replace(
+            "script-src 'unsafe-inline'",
+            &format!("script-src 'unsafe-inline' {asset_origin}"),
+        )
+        .replace(
+            "style-src 'unsafe-inline'",
+            &format!("style-src 'unsafe-inline' {asset_origin}"),
+        );
+    let mut running = false;
     while Instant::now() < deadline {
         match listener.accept() {
             Ok((mut socket, _)) => {
@@ -163,7 +193,18 @@ fn serve(
                         );
                     }
                     Ok(Action::Run) => {
-                        if selected.reader.rewind().is_ok() {
+                        if let Some(bundle) = &selected.bundle {
+                            running = true;
+                            let location = format!("{resources}{}", bundle.entrypoint);
+                            let _ = respond(
+                                &mut socket,
+                                303,
+                                ResponsePolicy::Redirect(&location),
+                                &mut io::empty(),
+                                0,
+                                response_deadline,
+                            );
+                        } else if selected.reader.rewind().is_ok() {
                             let size = selected.reader.size();
                             let _ = respond(
                                 &mut socket,
@@ -171,6 +212,40 @@ fn serve(
                                 ResponsePolicy::Child,
                                 &mut selected.reader,
                                 size,
+                                response_deadline,
+                            );
+                        }
+                    }
+                    Ok(Action::Asset(offered)) => {
+                        let member = offered.strip_prefix(resources).and_then(member_path);
+                        let found = if running {
+                            match (member, selected.bundle.as_mut()) {
+                                (Some(member), Some(bundle)) => bundle.members.get_mut(&member),
+                                _ => None,
+                            }
+                        } else {
+                            None
+                        };
+                        if let Some(member) = found {
+                            if member.reader.rewind().is_ok() {
+                                let size = member.reader.size();
+                                let _ = respond(
+                                    &mut socket,
+                                    200,
+                                    ResponsePolicy::Asset(&member.media_type, &child_policy),
+                                    &mut member.reader,
+                                    size,
+                                    response_deadline,
+                                );
+                            }
+                        } else {
+                            let body = "Preview request refused.";
+                            let _ = respond(
+                                &mut socket,
+                                404,
+                                ResponsePolicy::Trusted,
+                                &mut body.as_bytes(),
+                                body.len() as u64,
                                 response_deadline,
                             );
                         }
@@ -212,17 +287,52 @@ fn serve(
     }
 }
 
-#[derive(Clone, Copy)]
 enum Action {
     Wrapper,
     Run,
     Close,
+    Asset(String),
 }
 
-enum ResponsePolicy {
+enum ResponsePolicy<'a> {
     Wrapper,
     Child,
     Trusted,
+    Asset(&'a str, &'a str),
+    Redirect(&'a str),
+}
+
+fn member_path(offered: &str) -> Option<String> {
+    let mut bytes = Vec::with_capacity(offered.len());
+    let mut characters = offered.bytes();
+    while let Some(byte) = characters.next() {
+        if byte == b'%' {
+            let high = (characters.next()? as char).to_digit(16)?;
+            let low = (characters.next()? as char).to_digit(16)?;
+            let decoded = (high * 16 + low) as u8;
+            if decoded == b'/' || decoded == b'\\' {
+                return None;
+            }
+            bytes.push(decoded);
+        } else {
+            bytes.push(byte);
+        }
+    }
+    let decoded = String::from_utf8(bytes).ok()?;
+    if decoded.len() > 240
+        || decoded.split('/').any(|part| {
+            part.is_empty()
+                || part == "."
+                || part == ".."
+                || part.len() > 64
+                || !part
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"-_.".contains(&byte))
+        })
+    {
+        return None;
+    }
+    Some(decoded)
 }
 
 fn unique<'a>(headers: &'a [httparse::Header<'a>], name: &str) -> Result<Option<&'a [u8]>, u16> {
@@ -249,7 +359,13 @@ fn admit(
         return Err(403);
     }
     let offered_origin = unique(request.headers, "Origin")?;
-    if offered_origin.is_some_and(|value| value != origin.as_bytes()) {
+    let asset = request.method == Some("GET")
+        && request
+            .path
+            .is_some_and(|path| path.starts_with("/assets/"));
+    if offered_origin
+        .is_some_and(|value| value != origin.as_bytes() && !(asset && value == b"null"))
+    {
         return Err(403);
     }
     if unique(request.headers, "Transfer-Encoding")?.is_some()
@@ -273,6 +389,9 @@ fn admit(
     }
     match (request.method, request.path) {
         (Some("GET"), Some(offered)) if offered == path && length == 0 => Ok((Action::Wrapper, 0)),
+        (Some("GET"), Some(offered)) if asset && length == 0 => {
+            Ok((Action::Asset(offered.to_owned()), 0))
+        }
         (Some("POST"), Some("/run" | "/close")) => {
             if offered_origin != Some(origin.as_bytes()) {
                 return Err(403);
@@ -372,7 +491,7 @@ fn receive(
     if pipelined {
         return Err(400);
     }
-    if !matches!(action, Action::Wrapper) {
+    if matches!(action, Action::Run | Action::Close) {
         let expected = format!("token={token}");
         if length != expected.len() || !body[..length].is_ascii() {
             return Err(403);
@@ -410,24 +529,60 @@ fn write_before(socket: &mut TcpStream, mut bytes: &[u8], deadline: Instant) -> 
 fn respond(
     socket: &mut TcpStream,
     status: u16,
-    policy: ResponsePolicy,
+    policy: ResponsePolicy<'_>,
     reader: &mut impl Read,
     size: u64,
     deadline: Instant,
 ) -> io::Result<()> {
-    let (policy, referrer_policy) = match policy {
-        ResponsePolicy::Wrapper => (WRAPPER_POLICY, "origin"),
-        ResponsePolicy::Child => (CHILD_POLICY, "no-referrer"),
-        ResponsePolicy::Trusted => (WRAPPER_POLICY, "no-referrer"),
+    let (policy, referrer_policy, media_type, extra) = match policy {
+        ResponsePolicy::Wrapper => (
+            WRAPPER_POLICY,
+            "origin",
+            "text/html; charset=utf-8",
+            String::new(),
+        ),
+        ResponsePolicy::Child => (
+            CHILD_POLICY,
+            "no-referrer",
+            "text/html; charset=utf-8",
+            String::new(),
+        ),
+        ResponsePolicy::Trusted => (
+            WRAPPER_POLICY,
+            "no-referrer",
+            "text/html; charset=utf-8",
+            String::new(),
+        ),
+        ResponsePolicy::Asset(media_type, policy) => {
+            let media_type = match media_type {
+                "text/html" => "text/html; charset=utf-8",
+                "text/css" => "text/css; charset=utf-8",
+                "text/javascript" => "text/javascript; charset=utf-8",
+                _ => return Err(io::Error::other("Unsupported preview media type.")),
+            };
+            (
+                policy,
+                "no-referrer",
+                media_type,
+                "Access-Control-Allow-Origin: null\r\n".into(),
+            )
+        }
+        ResponsePolicy::Redirect(location) => (
+            WRAPPER_POLICY,
+            "no-referrer",
+            "text/html; charset=utf-8",
+            format!("Location: {location}\r\n"),
+        ),
     };
     let reason = match status {
         200 => "OK",
+        303 => "See Other",
         403 => "Forbidden",
         404 => "Not Found",
         405 => "Method Not Allowed",
         _ => "Bad Request",
     };
-    let header = format!("HTTP/1.1 {status} {reason}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {size}\r\nConnection: close\r\nContent-Security-Policy: {policy}\r\nReferrer-Policy: {referrer_policy}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nX-DNS-Prefetch-Control: off\r\nPermissions-Policy: camera=(), microphone=(), geolocation=()\r\nCross-Origin-Opener-Policy: same-origin\r\n\r\n");
+    let header = format!("HTTP/1.1 {status} {reason}\r\nContent-Type: {media_type}\r\nContent-Length: {size}\r\nConnection: close\r\nContent-Security-Policy: {policy}\r\nReferrer-Policy: {referrer_policy}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nX-DNS-Prefetch-Control: off\r\nPermissions-Policy: camera=(), microphone=(), geolocation=()\r\nCross-Origin-Opener-Policy: same-origin\r\n{extra}\r\n");
     write_before(socket, header.as_bytes(), deadline)?;
     let mut buffer = [0; 8192];
     let mut left = size;
@@ -456,6 +611,24 @@ mod tests {
 
     static SERVERS: Mutex<()> = Mutex::new(());
 
+    #[test]
+    fn preview_asset_admission_accepts_opaque_origin_without_control_authority() {
+        let mut headers = [httparse::EMPTY_HEADER; 32];
+        let mut request = httparse::Request::new(&mut headers);
+        request.parse(b"GET /assets/resource/pages/index.html HTTP/1.1\r\nHost: localhost:1234\r\nOrigin: null\r\n\r\n").unwrap();
+        assert!(admit(&request, "localhost:1234", "http://localhost:1234", "/view").is_ok());
+        for action in ["run", "close"] {
+            let bytes = format!("POST /{action} HTTP/1.1\r\nHost: localhost:1234\r\nOrigin: null\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 0\r\n\r\n");
+            let mut headers = [httparse::EMPTY_HEADER; 32];
+            let mut request = httparse::Request::new(&mut headers);
+            request.parse(bytes.as_bytes()).unwrap();
+            assert_eq!(
+                admit(&request, "localhost:1234", "http://localhost:1234", "/view").err(),
+                Some(403)
+            );
+        }
+    }
+
     fn selected(bytes: &[u8]) -> PreviewRevision {
         let root = super::super::standalone_root("preview-runner");
         fs::create_dir(&root).unwrap();
@@ -468,6 +641,7 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
         PreviewRevision {
             reader,
+            bundle: None,
             artifact: crate::id::ulid(),
             revision,
             source: "mockup.html".into(),
@@ -513,6 +687,144 @@ mod tests {
         let (host, token) = parts(url);
         let body = format!("token={token}");
         request(url, "POST", &format!("/{action}"), &format!("Origin: http://{host}\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\n",body.len()), &body)
+    }
+
+    #[test]
+    fn bundle_preview_serves_only_verified_members_after_run_without_control_token() {
+        let _guard = SERVERS.lock().unwrap_or_else(|error| error.into_inner());
+        let html = "<link rel=\"stylesheet\" href=\"../styles/main.css\"><script src=\"scripts/app.js\"></script>";
+        let mut delivery = selected(html.as_bytes());
+        let mut members = std::collections::BTreeMap::new();
+        for (path, media_type, body) in [
+            ("pages/index.html", "text/html", html),
+            ("styles/main.css", "text/css", "body { color: red; }"),
+            (
+                "pages/scripts/app.js",
+                "text/javascript",
+                "window.retained = true;",
+            ),
+        ] {
+            members.insert(
+                path.into(),
+                super::super::bundle::PreviewMember {
+                    media_type: media_type.into(),
+                    reader: selected(body.as_bytes()).reader,
+                },
+            );
+        }
+        delivery.bundle = Some(super::super::bundle::PreviewResources {
+            entrypoint: "pages/index.html".into(),
+            members,
+        });
+        let preview = start_for(delivery, Duration::from_secs(4)).unwrap();
+        let (host, token) = parts(preview.url());
+        let resources = &preview.resources;
+        let entry = format!("{resources}pages/index.html");
+        assert!(!resources.contains(token));
+        assert!(request(preview.url(), "GET", &entry, "", "").starts_with("HTTP/1.1 404"));
+        let wrapper = request(preview.url(), "GET", &format!("/{token}"), "", "");
+        assert!(!wrapper.contains(resources));
+        let run = post(preview.url(), "run");
+        assert!(run.starts_with("HTTP/1.1 303"));
+        assert!(run.contains(&format!("Location: {entry}\r\n")));
+        assert!(!run.contains(token));
+        for (path, mime, body) in [
+            ("pages/index.html", "text/html", html),
+            ("styles/main.css", "text/css", "body { color: red; }"),
+            (
+                "pages/scripts/app.js",
+                "text/javascript",
+                "window.retained = true;",
+            ),
+        ] {
+            for _ in 0..2 {
+                let response = request(
+                    preview.url(),
+                    "GET",
+                    &format!("{resources}{path}"),
+                    "Origin: null\r\n",
+                    "",
+                );
+                assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+                assert!(response.ends_with(body));
+                assert!(response.contains(&format!("Content-Type: {mime}; charset=utf-8\r\n")));
+                assert!(response.contains(&format!(
+                    "script-src 'unsafe-inline' http://{host}{resources}"
+                )));
+                assert!(response.contains(&format!(
+                    "style-src 'unsafe-inline' http://{host}{resources}"
+                )));
+                assert!(response.contains("sandbox allow-scripts;"));
+                assert!(!response.contains("allow-same-origin"));
+                assert!(response.contains("Access-Control-Allow-Origin: null\r\n"));
+                assert!(!response.contains("Access-Control-Allow-Credentials"));
+                assert!(!response.contains(token));
+                for header in [
+                    "connect-src 'none'",
+                    "worker-src 'none'",
+                    "frame-src 'none'",
+                    "base-uri 'none'",
+                    "form-action 'none'",
+                    "X-Content-Type-Options: nosniff",
+                    "Cache-Control: no-store",
+                    "Referrer-Policy: no-referrer",
+                ] {
+                    assert!(response.contains(header));
+                }
+            }
+        }
+        for path in [
+            "../pages/index.html",
+            "%2e%2e/pages/index.html",
+            "pages%2findex.html",
+            "pages%5cindex.html",
+            "pages\\index.html",
+            "pages/./index.html",
+            "pages//index.html",
+            "pages/%ZZindex.html",
+            "pages/index.html?ignored",
+            "undeclared.html",
+            ".vivac-delivery.json",
+            "manifest.json",
+        ] {
+            assert!(
+                request(preview.url(), "GET", &format!("{resources}{path}"), "", "")
+                    .starts_with("HTTP/1.1 404"),
+                "{path}"
+            );
+        }
+        assert!(
+            request_host(preview.url(), "127.0.0.1", "GET", &entry, "", "")
+                .starts_with("HTTP/1.1 403")
+        );
+        assert!(request(preview.url(), "POST", &entry, "", "").starts_with("HTTP/1.1 404"));
+        for action in ["run", "close"] {
+            let body = format!("token={token}");
+            let headers = format!("Origin: null\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\n", body.len());
+            assert!(request(
+                preview.url(),
+                "POST",
+                &format!("/{action}"),
+                &headers,
+                &body
+            )
+            .starts_with("HTTP/1.1 403"));
+            let body = format!(
+                "token={}",
+                resources.trim_end_matches('/').rsplit('/').next().unwrap()
+            );
+            let headers = format!("Origin: http://{host}\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\n", body.len());
+            assert!(request(
+                preview.url(),
+                "POST",
+                &format!("/{action}"),
+                &headers,
+                &body
+            )
+            .starts_with("HTTP/1.1 403"));
+        }
+        post(preview.url(), "close");
+        preview.wait();
     }
 
     #[test]

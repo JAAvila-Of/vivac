@@ -120,7 +120,7 @@ const MAGIC: u64 = u64::from_le_bytes(*b"vivacIDX");
 // is refused rather than read as a node with no notes.
 // Version 20 preserves lane-scoped agent custody history in a bounded section.
 // Version 21 adds a separate bounded section for artifact custody history.
-const FORMAT_VERSION: u32 = 21;
+const FORMAT_VERSION: u32 = 22;
 const ULID_LEN: usize = 26;
 const SPAN_LEN: usize = 8;
 const FLAG_RECORD_LEN: usize = 1 + SPAN_LEN;
@@ -1844,10 +1844,13 @@ fn build_tree(bytes: &[u8], header: &Header) -> Option<Tree> {
     .ok()?;
     let artifact_history: Vec<(String, crate::event::Body)> =
         serde_json::from_slice(bytes.get(start..end)?).ok()?;
-    if artifact_history
-        .iter()
-        .any(|(_, body)| !matches!(body, crate::event::Body::ArtifactCaptured { .. }))
-    {
+    if artifact_history.iter().any(|(_, body)| {
+        !matches!(
+            body,
+            crate::event::Body::ArtifactCaptured { .. }
+                | crate::event::Body::ArtifactBundleCaptured { .. }
+        )
+    }) {
         return None;
     }
     let text = parse_text(bytes, header)?;

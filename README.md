@@ -227,8 +227,10 @@ synchronization plan through the same operations as `vivac agents sync`. It is
 also where the Artifacts page connects retained deliveries to their producer
 and decisions referencing exact revisions. Checks, capture and restore use
 the artifact engine; downloads verify the selected revision before sending it
-as an attachment. HTML revisions can also open in a restricted browser preview
-separate from the Vivac session. See [Artifact custody](docs/ARTIFACTS.md). This
+as an attachment. Static HTML, CSS and JavaScript bundles retain all declared
+members as one revision and restore into a new directory. HTML revisions and
+bundles can open in a restricted browser preview separate from the Vivac
+session. See [Artifact custody](docs/ARTIFACTS.md). This
 is where you see the state of each item for yourself, and where you catch what
 the agent let pass.
 
@@ -518,7 +520,7 @@ Not there yet: team mode. The project is in `0.x` and
 | [**Versioning**](docs/VERSIONING.md) | what breaks when, and what keeps `1.0` away |
 | [**Where it sits**](docs/POSITION.md) | what each category of tool stores, and where each is better than this |
 | [**Pillars**](docs/PILLARS.md) | the four arbiters every decision here is judged against |
-| [**Artifact custody**](docs/ARTIFACTS.md) | retain selected local text deliveries, reference exact revisions and recover their bytes |
+| [**Artifact custody**](docs/ARTIFACTS.md) | retain text files and complete static bundles, reference exact revisions and recover their bytes |
 
 ## Licence
 
