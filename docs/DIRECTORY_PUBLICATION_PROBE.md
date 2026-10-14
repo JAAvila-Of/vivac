@@ -1,11 +1,11 @@
-# Exclusive directory publication experiment
+# Native publication identity experiments
 
-This experiment observes native filesystem APIs on Linux and macOS. It does not
+These experiments observe native filesystem APIs on Linux and macOS. They do not
 add multi-file artifact custody to vivac or change the Rust binary. A successful
 job means the declared synthetic observations completed, including a deliberate
 source-identity counterexample. It does not mean a bundle backend is ready.
 
-## What the experiment checks
+## Directory publication
 
 The script prepares three synthetic members and a manifest, then uses one native
 rename operation to publish the complete directory. Linux uses
@@ -29,7 +29,31 @@ These APIs protect a destination from replacement. They do not establish a
 consistent source snapshot, production access bound to a project root, artifact
 inspection, provenance receipts, power-loss durability, or Rust performance and
 memory budgets. Process exit is not a power-loss test. No existing artifact or
-project content is read, imported, executed or uploaded by the probe.
+project content is read, imported, executed or uploaded by either probe.
+
+## File publication from an open descriptor
+
+The second probe represents three synthetic members and their manifest in one
+regular file. This is a complete experimental fixture, not an adopted bundle
+format or a supported artifact delivery type.
+
+Linux uses `linkat` with a generated `/proc/self/fd` alias and
+`AT_SYMLINK_FOLLOW`; macOS uses `fclonefileat` with the source descriptor. The
+probe never accepts a user-supplied proc alias or falls back to the source's
+mutable filename. Required APIs, proc access and filesystem support must be
+available. The macOS operation creates a separate clone; the Linux operation
+creates a link to the held inode.
+
+The observations compare original bytes with the published file after replacing
+the source name, reject occupied destinations and check a destination parent
+whose visible name has changed. `source_selection_bound_to_fd` describes only
+these executed observations. It does not promise a coherent snapshot during
+concurrent writes to the held object. `production_ready` remains false.
+
+This experiment can inform the physical representation of a retained revision.
+It does not establish safe, complete restoration into a new directory, inspect
+real deliveries, implement receipts, or satisfy Rust resource budgets. A file
+result cannot be substituted for the directory-restoration contract.
 
 ## Run and interpret the report
 
@@ -37,6 +61,7 @@ On a native Linux or macOS host with Python 3.12:
 
 ```sh
 python tools/directory_publication_probe.py --workspace "$PWD"
+python tools/file_publication_identity_probe.py --workspace "$PWD"
 ```
 
 The JSON report includes the platform, Python version, API, individual
@@ -50,7 +75,7 @@ observations and explicit failures or incomplete cases. Exit codes are:
 | 3 | A required observation or safe cleanup could not be completed. |
 
 The `directory-publication-probe` workflow runs on pull requests that change
-these experiment files. Each native runner retains its bounded JSON report even
+these experiment files. Each native runner retains bounded JSON reports even
 if the probe fails. The workflow has no publishing or release permissions.
 Windows is outside this experiment; a Linux or macOS result cannot establish
 Windows behavior. A report must be associated with the exact tested commit.
@@ -59,6 +84,8 @@ Windows behavior. A report must be associated with the exact tested commit.
 
 - [Linux rename and exclusive rename flags](https://man7.org/linux/man-pages/man2/renameat2.2.html).
 - [Linux hard links and the directory restriction](https://man7.org/linux/man-pages/man2/linkat.2.html).
+- [Linux descriptor aliases and access requirements](https://man7.org/linux/man-pages/man5/proc_pid_fd.5.html).
+- [Apple clonefile and fclonefileat](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/man/man2/clonefile.2).
 - [Apple exclusive-renaming volume capability](https://developer.apple.com/documentation/foundation/urlresourcevalues/volumesupportsexclusiverenaming).
 - [Apple syscall declarations](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/syscalls.master).
 - [Python descriptor-based recursive removal](https://docs.python.org/3.12/library/shutil.html#shutil.rmtree).
