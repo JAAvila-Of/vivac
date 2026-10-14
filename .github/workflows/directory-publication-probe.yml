@@ -1,0 +1,38 @@
+name: directory-publication-probe
+
+on:
+  pull_request:
+    paths:
+      - tools/directory_publication_probe.py
+      - docs/DIRECTORY_PUBLICATION_PROBE.md
+      - .github/workflows/directory-publication-probe.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-api:
+    name: native-api (${{ matrix.os }})
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Observe exclusive directory publication
+        shell: bash
+        run: python tools/directory_publication_probe.py --workspace "$GITHUB_WORKSPACE" > native-probe.json
+      - name: Retain the synthetic API report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: directory-publication-${{ runner.os }}
+          path: native-probe.json
+          if-no-files-found: error
+          retention-days: 14
