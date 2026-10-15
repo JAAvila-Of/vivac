@@ -12,10 +12,11 @@
   let historyLoading = false, historyPrevious = null, historyFollowing = null;
   const short = id => String(id).slice(-8);
   const basename = source => String(source).split(/[\\/]/).pop();
-  const typeLabel = type => ({ file: 'Single UTF-8 file', bundle: 'Bundle', sqlite_snapshot: 'SQLite data' })[type] || type;
-  const isBundle = entry => entry.delivery_type === 'bundle';
+  const typeLabel = type => ({ file: 'Single UTF-8 file', bundle: 'Bundle', sqlite_application: 'SQLite application', sqlite_snapshot: 'SQLite data' })[type] || type;
+  const bundleType = type => ['bundle', 'sqlite_application'].includes(type);
+  const isBundle = entry => bundleType(entry.delivery_type);
   const descriptionText = entry => entry.description || 'No description recorded.';
-  const deliveryLabel = entry => isBundle(entry) ? 'Bundle · Entry: ' + entry.entrypoint + ' · ' + entry.member_count + ' members' : typeLabel('file');
+  const deliveryLabel = entry => isBundle(entry) ? typeLabel(entry.delivery_type) + ' · Entry: ' + entry.entrypoint + ' · ' + entry.member_count + ' members' + (entry.database ? ' · Database: ' + entry.database : '') : typeLabel('file');
   const formats = values => (values || []).map(value => value === 'utf8_text' ? 'UTF-8 text' : value).join(', ');
   const observationStorageKey = 'vivac.artifact-checks.v1';
   const observations = new Map();
@@ -240,6 +241,10 @@
     box.append(element('h2', basename(entry.source)), selectedLabel, element('p', descriptionText(entry), 'delivery-description'), element('p', entry.source, 'muted'), element('p', deliveryLabel(entry), 'small muted'));
     const facts = element('div', undefined, 'facts');
     facts.append(element('p', entry.size + ' bytes'), element('p', 'Digest: ' + entry.digest, 'mono'), element('p', 'Producer'), producer(entry)); box.append(facts);
+    if (entry.delivery_type === 'sqlite_application') {
+      box.append(element('p', 'Database profile: ' + entry.profile, 'small muted'),
+        element('p', 'The retained database is a logical export, not a byte-for-byte copy of the source. Changes made in the preview stay in browser memory; they do not update this retained revision.', 'notice'));
+    }
     box.append(element('h3', 'References to this revision'), references(entry), element('p', 'A reference is not inferred approval. Integrity checks do not approve a delivery.', 'small muted'));
     const status = element('div', observationText(observationFor(entry)), 'notice'); status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite'); box.append(status);
     const actions = element('div', undefined, 'actions');
@@ -299,6 +304,7 @@
     if (!capabilities) return element('p', 'Checking preview support…', 'small muted');
     if (capabilities.execution?.provided !== true || capabilities.execution?.scope !== 'retained_html_preview') return element('p', 'Preview is not supported by this engine.', 'small muted');
     if (isBundle(entry) && capabilities.execution.bundle_preview !== true) return element('p', 'Bundle preview is not supported by this engine.', 'small muted');
+    if (entry.delivery_type === 'sqlite_application' && capabilities.delivery_types?.sqlite_application?.supported !== true) return element('p', 'SQLite application preview is not supported by this engine.', 'small muted');
     return nativeForm(entry, 'preview', label);
   }
   function modal(title) {
@@ -330,16 +336,16 @@
     function describeContinuation() { continuation.textContent = 'Continue latest revision ' + short(previous) + (entry.revision !== previous ? '; the selected older revision stays unchanged.' : '.'); }
     if (continuing) { describeContinuation(); $('dialog-content').append(continuation); }
     const structureLabel = element('label', 'Delivery structure'), types = element('select'); types.id = 'capture-type';
-    Object.entries(caps.delivery_types).forEach(([name, capability]) => { const available = ['file', 'bundle'].includes(name) && capability.supported; const option = element('option', typeLabel(name) + (available ? ' · supported' : ' · ' + (capability.reason || 'Not supported by this capture surface.'))); option.value = name; option.disabled = !available; types.append(option); });
-    types.value = continuing && isBundle(entry) ? 'bundle' : 'file'; types.disabled = continuing; structureLabel.append(types); $('dialog-content').append(structureLabel);
-    const path = input('capture-path', types.value === 'bundle' ? 'Bundle selection file' : 'Project-relative source path', continuing ? (isBundle(entry) ? entry.selection : entry.source) : '');
-    const selectionHelp = element('p', types.value === 'bundle' ? 'Use a project-relative JSON file declaring the complete delivery.' : '', 'small muted');
+    Object.entries(caps.delivery_types).forEach(([name, capability]) => { const available = (name === 'file' || bundleType(name)) && capability.supported; const option = element('option', typeLabel(name) + (available ? ' · supported' : ' · ' + (capability.reason || 'Not supported by this capture surface.'))); option.value = name; option.disabled = !available; types.append(option); });
+    types.value = continuing && isBundle(entry) ? entry.delivery_type : 'file'; types.disabled = continuing; structureLabel.append(types); $('dialog-content').append(structureLabel);
+    const path = input('capture-path', bundleType(types.value) ? 'Bundle selection file' : 'Project-relative source path', continuing ? (isBundle(entry) ? entry.selection : entry.source) : '');
+    const selectionHelp = element('p', bundleType(types.value) ? 'Use a project-relative JSON file declaring the complete delivery.' : '', 'small muted');
     $('dialog-content').append(selectionHelp);
     types.addEventListener('change', () => {
       path.value = '';
       const label = path.parentNode;
-      if (label) { label.textContent = types.value === 'bundle' ? 'Bundle selection file' : 'Project-relative source path'; label.append(path); }
-      selectionHelp.textContent = types.value === 'bundle' ? 'Use a project-relative JSON file declaring the complete delivery.' : '';
+      if (label) { label.textContent = bundleType(types.value) ? 'Bundle selection file' : 'Project-relative source path'; label.append(path); }
+      selectionHelp.textContent = bundleType(types.value) ? 'Use a project-relative JSON file declaring the complete delivery.' : '';
       describeLimits();
     });
     const from = input('capture-producer', 'Producer node alias or ID', $('scope').value === 'from' ? $('from').value.trim() : '');
@@ -351,18 +357,18 @@
     const limits = element('p', '', 'small muted');
     function describeLimits() {
       const capability = caps.delivery_types[types.value];
-      limits.textContent = capability ? 'Formats: ' + formats(capability.formats) + '. Maximum ' + (types.value === 'bundle' ? 'revision' : 'file') + ' size: ' + sizeLabel(capability.max_bytes) + '.' : '';
+      limits.textContent = capability ? 'Formats: ' + formats(capability.formats) + '. Maximum ' + (bundleType(types.value) ? 'revision' : 'file') + ' size: ' + sizeLabel(capability.max_bytes) + '.' : '';
     }
     describeLimits(); $('dialog-content').append(limits);
     $('dialog-content').append(element('p', 'Capture retains a delivery locally and records its producer. It does not record approval.'));
     const controls = dialogActions('Capture delivery', async (confirm, status) => {
       if (needsHeadApproval) return;
-      if (!['file', 'bundle'].includes(types.value) || !caps.delivery_types[types.value]?.supported) { status.textContent = 'This delivery structure is not supported.'; return; }
+      if (!(types.value === 'file' || bundleType(types.value)) || !caps.delivery_types[types.value]?.supported) { status.textContent = 'This delivery structure is not supported.'; return; }
       if (!path.value.trim() || !from.value.trim()) { status.textContent = 'Source path and producer node are required.'; (!path.value.trim() ? path : from).focus(); return; }
       const descriptionValue = description.value.trim();
       if (!descriptionValue) { status.textContent = 'A description is required.'; description.focus(); return; }
       if (/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(description.value) || [...descriptionValue].length > 280) { status.textContent = 'Description must be a single line of up to 280 characters.'; description.focus(); return; }
-      const args = { [types.value === 'bundle' ? 'bundle' : 'path']: path.value.trim(), from: from.value.trim(), description: descriptionValue };
+      const args = { [bundleType(types.value) ? 'bundle' : 'path']: path.value.trim(), from: from.value.trim(), description: descriptionValue };
       if (continuing) { args.artifact = entry.artifact; args.previous = previous; }
       writing = true; confirm.disabled = true; controls.cancel.disabled = true; status.textContent = 'Capturing delivery…';
       try { const result = await request('capture', args); const delivery = result.delivery; $('dialog').close(); note('Delivery captured.'); await openArtifact(delivery.artifact, delivery.revision, delivery.revision); }

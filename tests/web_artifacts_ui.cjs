@@ -176,6 +176,36 @@ const button = text => all(document.elements['revision-content']).find(e => e.ta
   assert.equal(bundleCapture.previous, 'r2');
   assert.equal(bundleCapture.description, 'Explore the bundled dashboard.');
   assert(!Object.hasOwn(bundleCapture, 'path'));
+  const sqliteRequests = [];
+  const sqliteRevision = id => ({ ...bundleRevision(id), delivery_type: 'sqlite_application', database: 'data/items.sqlite', profile: 'sqlite-standalone-v1' });
+  const sqliteView = await reload({ artifact: 'bundle-artifact', fetch: async (url, options) => {
+    const body = JSON.parse(options.body); sqliteRequests.push(body);
+    const result = body.operation === 'capabilities'
+      ? { ...caps, delivery_types: { ...caps.delivery_types, sqlite_application: { supported: true, formats: ['html', 'css', 'js', 'sqlite3'], max_bytes: 10485760 } }, execution: { ...caps.execution, bundle_preview: true } }
+      : body.operation === 'list' ? { artifacts: [sqliteRevision('r2')], total: 1, next_offset: null }
+      : body.operation === 'show' ? { revisions: body.revision ? [sqliteRevision(body.revision)] : [sqliteRevision('r1'), sqliteRevision('r2')], latest_revision: 'r2', total: 2, next_offset: null, members: [{ path: 'data/items.sqlite', bytes: 8192, sha256: 'b'.repeat(64), media_type: 'application/vnd.sqlite3' }], total_members: 1, members_next_offset: null }
+      : body.operation === 'capture' ? { delivery: sqliteRevision('r3') } : {};
+    return { ok: true, json: async () => ({ result }) };
+  } });
+  await settle();
+  assert.match(sqliteView.elements.rows.textContent, /SQLite application.*pages\/index.html.*data\/items.sqlite/);
+  assert.match(sqliteView.elements['revision-content'].textContent, /sqlite-standalone-v1/);
+  assert.match(sqliteView.elements['revision-content'].textContent, /logical export.*not a byte-for-byte copy/i);
+  assert.match(sqliteView.elements['revision-content'].textContent, /Changes made in the preview stay in browser memory/);
+  assert.match(sqliteView.elements['revision-content'].textContent, /data\/items.sqlite.*application\/vnd.sqlite3/);
+  assert(previewForm(sqliteView.elements.rows, 'Preview latest revision'));
+  assert(previewForm(sqliteView.elements['revision-content'], 'Preview selected revision'));
+  assert(!previewForm(sqliteView.elements['revision-content'], 'Download selected revision'));
+  await all(sqliteView.elements['revision-content']).find(e => e.tagName === 'BUTTON' && e.textContent === 'Capture a new revision').click(); await settle();
+  assert.equal(sqliteView.elements['capture-type'].value, 'sqlite_application');
+  assert.equal(sqliteView.elements['capture-path'].value, 'bundle-selection.json');
+  sqliteView.elements['capture-producer'].value = 't1';
+  sqliteView.elements['capture-description'].value = 'Explore the inventory with its contained database.';
+  await sqliteView.elements['capture-confirm'].click(); await settle();
+  const sqliteCapture = sqliteRequests.find(body => body.operation === 'capture');
+  assert.equal(sqliteCapture.bundle, 'bundle-selection.json');
+  assert.equal(sqliteCapture.previous, 'r2');
+  assert(!Object.hasOwn(sqliteCapture, 'path'));
   const twoRows = await reload({ fetch: async (url, options) => {
     if (JSON.parse(options.body).operation !== 'list') return fetch(url, options);
     return { ok: true, json: async () => ({ result: { artifacts: [latest, { ...revision('other-head'), artifact: 'other-artifact' }], total: 2, next_offset: null } }) };

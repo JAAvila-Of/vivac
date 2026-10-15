@@ -1,7 +1,7 @@
 # Local artifact custody
 
 An artifact delivery connects a producer node to a selected file or complete
-static bundle revision.
+frontend bundle revision, optionally with a contained SQLite database.
 For preview tasks, prefer self-contained HTML or an HTML/CSS/JS frontend without
 a backend. Reports, Markdown documentation, JSON results, SQL scripts, ordinary
 source and configuration are not artifact deliveries by default. Retain those
@@ -224,11 +224,81 @@ it does not freeze editable source files or claim a coherent filesystem snapshot
 Unsupported filesystem operations are refused rather than replaced by an
 overwriting fallback.
 
+## Frontend applications with SQLite
+
+Check `vivac artifacts capabilities --json` first. The `sqlite_application`
+delivery type must report `supported: true`; `sqlite_snapshot` does not enable
+standalone database capture. The application supplies its own JavaScript
+runtime. Vivac does not download a database engine or provide an application
+backend, WebAssembly or dynamic code evaluation in the preview.
+
+Select the complete frontend and one database explicitly:
+
+```json
+{
+  "root": "previews/counter",
+  "entrypoint": "index.html",
+  "members": ["index.html", "style.css", "app.js", "sql-asm.js", "data.sqlite"],
+  "database": "data.sqlite",
+  "requirements": ["JavaScript enabled; changes stay in browser memory."]
+}
+```
+
+Use `capture --bundle` and the same check, preview and directory restore
+operations as static bundles. The `database` path must name exactly one selected
+`.sqlite`, `.sqlite3` or `.db` member; every other member must be HTML, CSS or
+JavaScript. A filename alone never selects database capture. Include required
+runtime notices in a selected HTML or JavaScript member.
+
+The initial `sqlite-standalone-v1` profile accepts an autonomous, UTF-8 SQLite
+database in rollback mode. WAL mode, any WAL/SHM/journal sidecar, multiple
+databases and hard-linked sources are refused. Vivac holds a native SQLite read
+lock on the authorized source handle throughout inspection and hashing. It
+does not checkpoint, compact or write the source.
+
+The retained database is a fresh **logical export**, not a byte-for-byte source
+copy. The manifest identifies `logical-export-v1` and records the source size
+and digest separately from the retained member's size and digest. This removes
+freed-page remnants; it does not excuse sensitive live data or metadata. Source
+SQL is parsed into a supported schema and never executed as artifact code.
+All logical names, definitions, values and relevant internal metadata pass the
+existing sensitive-value guards, using actual cell storage classes.
+
+Tables need a verified `INTEGER PRIMARY KEY` alias or an explicit primary key
+with `WITHOUT ROWID`. Supported keys, ordinary indexes, foreign keys, literal
+defaults, AUTOINCREMENT counters, `user_version` and `application_id` are
+preserved. BLOB, non-finite REAL, invalid UTF-8, NUL text, views, triggers,
+virtual tables, generated columns, expression indexes and unsupported schema
+clauses refuse the complete capture. No table or row is silently omitted.
+
+The complete revision still has the 10 MiB, 64-member and 64 KiB manifest
+limits. The SQLite profile additionally bounds schema and data: 16 user tables,
+32 columns per table, 256 columns total, 32 indexes including automatic indexes,
+64 KiB of schema SQL, 128-byte names, 64 KiB values, 256 KiB serialized rows
+and 100,000 rows total. Inspection and export are bounded to 20 million SQLite
+VM steps and two seconds of work per operation.
+SQLite and Rust share the 2 MiB auxiliary-memory budget. Exceeding a limit
+refuses capture rather than truncating inspection.
+
+The new receipt is `artifact.sqlite_application_captured`; its manifest uses
+schema version 2. Older engines must refuse that receipt rather than treat the
+application as a static bundle. Use compatible engines in every harness sharing
+the project. An artifact cannot change between file, static bundle and SQLite
+application identities.
+
+Preview serves only verified revision members, including the database as
+`application/vnd.sqlite3`. The frontend may fetch resources from its random
+revision resource prefix; it cannot use that permission to access vivac's
+authenticated web origin. Changes made by the JavaScript runtime stay in browser
+memory and do not update the retained revision or source. Restore copies the
+exact normalized database bytes with the rest of the selected revision.
+
 ## Limits and refusals
 
 File deliveries accept UTF-8 text up to 10 MiB. Invalid UTF-8,
 oversized input and content recognized by the sensitive-data guard are
-refused. Binary formats are unsupported. The guard examines the complete
+refused. Binary formats require an explicit supported delivery profile; the
+single-file operation does not accept them. The guard examines the complete
 stream without truncating inspection; an oversized token is refused.
 No automated detector can certify that an arbitrary document contains no
 sensitive information. Select files deliberately under the project's rules.
@@ -322,11 +392,12 @@ required description. Do not omit it to get an older capture accepted; report
 that limitation and keep the described delivery outside custody until the engine
 supports it.
 
-The engine retains a UTF-8 file or a complete selected static bundle per
+The engine retains a UTF-8 file or a complete selected frontend bundle per
 revision, up to 10 MiB including bundle metadata. A self-contained HTML file can
-include JavaScript and remain a single delivery. SQLite snapshots and other
-binary formats are unsupported. Recognizing their filenames does not make them
-eligible for custody. Retaining a supported
+include JavaScript and remain a single delivery. A contained SQLite database
+requires the explicit `sqlite_application` capability and profile described
+above. Other binary formats are unsupported. Recognizing a filename does not
+make it eligible for custody. Retaining a supported
 code file does not prove that an entire application can be recovered or run.
 The engine offers restricted browser preview for retained HTML revisions.
 It does not provide general application execution or install runtime dependencies.
@@ -343,8 +414,8 @@ Later changes to a known artifact become new revisions of the same identity.
 Other file deliveries require the person's explicit selection. Documentation,
 reports, code and configuration stay in their ordinary project locations by
 default. A small frontend application with a contained SQLite database still
-requires explicit engine support for data custody and runtime; this workflow
-does not enable either capability.
+requires explicit installed support for its application profile and a supplied
+JavaScript runtime; this workflow does not install either one.
 
 This is agent guidance, not automatic filesystem capture. Hooks do not inspect
 or retain delivery bytes. Unsupported formats and capture refusals must be

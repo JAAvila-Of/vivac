@@ -129,7 +129,7 @@ const TOOLS: &[Tool] = &[
             Arg { name:"operation",kind:ArgKind::Str,required:true,description:"capabilities, list, show, capture, check or restore." },
             Arg { name:"artifact",kind:ArgKind::Str,required:false,description:"Stable artifact identity, never inferred from a filename." },
             Arg { name:"path",kind:ArgKind::Str,required:false,description:"Selected project-relative source; capture only." },
-            Arg { name:"bundle",kind:ArgKind::Str,required:false,description:"Project-relative JSON selection file for a complete static HTML/CSS/JS bundle; capture only, exclusive with path." },
+            Arg { name:"bundle",kind:ArgKind::Str,required:false,description:"Project-relative JSON selection file for a complete frontend bundle, optionally with one explicit database when sqlite_application is supported; capture only, exclusive with path." },
             Arg { name:"from",kind:ArgKind::Str,required:false,description:"Producer node for capture, or scope node for list." },
             Arg { name:"description",kind:ArgKind::Str,required:false,description:"Required for capture: what this revision does, in one line of up to 280 Unicode characters." },
             Arg { name:"revision",kind:ArgKind::Str,required:false,description:"Exact retained revision for show, check or restore." },

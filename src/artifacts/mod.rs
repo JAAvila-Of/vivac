@@ -5,6 +5,8 @@ mod guard;
 mod native;
 pub(crate) mod preview;
 pub(crate) mod projection;
+#[cfg(test)]
+mod sqlite;
 
 use crate::args::Args;
 use crate::event::Body;
