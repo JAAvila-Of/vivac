@@ -621,7 +621,7 @@ fn respond(
 mod tests {
     use super::*;
     use std::fs;
-    use std::io::{Read, Write};
+    use std::io::{self, Cursor, Read, Write};
     use std::net::{Shutdown, TcpStream};
     use std::sync::Mutex;
 
@@ -708,9 +708,133 @@ mod tests {
             .unwrap();
         socket.write_all(format!("{method} {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n{headers}\r\n{body}").as_bytes()).unwrap();
         socket.shutdown(Shutdown::Write).unwrap();
-        let mut response = String::new();
-        socket.read_to_string(&mut response).unwrap();
-        response
+        read_response(&mut socket).unwrap_or_else(|error| {
+            let (_, token) = parts(url);
+            let path = if !token.is_empty() && path.contains(token) {
+                "[redacted]"
+            } else {
+                path
+            };
+            panic!("response for {method} {path}: {error}")
+        })
+    }
+
+    fn read_response(reader: &mut impl Read) -> io::Result<String> {
+        let invalid = || io::Error::new(io::ErrorKind::InvalidData, "invalid response framing");
+        let mut reader = io::BufReader::new(reader);
+        let mut response = Vec::new();
+        while !response.ends_with(b"\r\n\r\n") {
+            if response.len() == 8192 {
+                return Err(invalid());
+            }
+            let mut byte = [0];
+            reader.read_exact(&mut byte)?;
+            response.push(byte[0]);
+        }
+        let length = {
+            let mut headers = [httparse::EMPTY_HEADER; 32];
+            let mut parsed = httparse::Response::new(&mut headers);
+            match parsed.parse(&response) {
+                Ok(httparse::Status::Complete(end)) if end == response.len() => {}
+                _ => return Err(invalid()),
+            }
+            let mut length = None;
+            for header in parsed.headers {
+                if header.name.eq_ignore_ascii_case("Transfer-Encoding") {
+                    return Err(invalid());
+                }
+                if header.name.eq_ignore_ascii_case("Content-Length") {
+                    if length.is_some()
+                        || header.value.is_empty()
+                        || !header.value.iter().all(u8::is_ascii_digit)
+                    {
+                        return Err(invalid());
+                    }
+                    let value = std::str::from_utf8(header.value)
+                        .map_err(|_| invalid())?
+                        .parse::<usize>()
+                        .map_err(|_| invalid())?;
+                    if value as u64 > crate::artifacts::MAX_FILE_BYTES {
+                        return Err(invalid());
+                    }
+                    length = Some(value);
+                }
+            }
+            length.ok_or_else(invalid)?
+        };
+        let header_length = response.len();
+        response.resize(header_length + length, 0);
+        reader.read_exact(&mut response[header_length..])?;
+        String::from_utf8(response).map_err(|_| invalid())
+    }
+
+    struct ResetAfter<'a>(Cursor<&'a [u8]>);
+
+    impl Read for ResetAfter<'_> {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            if buffer.is_empty() {
+                return Ok(0);
+            }
+            match self.0.read(buffer)? {
+                0 => Err(io::Error::from(io::ErrorKind::ConnectionReset)),
+                count => Ok(count),
+            }
+        }
+    }
+
+    #[test]
+    fn preview_response_framing_accepts_complete_body_before_reset() {
+        let body = "caf\u{e9}";
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        let mut reader = ResetAfter(Cursor::new(response.as_bytes()));
+        assert_eq!(read_response(&mut reader).unwrap(), response);
+    }
+
+    #[test]
+    fn preview_response_framing_rejects_truncated_body() {
+        let response = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\ndata";
+        assert!(read_response(&mut ResetAfter(Cursor::new(response))).is_err());
+        assert!(read_response(&mut Cursor::new(response)).is_err());
+    }
+
+    #[test]
+    fn preview_response_framing_rejects_invalid_headers() {
+        for headers in [
+            "".to_owned(),
+            "Content-Length: 0\r\nContent-Length: 0\r\n".to_owned(),
+            "Content-Length: +0\r\n".to_owned(),
+            "Content-Length: 18446744073709551616\r\n".to_owned(),
+            format!(
+                "Content-Length: {}\r\n",
+                crate::artifacts::MAX_FILE_BYTES + 1
+            ),
+            "Content-Length: 0\r\nTransfer-Encoding: chunked\r\n".to_owned(),
+            "Invalid header\r\nContent-Length: 0\r\n".to_owned(),
+            format!("X-Padding: {}\r\nContent-Length: 0\r\n", "a".repeat(8192)),
+        ] {
+            let response = format!("HTTP/1.1 200 OK\r\n{headers}\r\n");
+            assert_eq!(
+                read_response(&mut Cursor::new(response.as_bytes()))
+                    .unwrap_err()
+                    .kind(),
+                io::ErrorKind::InvalidData
+            );
+        }
+        assert!(read_response(&mut Cursor::new(b"HTTP/1.1 200 OK\r\n")).is_err());
+    }
+
+    #[test]
+    fn preview_response_framing_rejects_invalid_utf8() {
+        let response = b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\n\xff";
+        assert_eq!(
+            read_response(&mut Cursor::new(response))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
     }
 
     fn post(url: &str, action: &str) -> String {
