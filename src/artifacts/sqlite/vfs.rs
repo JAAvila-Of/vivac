@@ -611,7 +611,7 @@ fn reserved(file: &File) -> io::Result<bool> {
     if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETLK, &mut lock) } == -1 {
         Err(io::Error::last_os_error())
     } else {
-        Ok(lock.l_type != libc::F_UNLCK as _)
+        Ok(lock.l_type != libc::F_UNLCK as libc::c_short)
     }
 }
 
