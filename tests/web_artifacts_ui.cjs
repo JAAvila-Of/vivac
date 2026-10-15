@@ -27,7 +27,7 @@ for (const id of ['bootstrap', 'inventory', 'detail', 'rows', 'revision-content'
 document.elements.bootstrap.textContent = JSON.stringify({ token: 'abc', base: '/p/project/artifacts', project_base: '/p/project' });
 document.elements.scope.value = 'all';
 const requests = [];
-const revision = (id, source = 'layout.html') => ({ artifact: 'artifact', revision: id, site: 'site-a', source, producer: 'node', size: 50, digest: 'a'.repeat(64), decision_references: [] });
+const revision = (id, source = 'layout.html') => ({ artifact: 'artifact', revision: id, site: 'site-a', source, producer: 'node', description: id === 'r1' ? null : 'Explore <img onerror=attack> by month.', size: 50, digest: 'a'.repeat(64), decision_references: [] });
 const latest = revision('r2');
 latest.artifact_decision_references = [{ revision: 'r1', node: 'decision', alias: 'd1', kind: 'decision', state: 'closed' }];
 latest.artifact_decision_references_total = 1;
@@ -71,6 +71,12 @@ const button = text => all(document.elements['revision-content']).find(e => e.ta
     assert.equal(form.method, 'post'); assert.equal(form.target, '_blank'); assert.equal(form.rel, 'noopener');
     assert.deepEqual(Object.fromEntries(form.children.filter(e => e.tagName === 'INPUT').map(e => [e.name, e.value])), { artifact: 'artifact', revision: expectedRevision, token: 'abc' });
   };
+  assert(document.elements.rows.textContent.includes(latest.description), 'Inventory must show the latest description as plain text');
+  assert.match(document.elements['revision-content'].textContent, /No description recorded\./, 'Legacy revisions must not inherit the latest description');
+  assert(!document.elements['revision-content'].textContent.includes(latest.description));
+  document.elements.search.value = 'by month'; document.elements.search.listeners.input();
+  assert(document.elements.rows.textContent.includes(latest.description), 'Search must include descriptions');
+  document.elements.search.value = ''; document.elements.search.listeners.input();
   assertPreview(previewForm(document.elements.rows, 'Preview latest revision'), 'r2');
   assertPreview(previewForm(document.elements['revision-content'], 'Preview selected revision'), 'r1');
   await document.elements.capabilities.click(); await settle();
@@ -90,6 +96,12 @@ const button = text => all(document.elements['revision-content']).find(e => e.ta
   document.elements.capture.focus(); await document.elements.capture.click(); await settle();
   assert.match(document.elements['dialog-content'].textContent, /UTF-8 text/);
   assert.match(document.elements['dialog-content'].textContent, /99 bytes/);
+  assert.equal(document.elements['capture-description'].value, '', 'A new identity must not inherit the selected artifact description');
+  document.elements['capture-path'].value = 'new-delivery.html'; document.elements['capture-producer'].value = 't1';
+  const newCaptureRequests = requests.length;
+  await document.elements['capture-confirm'].click(); await settle();
+  assert.equal(requests.length, newCaptureRequests, 'A new identity requires its own description before capture');
+  assert.match(document.elements['dialog-content'].textContent, /A description is required\./);
   document.elements.dialog.close();
   assert.equal(document.activeElement, document.elements.capture, 'Cancelling toolbar capture must restore its focus');
   assert.match(document.elements['revision-content'].textContent, /r1.*Selected/, 'Cancelling toolbar capture must preserve the old revision selection');
@@ -155,11 +167,14 @@ const button = text => all(document.elements['revision-content']).find(e => e.ta
   assert.equal(bundleView.elements['capture-type'].value, 'bundle');
   assert.equal(bundleView.elements['capture-path'].value, 'bundle-selection.json');
   assert.match(bundleView.elements['dialog-content'].textContent, /Bundle selection file/);
+  assert.equal(bundleView.elements['capture-description'].value, '', 'An old revision must not prefill its newer revision description');
   bundleView.elements['capture-producer'].value = 't1';
+  bundleView.elements['capture-description'].value = '  Explore the bundled dashboard.  ';
   await bundleView.elements['capture-confirm'].click(); await settle();
   const bundleCapture = bundleRequests.find(body => body.operation === 'capture');
   assert.equal(bundleCapture.bundle, 'bundle-selection.json');
   assert.equal(bundleCapture.previous, 'r2');
+  assert.equal(bundleCapture.description, 'Explore the bundled dashboard.');
   assert(!Object.hasOwn(bundleCapture, 'path'));
   const twoRows = await reload({ fetch: async (url, options) => {
     if (JSON.parse(options.body).operation !== 'list') return fetch(url, options);
@@ -273,6 +288,19 @@ const button = text => all(document.elements['revision-content']).find(e => e.ta
   document.elements.dialog.close();
   await button('Capture a new revision').click(); await settle();
   document.elements['capture-path'].value = 'new.html'; document.elements['capture-producer'].value = 't1';
+  const description = document.elements['capture-description'];
+  assert.equal(description.required, true);
+  assert.equal(description.maxLength, 560, 'Native input limits must leave room for supplementary Unicode characters');
+  assert.match(document.elements['dialog-content'].textContent, /Briefly describe what this delivery does \(up to 280 characters\)\./);
+  const capturesBeforeValidation = requests.filter(r => r.body.operation === 'capture').length;
+  for (const invalid of ['', '   ', 'x'.repeat(281), '😀'.repeat(281), '\nleading', 'trailing\t', 'line\nbreak', 'line\rbreak', 'tab\there', 'control\u007fhere', 'control\u0085here', 'line\u2028break', 'line\u2029break']) {
+    description.value = invalid;
+    await document.elements['capture-confirm'].click(); await settle();
+    assert.equal(requests.filter(r => r.body.operation === 'capture').length, capturesBeforeValidation, 'Invalid descriptions must never submit capture');
+    assert.equal(document.activeElement, description);
+    assert.match(document.elements['dialog-content'].textContent, /A description is required\.|Description must be a single line of up to 280 characters\./);
+  }
+  description.value = '😀'.repeat(280);
   document.elements['capture-type'].value = 'bundle';
   const before = requests.length;
   await document.elements['capture-confirm'].click(); await settle();
@@ -295,10 +323,12 @@ const button = text => all(document.elements['revision-content']).find(e => e.ta
   const capture = requests.find(request => request.body.operation === 'capture');
   assert.equal(capture.body.previous, 'r3', 'An old selection must continue the authoritative latest head');
   assert.equal(capture.body.artifact, 'artifact');
+  assert.equal(capture.body.description, '😀'.repeat(280), 'The limit must count Unicode characters rather than UTF-16 units');
   assert.match(document.elements['revision-content'].textContent, /r3.*Selected/);
   assert(!document.elements['revision-content'].textContent.includes('2026-10-13T03:30:04Z'), 'A new revision must not inherit another revision check');
   caps.delivery_types.file.max_bytes = 1572864;
   await button('Capture a new revision').click(); await settle();
+  assert.equal(document.elements['capture-description'].value, revision('r3').description, 'Continuing a selected revision may prefill only that revision description');
   document.elements['capture-path'].value = 'next.html'; document.elements['capture-producer'].value = 't2';
   captureConflict = true;
   await document.elements['capture-confirm'].click(); await settle();

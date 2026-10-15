@@ -553,6 +553,40 @@ pub enum Body {
         member_count: usize,
         manifest_bytes: u64,
     },
+    #[serde(rename = "artifact.captured_v2")]
+    ArtifactCapturedV2 {
+        artifact: String,
+        revision: String,
+        operation: String,
+        producer: String,
+        previous: Option<String>,
+        source: String,
+        #[serde(deserialize_with = "crate::artifacts::deserialize_description")]
+        description: String,
+        site: String,
+        size: u64,
+        digest: String,
+        object: String,
+    },
+    #[serde(rename = "artifact.bundle_captured_v2")]
+    ArtifactBundleCapturedV2 {
+        artifact: String,
+        revision: String,
+        operation: String,
+        producer: String,
+        previous: Option<String>,
+        source: String,
+        #[serde(deserialize_with = "crate::artifacts::deserialize_description")]
+        description: String,
+        selection: String,
+        site: String,
+        size: u64,
+        digest: String,
+        object: String,
+        entrypoint: String,
+        member_count: usize,
+        manifest_bytes: u64,
+    },
     #[serde(rename = "agent.automation.configured")]
     AgentAutomationConfigured { node: String, enabled: bool },
     #[serde(rename = "agent.recorded")]
@@ -625,6 +659,8 @@ impl Body {
         "where.changed",
         "artifact.captured",
         "artifact.bundle_captured",
+        "artifact.captured_v2",
+        "artifact.bundle_captured_v2",
         "agent.automation.configured",
         "agent.recorded",
         "agent.bound",
@@ -708,6 +744,8 @@ mod tests {
             Body::WhereChanged { .. } => "where.changed",
             Body::ArtifactCaptured { .. } => "artifact.captured",
             Body::ArtifactBundleCaptured { .. } => "artifact.bundle_captured",
+            Body::ArtifactCapturedV2 { .. } => "artifact.captured_v2",
+            Body::ArtifactBundleCapturedV2 { .. } => "artifact.bundle_captured_v2",
             Body::AgentAutomationConfigured { .. } => "agent.automation.configured",
             Body::AgentRecorded { .. } => "agent.recorded",
             Body::AgentBound { .. } => "agent.bound",
@@ -719,6 +757,36 @@ mod tests {
 
     fn one_of_each() -> Vec<Body> {
         vec![
+            Body::ArtifactBundleCapturedV2 {
+                description: "Selected layout".into(),
+                artifact: "a".into(),
+                revision: "r".into(),
+                operation: "o".into(),
+                producer: "n".into(),
+                previous: None,
+                source: "app".into(),
+                selection: "selection.json".into(),
+                site: "s".into(),
+                size: 1000,
+                digest: "a".repeat(64),
+                object: "objects/r.bundle".into(),
+                entrypoint: "index.html".into(),
+                member_count: 3,
+                manifest_bytes: 500,
+            },
+            Body::ArtifactCapturedV2 {
+                description: "Selected layout".into(),
+                artifact: "a".into(),
+                revision: "r".into(),
+                operation: "o".into(),
+                producer: "n".into(),
+                previous: None,
+                source: "mockup.html".into(),
+                site: "s".into(),
+                size: 17,
+                digest: "a".repeat(64),
+                object: "objects/r".into(),
+            },
             Body::ArtifactBundleCaptured {
                 artifact: "a".into(),
                 revision: "r".into(),
@@ -1198,6 +1266,54 @@ mod tests {
         assert_eq!(encoded["type"], "artifact.captured");
         assert_eq!(encoded["previous"], "previous-id");
         assert_eq!(serde_json::from_value::<Body>(encoded).unwrap(), body);
+    }
+
+    #[test]
+    fn described_receipts_require_safe_descriptions_and_old_readers_reject_their_tags() {
+        #[derive(serde::Deserialize)]
+        #[serde(tag = "type")]
+        enum LegacyReceipt {
+            #[serde(rename = "artifact.captured")]
+            File {},
+            #[serde(rename = "artifact.bundle_captured")]
+            Bundle {},
+        }
+        for body in one_of_each().into_iter().filter(|body| {
+            matches!(
+                body,
+                Body::ArtifactCaptured { .. } | Body::ArtifactBundleCaptured { .. }
+            )
+        }) {
+            let mut encoded = serde_json::to_value(body).unwrap();
+            encoded["type"] =
+                serde_json::json!(format!("{}_v2", encoded["type"].as_str().unwrap()));
+            encoded["description"] = serde_json::json!("Selected layout");
+            let decoded = serde_json::from_value::<Body>(encoded.clone()).unwrap();
+            assert_eq!(serde_json::to_value(decoded).unwrap(), encoded);
+            assert!(serde_json::from_value::<LegacyReceipt>(encoded.clone()).is_err());
+            encoded["description"] = serde_json::json!("  Selected layout  ");
+            let padded = serde_json::from_value::<Body>(encoded.clone()).unwrap();
+            assert_eq!(
+                serde_json::to_value(padded).unwrap()["description"],
+                "  Selected layout  "
+            );
+            for invalid in [
+                serde_json::Value::Null,
+                serde_json::json!(false),
+                serde_json::json!(""),
+                serde_json::json!("  "),
+                serde_json::json!("one\ntwo"),
+                serde_json::json!("one\u{2028}two"),
+                serde_json::json!("x".repeat(281)),
+                serde_json::json!("person@example.com"),
+                serde_json::json!("```html"),
+            ] {
+                encoded["description"] = invalid;
+                assert!(serde_json::from_value::<Body>(encoded.clone()).is_err());
+            }
+            encoded.as_object_mut().unwrap().remove("description");
+            assert!(serde_json::from_value::<Body>(encoded).is_err());
+        }
     }
 
     #[test]

@@ -189,10 +189,11 @@ const USAGE: &str = r#"vivac - provenance of work
 
     vivac artifacts [--all] [--json]         selected deliveries; no byte checks
     vivac artifacts capabilities [--json]    engine formats and limits; no project needed
-    vivac artifacts capture <path> --from <node> [--artifact <id>] [--json]
+    vivac artifacts capture <path> --from <node> --description <text> [--artifact <id>] [--json]
                                             retain guarded UTF-8 locally, up to 10 MiB
-    vivac artifacts capture --bundle <selection.json> --from <node> [--artifact <id>] [--json]
+    vivac artifacts capture --bundle <selection.json> --from <node> --description <text> [--artifact <id>] [--json]
                                             retain a complete selected HTML/CSS/JS revision
+      --description <text>                  what the delivery does; one line, up to 280 characters
     vivac artifacts show <id> [--revision <id>] [--json]
     vivac artifacts check <id> [--revision <id>] [--json]
     vivac artifacts check --store [--json]    check retained bytes and unrecorded objects

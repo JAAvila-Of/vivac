@@ -167,7 +167,8 @@ cargo test --locked --release measure_one_hundred_resident_receipt_commits_after
 
 For complete file capture, `tools/measure-artifact-custody.py` runs the Rust
 binary in fresh processes against exact 1 MiB and 10 MiB synthetic UTF-8 files.
-It verifies retained sizes and digests after every sample. The default fixture
+It passes a 280-character description and verifies that description, retained
+sizes and digests after every sample. The default fixture
 is a Git repository, so custody preflight checks are included. Use an external
 temporary directory: the script refuses ancestors containing an existing
 Vivac project. Record the binary profile, compiler and verified filesystem:
@@ -366,6 +367,40 @@ cargo clean -p vivac
 cargo test --locked --release --bin vivac artifacts::bundle::tests::retained_bundle_release_benchmark -- --ignored --exact --nocapture --test-threads=1
 cargo test --locked --release --bin vivac artifacts::tests::measure_one_hundred_complete_bundle_receipt_commits_with_ten_thousand_prior_artifacts -- --ignored --exact --nocapture --test-threads=1
 ```
+
+## Described artifact revisions
+
+Measured on **15 October 2026**, in release mode on Windows with Rust
+`1.94.1` and external NTFS fixtures. Each receipt benchmark uses 10,000 prior
+V2 receipts and 100 new commits, all with 280-character descriptions. Earlier
+artifact receipt results above used the previous event format.
+
+| Receipt route | p99 (ms) | Peak auxiliary heap (bytes) |
+|---|---:|---:|
+| Complete file receipt commit | 0.7397 | 35,084 |
+| Complete bundle receipt commit | 0.7027 | 36,528 |
+| Capture context after external writes | 1.0118 | 617,063 |
+| Resident `Project.write` after external writes | 1.0206 | 12,461 |
+
+All samples remain included. Each route meets the strict 5 ms p99 budget and
+2 MiB auxiliary-memory ceiling in this environment. These measurements include
+receipt validation and persistence, but exclude retaining source bytes and
+process startup. The allocation counter measures additional live heap on the
+calling thread, not process RSS or Git child-process memory.
+
+The complete-file script used the freshly built release executable, a temporary
+Git repository on NTFS and 100 samples per size, each with a 280-character
+description. It verified every returned description, retained size and digest.
+
+| Complete file capture | p50 (ms) | p99 (ms) | Maximum (ms) | p99 budget (ms) |
+|---|---:|---:|---:|---:|
+| 1 MiB | 261.0702 | 311.4429 | 339.7010 | 500 |
+| 10 MiB | 625.66645 | 866.5226 | 875.4242 | 2,000 |
+
+Both sizes meet their time budgets, with all samples included. These timings
+include CLI process startup, custody preflight, synchronized local retention
+and the receipt. This script does not measure memory and does not establish
+capture performance on other operating systems or filesystems.
 
 ## Context
 

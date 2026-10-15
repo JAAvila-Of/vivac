@@ -20,6 +20,37 @@ use std::path::Path;
 const MAX_FILE_BYTES: u64 = 10 * 1024 * 1024;
 const MAX_PAGE_SIZE: usize = 100;
 
+pub(crate) fn normalize_description(value: &str) -> Result<&str, Failure> {
+    if value.len() > 1120
+        || value
+            .chars()
+            .any(|character| character.is_control() || matches!(character, '\u{2028}' | '\u{2029}'))
+    {
+        return Err(Failure::usage(
+            "Artifact description must be a single line of up to 280 Unicode characters.",
+        ));
+    }
+    let description = value.trim();
+    if description.is_empty() || description.chars().count() > 280 {
+        return Err(Failure::usage(
+            "Artifact description must contain between 1 and 280 Unicode characters.",
+        ));
+    }
+    if let Some(found) = crate::redact::check_field("artifact description", description) {
+        return Err(Failure::Redaction(Box::new(found)));
+    }
+    Ok(description)
+}
+
+pub(crate) fn deserialize_description<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<String, D::Error> {
+    let value = <String as serde::Deserialize>::deserialize(deserializer)?;
+    normalize_description(&value)
+        .map_err(|_| serde::de::Error::custom("Invalid artifact description."))?;
+    Ok(value)
+}
+
 fn capabilities() -> Value {
     let bundles = bundle::SUPPORTED;
     let bundle_capabilities = if bundles {
@@ -31,6 +62,7 @@ fn capabilities() -> Value {
         "operation": "capabilities",
         "schema_version": 1,
         "scope": "engine",
+        "description": {"required_for_capture": true, "max_characters": 280, "scope": "revision"},
         "delivery_types": {
             "file": {"supported": true, "formats": ["utf8_text"], "max_bytes": MAX_FILE_BYTES},
             "bundle": bundle_capabilities,
@@ -64,6 +96,7 @@ struct Revision<'a> {
     producer: &'a str,
     previous: Option<&'a str>,
     source: &'a str,
+    description: Option<&'a str>,
     site: &'a str,
     size: u64,
     digest: &'a str,
@@ -109,6 +142,32 @@ impl<'a> Revision<'a> {
                     digest,
                     object,
                     ..
+                }
+                | Body::ArtifactCapturedV2 {
+                    artifact,
+                    revision,
+                    operation,
+                    producer,
+                    previous,
+                    source,
+                    site,
+                    size,
+                    digest,
+                    object,
+                    ..
+                }
+                | Body::ArtifactBundleCapturedV2 {
+                    artifact,
+                    revision,
+                    operation,
+                    producer,
+                    previous,
+                    source,
+                    site,
+                    size,
+                    digest,
+                    object,
+                    ..
                 } => (
                     artifact, revision, operation, producer, previous, source, site, size, digest,
                     object,
@@ -117,6 +176,13 @@ impl<'a> Revision<'a> {
             };
         let (delivery_type, selection, entrypoint, member_count, manifest_bytes) = match body {
             Body::ArtifactBundleCaptured {
+                selection,
+                entrypoint,
+                member_count,
+                manifest_bytes,
+                ..
+            }
+            | Body::ArtifactBundleCapturedV2 {
                 selection,
                 entrypoint,
                 member_count,
@@ -138,6 +204,11 @@ impl<'a> Revision<'a> {
             producer,
             previous: previous.as_deref(),
             source,
+            description: match body {
+                Body::ArtifactCapturedV2 { description, .. }
+                | Body::ArtifactBundleCapturedV2 { description, .. } => Some(description.as_str()),
+                _ => None,
+            },
             site,
             size: *size,
             digest,
@@ -245,6 +316,9 @@ fn guard_source_reference(source: &str) -> Result<(), Failure> {
 }
 
 fn metadata(revision: &Revision) -> Result<(), Failure> {
+    if let Some(description) = revision.description {
+        normalize_description(description)?;
+    }
     if ![
         revision.artifact,
         revision.revision,
@@ -407,7 +481,7 @@ fn validate(args: &Args) -> Result<&str, Failure> {
         "capabilities" => &["json"],
         "list" => &["json", "all", "from", "limit", "offset"],
         "show" => &["json", "revision", "limit", "offset"],
-        "capture" => &["json", "from", "artifact", "previous", "operation", "bundle"],
+        "capture" => &["json", "from", "artifact", "previous", "operation", "bundle", "description"],
         "check" if args.has("store") => &["json", "revision", "store", "limit", "offset"],
         "check" => &["json", "revision", "store"],
         "restore" => &["json", "revision", "to", "orphan"],
@@ -440,6 +514,9 @@ fn validate(args: &Args) -> Result<&str, Failure> {
         if !valid_id(artifact) || !valid_id(revision) {
             return Err(Failure::usage("Invalid artifact or revision identifier."));
         }
+    }
+    if operation == "capture" {
+        normalize_description(required(args, "description")?)?;
     }
     if operation == "capture" && (args.has("bundle") == args.positional(1).is_some()) {
         return Err(Failure::usage(
@@ -626,6 +703,7 @@ enum CapturePlan {
 }
 
 fn prepare_capture(ctx: &Ctx, args: &Args) -> Result<CapturePlan, Failure> {
+    let description = normalize_description(required(args, "description")?)?;
     let is_bundle = args.has("bundle");
     let source = args
         .opt("bundle")
@@ -652,7 +730,8 @@ fn prepare_capture(ctx: &Ctx, args: &Args) -> Result<CapturePlan, Failure> {
         ));
     }
     if let Some(recorded) = ledger.operation(operation.as_str()) {
-        if recorded.is_bundle() != is_bundle
+        if recorded.description.map(str::trim) != Some(description)
+            || recorded.is_bundle() != is_bundle
             || (if is_bundle {
                 recorded.selection
             } else {
@@ -711,7 +790,8 @@ fn prepare_capture(ctx: &Ctx, args: &Args) -> Result<CapturePlan, Failure> {
         guard_source_reference(&selection.root)?;
         bundle::validate_selection(&selection)?;
         let retained = bundle::capture(&ctx.lane_dir, &selection, &revision)?;
-        let body = Body::ArtifactBundleCaptured {
+        let body = Body::ArtifactBundleCapturedV2 {
+            description: description.into(),
             artifact,
             revision,
             operation,
@@ -731,7 +811,8 @@ fn prepare_capture(ctx: &Ctx, args: &Args) -> Result<CapturePlan, Failure> {
     }
     guard_source_reference(source)?;
     let retained = files::capture(&ctx.lane_dir, source, &revision)?;
-    let body = Body::ArtifactCaptured {
+    let body = Body::ArtifactCapturedV2 {
+        description: description.into(),
         artifact,
         revision: revision.clone(),
         operation,
@@ -977,7 +1058,7 @@ fn restore(ctx: &Ctx, ledger: &Ledger, args: &Args) -> Result<Value, Failure> {
             ));
         }
         if ctx.tree.artifact_history.iter().any(|(_, body)| {
-            matches!(body, Body::ArtifactCaptured { revision, .. } | Body::ArtifactBundleCaptured { revision, .. } if revision == orphan)
+            matches!(body, Body::ArtifactCaptured { revision, .. } | Body::ArtifactBundleCaptured { revision, .. } | Body::ArtifactCapturedV2 { revision, .. } | Body::ArtifactBundleCapturedV2 { revision, .. } if revision == orphan)
         }) {
             return Err(Failure::usage(
                 "This object has a recorded revision; restore its artifact identity.",
@@ -1198,6 +1279,7 @@ pub(crate) struct PreviewRevision {
     pub(crate) artifact: String,
     pub(crate) revision: String,
     pub(crate) source: String,
+    pub(crate) description: Option<String>,
     pub(crate) producer: String,
     pub(crate) digest: String,
 }
@@ -1222,6 +1304,7 @@ fn preview_revision(ctx: &Ctx, selected: Revision<'_>) -> Result<PreviewRevision
         )?;
         return Ok(PreviewRevision {
             reader,
+            description: selected.description.map(str::to_owned),
             bundle: Some(bundle),
             artifact: selected.artifact.to_owned(),
             revision: selected.revision.to_owned(),
@@ -1250,6 +1333,7 @@ fn preview_revision(ctx: &Ctx, selected: Revision<'_>) -> Result<PreviewRevision
     )?;
     Ok(PreviewRevision {
         reader,
+        description: selected.description.map(str::to_owned),
         bundle: None,
         artifact: selected.artifact.to_owned(),
         revision: selected.revision.to_owned(),
@@ -1326,6 +1410,7 @@ fn start_preview(cwd: &Path, args: &Args) -> Result<(preview::Preview, Value), F
             "artifact": selected.artifact,
             "revision": selected.revision,
             "source": selected.source,
+            "description": selected.description,
             "producer": selected.producer,
             "digest": selected.digest,
             "size": selected.reader.size(),
@@ -1385,6 +1470,9 @@ fn print(value: &Value) -> Result<(), Failure> {
             crate::output::outln!("Artifacts: one UTF-8 text file per revision, up to {max_mib} MiB; pages up to {MAX_PAGE_SIZE}. Complete bundle custody is not supported on this platform.");
         }
         crate::output::outln!("Database snapshots are not supported. Retained HTML preview runs with browser restrictions; complete network isolation is not guaranteed.");
+        crate::output::outln!(
+            "Every capture requires a single-line description of up to 280 Unicode characters."
+        );
         return Ok(());
     }
     crate::output::outln!(
@@ -1401,6 +1489,12 @@ fn print(value: &Value) -> Result<(), Failure> {
                 entry["artifact"].as_str().unwrap_or(""),
                 entry["revision"].as_str().unwrap_or(""),
                 entry["source"].as_str().unwrap_or("")
+            );
+            crate::output::outln!(
+                "    Description: {}",
+                entry["description"]
+                    .as_str()
+                    .unwrap_or("No description recorded.")
             );
         }
         if entries.is_empty() {
@@ -1419,6 +1513,7 @@ pub(crate) fn request_args(value: &Value) -> Result<Args, Failure> {
         operation: &'a str,
         artifact: Option<&'a str>,
         path: Option<&'a str>,
+        description: Option<&'a str>,
         bundle: Option<&'a str>,
         from: Option<&'a str>,
         revision: Option<&'a str>,
@@ -1435,6 +1530,7 @@ pub(crate) fn request_args(value: &Value) -> Result<Args, Failure> {
         "operation",
         "artifact",
         "path",
+        "description",
         "bundle",
         "from",
         "revision",
@@ -1464,6 +1560,13 @@ pub(crate) fn request_args(value: &Value) -> Result<Args, Failure> {
     if object.keys().any(|key| !fields.contains(&key.as_str())) {
         return Err(Failure::usage("Invalid artifact request arguments."));
     }
+    if object.contains_key("description")
+        && object.get("operation").and_then(Value::as_str) != Some("capture")
+    {
+        return Err(Failure::usage(
+            "Only capture takes an artifact description.",
+        ));
+    }
     if object.iter().any(|(key, value)| {
         if key == "operation" {
             return !value.is_string();
@@ -1482,6 +1585,7 @@ pub(crate) fn request_args(value: &Value) -> Result<Args, Failure> {
     let request = <Request<'_> as serde::Deserialize>::deserialize(value)
         .map_err(|_| Failure::usage("Invalid artifact request arguments."))?;
     if request.operation.len() > 16
+        || request.description.is_some_and(|value| value.len() > 1120)
         || [request.path, request.bundle, request.to, request.from]
             .into_iter()
             .flatten()
@@ -1513,7 +1617,9 @@ pub(crate) fn request_args(value: &Value) -> Result<Args, Failure> {
     } else {
         request.artifact.map(str::to_owned)
     };
-    if operation != "capture" && (request.path.is_some() || request.bundle.is_some()) {
+    if operation != "capture"
+        && (request.path.is_some() || request.bundle.is_some() || request.description.is_some())
+    {
         return Err(Failure::usage(
             "Only capture takes a source path or bundle selector.",
         ));
@@ -1530,6 +1636,7 @@ pub(crate) fn request_args(value: &Value) -> Result<Args, Failure> {
     }
     for (key, value) in [
         ("bundle", request.bundle),
+        ("description", request.description),
         ("from", request.from),
         ("revision", request.revision),
         ("previous", request.previous),
@@ -1704,6 +1811,7 @@ mod tests {
             }
             let args = Args::parse(vec![
                 "capture".into(),
+                "--description=Selected fixture layout".into(),
                 source.into(),
                 format!("--from={producer}"),
             ])
@@ -1745,6 +1853,7 @@ mod tests {
         .unwrap();
         let args = Args::parse(vec![
             "capture".into(),
+            "--description=Selected fixture layout".into(),
             "mockup.html".into(),
             format!("--from={}", fixture.delivery["producer"].as_str().unwrap()),
             format!(
@@ -3106,6 +3215,7 @@ mod tests {
         let log_before = fs::read(ctx.store.log()).unwrap();
         let args = Args::parse(vec![
             "capture".into(),
+            "--description=Selected fixture layout".into(),
             source.into(),
             format!("--from={producer}"),
         ])
@@ -3778,7 +3888,12 @@ mod tests {
         let producer = format!("{:026x}", 1);
         let receipt = |artifact: u64, revision: u64, operation: u64| {
             let revision = format!("{revision:026x}");
-            Body::ArtifactCaptured {
+            Body::ArtifactCapturedV2 {
+                description: "Selected layout revision. "
+                    .repeat(12)
+                    .chars()
+                    .take(280)
+                    .collect(),
                 artifact: format!("{artifact:026x}"),
                 revision: revision.clone(),
                 operation: format!("{operation:026x}"),
@@ -3807,6 +3922,11 @@ mod tests {
         });
         for index in 0..10_000u64 {
             bodies.push(receipt(10_000 + index, 20_000 + index, 30_000 + index));
+        }
+        for body in bodies.iter().skip(1) {
+            assert!(
+                matches!(body, Body::ArtifactCapturedV2 { description, .. } | Body::ArtifactBundleCapturedV2 { description, .. } if description.chars().count() == 280)
+            );
         }
         let lock = store.lock_for_write().unwrap();
         store
@@ -3837,6 +3957,9 @@ mod tests {
             drop(lock);
             external_sequences[index as usize] = appended.events[0].seq;
             let body = receipt(60_000 + index, 50_000 + index, 40_000 + index);
+            assert!(
+                matches!(&body, Body::ArtifactCapturedV2 { description, .. } if description.chars().count() == 280)
+            );
             let ((result, duration), sample_peak) = crate::test_alloc::measure(|| {
                 let started = std::time::Instant::now();
                 let result = commit_capture(&mut ctx, body);
@@ -3872,7 +3995,7 @@ mod tests {
             let saved = &recorded[10_002 + 2 * index];
             assert_eq!(saved.seq, external_seq + 1);
             assert!(
-                matches!(&saved.payload, Body::ArtifactCaptured { revision, producer: node, .. } if revision == &format!("{:026x}", 50_000 + index as u64) && node == &producer)
+                matches!(&saved.payload, Body::ArtifactCapturedV2 { revision, producer: node, .. } if revision == &format!("{:026x}", 50_000 + index as u64) && node == &producer)
             );
         }
         assert!(
@@ -3897,7 +4020,12 @@ mod tests {
         let producer = format!("{:026x}", 1);
         let receipt = |artifact: u64, revision: u64, operation: u64| {
             let revision = format!("{revision:026x}");
-            Body::ArtifactCaptured {
+            Body::ArtifactCapturedV2 {
+                description: "Selected layout revision. "
+                    .repeat(12)
+                    .chars()
+                    .take(280)
+                    .collect(),
                 artifact: format!("{artifact:026x}"),
                 revision: revision.clone(),
                 operation: format!("{operation:026x}"),
@@ -3926,6 +4054,11 @@ mod tests {
         });
         for index in 0..10_000u64 {
             bodies.push(receipt(10_000 + index, 20_000 + index, 30_000 + index));
+        }
+        for body in bodies.iter().skip(1) {
+            assert!(
+                matches!(body, Body::ArtifactCapturedV2 { description, .. } | Body::ArtifactBundleCapturedV2 { description, .. } if description.chars().count() == 280)
+            );
         }
         let lock = store.lock_for_write().unwrap();
         store
@@ -3963,6 +4096,9 @@ mod tests {
             drop(lock);
             external_sequences[index as usize] = appended.events[0].seq;
             let body = receipt(60_000 + index, 50_000 + index, 40_000 + index);
+            assert!(
+                matches!(&body, Body::ArtifactCapturedV2 { description, .. } if description.chars().count() == 280)
+            );
             let ((result, sequence, duration), sample_peak) = crate::test_alloc::measure(|| {
                 let started = std::time::Instant::now();
                 let mut sequence = 0;
@@ -3985,7 +4121,7 @@ mod tests {
                 let sequence = 10_002 + 2 * index as u64;
                 pair[0].seq == sequence && pair[1].seq == sequence + 1
                     && matches!(&pair[0].payload, Body::NodeNoted { node, note } if node == &producer && note == &format!("External selected work {index}"))
-                    && matches!(&pair[1].payload, Body::ArtifactCaptured { revision, producer: node, .. } if revision == &format!("{:026x}", 50_000 + index as u64) && node == &producer)
+                    && matches!(&pair[1].payload, Body::ArtifactCapturedV2 { revision, producer: node, .. } if revision == &format!("{:026x}", 50_000 + index as u64) && node == &producer)
             })
         });
         drop(external);
@@ -4014,7 +4150,7 @@ mod tests {
             let saved = &recorded[10_002 + 2 * index];
             assert_eq!(saved.seq, external_seq + 1);
             assert!(
-                matches!(&saved.payload, Body::ArtifactCaptured { revision, producer: node, .. } if revision == &format!("{:026x}", 50_000 + index as u64) && node == &producer)
+                matches!(&saved.payload, Body::ArtifactCapturedV2 { revision, producer: node, .. } if revision == &format!("{:026x}", 50_000 + index as u64) && node == &producer)
             );
         }
         assert!(
@@ -4039,7 +4175,12 @@ mod tests {
         let producer = format!("{:026x}", 1);
         let receipt = |artifact: u64, revision: u64, operation: u64| {
             let revision = format!("{revision:026x}");
-            Body::ArtifactBundleCaptured {
+            Body::ArtifactBundleCapturedV2 {
+                description: "Selected layout revision. "
+                    .repeat(12)
+                    .chars()
+                    .take(280)
+                    .collect(),
                 artifact: format!("{artifact:026x}"),
                 revision: revision.clone(),
                 operation: format!("{operation:026x}"),
@@ -4073,6 +4214,11 @@ mod tests {
         for index in 0..10_000u64 {
             bodies.push(receipt(10_000 + index, 20_000 + index, 30_000 + index));
         }
+        for body in bodies.iter().skip(1) {
+            assert!(
+                matches!(body, Body::ArtifactCapturedV2 { description, .. } | Body::ArtifactBundleCapturedV2 { description, .. } if description.chars().count() == 280)
+            );
+        }
         let lock = store.lock_for_write().unwrap();
         store
             .append(&lock, crate::lane::MAIN, bodies, 0, false)
@@ -4085,6 +4231,9 @@ mod tests {
         let mut durations = Vec::with_capacity(100);
         let mut peak = 0;
         for body in samples {
+            assert!(
+                matches!(&body, Body::ArtifactCapturedV2 { description, .. } | Body::ArtifactBundleCapturedV2 { description, .. } if description.chars().count() == 280)
+            );
             let ((result, duration), sample_peak) = crate::test_alloc::measure(|| {
                 let started = std::time::Instant::now();
                 let result = commit_capture(&mut ctx, body);
@@ -4156,7 +4305,12 @@ mod tests {
         });
         for index in 0..10_000u64 {
             let revision = format!("{:026x}", 20_000 + index);
-            bodies.push(Body::ArtifactCaptured {
+            bodies.push(Body::ArtifactCapturedV2 {
+                description: "Selected layout revision. "
+                    .repeat(12)
+                    .chars()
+                    .take(280)
+                    .collect(),
                 artifact: format!("{:026x}", 10_000 + index),
                 revision: revision.clone(),
                 operation: format!("{:026x}", 30_000 + index),
@@ -4169,6 +4323,11 @@ mod tests {
                 object: format!("objects/{revision}.blob"),
             });
         }
+        for body in bodies.iter().skip(1) {
+            assert!(
+                matches!(body, Body::ArtifactCapturedV2 { description, .. } | Body::ArtifactBundleCapturedV2 { description, .. } if description.chars().count() == 280)
+            );
+        }
         let lock = store.lock_for_write().unwrap();
         store
             .append(&lock, crate::lane::MAIN, bodies, 0, false)
@@ -4179,7 +4338,12 @@ mod tests {
         let samples: Vec<_> = (0..100u64)
             .map(|index| {
                 let revision = format!("{:026x}", 50_000 + index);
-                Body::ArtifactCaptured {
+                Body::ArtifactCapturedV2 {
+                    description: "Selected layout revision. "
+                        .repeat(12)
+                        .chars()
+                        .take(280)
+                        .collect(),
                     artifact: format!("{:026x}", 60_000 + index),
                     revision: revision.clone(),
                     operation: format!("{:026x}", 40_000 + index),
@@ -4196,6 +4360,9 @@ mod tests {
         let mut durations = Vec::with_capacity(100);
         let mut peak = 0;
         for body in samples {
+            assert!(
+                matches!(&body, Body::ArtifactCapturedV2 { description, .. } | Body::ArtifactBundleCapturedV2 { description, .. } if description.chars().count() == 280)
+            );
             let ((result, duration), sample_peak) = crate::test_alloc::measure(|| {
                 let started = std::time::Instant::now();
                 let result = commit_capture(&mut ctx, body);
@@ -4231,7 +4398,12 @@ mod tests {
         let mut emit_residuals = Vec::with_capacity(100);
         for index in 0..100u64 {
             let revision = format!("{:026x}", 70_000 + index);
-            let body = Body::ArtifactCaptured {
+            let body = Body::ArtifactCapturedV2 {
+                description: "Selected layout revision. "
+                    .repeat(12)
+                    .chars()
+                    .take(280)
+                    .collect(),
                 artifact: format!("{:026x}", 80_000 + index),
                 revision: revision.clone(),
                 operation: format!("{:026x}", 90_000 + index),
@@ -4385,7 +4557,12 @@ mod tests {
         let resident_bodies: Vec<_> = (0..100u64)
             .map(|index| {
                 let revision = format!("{:026x}", 110_000 + index);
-                Body::ArtifactCaptured {
+                Body::ArtifactCapturedV2 {
+                    description: "Selected layout revision. "
+                        .repeat(12)
+                        .chars()
+                        .take(280)
+                        .collect(),
                     artifact: format!("{:026x}", 100_000 + index),
                     revision: revision.clone(),
                     operation: format!("{:026x}", 120_000 + index),

@@ -72,6 +72,8 @@ fn capture(sandbox: &Sandbox, extra: &[&str]) -> Value {
     let mut args = vec![
         "artifacts",
         "capture",
+        "--description",
+        "Selected fixture layout",
         "--bundle",
         "selection.json",
         "--from",
@@ -80,6 +82,72 @@ fn capture(sandbox: &Sandbox, extra: &[&str]) -> Value {
     ];
     args.extend_from_slice(extra);
     serde_json::from_str::<Value>(&sandbox.ok(&args)).unwrap()["delivery"].clone()
+}
+
+#[test]
+fn legacy_bundle_continues_as_a_described_revision_without_losing_restore_or_history() {
+    let sandbox = fixture("bundle-mixed-description-history");
+    let first = capture(&sandbox, &[]);
+    let artifact = first["artifact"].as_str().unwrap();
+    let revision = first["revision"].as_str().unwrap();
+    let events = sandbox.0.join(".vivac/events");
+    let legacy = sandbox
+        .log()
+        .lines()
+        .map(|line| {
+            let mut event: Value = serde_json::from_str(line).unwrap();
+            if event["payload"]["type"] == "artifact.bundle_captured_v2" {
+                event["payload"]["type"] = json!("artifact.bundle_captured");
+                event["payload"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("description");
+            }
+            serde_json::to_string(&event).unwrap() + "\n"
+        })
+        .collect::<String>();
+    fs::write(events, legacy).unwrap();
+    let second = capture(&sandbox, &["--artifact", artifact, "--previous", revision]);
+    assert_eq!(second["description"], "Selected fixture layout");
+    assert_eq!(second["previous"], revision);
+    let index = sandbox.0.join(".vivac/index");
+    sandbox.ok(&["why", "g1"]);
+    assert!(
+        index.is_file(),
+        "the mixed bundle fixture must have a real cached index"
+    );
+    let cached: Value =
+        serde_json::from_str(&sandbox.ok(&["artifacts", "show", artifact, "--json"])).unwrap();
+    fs::remove_file(index).unwrap();
+    let history: Value =
+        serde_json::from_str(&sandbox.ok(&["artifacts", "show", artifact, "--json"])).unwrap();
+    assert_eq!(
+        history, cached,
+        "rebuilding the bundle index must preserve descriptions and history"
+    );
+    assert_eq!(history["revisions"].as_array().unwrap().len(), 2);
+    let old = history["revisions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["revision"] == revision)
+        .unwrap();
+    assert!(old.as_object().unwrap().contains_key("description"));
+    assert_eq!(old["description"], Value::Null);
+    sandbox.ok(&[
+        "artifacts",
+        "restore",
+        artifact,
+        "--revision",
+        revision,
+        "--to",
+        "restored-old",
+        "--json",
+    ]);
+    assert_eq!(
+        fs::read(sandbox.0.join("restored-old/index.html")).unwrap(),
+        fs::read(sandbox.0.join("app/index.html")).unwrap()
+    );
 }
 #[test]
 fn selected_bundle_revisions_restore_complete_original_after_source_removal() {
@@ -174,6 +242,8 @@ fn bundle_capture_retry_does_not_reopen_changed_or_deleted_selector() {
     let (_, code) = sandbox.run(&[
         "artifacts",
         "capture",
+        "--description",
+        "Selected fixture layout",
         "--bundle",
         "another-selection.json",
         "--from",
@@ -191,6 +261,8 @@ fn file_identity_cannot_change_into_bundle_and_capture_forms_are_exclusive() {
     let file: Value = serde_json::from_str(&sandbox.ok(&[
         "artifacts",
         "capture",
+        "--description",
+        "Selected fixture layout",
         "app/index.html",
         "--from",
         "g1",
@@ -204,6 +276,8 @@ fn file_identity_cannot_change_into_bundle_and_capture_forms_are_exclusive() {
         vec![
             "artifacts",
             "capture",
+            "--description",
+            "Selected fixture layout",
             "--bundle",
             "selection.json",
             "--from",
@@ -217,6 +291,8 @@ fn file_identity_cannot_change_into_bundle_and_capture_forms_are_exclusive() {
         vec![
             "artifacts",
             "capture",
+            "--description",
+            "Selected fixture layout",
             "app/index.html",
             "--bundle",
             "selection.json",
@@ -311,6 +387,8 @@ fn bundle_capture_refuses_invalid_selectors_and_every_unsafe_member_without_rece
         let (output, code) = sandbox.run(&[
             "artifacts",
             "capture",
+            "--description",
+            "Selected fixture layout",
             "--bundle",
             "selection.json",
             "--from",
@@ -331,6 +409,8 @@ fn bundle_capture_refuses_invalid_selectors_and_every_unsafe_member_without_rece
                 .run(&[
                     "artifacts",
                     "capture",
+                    "--description",
+                    "Selected fixture layout",
                     "--bundle",
                     "selection.json",
                     "--from",
@@ -353,6 +433,8 @@ fn bundle_capture_refuses_invalid_selectors_and_every_unsafe_member_without_rece
                 .run(&[
                     "artifacts",
                     "capture",
+                    "--description",
+                    "Selected fixture layout",
                     "--bundle",
                     "selection.json",
                     "--from",
@@ -456,6 +538,8 @@ fn bundle_capture_member_and_aggregate_limits_do_not_record_partial_revision() {
             .run(&[
                 "artifacts",
                 "capture",
+                "--description",
+                "Selected fixture layout",
                 "--bundle",
                 "selection.json",
                 "--from",
@@ -481,6 +565,8 @@ fn bundle_capture_member_and_aggregate_limits_do_not_record_partial_revision() {
             .run(&[
                 "artifacts",
                 "capture",
+                "--description",
+                "Selected fixture layout",
                 "--bundle",
                 "selection.json",
                 "--from",

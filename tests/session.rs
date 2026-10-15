@@ -1808,6 +1808,16 @@ fn artifact_delivery_guidance_survives_a_tiny_budget_without_capturing_files() {
         assert!(block.contains("producing node"), "{block}");
         assert!(block.contains("revision reference"), "{block}");
         assert!(block.contains("Custody is not human approval."), "{block}");
+        let words = block.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(words.contains("visual or interactive previews"), "{block}");
+        assert!(
+            words.contains("brief description of what it does"),
+            "{block}"
+        );
+        assert!(
+            words.contains("explicit selection as deliveries"),
+            "{block}"
+        );
         if let Some(full_block) = &full_block {
             assert_eq!(
                 block, full_block,

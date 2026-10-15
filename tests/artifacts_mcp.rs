@@ -10,6 +10,36 @@ const BIN: &str = env!("CARGO_BIN_EXE_vivac");
 const OPERATION: &str = "01cccccccccccccccccccccccc";
 
 #[test]
+fn mcp_requires_a_safe_text_description_before_any_capture_side_effect() {
+    let sandbox = seeded("artifact-mcp-description");
+    fs::write(sandbox.0.join("design.html"), b"<html>fixture</html>").unwrap();
+    let mut server = Server::start(&sandbox);
+    let before = sandbox.log();
+    for description in [
+        None,
+        Some(Value::Null),
+        Some(json!(false)),
+        Some(json!(8)),
+        Some(json!(["layout"])),
+        Some(json!("")),
+        Some(json!("one\ntwo")),
+        Some(json!("person@example.com")),
+    ] {
+        let mut arguments = json!({"operation":"capture","path":"design.html","from":"g1"});
+        if let Some(description) = description {
+            arguments["description"] = description;
+        }
+        let refused = server.ask(
+            "tools/call",
+            json!({"name":"vivac_artifacts","arguments":arguments}),
+        );
+        assert_eq!(refused["result"]["isError"], true, "{refused}");
+        assert_eq!(sandbox.log(), before);
+        assert!(!sandbox.0.join(".vivac-artifacts").exists());
+    }
+}
+
+#[test]
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 fn mcp_selected_bundle_matches_cli_and_retry_preserves_original_receipt() {
     let sandbox = seeded("artifact-mcp-bundle");
@@ -26,13 +56,13 @@ fn mcp_selected_bundle_matches_cli_and_retry_preserves_original_receipt() {
     }
     fs::write(sandbox.0.join("selection.json"), serde_json::to_vec(&json!({"root":"app","entrypoint":"index.html","members":["index.html","assets/style.css","assets/main.js"],"requirements":[]})).unwrap()).unwrap();
     let mut server = Server::start(&sandbox);
-    let first = server.artifacts(json!({"operation":"capture","bundle":"selection.json","from":"g1","operation_id":OPERATION}));
+    let first = server.artifacts(json!({"operation":"capture","description":"Selected fixture layout","bundle":"selection.json","from":"g1","operation_id":OPERATION}));
     assert_eq!(first["exit_code"], 0);
     assert_eq!(first["result"]["delivery"]["delivery_type"], "bundle");
     assert_eq!(first["result"]["delivery"]["member_count"], 3);
     fs::remove_file(sandbox.0.join("selection.json")).unwrap();
     fs::remove_dir_all(sandbox.0.join("app")).unwrap();
-    let retry = server.artifacts(json!({"operation":"capture","bundle":"selection.json","from":"g1","operation_id":OPERATION}));
+    let retry = server.artifacts(json!({"operation":"capture","description":"Selected fixture layout","bundle":"selection.json","from":"g1","operation_id":OPERATION}));
     assert_eq!(
         retry["result"]["delivery"]["revision"],
         first["result"]["delivery"]["revision"]
@@ -45,7 +75,7 @@ fn mcp_selected_bundle_matches_cli_and_retry_preserves_original_receipt() {
     );
     assert!(sandbox.0.join("restored/assets/style.css").is_file());
     assert!(sandbox.0.join("restored/.vivac-delivery.json").is_file());
-    let refused = server.ask("tools/call", json!({"name":"vivac_artifacts","arguments":{"operation":"capture","bundle":"selection.json","path":"app/index.html","from":"g1"}}));
+    let refused = server.ask("tools/call", json!({"name":"vivac_artifacts","arguments":{"operation":"capture","description":"Selected fixture layout","bundle":"selection.json","path":"app/index.html","from":"g1"}}));
     assert_eq!(refused["result"]["isError"], true);
 }
 
@@ -191,6 +221,7 @@ fn artifact_tool_discovery_declares_the_selected_operations() {
     for name in [
         "artifact",
         "path",
+        "description",
         "from",
         "revision",
         "to",
@@ -200,6 +231,7 @@ fn artifact_tool_discovery_declares_the_selected_operations() {
     ] {
         assert!(properties.get(name).is_some(), "missing {name}: {tool}");
     }
+    assert_eq!(properties["description"]["type"], "string");
 }
 
 #[test]
@@ -252,7 +284,7 @@ fn mcp_and_cli_share_revision_identity_retention_and_restore_behavior() {
     fs::write(sandbox.0.join("design.html"), first).unwrap();
     let mut server = Server::start(&sandbox);
     let captured = server.artifacts(
-        json!({"operation":"capture","path":"design.html","from":"g1","operation_id":OPERATION}),
+        json!({"operation":"capture","description":"Selected fixture layout","path":"design.html","from":"g1","operation_id":OPERATION}),
     );
     assert_eq!(captured["exit_code"], 0, "{captured}");
     let delivery = &captured["result"]["delivery"];
@@ -298,6 +330,8 @@ fn mcp_and_cli_share_revision_identity_retention_and_restore_behavior() {
         &[
             "artifacts",
             "capture",
+            "--description",
+            "Selected fixture layout",
             "design.html",
             "--artifact",
             artifact,
@@ -309,7 +343,7 @@ fn mcp_and_cli_share_revision_identity_retention_and_restore_behavior() {
     assert_ne!(next["delivery"]["revision"], revision);
     let log = sandbox.log();
     let retried = server.artifacts(
-        json!({"operation":"capture","path":"design.html","from":"g1","operation_id":OPERATION}),
+        json!({"operation":"capture","description":"Selected fixture layout","path":"design.html","from":"g1","operation_id":OPERATION}),
     );
     assert_eq!(retried["result"]["already_recorded"], true);
     assert_eq!(retried["result"]["delivery"], *delivery);
@@ -341,7 +375,7 @@ fn mcp_capture_refuses_sensitive_body_without_protocol_or_log_leaks() {
     )
     .unwrap();
     let mut server = Server::start(&sandbox);
-    let refused = server.artifacts(json!({"operation":"capture","path":"unsafe.html","from":"g1"}));
+    let refused = server.artifacts(json!({"operation":"capture","description":"Selected fixture layout","path":"unsafe.html","from":"g1"}));
     assert_eq!(refused["exit_code"], 3);
     let reply = refused.to_string();
     assert!(!reply.contains("Private fixture marker"));
@@ -357,10 +391,10 @@ fn mcp_retry_rejects_a_different_explicit_previous_revision_without_reading_sour
     let sandbox = seeded("artifact-mcp-previous");
     fs::write(sandbox.0.join("design.html"), b"Selected layout\n").unwrap();
     let mut server = Server::start(&sandbox);
-    let first = server.artifacts(json!({"operation":"capture", "path":"design.html", "from":"g1"}));
+    let first = server.artifacts(json!({"operation":"capture","description":"Selected fixture layout", "path":"design.html", "from":"g1"}));
     let artifact = first["result"]["delivery"]["artifact"].as_str().unwrap();
     let previous = first["result"]["delivery"]["revision"].as_str().unwrap();
-    let args = json!({"operation":"capture", "path":"design.html", "from":"g1",
+    let args = json!({"operation":"capture","description":"Selected fixture layout", "path":"design.html", "from":"g1",
         "artifact":artifact, "previous":previous, "operation_id":OPERATION});
     let recorded = server.artifacts(args.clone());
     assert_eq!(recorded["exit_code"], 0);
@@ -373,7 +407,7 @@ fn mcp_retry_rejects_a_different_explicit_previous_revision_without_reading_sour
         recorded["result"]["delivery"]
     );
     let wrong = server.artifacts(
-        json!({"operation":"capture", "path":"design.html", "from":"g1",
+        json!({"operation":"capture","description":"Selected fixture layout", "path":"design.html", "from":"g1",
         "artifact":artifact, "previous":"01aaaaaaaaaaaaaaaaaaaaaaaa", "operation_id":OPERATION}),
     );
     assert_ne!(wrong["exit_code"], 0);

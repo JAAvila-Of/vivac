@@ -1849,6 +1849,8 @@ fn build_tree(bytes: &[u8], header: &Header) -> Option<Tree> {
             body,
             crate::event::Body::ArtifactCaptured { .. }
                 | crate::event::Body::ArtifactBundleCaptured { .. }
+                | crate::event::Body::ArtifactCapturedV2 { .. }
+                | crate::event::Body::ArtifactBundleCapturedV2 { .. }
         )
     }) {
         return None;

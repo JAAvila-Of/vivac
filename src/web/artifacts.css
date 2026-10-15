@@ -24,6 +24,8 @@
 .artifact-page .file-link { padding:0; border:0; background:transparent; color:var(--accent); font-weight:600; text-align:left; }
 .artifact-page .small { font-size:.85rem; }
 .artifact-page .muted { color:var(--ink-soft); }
+.artifact-page .delivery-description { margin:.5rem 0; font-weight:400; overflow-wrap:anywhere; }
+.artifact-page .revision-description { display:block; margin-top:.3rem; font-weight:400; }
 .artifact-page .mono { font-family:var(--mono); overflow-wrap:anywhere; font-size:.85rem; }
 .artifact-page .status { display:inline-block; padding:.1rem .45rem; border:1px solid var(--rule); border-radius:5px; font-size:.78rem; }
 .artifact-page .workspace { display:grid; grid-template-columns:16rem minmax(0,1fr); gap:1.2rem; margin-top:1.2rem; }

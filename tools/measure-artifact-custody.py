@@ -29,11 +29,14 @@ def main():
     if args.samples < 100:
         parser.error("at least 100 samples are required for the p99 comparison")
     binary = args.binary.resolve(strict=True)
+    description = "Preview the retained layout with local controls. " * 5 + "Inspect saved sections and controls"
+    assert len(description) == 280
     report = {"platform": platform.platform(), "binary": str(binary),
               "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
               "samples": args.samples, "profile": args.profile,
               "rust_build": args.rust_build, "filesystem": args.filesystem,
               "repository": args.repository,
+              "capture_description_characters": len(description),
               "timing": "fresh process, complete capture including synchronized local retention",
               "fixture": "repeated UTF-8 layout prose and separators; exact byte lengths",
               "cells": []}
@@ -76,11 +79,13 @@ def main():
             elapsed = []
             for sample in range(args.samples):
                 started = time.perf_counter_ns()
-                reply = json.loads(call("artifacts", "capture", "delivery.html", "--from", "g1", "--json"))
+                reply = json.loads(call("artifacts", "capture", "delivery.html", "--from", "g1",
+                                        "--description", description, "--json"))
                 elapsed.append((time.perf_counter_ns() - started) / 1_000_000)
                 receipt = reply["delivery"]
                 retained = project / ".vivac-artifacts" / receipt["object"]
                 assert receipt["size"] == size and receipt["digest"] == expected
+                assert receipt["description"] == description
                 assert hashlib.sha256(retained.read_bytes()).hexdigest() == expected
                 # This isolated benchmark intentionally removes synthetic copies
                 # after verifying them, keeping peak disk use below the fixture size.
