@@ -1851,6 +1851,7 @@ fn build_tree(bytes: &[u8], header: &Header) -> Option<Tree> {
                 | crate::event::Body::ArtifactBundleCaptured { .. }
                 | crate::event::Body::ArtifactCapturedV2 { .. }
                 | crate::event::Body::ArtifactBundleCapturedV2 { .. }
+                | crate::event::Body::ArtifactSqliteApplicationCaptured { .. }
         )
     }) {
         return None;

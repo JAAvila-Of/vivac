@@ -168,6 +168,16 @@ fn serve(
             "style-src 'unsafe-inline'",
             &format!("style-src 'unsafe-inline' {asset_origin}"),
         );
+    let child_policy = if selected.bundle.as_ref().is_some_and(|bundle| {
+        bundle
+            .members
+            .values()
+            .any(|member| member.media_type == "application/vnd.sqlite3")
+    }) {
+        child_policy.replace("connect-src 'none'", &format!("connect-src {asset_origin}"))
+    } else {
+        child_policy
+    };
     let mut running = false;
     while Instant::now() < deadline {
         match listener.accept() {
@@ -559,6 +569,7 @@ fn respond(
                 "text/html" => "text/html; charset=utf-8",
                 "text/css" => "text/css; charset=utf-8",
                 "text/javascript" => "text/javascript; charset=utf-8",
+                "application/vnd.sqlite3" => "application/vnd.sqlite3",
                 _ => return Err(io::Error::other("Unsupported preview media type.")),
             };
             (

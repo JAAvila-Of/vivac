@@ -5,7 +5,6 @@ mod guard;
 mod native;
 pub(crate) mod preview;
 pub(crate) mod projection;
-#[cfg(test)]
 mod sqlite;
 
 use crate::args::Args;
@@ -68,7 +67,34 @@ fn capabilities() -> Value {
         "delivery_types": {
             "file": {"supported": true, "formats": ["utf8_text"], "max_bytes": MAX_FILE_BYTES},
             "bundle": bundle_capabilities,
-            "sqlite_snapshot": {"supported": false, "reason": "Database-specific inspection and consistent snapshot capture are not supported."}
+            "sqlite_application": {
+                "supported": false,
+                "reason": "SQLite application custody acceptance is not complete.",
+                "formats": ["html", "css", "js", "sqlite3"],
+                "profile": bundle::SQLITE_PROFILE,
+                "transformation": "logical-export-v1",
+                "journal_mode": "standalone_rollback",
+                "encoding": "utf8",
+                "auxiliary_files": "refused",
+                "runtime": "delivery_supplied_javascript",
+                "max_bytes": MAX_FILE_BYTES,
+                "max_members": 64,
+                "max_manifest_bytes": 65536,
+                "max_name_bytes": 128,
+                "max_value_bytes": 65536,
+                "max_row_bytes": 262144,
+                "max_rows": 100000,
+                "max_tables": 16,
+                "max_columns_per_table": 32,
+                "max_columns": 256,
+                "max_indexes": 32,
+                "max_schema_bytes": 65536,
+                "max_vm_steps": 20000000,
+                "timeout_seconds": 2,
+                "max_sqlite_heap_bytes": 1048576,
+                "max_auxiliary_bytes": 2097152
+            },
+            "sqlite_snapshot": {"supported": false, "reason": "Standalone database-only delivery is not supported; select one database in a complete SQLite application bundle."}
         },
         "limits": {"max_file_bytes": MAX_FILE_BYTES, "max_revision_bytes": MAX_FILE_BYTES, "max_files_per_revision": if bundles {64} else {1}, "max_manifest_bytes": if bundles {65536} else {0}, "max_page_size": MAX_PAGE_SIZE},
         "execution": {
@@ -114,6 +140,8 @@ struct Revision<'a> {
     member_count: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     manifest_bytes: Option<u64>,
+    database: Option<&'a str>,
+    profile: Option<&'a str>,
 }
 
 impl<'a> Revision<'a> {
@@ -170,35 +198,68 @@ impl<'a> Revision<'a> {
                     digest,
                     object,
                     ..
+                }
+                | Body::ArtifactSqliteApplicationCaptured {
+                    artifact,
+                    revision,
+                    operation,
+                    producer,
+                    previous,
+                    source,
+                    site,
+                    size,
+                    digest,
+                    object,
+                    ..
                 } => (
                     artifact, revision, operation, producer, previous, source, site, size, digest,
                     object,
                 ),
                 _ => return None,
             };
-        let (delivery_type, selection, entrypoint, member_count, manifest_bytes) = match body {
-            Body::ArtifactBundleCaptured {
-                selection,
-                entrypoint,
-                member_count,
-                manifest_bytes,
-                ..
-            }
-            | Body::ArtifactBundleCapturedV2 {
-                selection,
-                entrypoint,
-                member_count,
-                manifest_bytes,
-                ..
-            } => (
-                Some("bundle"),
-                Some(selection.as_str()),
-                Some(entrypoint.as_str()),
-                Some(*member_count),
-                Some(*manifest_bytes),
-            ),
-            _ => (None, None, None, None, None),
-        };
+        let (delivery_type, selection, entrypoint, member_count, manifest_bytes, database, profile) =
+            match body {
+                Body::ArtifactBundleCaptured {
+                    selection,
+                    entrypoint,
+                    member_count,
+                    manifest_bytes,
+                    ..
+                }
+                | Body::ArtifactBundleCapturedV2 {
+                    selection,
+                    entrypoint,
+                    member_count,
+                    manifest_bytes,
+                    ..
+                } => (
+                    Some("bundle"),
+                    Some(selection.as_str()),
+                    Some(entrypoint.as_str()),
+                    Some(*member_count),
+                    Some(*manifest_bytes),
+                    None,
+                    None,
+                ),
+                Body::ArtifactSqliteApplicationCaptured {
+                    selection,
+                    entrypoint,
+                    member_count,
+                    manifest_bytes,
+                    database,
+                    profile,
+                    ..
+                } => (
+                    Some("sqlite_application"),
+                    Some(selection.as_str()),
+                    Some(entrypoint.as_str()),
+                    Some(*member_count),
+                    Some(*manifest_bytes),
+                    Some(database.as_str()),
+                    Some(profile.as_str()),
+                ),
+                _ => (None, None, None, None, None, None, None),
+            };
         Some(Self {
             artifact,
             revision,
@@ -208,7 +269,10 @@ impl<'a> Revision<'a> {
             source,
             description: match body {
                 Body::ArtifactCapturedV2 { description, .. }
-                | Body::ArtifactBundleCapturedV2 { description, .. } => Some(description.as_str()),
+                | Body::ArtifactBundleCapturedV2 { description, .. }
+                | Body::ArtifactSqliteApplicationCaptured { description, .. } => {
+                    Some(description.as_str())
+                }
                 _ => None,
             },
             site,
@@ -221,11 +285,13 @@ impl<'a> Revision<'a> {
             entrypoint,
             member_count,
             manifest_bytes,
+            database,
+            profile,
         })
     }
 
     fn is_bundle(&self) -> bool {
-        self.delivery_type == Some("bundle")
+        matches!(self.delivery_type, Some("bundle" | "sqlite_application"))
     }
 }
 
@@ -356,6 +422,22 @@ fn metadata(revision: &Revision) -> Result<(), Failure> {
         return Err(Failure::Model("Invalid artifact custody metadata.".into()));
     }
     guard_source_reference(revision.source)?;
+    if revision.delivery_type == Some("sqlite_application") {
+        let database = revision
+            .database
+            .ok_or_else(|| Failure::Model("Missing SQLite database reference.".into()))?;
+        guard_source_reference(database)?;
+        bundle::validate_database_path(database)?;
+        if revision.profile != Some(bundle::SQLITE_PROFILE) {
+            return Err(Failure::Model(
+                "Unsupported SQLite application profile.".into(),
+            ));
+        }
+    } else if revision.database.is_some() || revision.profile.is_some() {
+        return Err(Failure::Model(
+            "Unexpected SQLite application metadata.".into(),
+        ));
+    }
     if revision.is_bundle() {
         let selection = revision
             .selection
@@ -446,7 +528,7 @@ fn diagnostic_ledger(tree: &Tree) -> Ledger<'_> {
             || entry
                 .previous
                 .and_then(|id| ledger.get(id))
-                .is_some_and(|previous| previous.is_bundle() != entry.is_bundle())
+                .is_some_and(|previous| previous.delivery_type != entry.delivery_type)
         {
             ledger.unresolved_receipts += 1;
         }
@@ -779,6 +861,9 @@ fn prepare_capture(ctx: &Ctx, args: &Args) -> Result<CapturePlan, Failure> {
             "The expected previous revision is no longer current.".into(),
         ));
     }
+    let previous_delivery_type = ledger
+        .latest(artifact.as_str())
+        .and_then(|revision| revision.delivery_type);
     drop(ledger);
     let revision = crate::id::ulid();
     if is_bundle {
@@ -791,7 +876,40 @@ fn prepare_capture(ctx: &Ctx, args: &Args) -> Result<CapturePlan, Failure> {
         let selection = bundle::load_selection(&ctx.lane_dir, source)?;
         guard_source_reference(&selection.root)?;
         bundle::validate_selection(&selection)?;
+        let delivery_type = if selection.database.is_some() {
+            "sqlite_application"
+        } else {
+            "bundle"
+        };
+        if previous_delivery_type.is_some_and(|previous| previous != delivery_type) {
+            return Err(Failure::Model(
+                "An artifact identity cannot change its delivery type.".into(),
+            ));
+        }
         let retained = bundle::capture(&ctx.lane_dir, &selection, &revision)?;
+        if let Some(database) = selection.database {
+            return Ok(CapturePlan::Prepared(Box::new(
+                Body::ArtifactSqliteApplicationCaptured {
+                    description: description.into(),
+                    artifact,
+                    revision,
+                    operation,
+                    producer,
+                    previous,
+                    source: selection.root,
+                    selection: source.into(),
+                    site: retained.retained.site,
+                    size: retained.retained.size,
+                    digest: retained.retained.digest,
+                    object: retained.retained.object,
+                    entrypoint: retained.entrypoint,
+                    member_count: retained.members,
+                    manifest_bytes: retained.manifest_bytes,
+                    database,
+                    profile: bundle::SQLITE_PROFILE.into(),
+                },
+            )));
+        }
         let body = Body::ArtifactBundleCapturedV2 {
             description: description.into(),
             artifact,
@@ -856,7 +974,7 @@ fn commit_capture_with(
     if now.latest(entry.artifact).map(|r| r.revision) != entry.previous
         || now
             .latest(entry.artifact)
-            .is_some_and(|revision| revision.is_bundle() != entry.is_bundle())
+            .is_some_and(|revision| revision.delivery_type != entry.delivery_type)
         || now.operation(entry.operation).is_some()
         || ctx.tree.node(entry.producer).is_none()
     {
@@ -897,6 +1015,17 @@ fn bundle_manifest(
     if revision.entrypoint != Some(manifest.entrypoint.as_str())
         || revision.member_count != Some(manifest.members.len())
         || revision.manifest_bytes != Some(manifest.manifest_bytes)
+        || revision.delivery_type != Some(manifest.delivery_type.as_str())
+        || revision.database
+            != manifest
+                .database
+                .as_ref()
+                .map(|database| database.path.as_str())
+        || revision.profile
+            != manifest
+                .database
+                .as_ref()
+                .map(|database| database.profile.as_str())
     {
         return Err(Failure::Model(
             "Bundle manifest does not match its custody receipt.".into(),
@@ -1060,7 +1189,7 @@ fn restore(ctx: &Ctx, ledger: &Ledger, args: &Args) -> Result<Value, Failure> {
             ));
         }
         if ctx.tree.artifact_history.iter().any(|(_, body)| {
-            matches!(body, Body::ArtifactCaptured { revision, .. } | Body::ArtifactBundleCaptured { revision, .. } | Body::ArtifactCapturedV2 { revision, .. } | Body::ArtifactBundleCapturedV2 { revision, .. } if revision == orphan)
+            matches!(body, Body::ArtifactCaptured { revision, .. } | Body::ArtifactBundleCaptured { revision, .. } | Body::ArtifactCapturedV2 { revision, .. } | Body::ArtifactBundleCapturedV2 { revision, .. } | Body::ArtifactSqliteApplicationCaptured { revision, .. } if revision == orphan)
         }) {
             return Err(Failure::usage(
                 "This object has a recorded revision; restore its artifact identity.",
@@ -1471,7 +1600,12 @@ fn print(value: &Value) -> Result<(), Failure> {
         } else {
             crate::output::outln!("Artifacts: one UTF-8 text file per revision, up to {max_mib} MiB; pages up to {MAX_PAGE_SIZE}. Complete bundle custody is not supported on this platform.");
         }
-        crate::output::outln!("Database snapshots are not supported. Retained HTML preview runs with browser restrictions; complete network isolation is not guaranteed.");
+        if value["delivery_types"]["sqlite_application"]["supported"] == true {
+            crate::output::outln!("SQLite applications: complete HTML/CSS/JS with one explicit standalone database, retained as a logical export. The delivery supplies its JavaScript runtime; no backend is provided.");
+        } else {
+            crate::output::outln!("SQLite application custody is not supported by this engine.");
+        }
+        crate::output::outln!("Standalone database snapshots are not supported. Retained HTML preview runs with browser restrictions; complete network isolation is not guaranteed.");
         crate::output::outln!(
             "Every capture requires a single-line description of up to 280 Unicode characters."
         );
@@ -2770,6 +2904,7 @@ mod tests {
                 "assets/main.js".into(),
             ],
             requirements: vec![],
+            database: None,
         };
         let retained = bundle::capture(root, &selection, &revision).unwrap();
         Body::ArtifactBundleCaptured {
@@ -2813,6 +2948,80 @@ mod tests {
         let manifest: Value = serde_json::from_slice(&retained_manifest).unwrap();
         assert_eq!(manifest["members"].as_array().unwrap().len(), 3);
         assert_eq!(manifest["entrypoint"], "index.html");
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+    fn sqlite_commit_fixture() -> (std::path::PathBuf, Ctx, String) {
+        use libsqlite3_sys as ffi;
+        let fixture = bundle_commit_fixture();
+        let path =
+            std::ffi::CString::new(fixture.0.join("app/data.sqlite").to_str().unwrap()).unwrap();
+        let _engine = sqlite::test_engine_guard().unwrap();
+        unsafe {
+            let mut database = std::ptr::null_mut();
+            assert_eq!(
+                ffi::sqlite3_open(path.as_ptr(), &mut database),
+                ffi::SQLITE_OK
+            );
+            assert_eq!(ffi::sqlite3_exec(database, c"CREATE TABLE items(id INTEGER PRIMARY KEY, value TEXT); INSERT INTO items VALUES(1,'Synthetic fixture data')".as_ptr(), None, std::ptr::null_mut(), std::ptr::null_mut()), ffi::SQLITE_OK);
+            assert_eq!(ffi::sqlite3_close(database), ffi::SQLITE_OK);
+        }
+        fs::write(fixture.0.join("selection.json"), serde_json::to_vec(&json!({"root":"app", "entrypoint":"index.html", "members":["index.html","assets/style.css","assets/main.js","data.sqlite"], "database":"data.sqlite", "requirements":[]})).unwrap()).unwrap();
+        fixture
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+    fn staged_sqlite_delivery(
+        root: &Path,
+        artifact: &str,
+        producer: &str,
+        previous: Option<&str>,
+        operation: &str,
+    ) -> Body {
+        let revision = crate::id::ulid();
+        let selection = bundle::load_selection(root, "selection.json").unwrap();
+        let retained = bundle::capture(root, &selection, &revision).unwrap();
+        Body::ArtifactSqliteApplicationCaptured {
+            artifact: artifact.into(),
+            revision,
+            operation: operation.into(),
+            producer: producer.into(),
+            previous: previous.map(str::to_owned),
+            source: selection.root,
+            description: "Selected SQLite application".into(),
+            selection: "selection.json".into(),
+            site: retained.retained.site,
+            size: retained.retained.size,
+            digest: retained.retained.digest,
+            object: retained.retained.object,
+            entrypoint: retained.entrypoint,
+            member_count: retained.members,
+            manifest_bytes: retained.manifest_bytes,
+            database: "data.sqlite".into(),
+            profile: bundle::SQLITE_PROFILE.into(),
+        }
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+    fn assert_rescued_sqlite(root: &Path, destination: &str, object: &str) {
+        let retained = root.join(".vivac-artifacts").join(object);
+        for path in [
+            "index.html",
+            "assets/style.css",
+            "assets/main.js",
+            "data.sqlite",
+            ".vivac-delivery.json",
+        ] {
+            assert_eq!(
+                fs::read(root.join(destination).join(path)).unwrap(),
+                fs::read(retained.join(path)).unwrap()
+            );
+        }
+        let manifest: Value =
+            serde_json::from_slice(&fs::read(retained.join(".vivac-delivery.json")).unwrap())
+                .unwrap();
+        assert_eq!(manifest["members"].as_array().unwrap().len(), 4);
+        assert_eq!(manifest["delivery_type"], "sqlite_application");
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos", windows))]
@@ -3018,6 +3227,217 @@ mod tests {
         assert_eq!(restored["event_recorded"], false);
         assert!(restored.get("producer").is_none());
         assert_rescued_bundle(&root, "rescue", &object);
+        assert_eq!(fs::read(ctx.store.log()).unwrap(), broken);
+        assert_eq!(fs::read(&config_path).unwrap(), config);
+        drop(diagnostic);
+        drop(ctx);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+    #[test]
+    fn competing_published_sqlite_applications_leave_the_rejected_complete_object_rescuable() {
+        for shared_operation in [false, true] {
+            let (root, mut ctx, producer) = sqlite_commit_fixture();
+            let artifact = crate::id::ulid();
+            let first =
+                staged_sqlite_delivery(&root, &artifact, &producer, None, &crate::id::ulid());
+            let saved = commit_capture(&mut ctx, first).unwrap();
+            ctx.unlock();
+            let previous = saved["delivery"]["revision"].as_str().unwrap();
+            let mut winner =
+                Ctx::load_for_write(Store::open_strict(root.clone()).unwrap(), Whose::Founding)
+                    .unwrap();
+            let mut loser =
+                Ctx::load_for_write(Store::open_strict(root.clone()).unwrap(), Whose::Founding)
+                    .unwrap();
+            let operation = crate::id::ulid();
+            let winning_body =
+                staged_sqlite_delivery(&root, &artifact, &producer, Some(previous), &operation);
+            let winning_revision = Revision::from_body("main", &winning_body)
+                .unwrap()
+                .revision
+                .to_owned();
+            let losing_operation = if shared_operation {
+                operation.clone()
+            } else {
+                crate::id::ulid()
+            };
+            let losing_body = staged_sqlite_delivery(
+                &root,
+                &artifact,
+                &producer,
+                Some(previous),
+                &losing_operation,
+            );
+            let losing_revision = Revision::from_body("main", &losing_body)
+                .unwrap()
+                .revision
+                .to_owned();
+            let losing_object = format!("objects/{losing_revision}.bundle");
+            commit_capture(&mut winner, winning_body).unwrap();
+            winner.unlock();
+            let log = fs::read(ctx.store.log()).unwrap();
+            let config_path = root.join(store::DIR).join(store::CONFIG);
+            let config = fs::read(&config_path).unwrap();
+            assert!(commit_capture(&mut loser, losing_body).is_err());
+            loser.unlock();
+            assert_eq!(fs::read(ctx.store.log()).unwrap(), log);
+            assert_eq!(fs::read(&config_path).unwrap(), config);
+            assert_eq!(
+                replay(&loser.tree)
+                    .unwrap()
+                    .latest(&artifact)
+                    .unwrap()
+                    .revision,
+                winning_revision
+            );
+            let ledger = diagnostic_ledger(&loser.tree);
+            let args = Args::parse(vec!["check".into(), "--store".into()]).unwrap();
+            let (inventory, code) = check(&loser, &ledger, &args).unwrap();
+            assert_eq!(code, 1);
+            assert_eq!(inventory["recorded_total"], 2);
+            assert_eq!(inventory["orphans"], json!([losing_object]));
+            assert_eq!(
+                inventory["bundle_objects"][0]["retained"]["status"],
+                "matches"
+            );
+            let rescue = Args::parse(vec![
+                "restore".into(),
+                format!("--orphan={losing_revision}"),
+                "--to=rescue".into(),
+            ])
+            .unwrap();
+            let restored = restore(&loser, &ledger, &rescue).unwrap();
+            assert_eq!(restored["provenance"], "unknown");
+            assert_eq!(restored["event_recorded"], false);
+            assert!(restored.get("producer").is_none());
+            assert_rescued_sqlite(&root, "rescue", &losing_object);
+            assert_eq!(fs::read(ctx.store.log()).unwrap(), log);
+            assert_eq!(fs::read(&config_path).unwrap(), config);
+            drop(loser);
+            drop(winner);
+            drop(ctx);
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+    #[test]
+    fn a_sqlite_application_append_failure_keeps_the_complete_object_rescuable_without_a_receipt() {
+        let (root, mut ctx, producer) = sqlite_commit_fixture();
+        let body = staged_sqlite_delivery(
+            &root,
+            &crate::id::ulid(),
+            &producer,
+            None,
+            &crate::id::ulid(),
+        );
+        let revision = Revision::from_body("main", &body)
+            .unwrap()
+            .revision
+            .to_owned();
+        let object = format!("objects/{revision}.bundle");
+        let log = fs::read(ctx.store.log()).unwrap();
+        let config_path = root.join(store::DIR).join(store::CONFIG);
+        let config = fs::read(&config_path).unwrap();
+        assert!(commit_capture_with(&mut ctx, body, |_, _| Err(Failure::Io(
+            std::io::Error::other("Injected bundle append failure.")
+        )))
+        .is_err());
+        ctx.unlock();
+        assert_eq!(fs::read(ctx.store.log()).unwrap(), log);
+        assert_eq!(fs::read(&config_path).unwrap(), config);
+        let ledger = diagnostic_ledger(&ctx.tree);
+        let args = Args::parse(vec!["check".into(), "--store".into()]).unwrap();
+        let (inventory, code) = check(&ctx, &ledger, &args).unwrap();
+        assert_eq!(code, 1);
+        assert_eq!(inventory["recorded_total"], 0);
+        assert_eq!(inventory["orphans"], json!([object]));
+        assert_eq!(
+            inventory["bundle_objects"][0]["retained"]["status"],
+            "matches"
+        );
+        let rescue = Args::parse(vec![
+            "restore".into(),
+            format!("--orphan={revision}"),
+            "--to=rescue".into(),
+        ])
+        .unwrap();
+        let restored = restore(&ctx, &ledger, &rescue).unwrap();
+        assert_eq!(restored["provenance"], "unknown");
+        assert_eq!(restored["event_recorded"], false);
+        assert!(restored.get("producer").is_none());
+        assert_rescued_sqlite(&root, "rescue", &object);
+        assert_eq!(fs::read(ctx.store.log()).unwrap(), log);
+        assert_eq!(fs::read(&config_path).unwrap(), config);
+        drop(ctx);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+    #[test]
+    fn a_partial_sqlite_application_append_preserves_the_exact_tail_and_allows_only_unknown_rescue()
+    {
+        let (root, mut ctx, producer) = sqlite_commit_fixture();
+        let artifact = crate::id::ulid();
+        let body = staged_sqlite_delivery(&root, &artifact, &producer, None, &crate::id::ulid());
+        let revision = Revision::from_body("main", &body)
+            .unwrap()
+            .revision
+            .to_owned();
+        let object = format!("objects/{revision}.bundle");
+        let mut broken = fs::read(ctx.store.log()).unwrap();
+        broken.extend_from_slice(b"{\"payload\":");
+        let config_path = root.join(store::DIR).join(store::CONFIG);
+        let config = fs::read(&config_path).unwrap();
+        assert!(commit_capture_with(&mut ctx, body, |ctx, _| {
+            fs::OpenOptions::new()
+                .append(true)
+                .open(ctx.store.log())
+                .unwrap()
+                .write_all(b"{\"payload\":")
+                .unwrap();
+            Err(Failure::Io(std::io::Error::other(
+                "Injected partial bundle append failure.",
+            )))
+        })
+        .is_err());
+        ctx.unlock();
+        assert_eq!(fs::read(ctx.store.log()).unwrap(), broken);
+        assert_eq!(fs::read(&config_path).unwrap(), config);
+        let diagnostic =
+            Ctx::load_for_write(Store::open_strict(root.clone()).unwrap(), Whose::Founding)
+                .unwrap();
+        assert_eq!(diagnostic.tree.broken_lines, 1);
+        let ledger = diagnostic_ledger(&diagnostic.tree);
+        let args = Args::parse(vec!["check".into(), "--store".into()]).unwrap();
+        let (inventory, code) = check(&diagnostic, &ledger, &args).unwrap();
+        assert_eq!(code, 1);
+        assert_eq!(inventory["recorded_total"], 0);
+        assert_eq!(inventory["provenance_complete"], false);
+        assert_eq!(inventory["unattributed"], json!([object]));
+        assert_eq!(inventory["orphans"], json!([]));
+        let normal = Args::parse(vec![
+            "restore".into(),
+            artifact,
+            format!("--revision={revision}"),
+            "--to=normal".into(),
+        ])
+        .unwrap();
+        assert!(execute_read(&diagnostic, &normal).is_err());
+        assert!(!root.join("normal").exists());
+        let rescue = Args::parse(vec![
+            "restore".into(),
+            format!("--orphan={revision}"),
+            "--to=rescue".into(),
+        ])
+        .unwrap();
+        let restored = restore(&diagnostic, &ledger, &rescue).unwrap();
+        assert_eq!(restored["provenance"], "unknown");
+        assert_eq!(restored["event_recorded"], false);
+        assert!(restored.get("producer").is_none());
+        assert_rescued_sqlite(&root, "rescue", &object);
         assert_eq!(fs::read(ctx.store.log()).unwrap(), broken);
         assert_eq!(fs::read(&config_path).unwrap(), config);
         drop(diagnostic);
@@ -4282,6 +4702,128 @@ mod tests {
         assert!(
             durations[98] < std::time::Duration::from_millis(5),
             "complete bundle receipt commit exceeded its strict five millisecond p99 budget"
+        );
+    }
+
+    #[test]
+    #[ignore = "Run explicitly in release mode to measure complete receipt commits."]
+    fn measure_one_hundred_complete_sqlite_receipt_commits_with_ten_thousand_prior_artifacts() {
+        assert!(
+            std::hint::black_box(!cfg!(debug_assertions)),
+            "bundle receipt measurements require release mode"
+        );
+        let root = standalone_root("sqlite-commit-benchmark");
+        let mut store = Store::create(&root).unwrap();
+        let producer = format!("{:026x}", 1);
+        let receipt = |artifact: u64, revision: u64, operation: u64| {
+            let revision = format!("{revision:026x}");
+            Body::ArtifactSqliteApplicationCaptured {
+                description: "Selected layout revision. "
+                    .repeat(12)
+                    .chars()
+                    .take(280)
+                    .collect(),
+                artifact: format!("{artifact:026x}"),
+                revision: revision.clone(),
+                operation: format!("{operation:026x}"),
+                producer: producer.clone(),
+                previous: None,
+                source: "app".into(),
+                selection: "selection.json".into(),
+                site: format!("{:026x}", 2),
+                size: 1024 * 1024,
+                digest: "a".repeat(64),
+                object: format!("objects/{revision}.bundle"),
+                entrypoint: "index.html".into(),
+                member_count: 64,
+                manifest_bytes: 32 * 1024,
+                database: String::from("data.sqlite"),
+                profile: bundle::SQLITE_PROFILE.into(),
+            }
+        };
+        let mut bodies = Vec::with_capacity(10_001);
+        bodies.push(Body::NodeCreated {
+            node: producer.clone(),
+            num: 1,
+            kind: crate::event::Kind::Task,
+            title: "Produce selected deliveries".into(),
+            why: String::new(),
+            parent: None,
+            blocks: false,
+            refs: vec![],
+            governs: vec![],
+            arms: vec![],
+            against: None,
+        });
+        for index in 0..10_000u64 {
+            bodies.push(receipt(10_000 + index, 20_000 + index, 30_000 + index));
+        }
+        for body in bodies.iter().skip(1) {
+            assert!(
+                matches!(body, Body::ArtifactCapturedV2 { description, .. } | Body::ArtifactSqliteApplicationCaptured { description, .. } if description.chars().count() == 280)
+            );
+        }
+        let lock = store.lock_for_write().unwrap();
+        store
+            .append(&lock, crate::lane::MAIN, bodies, 0, false)
+            .unwrap();
+        drop(lock);
+        let mut ctx = Ctx::load_for_capture(store, Whose::Founding).unwrap();
+        let samples: Vec<_> = (0..100u64)
+            .map(|index| receipt(60_000 + index, 50_000 + index, 40_000 + index))
+            .collect();
+        let mut durations = Vec::with_capacity(100);
+        let mut peak = 0;
+        for body in samples {
+            assert!(
+                matches!(&body, Body::ArtifactCapturedV2 { description, .. } | Body::ArtifactSqliteApplicationCaptured { description, .. } if description.chars().count() == 280)
+            );
+            let ((result, duration), sample_peak) = crate::test_alloc::measure(|| {
+                let started = std::time::Instant::now();
+                let result = commit_capture(&mut ctx, body);
+                ctx.unlock();
+                (result, started.elapsed())
+            });
+            result.unwrap();
+            durations.push(duration);
+            peak = peak.max(sample_peak);
+        }
+        durations.sort();
+        eprintln!("Complete SQLite application receipt commit: 100 release samples, 10000 prior distinct SQLite application receipts, one producer; p50={:?}, p99={:?}, max={:?}, peak auxiliary={peak} bytes. Includes lock, refresh, guards, CAS, append, projection, JSON response construction and unlock. Synthetic metadata describes 64 members, a 32 KiB manifest and 1 MiB total. Fixture setup, tree loading, prepared metadata, retained byte copying and stdout serialization are excluded.", durations[49], durations[98], durations[99]);
+        let (recorded, broken) = ctx.store.read_all().unwrap();
+        let folded_receipts = ctx.tree.artifact_history.len();
+        drop(ctx);
+        fs::remove_dir_all(&root).unwrap();
+        assert_eq!(broken, 0);
+        assert_eq!(recorded.len(), 10_101);
+        assert_eq!(folded_receipts, 10_100);
+        for (index, event) in recorded.iter().enumerate() {
+            assert_eq!(event.seq, index as u64 + 1);
+            if index == 0 {
+                assert!(
+                    matches!(&event.payload, Body::NodeCreated { node, .. } if node == &producer)
+                );
+            } else if index <= 10_000 {
+                let prior = index as u64 - 1;
+                assert_eq!(
+                    event.payload,
+                    receipt(10_000 + prior, 20_000 + prior, 30_000 + prior)
+                );
+            } else {
+                let sample = index as u64 - 10_001;
+                assert_eq!(
+                    event.payload,
+                    receipt(60_000 + sample, 50_000 + sample, 40_000 + sample)
+                );
+            }
+        }
+        assert!(
+            peak <= 2 * 1024 * 1024,
+            "complete SQLite application receipt commit allocated {peak} auxiliary bytes"
+        );
+        assert!(
+            durations[98] < std::time::Duration::from_millis(5),
+            "complete SQLite application receipt commit exceeded its strict five millisecond p99 budget"
         );
     }
 

@@ -19,6 +19,7 @@ accepts
 access
 accessible
 accessor
+accounted
 ace
 acl
 acq
@@ -46,6 +47,7 @@ adopt
 adopted
 adoption
 adopts
+advance
 advertised
 advice
 after
@@ -70,6 +72,7 @@ all
 alloc
 allocated
 allocation
+allocations
 allocator
 allow
 allowed
@@ -90,6 +93,7 @@ ambient
 ambiguity
 ambiguous
 among
+amount
 an
 ancestor
 ancestors
@@ -113,6 +117,7 @@ anyone
 anything
 anywhere
 apart
+app
 appear
 appeared
 appearing
@@ -122,6 +127,7 @@ appended
 appending
 appends
 application
+applications
 applied
 applies
 apply
@@ -183,12 +189,17 @@ authored
 authoritative
 authority
 authorization
+authorize
+authorizer
 authorizing
 auto
+autoincrement
 automatic
 automation
+aux
 auxiliary
 available
+avoids
 away
 aws
 back
@@ -311,6 +322,7 @@ cached
 calendar
 call
 callback
+callbacks
 called
 caller
 calling
@@ -325,6 +337,7 @@ cannot
 canon
 canonical
 canonicalize
+cantopen
 cap
 capabilities
 capability
@@ -353,7 +366,9 @@ category
 cause
 cc
 ceil
+ceiling
 cell
+cells
 centres
 cfg
 ch
@@ -366,6 +381,7 @@ changing
 channel
 char
 character
+characteristics
 characters
 chars
 check
@@ -373,6 +389,7 @@ checkbox
 checked
 checking
 checkpoint
+checkreservedlock
 checks
 checksum
 child
@@ -385,6 +402,7 @@ chosen
 chunk
 chunked
 chunks
+cid
 civil
 claim
 claimant
@@ -471,10 +489,12 @@ compatibility
 competing
 compiled
 complete
+completed
 completes
 component
 components
 composition
+compound
 compute
 concat
 concurrent
@@ -484,6 +504,7 @@ configuration
 configure
 configured
 confirm
+confirmed
 confirms
 conflict
 conflicts
@@ -565,6 +586,7 @@ crumb
 csp
 css
 cst
+cstr
 cstring
 ctime
 ctx
@@ -584,15 +606,22 @@ d200
 dacl
 damage
 damaged
+dangling
 dash
 dashed
 dashes
 data
+database
+databases
+dataonly
 date
 dateless
 dates
 day
 days
+db
+dbconfig
+ddl
 de
 dead
 deadline
@@ -622,7 +651,9 @@ deepest
 default
 defaulted
 defaults
+defensive
 definition
+definitions
 degradation
 degree
 degrees
@@ -716,6 +747,7 @@ distinct
 div
 divergence
 divides
+dl
 do
 docs
 docstring
@@ -758,6 +790,7 @@ duration
 durations
 during
 duties
+dw
 dx
 dyn
 each
@@ -767,6 +800,8 @@ eats
 echo
 echoes
 echoing
+edge
+edged
 edges
 edit
 edited
@@ -798,7 +833,9 @@ encoded
 end
 endings
 ends
+enforce
 enforces
+engine
 english
 enough
 ensure
@@ -860,6 +897,7 @@ excluding
 exclusive
 excuse
 exe
+exec
 executable
 execute
 execution
@@ -872,12 +910,16 @@ expand
 expect
 expected
 expecting
+expired
 expires
 expiry
 explains
 explanation
 explicit
+export
 exposes
+expr
+exrescode
 ext
 extend
 extended
@@ -908,6 +950,7 @@ family
 fan
 fault
 favicon
+fcntl
 fd
 feature
 fence
@@ -937,6 +980,7 @@ fine
 fingerprint
 finish
 finished
+finite
 first
 fit
 fits
@@ -952,6 +996,8 @@ flags
 flat
 flatten
 flips
+float
+flock
 flush
 fmt
 fn
@@ -1004,7 +1050,10 @@ front
 frontmatter
 fronts
 fs
+fstat
+fsync
 full
+function
 future
 g1
 gains
@@ -1012,9 +1061,11 @@ gap
 garbage
 gate
 gates
+generates
 generation
 get
 geteuid
+getlk
 getrandom
 gets
 git
@@ -1107,6 +1158,7 @@ hide
 hides
 hiding
 high
+highwater
 hint
 hints
 historical
@@ -1164,6 +1216,7 @@ ignore
 ignored
 ignores
 image
+immediately
 impl
 implicit
 import
@@ -1185,9 +1238,11 @@ indented
 independent
 index
 indexed
+indexes
 india
 indicators
 indices
+individually
 infer
 info
 information
@@ -1207,6 +1262,7 @@ insert
 inserted
 inside
 inspect
+inspected
 inspection
 install
 installed
@@ -1217,6 +1273,7 @@ instead
 instruction
 instructions
 int
+int64
 intact
 integer
 integrity
@@ -1238,6 +1295,7 @@ invents
 invitation
 io
 ioctl
+ioerr
 ip
 iquorum
 is
@@ -1258,6 +1316,7 @@ joined
 joiner
 joining
 joins
+journal
 js
 json
 judged
@@ -1270,6 +1329,7 @@ kept
 key
 keyboard
 keys
+keyword
 kids
 kill
 kind
@@ -1303,6 +1363,7 @@ leaks
 leap
 learn
 learned
+lease
 leave
 leaves
 ledger
@@ -1321,11 +1382,14 @@ lexically
 lflag
 li
 libc
+libsqlite3
+libversion
 lifetime
 lifts
 light
 like
 limit
+limit64
 limits
 line
 lineage
@@ -1354,10 +1418,13 @@ located
 location
 lock
 locked
+lockfile
 locking
 locks
+lockstate
 log
 log2
+logical
 logs
 lone
 long
@@ -1386,6 +1453,7 @@ main
 make
 makes
 malformed
+malloc64
 managed
 managing
 mandatory
@@ -1431,6 +1499,7 @@ mem
 member
 members
 memory
+memstatus
 mentioned
 merely
 merged
@@ -1438,7 +1507,10 @@ message
 messy
 metadata
 method
+methods
 mib
+micros
+microseconds
 mid
 middle
 midnight
@@ -1482,10 +1554,12 @@ msg
 mtime
 mul
 multibyte
+multiple
 must
 mut
 mutation
 mutex
+mx
 n1
 n2
 name
@@ -1514,11 +1588,13 @@ newest
 newline
 next
 nfd
+nlink
 no
 nobody
 node
 nodes
 nofollow
+nomutex
 non
 nonalert
 nonblocking
@@ -1545,6 +1621,7 @@ not
 note
 noted
 notes
+notfound
 nothing
 notice
 notification
@@ -1556,6 +1633,7 @@ nsec
 nt
 nth
 nudge
+nul
 null
 num
 number
@@ -1591,6 +1669,7 @@ ones
 only
 onto
 onward
+oom
 op
 opaque
 open
@@ -1644,6 +1723,7 @@ over
 overall
 overdue
 overflow
+overlapped
 overlong
 overrides
 oversized
@@ -1667,6 +1747,7 @@ pad
 padded
 padding
 page
+pagecache
 paged
 pages
 pagination
@@ -1679,9 +1760,11 @@ panics
 paragraph
 paragraphs
 parallel
+parameter
 parameters
 params
 parent
+parenthesized
 parents
 parity
 park
@@ -1701,6 +1784,7 @@ passed
 passes
 past
 path
+pathname
 paths
 pattern
 payload
@@ -1724,6 +1808,7 @@ persists
 person
 personal
 persons
+phantom
 phase
 phases
 phrase
@@ -1742,6 +1827,7 @@ pipe
 piped
 pipelined
 pixel
+pk
 place
 placed
 placeholder
@@ -1765,6 +1851,7 @@ points
 policy
 pop
 popped
+populate
 populated
 port
 portable
@@ -1775,6 +1862,7 @@ positionals
 positive
 post
 power
+pragma
 precedence
 precision
 precomposed
@@ -1790,12 +1878,14 @@ presentation
 preserve
 preserved
 preserves
+preserving
 presets
 pretty
 prev
 preview
 previews
 previous
+primary
 prime
 print
 printed
@@ -1804,6 +1894,7 @@ prints
 prior
 prioritizes
 private
+privatecache
 probe
 problem
 proceed
@@ -1818,6 +1909,7 @@ product
 products
 profile
 profiled
+profiles
 program
 progress
 proj
@@ -1854,6 +1946,7 @@ publication
 publish
 published
 publishes
+punctuation
 pure
 purpose
 push
@@ -1880,6 +1973,7 @@ ralias
 ran
 rand
 random
+randomness
 range
 ranges
 rank
@@ -1887,6 +1981,7 @@ rather
 raw
 rc
 rd
+rdlck
 reach
 reachable
 reached
@@ -1899,6 +1994,7 @@ reading
 readme
 readonly
 reads
+readwrite
 ready
 real
 realloc
@@ -1931,6 +2027,7 @@ recovery
 recreates
 recreation
 rect
+recursive
 recv
 red
 redact
@@ -1965,11 +2062,13 @@ regenerates
 regeneration
 regex
 regional
+register
 registered
 registers
 registry
 regular
 rehashing
+reindex
 reinstalled
 reject
 rejected
@@ -2014,6 +2113,7 @@ renders
 reopen
 reopened
 reopening
+reopens
 reordered
 repair
 repaired
@@ -2063,6 +2163,7 @@ reset
 resident
 residual
 residuals
+resize
 resized
 resolve
 resolved
@@ -2082,6 +2183,7 @@ results
 retain
 retained
 retaining
+retains
 retention
 retired
 retirement
@@ -2126,6 +2228,7 @@ rounds
 route
 routes
 row
+rowid
 rows
 rpc
 rposition
@@ -2157,6 +2260,7 @@ saves
 say
 says
 sb
+scalar
 scalars
 scan
 scanned
@@ -2187,6 +2291,7 @@ secrets
 secs
 section
 sections
+sector
 security
 see
 seed
@@ -2215,6 +2320,7 @@ sentinel
 sentinels
 sep
 separate
+separated
 separates
 separator
 separators
@@ -2238,6 +2344,7 @@ serving
 session
 sessions
 set
+setlk
 sets
 settings
 setup
@@ -2253,6 +2360,7 @@ shared
 shares
 sharing
 shell
+shm
 short
 should
 show
@@ -2334,6 +2442,9 @@ spine
 split
 splitn
 spoken
+sql
+sqlite
+sqlite3
 src
 ss
 st
@@ -2358,10 +2469,12 @@ starting
 starts
 startup
 state
+statement
 static
 station
 stats
 status
+status64
 stay
 staying
 stays
@@ -2375,6 +2488,8 @@ step
 stepped
 steps
 still
+stmt
+stmtstatus
 stop
 stopped
 stops
@@ -2383,6 +2498,8 @@ store
 stores
 str
 stream
+streamed
+streaming
 streams
 stretch
 strict
@@ -2440,6 +2557,7 @@ swap
 sweep
 switch
 switches
+symbol
 symlink
 symlinks
 sync
@@ -2448,6 +2566,7 @@ synchronous
 sys
 syscall
 system
+sz
 t2
 table
 tables
@@ -2549,9 +2668,12 @@ trail
 trailer
 trailing
 trait
+transaction
 transcript
 transfer
 transfers
+transformation
+transient
 transport
 transpose
 travels
@@ -2561,6 +2683,7 @@ tree
 trees
 triage
 trial
+trigger
 trim
 trimmed
 trimming
@@ -2599,6 +2722,7 @@ uk
 ulid
 ulids
 ulong
+unaccounted
 unambiguous
 unattributed
 unavailable
@@ -2613,6 +2737,7 @@ undo
 undoable
 undone
 unexpected
+unfetch
 unfinished
 unfold
 ungoverned
@@ -2624,16 +2749,19 @@ unit
 unix
 unjoined
 unknown
+unlck
 unlock
 unlocked
 unlocks
 unmanaged
+unmap
 unmarked
 unnamed
 unreachable
 unreadable
 unrecognised
 unrecorded
+unregister
 unrelated
 unremoved
 unrepresentable
@@ -2667,6 +2795,7 @@ upper
 uppercase
 upto
 upward
+uri
 url
 urls
 usage
@@ -2697,6 +2826,7 @@ variables
 variant
 variants
 varied
+vdbe
 vec
 vector
 vectors
@@ -2710,9 +2840,11 @@ verify
 version
 versions
 very
+vfs
 via
 view
 views
+violation
 virtual
 visible
 visit
@@ -2722,6 +2854,7 @@ visitor
 visits
 vivac
 vivacs
+vm
 vmin
 vocabulary
 void
@@ -2734,11 +2867,13 @@ wait
 waited
 waiting
 waits
+wal
 walk
 walking
 walks
 want
 warm
+warmup
 warn
 warning
 warns
@@ -2754,6 +2889,7 @@ west
 what
 whatever
 when
+whence
 where
 wheres
 wherever
@@ -2814,6 +2950,7 @@ writers
 writes
 writing
 written
+wrlck
 wrong
 wrote
 ws

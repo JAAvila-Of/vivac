@@ -137,10 +137,15 @@ are in the `README`.
 | `brief` / `open` / `tree`, counted in **open fronts** and not in nodes | **< 50 ms** | the same reading; what these three walk is the open part of the tree |
 | text search | **< 100 ms** | same |
 | semantic search | off the critical path | see the arbitration above |
-| explicitly retaining a selected UTF-8 delivery | **p99 < 500 ms at 1 MiB; < 2 s at 10 MiB** | a requested file operation, outside ordinary writes and hooks |
+| explicitly retaining a selected supported delivery | **p99 < 500 ms at 1 MiB; < 2 s at 10 MiB** | a requested file operation, outside ordinary writes and hooks |
 
-Local artifact retention accepts at most 10 MiB of UTF-8 text in this increment.
-Artifact operations use at most 2 MiB of auxiliary memory, excluding the
+Local artifact retention accepts at most 10 MiB per complete revision, including
+its manifest. Supported profiles are a UTF-8 file, a complete static frontend
+bundle, and a complete frontend application with one explicitly selected
+standalone SQLite database retained through a fresh logical export. This does
+not permit generic binary capture or active-WAL ingestion.
+Artifact operations use at most 2 MiB of auxiliary memory, including SQLite's
+native heap, caches and adapters as well as Rust allocations, and excluding the
 already loaded tree and bounded response metadata. Inspection is never shortened
 to meet a budget: unsupported input or an exceeded inspection bound is refused.
 The receipt append still follows the ordinary write budget; copying and checking
@@ -287,6 +292,13 @@ tree is a map of where a system is weak and not yet fixed.**
   A retained revision is not an approval, a filesystem snapshot or a backup of
   the disk. Human review names the exact retained revision. Secret and personal
   data guards still apply; local retention has no bypass or force option.
+  A database delivery declares its logical-export transformation before
+  inspection. All schema definitions, names, values and relevant internal
+  metadata must pass inspection within the supported profile before a fresh
+  database is built; unsupported content rejects the complete revision. Raw
+  page copying does not establish that deleted sensitive data is absent.
+  Source and retained digests identify their different bytes; extracted data
+  and SQL never enter the provenance log.
 - **No telemetry.** The binary does not phone home. Ever.
 
   Phoning home is the binary reaching the network on its own account: to

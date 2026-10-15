@@ -88,6 +88,25 @@ pub(super) fn copy_checked_limit(
 }
 
 fn flush_token(token: &mut String, output: &mut CheckedOutput<'_>) -> Result<(), Failure> {
+    check_token(token)?;
+    output.append(token.as_bytes())?;
+    token.clear();
+    Ok(())
+}
+
+pub(super) fn check_text(text: &str) -> Result<(), Failure> {
+    for token in text.split(redact::is_token_separator) {
+        if token.len() > TOKEN_LIMIT {
+            return Err(Failure::usage(
+                "Artifact token exceeds the 64 KiB inspection limit.",
+            ));
+        }
+        check_token(token)?;
+    }
+    Ok(())
+}
+
+fn check_token(token: &str) -> Result<(), Failure> {
     if token.contains("-----BEGIN") {
         return Err(Failure::Redaction(Box::new(Finding {
             rule: "PEM header",
@@ -104,8 +123,6 @@ fn flush_token(token: &mut String, output: &mut CheckedOutput<'_>) -> Result<(),
         finding.advice = "Replace sensitive values with references before capturing this artifact.";
         return Err(Failure::Redaction(Box::new(finding)));
     }
-    output.append(token.as_bytes())?;
-    token.clear();
     Ok(())
 }
 
@@ -149,6 +166,91 @@ mod tests {
             self.remaining = &self.remaining[count..];
             Ok(count)
         }
+    }
+
+    fn validation_result(result: Result<(), Failure>) -> Option<(i32, String)> {
+        result
+            .err()
+            .map(|error| (error.code(), format!("{error:?}")))
+    }
+
+    fn assert_text_parity(text: &str, expected: Option<i32>) {
+        let direct = validation_result(check_text(text));
+        assert_eq!(direct.as_ref().map(|(code, _)| *code), expected);
+        for width in [1, 7, CHUNK_SIZE] {
+            let streamed = validation_result(
+                copy_checked(
+                    TinyReader {
+                        remaining: text.as_bytes(),
+                        width,
+                    },
+                    io::sink(),
+                )
+                .map(|_| ()),
+            );
+            assert_eq!(streamed, direct, "read width {width}");
+        }
+    }
+
+    #[test]
+    fn bounded_text_validation_matches_streaming_for_safe_unicode_and_separators() {
+        for text in [
+            "",
+            "Selected application data.",
+            "\u{feff}Example: caf\u{e9} \u{4e2d} \u{1f980}.\r\n```rust\nlet result = 42;\n```\n",
+            "one,two;three\"four'five(six)[seven]{eight}<nine>`ten`\t\r\n\u{2003}\u{2028}last",
+            "src/artifacts/guard.rs:42 https://example.org/path",
+            "MeetingV2PolicyMaskCalculator",
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "...safe!? :reference:",
+        ] {
+            assert_text_parity(text, None);
+        }
+    }
+
+    #[test]
+    fn bounded_text_validation_preserves_sensitive_rules_and_edge_signs() {
+        for sensitive in [
+            "-----BEGIN CERTIFICATE-----",
+            "prefix-----BEGINsuffix",
+            "person@example.com",
+            "C:\\Users\\someone\\project",
+            "/home/someone/project",
+            "ghp_16C7e42F292c6912E7710c838347Ae178B4a",
+            "AKIAIOSFODNN7EXAMPLE",
+            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r",
+            "Xk7fQ2mZp9RtLw4sVb8NcJ3hGd6y",
+        ] {
+            assert_text_parity(sensitive, Some(3));
+            assert_text_parity(&format!("safe [:.{sensitive}!?] tail"), Some(3));
+        }
+    }
+
+    #[test]
+    fn bounded_text_validation_counts_raw_token_bytes_before_trimming_edges() {
+        for length in [TOKEN_LIMIT - 1, TOKEN_LIMIT, TOKEN_LIMIT + 1] {
+            let expected = (length > TOKEN_LIMIT).then_some(2);
+            assert_text_parity(&"a".repeat(length), expected);
+            assert_text_parity(&".".repeat(length), expected);
+            let edged = format!(".{}!", "a".repeat(length - 2));
+            assert_text_parity(&edged, expected);
+            let unicode = format!("{}{}", "\u{e9}".repeat(length / 2), "a".repeat(length % 2));
+            assert_eq!(unicode.len(), length);
+            assert_text_parity(&unicode, expected);
+        }
+        let separated = format!("{};{}", "a".repeat(TOKEN_LIMIT), ".".repeat(TOKEN_LIMIT));
+        assert_text_parity(&separated, None);
+    }
+
+    #[test]
+    fn bounded_text_validation_avoids_per_value_streaming_allocations() {
+        let text = "Synthetic SQLite application fixture data. ".repeat(6);
+        let (result, peak) = crate::test_alloc::measure(|| check_text(&text));
+        result.unwrap();
+        assert!(
+            peak < 8 * 1024,
+            "bounded value validation allocated {peak} bytes"
+        );
     }
 
     #[test]

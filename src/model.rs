@@ -617,7 +617,10 @@ impl Tree {
                 Body::ArtifactCaptured { producer, .. }
                 | Body::ArtifactBundleCaptured { producer, .. }
                 | Body::ArtifactCapturedV2 { producer, .. }
-                | Body::ArtifactBundleCapturedV2 { producer, .. } => self.node(producer).is_some(),
+                | Body::ArtifactBundleCapturedV2 { producer, .. }
+                | Body::ArtifactSqliteApplicationCaptured { producer, .. } => {
+                    self.node(producer).is_some()
+                }
                 _ => false,
             };
             projection.observe(lane, body, &self.artifact_history[..index], producer_exists);
@@ -1103,7 +1106,8 @@ impl Tree {
             Body::ArtifactCaptured { producer, .. }
             | Body::ArtifactBundleCaptured { producer, .. }
             | Body::ArtifactCapturedV2 { producer, .. }
-            | Body::ArtifactBundleCapturedV2 { producer, .. } => {
+            | Body::ArtifactBundleCapturedV2 { producer, .. }
+            | Body::ArtifactSqliteApplicationCaptured { producer, .. } => {
                 let producer_exists = self.node(producer).is_some();
                 self.artifact_projection.observe(
                     lane,

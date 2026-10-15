@@ -60,6 +60,13 @@ pub(super) fn project(tree: &Tree) -> HashMap<u64, Links<'_>> {
             producer,
             source,
             ..
+        }
+        | Body::ArtifactSqliteApplicationCaptured {
+            artifact,
+            revision,
+            producer,
+            source,
+            ..
         } = body
         {
             let link = Link {

@@ -251,7 +251,9 @@ JavaScript. A filename alone never selects database capture. Include required
 runtime notices in a selected HTML or JavaScript member.
 
 The initial `sqlite-standalone-v1` profile accepts an autonomous, UTF-8 SQLite
-database in rollback mode. WAL mode, any WAL/SHM/journal sidecar, multiple
+database in rollback mode with a current, self-consistent header and an exact
+physical page count. Legacy or stale headers and unexplained trailing pages
+are outside this profile. WAL mode, any WAL/SHM/journal sidecar, multiple
 databases and hard-linked sources are refused. Vivac holds a native SQLite read
 lock on the authorized source handle throughout inspection and hashing. It
 does not checkpoint, compact or write the source.
@@ -271,8 +273,10 @@ preserved. BLOB, non-finite REAL, invalid UTF-8, NUL text, views, triggers,
 virtual tables, generated columns, expression indexes and unsupported schema
 clauses refuse the complete capture. No table or row is silently omitted.
 
-The complete revision still has the 10 MiB, 64-member and 64 KiB manifest
-limits. The SQLite profile additionally bounds schema and data: 16 user tables,
+The selected source files together and the complete retained revision each have
+a 10 MiB limit; the retained revision includes its manifest. The 64-member and
+64 KiB manifest limits also apply. The SQLite profile additionally bounds schema
+and data: 16 user tables,
 32 columns per table, 256 columns total, 32 indexes including automatic indexes,
 64 KiB of schema SQL, 128-byte names, 64 KiB values, 256 KiB serialized rows
 and 100,000 rows total. Inspection and export are bounded to 20 million SQLite

@@ -25,6 +25,7 @@ accepts
 access
 accessor
 accident
+accidentally
 account
 accounted
 accounts
@@ -248,6 +249,7 @@ assumed
 assumes
 assuming
 assumption
+ast
 asterisk
 astray
 asymmetry
@@ -276,6 +278,7 @@ authored
 authorised
 authoritative
 authority
+authorization
 authorize
 authorized
 authors
@@ -283,6 +286,7 @@ auto
 automatic
 automatically
 autos
+auxiliary
 available
 avoid
 avoidable
@@ -426,6 +430,7 @@ boundary
 bounded
 bounding
 box
+boxes
 brace
 bracketed
 brackets
@@ -490,6 +495,8 @@ caches
 caching
 calendar
 call
+callback
+callbacks
 called
 caller
 callers
@@ -509,6 +516,7 @@ canonicalized
 canonicalizing
 canonically
 cap
+capabilities
 capability
 capable
 capital
@@ -671,6 +679,7 @@ collapses
 collect
 collected
 collecting
+collection
 collects
 collide
 collided
@@ -762,6 +771,7 @@ confuse
 confused
 conjuring
 connection
+connections
 connector
 connects
 consecutive
@@ -920,6 +930,7 @@ datum
 day
 daylight
 days
+ddl
 de
 dead
 deadline
@@ -965,6 +976,7 @@ defence
 defend
 defenses
 defensible
+defensive
 defined
 defines
 definition
@@ -975,6 +987,7 @@ degrade
 degraded
 degrades
 degree
+delegates
 delegating
 delete
 deleted
@@ -1196,6 +1209,7 @@ due
 dump
 dumps
 duplicated
+duplicates
 duplicating
 duplication
 durability
@@ -1260,6 +1274,7 @@ emptied
 empties
 empty
 empuja
+enables
 encoded
 encoding
 end
@@ -1424,6 +1439,7 @@ fast
 fate
 fault
 favored
+fcntl
 fear
 feature
 features
@@ -1988,6 +2004,7 @@ invites
 invocation
 invoke
 invoked
+invokes
 involved
 io
 iquorum
@@ -2014,6 +2031,7 @@ joined
 joiner
 joining
 joins
+journal
 js
 json
 judge
@@ -2100,6 +2118,7 @@ learn
 learned
 learning
 learns
+lease
 least
 leave
 leaves
@@ -2811,6 +2830,7 @@ powershell
 practice
 pre
 preamble
+precede
 preceded
 precedent
 precedes
@@ -2830,6 +2850,7 @@ prefixes
 preflight
 premise
 preparation
+prepare
 prepares
 prepend
 presence
@@ -2963,6 +2984,7 @@ qualifying
 quantity
 quarrel
 quarter
+queries
 query
 question
 questions
@@ -3103,6 +3125,7 @@ ref
 reference
 referenced
 references
+referring
 refers
 refining
 refixed
@@ -3462,6 +3485,7 @@ segment
 segmented
 segmenting
 segments
+select
 selectable
 selected
 selecting
@@ -3733,6 +3757,7 @@ starts
 startup
 state
 statement
+statements
 states
 stating
 station
@@ -4235,6 +4260,7 @@ unreadable
 unrecognisable
 unrecognised
 unrecorded
+unregistering
 unrelated
 unresolvable
 unresolved
@@ -4336,6 +4362,7 @@ vertical
 very
 veto
 vetoes
+vfs
 via
 vietnamese
 view
@@ -4496,5 +4523,6 @@ yourself
 zero
 zeroed
 zeros
+zombie
 zone
 zwj

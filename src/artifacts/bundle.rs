@@ -15,6 +15,9 @@ pub(crate) const MAX_MEMBERS: usize = 64;
 pub(crate) const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
 const MAX_BYTES: u64 = 10 * 1024 * 1024;
 pub(crate) const SUPPORTED: bool = super::native::SUPPORTED;
+pub(crate) const SQLITE_PROFILE: &str = "sqlite-standalone-v1";
+const SQLITE_TRANSFORMATION: &str = "logical-export-v1";
+const SQLITE_MEDIA_TYPE: &str = "application/vnd.sqlite3";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -24,6 +27,8 @@ pub(crate) struct BundleSelection {
     pub(crate) members: Vec<String>,
     #[serde(default)]
     pub(crate) requirements: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) database: Option<String>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -33,8 +38,28 @@ pub(crate) struct Manifest {
     pub(crate) entrypoint: String,
     pub(crate) requirements: Vec<String>,
     pub(crate) members: Vec<Member>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_database"
+    )]
+    pub(crate) database: Option<DatabaseMetadata>,
     #[serde(skip)]
     pub(crate) manifest_bytes: u64,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DatabaseMetadata {
+    pub(crate) path: String,
+    pub(crate) profile: String,
+    pub(crate) transformation: String,
+    pub(crate) source_bytes: u64,
+    pub(crate) source_sha256: String,
+}
+fn deserialize_database<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<DatabaseMetadata>, D::Error> {
+    DatabaseMetadata::deserialize(deserializer).map(Some)
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -66,6 +91,11 @@ fn media_type(path: &str) -> Result<&'static str, Failure> {
         Ok("text/css")
     } else if extension.eq_ignore_ascii_case("js") {
         Ok("text/javascript")
+    } else if ["sqlite", "sqlite3", "db"]
+        .iter()
+        .any(|value| extension.eq_ignore_ascii_case(value))
+    {
+        Ok(SQLITE_MEDIA_TYPE)
     } else {
         Err(Failure::usage(
             "Bundle members must be HTML, CSS, or JavaScript files.",
@@ -74,6 +104,15 @@ fn media_type(path: &str) -> Result<&'static str, Failure> {
 }
 pub(crate) fn validate_path(path: &str) -> Result<(), Failure> {
     member_path(path)
+}
+pub(crate) fn validate_database_path(path: &str) -> Result<(), Failure> {
+    member_path(path)?;
+    if media_type(path)? != SQLITE_MEDIA_TYPE {
+        return Err(Failure::usage(
+            "The database must be a selected SQLite member.",
+        ));
+    }
+    Ok(())
 }
 fn member_path(path: &str) -> Result<(), Failure> {
     if path
@@ -131,8 +170,21 @@ pub(crate) fn validate_selection(selection: &BundleSelection) -> Result<(), Fail
         ));
     }
     let mut folded = BTreeSet::new();
+    if let Some(database) = &selection.database {
+        validate_database_path(database)?;
+        if !selection.members.contains(database) {
+            return Err(Failure::usage(
+                "The database must exactly name a selected SQLite member.",
+            ));
+        }
+    }
     for path in &selection.members {
         member_path(path)?;
+        if media_type(path)? == SQLITE_MEDIA_TYPE && selection.database.as_ref() != Some(path) {
+            return Err(Failure::usage(
+                "SQLite members require one explicit database selection.",
+            ));
+        }
         if !folded.insert(path.to_ascii_lowercase()) {
             return Err(Failure::usage(
                 "Bundle member paths must not collide without case distinctions.",
@@ -228,6 +280,8 @@ pub(crate) fn load_selection(root: &Path, selector: &str) -> Result<BundleSelect
 }
 struct Held {
     path: String,
+    parent: Dir,
+    name: String,
     file: File,
     before: Metadata,
     #[cfg(windows)]
@@ -235,12 +289,15 @@ struct Held {
 }
 impl Held {
     fn open(root: &Dir, path: &str) -> Result<Self, Failure> {
-        let file = files::regular(root, path)?;
+        let (parent, name) = member_parent(root, path)?;
+        let file = files::regular(&parent, &name)?;
         let before = file.metadata()?;
         #[cfg(windows)]
         let identity = files::file_identity(&file)?;
         Ok(Self {
             path: path.into(),
+            parent,
+            name,
             file,
             before,
             #[cfg(windows)]
@@ -268,6 +325,82 @@ fn recheck_all(root: &Dir, held: &[Held]) -> Result<(), Failure> {
         source.recheck(root)?;
     }
     Ok(())
+}
+
+fn member_parent(root: &Dir, path: &str) -> Result<(Dir, String), Failure> {
+    files::source_path(path)?;
+    let mut parent = root.try_clone()?;
+    let mut components = path.split('/').peekable();
+    while let Some(component) = components.next() {
+        if components.peek().is_none() {
+            return Ok((parent, component.into()));
+        }
+        files::reject_link(&parent.symlink_metadata(component)?)?;
+        parent = parent.open_dir_nofollow(component)?;
+    }
+    Err(Failure::usage("Invalid SQLite member path."))
+}
+
+fn check_auxiliary(parent: &Dir, name: &str) -> Result<(), Failure> {
+    for suffix in ["-wal", "-shm", "-journal"] {
+        match parent.symlink_metadata(format!("{name}{suffix}")) {
+            Ok(_) => return Err(Failure::usage("SQLite auxiliary files are not supported.")),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
+}
+
+fn valid_digest(digest: &str) -> bool {
+    digest.len() == 64
+        && digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+}
+
+fn copy_binary_limit(
+    source: &File,
+    mut writer: impl Write,
+    limit: u64,
+) -> Result<guard::Receipt, Failure> {
+    let reader = source.try_clone()?.into_std();
+    let mut buffer = [0; 64 * 1024];
+    let mut digest = Sha256::new();
+    let mut size = 0u64;
+    loop {
+        #[cfg(unix)]
+        let read = std::os::unix::fs::FileExt::read_at(&reader, &mut buffer, size);
+        #[cfg(windows)]
+        let read = std::os::windows::fs::FileExt::seek_read(&reader, &mut buffer, size);
+        #[cfg(not(any(unix, windows)))]
+        let read = {
+            use std::io::{Seek, SeekFrom};
+            let mut reader = &reader;
+            reader.seek(SeekFrom::Start(size))?;
+            reader.read(&mut buffer)
+        };
+        let count = match read {
+            Ok(count) => count,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error.into()),
+        };
+        if count == 0 {
+            break;
+        }
+        size = size
+            .checked_add(count as u64)
+            .ok_or_else(|| Failure::usage("Bundle size overflow."))?;
+        if size > limit {
+            return Err(Failure::usage("The SQLite member exceeds its byte budget."));
+        }
+        digest.update(&buffer[..count]);
+        writer.write_all(&buffer[..count])?;
+    }
+    Ok(guard::Receipt {
+        digest: format!("{:x}", digest.finalize()),
+        size,
+    })
 }
 
 fn recheck_selected_root(
@@ -381,6 +514,8 @@ struct BorrowedManifest<'a> {
     entrypoint: &'a str,
     requirements: &'a [String],
     members: &'a [Member],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    database: Option<&'a DatabaseMetadata>,
 }
 fn write_manifest(root: &Dir, bytes: &[u8]) -> Result<(), Failure> {
     let mut output = new_member(root, MANIFEST)?;
@@ -424,16 +559,42 @@ pub(crate) fn capture(
     files::check_git(root, &object, &preparation.name)?;
     let mut total = 0u64;
     let mut manifest = Manifest {
-        schema_version: 1,
-        delivery_type: "bundle".into(),
+        schema_version: if selection.database.is_some() { 2 } else { 1 },
+        delivery_type: if selection.database.is_some() {
+            "sqlite_application"
+        } else {
+            "bundle"
+        }
+        .into(),
         entrypoint: selection.entrypoint.clone(),
         requirements: vec![],
+        database: None,
         members: Vec::with_capacity(sources.len()),
         manifest_bytes: 0,
     };
     for source in &mut sources {
         let mut output = new_member(&preparation.dir, &source.path)?;
-        let receipt = guard::copy_checked_limit(&mut source.file, &mut output, MAX_BYTES - total)?;
+        let receipt = if selection.database.as_ref() == Some(&source.path) {
+            let snapshot = super::sqlite::normalize(&source.file, &output, || {
+                check_auxiliary(&source.parent, &source.name)
+            })?;
+            if snapshot.bytes > MAX_BYTES - total {
+                return Err(Failure::usage("The complete bundle exceeds 10 MiB."));
+            }
+            manifest.database = Some(DatabaseMetadata {
+                path: source.path.clone(),
+                profile: SQLITE_PROFILE.into(),
+                transformation: SQLITE_TRANSFORMATION.into(),
+                source_bytes: snapshot.source_bytes,
+                source_sha256: snapshot.source_sha256,
+            });
+            guard::Receipt {
+                digest: snapshot.sha256,
+                size: snapshot.bytes,
+            }
+        } else {
+            guard::copy_checked_limit(&mut source.file, &mut output, MAX_BYTES - total)?
+        };
         total += receipt.size;
         output.sync_all()?;
         manifest.members.push(Member {
@@ -450,6 +611,7 @@ pub(crate) fn capture(
         entrypoint: &manifest.entrypoint,
         requirements: &selection.requirements,
         members: &manifest.members,
+        database: manifest.database.as_ref(),
     })?;
     total = total
         .checked_add(bytes.len() as u64)
@@ -484,7 +646,14 @@ pub(crate) fn capture(
 }
 
 fn validate_manifest(manifest: &Manifest) -> Result<(), Failure> {
-    if manifest.schema_version != 1 || manifest.delivery_type != "bundle" {
+    if !matches!(
+        (
+            manifest.schema_version,
+            manifest.delivery_type.as_str(),
+            manifest.database.as_ref()
+        ),
+        (1, "bundle", None) | (2, "sqlite_application", Some(_))
+    ) {
         return Err(Failure::usage("Unsupported bundle manifest schema."));
     }
     let selection = BundleSelection {
@@ -496,8 +665,22 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), Failure> {
             .map(|member| member.path.clone())
             .collect(),
         requirements: vec![],
+        database: manifest
+            .database
+            .as_ref()
+            .map(|database| database.path.clone()),
     };
     validate_selection(&selection)?;
+    if let Some(database) = &manifest.database {
+        if database.profile != SQLITE_PROFILE
+            || database.transformation != SQLITE_TRANSFORMATION
+            || database.source_bytes > MAX_BYTES
+            || database.source_bytes < 512
+            || !valid_digest(&database.source_sha256)
+        {
+            return Err(Failure::usage("Invalid SQLite application metadata."));
+        }
+    }
     for requirement in &manifest.requirements {
         if let Some(finding) = crate::redact::check_field("bundle requirement", requirement) {
             return Err(Failure::Redaction(Box::new(finding)));
@@ -635,13 +818,36 @@ fn verify_directory(
         sources.push(Held::open(root, &member.path)?);
     }
     for (source, member) in sources.iter_mut().zip(&manifest.members) {
+        let binary = manifest
+            .database
+            .as_ref()
+            .is_some_and(|database| database.path == member.path);
+        if binary {
+            let inspected = super::sqlite::inspect(&source.file, || {
+                check_auxiliary(&source.parent, &source.name)
+            })?;
+            files::matching(
+                &inspected.digest,
+                inspected.size,
+                &member.sha256,
+                member.bytes,
+            )?;
+        }
         let receipt = if let Some(destination) = destination {
             let mut output = new_member(destination, &member.path)?;
-            let receipt = guard::copy_checked_limit(&mut source.file, &mut output, member.bytes)?;
+            let receipt = if binary {
+                copy_binary_limit(&source.file, &mut output, member.bytes)?
+            } else {
+                guard::copy_checked_limit(&mut source.file, &mut output, member.bytes)?
+            };
             output.sync_all()?;
             receipt
         } else {
-            guard::copy_checked_limit(&mut source.file, io::sink(), member.bytes)?
+            if binary {
+                copy_binary_limit(&source.file, io::sink(), member.bytes)?
+            } else {
+                guard::copy_checked_limit(&mut source.file, io::sink(), member.bytes)?
+            }
         };
         files::matching(&receipt.digest, receipt.size, &member.sha256, member.bytes)?;
     }
@@ -818,8 +1024,18 @@ pub(crate) fn source_check(root: &Path, source_root_path: &str, manifest: &Manif
         }
         let mut matches = true;
         for (held, member) in sources.iter_mut().zip(&manifest.members) {
-            let receipt = guard::copy_checked_limit(&mut held.file, io::sink(), MAX_BYTES)?;
-            matches &= receipt.digest == member.sha256 && receipt.size == member.bytes;
+            if let Some(database) = manifest
+                .database
+                .as_ref()
+                .filter(|database| database.path == member.path)
+            {
+                let receipt = copy_binary_limit(&held.file, io::sink(), MAX_BYTES)?;
+                matches &= receipt.digest == database.source_sha256
+                    && receipt.size == database.source_bytes;
+            } else {
+                let receipt = guard::copy_checked_limit(&mut held.file, io::sink(), MAX_BYTES)?;
+                matches &= receipt.digest == member.sha256 && receipt.size == member.bytes;
+            }
         }
         recheck_all(&source, &sources)?;
         recheck_selected_root(&root, &source, source_root_path, &sources)?;
@@ -851,6 +1067,41 @@ mod tests {
         let (previous, _) = controlled_destination(&project, "previous/restored").unwrap();
         assert!(recheck_visible_destination(&project, "visible/restored", &visible).is_ok());
         assert!(recheck_visible_destination(&project, "visible/restored", &previous).is_err());
+    }
+
+    #[test]
+    fn binary_copy_starts_at_zero_even_when_a_cloned_handle_moved_the_cursor() {
+        use std::io::{Seek, SeekFrom};
+        let root = Scratch::new();
+        let bytes = b"Synthetic binary\0delivery bytes";
+        fs::write(root.0.join("data.sqlite"), bytes).unwrap();
+        let directory = files::open_root(&root.0).unwrap();
+        let source = files::regular(&directory, "data.sqlite").unwrap();
+        let mut clone = source.try_clone().unwrap();
+        clone.seek(SeekFrom::End(0)).unwrap();
+        let mut output = Vec::new();
+        let receipt = copy_binary_limit(&source, &mut output, bytes.len() as u64).unwrap();
+        assert_eq!(output, bytes);
+        assert_eq!(receipt.size, bytes.len() as u64);
+        assert_eq!(receipt.digest, format!("{:x}", Sha256::digest(bytes)));
+        assert!(copy_binary_limit(&source, io::sink(), bytes.len() as u64 - 1).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn auxiliary_checks_follow_the_original_held_source_parent_after_a_rename() {
+        let root = Scratch::new();
+        fs::create_dir(root.0.join("app")).unwrap();
+        fs::write(root.0.join("app/data.sqlite"), b"Synthetic held source").unwrap();
+        let project = files::open_root(&root.0).unwrap();
+        let source = Held::open(&project, "app/data.sqlite").unwrap();
+        fs::rename(root.0.join("app"), root.0.join("original")).unwrap();
+        fs::create_dir(root.0.join("app")).unwrap();
+        fs::write(root.0.join("original/data.sqlite-wal"), b"").unwrap();
+        assert!(check_auxiliary(&source.parent, &source.name).is_err());
+        let (visible, name) = member_parent(&project, "app/data.sqlite").unwrap();
+        assert!(check_auxiliary(&visible, &name).is_ok());
+        assert!(source.recheck(&project).is_err());
     }
     #[cfg(unix)]
     #[test]
@@ -893,6 +1144,7 @@ mod tests {
                 "assets/b.css".into(),
             ],
             requirements: vec![],
+            database: None,
         };
         assert!(validate_selection(&selection).is_err());
         selection.members[2] = "Assets/b.css".into();
@@ -907,6 +1159,7 @@ mod tests {
             delivery_type: "bundle".into(),
             entrypoint: "Assets/index.HTML".into(),
             requirements: vec![],
+            database: None,
             manifest_bytes: 0,
             members: vec![
                 Member {
@@ -941,6 +1194,7 @@ mod tests {
             entrypoint: members[0].clone(),
             members,
             requirements: vec![String::new(); 10_000],
+            database: None,
         };
         let (result, peak) = crate::test_alloc::measure(|| validate_selection(&selection));
         result.unwrap();
@@ -1043,6 +1297,7 @@ mod tests {
             entrypoint: "index.html".into(),
             members: vec!["index.html".into(), "assets/style.css".into()],
             requirements: vec![],
+            database: None,
         };
         (root, selection)
     }
@@ -1187,6 +1442,7 @@ mod tests {
                 entrypoint: "index.html".into(),
                 members: vec!["index.html".into()],
                 requirements: vec![],
+                database: None,
             };
             for index in 1..count {
                 selection.members.push(format!("style-{index}.css"));
@@ -1210,6 +1466,7 @@ mod tests {
                     delivery_type: "bundle".into(),
                     entrypoint: selection.entrypoint.clone(),
                     requirements: vec![],
+                    database: None,
                     members,
                     manifest_bytes: 0,
                 };
@@ -1257,6 +1514,205 @@ mod tests {
             );
         }
     }
+    fn sqlite_benchmark_fixture(target: usize) -> (Scratch, BundleSelection, u64) {
+        use libsqlite3_sys as ffi;
+        use std::ffi::CString;
+        let root = Scratch::new();
+        let selection = BundleSelection {
+            root: ".".into(),
+            entrypoint: "index.html".into(),
+            members: vec!["data.sqlite".into(), "index.html".into(), "main.js".into()],
+            requirements: vec![],
+            database: Some("data.sqlite".into()),
+        };
+        fs::write(
+            root.0.join("index.html"),
+            b"<!doctype html><script src=main.js></script>",
+        )
+        .unwrap();
+        fs::write(
+            root.0.join("main.js"),
+            b"document.title = 'Synthetic SQLite application';",
+        )
+        .unwrap();
+        {
+            let _engine = super::super::sqlite::test_engine_guard().unwrap();
+            let path = CString::new(root.0.join("data.sqlite").to_str().unwrap()).unwrap();
+            let value = "Synthetic SQLite application fixture data. ".repeat(6);
+            let rows = target * 9 / 10 / 280;
+            assert!(rows <= 100_000 && value.len() <= 65536);
+            unsafe {
+                let mut database = std::ptr::null_mut();
+                assert_eq!(
+                    ffi::sqlite3_open(path.as_ptr(), &mut database),
+                    ffi::SQLITE_OK
+                );
+                assert_eq!(ffi::sqlite3_exec(database, c"PRAGMA cache_size=-64; PRAGMA temp_store=MEMORY; PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF; CREATE TABLE items(id INTEGER PRIMARY KEY, value TEXT NOT NULL); BEGIN".as_ptr(), None, std::ptr::null_mut(), std::ptr::null_mut()), ffi::SQLITE_OK);
+                let mut statement = std::ptr::null_mut();
+                assert_eq!(
+                    ffi::sqlite3_prepare_v2(
+                        database,
+                        c"INSERT INTO items VALUES(?1,?2)".as_ptr(),
+                        -1,
+                        &mut statement,
+                        std::ptr::null_mut()
+                    ),
+                    ffi::SQLITE_OK
+                );
+                for index in 0..rows {
+                    assert_eq!(
+                        ffi::sqlite3_bind_int64(statement, 1, index as i64),
+                        ffi::SQLITE_OK
+                    );
+                    assert_eq!(
+                        ffi::sqlite3_bind_text(
+                            statement,
+                            2,
+                            value.as_ptr().cast(),
+                            value.len() as i32,
+                            None
+                        ),
+                        ffi::SQLITE_OK
+                    );
+                    assert_eq!(ffi::sqlite3_step(statement), ffi::SQLITE_DONE);
+                    assert_eq!(ffi::sqlite3_reset(statement), ffi::SQLITE_OK);
+                }
+                assert_eq!(ffi::sqlite3_finalize(statement), ffi::SQLITE_OK);
+                assert_eq!(
+                    ffi::sqlite3_exec(
+                        database,
+                        c"COMMIT".as_ptr(),
+                        None,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut()
+                    ),
+                    ffi::SQLITE_OK
+                );
+                assert_eq!(ffi::sqlite3_close(database), ffi::SQLITE_OK);
+            }
+        }
+        let project = files::open_root(&root.0).unwrap();
+        let first = capture(&root.0, &selection, &crate::id::ulid())
+            .unwrap()
+            .retained;
+        fs::copy(
+            root.0
+                .join(".vivac-artifacts")
+                .join(&first.object)
+                .join("data.sqlite"),
+            root.0.join("data.sqlite"),
+        )
+        .unwrap();
+        files::store(&project, false)
+            .unwrap()
+            .remove_dir_all(&first.object)
+            .unwrap();
+        let warmup = capture(&root.0, &selection, &crate::id::ulid())
+            .unwrap()
+            .retained;
+        let mut manifest =
+            read_manifest(&root.0, &warmup.object, &warmup.digest, warmup.size).unwrap();
+        let other = manifest
+            .members
+            .iter()
+            .filter(|member| member.path != "index.html")
+            .map(|member| member.bytes)
+            .sum::<u64>() as usize;
+        let mut html_bytes = 0;
+        for _ in 0..4 {
+            html_bytes = target
+                .checked_sub(other + manifest_bytes(&manifest).unwrap().len())
+                .unwrap();
+            manifest
+                .members
+                .iter_mut()
+                .find(|member| member.path == "index.html")
+                .unwrap()
+                .bytes = html_bytes as u64;
+        }
+        let mut html = b"<!doctype html><script src=main.js></script>".to_vec();
+        html.extend(representative_bytes(html_bytes - html.len()));
+        fs::write(root.0.join("index.html"), html).unwrap();
+        files::store(&project, false)
+            .unwrap()
+            .remove_dir_all(&warmup.object)
+            .unwrap();
+        let ready = capture(&root.0, &selection, &crate::id::ulid())
+            .unwrap()
+            .retained;
+        assert_eq!(ready.size, target as u64);
+        let database_bytes = read_manifest(&root.0, &ready.object, &ready.digest, ready.size)
+            .unwrap()
+            .members
+            .iter()
+            .find(|member| member.path == "data.sqlite")
+            .unwrap()
+            .bytes;
+        files::store(&project, false)
+            .unwrap()
+            .remove_dir_all(&ready.object)
+            .unwrap();
+        (root, selection, database_bytes)
+    }
+
+    #[test]
+    #[ignore = "Run explicitly in release mode with --test-threads=1 to measure SQLite application retention."]
+    fn retained_sqlite_application_release_benchmark() {
+        assert!(
+            std::hint::black_box(!cfg!(debug_assertions)),
+            "Run this benchmark in release mode."
+        );
+        for (label, target, budget) in [
+            ("one_mib", 1024 * 1024, 500.0),
+            ("ten_mib", 10 * 1024 * 1024, 2000.0),
+        ] {
+            let (root, selection, database_bytes) = sqlite_benchmark_fixture(target);
+            let mut samples = Vec::with_capacity(100);
+            let mut maximum_rust = 0;
+            let mut maximum_sqlite = 0;
+            for _ in 0..100 {
+                {
+                    let _engine = super::super::sqlite::test_engine_guard().unwrap();
+                    unsafe {
+                        libsqlite3_sys::sqlite3_memory_highwater(1);
+                    }
+                }
+                let revision = crate::id::ulid();
+                let started = std::time::Instant::now();
+                let (result, rust_heap) =
+                    crate::test_alloc::measure(|| capture(&root.0, &selection, &revision));
+                samples.push(started.elapsed().as_secs_f64() * 1000.0);
+                maximum_rust = maximum_rust.max(rust_heap);
+                {
+                    let _engine = super::super::sqlite::test_engine_guard().unwrap();
+                    let sqlite_heap = unsafe { libsqlite3_sys::sqlite3_memory_highwater(0) };
+                    maximum_sqlite = maximum_sqlite.max(usize::try_from(sqlite_heap).unwrap());
+                }
+                let retained = result.unwrap().retained;
+                assert_eq!(retained.size, target as u64);
+                let project = files::open_root(&root.0).unwrap();
+                files::store(&project, false)
+                    .unwrap()
+                    .remove_dir_all(&retained.object)
+                    .unwrap();
+            }
+            samples.sort_by(f64::total_cmp);
+            eprintln!(
+                "{}",
+                json!({"benchmark":"sqlite_application_retention","case":label,"samples":100,"profile":"release","os":std::env::consts::OS,"arch":std::env::consts::ARCH,"filesystem_root":root.0,"total_bytes":target,"database_bytes":database_bytes,"other_bytes":target as u64-database_bytes,"transformation":SQLITE_TRANSFORMATION,"members":3,"guards":"complete_logical_sqlite_utf8_sensitive_metadata_source_lock_identity_git_native_exclusive","p50_ms":samples[49],"p99_ms":samples[98],"max_ms":samples[99],"peak_rust_auxiliary_heap_bytes":maximum_rust,"peak_sqlite_heap_bytes":maximum_sqlite,"combined_conservative_heap_bytes":maximum_rust+maximum_sqlite,"stack_allowance_bytes":128*1024})
+            );
+            assert!(
+                samples[98] < budget,
+                "{label} p99 {} ms exceeds {budget} ms",
+                samples[98]
+            );
+            assert!(
+                maximum_rust + maximum_sqlite + 128 * 1024 <= 2 * 1024 * 1024,
+                "{label} combined auxiliary memory exceeds 2 MiB"
+            );
+        }
+    }
+
     #[test]
     fn selectors_are_bounded_exact_and_reject_unknown_fields() {
         let (root, selection) = fixture();
@@ -1309,6 +1765,7 @@ mod tests {
             entrypoint: "index.html".into(),
             members: vec!["index.html".into()],
             requirements: vec![],
+            database: None,
         };
         let bytes = vec![b' '; (MAX_BYTES - MAX_MANIFEST_BYTES) as usize];
         fs::write(root.0.join("index.html"), &bytes).unwrap();
@@ -1349,6 +1806,7 @@ mod tests {
             entrypoint: "index.html".into(),
             members: vec!["index.html".into(), "INDEX.html".into()],
             requirements: vec![],
+            database: None,
         };
         assert!(validate_selection(&selection).is_err());
     }

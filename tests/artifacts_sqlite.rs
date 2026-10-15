@@ -96,11 +96,11 @@ fn object(sandbox: &Sandbox, delivery: &Value) -> std::path::PathBuf {
         .join(delivery["object"].as_str().unwrap())
 }
 
-const SIMPLE: &str = "CREATE TABLE items(id INTEGER PRIMARY KEY, label TEXT NOT NULL); INSERT INTO items VALUES(1,'First revision');";
+const DATABASE_FIXTURE: &str = "CREATE TABLE items(id INTEGER PRIMARY KEY, label TEXT NOT NULL); INSERT INTO items VALUES(1,'First revision');";
 
 #[test]
 fn sqlite_application_retains_revisions_source_observation_retry_and_exact_restore() {
-    let sandbox = fixture("sqlite-application-lifecycle", SIMPLE);
+    let sandbox = fixture("sqlite-application-lifecycle", DATABASE_FIXTURE);
     database(&sandbox.0.join("app/data.sqlite"), "PRAGMA secure_delete=OFF; INSERT INTO items VALUES(2,'person@example.com'); DELETE FROM items WHERE id=2;");
     let source = fs::read(sandbox.0.join("app/data.sqlite")).unwrap();
     let first = capture(&sandbox, &["--operation", "01cccccccccccccccccccccccc"]);
@@ -147,6 +147,16 @@ fn sqlite_application_retains_revisions_source_observation_retry_and_exact_resto
     );
     let second = capture(&sandbox, &["--artifact", artifact, "--previous", revision]);
     assert_eq!(second["previous"], revision);
+    sandbox.ok(&["why", "g1"]);
+    let index = sandbox.0.join(".vivac/index");
+    assert!(index.is_file());
+    let cached = sandbox.ok(&["artifacts", "show", artifact, "--json"]);
+    fs::remove_file(index).unwrap();
+    let rebuilt = sandbox.ok(&["artifacts", "show", artifact, "--json"]);
+    assert_eq!(
+        serde_json::from_str::<Value>(&cached).unwrap(),
+        serde_json::from_str::<Value>(&rebuilt).unwrap()
+    );
     fs::remove_dir_all(sandbox.0.join("app")).unwrap();
     fs::remove_file(sandbox.0.join("selection.json")).unwrap();
     let retry = capture(&sandbox, &["--operation", "01cccccccccccccccccccccccc"]);
@@ -192,7 +202,7 @@ fn sqlite_requires_explicit_exact_selection_and_refuses_unsafe_databases_atomica
         let objects = sandbox.0.join(".vivac-artifacts/objects");
         assert!(!objects.exists() || fs::read_dir(objects).unwrap().next().is_none());
     }
-    let sandbox = fixture("sqlite-explicit-selection", SIMPLE);
+    let sandbox = fixture("sqlite-explicit-selection", DATABASE_FIXTURE);
     for selected in [None, Some("DATA.sqlite"), Some("main.js")] {
         selection(&sandbox, selected);
         let before = sandbox.log();
@@ -218,7 +228,7 @@ fn sqlite_requires_explicit_exact_selection_and_refuses_unsafe_databases_atomica
 
 #[test]
 fn sqlite_auxiliary_files_refuse_capture_without_a_receipt_or_partial_object() {
-    let sandbox = fixture("sqlite-auxiliary-refusal", SIMPLE);
+    let sandbox = fixture("sqlite-auxiliary-refusal", DATABASE_FIXTURE);
     for suffix in ["-wal", "-shm", "-journal"] {
         let path = sandbox.0.join(format!("app/data.sqlite{suffix}"));
         fs::write(&path, b"").unwrap();
@@ -248,7 +258,7 @@ fn sqlite_auxiliary_files_refuse_capture_without_a_receipt_or_partial_object() {
 
 #[test]
 fn sqlite_and_static_bundle_identities_cannot_change_kind() {
-    let sandbox = fixture("sqlite-bundle-identity", SIMPLE);
+    let sandbox = fixture("sqlite-bundle-identity", DATABASE_FIXTURE);
     let sqlite = capture(&sandbox, &[]);
     fs::write(
         sandbox.0.join("static.json"),
@@ -311,7 +321,7 @@ fn sqlite_and_static_bundle_identities_cannot_change_kind() {
 
 #[test]
 fn retained_sqlite_corruption_refuses_restore_before_publication() {
-    let sandbox = fixture("sqlite-retained-corruption", SIMPLE);
+    let sandbox = fixture("sqlite-retained-corruption", DATABASE_FIXTURE);
     let delivery = capture(&sandbox, &[]);
     let saved = object(&sandbox, &delivery).join("data.sqlite");
     let mut bytes = fs::read(&saved).unwrap();
@@ -360,7 +370,7 @@ fn sqlite_preview_binary_is_only_served_from_the_opaque_resource_base_after_run(
         socket.read_to_end(&mut response).unwrap();
         response
     }
-    let sandbox = fixture("sqlite-preview-binary", SIMPLE);
+    let sandbox = fixture("sqlite-preview-binary", DATABASE_FIXTURE);
     let delivery = capture(&sandbox, &[]);
     let bytes = fs::read(object(&sandbox, &delivery).join("data.sqlite")).unwrap();
     let mut process = Running(
@@ -399,9 +409,13 @@ fn sqlite_preview_binary_is_only_served_from_the_opaque_resource_base_after_run(
         .unwrap()
         .split_once('/')
         .unwrap();
-    assert!(
-        request(host, "GET", "/data.sqlite", "Origin: null\r\n", "").starts_with(b"HTTP/1.1 404")
-    );
+    let refused = request(host, "GET", "/data.sqlite", "Origin: null\r\n", "");
+    assert!(refused.starts_with(b"HTTP/1.1 403"));
+    assert!(!refused
+        .windows(b"Access-Control-Allow-Origin".len())
+        .any(|part| part == b"Access-Control-Allow-Origin"));
+    assert!(!refused.windows(bytes.len()).any(|part| part == bytes));
+    assert!(request(host, "GET", "/data.sqlite", "", "").starts_with(b"HTTP/1.1 404"));
     let body = format!("token={token}");
     let run = request(
         host,
@@ -484,7 +498,7 @@ fn sqlite_mcp_retry_uses_the_same_receipt_as_cli_after_selector_loss() {
             reply
         }
     }
-    let sandbox = fixture("sqlite-mcp-cli-contract", SIMPLE);
+    let sandbox = fixture("sqlite-mcp-cli-contract", DATABASE_FIXTURE);
     let operation = "01dddddddddddddddddddddddd";
     let cli = capture(&sandbox, &["--operation", operation]);
     fs::remove_dir_all(sandbox.0.join("app")).unwrap();
@@ -571,7 +585,7 @@ fn manifest_database_shape_is_strict_even_with_a_matching_custody_digest() {
             0
         );
     }
-    let sandbox = fixture("static-manifest-database-null", SIMPLE);
+    let sandbox = fixture("static-manifest-database-null", DATABASE_FIXTURE);
     fs::write(
         sandbox.0.join("selection.json"),
         serde_json::to_vec(
@@ -588,7 +602,7 @@ fn manifest_database_shape_is_strict_even_with_a_matching_custody_digest() {
     manifest["database"] = Value::Null;
     refuse(&sandbox, &delivery, &manifest);
     for absent in [false, true] {
-        let sandbox = fixture("sqlite-manifest-missing-database", SIMPLE);
+        let sandbox = fixture("sqlite-manifest-missing-database", DATABASE_FIXTURE);
         let delivery = capture(&sandbox, &[]);
         let mut manifest: Value = serde_json::from_slice(
             &fs::read(object(&sandbox, &delivery).join(".vivac-delivery.json")).unwrap(),
@@ -600,5 +614,67 @@ fn manifest_database_shape_is_strict_even_with_a_matching_custody_digest() {
             manifest["database"] = Value::Null;
         }
         refuse(&sandbox, &delivery, &manifest);
+    }
+}
+
+#[test]
+fn sqlite_receipt_metadata_refuses_invalid_paths_profiles_and_missing_required_fields() {
+    let sandbox = fixture("sqlite-receipt-guards", DATABASE_FIXTURE);
+    let delivery = capture(&sandbox, &[]);
+    let original = sandbox.log();
+    for (field, value) in [
+        ("database", Some(json!("../data.sqlite"))),
+        ("database", Some(json!("main.js"))),
+        ("profile", Some(json!("unknown-profile"))),
+        ("database", None),
+        ("profile", None),
+        ("description", None),
+    ] {
+        let log = original
+            .lines()
+            .map(|line| {
+                let mut event: Value = serde_json::from_str(line).unwrap();
+                if event["payload"]["revision"] == delivery["revision"] {
+                    if let Some(value) = &value {
+                        event["payload"][field] = value.clone();
+                    } else {
+                        event["payload"].as_object_mut().unwrap().remove(field);
+                    }
+                }
+                serde_json::to_string(&event).unwrap() + "\n"
+            })
+            .collect::<String>();
+        fs::write(sandbox.0.join(".vivac/events"), log).unwrap();
+        let index = sandbox.0.join(".vivac/index");
+        if index.exists() {
+            fs::remove_file(index).unwrap();
+        }
+        assert_ne!(
+            sandbox
+                .run(&[
+                    "artifacts",
+                    "show",
+                    delivery["artifact"].as_str().unwrap(),
+                    "--json"
+                ])
+                .1,
+            0
+        );
+        assert_ne!(
+            sandbox
+                .run(&[
+                    "artifacts",
+                    "restore",
+                    delivery["artifact"].as_str().unwrap(),
+                    "--revision",
+                    delivery["revision"].as_str().unwrap(),
+                    "--to",
+                    "refused",
+                    "--json"
+                ])
+                .1,
+            0
+        );
+        assert!(!sandbox.0.join("refused").exists());
     }
 }
