@@ -66,9 +66,313 @@ fn value(sandbox: &Sandbox, args: &[&str]) -> Value {
 fn capture(sandbox: &Sandbox, path: &str) -> Value {
     value(
         sandbox,
-        &["artifacts", "capture", path, "--from", "g1", "--json"],
+        &[
+            "artifacts",
+            "capture",
+            "--description",
+            "Selected fixture layout",
+            path,
+            "--from",
+            "g1",
+            "--json",
+        ],
     )["delivery"]
         .clone()
+}
+
+#[test]
+fn capture_requires_a_description_before_retaining_or_recording() {
+    let sandbox = seeded("artifact-required-description");
+    fs::write(sandbox.0.join("design.html"), b"<html>fixture</html>").unwrap();
+    let before = fs::read(sandbox.0.join(".vivac/events")).unwrap();
+    let (output, code) = sandbox.run(&[
+        "artifacts",
+        "capture",
+        "design.html",
+        "--from",
+        "g1",
+        "--json",
+    ]);
+    assert_ne!(code, 0, "missing description must be refused: {output}");
+    assert!(output.contains("description"));
+    assert_eq!(fs::read(sandbox.0.join(".vivac/events")).unwrap(), before);
+    assert!(!sandbox.0.join(".vivac-artifacts").exists());
+}
+
+#[test]
+fn unsafe_or_invalid_descriptions_are_refused_before_retaining_bytes() {
+    let sandbox = seeded("artifact-description-validation");
+    fs::write(sandbox.0.join("design.html"), b"<html>fixture</html>").unwrap();
+    let before = sandbox.log();
+    for description in [
+        "".to_owned(),
+        "   ".to_owned(),
+        "\ntrimmed control".to_owned(),
+        "one\ttwo".to_owned(),
+        "one\u{7f}two".to_owned(),
+        "one\u{85}two".to_owned(),
+        "one\u{2028}two".to_owned(),
+        "one\u{2029}two".to_owned(),
+        "x".repeat(281),
+        "🖼".repeat(281),
+        "person@example.com".to_owned(),
+        "sk-ant-api03-abcdefghijklmnopqrstuvwxyz012345".to_owned(),
+        "```html".to_owned(),
+    ] {
+        let (_, code) = sandbox.run(&[
+            "artifacts",
+            "capture",
+            "design.html",
+            "--from",
+            "g1",
+            "--description",
+            &description,
+            "--json",
+        ]);
+        assert_ne!(code, 0, "invalid description was accepted");
+        assert_eq!(sandbox.log(), before);
+        assert!(!sandbox.0.join(".vivac-artifacts").exists());
+    }
+}
+
+#[test]
+fn descriptions_are_normalized_per_revision_and_operation_retries_compare_them() {
+    let sandbox = seeded("artifact-description-retry");
+    fs::write(sandbox.0.join("design.html"), b"<html>fixture</html>").unwrap();
+    let args = |description: &str| {
+        vec![
+            "artifacts".to_owned(),
+            "capture".into(),
+            "design.html".into(),
+            "--from".into(),
+            "g1".into(),
+            "--description".into(),
+            description.into(),
+            "--operation".into(),
+            OPERATION.into(),
+            "--json".into(),
+        ]
+    };
+    let run = |description: &str| {
+        let args = args(description);
+        sandbox.run(&args.iter().map(String::as_str).collect::<Vec<_>>())
+    };
+    let (output, code) = run("  Selected layout  ");
+    assert_eq!(code, 0, "{output}");
+    let first: Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(first["delivery"]["description"], "Selected layout");
+    assert!(sandbox.log().contains("artifact.captured_v2"));
+    let before = sandbox.log();
+    fs::remove_file(sandbox.0.join("design.html")).unwrap();
+    let (output, code) = run("Selected layout");
+    assert_eq!(code, 0, "{output}");
+    assert_eq!(
+        serde_json::from_str::<Value>(&output).unwrap()["already_recorded"],
+        true
+    );
+    assert_ne!(run("Different layout").1, 0);
+    assert_ne!(run("").1, 0);
+    assert_eq!(sandbox.log(), before);
+}
+
+#[test]
+fn description_character_limit_counts_unicode_scalars_instead_of_bytes() {
+    let sandbox = seeded("artifact-unicode-description");
+    fs::write(sandbox.0.join("design.html"), b"<html>fixture</html>").unwrap();
+    let description = "🖼".repeat(280);
+    let captured = value(
+        &sandbox,
+        &[
+            "artifacts",
+            "capture",
+            "design.html",
+            "--from",
+            "g1",
+            "--description",
+            &description,
+            "--json",
+        ],
+    );
+    assert_eq!(captured["delivery"]["description"], description);
+    assert_eq!(
+        captured["delivery"]["description"].as_str().unwrap().len(),
+        1120
+    );
+}
+
+#[test]
+fn legacy_and_described_revisions_survive_continuation_restore_and_index_rebuild() {
+    let sandbox = seeded("artifact-mixed-description-history");
+    let first_bytes = b"<html>first fixture</html>";
+    fs::write(sandbox.0.join("design.html"), first_bytes).unwrap();
+    let first = capture(&sandbox, "design.html");
+    let artifact = first["artifact"].as_str().unwrap();
+    let first_revision = first["revision"].as_str().unwrap();
+    let events = sandbox.0.join(".vivac/events");
+    let legacy = sandbox
+        .log()
+        .lines()
+        .map(|line| {
+            let mut event: Value = serde_json::from_str(line).unwrap();
+            if event["payload"]["type"] == "artifact.captured_v2" {
+                event["payload"]["type"] = serde_json::json!("artifact.captured");
+                event["payload"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("description");
+            }
+            serde_json::to_string(&event).unwrap() + "\n"
+        })
+        .collect::<String>();
+    fs::write(&events, legacy).unwrap();
+    let index = sandbox.0.join(".vivac/index");
+    if index.exists() {
+        fs::remove_file(&index).unwrap();
+    }
+    sandbox.ok(&["why", "g1"]);
+    assert!(
+        index.is_file(),
+        "the legacy fixture must have a real cached index"
+    );
+    let old = value(
+        &sandbox,
+        &[
+            "artifacts",
+            "show",
+            artifact,
+            "--revision",
+            first_revision,
+            "--json",
+        ],
+    );
+    assert!(old["revisions"][0]
+        .as_object()
+        .unwrap()
+        .contains_key("description"));
+    assert_eq!(old["revisions"][0]["description"], Value::Null);
+    fs::write(
+        sandbox.0.join("design.html"),
+        b"<html>second fixture</html>",
+    )
+    .unwrap();
+    let second = value(
+        &sandbox,
+        &[
+            "artifacts",
+            "capture",
+            "design.html",
+            "--from",
+            "g1",
+            "--description",
+            "Second layout",
+            "--artifact",
+            artifact,
+            "--previous",
+            first_revision,
+            "--json",
+        ],
+    );
+    assert_eq!(second["delivery"]["description"], "Second layout");
+    assert_eq!(second["delivery"]["previous"], first_revision);
+    sandbox.ok(&["why", "g1"]);
+    assert!(
+        index.is_file(),
+        "the mixed fixture must have a real cached index"
+    );
+    let cached = value(&sandbox, &["artifacts", "show", artifact, "--json"]);
+    fs::remove_file(&index).unwrap();
+    let history = value(&sandbox, &["artifacts", "show", artifact, "--json"]);
+    assert_eq!(
+        history, cached,
+        "rebuilding the index must preserve both descriptions and history"
+    );
+    assert_eq!(history["revisions"].as_array().unwrap().len(), 2);
+    let old = history["revisions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["revision"] == first_revision)
+        .unwrap();
+    assert_eq!(old["description"], Value::Null);
+    value(
+        &sandbox,
+        &[
+            "artifacts",
+            "restore",
+            artifact,
+            "--revision",
+            first_revision,
+            "--to",
+            "first-restored.html",
+            "--json",
+        ],
+    );
+    assert_eq!(
+        fs::read(sandbox.0.join("first-restored.html")).unwrap(),
+        first_bytes
+    );
+    let (checked, code) = sandbox.run(&[
+        "artifacts",
+        "check",
+        artifact,
+        "--revision",
+        first_revision,
+        "--json",
+    ]);
+    assert_eq!(code, 1);
+    let checked: Value = serde_json::from_str(&checked).unwrap();
+    assert_eq!(checked["retained"]["status"], "matches");
+    assert_eq!(checked["source"]["status"], "changed");
+}
+
+#[test]
+fn malformed_described_receipts_refuse_reads_and_writes_without_rewriting_the_log() {
+    let sandbox = seeded("artifact-invalid-described-event");
+    fs::write(sandbox.0.join("design.html"), b"<html>fixture</html>").unwrap();
+    capture(&sandbox, "design.html");
+    let original = sandbox.log();
+    let events = sandbox.0.join(".vivac/events");
+    for description in [
+        None,
+        Some(serde_json::json!(null)),
+        Some(serde_json::json!("")),
+        Some(serde_json::json!("one\ntwo")),
+        Some(serde_json::json!("person@example.com")),
+        Some(serde_json::json!("x".repeat(281))),
+    ] {
+        let malformed = original
+            .lines()
+            .map(|line| {
+                let mut event: Value = serde_json::from_str(line).unwrap();
+                if event["payload"]["type"] == "artifact.captured_v2" {
+                    match &description {
+                        Some(description) => event["payload"]["description"] = description.clone(),
+                        None => {
+                            event["payload"]
+                                .as_object_mut()
+                                .unwrap()
+                                .remove("description");
+                        }
+                    }
+                }
+                serde_json::to_string(&event).unwrap() + "\n"
+            })
+            .collect::<String>();
+        fs::write(&events, &malformed).unwrap();
+        assert_ne!(sandbox.run(&["artifacts", "list", "--all", "--json"]).1, 0);
+        assert_ne!(
+            sandbox
+                .run(&[
+                    "push",
+                    "Blocked write",
+                    "--why",
+                    "do not skip malformed custody"
+                ])
+                .1,
+            0
+        );
+        assert_eq!(fs::read_to_string(&events).unwrap(), malformed);
+    }
 }
 
 #[test]
@@ -171,6 +475,10 @@ fn capabilities_need_no_project_and_ignore_an_unreadable_tree() {
     assert_eq!(expected["schema_version"], 1);
     assert_eq!(expected["scope"], "engine");
     assert_eq!(
+        expected["description"],
+        serde_json::json!({"required_for_capture":true,"max_characters":280,"scope":"revision"})
+    );
+    assert_eq!(
         expected["delivery_types"]["file"]["formats"],
         serde_json::json!(["utf8_text"])
     );
@@ -253,6 +561,8 @@ fn unsupported_bundle_capture_is_refused_before_project_or_selector_io() {
     let (output, code) = sandbox.run(&[
         "artifacts",
         "capture",
+        "--description",
+        "Selected fixture layout",
         "--bundle",
         "missing.json",
         "--from",
@@ -322,6 +632,8 @@ fn revisions_survive_source_loss_and_decisions_keep_the_reviewed_reference() {
         &[
             "artifacts",
             "capture",
+            "--description",
+            "Selected fixture layout",
             "design.html",
             "--artifact",
             artifact,
@@ -469,6 +781,8 @@ fn a_retried_operation_records_one_delivery_without_rereading_changed_source() {
     let args = [
         "artifacts",
         "capture",
+        "--description",
+        "Selected fixture layout",
         "design.html",
         "--from",
         "g1",
@@ -489,6 +803,8 @@ fn a_retried_operation_records_one_delivery_without_rereading_changed_source() {
             .run(&[
                 "artifacts",
                 "capture",
+                "--description",
+                "Selected fixture layout",
                 "other.html",
                 "--from",
                 "g1",
@@ -515,6 +831,8 @@ fn unsafe_or_oversized_bodies_never_enter_the_log_or_a_delivery() {
         let (reply, code) = sandbox.run(&[
             "artifacts",
             "capture",
+            "--description",
+            "Selected fixture layout",
             "unsafe.html",
             "--from",
             "g1",
@@ -536,6 +854,8 @@ fn unsafe_or_oversized_bodies_never_enter_the_log_or_a_delivery() {
             .run(&[
                 "artifacts",
                 "capture",
+                "--description",
+                "Selected fixture layout",
                 "large.html",
                 "--from",
                 "g1",
@@ -572,6 +892,8 @@ fn every_node_write_rejects_unknown_revisions_before_append_and_accepts_saved_re
             &[
                 "artifacts",
                 "capture",
+                "--description",
+                "Selected fixture layout",
                 "design.html",
                 "--artifact",
                 artifact,
@@ -667,6 +989,8 @@ fn operation_retry_requires_the_original_explicit_previous_revision() {
     let args = [
         "artifacts",
         "capture",
+        "--description",
+        "Selected fixture layout",
         "design.html",
         "--from",
         "g1",
@@ -687,6 +1011,8 @@ fn operation_retry_requires_the_original_explicit_previous_revision() {
     let (_, code) = sandbox.run(&[
         "artifacts",
         "capture",
+        "--description",
+        "Selected fixture layout",
         "design.html",
         "--from",
         "g1",
@@ -722,7 +1048,7 @@ fn incomplete_log_allows_only_explicit_unknown_object_rescue() {
     let mut duplicate: Value = original
         .lines()
         .map(|line| serde_json::from_str::<Value>(line).unwrap())
-        .find(|event| event["payload"]["type"] == "artifact.captured")
+        .find(|event| event["payload"]["type"] == "artifact.captured_v2")
         .unwrap();
     duplicate["seq"] = serde_json::json!(duplicate["seq"].as_u64().unwrap() + 1);
     duplicate["id"] = serde_json::json!("01dddddddddddddddddddddddd");

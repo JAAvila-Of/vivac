@@ -14,6 +14,7 @@
   const basename = source => String(source).split(/[\\/]/).pop();
   const typeLabel = type => ({ file: 'Single UTF-8 file', bundle: 'Bundle', sqlite_snapshot: 'SQLite data' })[type] || type;
   const isBundle = entry => entry.delivery_type === 'bundle';
+  const descriptionText = entry => entry.description || 'No description recorded.';
   const deliveryLabel = entry => isBundle(entry) ? 'Bundle · Entry: ' + entry.entrypoint + ' · ' + entry.member_count + ' members' : typeLabel('file');
   const formats = values => (values || []).map(value => value === 'utf8_text' ? 'UTF-8 text' : value).join(', ');
   const observationStorageKey = 'vivac.artifact-checks.v1';
@@ -134,11 +135,11 @@
   function inventory() {
     $('rows').replaceChildren();
     const query = $('search').value.toLowerCase();
-    const shown = page.filter(entry => [entry.source, entry.producer, entry.producer_node?.alias, entry.producer_node?.title].join(' ').toLowerCase().includes(query));
+    const shown = page.filter(entry => [entry.source, entry.description, entry.producer, entry.producer_node?.alias, entry.producer_node?.title].join(' ').toLowerCase().includes(query));
     shown.forEach(entry => {
       const row = element('tr'), delivery = element('th'); delivery.scope = 'row';
       const open = button(basename(entry.source), () => openArtifact(entry.artifact, entry.revision, entry.revision)); open.className = 'file-link';
-      delivery.append(open, producer(entry), element('p', deliveryLabel(entry), 'small muted'));
+      delivery.append(open, element('p', descriptionText(entry), 'delivery-description'), producer(entry), element('p', deliveryLabel(entry), 'small muted'));
       delivery.append(previewAction(entry, 'Preview latest revision'));
       const identity = element('td'); identity.append(element('strong', short(entry.revision) + ' · Latest'), element('p', entry.source, 'small muted'));
       const refs = element('td'); refs.append(inventoryReferences(entry));
@@ -223,6 +224,7 @@
     $('revisions').replaceChildren(element('h3', 'Revision history'));
     revisions.forEach(entry => {
       const pick = button(revisionLabel(entry), () => { if (writing) return; ++detailGeneration; selected = entry; note(''); renderRevision(); });
+      pick.append(element('span', descriptionText(entry), 'revision-description small muted'));
       pick.setAttribute('aria-pressed', entry.revision === selected.revision); $('revisions').append(pick);
     });
     const previous = button('Previous revisions', () => historyPage(Math.max(0, historyOffset - 20)));
@@ -235,7 +237,7 @@
     renderRail(); saveFragment();
     const entry = selected, box = $('revision-content'); box.replaceChildren();
     selectedLabel = element('p', revisionLabel(entry), 'mono');
-    box.append(element('h2', basename(entry.source)), selectedLabel, element('p', entry.source, 'muted'), element('p', deliveryLabel(entry), 'small muted'));
+    box.append(element('h2', basename(entry.source)), selectedLabel, element('p', descriptionText(entry), 'delivery-description'), element('p', entry.source, 'muted'), element('p', deliveryLabel(entry), 'small muted'));
     const facts = element('div', undefined, 'facts');
     facts.append(element('p', entry.size + ' bytes'), element('p', 'Digest: ' + entry.digest, 'mono'), element('p', 'Producer'), producer(entry)); box.append(facts);
     box.append(element('h3', 'References to this revision'), references(entry), element('p', 'A reference is not inferred approval. Integrity checks do not approve a delivery.', 'small muted'));
@@ -341,6 +343,11 @@
       describeLimits();
     });
     const from = input('capture-producer', 'Producer node alias or ID', $('scope').value === 'from' ? $('from').value.trim() : '');
+    const description = input('capture-description', 'Description', continuing ? entry.description : '');
+    description.maxLength = 560;
+    description.setAttribute('aria-describedby', 'capture-description-help');
+    const descriptionHelp = element('p', 'Briefly describe what this delivery does (up to 280 characters).', 'small muted');
+    descriptionHelp.id = 'capture-description-help'; $('dialog-content').append(descriptionHelp);
     const limits = element('p', '', 'small muted');
     function describeLimits() {
       const capability = caps.delivery_types[types.value];
@@ -352,7 +359,10 @@
       if (needsHeadApproval) return;
       if (!['file', 'bundle'].includes(types.value) || !caps.delivery_types[types.value]?.supported) { status.textContent = 'This delivery structure is not supported.'; return; }
       if (!path.value.trim() || !from.value.trim()) { status.textContent = 'Source path and producer node are required.'; (!path.value.trim() ? path : from).focus(); return; }
-      const args = { [types.value === 'bundle' ? 'bundle' : 'path']: path.value.trim(), from: from.value.trim() };
+      const descriptionValue = description.value.trim();
+      if (!descriptionValue) { status.textContent = 'A description is required.'; description.focus(); return; }
+      if (/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(description.value) || [...descriptionValue].length > 280) { status.textContent = 'Description must be a single line of up to 280 characters.'; description.focus(); return; }
+      const args = { [types.value === 'bundle' ? 'bundle' : 'path']: path.value.trim(), from: from.value.trim(), description: descriptionValue };
       if (continuing) { args.artifact = entry.artifact; args.previous = previous; }
       writing = true; confirm.disabled = true; controls.cancel.disabled = true; status.textContent = 'Capturing delivery…';
       try { const result = await request('capture', args); const delivery = result.delivery; $('dialog').close(); note('Delivery captured.'); await openArtifact(delivery.artifact, delivery.revision, delivery.revision); }

@@ -1,6 +1,6 @@
 ---
 name: vivac-artifacts
-description: Deliver newly created or modified project artifacts through vivac custody, or incorporate selected existing deliveries, with explicit provenance and installed-engine capability checks.
+description: Create and retain visual or interactive preview deliveries through vivac, with a brief description, explicit provenance and installed-engine capability checks; incorporate other files only when the person explicitly selects them as deliveries.
 ---
 
 # Deliver and incorporate artifacts
@@ -14,10 +14,29 @@ inside them.
 
 ## Deliver new work by default
 
-When creating or modifying an artifact as a deliverable for the person's current
-task, use vivac custody by default unless the person asks otherwise. This applies
-to the delivery, not temporary drafts, ordinary source edits or every file written
-by an authoring tool. Do not incorporate existing unrelated files by default.
+When the person's task calls for showing a preview, create and retain the complete
+visual or interactive delivery through vivac by default unless they ask otherwise.
+Prefer the simplest frontend that meets the task: a self-contained HTML file, or
+an HTML entry point with its declared JavaScript and CSS members. Use no backend
+when the preview can work entirely in the browser. A small application with a
+contained SQLite database needs explicit engine support for both its data and
+runtime; this guidance does not enable that support.
+
+An artifact is the selected delivery intended to be viewed or used. A file is not
+an artifact merely because it was created, modified, mentioned in the answer or
+accepted as UTF-8 by the engine. Do not capture reports, Markdown documentation,
+JSON test results, SQL scripts, ordinary source code, configuration or temporary
+drafts by default. Keep those in their normal project locations. Capture another
+kind of file only when the person explicitly selects it as a delivery. A resource
+needed by a preview belongs to that complete delivery, not a separate artifact by
+default. Do not incorporate existing unrelated files.
+
+Give every captured revision a brief description of what the delivery does and
+what it is for. Write one clear line, up to 280 Unicode characters, without
+secrets, personal data or copied file contents. Do not use the filename alone as
+the description. Pass it as CLI `--description` or MCP `description`; later
+revisions must describe their own behavior. Historical receipts without a
+description remain readable; do not invent one on their behalf.
 
 Check installed support before choosing a delivery structure. Create the complete
 delivery inside the project using its supported structure and project-relative
@@ -44,6 +63,13 @@ retained revision with its producer and source path. A native preview may accomp
 that reference. If capture is unsupported or refused, report that the delivery is
 not in custody and why; do not claim success or silently substitute a partial
 delivery. Human review or approval remains separate and names the exact revision.
+
+Check the installed engine's description capability as well as its delivery
+formats. It must support the required capture description. If an older engine
+cannot retain that metadata, report described custody as unavailable; do not omit
+the description to get a capture accepted. Continue the authorized authoring task
+and keep the delivery's description with the project file until compatible custody
+is available. Do not install or update the engine on the person's behalf.
 
 ## Establish scope and support
 
@@ -74,7 +100,7 @@ starting servers and running artifact code are separate work.
 
 ## Select existing deliveries
 
-For each candidate, show its project-relative path, delivery structure, estimated
+For each candidate, show a brief description, its project-relative path, delivery structure, estimated
 size, relevant runtime requirements, support status and proposed provenance. Check
 existing vivac artifact identities before proposing a new one. Equal filenames or
 matching bytes do not establish a shared identity.
@@ -99,14 +125,14 @@ concurrency checks. Do not implement an alternate copy or direct log write.
 For a new supported file, the CLI form is:
 
 ```sh
-vivac artifacts capture path/to/delivery.html --from t12 --json
+vivac artifacts capture path/to/delivery.html --from t12 --description "Explore monthly sales by branch." --json
 ```
 
 For a selected existing identity, inspect its latest revision and supply both
 that artifact identity and the expected previous revision:
 
 ```sh
-vivac artifacts capture path/to/delivery.html --from t18 --artifact <artifact-id> --previous <revision-id> --json
+vivac artifacts capture path/to/delivery.html --from t18 --description "Explore monthly sales with a branch filter." --artifact <artifact-id> --previous <revision-id> --json
 ```
 
 When installed capabilities support complete static bundles, create a selection
@@ -116,8 +142,8 @@ selector. The selector is preparation metadata, not another delivery by default.
 Capture all members as one revision through the engine:
 
 ```sh
-vivac artifacts capture --bundle path/to/selection.json --from t12 --json
-vivac artifacts capture --bundle path/to/selection.json --from t18 --artifact <artifact-id> --previous <revision-id> --json
+vivac artifacts capture --bundle path/to/selection.json --from t12 --description "Explore monthly sales by branch." --json
+vivac artifacts capture --bundle path/to/selection.json --from t18 --description "Explore monthly sales with a branch filter." --artifact <artifact-id> --previous <revision-id> --json
 ```
 
 MCP uses `bundle` for that selection-file path, mutually exclusive with `path`.

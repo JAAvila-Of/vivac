@@ -2,9 +2,15 @@
 
 An artifact delivery connects a producer node to a selected file or complete
 static bundle revision.
+For preview tasks, prefer self-contained HTML or an HTML/CSS/JS frontend without
+a backend. Reports, Markdown documentation, JSON results, SQL scripts, ordinary
+source and configuration are not artifact deliveries by default. Retain those
+files only when the person explicitly selects them as deliveries. UTF-8 support
+is a format capability, not a reason to capture every file.
 Vivac retains that revision locally so it can be recovered after the source
 changes or disappears. The provenance tree holds identities, paths, sizes and
-SHA-256 digests; file contents stay in a separate `.vivac-artifacts/` directory.
+SHA-256 digests and brief descriptions; file contents stay in a separate
+`.vivac-artifacts/` directory.
 
 Custody does not imply approval. Review the retained revision, then record a
 decision that references that exact revision. Later deliveries keep the same
@@ -15,7 +21,7 @@ artifact identity and receive new revision identities.
 Capture a project-relative UTF-8 file with an explicit producer:
 
 ```sh
-vivac artifacts capture design.html --from t12 --json
+vivac artifacts capture design.html --from t12 --description "Preview the checkout layout." --json
 ```
 
 The reply includes `artifact`, `revision` and a reference of the form
@@ -34,7 +40,7 @@ action; capture and restore never execute it.
 After editing the source, retain the next delivery under the same identity:
 
 ```sh
-vivac artifacts capture design.html --from t12 --artifact <artifact-id> --previous <revision-id> --json
+vivac artifacts capture design.html --from t12 --description "Preview checkout with delivery options." --artifact <artifact-id> --previous <revision-id> --json
 vivac artifacts show <artifact-id> --json
 vivac artifacts restore <artifact-id> --revision <revision-id> --to recovered-r1.html
 ```
@@ -42,6 +48,22 @@ vivac artifacts restore <artifact-id> --revision <revision-id> --to recovered-r1
 The decision still references R1. Deleting `design.html` does not delete the
 retained revisions. Deleting the local artifact store does: this feature is
 local retention, not a backup service.
+
+Every capture requires `--description` (MCP `description`): a nonempty, single
+line of up to 280 Unicode characters explaining what the delivery does and what
+it is for. Surrounding whitespace is trimmed; control characters and sensitive
+values are refused before retaining bytes. The description belongs to the exact
+revision, appears in list/show and the web, and is included in retry matching.
+A retry with the same operation identity and a different description is refused.
+Use the same description when retrying the same capture.
+
+Historical receipts without descriptions remain readable and recoverable. The
+web shows **No description recorded.** for those revisions; it does not derive
+a description from a filename or copy a later revision's text. New file and
+bundle captures use versioned receipt types, `artifact.captured_v2` and
+`artifact.bundle_captured_v2`. Readers that do not recognize them refuse the log
+rather than silently discard the descriptions. Use a compatible engine in every
+harness before creating these receipts in a shared project.
 
 The first retained delivery marks the tree as requiring artifact-aware Vivac.
 Older releases refuse to read that tree rather than silently omit its receipts.
@@ -159,8 +181,8 @@ capture are refused. Selection does not prove that an application has all its
 dependencies or that it works.
 
 ```sh
-vivac artifacts capture --bundle card.selection.json --from t12 --json
-vivac artifacts capture --bundle card.selection.json --from t18 --artifact <artifact-id> --previous <revision-id> --json
+vivac artifacts capture --bundle card.selection.json --from t12 --description "Preview the interactive card." --json
+vivac artifacts capture --bundle card.selection.json --from t18 --description "Preview the card with keyboard controls." --artifact <artifact-id> --previous <revision-id> --json
 vivac artifacts show <artifact-id> --revision <revision-id> --limit 20 --offset 0 --json
 vivac artifacts check <artifact-id> --revision <revision-id> --json
 vivac artifacts restore <artifact-id> --revision <revision-id> --to recovered-card --json
@@ -294,6 +316,11 @@ The query reports the installed engine's supported delivery types, effective
 size and pagination limits, and execution policy. It works outside a project
 and does not load the provenance tree or inspect file bodies. MCP exposes the
 same result through `vivac_artifacts` with `operation: "capabilities"`.
+Its `description` object reports `required_for_capture`, `max_characters` and
+the `revision` scope. Older engines without this capability cannot retain the
+required description. Do not omit it to get an older capture accepted; report
+that limitation and keep the described delivery outside custody until the engine
+supports it.
 
 The engine retains a UTF-8 file or a complete selected static bundle per
 revision, up to 10 MiB including bundle metadata. A self-contained HTML file can
@@ -308,12 +335,16 @@ It does not provide general application execution or install runtime dependencie
 
 `vivac setup claude-code` and `vivac setup codex` install the
 `vivac-artifacts` workflow in their native project skill directories. The session
-orientation asks the agent to use it by default when creating or modifying an
-artifact as a task delivery, unless the person asks otherwise. The agent creates
-the project file with its authoring tools, captures it with its actual producer
-node and returns the exact retained revision. Later changes to a known artifact
-become new revisions of the same identity. Temporary drafts and ordinary source
-edits are outside this default.
+orientation asks the agent to use it by default for visual or interactive
+previews, unless the person asks otherwise. The agent creates self-contained
+HTML or a complete HTML/CSS/JS frontend, adds a brief description, captures the
+delivery with its actual producer node and returns the exact retained revision.
+Later changes to a known artifact become new revisions of the same identity.
+Other file deliveries require the person's explicit selection. Documentation,
+reports, code and configuration stay in their ordinary project locations by
+default. A small frontend application with a contained SQLite database still
+requires explicit engine support for data custody and runtime; this workflow
+does not enable either capability.
 
 This is agent guidance, not automatic filesystem capture. Hooks do not inspect
 or retain delivery bytes. Unsupported formats and capture refusals must be
@@ -346,7 +377,9 @@ lineage page also links to deliveries in that scope.
 Select an artifact to inspect a particular revision, its producer and its
 references. Integrity checks are explicit and show when they ran; metadata
 alone does not prove the state of the working file or retained copy. Capture
-requires a project-relative source and producer node. A new revision continues
+requires a project-relative source, producer node and brief description. The
+inventory, page search and selected revision detail include the description.
+A new revision continues
 the latest revision reported by the engine, preserving the selected older one.
 Restore creates a new project-relative destination and refuses occupied paths.
 

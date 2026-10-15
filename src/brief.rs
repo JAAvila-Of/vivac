@@ -1689,14 +1689,16 @@ pub fn to_text(
         s.push(Section::fixed(heading(
             "ARTIFACT DELIVERIES",
             [
-                "For artifacts you create or modify as task deliveries, use",
-                "vivac-artifacts by default unless the person asks otherwise.",
-                "Create a project file, retain it through vivac_artifacts or",
-                "vivac artifacts with its producing node, then return the exact",
-                "revision reference before handing it back. Continue a known",
-                "artifact as a new revision. Check installed support; report",
-                "unsupported or refused custody. Skip temporary drafts and",
-                "unselected existing files. Custody is not human approval.",
+                "Use vivac-artifacts by default for visual or interactive previews,",
+                "unless the person asks otherwise. Prefer self-contained HTML or",
+                "complete HTML/CSS/JS without a backend. SQLite needs engine support.",
+                "Give each revision a brief description of what it does. Retain it",
+                "with its producing node and return the exact revision reference.",
+                "Continue known identities with new revisions. Check support;",
+                "report unsupported or refused custody. Reports, documentation,",
+                "JSON results, SQL, source and configuration require the person's",
+                "explicit selection as deliveries. Skip drafts and unselected files.",
+                "Custody is not human approval.",
             ]
             .iter()
             .map(|line| format!("  {line}"))

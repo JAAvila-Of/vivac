@@ -648,6 +648,7 @@ descendants
 describe
 described
 description
+descriptions
 descriptor
 deserialize
 deserializer
@@ -770,6 +771,7 @@ edges
 edit
 edited
 editing
+effect
 effective
 effort
 efforts
@@ -1662,6 +1664,7 @@ p8
 pa
 packed
 pad
+padded
 padding
 page
 paged
@@ -2083,6 +2086,7 @@ retention
 retired
 retirement
 retried
+retries
 retry
 return
 returning
@@ -2153,6 +2157,7 @@ saves
 say
 says
 sb
+scalars
 scan
 scanned
 scans
@@ -2447,6 +2452,7 @@ t2
 table
 tables
 tag
+tags
 tail
 tails
 take

@@ -1623,7 +1623,10 @@ fn regenerated_version(root: &Path) -> ConfigVersion {
         };
         match v["payload"]["type"].as_str() {
             Some("lane.declared") | Some("lane.claimed") => lanes = true,
-            Some("artifact.captured") | Some("artifact.bundle_captured") => artifacts = true,
+            Some("artifact.captured")
+            | Some("artifact.bundle_captured")
+            | Some("artifact.captured_v2")
+            | Some("artifact.bundle_captured_v2") => artifacts = true,
             Some("agent.automation.configured") => automatic_agents = true,
             Some("agent.recorded") if v["payload"]["definition"]["prompt"].is_object() => {
                 automatic_agents = true
@@ -1968,6 +1971,8 @@ impl Store {
                     b,
                     crate::event::Body::ArtifactCaptured { .. }
                         | crate::event::Body::ArtifactBundleCaptured { .. }
+                        | crate::event::Body::ArtifactCapturedV2 { .. }
+                        | crate::event::Body::ArtifactBundleCapturedV2 { .. }
                 )
             })
         {

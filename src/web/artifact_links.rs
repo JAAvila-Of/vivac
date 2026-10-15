@@ -46,6 +46,20 @@ pub(super) fn project(tree: &Tree) -> HashMap<u64, Links<'_>> {
             producer,
             source,
             ..
+        }
+        | Body::ArtifactCapturedV2 {
+            artifact,
+            revision,
+            producer,
+            source,
+            ..
+        }
+        | Body::ArtifactBundleCapturedV2 {
+            artifact,
+            revision,
+            producer,
+            source,
+            ..
         } = body
         {
             let link = Link {

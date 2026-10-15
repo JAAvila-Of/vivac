@@ -138,12 +138,13 @@ fn escape(value: &str) -> String {
 
 fn wrapper(selected: &PreviewRevision, token: &str) -> String {
     format!(
-        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><meta name=\"referrer\" content=\"origin\"><title>Preview retained revision</title><style>body{{font-family:system-ui;margin:0;background:#f5f7fa;color:#17212b}}main{{padding:20px;max-width:1400px;margin:auto}}h1{{margin:0;font-size:22px}}code,dd{{overflow-wrap:anywhere;word-break:break-word}}.small{{font-size:13px}}.controls{{display:flex;gap:12px;flex-wrap:wrap}}form{{display:inline}}button{{padding:10px 14px}}iframe{{display:block;width:100%;height:calc(100vh - 260px);min-height:420px;box-sizing:border-box;border:1px solid #ccd4df;border-radius:8px;margin-top:16px;background:white}}</style></head><body><main><h1>Preview retained revision</h1><p>Source: <code>{}</code><br>Revision: <code>{}</code></p><details><summary>Revision details</summary><dl><dt>Artifact</dt><dd>{}</dd><dt>Producer</dt><dd>{}</dd><dt>Digest</dt><dd>{}</dd></dl></details><p class=\"small\">JavaScript runs with browser restrictions. Complete network isolation is not guaranteed. Preview does not imply approval.</p><p class=\"small\">The local server expires after 15 minutes. Close this tab to stop HTML that is already running.</p><div class=\"controls\"><form action=\"/run\" method=\"post\" target=\"retained\"><input type=\"hidden\" name=\"token\" value=\"{token}\"><button type=\"submit\">Run HTML</button></form><form action=\"/close\" method=\"post\" target=\"_self\"><input type=\"hidden\" name=\"token\" value=\"{token}\"><button type=\"submit\">Close preview</button></form></div><iframe name=\"retained\" sandbox=\"allow-scripts\" referrerpolicy=\"origin\" title=\"Retained HTML\"></iframe></main></body></html>",
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><meta name=\"referrer\" content=\"origin\"><title>Preview retained revision</title><style>body{{font-family:system-ui;margin:0;background:#f5f7fa;color:#17212b}}main{{padding:20px;max-width:1400px;margin:auto}}h1{{margin:0;font-size:22px}}code,dd{{overflow-wrap:anywhere;word-break:break-word}}.small{{font-size:13px}}.controls{{display:flex;gap:12px;flex-wrap:wrap}}form{{display:inline}}button{{padding:10px 14px}}iframe{{display:block;width:100%;height:calc(100vh - 260px);min-height:420px;box-sizing:border-box;border:1px solid #ccd4df;border-radius:8px;margin-top:16px;background:white}}</style></head><body><main><h1>Preview retained revision</h1><p>Source: <code>{}</code><br>Revision: <code>{}</code></p><details><summary>Revision details</summary><dl><dt>Description</dt><dd>{description}</dd><dt>Artifact</dt><dd>{}</dd><dt>Producer</dt><dd>{}</dd><dt>Digest</dt><dd>{}</dd></dl></details><p class=\"small\">JavaScript runs with browser restrictions. Complete network isolation is not guaranteed. Preview does not imply approval.</p><p class=\"small\">The local server expires after 15 minutes. Close this tab to stop HTML that is already running.</p><div class=\"controls\"><form action=\"/run\" method=\"post\" target=\"retained\"><input type=\"hidden\" name=\"token\" value=\"{token}\"><button type=\"submit\">Run HTML</button></form><form action=\"/close\" method=\"post\" target=\"_self\"><input type=\"hidden\" name=\"token\" value=\"{token}\"><button type=\"submit\">Close preview</button></form></div><iframe name=\"retained\" sandbox=\"allow-scripts\" referrerpolicy=\"origin\" title=\"Retained HTML\"></iframe></main></body></html>",
         escape(&selected.source),
         escape(&selected.revision),
         escape(&selected.artifact),
         escape(&selected.producer),
         escape(&selected.digest),
+        description = escape(selected.description.as_deref().unwrap_or("No description recorded.")),
     )
 }
 
@@ -641,6 +642,7 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
         PreviewRevision {
             reader,
+            description: None,
             bundle: None,
             artifact: crate::id::ulid(),
             revision,
@@ -648,6 +650,18 @@ mod tests {
             producer: crate::id::ulid(),
             digest: saved.digest,
         }
+    }
+
+    #[test]
+    fn preview_wrapper_shows_only_the_selected_description_as_escaped_text() {
+        let mut delivery = selected(b"<html>fixture</html>");
+        assert!(wrapper(&delivery, "token")
+            .contains("<dt>Description</dt><dd>No description recorded.</dd>"));
+        delivery.description = Some("A <script> preview & a quoted \"layout\"".into());
+        let html = wrapper(&delivery, "token");
+        assert!(html.contains("A &lt;script&gt; preview &amp; a quoted &quot;layout&quot;"));
+        assert!(!html.contains("A <script>"));
+        assert!(!html.contains("No description recorded."));
     }
 
     fn parts(url: &str) -> (&str, &str) {

@@ -176,7 +176,11 @@ fn page_operations_and_download_refuse_unreviewed_requests() {
         )
         .starts_with("HTTP/1.1 403"));
     server.post("list", &json!({"operation":"list","extra":true}), 400);
-    server.post("list", &json!({"operation":"capture"}), 400);
+    server.post(
+        "list",
+        &json!({"operation":"capture","description":"Selected fixture layout"}),
+        400,
+    );
     assert!(server
         .call(
             "POST",
@@ -215,6 +219,8 @@ fn exact_download_survives_newer_revision_and_source_loss_but_refuses_corruption
         &[
             "artifacts",
             "capture",
+            "--description",
+            "Selected fixture layout",
             "delivery.txt",
             "--from",
             "g1",
@@ -236,6 +242,8 @@ fn exact_download_survives_newer_revision_and_source_loss_but_refuses_corruption
         &[
             "artifacts",
             "capture",
+            "--description",
+            "Selected fixture layout",
             "delivery.txt",
             "--from",
             "g1",
@@ -420,6 +428,8 @@ fn bundle_preview_keeps_the_selected_complete_revision_after_source_and_store_lo
         &[
             "artifacts",
             "capture",
+            "--description",
+            "Selected fixture layout",
             "--bundle",
             "selection.json",
             "--from",
@@ -438,6 +448,8 @@ fn bundle_preview_keeps_the_selected_complete_revision_after_source_and_store_lo
         &[
             "artifacts",
             "capture",
+            "--description",
+            "Selected fixture layout",
             "--bundle",
             "selection.json",
             "--from",
@@ -575,6 +587,8 @@ fn preview_opens_exact_retained_html_and_preserves_native_gates() {
         &[
             "artifacts",
             "capture",
+            "--description",
+            "Selected fixture layout",
             "layout.HTML",
             "--from",
             "g1",
@@ -588,6 +602,8 @@ fn preview_opens_exact_retained_html_and_preserves_native_gates() {
         &[
             "artifacts",
             "capture",
+            "--description",
+            "Selected fixture layout",
             "layout.HTML",
             "--from",
             "g1",
@@ -739,7 +755,16 @@ fn preview_opens_exact_retained_html_and_preserves_native_gates() {
     std::fs::write(c.0.join("text.txt"), b"retained plain text").unwrap();
     let text = cli(
         &c,
-        &["artifacts", "capture", "text.txt", "--from", "g1", "--json"],
+        &[
+            "artifacts",
+            "capture",
+            "--description",
+            "Selected fixture layout",
+            "text.txt",
+            "--from",
+            "g1",
+            "--json",
+        ],
     )["delivery"]
         .clone();
     let text_body = format!(
@@ -784,6 +809,8 @@ fn web_reads_match_cli_and_capabilities_do_not_refresh_a_broken_log() {
         &[
             "artifacts",
             "capture",
+            "--description",
+            "Selected fixture layout",
             "delivery.txt",
             "--from",
             "g1",

@@ -395,8 +395,10 @@ vivac setup claude-code
 ```
 
 Use `vivac setup codex` for Codex. Setup also installs `vivac-artifacts` for
-incorporating selected existing deliveries or retaining a reviewed new
-revision. It does not capture files automatically. See
+visual or interactive previews: self-contained HTML or a complete HTML/CSS/JS
+frontend, preferably without a backend. Each captured revision needs a brief
+description. Other file deliveries require the person's explicit selection.
+Setup does not capture files automatically. See
 [Artifact custody](docs/ARTIFACTS.md).
 
 **2.** Start the first thread. You were going to say what you are doing

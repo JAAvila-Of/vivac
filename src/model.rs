@@ -615,7 +615,9 @@ impl Tree {
         for (index, (lane, body)) in self.artifact_history.iter().enumerate() {
             let producer_exists = match body {
                 Body::ArtifactCaptured { producer, .. }
-                | Body::ArtifactBundleCaptured { producer, .. } => self.node(producer).is_some(),
+                | Body::ArtifactBundleCaptured { producer, .. }
+                | Body::ArtifactCapturedV2 { producer, .. }
+                | Body::ArtifactBundleCapturedV2 { producer, .. } => self.node(producer).is_some(),
                 _ => false,
             };
             projection.observe(lane, body, &self.artifact_history[..index], producer_exists);
@@ -1099,7 +1101,9 @@ impl Tree {
                 });
             }
             Body::ArtifactCaptured { producer, .. }
-            | Body::ArtifactBundleCaptured { producer, .. } => {
+            | Body::ArtifactBundleCaptured { producer, .. }
+            | Body::ArtifactCapturedV2 { producer, .. }
+            | Body::ArtifactBundleCapturedV2 { producer, .. } => {
                 let producer_exists = self.node(producer).is_some();
                 self.artifact_projection.observe(
                     lane,
