@@ -1399,6 +1399,7 @@ expression
 extend
 extended
 extends
+extensions
 external
 extra
 extracted
@@ -2329,6 +2330,7 @@ mechanisms
 media
 median
 meets
+megabyte
 megabytes
 member
 membership
@@ -2616,6 +2618,7 @@ out
 outcome
 outcomes
 outer
+outgrows
 outlive
 outlives
 outliving
@@ -3493,6 +3496,7 @@ selection
 selections
 self
 semantics
+semicolon
 send
 sending
 sends
