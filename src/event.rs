@@ -607,6 +607,8 @@ pub enum Body {
         manifest_bytes: u64,
         database: String,
         profile: String,
+        runtime: String,
+        runtime_sha256: String,
     },
     #[serde(rename = "agent.automation.configured")]
     AgentAutomationConfigured { node: String, enabled: bool },
@@ -800,6 +802,9 @@ mod tests {
                 manifest_bytes: 500,
                 database: "data.sqlite".into(),
                 profile: crate::artifacts::bundle::SQLITE_PROFILE.into(),
+                runtime: "sqljs-asm-1.14.2".into(),
+                runtime_sha256: "a5709877905821fcae8aeb6789c53302eb0ffc50473f81dc2bfbdd93a16f9b38"
+                    .into(),
             },
             Body::ArtifactBundleCapturedV2 {
                 description: "Selected layout".into(),
@@ -1374,7 +1379,13 @@ mod tests {
             .unwrap();
         let encoded = serde_json::to_value(body).unwrap();
         assert!(serde_json::from_value::<StaticReceipt>(encoded.clone()).is_err());
-        for field in ["database", "profile", "description"] {
+        for field in [
+            "database",
+            "profile",
+            "description",
+            "runtime",
+            "runtime_sha256",
+        ] {
             let mut missing = encoded.clone();
             missing.as_object_mut().unwrap().remove(field);
             assert!(serde_json::from_value::<Body>(missing).is_err());

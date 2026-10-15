@@ -243,6 +243,9 @@
     facts.append(element('p', entry.size + ' bytes'), element('p', 'Digest: ' + entry.digest, 'mono'), element('p', 'Producer'), producer(entry)); box.append(facts);
     if (entry.delivery_type === 'sqlite_application') {
       box.append(element('p', 'Database profile: ' + entry.profile, 'small muted'),
+        element('p', 'Runtime pinned to this revision: ' + entry.runtime, 'small muted'),
+        element('p', 'Runtime SHA-256: ' + entry.runtime_sha256, 'mono'),
+        element('p', 'Updating vivac does not replace this revision’s runtime. Restore includes its complete runtime and license notices.', 'small muted'),
         element('p', 'The retained database is a logical export, not a byte-for-byte copy of the source. Changes made in the preview stay in browser memory; they do not update this retained revision.', 'notice'));
     }
     box.append(element('h3', 'References to this revision'), references(entry), element('p', 'A reference is not inferred approval. Integrity checks do not approve a delivery.', 'small muted'));

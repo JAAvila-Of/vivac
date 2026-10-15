@@ -22,9 +22,11 @@ when the preview can work entirely in the browser. A small application with a
 contained SQLite database needs explicit engine support for both its data and
 runtime; this guidance does not enable that support. Query `sqlite_application`
 in installed capabilities. When supported, select the complete HTML/CSS/JS
-application, its supplied JavaScript runtime and exactly one database member via
-the selection's `database` field. Prefer this contained frontend over a backend
-when it meets the task. Never select a database merely because it exists.
+application and exactly one database member via the selection's `database`
+field, together with an available fixed product identity in `runtime`. The
+engine supplies and retains that runtime with the revision. Prefer this contained
+frontend over a backend when it meets the task. Never select a database merely
+because it exists.
 
 An artifact is the selected delivery intended to be viewed or used. A file is not
 an artifact merely because it was created, modified, mentioned in the answer or
@@ -157,10 +159,14 @@ merges into existing files. Unsupported members must not be dropped or captured
 separately while presenting the application as complete. Query installed support;
 the presence of this guidance does not enable bundles in an older engine.
 
-For a supported `sqlite_application`, add `database: "data.sqlite"` to the
-selector and include that exact path in `members`. Other members remain HTML,
-CSS or JavaScript. Include the chosen browser runtime and its required notices;
-vivac does not provide or install it. The initial `sqlite-standalone-v1` profile
+For a supported `sqlite_application`, add `database: "data.sqlite"` and an
+available `runtime` identity from installed capabilities to the selector. Both
+fields are required together as nonempty strings. Include the database path in
+`members`; other selected members remain HTML, CSS or JavaScript. Do not select
+a runtime file: vivac generates the reserved `vivac-sqlite.js` member with its
+license notices. Reference it from HTML and use `initSqlJs` to open the declared
+database. Its complete bytes count toward the revision limits and remain pinned
+when vivac is updated. The initial `sqlite-standalone-v1` profile
 requires an autonomous UTF-8 rollback database, stable primary keys and supported
 scalar values. WAL mode, auxiliary WAL/SHM/journal files, BLOB and unsupported
 schema constructs refuse the complete delivery. Do not change journal mode,

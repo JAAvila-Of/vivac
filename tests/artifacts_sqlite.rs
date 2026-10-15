@@ -65,6 +65,7 @@ fn selection(sandbox: &Sandbox, selected: Option<&str>) {
     let mut value = json!({"root":"app","entrypoint":"index.html","members":["index.html","main.js","data.sqlite"],"requirements":[]});
     if let Some(path) = selected {
         value["database"] = json!(path);
+        value["runtime"] = json!(PRODUCT_RUNTIME_ID);
     }
     fs::write(
         sandbox.0.join("selection.json"),
@@ -97,6 +98,397 @@ fn object(sandbox: &Sandbox, delivery: &Value) -> std::path::PathBuf {
 }
 
 const DATABASE_FIXTURE: &str = "CREATE TABLE items(id INTEGER PRIMARY KEY, label TEXT NOT NULL); INSERT INTO items VALUES(1,'First revision');";
+const PRODUCT_RUNTIME_ID: &str = "sqljs-asm-1.14.2";
+const PRODUCT_RUNTIME_PATH: &str = "vivac-sqlite.js";
+const PRODUCT_RUNTIME_BYTES: u64 = 1357427;
+const PRODUCT_RUNTIME_SHA256: &str =
+    "a5709877905821fcae8aeb6789c53302eb0ffc50473f81dc2bfbdd93a16f9b38";
+
+fn product_selection(sandbox: &Sandbox) -> Value {
+    let mut selection: Value =
+        serde_json::from_slice(&fs::read(sandbox.0.join("selection.json")).unwrap()).unwrap();
+    selection["runtime"] = json!(PRODUCT_RUNTIME_ID);
+    fs::write(
+        sandbox.0.join("selection.json"),
+        serde_json::to_vec(&selection).unwrap(),
+    )
+    .unwrap();
+    selection
+}
+
+#[test]
+fn product_runtime_selector_rejects_incomplete_unknown_and_reserved_inputs() {
+    let sandbox = fixture("product-runtime-selector", DATABASE_FIXTURE);
+    let mut base: Value =
+        serde_json::from_slice(&fs::read(sandbox.0.join("selection.json")).unwrap()).unwrap();
+    base.as_object_mut().unwrap().remove("runtime");
+    let mut cases = vec![base.clone()];
+    let mut valid = base.clone();
+    valid["runtime"] = json!(PRODUCT_RUNTIME_ID);
+    for (key, value) in [
+        ("runtime", Value::Null),
+        ("runtime", json!("")),
+        ("runtime", json!("unknown-runtime")),
+        ("database", Value::Null),
+        ("database", json!("")),
+    ] {
+        let mut selection = valid.clone();
+        selection[key] = value;
+        cases.push(selection);
+    }
+    let mut missing_database = valid.clone();
+    missing_database.as_object_mut().unwrap().remove("database");
+    cases.push(missing_database);
+    let mut static_null = json!({"root":"app","entrypoint":"index.html","members":["index.html","main.js"],"runtime":null});
+    cases.push(static_null.clone());
+    static_null.as_object_mut().unwrap().remove("runtime");
+    static_null["database"] = Value::Null;
+    cases.push(static_null);
+    for path in [
+        PRODUCT_RUNTIME_PATH,
+        "VIVAC-SQLITE.JS",
+        "vivac-sqlite.js/child.js",
+        "Vivac-Sqlite.Js/child.js",
+    ] {
+        let mut selection = valid.clone();
+        selection["members"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!(path));
+        cases.push(selection);
+    }
+    let before = sandbox.log();
+    for selection in cases {
+        fs::write(
+            sandbox.0.join("selection.json"),
+            serde_json::to_vec(&selection).unwrap(),
+        )
+        .unwrap();
+        assert_ne!(
+            sandbox
+                .run(&[
+                    "artifacts",
+                    "capture",
+                    "--description",
+                    "Selected database application",
+                    "--bundle",
+                    "selection.json",
+                    "--from",
+                    "g1",
+                    "--json"
+                ])
+                .1,
+            0
+        );
+        assert_eq!(sandbox.log(), before);
+        let objects = sandbox.0.join(".vivac-artifacts/objects");
+        assert!(!objects.exists() || fs::read_dir(objects).unwrap().next().is_none());
+    }
+}
+
+#[test]
+fn product_runtime_is_generated_without_opening_a_project_copy_and_restores_exact_bytes() {
+    let sandbox = fixture("product-runtime-generated", DATABASE_FIXTURE);
+    product_selection(&sandbox);
+    fs::write(
+        sandbox.0.join("app").join(PRODUCT_RUNTIME_PATH),
+        b"person@example.com",
+    )
+    .unwrap();
+    let first = capture(&sandbox, &["--operation", "01eeeeeeeeeeeeeeeeeeeeeeee"]);
+    assert_eq!(first["runtime"], PRODUCT_RUNTIME_ID);
+    assert_eq!(first["runtime_sha256"], PRODUCT_RUNTIME_SHA256);
+    assert_eq!(first["member_count"], 4);
+    let retained = object(&sandbox, &first);
+    let bytes = fs::read(retained.join(PRODUCT_RUNTIME_PATH)).unwrap();
+    assert_eq!(bytes.len() as u64, PRODUCT_RUNTIME_BYTES);
+    assert_eq!(
+        format!("{:x}", Sha256::digest(&bytes)),
+        PRODUCT_RUNTIME_SHA256
+    );
+    let manifest: Value =
+        serde_json::from_slice(&fs::read(retained.join(".vivac-delivery.json")).unwrap()).unwrap();
+    assert_eq!(manifest["schema_version"], 3);
+    assert_eq!(
+        manifest["runtime"],
+        json!({"id":PRODUCT_RUNTIME_ID,"path":PRODUCT_RUNTIME_PATH,"bytes":PRODUCT_RUNTIME_BYTES,"sha256":PRODUCT_RUNTIME_SHA256})
+    );
+    assert_eq!(
+        manifest["members"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|member| member["path"] == PRODUCT_RUNTIME_PATH)
+            .count(),
+        1
+    );
+    let artifact = first["artifact"].as_str().unwrap();
+    let revision = first["revision"].as_str().unwrap();
+    let check: Value =
+        serde_json::from_str(&sandbox.ok(&["artifacts", "check", artifact, "--json"])).unwrap();
+    assert_eq!(check["source"]["status"], "matches");
+    let mut selected: Value =
+        serde_json::from_slice(&fs::read(sandbox.0.join("selection.json")).unwrap()).unwrap();
+    selected["runtime"] = json!("unknown-runtime");
+    fs::write(
+        sandbox.0.join("selection.json"),
+        serde_json::to_vec(&selected).unwrap(),
+    )
+    .unwrap();
+    let (changed, code) = sandbox.run(&["artifacts", "check", artifact, "--json"]);
+    assert_ne!(code, 0);
+    let changed: Value = serde_json::from_str(&changed).unwrap();
+    assert_eq!(changed["source"]["status"], "changed");
+    assert_eq!(changed["retained"]["status"], "matches");
+    selected["runtime"] = json!(PRODUCT_RUNTIME_ID);
+    fs::write(
+        sandbox.0.join("selection.json"),
+        serde_json::to_vec(&selected).unwrap(),
+    )
+    .unwrap();
+    database(
+        &sandbox.0.join("app/data.sqlite"),
+        "UPDATE items SET label='Later data' WHERE id=1;",
+    );
+    capture(&sandbox, &["--artifact", artifact, "--previous", revision]);
+    let shown: Value =
+        serde_json::from_str(&sandbox.ok(&["artifacts", "show", artifact, "--json"])).unwrap();
+    assert_eq!(shown["revisions"].as_array().unwrap().len(), 2);
+    for entry in shown["revisions"].as_array().unwrap() {
+        assert_eq!(entry["runtime"], PRODUCT_RUNTIME_ID);
+        assert_eq!(entry["runtime_sha256"], PRODUCT_RUNTIME_SHA256);
+    }
+    let listed: Value =
+        serde_json::from_str(&sandbox.ok(&["artifacts", "list", "--all", "--json"])).unwrap();
+    assert_eq!(listed["artifacts"][0]["runtime"], PRODUCT_RUNTIME_ID);
+    assert_eq!(
+        listed["artifacts"][0]["runtime_sha256"],
+        PRODUCT_RUNTIME_SHA256
+    );
+    fs::remove_dir_all(sandbox.0.join("app")).unwrap();
+    fs::remove_file(sandbox.0.join("selection.json")).unwrap();
+    let retry = capture(&sandbox, &["--operation", "01eeeeeeeeeeeeeeeeeeeeeeee"]);
+    assert_eq!(retry["revision"], revision);
+    assert_eq!(retry["runtime"], PRODUCT_RUNTIME_ID);
+    sandbox.ok(&[
+        "artifacts",
+        "restore",
+        artifact,
+        "--revision",
+        revision,
+        "--to",
+        "restored",
+        "--json",
+    ]);
+    assert_eq!(
+        fs::read(sandbox.0.join("restored").join(PRODUCT_RUNTIME_PATH)).unwrap(),
+        bytes
+    );
+    for path in [
+        "index.html",
+        "main.js",
+        "data.sqlite",
+        ".vivac-delivery.json",
+    ] {
+        assert_eq!(
+            fs::read(sandbox.0.join("restored").join(path)).unwrap(),
+            fs::read(retained.join(path)).unwrap()
+        );
+    }
+}
+
+#[test]
+fn product_runtime_missing_truncated_modified_or_extra_resources_refuse_restore() {
+    for change in ["missing", "truncated", "modified", "extra"] {
+        let sandbox = fixture("product-runtime-tamper", DATABASE_FIXTURE);
+        product_selection(&sandbox);
+        let delivery = capture(&sandbox, &[]);
+        let retained = object(&sandbox, &delivery);
+        let path = retained.join(PRODUCT_RUNTIME_PATH);
+        match change {
+            "missing" => fs::remove_file(path).unwrap(),
+            "truncated" => {
+                let mut bytes = fs::read(&path).unwrap();
+                bytes.pop();
+                fs::write(path, bytes).unwrap();
+            }
+            "modified" => {
+                let mut bytes = fs::read(&path).unwrap();
+                bytes[0] ^= 1;
+                fs::write(path, bytes).unwrap();
+            }
+            "extra" => fs::write(retained.join("extra.js"), b"Unlisted resource").unwrap(),
+            _ => unreachable!(),
+        }
+        let before = sandbox.log();
+        assert_ne!(
+            sandbox
+                .run(&[
+                    "artifacts",
+                    "restore",
+                    delivery["artifact"].as_str().unwrap(),
+                    "--revision",
+                    delivery["revision"].as_str().unwrap(),
+                    "--to",
+                    "refused",
+                    "--json"
+                ])
+                .1,
+            0
+        );
+        assert!(!sandbox.0.join("refused").exists());
+        assert_eq!(sandbox.log(), before);
+    }
+}
+
+#[test]
+fn product_runtime_does_not_exempt_author_javascript_from_the_content_guard() {
+    let sandbox = fixture("product-runtime-author-guard", DATABASE_FIXTURE);
+    let mut selection = product_selection(&sandbox);
+    fs::write(
+        sandbox.0.join("app/author.js"),
+        b"const contact = 'person@example.com';",
+    )
+    .unwrap();
+    selection["members"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("author.js"));
+    fs::write(
+        sandbox.0.join("selection.json"),
+        serde_json::to_vec(&selection).unwrap(),
+    )
+    .unwrap();
+    let before = sandbox.log();
+    assert_ne!(
+        sandbox
+            .run(&[
+                "artifacts",
+                "capture",
+                "--description",
+                "Selected database application",
+                "--bundle",
+                "selection.json",
+                "--from",
+                "g1",
+                "--json"
+            ])
+            .1,
+        0
+    );
+    assert_eq!(sandbox.log(), before);
+    let objects = sandbox.0.join(".vivac-artifacts/objects");
+    assert!(!objects.exists() || fs::read_dir(objects).unwrap().next().is_none());
+}
+
+#[test]
+fn static_bundles_keep_author_javascript_at_the_product_runtime_name_or_parent() {
+    for path in ["vivac-sqlite.js", "VIVAC-SQLITE.JS/author.js"] {
+        let sandbox = fixture("static-author-runtime-name", DATABASE_FIXTURE);
+        let selected = sandbox.0.join("app").join(path);
+        fs::create_dir_all(selected.parent().unwrap()).unwrap();
+        let authored = b"document.title = 'Author supplied static program';";
+        fs::write(selected, authored).unwrap();
+        fs::write(
+            sandbox.0.join("selection.json"),
+            serde_json::to_vec(
+                &json!({"root":"app","entrypoint":"index.html","members":["index.html",path]}),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let delivery = capture(&sandbox, &[]);
+        assert_eq!(delivery["delivery_type"], "bundle");
+        let retained = object(&sandbox, &delivery);
+        let manifest: Value =
+            serde_json::from_slice(&fs::read(retained.join(".vivac-delivery.json")).unwrap())
+                .unwrap();
+        assert_eq!(manifest["schema_version"], 1);
+        assert!(manifest.get("runtime").is_none());
+        assert!(manifest.get("database").is_none());
+        assert_eq!(manifest["members"].as_array().unwrap().len(), 2);
+        assert_eq!(fs::read(retained.join(path)).unwrap(), authored);
+        sandbox.ok(&[
+            "artifacts",
+            "restore",
+            delivery["artifact"].as_str().unwrap(),
+            "--revision",
+            delivery["revision"].as_str().unwrap(),
+            "--to",
+            "restored",
+            "--json",
+        ]);
+        assert_eq!(
+            fs::read(sandbox.0.join("restored").join(path)).unwrap(),
+            authored
+        );
+    }
+}
+
+#[test]
+fn product_runtime_counts_toward_the_member_limit_without_dropping_selected_files() {
+    let sandbox = fixture("sqlite-runtime-member-limit", DATABASE_FIXTURE);
+    let mut selected = product_selection(&sandbox);
+    for index in 0..60 {
+        let path = format!("part-{index}.js");
+        fs::write(
+            sandbox.0.join("app").join(&path),
+            b"document.title = 'Selected member';",
+        )
+        .unwrap();
+        selected["members"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!(path));
+    }
+    fs::write(
+        sandbox.0.join("selection.json"),
+        serde_json::to_vec(&selected).unwrap(),
+    )
+    .unwrap();
+    let delivery = capture(&sandbox, &[]);
+    assert_eq!(delivery["member_count"], 64);
+    let retained = object(&sandbox, &delivery);
+    for path in selected["members"].as_array().unwrap() {
+        assert!(retained.join(path.as_str().unwrap()).is_file());
+    }
+    assert!(retained.join(PRODUCT_RUNTIME_PATH).is_file());
+    fs::write(
+        sandbox.0.join("app/overflow.js"),
+        b"document.title = 'Overflow member';",
+    )
+    .unwrap();
+    selected["members"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("overflow.js"));
+    fs::write(
+        sandbox.0.join("selection.json"),
+        serde_json::to_vec(&selected).unwrap(),
+    )
+    .unwrap();
+    let before = sandbox.log();
+    let (error, code) = sandbox.run(&[
+        "artifacts",
+        "capture",
+        "--description",
+        "Selected database application",
+        "--bundle",
+        "selection.json",
+        "--from",
+        "g1",
+        "--json",
+    ]);
+    assert_ne!(code, 0);
+    assert!(error.contains("64 members"));
+    assert_eq!(sandbox.log(), before);
+    assert_eq!(
+        fs::read_dir(sandbox.0.join(".vivac-artifacts/objects"))
+            .unwrap()
+            .count(),
+        1
+    );
+}
 
 #[test]
 fn sqlite_application_retains_revisions_source_observation_retry_and_exact_restore() {
@@ -110,7 +502,7 @@ fn sqlite_application_retains_revisions_source_observation_retry_and_exact_resto
     let retained = object(&sandbox, &first);
     let manifest: Value =
         serde_json::from_slice(&fs::read(retained.join(".vivac-delivery.json")).unwrap()).unwrap();
-    assert_eq!(manifest["schema_version"], 2);
+    assert_eq!(manifest["schema_version"], 3);
     assert_eq!(manifest["delivery_type"], "sqlite_application");
     assert_eq!(manifest["database"]["path"], "data.sqlite");
     assert_eq!(manifest["database"]["profile"], "sqlite-standalone-v1");
@@ -409,6 +801,12 @@ fn sqlite_preview_binary_is_only_served_from_the_opaque_resource_base_after_run(
         .unwrap()
         .split_once('/')
         .unwrap();
+    let wrapper = request(host, "GET", &format!("/{token}"), "", "");
+    let wrapper = std::str::from_utf8(&wrapper).unwrap();
+    assert!(wrapper.contains("Runtime pinned to this revision"));
+    assert!(wrapper.contains(PRODUCT_RUNTIME_ID));
+    assert!(wrapper.contains(PRODUCT_RUNTIME_SHA256));
+    assert!(wrapper.contains("Updating vivac does not replace this runtime."));
     let refused = request(host, "GET", "/data.sqlite", "Origin: null\r\n", "");
     assert!(refused.starts_with(b"HTTP/1.1 403"));
     assert!(!refused
@@ -615,6 +1013,60 @@ fn manifest_database_shape_is_strict_even_with_a_matching_custody_digest() {
         }
         refuse(&sandbox, &delivery, &manifest);
     }
+    for case in [
+        "absent",
+        "null",
+        "unknown_id",
+        "origin",
+        "path",
+        "size",
+        "hash",
+        "member_hash",
+        "duplicate",
+        "experimental_v2",
+    ] {
+        let sandbox = fixture("sqlite-runtime-manifest-guards", DATABASE_FIXTURE);
+        let delivery = capture(&sandbox, &[]);
+        let mut manifest: Value = serde_json::from_slice(
+            &fs::read(object(&sandbox, &delivery).join(".vivac-delivery.json")).unwrap(),
+        )
+        .unwrap();
+        match case {
+            "absent" => {
+                manifest.as_object_mut().unwrap().remove("runtime");
+            }
+            "null" => manifest["runtime"] = Value::Null,
+            "unknown_id" => manifest["runtime"]["id"] = json!("unknown-runtime"),
+            "origin" => manifest["runtime"]["origin"] = json!("product"),
+            "path" => manifest["runtime"]["path"] = json!("main.js"),
+            "size" => manifest["runtime"]["bytes"] = json!(PRODUCT_RUNTIME_BYTES - 1),
+            "hash" => manifest["runtime"]["sha256"] = json!("0".repeat(64)),
+            "member_hash" => {
+                manifest["members"]
+                    .as_array_mut()
+                    .unwrap()
+                    .iter_mut()
+                    .find(|member| member["path"] == PRODUCT_RUNTIME_PATH)
+                    .unwrap()["sha256"] = json!("0".repeat(64));
+            }
+            "duplicate" => {
+                let generated = manifest["members"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|member| member["path"] == PRODUCT_RUNTIME_PATH)
+                    .unwrap()
+                    .clone();
+                manifest["members"].as_array_mut().unwrap().push(generated);
+            }
+            "experimental_v2" => {
+                manifest["schema_version"] = json!(2);
+                manifest.as_object_mut().unwrap().remove("runtime");
+            }
+            _ => unreachable!(),
+        }
+        refuse(&sandbox, &delivery, &manifest);
+    }
 }
 
 #[test]
@@ -629,6 +1081,11 @@ fn sqlite_receipt_metadata_refuses_invalid_paths_profiles_and_missing_required_f
         ("database", None),
         ("profile", None),
         ("description", None),
+        ("runtime", None),
+        ("runtime_sha256", None),
+        ("runtime", Some(Value::Null)),
+        ("runtime", Some(json!("unknown-runtime"))),
+        ("runtime_sha256", Some(json!("0".repeat(64)))),
     ] {
         let log = original
             .lines()

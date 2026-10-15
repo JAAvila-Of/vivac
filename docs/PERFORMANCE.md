@@ -402,6 +402,67 @@ include CLI process startup, custody preflight, synchronized local retention
 and the receipt. This script does not measure memory and does not establish
 capture performance on other operating systems or filesystems.
 
+## SQLite application retention with a fixed runtime
+
+Measured on **15 October 2026**, Windows x86_64, local NTFS temporary
+directories outside Git, with rustc **1.94.1 (e408947bf 2026-03-25)** and a
+fresh release build. Each case has 100 measured captures. Fixture preparation,
+warmup, object removal and receipt append are outside the capture timer; source
+opening, guards, logical SQLite export, complete runtime materialization and
+verification, synchronization and exclusive publication are inside it. All
+samples remain included; p99 is the 99th sorted sample.
+
+Each complete revision contains HTML, JavaScript, one normalized database,
+the fixed runtime and a manifest. The runtime is 1,357,427 bytes, including its
+license notices. Complete revision sizes below include every member and the
+manifest. The second case includes the runtime plus exactly 1 MiB of other
+content; runtime bytes are never discounted.
+
+| Complete revision | Bytes | p50 (ms) | p99 (ms) | Maximum (ms) | Strict p99 ceiling (ms) |
+|---|---:|---:|---:|---:|---:|
+| Minimum fixture | 1,366,756 | 37.2750 | 234.2437 | 250.9065 | 500 |
+| Runtime plus 1 MiB | 2,406,003 | 232.9526 | 364.8883 | 394.5581 | 500 |
+| 10 MiB | 10,485,760 | 1,424.9915 | 1,998.8241 | 2,024.4926 | 2,000 |
+
+All three p99 values pass in this run. The 10 MiB margin is only **1.1759 ms**,
+and its maximum exceeds two seconds. This is one machine's measurement, not
+evidence of a broad margin, repeatability across machines or another filesystem.
+
+| Auxiliary memory | Minimum (bytes) | Runtime plus 1 MiB (bytes) | 10 MiB (bytes) |
+|---|---:|---:|---:|
+| Peak live Rust heap | 203,264 | 203,264 | 203,264 |
+| Peak SQLite heap | 178,488 | 222,000 | 230,736 |
+| Stack allowance | 131,072 | 131,072 | 131,072 |
+| Embedded compressed runtime | 453,701 | 453,701 | 453,701 |
+| Conservative total | 966,525 | 1,010,037 | 1,018,773 |
+
+The totals conservatively add the separate Rust and SQLite peaks, a 128 KiB
+stack allowance and the embedded compressed bytes. They fit the 2 MiB ceiling;
+the full runtime body is streamed rather than allocated. These counters do not
+measure process RSS or browser memory.
+
+The Windows capture retains the newly written runtime handle through complete
+byte verification. Revalidating its name uses a separate attributes-only handle
+and the existing metadata and identity comparisons. That second handle cannot
+read content and does not pin the name. Historical revisions and author files
+retain their existing open and verification paths.
+
+The separate complete SQLite receipt benchmark used 100 samples after 10,000
+prior distinct receipts, with 64-member, 32 KiB manifest metadata describing a
+2 MiB delivery. Its p99 was **0.6304 ms**, maximum **0.6421 ms**, and peak
+auxiliary heap **44,365 bytes**. It includes lock, refresh, guards, compare-and-swap,
+append, projection, response construction and unlock. Retained-byte copying,
+fixture preparation, tree loading and stdout serialization are excluded.
+
+Reproduce from the crate directory, coordinating each Rust command separately
+with the shared Windows RustWork launcher where required:
+
+```text
+cargo clean -p vivac
+cargo test --locked --release --bin vivac artifacts::bundle::tests::retained_sqlite_application_release_benchmark -- --ignored --exact --nocapture --test-threads=1
+cargo test --locked --release --bin vivac artifacts::tests::measure_one_hundred_complete_sqlite_receipt_commits_with_ten_thousand_prior_artifacts -- --ignored --exact --nocapture --test-threads=1
+```
+
 ## Context
 
 Context is the budget that actually binds an agent, so the payloads are

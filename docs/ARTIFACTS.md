@@ -228,9 +228,10 @@ overwriting fallback.
 
 Check `vivac artifacts capabilities --json` first. The `sqlite_application`
 delivery type must report `supported: true`; `sqlite_snapshot` does not enable
-standalone database capture. The application supplies its own JavaScript
-runtime. Vivac does not download a database engine or provide an application
-backend, WebAssembly or dynamic code evaluation in the preview.
+standalone database capture. Select a fixed runtime identity available for
+capture in those capabilities. Vivac supplies that runtime from its compiled
+catalog and retains its complete bytes with the revision. Preview provides no
+application backend, WebAssembly or dynamic code evaluation.
 
 Select the complete frontend and one database explicitly:
 
@@ -238,8 +239,9 @@ Select the complete frontend and one database explicitly:
 {
   "root": "previews/counter",
   "entrypoint": "index.html",
-  "members": ["index.html", "style.css", "app.js", "sql-asm.js", "data.sqlite"],
+  "members": ["index.html", "style.css", "app.js", "data.sqlite"],
   "database": "data.sqlite",
+  "runtime": "sqljs-asm-1.14.2",
   "requirements": ["JavaScript enabled; changes stay in browser memory."]
 }
 ```
@@ -247,8 +249,24 @@ Select the complete frontend and one database explicitly:
 Use `capture --bundle` and the same check, preview and directory restore
 operations as static bundles. The `database` path must name exactly one selected
 `.sqlite`, `.sqlite3` or `.db` member; every other member must be HTML, CSS or
-JavaScript. A filename alone never selects database capture. Include required
-runtime notices in a selected HTML or JavaScript member.
+JavaScript. `database` and `runtime` are required together as nonempty strings;
+a static bundle declares neither. A filename alone never selects database
+capture. Reference `vivac-sqlite.js` from HTML and use its `initSqlJs` API to
+open the declared database in browser memory.
+
+Do not select a runtime file from the project. The engine generates the reserved
+`vivac-sqlite.js` member, including its complete license notices, from the fixed
+product dependency. Selected paths cannot collide with that name or use it as a
+directory, including case variants. Application files and database values retain
+their full sensitive-value checks. A caller-supplied name, origin or digest never
+grants a file the product dependency's trust.
+
+The revision pins the runtime identity, size and SHA-256 digest. Check, preview
+and restore verify the retained bytes against the engine's historical catalog.
+Updating vivac does not replace R1's runtime. Reading or restoring R1 needs no
+download or current embedded copy of its runtime. Capabilities distinguish known
+identities from those available for a new capture; an unavailable capture
+identity is refused rather than replaced.
 
 The initial `sqlite-standalone-v1` profile accepts an autonomous, UTF-8 SQLite
 database in rollback mode with a current, self-consistent header and an exact
@@ -274,7 +292,8 @@ virtual tables, generated columns, expression indexes and unsupported schema
 clauses refuse the complete capture. No table or row is silently omitted.
 
 The selected source files together and the complete retained revision each have
-a 10 MiB limit; the retained revision includes its manifest. The 64-member and
+a 10 MiB limit; the retained revision includes its generated runtime, notices
+and manifest. The generated runtime also counts as a member. The 64-member and
 64 KiB manifest limits also apply. The SQLite profile additionally bounds schema
 and data: 16 user tables,
 32 columns per table, 256 columns total, 32 indexes including automatic indexes,
@@ -285,7 +304,9 @@ SQLite and Rust share the 2 MiB auxiliary-memory budget. Exceeding a limit
 refuses capture rather than truncating inspection.
 
 The new receipt is `artifact.sqlite_application_captured`; its manifest uses
-schema version 2. Older engines must refuse that receipt rather than treat the
+schema version 3 with a required runtime descriptor. The experimental SQLite
+version 2 is refused without automatic migration. Older engines must refuse
+the receipt rather than treat the
 application as a static bundle. Use compatible engines in every harness sharing
 the project. An artifact cannot change between file, static bundle and SQLite
 application identities.
@@ -295,7 +316,9 @@ Preview serves only verified revision members, including the database as
 revision resource prefix; it cannot use that permission to access vivac's
 authenticated web origin. Changes made by the JavaScript runtime stay in browser
 memory and do not update the retained revision or source. Restore copies the
-exact normalized database bytes with the rest of the selected revision.
+exact normalized database, runtime and application bytes of that revision to
+a new directory. A restored application may still need a static HTTP server
+for browser fetch; it does not need vivac to resolve its runtime.
 
 ## Limits and refusals
 
@@ -418,8 +441,9 @@ Later changes to a known artifact become new revisions of the same identity.
 Other file deliveries require the person's explicit selection. Documentation,
 reports, code and configuration stay in their ordinary project locations by
 default. A small frontend application with a contained SQLite database still
-requires explicit installed support for its application profile and a supplied
-JavaScript runtime; this workflow does not install either one.
+requires explicit installed support for its application profile and a fixed
+JavaScript runtime supplied by the product. Setup installs guidance; it does
+not install an engine update or enable that capability.
 
 This is agent guidance, not automatic filesystem capture. Hooks do not inspect
 or retain delivery bytes. Unsupported formats and capture refusals must be

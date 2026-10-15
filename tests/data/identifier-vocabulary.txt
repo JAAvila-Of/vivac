@@ -76,6 +76,7 @@ allocations
 allocator
 allow
 allowed
+allowing
 allows
 alone
 along
@@ -185,6 +186,7 @@ attribute
 attributes
 attributing
 authenticated
+author
 authored
 authoritative
 authority
@@ -519,6 +521,7 @@ constant
 constraint
 constraints
 consts
+consumed
 consuming
 cont
 contained
@@ -642,9 +645,11 @@ declares
 declined
 decode
 decoded
+decoder
 decodes
 decoding
 decomposed
+decompress
 dedup
 deep
 deepest
@@ -778,6 +783,7 @@ drive
 driven
 drop
 dropped
+dropping
 drops
 dry
 dual
@@ -832,6 +838,7 @@ encode
 encoded
 end
 endings
+endless
 ends
 enforce
 enforces
@@ -901,6 +908,7 @@ exec
 executable
 execute
 execution
+exempt
 exist
 existing
 exists
@@ -994,6 +1002,7 @@ flag
 flagged
 flags
 flat
+flate2
 flatten
 flips
 float
@@ -1042,6 +1051,7 @@ fp
 fractional
 fragment
 fragments
+framing
 free
 frees
 fresh
@@ -1061,6 +1071,7 @@ gap
 garbage
 gate
 gates
+generated
 generates
 generation
 get
@@ -1258,6 +1269,7 @@ inline
 inner
 ino
 input
+inputs
 insert
 inserted
 inside
@@ -1384,6 +1396,7 @@ li
 libc
 libsqlite3
 libversion
+license
 lifetime
 lifts
 light
@@ -1478,6 +1491,7 @@ matcher
 matchers
 matches
 matching
+materialization
 materialize
 materialized
 matrix
@@ -1528,6 +1542,7 @@ minted
 minus
 minute
 minutes
+mismatch
 mismatching
 missing
 mixed
@@ -2173,6 +2188,7 @@ resources
 respects
 respond
 response
+responses
 rest
 restamp
 restore
@@ -2630,6 +2646,7 @@ time
 timed
 timeout
 times
+timing
 tiny
 tiocgwinsz
 title
@@ -2793,6 +2810,7 @@ upgrade
 upgraded
 upper
 uppercase
+upstream
 upto
 upward
 uri
@@ -2919,6 +2937,7 @@ windows
 winner
 winning
 wins
+wire
 with
 withheld
 withholds

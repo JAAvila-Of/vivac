@@ -177,7 +177,7 @@ const button = text => all(document.elements['revision-content']).find(e => e.ta
   assert.equal(bundleCapture.description, 'Explore the bundled dashboard.');
   assert(!Object.hasOwn(bundleCapture, 'path'));
   const sqliteRequests = [];
-  const sqliteRevision = id => ({ ...bundleRevision(id), delivery_type: 'sqlite_application', database: 'data/items.sqlite', profile: 'sqlite-standalone-v1' });
+  const sqliteRevision = id => ({ ...bundleRevision(id), delivery_type: 'sqlite_application', database: 'data/items.sqlite', profile: 'sqlite-standalone-v1', runtime: 'sqljs-asm-1.14.2', runtime_sha256: 'a5709877905821fcae8aeb6789c53302eb0ffc50473f81dc2bfbdd93a16f9b38' });
   const sqliteView = await reload({ artifact: 'bundle-artifact', fetch: async (url, options) => {
     const body = JSON.parse(options.body); sqliteRequests.push(body);
     const result = body.operation === 'capabilities'
@@ -191,6 +191,9 @@ const button = text => all(document.elements['revision-content']).find(e => e.ta
   assert.match(sqliteView.elements.rows.textContent, /SQLite application.*pages\/index.html.*data\/items.sqlite/);
   assert.match(sqliteView.elements['revision-content'].textContent, /sqlite-standalone-v1/);
   assert.match(sqliteView.elements['revision-content'].textContent, /logical export.*not a byte-for-byte copy/i);
+  assert.match(sqliteView.elements['revision-content'].textContent, /Runtime pinned to this revision: sqljs-asm-1\.14\.2/);
+  assert.match(sqliteView.elements['revision-content'].textContent, /Runtime SHA-256: a5709877905821fcae8aeb6789c53302eb0ffc50473f81dc2bfbdd93a16f9b38/);
+  assert.match(sqliteView.elements['revision-content'].textContent, /Updating vivac does not replace this revision’s runtime/);
   assert.match(sqliteView.elements['revision-content'].textContent, /Changes made in the preview stay in browser memory/);
   assert.match(sqliteView.elements['revision-content'].textContent, /data\/items.sqlite.*application\/vnd.sqlite3/);
   assert(previewForm(sqliteView.elements.rows, 'Preview latest revision'));

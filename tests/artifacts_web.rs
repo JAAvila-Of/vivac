@@ -1,4 +1,6 @@
 mod common;
+#[path = "common/http.rs"]
+mod http;
 use common::Sandbox;
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -73,9 +75,7 @@ impl Server {
             .set_read_timeout(Some(std::time::Duration::from_secs(10)))
             .unwrap();
         write!(stream,"{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nCookie: {}\r\nConnection: close\r\nContent-Length: {}\r\n{headers}\r\n{body}",self.port,self.cookie,body.len()).unwrap();
-        let mut response = String::new();
-        stream.read_to_string(&mut response).unwrap();
-        response
+        read_response(&mut BufReader::new(stream))
     }
     fn headers(&self) -> String {
         let token = self.cookie.split_once('=').unwrap().1;
@@ -99,6 +99,62 @@ impl Server {
             .to_ascii_lowercase()
             .contains("referrer-policy: no-referrer\r\n"));
         json_body(&response)
+    }
+}
+
+fn read_response(reader: &mut impl BufRead) -> String {
+    let mut response = String::new();
+    let mut status = String::new();
+    assert!(reader.read_line(&mut status).unwrap() > 0);
+    assert!(status.is_ascii());
+    response.push_str(&status);
+    let mut content_length = None;
+    let mut chunked = false;
+    loop {
+        let mut line = String::new();
+        assert!(reader.read_line(&mut line).unwrap() > 0);
+        assert!(line.is_ascii());
+        response.push_str(&line);
+        let trimmed = line.trim_end_matches(['\r', '\n']);
+        if trimmed.is_empty() {
+            break;
+        }
+        let (name, value) = trimmed.split_once(':').unwrap();
+        if name.trim().eq_ignore_ascii_case("content-length") {
+            content_length = Some(value.trim().parse().unwrap());
+        }
+        if name.trim().eq_ignore_ascii_case("transfer-encoding")
+            && value.trim().eq_ignore_ascii_case("chunked")
+        {
+            chunked = true;
+        }
+    }
+    let body = if chunked || content_length.is_some() {
+        http::read_body(reader, content_length.unwrap_or(0), chunked)
+    } else {
+        let mut body = Vec::new();
+        reader.read_to_end(&mut body).unwrap();
+        body
+    };
+    response.push_str(std::str::from_utf8(&body).unwrap());
+    response
+}
+
+#[test]
+fn responses_decode_http_framing_before_multibyte_utf8() {
+    for (headers, wire_body) in [
+        (
+            "Transfer-Encoding: chunked\r\n",
+            &b"1\r\nA\r\n1\r\n\xce\r\n1;part=end\r\n\xb1\r\n0\r\n\r\n"[..],
+        ),
+        ("Content-Length: 3\r\n", &b"A\xce\xb1"[..]),
+        ("", &b"A\xce\xb1"[..]),
+    ] {
+        let head = format!("HTTP/1.1 200 OK\r\n{headers}X-Vivac-Test: framing\r\n\r\n");
+        let mut wire = head.as_bytes().to_vec();
+        wire.extend_from_slice(wire_body);
+        let decoded = read_response(&mut BufReader::new(std::io::Cursor::new(wire)));
+        assert_eq!(decoded, format!("{head}Aα"));
     }
 }
 

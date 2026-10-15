@@ -144,10 +144,18 @@ its manifest. Supported profiles are a UTF-8 file, a complete static frontend
 bundle, and a complete frontend application with one explicitly selected
 standalone SQLite database retained through a fresh logical export. This does
 not permit generic binary capture or active-WAL ingestion.
+For a SQLite application whose fixed product runtime already exceeds 1 MiB,
+measure the smallest complete revision and a complete revision containing the
+runtime plus 1 MiB of other content, including the manifest. Both retain the
+strict 500 ms p99 ceiling; 10 MiB complete revisions retain the two-second
+ceiling. Runtime bytes are never discounted from delivery size.
 Artifact operations use at most 2 MiB of auxiliary memory, including SQLite's
 native heap, caches and adapters as well as Rust allocations, and excluding the
 already loaded tree and bounded response metadata. Inspection is never shortened
 to meet a budget: unsupported input or an exceeded inspection bound is refused.
+An embedded compressed runtime representation and its decoder also count toward
+that auxiliary-memory ceiling; materialization streams into the revision rather
+than allocating the complete program body.
 The receipt append still follows the ordinary write budget; copying and checking
 file bytes happen before acquiring the tree's write lock. Measurements must name
 the Rust build, filesystem, fixture and sample count; earlier Python probes do
@@ -292,6 +300,17 @@ tree is a map of where a system is weak and not yet fixed.**
   A retained revision is not an approval, a filesystem snapshot or a backup of
   the disk. Human review names the exact retained revision. Secret and personal
   data guards still apply; local retention has no bypass or force option.
+  A product-supplied program component requires a reviewed, immutable catalog
+  compiled into vivac, with a fixed identity, size, digest, license and supply
+  recipe. Capture materializes only the product's own bytes. Artifact-controlled
+  files, including an author-supplied copy of that program, keep their complete
+  input guards; caller-provided paths, hashes or origin labels cannot establish
+  trust. Adding a catalog entry is a product-code dependency change under these
+  pillars. Each revision retains the complete component and notices, counts
+  them in its limits, and verifies its actual bytes against the historical
+  catalog before use or recovery. Updating vivac never substitutes a newer
+  program into an old revision. Unknown components and modified bytes are
+  refused without downloading or falling back to another program.
   A database delivery declares its logical-export transformation before
   inspection. All schema definitions, names, values and relevant internal
   metadata must pass inspection within the supported profile before a fresh

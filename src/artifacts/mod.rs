@@ -5,6 +5,7 @@ mod guard;
 mod native;
 pub(crate) mod preview;
 pub(crate) mod projection;
+mod runtime;
 mod sqlite;
 
 use crate::args::Args;
@@ -76,7 +77,7 @@ fn capabilities() -> Value {
                 "journal_mode": "standalone_rollback",
                 "encoding": "utf8",
                 "auxiliary_files": "refused",
-                "runtime": "delivery_supplied_javascript",
+                "runtime": {"api":"initSqlJs", "generated_member":runtime::PATH, "known":[{"id":runtime::ID,"path":runtime::PATH,"bytes":runtime::BYTES,"sha256":runtime::SHA256}], "available_for_capture":[runtime::ID]},
                 "max_bytes": MAX_FILE_BYTES,
                 "max_members": 64,
                 "max_manifest_bytes": 65536,
@@ -142,6 +143,8 @@ struct Revision<'a> {
     manifest_bytes: Option<u64>,
     database: Option<&'a str>,
     profile: Option<&'a str>,
+    runtime: Option<&'a str>,
+    runtime_sha256: Option<&'a str>,
 }
 
 impl<'a> Revision<'a> {
@@ -260,6 +263,14 @@ impl<'a> Revision<'a> {
                 ),
                 _ => (None, None, None, None, None, None, None),
             };
+        let (runtime, runtime_sha256) = match body {
+            Body::ArtifactSqliteApplicationCaptured {
+                runtime,
+                runtime_sha256,
+                ..
+            } => (Some(runtime.as_str()), Some(runtime_sha256.as_str())),
+            _ => (None, None),
+        };
         Some(Self {
             artifact,
             revision,
@@ -287,6 +298,8 @@ impl<'a> Revision<'a> {
             manifest_bytes,
             database,
             profile,
+            runtime,
+            runtime_sha256,
         })
     }
 
@@ -433,7 +446,21 @@ fn metadata(revision: &Revision) -> Result<(), Failure> {
                 "Unsupported SQLite application profile.".into(),
             ));
         }
-    } else if revision.database.is_some() || revision.profile.is_some() {
+        let descriptor = runtime::known_descriptor(
+            revision
+                .runtime
+                .ok_or_else(|| Failure::Model("Missing product runtime identity.".into()))?,
+        )?;
+        if revision.runtime_sha256 != Some(descriptor.sha256.as_str()) {
+            return Err(Failure::Model(
+                "Product runtime receipt does not match the engine catalog.".into(),
+            ));
+        }
+    } else if revision.database.is_some()
+        || revision.profile.is_some()
+        || revision.runtime.is_some()
+        || revision.runtime_sha256.is_some()
+    {
         return Err(Failure::Model(
             "Unexpected SQLite application metadata.".into(),
         ));
@@ -888,6 +915,9 @@ fn prepare_capture(ctx: &Ctx, args: &Args) -> Result<CapturePlan, Failure> {
         }
         let retained = bundle::capture(&ctx.lane_dir, &selection, &revision)?;
         if let Some(database) = selection.database {
+            let runtime = retained.runtime.ok_or_else(|| {
+                Failure::Model("Missing generated product runtime metadata.".into())
+            })?;
             return Ok(CapturePlan::Prepared(Box::new(
                 Body::ArtifactSqliteApplicationCaptured {
                     description: description.into(),
@@ -907,6 +937,8 @@ fn prepare_capture(ctx: &Ctx, args: &Args) -> Result<CapturePlan, Failure> {
                     manifest_bytes: retained.manifest_bytes,
                     database,
                     profile: bundle::SQLITE_PROFILE.into(),
+                    runtime: runtime.id,
+                    runtime_sha256: runtime.sha256,
                 },
             )));
         }
@@ -1026,6 +1058,12 @@ fn bundle_manifest(
                 .database
                 .as_ref()
                 .map(|database| database.profile.as_str())
+        || revision.runtime != manifest.runtime.as_ref().map(|runtime| runtime.id.as_str())
+        || revision.runtime_sha256
+            != manifest
+                .runtime
+                .as_ref()
+                .map(|runtime| runtime.sha256.as_str())
     {
         return Err(Failure::Model(
             "Bundle manifest does not match its custody receipt.".into(),
@@ -1159,7 +1197,7 @@ fn check(ctx: &Ctx, ledger: &Ledger, args: &Args) -> Result<(Value, i32), Failur
         let source = if files::site_id(&ctx.lane_dir)?.as_deref() != Some(revision.site) {
             json!({"status":"foreign_site","bytes_checked":false})
         } else if let Ok(manifest) = &result {
-            bundle::source_check(&ctx.lane_dir, revision.source, manifest)
+            bundle::source_check(&ctx.lane_dir, revision.source, revision.selection, manifest)
         } else {
             json!({"status":"not_checked","bytes_checked":false})
         };
@@ -1407,6 +1445,7 @@ pub(crate) use files::Download;
 pub(crate) struct PreviewRevision {
     pub(crate) reader: Download,
     pub(crate) bundle: Option<bundle::PreviewResources>,
+    runtime: Option<runtime::Descriptor>,
     pub(crate) artifact: String,
     pub(crate) revision: String,
     pub(crate) source: String,
@@ -1435,6 +1474,10 @@ fn preview_revision(ctx: &Ctx, selected: Revision<'_>) -> Result<PreviewRevision
         )?;
         return Ok(PreviewRevision {
             reader,
+            runtime: selected
+                .runtime
+                .map(runtime::known_descriptor)
+                .transpose()?,
             description: selected.description.map(str::to_owned),
             bundle: Some(bundle),
             artifact: selected.artifact.to_owned(),
@@ -1464,6 +1507,7 @@ fn preview_revision(ctx: &Ctx, selected: Revision<'_>) -> Result<PreviewRevision
     )?;
     Ok(PreviewRevision {
         reader,
+        runtime: None,
         description: selected.description.map(str::to_owned),
         bundle: None,
         artifact: selected.artifact.to_owned(),
@@ -1601,7 +1645,7 @@ fn print(value: &Value) -> Result<(), Failure> {
             crate::output::outln!("Artifacts: one UTF-8 text file per revision, up to {max_mib} MiB; pages up to {MAX_PAGE_SIZE}. Complete bundle custody is not supported on this platform.");
         }
         if value["delivery_types"]["sqlite_application"]["supported"] == true {
-            crate::output::outln!("SQLite applications: complete HTML/CSS/JS with one explicit standalone database, retained as a logical export. The delivery supplies its JavaScript runtime; no backend is provided.");
+            crate::output::outln!("SQLite applications: complete HTML/CSS/JS with one explicit standalone database, retained as a logical export. Vivac supplies a fixed JavaScript runtime and retains it with the revision; no backend is provided.");
         } else {
             crate::output::outln!("SQLite application custody is not supported by this engine.");
         }
@@ -2905,6 +2949,7 @@ mod tests {
             ],
             requirements: vec![],
             database: None,
+            runtime: None,
         };
         let retained = bundle::capture(root, &selection, &revision).unwrap();
         Body::ArtifactBundleCaptured {
@@ -2966,7 +3011,7 @@ mod tests {
             assert_eq!(ffi::sqlite3_exec(database, c"CREATE TABLE items(id INTEGER PRIMARY KEY, value TEXT); INSERT INTO items VALUES(1,'Synthetic fixture data')".as_ptr(), None, std::ptr::null_mut(), std::ptr::null_mut()), ffi::SQLITE_OK);
             assert_eq!(ffi::sqlite3_close(database), ffi::SQLITE_OK);
         }
-        fs::write(fixture.0.join("selection.json"), serde_json::to_vec(&json!({"root":"app", "entrypoint":"index.html", "members":["index.html","assets/style.css","assets/main.js","data.sqlite"], "database":"data.sqlite", "requirements":[]})).unwrap()).unwrap();
+        fs::write(fixture.0.join("selection.json"), serde_json::to_vec(&json!({"root":"app", "entrypoint":"index.html", "members":["index.html","assets/style.css","assets/main.js","data.sqlite"], "database":"data.sqlite", "runtime":runtime::ID, "requirements":[]})).unwrap()).unwrap();
         fixture
     }
 
@@ -2999,6 +3044,8 @@ mod tests {
             manifest_bytes: retained.manifest_bytes,
             database: "data.sqlite".into(),
             profile: bundle::SQLITE_PROFILE.into(),
+            runtime: runtime::ID.into(),
+            runtime_sha256: runtime::SHA256.into(),
         }
     }
 
@@ -3010,6 +3057,7 @@ mod tests {
             "assets/style.css",
             "assets/main.js",
             "data.sqlite",
+            runtime::PATH,
             ".vivac-delivery.json",
         ] {
             assert_eq!(
@@ -3020,7 +3068,7 @@ mod tests {
         let manifest: Value =
             serde_json::from_slice(&fs::read(retained.join(".vivac-delivery.json")).unwrap())
                 .unwrap();
-        assert_eq!(manifest["members"].as_array().unwrap().len(), 4);
+        assert_eq!(manifest["members"].as_array().unwrap().len(), 5);
         assert_eq!(manifest["delivery_type"], "sqlite_application");
     }
 
@@ -4611,7 +4659,7 @@ mod tests {
                 source: "app".into(),
                 selection: "selection.json".into(),
                 site: format!("{:026x}", 2),
-                size: 1024 * 1024,
+                size: 2 * 1024 * 1024,
                 digest: "a".repeat(64),
                 object: format!("objects/{revision}.bundle"),
                 entrypoint: "index.html".into(),
@@ -4739,6 +4787,8 @@ mod tests {
                 manifest_bytes: 32 * 1024,
                 database: String::from("data.sqlite"),
                 profile: bundle::SQLITE_PROFILE.into(),
+                runtime: runtime::ID.into(),
+                runtime_sha256: runtime::SHA256.into(),
             }
         };
         let mut bodies = Vec::with_capacity(10_001);
@@ -4789,7 +4839,7 @@ mod tests {
             peak = peak.max(sample_peak);
         }
         durations.sort();
-        eprintln!("Complete SQLite application receipt commit: 100 release samples, 10000 prior distinct SQLite application receipts, one producer; p50={:?}, p99={:?}, max={:?}, peak auxiliary={peak} bytes. Includes lock, refresh, guards, CAS, append, projection, JSON response construction and unlock. Synthetic metadata describes 64 members, a 32 KiB manifest and 1 MiB total. Fixture setup, tree loading, prepared metadata, retained byte copying and stdout serialization are excluded.", durations[49], durations[98], durations[99]);
+        eprintln!("Complete SQLite application receipt commit: 100 release samples, 10000 prior distinct SQLite application receipts, one producer; p50={:?}, p99={:?}, max={:?}, peak auxiliary={peak} bytes. Includes lock, refresh, guards, CAS, append, projection, JSON response construction and unlock. Synthetic metadata describes 64 members, a 32 KiB manifest and 2 MiB total. Fixture setup, tree loading, prepared metadata, retained byte copying and stdout serialization are excluded.", durations[49], durations[98], durations[99]);
         let (recorded, broken) = ctx.store.read_all().unwrap();
         let folded_receipts = ctx.tree.artifact_history.len();
         drop(ctx);

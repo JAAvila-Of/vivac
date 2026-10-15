@@ -287,6 +287,7 @@ automatic
 automatically
 autos
 auxiliary
+availability
 available
 avoid
 avoidable
@@ -787,6 +788,7 @@ construct
 construction
 constructor
 consulted
+consulting
 consume
 consumed
 consumer
@@ -1397,7 +1399,6 @@ expression
 extend
 extended
 extends
-extensions
 external
 extra
 extracted
@@ -2328,7 +2329,6 @@ mechanisms
 media
 median
 meets
-megabyte
 megabytes
 member
 membership
@@ -2616,7 +2616,6 @@ out
 outcome
 outcomes
 outer
-outgrows
 outlive
 outlives
 outliving
@@ -2851,6 +2850,7 @@ preflight
 premise
 preparation
 prepare
+prepared
 prepares
 prepend
 presence
@@ -3493,7 +3493,6 @@ selection
 selections
 self
 semantics
-semicolon
 send
 sending
 sends
