@@ -400,8 +400,9 @@ Use `vivac setup codex` for Codex. Setup also installs `vivac-artifacts` for
 visual or interactive previews: self-contained HTML or a complete HTML/CSS/JS
 frontend, preferably without a backend. Each captured revision needs a brief
 description. A contained SQLite frontend also needs the installed
-`sqlite_application` capability and its own JavaScript runtime. Other file
-deliveries require the person's explicit selection.
+`sqlite_application` capability and a fixed JavaScript runtime supplied by vivac
+and retained with the revision. Other file deliveries require the person's
+explicit selection.
 Setup does not capture files automatically. See
 [Artifact custody](docs/ARTIFACTS.md).
 

@@ -228,7 +228,8 @@ overwriting fallback.
 
 Check `vivac artifacts capabilities --json` first. The `sqlite_application`
 delivery type must report `supported: true`; `sqlite_snapshot` does not enable
-standalone database capture. Select a fixed runtime identity available for
+standalone database capture. The SQLite application profile is available on
+Linux, macOS and Windows. Select a fixed runtime identity available for
 capture in those capabilities. Vivac supplies that runtime from its compiled
 catalog and retains its complete bytes with the revision. Preview provides no
 application backend, WebAssembly or dynamic code evaluation.

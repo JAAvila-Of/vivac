@@ -60,7 +60,7 @@ fn capabilities() -> Value {
     } else {
         json!({"supported":false,"reason":"Complete bundle custody is not supported on this platform."})
     };
-    json!({
+    let mut value = json!({
         "operation": "capabilities",
         "schema_version": 1,
         "scope": "engine",
@@ -69,8 +69,7 @@ fn capabilities() -> Value {
             "file": {"supported": true, "formats": ["utf8_text"], "max_bytes": MAX_FILE_BYTES},
             "bundle": bundle_capabilities,
             "sqlite_application": {
-                "supported": false,
-                "reason": "SQLite application custody acceptance is not complete.",
+                "supported": bundles,
                 "formats": ["html", "css", "js", "sqlite3"],
                 "profile": bundle::SQLITE_PROFILE,
                 "transformation": "logical-export-v1",
@@ -114,7 +113,12 @@ fn capabilities() -> Value {
         },
         "bytes_checked": false,
         "event_recorded": false
-    })
+    });
+    if !bundles {
+        value["delivery_types"]["sqlite_application"]["reason"] =
+            json!("SQLite application custody is not supported on this platform.");
+    }
+    value
 }
 
 #[derive(Serialize)]
