@@ -29,6 +29,7 @@ impl Server {
         let mut child = Command::new(BIN)
             .current_dir(&c.0)
             .env("VIVAC_HOME", c.global_home())
+            .env("CODEX_HOME", c.0.join(".codex"))
             .env("TZ", "UTC")
             .arg("mcp")
             .stdin(Stdio::piped())
@@ -2966,6 +2967,50 @@ fn agent_review_schema_exposes_shared_plans_without_more_tools() {
         assert!(refusal["exit_code"].as_i64().unwrap() > 1, "{refusal}");
     }
     assert_eq!(before, c.log());
+}
+
+#[test]
+fn agent_inventory_uses_the_sandbox_model_catalog_for_mcp_and_cli() {
+    let c = seeded("custody-isolated-catalog");
+    let mut server = hello(&c);
+    for cached in [false, true] {
+        if cached {
+            std::fs::create_dir_all(c.0.join(".codex")).unwrap();
+            std::fs::write(
+                c.0.join(".codex/models_cache.json"),
+                json!({"models":[{"slug":"isolated-test-model","visibility":"list","supported_reasoning_levels":[{"effort":"high"}]}]}).to_string(),
+            )
+            .unwrap();
+        }
+        let (text, code) = c.run(&["agents", "inventory", "--json"]);
+        assert_eq!(code, 0, "{text}");
+        let cli: Value = serde_json::from_str(&text).unwrap();
+        let inventory = custody(&mut server, json!({"operation":"inventory"}));
+        assert_eq!(inventory["exit_code"], 0, "{inventory}");
+        assert_eq!(inventory["result"], cli);
+        for result in [&cli, &inventory["result"]] {
+            let codex = result["harnesses"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|harness| harness["harness"] == "codex")
+                .unwrap();
+            let catalog = &codex["model_catalog"];
+            if cached {
+                let models = catalog["models"].as_array().unwrap();
+                assert_eq!(models.len(), 1, "{catalog}");
+                assert_eq!(models[0]["id"], "isolated-test-model");
+                assert_eq!(models[0]["efforts"], json!(["high"]));
+                assert!(codex["models"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&json!("isolated-test-model")));
+            } else {
+                assert_eq!(catalog["status"], "unavailable", "{catalog}");
+                assert_eq!(catalog["models"], json!([]), "{catalog}");
+            }
+        }
+    }
 }
 
 fn custody_selection(c: &Sandbox, server: &mut Server) -> Value {
