@@ -219,8 +219,9 @@ consumer: after adding a fresh Unicode sentinel, the producer prepared and
 `prompt.context` published the new 19,859-unit snapshot, but the provider
 request contained the old snapshot once and the new snapshot zero times.
 The turn guard accepted publication without detecting that difference.
-The current experimental module therefore blocks resume with a present tree;
-this is a refusal, not a completed resume integration.
+At that stage, the experimental module therefore blocked resume with a present
+tree. That refusal was later replaced by the reference-based consumer described
+below; it is not the behavior of the current module.
 
 The corrected artifact then passed a separate native rejection control.
 Startup delivered the complete 19,862-unit baseline once and preserved the
@@ -1123,8 +1124,12 @@ synthetic pillar and 62 constraints, with no active focus. Neither case
 establishes delivery for a deeply nested focus or the original project's
 instructions. No check established that a model read the saved output or
 consulted rule bodies. The clear check exercised the app-server API, not the
-interactive `/clear` command. Actual compaction of the vivac setup integrations
-remains unverified; the synthetic Claude module check above has narrower scope.
+interactive `/clear` command. Codex reception after actual compaction remains
+unverified. For Claude, the revised consumer passed native manual and automatic
+compaction controls using instrumented copies of its executable body, as
+described above. Those controls did not activate setup; the uninstrumented bundle
+installed through setup was checked separately for startup and resume, without
+repeating either compaction control through that installation path.
 
 A separate Claude consumer check used a deterministic test hook with three
 markers in ASCII text. Both plain stdout and JSON `additionalContext` delivered
