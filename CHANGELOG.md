@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.0](https://github.com/JAAvila-Of/vivac/compare/v0.19.6...v0.20.0) - 2026-10-16
+
+### Added
+
+- *(artifacts)* retain frontend applications with SQLite
+- [**breaking**] require descriptions for artifact revisions
+- *(artifacts)* retain and preview complete static bundles
+- *(artifacts)* preview retained HTML revisions
+
 ## [0.19.6](https://github.com/JAAvila-Of/vivac/compare/v0.19.5...v0.19.6) - 2026-10-13
 
 ### Added
