@@ -1626,7 +1626,8 @@ fn regenerated_version(root: &Path) -> ConfigVersion {
             Some("artifact.captured")
             | Some("artifact.bundle_captured")
             | Some("artifact.captured_v2")
-            | Some("artifact.bundle_captured_v2") => artifacts = true,
+            | Some("artifact.bundle_captured_v2")
+            | Some("artifact.sqlite_application_captured") => artifacts = true,
             Some("agent.automation.configured") => automatic_agents = true,
             Some("agent.recorded") if v["payload"]["definition"]["prompt"].is_object() => {
                 automatic_agents = true
@@ -1973,6 +1974,7 @@ impl Store {
                         | crate::event::Body::ArtifactBundleCaptured { .. }
                         | crate::event::Body::ArtifactCapturedV2 { .. }
                         | crate::event::Body::ArtifactBundleCapturedV2 { .. }
+                        | crate::event::Body::ArtifactSqliteApplicationCaptured { .. }
                 )
             })
         {

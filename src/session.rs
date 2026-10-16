@@ -597,7 +597,8 @@ fn is_capture(body: &Body) -> bool {
         | Body::ArtifactCaptured { .. }
         | Body::ArtifactBundleCaptured { .. }
         | Body::ArtifactCapturedV2 { .. }
-        | Body::ArtifactBundleCapturedV2 { .. } => true,
+        | Body::ArtifactBundleCapturedV2 { .. }
+        | Body::ArtifactSqliteApplicationCaptured { .. } => true,
         Body::VivacCreated { kind, .. } => *kind == VivacKind::Manual,
         Body::SessionStarted { .. }
         | Body::LaneDeclared { .. }

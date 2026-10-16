@@ -137,14 +137,18 @@ fn escape(value: &str) -> String {
 }
 
 fn wrapper(selected: &PreviewRevision, token: &str) -> String {
+    let runtime = selected.runtime.as_ref().map_or_else(String::new, |runtime| {
+        format!("<dt>Runtime pinned to this revision</dt><dd>{}</dd><dt>Runtime SHA-256</dt><dd>{}</dd><dt>Runtime recovery</dt><dd>Updating vivac does not replace this runtime. Restore includes its complete bytes and license notices.</dd>", escape(&runtime.id), escape(&runtime.sha256))
+    });
     format!(
-        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><meta name=\"referrer\" content=\"origin\"><title>Preview retained revision</title><style>body{{font-family:system-ui;margin:0;background:#f5f7fa;color:#17212b}}main{{padding:20px;max-width:1400px;margin:auto}}h1{{margin:0;font-size:22px}}code,dd{{overflow-wrap:anywhere;word-break:break-word}}.small{{font-size:13px}}.controls{{display:flex;gap:12px;flex-wrap:wrap}}form{{display:inline}}button{{padding:10px 14px}}iframe{{display:block;width:100%;height:calc(100vh - 260px);min-height:420px;box-sizing:border-box;border:1px solid #ccd4df;border-radius:8px;margin-top:16px;background:white}}</style></head><body><main><h1>Preview retained revision</h1><p>Source: <code>{}</code><br>Revision: <code>{}</code></p><details><summary>Revision details</summary><dl><dt>Description</dt><dd>{description}</dd><dt>Artifact</dt><dd>{}</dd><dt>Producer</dt><dd>{}</dd><dt>Digest</dt><dd>{}</dd></dl></details><p class=\"small\">JavaScript runs with browser restrictions. Complete network isolation is not guaranteed. Preview does not imply approval.</p><p class=\"small\">The local server expires after 15 minutes. Close this tab to stop HTML that is already running.</p><div class=\"controls\"><form action=\"/run\" method=\"post\" target=\"retained\"><input type=\"hidden\" name=\"token\" value=\"{token}\"><button type=\"submit\">Run HTML</button></form><form action=\"/close\" method=\"post\" target=\"_self\"><input type=\"hidden\" name=\"token\" value=\"{token}\"><button type=\"submit\">Close preview</button></form></div><iframe name=\"retained\" sandbox=\"allow-scripts\" referrerpolicy=\"origin\" title=\"Retained HTML\"></iframe></main></body></html>",
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><meta name=\"referrer\" content=\"origin\"><title>Preview retained revision</title><style>body{{font-family:system-ui;margin:0;background:#f5f7fa;color:#17212b}}main{{padding:20px;max-width:1400px;margin:auto}}h1{{margin:0;font-size:22px}}code,dd{{overflow-wrap:anywhere;word-break:break-word}}.small{{font-size:13px}}.controls{{display:flex;gap:12px;flex-wrap:wrap}}form{{display:inline}}button{{padding:10px 14px}}iframe{{display:block;width:100%;height:calc(100vh - 260px);min-height:420px;box-sizing:border-box;border:1px solid #ccd4df;border-radius:8px;margin-top:16px;background:white}}</style></head><body><main><h1>Preview retained revision</h1><p>Source: <code>{}</code><br>Revision: <code>{}</code></p><details><summary>Revision details</summary><dl><dt>Description</dt><dd>{description}</dd><dt>Artifact</dt><dd>{}</dd><dt>Producer</dt><dd>{}</dd><dt>Digest</dt><dd>{}</dd>{runtime}</dl></details><p class=\"small\">JavaScript runs with browser restrictions. Complete network isolation is not guaranteed. Preview does not imply approval.</p><p class=\"small\">The local server expires after 15 minutes. Close this tab to stop HTML that is already running.</p><div class=\"controls\"><form action=\"/run\" method=\"post\" target=\"retained\"><input type=\"hidden\" name=\"token\" value=\"{token}\"><button type=\"submit\">Run HTML</button></form><form action=\"/close\" method=\"post\" target=\"_self\"><input type=\"hidden\" name=\"token\" value=\"{token}\"><button type=\"submit\">Close preview</button></form></div><iframe name=\"retained\" sandbox=\"allow-scripts\" referrerpolicy=\"origin\" title=\"Retained HTML\"></iframe></main></body></html>",
         escape(&selected.source),
         escape(&selected.revision),
         escape(&selected.artifact),
         escape(&selected.producer),
         escape(&selected.digest),
         description = escape(selected.description.as_deref().unwrap_or("No description recorded.")),
+        runtime = runtime,
     )
 }
 
@@ -168,6 +172,16 @@ fn serve(
             "style-src 'unsafe-inline'",
             &format!("style-src 'unsafe-inline' {asset_origin}"),
         );
+    let child_policy = if selected.bundle.as_ref().is_some_and(|bundle| {
+        bundle
+            .members
+            .values()
+            .any(|member| member.media_type == "application/vnd.sqlite3")
+    }) {
+        child_policy.replace("connect-src 'none'", &format!("connect-src {asset_origin}"))
+    } else {
+        child_policy
+    };
     let mut running = false;
     while Instant::now() < deadline {
         match listener.accept() {
@@ -559,6 +573,7 @@ fn respond(
                 "text/html" => "text/html; charset=utf-8",
                 "text/css" => "text/css; charset=utf-8",
                 "text/javascript" => "text/javascript; charset=utf-8",
+                "application/vnd.sqlite3" => "application/vnd.sqlite3",
                 _ => return Err(io::Error::other("Unsupported preview media type.")),
             };
             (
@@ -606,7 +621,7 @@ fn respond(
 mod tests {
     use super::*;
     use std::fs;
-    use std::io::{Read, Write};
+    use std::io::{self, Cursor, Read, Write};
     use std::net::{Shutdown, TcpStream};
     use std::sync::Mutex;
 
@@ -642,6 +657,7 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
         PreviewRevision {
             reader,
+            runtime: None,
             description: None,
             bundle: None,
             artifact: crate::id::ulid(),
@@ -692,9 +708,133 @@ mod tests {
             .unwrap();
         socket.write_all(format!("{method} {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n{headers}\r\n{body}").as_bytes()).unwrap();
         socket.shutdown(Shutdown::Write).unwrap();
-        let mut response = String::new();
-        socket.read_to_string(&mut response).unwrap();
-        response
+        read_response(&mut socket).unwrap_or_else(|error| {
+            let (_, token) = parts(url);
+            let path = if !token.is_empty() && path.contains(token) {
+                "[redacted]"
+            } else {
+                path
+            };
+            panic!("response for {method} {path}: {error}")
+        })
+    }
+
+    fn read_response(reader: &mut impl Read) -> io::Result<String> {
+        let invalid = || io::Error::new(io::ErrorKind::InvalidData, "invalid response framing");
+        let mut reader = io::BufReader::new(reader);
+        let mut response = Vec::new();
+        while !response.ends_with(b"\r\n\r\n") {
+            if response.len() == 8192 {
+                return Err(invalid());
+            }
+            let mut byte = [0];
+            reader.read_exact(&mut byte)?;
+            response.push(byte[0]);
+        }
+        let length = {
+            let mut headers = [httparse::EMPTY_HEADER; 32];
+            let mut parsed = httparse::Response::new(&mut headers);
+            match parsed.parse(&response) {
+                Ok(httparse::Status::Complete(end)) if end == response.len() => {}
+                _ => return Err(invalid()),
+            }
+            let mut length = None;
+            for header in parsed.headers {
+                if header.name.eq_ignore_ascii_case("Transfer-Encoding") {
+                    return Err(invalid());
+                }
+                if header.name.eq_ignore_ascii_case("Content-Length") {
+                    if length.is_some()
+                        || header.value.is_empty()
+                        || !header.value.iter().all(u8::is_ascii_digit)
+                    {
+                        return Err(invalid());
+                    }
+                    let value = std::str::from_utf8(header.value)
+                        .map_err(|_| invalid())?
+                        .parse::<usize>()
+                        .map_err(|_| invalid())?;
+                    if value as u64 > crate::artifacts::MAX_FILE_BYTES {
+                        return Err(invalid());
+                    }
+                    length = Some(value);
+                }
+            }
+            length.ok_or_else(invalid)?
+        };
+        let header_length = response.len();
+        response.resize(header_length + length, 0);
+        reader.read_exact(&mut response[header_length..])?;
+        String::from_utf8(response).map_err(|_| invalid())
+    }
+
+    struct ResetAfter<'a>(Cursor<&'a [u8]>);
+
+    impl Read for ResetAfter<'_> {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            if buffer.is_empty() {
+                return Ok(0);
+            }
+            match self.0.read(buffer)? {
+                0 => Err(io::Error::from(io::ErrorKind::ConnectionReset)),
+                count => Ok(count),
+            }
+        }
+    }
+
+    #[test]
+    fn preview_response_framing_accepts_complete_body_before_reset() {
+        let body = "caf\u{e9}";
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        let mut reader = ResetAfter(Cursor::new(response.as_bytes()));
+        assert_eq!(read_response(&mut reader).unwrap(), response);
+    }
+
+    #[test]
+    fn preview_response_framing_rejects_truncated_body() {
+        let response = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\ndata";
+        assert!(read_response(&mut ResetAfter(Cursor::new(response))).is_err());
+        assert!(read_response(&mut Cursor::new(response)).is_err());
+    }
+
+    #[test]
+    fn preview_response_framing_rejects_invalid_headers() {
+        for headers in [
+            "".to_owned(),
+            "Content-Length: 0\r\nContent-Length: 0\r\n".to_owned(),
+            "Content-Length: +0\r\n".to_owned(),
+            "Content-Length: 18446744073709551616\r\n".to_owned(),
+            format!(
+                "Content-Length: {}\r\n",
+                crate::artifacts::MAX_FILE_BYTES + 1
+            ),
+            "Content-Length: 0\r\nTransfer-Encoding: chunked\r\n".to_owned(),
+            "Invalid header\r\nContent-Length: 0\r\n".to_owned(),
+            format!("X-Padding: {}\r\nContent-Length: 0\r\n", "a".repeat(8192)),
+        ] {
+            let response = format!("HTTP/1.1 200 OK\r\n{headers}\r\n");
+            assert_eq!(
+                read_response(&mut Cursor::new(response.as_bytes()))
+                    .unwrap_err()
+                    .kind(),
+                io::ErrorKind::InvalidData
+            );
+        }
+        assert!(read_response(&mut Cursor::new(b"HTTP/1.1 200 OK\r\n")).is_err());
+    }
+
+    #[test]
+    fn preview_response_framing_rejects_invalid_utf8() {
+        let response = b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\n\xff";
+        assert_eq!(
+            read_response(&mut Cursor::new(response))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
     }
 
     fn post(url: &str, action: &str) -> String {

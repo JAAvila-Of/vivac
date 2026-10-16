@@ -6,3 +6,6 @@
 # without saying why. It happened: one `git stash` round trip converted three
 # files.
 * text=auto eol=lf
+vendor/sqljs-asm-1.14.2/sql-asm.js -text
+vendor/sqljs-asm-1.14.2/LICENSE -text
+vendor/sqljs-asm-1.14.2/vivac-sqlite.js.deflate -text

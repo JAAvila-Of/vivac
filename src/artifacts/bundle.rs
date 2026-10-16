@@ -1,4 +1,4 @@
-use super::{files, guard, native::Preparation};
+use super::{files, guard, native::Preparation, runtime};
 use crate::failure::Failure;
 use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
 use cap_std::fs::{Dir, File, Metadata, OpenOptions};
@@ -15,6 +15,9 @@ pub(crate) const MAX_MEMBERS: usize = 64;
 pub(crate) const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
 const MAX_BYTES: u64 = 10 * 1024 * 1024;
 pub(crate) const SUPPORTED: bool = super::native::SUPPORTED;
+pub(crate) const SQLITE_PROFILE: &str = "sqlite-standalone-v1";
+const SQLITE_TRANSFORMATION: &str = "logical-export-v1";
+const SQLITE_MEDIA_TYPE: &str = "application/vnd.sqlite3";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -24,6 +27,23 @@ pub(crate) struct BundleSelection {
     pub(crate) members: Vec<String>,
     #[serde(default)]
     pub(crate) requirements: Vec<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_selection_identity"
+    )]
+    pub(crate) database: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_selection_identity"
+    )]
+    pub(crate) runtime: Option<String>,
+}
+fn deserialize_selection_identity<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    String::deserialize(deserializer).map(Some)
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -33,8 +53,39 @@ pub(crate) struct Manifest {
     pub(crate) entrypoint: String,
     pub(crate) requirements: Vec<String>,
     pub(crate) members: Vec<Member>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_database"
+    )]
+    pub(crate) database: Option<DatabaseMetadata>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_runtime"
+    )]
+    pub(super) runtime: Option<runtime::Descriptor>,
     #[serde(skip)]
     pub(crate) manifest_bytes: u64,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DatabaseMetadata {
+    pub(crate) path: String,
+    pub(crate) profile: String,
+    pub(crate) transformation: String,
+    pub(crate) source_bytes: u64,
+    pub(crate) source_sha256: String,
+}
+fn deserialize_database<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<DatabaseMetadata>, D::Error> {
+    DatabaseMetadata::deserialize(deserializer).map(Some)
+}
+fn deserialize_runtime<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<runtime::Descriptor>, D::Error> {
+    runtime::Descriptor::deserialize(deserializer).map(Some)
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -49,6 +100,7 @@ pub(crate) struct RetainedBundle {
     pub(crate) entrypoint: String,
     pub(crate) members: usize,
     pub(crate) manifest_bytes: u64,
+    pub(super) runtime: Option<runtime::Descriptor>,
 }
 pub(crate) struct PreviewResources {
     pub(crate) entrypoint: String,
@@ -66,6 +118,11 @@ fn media_type(path: &str) -> Result<&'static str, Failure> {
         Ok("text/css")
     } else if extension.eq_ignore_ascii_case("js") {
         Ok("text/javascript")
+    } else if ["sqlite", "sqlite3", "db"]
+        .iter()
+        .any(|value| extension.eq_ignore_ascii_case(value))
+    {
+        Ok(SQLITE_MEDIA_TYPE)
     } else {
         Err(Failure::usage(
             "Bundle members must be HTML, CSS, or JavaScript files.",
@@ -74,6 +131,15 @@ fn media_type(path: &str) -> Result<&'static str, Failure> {
 }
 pub(crate) fn validate_path(path: &str) -> Result<(), Failure> {
     member_path(path)
+}
+pub(crate) fn validate_database_path(path: &str) -> Result<(), Failure> {
+    member_path(path)?;
+    if media_type(path)? != SQLITE_MEDIA_TYPE {
+        return Err(Failure::usage(
+            "The database must be a selected SQLite member.",
+        ));
+    }
+    Ok(())
 }
 fn member_path(path: &str) -> Result<(), Failure> {
     if path
@@ -114,10 +180,29 @@ fn source_root(root: &Dir, path: &str) -> Result<Dir, Failure> {
     Ok(directory)
 }
 pub(crate) fn validate_selection(selection: &BundleSelection) -> Result<(), Failure> {
+    validate_selection_shape(selection)?;
+    if let Some(id) = &selection.runtime {
+        runtime::descriptor(id)?;
+    }
+    Ok(())
+}
+fn validate_selection_shape(selection: &BundleSelection) -> Result<(), Failure> {
     if selection.root != "." {
         files::source_path(&selection.root)?;
     }
-    if selection.members.is_empty() || selection.members.len() > MAX_MEMBERS {
+    if !matches!(
+        (&selection.database, &selection.runtime),
+        (None, None) | (Some(_), Some(_))
+    ) || selection.database.as_ref().is_some_and(String::is_empty)
+        || selection.runtime.as_ref().is_some_and(String::is_empty)
+    {
+        return Err(Failure::usage(
+            "SQLite applications require paired database and product runtime identities.",
+        ));
+    }
+    if selection.members.is_empty()
+        || selection.members.len() + usize::from(selection.runtime.is_some()) > MAX_MEMBERS
+    {
         return Err(Failure::usage(
             "Bundles must select between 1 and 64 members.",
         ));
@@ -131,8 +216,31 @@ pub(crate) fn validate_selection(selection: &BundleSelection) -> Result<(), Fail
         ));
     }
     let mut folded = BTreeSet::new();
+    if let Some(database) = &selection.database {
+        validate_database_path(database)?;
+        if !selection.members.contains(database) {
+            return Err(Failure::usage(
+                "The database must exactly name a selected SQLite member.",
+            ));
+        }
+    }
     for path in &selection.members {
         member_path(path)?;
+        if selection.runtime.is_some()
+            && path
+                .split('/')
+                .next()
+                .is_some_and(|part| part.eq_ignore_ascii_case(runtime::PATH))
+        {
+            return Err(Failure::usage(
+                "The product runtime member path is reserved.",
+            ));
+        }
+        if media_type(path)? == SQLITE_MEDIA_TYPE && selection.database.as_ref() != Some(path) {
+            return Err(Failure::usage(
+                "SQLite members require one explicit database selection.",
+            ));
+        }
         if !folded.insert(path.to_ascii_lowercase()) {
             return Err(Failure::usage(
                 "Bundle member paths must not collide without case distinctions.",
@@ -214,6 +322,11 @@ fn validate_directory_spelling(paths: &[String]) -> Result<(), Failure> {
     Ok(())
 }
 pub(crate) fn load_selection(root: &Path, selector: &str) -> Result<BundleSelection, Failure> {
+    let selection = read_selection(root, selector)?;
+    validate_selection(&selection)?;
+    Ok(selection)
+}
+fn read_selection(root: &Path, selector: &str) -> Result<BundleSelection, Failure> {
     files::source_path(selector)?;
     let root = files::open_root(root)?;
     let mut source = Held::open(&root, selector)?;
@@ -222,33 +335,72 @@ pub(crate) fn load_selection(root: &Path, selector: &str) -> Result<BundleSelect
     guard::copy_checked(std::io::Cursor::new(&bytes), io::sink())?;
     let mut selection: BundleSelection = serde_json::from_slice(&bytes)
         .map_err(|_| Failure::usage("Invalid bundle selector JSON."))?;
-    validate_selection(&selection)?;
+    validate_selection_shape(&selection)?;
     selection.requirements.shrink_to_fit();
     Ok(selection)
 }
 struct Held {
     path: String,
+    parent: Dir,
+    name: String,
     file: File,
     before: Metadata,
     #[cfg(windows)]
     identity: (u64, [u8; 16]),
+    #[cfg(windows)]
+    prepared_runtime: bool,
 }
 impl Held {
+    fn from_prepared_runtime(root: &Dir, file: File) -> Result<Self, Failure> {
+        let before = file.metadata()?;
+        if !before.is_file() {
+            return Err(Failure::usage("Artifacts must be regular files."));
+        }
+        files::reject_link(&before)?;
+        #[cfg(windows)]
+        let identity = files::file_identity(&file)?;
+        Ok(Self {
+            path: runtime::PATH.into(),
+            parent: root.try_clone()?,
+            name: runtime::PATH.into(),
+            file,
+            before,
+            #[cfg(windows)]
+            identity,
+            #[cfg(windows)]
+            prepared_runtime: true,
+        })
+    }
     fn open(root: &Dir, path: &str) -> Result<Self, Failure> {
-        let file = files::regular(root, path)?;
+        let (parent, name) = member_parent(root, path)?;
+        let file = files::regular(&parent, &name)?;
         let before = file.metadata()?;
         #[cfg(windows)]
         let identity = files::file_identity(&file)?;
         Ok(Self {
             path: path.into(),
+            parent,
+            name,
             file,
             before,
             #[cfg(windows)]
             identity,
+            #[cfg(windows)]
+            prepared_runtime: false,
         })
     }
     fn recheck(&self, root: &Dir) -> Result<(), Failure> {
         files::unchanged(&self.before, &self.file.metadata()?)?;
+        #[cfg(windows)]
+        let current = if self.prepared_runtime {
+            // The prepared runtime's original handle supplies every byte check.
+            // Reopening its name needs attributes and identity only; this handle
+            // does not pin the name.
+            open_prepared_runtime_attributes(root)?
+        } else {
+            files::regular(root, &self.path)?
+        };
+        #[cfg(not(windows))]
         let current = files::regular(root, &self.path)?;
         files::unchanged(&self.before, &current.metadata()?)?;
         #[cfg(windows)]
@@ -263,11 +415,126 @@ impl Held {
         Ok(())
     }
 }
+#[cfg(windows)]
+fn open_prepared_runtime_attributes(root: &Dir) -> Result<File, Failure> {
+    use cap_std::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::{FILE_READ_ATTRIBUTES, SYNCHRONIZE};
+
+    let (parent, name) = member_parent(root, runtime::PATH)?;
+    files::reject_link(&parent.symlink_metadata(&name)?)?;
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .follow(FollowSymlinks::No)
+        .access_mode(FILE_READ_ATTRIBUTES | SYNCHRONIZE);
+    let file = parent.open_with(name, &options)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        return Err(Failure::usage("Artifacts must be regular files."));
+    }
+    files::reject_link(&metadata)?;
+    Ok(file)
+}
 fn recheck_all(root: &Dir, held: &[Held]) -> Result<(), Failure> {
     for source in held {
         source.recheck(root)?;
     }
     Ok(())
+}
+
+fn member_parent(root: &Dir, path: &str) -> Result<(Dir, String), Failure> {
+    files::source_path(path)?;
+    let mut parent = root.try_clone()?;
+    let mut components = path.split('/').peekable();
+    while let Some(component) = components.next() {
+        if components.peek().is_none() {
+            return Ok((parent, component.into()));
+        }
+        files::reject_link(&parent.symlink_metadata(component)?)?;
+        parent = parent.open_dir_nofollow(component)?;
+    }
+    Err(Failure::usage("Invalid SQLite member path."))
+}
+
+fn check_auxiliary(parent: &Dir, name: &str) -> Result<(), Failure> {
+    for suffix in ["-wal", "-shm", "-journal"] {
+        match parent.symlink_metadata(format!("{name}{suffix}")) {
+            Ok(_) => return Err(Failure::usage("SQLite auxiliary files are not supported.")),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
+}
+
+fn valid_digest(digest: &str) -> bool {
+    digest.len() == 64
+        && digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+}
+
+struct PositionalReader<'a> {
+    file: &'a File,
+    offset: u64,
+}
+impl<'a> PositionalReader<'a> {
+    fn new(file: &'a File) -> Self {
+        Self { file, offset: 0 }
+    }
+}
+impl Read for PositionalReader<'_> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        #[cfg(unix)]
+        let count = cap_std::fs::FileExt::read_at(self.file, buffer, self.offset)?;
+        #[cfg(windows)]
+        let count = cap_std::fs::FileExt::seek_read(self.file, buffer, self.offset)?;
+        #[cfg(not(any(unix, windows)))]
+        let count = {
+            use std::io::{Seek, SeekFrom};
+            let mut file = self.file;
+            file.seek(SeekFrom::Start(self.offset))?;
+            file.read(buffer)?
+        };
+        self.offset = self
+            .offset
+            .checked_add(count as u64)
+            .ok_or_else(|| io::Error::other("Bundle size overflow."))?;
+        Ok(count)
+    }
+}
+fn copy_binary_limit(
+    source: &File,
+    mut writer: impl Write,
+    limit: u64,
+) -> Result<guard::Receipt, Failure> {
+    let mut reader = PositionalReader::new(source);
+    let mut buffer = [0; 64 * 1024];
+    let mut digest = Sha256::new();
+    let mut size = 0u64;
+    loop {
+        let read = reader.read(&mut buffer);
+        let count = match read {
+            Ok(count) => count,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error.into()),
+        };
+        if count == 0 {
+            break;
+        }
+        size = size
+            .checked_add(count as u64)
+            .ok_or_else(|| Failure::usage("Bundle size overflow."))?;
+        if size > limit {
+            return Err(Failure::usage("The SQLite member exceeds its byte budget."));
+        }
+        digest.update(&buffer[..count]);
+        writer.write_all(&buffer[..count])?;
+    }
+    Ok(guard::Receipt {
+        digest: format!("{:x}", digest.finalize()),
+        size,
+    })
 }
 
 fn recheck_selected_root(
@@ -381,6 +648,10 @@ struct BorrowedManifest<'a> {
     entrypoint: &'a str,
     requirements: &'a [String],
     members: &'a [Member],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    database: Option<&'a DatabaseMetadata>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    runtime: Option<&'a runtime::Descriptor>,
 }
 fn write_manifest(root: &Dir, bytes: &[u8]) -> Result<(), Failure> {
     let mut output = new_member(root, MANIFEST)?;
@@ -403,7 +674,12 @@ pub(crate) fn capture(
     let mut paths = selection.members.clone();
     paths.sort();
     let mut sources = Vec::with_capacity(paths.len());
-    let mut expected_bytes = 0u64;
+    let runtime = selection
+        .runtime
+        .as_deref()
+        .map(runtime::descriptor)
+        .transpose()?;
+    let mut expected_bytes = runtime.as_ref().map_or(0, |runtime| runtime.bytes);
     for path in paths {
         let source = Held::open(&source_dir, &path)?;
         expected_bytes = expected_bytes
@@ -424,16 +700,43 @@ pub(crate) fn capture(
     files::check_git(root, &object, &preparation.name)?;
     let mut total = 0u64;
     let mut manifest = Manifest {
-        schema_version: 1,
-        delivery_type: "bundle".into(),
+        schema_version: if selection.database.is_some() { 3 } else { 1 },
+        delivery_type: if selection.database.is_some() {
+            "sqlite_application"
+        } else {
+            "bundle"
+        }
+        .into(),
         entrypoint: selection.entrypoint.clone(),
         requirements: vec![],
+        database: None,
+        runtime,
         members: Vec::with_capacity(sources.len()),
         manifest_bytes: 0,
     };
     for source in &mut sources {
         let mut output = new_member(&preparation.dir, &source.path)?;
-        let receipt = guard::copy_checked_limit(&mut source.file, &mut output, MAX_BYTES - total)?;
+        let receipt = if selection.database.as_ref() == Some(&source.path) {
+            let snapshot = super::sqlite::normalize(&source.file, &output, || {
+                check_auxiliary(&source.parent, &source.name)
+            })?;
+            if snapshot.bytes > MAX_BYTES - total {
+                return Err(Failure::usage("The complete bundle exceeds 10 MiB."));
+            }
+            manifest.database = Some(DatabaseMetadata {
+                path: source.path.clone(),
+                profile: SQLITE_PROFILE.into(),
+                transformation: SQLITE_TRANSFORMATION.into(),
+                source_bytes: snapshot.source_bytes,
+                source_sha256: snapshot.source_sha256,
+            });
+            guard::Receipt {
+                digest: snapshot.sha256,
+                size: snapshot.bytes,
+            }
+        } else {
+            guard::copy_checked_limit(&mut source.file, &mut output, MAX_BYTES - total)?
+        };
         total += receipt.size;
         output.sync_all()?;
         manifest.members.push(Member {
@@ -443,6 +746,32 @@ pub(crate) fn capture(
             media_type: media_type(&source.path)?.into(),
         });
     }
+    let mut prepared_runtime = None;
+    if let Some(runtime) = &manifest.runtime {
+        if runtime.bytes > MAX_BYTES - total {
+            return Err(Failure::usage("The complete bundle exceeds 10 MiB."));
+        }
+        let mut output = new_member(&preparation.dir, &runtime.path)?;
+        let receipt = runtime::materialize(&runtime.id, &mut output)?;
+        files::matching(
+            &receipt.digest,
+            receipt.size,
+            &runtime.sha256,
+            runtime.bytes,
+        )?;
+        output.sync_all()?;
+        prepared_runtime = Some(output);
+        total += receipt.size;
+        manifest.members.push(Member {
+            path: runtime.path.clone(),
+            bytes: receipt.size,
+            sha256: receipt.digest,
+            media_type: "text/javascript".into(),
+        });
+        manifest
+            .members
+            .sort_by(|left, right| left.path.cmp(&right.path));
+    }
     recheck_all(&source_dir, &sources)?;
     let bytes = manifest_bytes(&BorrowedManifest {
         schema_version: manifest.schema_version,
@@ -450,6 +779,8 @@ pub(crate) fn capture(
         entrypoint: &manifest.entrypoint,
         requirements: &selection.requirements,
         members: &manifest.members,
+        database: manifest.database.as_ref(),
+        runtime: manifest.runtime.as_ref(),
     })?;
     total = total
         .checked_add(bytes.len() as u64)
@@ -463,7 +794,12 @@ pub(crate) fn capture(
     let digest = format!("{:x}", Sha256::digest(&bytes));
     // Verify the retained preparation itself before publication, rather than
     // trusting a second serialization or reopening the selected source bytes.
-    verify_directory(&preparation.dir, Some((&digest, total)), None)?;
+    verify_directory_inner(
+        &preparation.dir,
+        Some((&digest, total)),
+        None,
+        prepared_runtime,
+    )?;
     recheck_all(&source_dir, &sources)?;
     recheck_selected_root(&root_dir, &source_dir, &selection.root, &sources)?;
     sync_tree(&preparation.dir)?;
@@ -480,12 +816,45 @@ pub(crate) fn capture(
         entrypoint: manifest.entrypoint,
         members: manifest.members.len(),
         manifest_bytes: bytes.len() as u64,
+        runtime: manifest.runtime,
     })
 }
 
 fn validate_manifest(manifest: &Manifest) -> Result<(), Failure> {
-    if manifest.schema_version != 1 || manifest.delivery_type != "bundle" {
+    if manifest.schema_version == 2 && manifest.delivery_type == "sqlite_application" {
+        return Err(Failure::usage(
+            "Experimental SQLite application manifest schema 2 is not supported.",
+        ));
+    }
+    if !matches!(
+        (
+            manifest.schema_version,
+            manifest.delivery_type.as_str(),
+            manifest.database.as_ref(),
+            manifest.runtime.as_ref()
+        ),
+        (1, "bundle", None, None) | (3, "sqlite_application", Some(_), Some(_))
+    ) {
         return Err(Failure::usage("Unsupported bundle manifest schema."));
+    }
+    if let Some(runtime) = &manifest.runtime {
+        runtime::validate(runtime)?;
+        let mut generated = manifest
+            .members
+            .iter()
+            .filter(|member| member.path == runtime.path);
+        let member = generated
+            .next()
+            .ok_or_else(|| Failure::usage("The product runtime member is missing."))?;
+        if generated.next().is_some()
+            || member.bytes != runtime.bytes
+            || member.sha256 != runtime.sha256
+            || member.media_type != "text/javascript"
+        {
+            return Err(Failure::usage(
+                "Product runtime member metadata does not match the engine catalog.",
+            ));
+        }
     }
     let selection = BundleSelection {
         root: ".".into(),
@@ -493,11 +862,32 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), Failure> {
         members: manifest
             .members
             .iter()
+            .filter(|member| {
+                manifest
+                    .runtime
+                    .as_ref()
+                    .is_none_or(|runtime| runtime.path != member.path)
+            })
             .map(|member| member.path.clone())
             .collect(),
         requirements: vec![],
+        database: manifest
+            .database
+            .as_ref()
+            .map(|database| database.path.clone()),
+        runtime: manifest.runtime.as_ref().map(|runtime| runtime.id.clone()),
     };
-    validate_selection(&selection)?;
+    validate_selection_shape(&selection)?;
+    if let Some(database) = &manifest.database {
+        if database.profile != SQLITE_PROFILE
+            || database.transformation != SQLITE_TRANSFORMATION
+            || database.source_bytes > MAX_BYTES
+            || database.source_bytes < 512
+            || !valid_digest(&database.source_sha256)
+        {
+            return Err(Failure::usage("Invalid SQLite application metadata."));
+        }
+    }
     for requirement in &manifest.requirements {
         if let Some(finding) = crate::redact::check_field("bundle requirement", requirement) {
             return Err(Failure::Redaction(Box::new(finding)));
@@ -621,7 +1011,20 @@ fn verify_directory(
     expected: Option<(&str, u64)>,
     destination: Option<&Dir>,
 ) -> Result<Manifest, Failure> {
+    verify_directory_inner(root, expected, destination, None)
+}
+fn verify_directory_inner(
+    root: &Dir,
+    expected: Option<(&str, u64)>,
+    destination: Option<&Dir>,
+    mut prepared_runtime: Option<File>,
+) -> Result<Manifest, Failure> {
     let (manifest, bytes, manifest_source) = load_manifest(root, expected)?;
+    if prepared_runtime.is_some() && manifest.runtime.is_none() {
+        return Err(Failure::usage(
+            "A prepared product runtime requires matching catalog metadata.",
+        ));
+    }
     let (expected_files, expected_dirs) = expected_paths(&manifest);
     let mut seen = BTreeSet::new();
     exact_set(root, "", &expected_files, &expected_dirs, &mut seen)?;
@@ -632,16 +1035,71 @@ fn verify_directory(
     }
     let mut sources = Vec::with_capacity(manifest.members.len());
     for member in &manifest.members {
-        sources.push(Held::open(root, &member.path)?);
+        let source = if manifest
+            .runtime
+            .as_ref()
+            .is_some_and(|runtime| runtime.path == member.path)
+        {
+            if let Some(file) = prepared_runtime.take() {
+                Held::from_prepared_runtime(root, file)?
+            } else {
+                Held::open(root, &member.path)?
+            }
+        } else {
+            Held::open(root, &member.path)?
+        };
+        sources.push(source);
+    }
+    if prepared_runtime.is_some() {
+        return Err(Failure::usage(
+            "The prepared product runtime was not verified.",
+        ));
     }
     for (source, member) in sources.iter_mut().zip(&manifest.members) {
+        let product_runtime = manifest
+            .runtime
+            .as_ref()
+            .filter(|runtime| runtime.path == member.path);
+        let database = manifest
+            .database
+            .as_ref()
+            .is_some_and(|database| database.path == member.path);
+        if database {
+            let inspected = super::sqlite::inspect(&source.file, || {
+                check_auxiliary(&source.parent, &source.name)
+            })?;
+            files::matching(
+                &inspected.digest,
+                inspected.size,
+                &member.sha256,
+                member.bytes,
+            )?;
+        }
+        if let Some(runtime) = product_runtime {
+            let inspected = runtime::inspect(runtime, PositionalReader::new(&source.file))?;
+            files::matching(
+                &inspected.digest,
+                inspected.size,
+                &member.sha256,
+                member.bytes,
+            )?;
+        }
+        let binary = database || product_runtime.is_some();
         let receipt = if let Some(destination) = destination {
             let mut output = new_member(destination, &member.path)?;
-            let receipt = guard::copy_checked_limit(&mut source.file, &mut output, member.bytes)?;
+            let receipt = if binary {
+                copy_binary_limit(&source.file, &mut output, member.bytes)?
+            } else {
+                guard::copy_checked_limit(&mut source.file, &mut output, member.bytes)?
+            };
             output.sync_all()?;
             receipt
         } else {
-            guard::copy_checked_limit(&mut source.file, io::sink(), member.bytes)?
+            if binary {
+                copy_binary_limit(&source.file, io::sink(), member.bytes)?
+            } else {
+                guard::copy_checked_limit(&mut source.file, io::sink(), member.bytes)?
+            }
         };
         files::matching(&receipt.digest, receipt.size, &member.sha256, member.bytes)?;
     }
@@ -808,18 +1266,52 @@ pub(crate) fn preview(
         },
     ))
 }
-pub(crate) fn source_check(root: &Path, source_root_path: &str, manifest: &Manifest) -> Value {
+pub(crate) fn source_check(
+    root: &Path,
+    source_root_path: &str,
+    selector: Option<&str>,
+    manifest: &Manifest,
+) -> Value {
     let result = (|| {
+        let runtime_matches = if let Some(runtime) = &manifest.runtime {
+            let selector =
+                selector.ok_or_else(|| Failure::usage("Missing bundle selection reference."))?;
+            // Compare the selected identity without consulting capture availability
+            // or opening a project file at the generated member's path.
+            read_selection(root, selector)?.runtime.as_deref() == Some(runtime.id.as_str())
+        } else {
+            true
+        };
         let root = files::open_root(root)?;
         let source = source_root(&root, source_root_path)?;
         let mut sources = Vec::new();
-        for member in &manifest.members {
+        let members: Vec<_> = manifest
+            .members
+            .iter()
+            .filter(|member| {
+                manifest
+                    .runtime
+                    .as_ref()
+                    .is_none_or(|runtime| runtime.path != member.path)
+            })
+            .collect();
+        for member in &members {
             sources.push(Held::open(&source, &member.path)?);
         }
-        let mut matches = true;
-        for (held, member) in sources.iter_mut().zip(&manifest.members) {
-            let receipt = guard::copy_checked_limit(&mut held.file, io::sink(), MAX_BYTES)?;
-            matches &= receipt.digest == member.sha256 && receipt.size == member.bytes;
+        let mut matches = runtime_matches;
+        for (held, member) in sources.iter_mut().zip(members) {
+            if let Some(database) = manifest
+                .database
+                .as_ref()
+                .filter(|database| database.path == member.path)
+            {
+                let receipt = copy_binary_limit(&held.file, io::sink(), MAX_BYTES)?;
+                matches &= receipt.digest == database.source_sha256
+                    && receipt.size == database.source_bytes;
+            } else {
+                let receipt = guard::copy_checked_limit(&mut held.file, io::sink(), MAX_BYTES)?;
+                matches &= receipt.digest == member.sha256 && receipt.size == member.bytes;
+            }
         }
         recheck_all(&source, &sources)?;
         recheck_selected_root(&root, &source, source_root_path, &sources)?;
@@ -841,6 +1333,158 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
 
+    fn prepared_runtime_fixture() -> (Scratch, Dir, File, files::Retained) {
+        let (root, selection, _, _, _) = sqlite_benchmark_fixture(None);
+        let retained = capture(&root.0, &selection, &crate::id::ulid())
+            .unwrap()
+            .retained;
+        let (_, _, bundle) = open_object(&root.0, &retained.object).unwrap();
+        bundle.remove_file(runtime::PATH).unwrap();
+        let mut output = new_member(&bundle, runtime::PATH).unwrap();
+        let receipt = runtime::materialize(runtime::ID, &mut output).unwrap();
+        files::matching(
+            &receipt.digest,
+            receipt.size,
+            runtime::SHA256,
+            runtime::BYTES,
+        )
+        .unwrap();
+        output.sync_all().unwrap();
+        (root, bundle, output, retained)
+    }
+
+    #[test]
+    fn prepared_runtime_verification_reads_the_complete_file_from_zero() {
+        use std::io::{Seek, SeekFrom};
+        let (_root, bundle, mut output, retained) = prepared_runtime_fixture();
+        assert_eq!(output.seek(SeekFrom::End(0)).unwrap(), runtime::BYTES);
+        let manifest = verify_directory_inner(
+            &bundle,
+            Some((&retained.digest, retained.size)),
+            None,
+            Some(output),
+        )
+        .unwrap();
+        assert_eq!(
+            manifest.runtime.unwrap(),
+            runtime::known_descriptor(runtime::ID).unwrap()
+        );
+        assert_eq!(manifest.members.len(), 4);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn prepared_runtime_attributes_preserve_identity_without_allowing_byte_reads() {
+        let (_root, bundle, output, _retained) = prepared_runtime_fixture();
+        let mut attributes = open_prepared_runtime_attributes(&bundle).unwrap();
+        assert!(attributes.metadata().unwrap().is_file());
+        files::unchanged(&output.metadata().unwrap(), &attributes.metadata().unwrap()).unwrap();
+        assert_eq!(
+            files::file_identity(&attributes).unwrap(),
+            files::file_identity(&output).unwrap()
+        );
+        files::same_source(&output, &attributes).unwrap();
+        let error = attributes.read(&mut [0u8; 1]).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        let inspected = runtime::inspect(
+            &runtime::known_descriptor(runtime::ID).unwrap(),
+            PositionalReader::new(&output),
+        )
+        .unwrap();
+        assert_eq!(inspected.size, runtime::BYTES);
+        assert_eq!(inspected.digest, runtime::SHA256);
+    }
+
+    #[test]
+    fn prepared_runtime_verification_refuses_bytes_changed_through_the_same_file() {
+        use std::io::{Seek, SeekFrom};
+        let (_root, bundle, mut output, retained) = prepared_runtime_fixture();
+        output.seek(SeekFrom::Start(0)).unwrap();
+        output.write_all(b"\0").unwrap();
+        output.sync_all().unwrap();
+        let error = verify_directory_inner(
+            &bundle,
+            Some((&retained.digest, retained.size)),
+            None,
+            Some(output),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(error, Failure::Usage(message) if message.trim() == "Retained product runtime bytes do not match the engine catalog.")
+        );
+    }
+
+    #[test]
+    fn prepared_runtime_verification_refuses_a_replaced_name_with_identical_bytes() {
+        let (root, bundle, output, retained) = prepared_runtime_fixture();
+        fs::rename(
+            root.0
+                .join(".vivac-artifacts")
+                .join(&retained.object)
+                .join(runtime::PATH),
+            root.0.join("moved-runtime.js"),
+        )
+        .unwrap();
+        let mut replacement = new_member(&bundle, runtime::PATH).unwrap();
+        let receipt = runtime::materialize(runtime::ID, &mut replacement).unwrap();
+        files::matching(
+            &receipt.digest,
+            receipt.size,
+            runtime::SHA256,
+            runtime::BYTES,
+        )
+        .unwrap();
+        replacement.sync_all().unwrap();
+        drop(replacement);
+        let manifest = load_manifest(&bundle, Some((&retained.digest, retained.size)))
+            .unwrap()
+            .0;
+        let (expected_files, expected_dirs) = expected_paths(&manifest);
+        let mut seen = BTreeSet::new();
+        exact_set(&bundle, "", &expected_files, &expected_dirs, &mut seen).unwrap();
+        assert_eq!(seen, expected_files);
+        let inspected = runtime::inspect(
+            manifest.runtime.as_ref().unwrap(),
+            PositionalReader::new(&output),
+        )
+        .unwrap();
+        assert_eq!(inspected.digest, runtime::SHA256);
+        assert_eq!(inspected.size, runtime::BYTES);
+        let error = verify_directory_inner(
+            &bundle,
+            Some((&retained.digest, retained.size)),
+            None,
+            Some(output),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&error, Failure::Usage(message) if message.trim() == "The artifact source changed while its bytes were being read." || message.trim() == "The artifact source was replaced while its bytes were being read." || message.trim() == "The bundle source identity changed while preparing the revision."),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn prepared_runtime_verification_requires_a_matching_runtime_descriptor() {
+        let (root, selection) = fixture();
+        let retained = capture(&root.0, &selection, &crate::id::ulid())
+            .unwrap()
+            .retained;
+        let (project, _, bundle) = open_object(&root.0, &retained.object).unwrap();
+        let mut output = new_member(&project, "prepared-runtime.js").unwrap();
+        runtime::materialize(runtime::ID, &mut output).unwrap();
+        output.sync_all().unwrap();
+        let error = verify_directory_inner(
+            &bundle,
+            Some((&retained.digest, retained.size)),
+            None,
+            Some(output),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(error, Failure::Usage(message) if message.trim() == "A prepared product runtime requires matching catalog metadata.")
+        );
+    }
+
     #[test]
     fn visible_restore_parent_must_match_the_retained_parent_identity() {
         let root = Scratch::new();
@@ -851,6 +1495,41 @@ mod tests {
         let (previous, _) = controlled_destination(&project, "previous/restored").unwrap();
         assert!(recheck_visible_destination(&project, "visible/restored", &visible).is_ok());
         assert!(recheck_visible_destination(&project, "visible/restored", &previous).is_err());
+    }
+
+    #[test]
+    fn binary_copy_starts_at_zero_even_when_a_cloned_handle_moved_the_cursor() {
+        use std::io::{Seek, SeekFrom};
+        let root = Scratch::new();
+        let bytes = b"Synthetic binary\0delivery bytes";
+        fs::write(root.0.join("data.sqlite"), bytes).unwrap();
+        let directory = files::open_root(&root.0).unwrap();
+        let source = files::regular(&directory, "data.sqlite").unwrap();
+        let mut clone = source.try_clone().unwrap();
+        clone.seek(SeekFrom::End(0)).unwrap();
+        let mut output = Vec::new();
+        let receipt = copy_binary_limit(&source, &mut output, bytes.len() as u64).unwrap();
+        assert_eq!(output, bytes);
+        assert_eq!(receipt.size, bytes.len() as u64);
+        assert_eq!(receipt.digest, format!("{:x}", Sha256::digest(bytes)));
+        assert!(copy_binary_limit(&source, io::sink(), bytes.len() as u64 - 1).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn auxiliary_checks_follow_the_original_held_source_parent_after_a_rename() {
+        let root = Scratch::new();
+        fs::create_dir(root.0.join("app")).unwrap();
+        fs::write(root.0.join("app/data.sqlite"), b"Synthetic held source").unwrap();
+        let project = files::open_root(&root.0).unwrap();
+        let source = Held::open(&project, "app/data.sqlite").unwrap();
+        fs::rename(root.0.join("app"), root.0.join("original")).unwrap();
+        fs::create_dir(root.0.join("app")).unwrap();
+        fs::write(root.0.join("original/data.sqlite-wal"), b"").unwrap();
+        assert!(check_auxiliary(&source.parent, &source.name).is_err());
+        let (visible, name) = member_parent(&project, "app/data.sqlite").unwrap();
+        assert!(check_auxiliary(&visible, &name).is_ok());
+        assert!(source.recheck(&project).is_err());
     }
     #[cfg(unix)]
     #[test]
@@ -893,6 +1572,8 @@ mod tests {
                 "assets/b.css".into(),
             ],
             requirements: vec![],
+            database: None,
+            runtime: None,
         };
         assert!(validate_selection(&selection).is_err());
         selection.members[2] = "Assets/b.css".into();
@@ -907,6 +1588,8 @@ mod tests {
             delivery_type: "bundle".into(),
             entrypoint: "Assets/index.HTML".into(),
             requirements: vec![],
+            database: None,
+            runtime: None,
             manifest_bytes: 0,
             members: vec![
                 Member {
@@ -941,6 +1624,8 @@ mod tests {
             entrypoint: members[0].clone(),
             members,
             requirements: vec![String::new(); 10_000],
+            database: None,
+            runtime: None,
         };
         let (result, peak) = crate::test_alloc::measure(|| validate_selection(&selection));
         result.unwrap();
@@ -1043,6 +1728,8 @@ mod tests {
             entrypoint: "index.html".into(),
             members: vec!["index.html".into(), "assets/style.css".into()],
             requirements: vec![],
+            database: None,
+            runtime: None,
         };
         (root, selection)
     }
@@ -1187,6 +1874,8 @@ mod tests {
                 entrypoint: "index.html".into(),
                 members: vec!["index.html".into()],
                 requirements: vec![],
+                database: None,
+                runtime: None,
             };
             for index in 1..count {
                 selection.members.push(format!("style-{index}.css"));
@@ -1210,6 +1899,8 @@ mod tests {
                     delivery_type: "bundle".into(),
                     entrypoint: selection.entrypoint.clone(),
                     requirements: vec![],
+                    database: None,
+                    runtime: None,
                     members,
                     manifest_bytes: 0,
                 };
@@ -1257,6 +1948,222 @@ mod tests {
             );
         }
     }
+    fn sqlite_benchmark_fixture(
+        target: Option<usize>,
+    ) -> (Scratch, BundleSelection, u64, u64, u64) {
+        use libsqlite3_sys as ffi;
+        use std::ffi::CString;
+        let root = Scratch::new();
+        let selection = BundleSelection {
+            root: ".".into(),
+            entrypoint: "index.html".into(),
+            members: vec!["data.sqlite".into(), "index.html".into(), "main.js".into()],
+            requirements: vec![],
+            database: Some("data.sqlite".into()),
+            runtime: Some(runtime::ID.into()),
+        };
+        fs::write(
+            root.0.join("index.html"),
+            b"<!doctype html><script src=main.js></script>",
+        )
+        .unwrap();
+        fs::write(
+            root.0.join("main.js"),
+            b"document.title = 'Synthetic SQLite application';",
+        )
+        .unwrap();
+        {
+            let _engine = super::super::sqlite::test_engine_guard().unwrap();
+            let path = CString::new(root.0.join("data.sqlite").to_str().unwrap()).unwrap();
+            let value = "Synthetic SQLite application fixture data. ".repeat(6);
+            let rows = target.map_or(1, |target| {
+                (target - runtime::BYTES as usize) * 9 / 10 / 280
+            });
+            assert!(rows <= 100_000 && value.len() <= 65536);
+            unsafe {
+                let mut database = std::ptr::null_mut();
+                assert_eq!(
+                    ffi::sqlite3_open(path.as_ptr(), &mut database),
+                    ffi::SQLITE_OK
+                );
+                assert_eq!(ffi::sqlite3_exec(database, c"PRAGMA cache_size=-64; PRAGMA temp_store=MEMORY; PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF; CREATE TABLE items(id INTEGER PRIMARY KEY, value TEXT NOT NULL); BEGIN".as_ptr(), None, std::ptr::null_mut(), std::ptr::null_mut()), ffi::SQLITE_OK);
+                let mut statement = std::ptr::null_mut();
+                assert_eq!(
+                    ffi::sqlite3_prepare_v2(
+                        database,
+                        c"INSERT INTO items VALUES(?1,?2)".as_ptr(),
+                        -1,
+                        &mut statement,
+                        std::ptr::null_mut()
+                    ),
+                    ffi::SQLITE_OK
+                );
+                for index in 0..rows {
+                    assert_eq!(
+                        ffi::sqlite3_bind_int64(statement, 1, index as i64),
+                        ffi::SQLITE_OK
+                    );
+                    assert_eq!(
+                        ffi::sqlite3_bind_text(
+                            statement,
+                            2,
+                            value.as_ptr().cast(),
+                            value.len() as i32,
+                            None
+                        ),
+                        ffi::SQLITE_OK
+                    );
+                    assert_eq!(ffi::sqlite3_step(statement), ffi::SQLITE_DONE);
+                    assert_eq!(ffi::sqlite3_reset(statement), ffi::SQLITE_OK);
+                }
+                assert_eq!(ffi::sqlite3_finalize(statement), ffi::SQLITE_OK);
+                assert_eq!(
+                    ffi::sqlite3_exec(
+                        database,
+                        c"COMMIT".as_ptr(),
+                        None,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut()
+                    ),
+                    ffi::SQLITE_OK
+                );
+                assert_eq!(ffi::sqlite3_close(database), ffi::SQLITE_OK);
+            }
+        }
+        let project = files::open_root(&root.0).unwrap();
+        let first = capture(&root.0, &selection, &crate::id::ulid())
+            .unwrap()
+            .retained;
+        fs::copy(
+            root.0
+                .join(".vivac-artifacts")
+                .join(&first.object)
+                .join("data.sqlite"),
+            root.0.join("data.sqlite"),
+        )
+        .unwrap();
+        files::store(&project, false)
+            .unwrap()
+            .remove_dir_all(&first.object)
+            .unwrap();
+        let warmup = capture(&root.0, &selection, &crate::id::ulid())
+            .unwrap()
+            .retained;
+        let mut manifest =
+            read_manifest(&root.0, &warmup.object, &warmup.digest, warmup.size).unwrap();
+        let target = target.unwrap_or(warmup.size as usize);
+        let other = manifest
+            .members
+            .iter()
+            .filter(|member| member.path != "index.html")
+            .map(|member| member.bytes)
+            .sum::<u64>() as usize;
+        let mut html_bytes = 0;
+        for _ in 0..4 {
+            html_bytes = target
+                .checked_sub(other + manifest_bytes(&manifest).unwrap().len())
+                .unwrap();
+            manifest
+                .members
+                .iter_mut()
+                .find(|member| member.path == "index.html")
+                .unwrap()
+                .bytes = html_bytes as u64;
+        }
+        let mut html = b"<!doctype html><script src=main.js></script>".to_vec();
+        html.extend(representative_bytes(html_bytes - html.len()));
+        fs::write(root.0.join("index.html"), html).unwrap();
+        files::store(&project, false)
+            .unwrap()
+            .remove_dir_all(&warmup.object)
+            .unwrap();
+        let ready = capture(&root.0, &selection, &crate::id::ulid())
+            .unwrap()
+            .retained;
+        assert_eq!(ready.size, target as u64);
+        let database_bytes = read_manifest(&root.0, &ready.object, &ready.digest, ready.size)
+            .unwrap()
+            .members
+            .iter()
+            .find(|member| member.path == "data.sqlite")
+            .unwrap()
+            .bytes;
+        files::store(&project, false)
+            .unwrap()
+            .remove_dir_all(&ready.object)
+            .unwrap();
+        let source_bytes = fs::metadata(root.0.join("data.sqlite")).unwrap().len();
+        (root, selection, ready.size, source_bytes, database_bytes)
+    }
+
+    #[test]
+    #[ignore = "Run explicitly in release mode with --test-threads=1 to measure SQLite application retention."]
+    fn retained_sqlite_application_release_benchmark() {
+        assert!(
+            std::hint::black_box(!cfg!(debug_assertions)),
+            "Run this benchmark in release mode."
+        );
+        let mut timing_failures = Vec::new();
+        for (label, target, budget) in [
+            ("minimum_complete", None, 500.0),
+            (
+                "runtime_plus_one_mib",
+                Some(runtime::BYTES as usize + 1024 * 1024),
+                500.0,
+            ),
+            ("ten_mib_complete", Some(10 * 1024 * 1024), 2000.0),
+        ] {
+            let (root, selection, target, source_bytes, database_bytes) =
+                sqlite_benchmark_fixture(target);
+            let mut samples = Vec::with_capacity(100);
+            let mut maximum_rust = 0;
+            let mut maximum_sqlite = 0;
+            for _ in 0..100 {
+                {
+                    let _engine = super::super::sqlite::test_engine_guard().unwrap();
+                    unsafe {
+                        libsqlite3_sys::sqlite3_memory_highwater(1);
+                    }
+                }
+                let revision = crate::id::ulid();
+                let started = std::time::Instant::now();
+                let (result, rust_heap) =
+                    crate::test_alloc::measure(|| capture(&root.0, &selection, &revision));
+                samples.push(started.elapsed().as_secs_f64() * 1000.0);
+                maximum_rust = maximum_rust.max(rust_heap);
+                {
+                    let _engine = super::super::sqlite::test_engine_guard().unwrap();
+                    let sqlite_heap = unsafe { libsqlite3_sys::sqlite3_memory_highwater(0) };
+                    maximum_sqlite = maximum_sqlite.max(usize::try_from(sqlite_heap).unwrap());
+                }
+                let retained = result.unwrap().retained;
+                assert_eq!(retained.size, target);
+                let project = files::open_root(&root.0).unwrap();
+                files::store(&project, false)
+                    .unwrap()
+                    .remove_dir_all(&retained.object)
+                    .unwrap();
+            }
+            samples.sort_by(f64::total_cmp);
+            eprintln!(
+                "{}",
+                json!({"benchmark":"sqlite_application_retention","case":label,"samples":100,"profile":"release","os":std::env::consts::OS,"arch":std::env::consts::ARCH,"filesystem_root":root.0,"total_bytes":target,"database_source_bytes":source_bytes,"database_snapshot_bytes":database_bytes,"runtime_bytes":runtime::BYTES,"other_bytes":target-database_bytes-runtime::BYTES,"transformation":SQLITE_TRANSFORMATION,"members":4,"guards":"complete_product_runtime_catalog_logical_sqlite_utf8_sensitive_metadata_source_lock_identity_git_native_exclusive","p50_ms":samples[49],"p99_ms":samples[98],"max_ms":samples[99],"peak_rust_auxiliary_heap_bytes":maximum_rust,"peak_sqlite_heap_bytes":maximum_sqlite,"combined_conservative_heap_bytes":maximum_rust+maximum_sqlite,"stack_allowance_bytes":128*1024,"compiled_runtime_bytes":runtime::PACKED_LEN,"total_conservative_auxiliary_bytes":maximum_rust+maximum_sqlite+128*1024+runtime::PACKED_LEN})
+            );
+            let within_time_budget = samples[98] < budget;
+            if !within_time_budget {
+                timing_failures.push(format!(
+                    "{label} p99 {} ms exceeds {budget} ms",
+                    samples[98]
+                ));
+            }
+            assert!(
+                maximum_rust + maximum_sqlite + 128 * 1024 + runtime::PACKED_LEN <= 2 * 1024 * 1024,
+                "{label} combined auxiliary memory exceeds 2 MiB"
+            );
+        }
+        assert!(timing_failures.is_empty(), "{}", timing_failures.join("; "));
+    }
+
     #[test]
     fn selectors_are_bounded_exact_and_reject_unknown_fields() {
         let (root, selection) = fixture();
@@ -1309,6 +2216,8 @@ mod tests {
             entrypoint: "index.html".into(),
             members: vec!["index.html".into()],
             requirements: vec![],
+            database: None,
+            runtime: None,
         };
         let bytes = vec![b' '; (MAX_BYTES - MAX_MANIFEST_BYTES) as usize];
         fs::write(root.0.join("index.html"), &bytes).unwrap();
@@ -1349,6 +2258,8 @@ mod tests {
             entrypoint: "index.html".into(),
             members: vec!["index.html".into(), "INDEX.html".into()],
             requirements: vec![],
+            database: None,
+            runtime: None,
         };
         assert!(validate_selection(&selection).is_err());
     }

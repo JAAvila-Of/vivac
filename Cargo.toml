@@ -44,6 +44,11 @@ sha2 = "0.10"
 cap-std = "=4.0.3"
 cap-fs-ext = "=4.0.3"
 
+# Inspect SQLite delivery data with the same maintained parser on every target.
+libsqlite3-sys = { version = "=0.38.2", features = ["bundled"] }
+# Materialize the fixed product runtime with a bounded Rust-only decoder.
+flate2 = { version = "=1.1.10", default-features = false, features = ["miniz_oxide"] }
+
 # `f443`: titles are cut and padded by what a terminal shows. A cut that
 # splits a grapheme drops an accent or leaves half a flag, and a column
 # padded by `char` drifts right after every CJK title. Both need Unicode's

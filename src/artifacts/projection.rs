@@ -45,7 +45,7 @@ impl Projection {
                     self.invalid = true;
                     return;
                 };
-                if previous.is_bundle() != entry.is_bundle() {
+                if previous.delivery_type != entry.delivery_type {
                     self.invalid = true;
                     return;
                 }

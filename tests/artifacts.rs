@@ -506,6 +506,13 @@ fn capabilities_need_no_project_and_ignore_an_unreadable_tree() {
     assert_eq!(expected["limits"]["max_page_size"], 100);
     assert_eq!(expected["delivery_types"]["file"]["supported"], true);
     assert_eq!(expected["delivery_types"]["bundle"]["supported"], bundles);
+    let application = &expected["delivery_types"]["sqlite_application"];
+    assert_eq!(application["supported"], bundles);
+    if bundles {
+        assert!(application.get("reason").is_none());
+    } else {
+        assert!(!application["reason"].as_str().unwrap().trim().is_empty());
+    }
     assert_eq!(expected["execution"]["bundle_preview"], bundles);
     if bundles {
         assert_eq!(
@@ -539,7 +546,13 @@ fn capabilities_need_no_project_and_ignore_an_unreadable_tree() {
     assert_eq!(expected["event_recorded"], false);
     assert!(!sandbox.0.join(".vivac").exists());
     assert!(!sandbox.0.join(".vivac-artifacts").exists());
-    assert!(sandbox.ok(&["artifacts", "capabilities"]).contains("UTF-8"));
+    let text = sandbox.ok(&["artifacts", "capabilities"]);
+    assert!(text.contains("UTF-8"));
+    assert!(text.contains(if bundles {
+        "Vivac supplies a fixed JavaScript runtime"
+    } else {
+        "SQLite application custody is not supported"
+    }));
 
     sandbox.ok(&["init", "--yes"]);
     let events = sandbox.0.join(".vivac").join("events");

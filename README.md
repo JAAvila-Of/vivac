@@ -346,7 +346,7 @@ forces a few things that are not negotiable:
   refuses and says why; it never stores in silence.
 - **No personal data.** No email, no name, no home path. The `actor` on every
   event is an opaque identifier.
-- **No file contents.** Only paths, references and prose about what was
+- **No file contents in the provenance log.** Only paths, references and prose about what was
   decided — so a leak bounds to *what was being worked on*, never to *what the
   code is*.
 - **No telemetry.** The binary does not phone home. Ever.
@@ -363,7 +363,7 @@ precompiled binary — Linux and macOS on `x86_64` and `aarch64`, Windows on
 `x86_64` — listed in `SHA256SUMS` and carrying signed build provenance.
 Unpack one and put `vivac` on your `PATH`.
 
-With a Rust toolchain, 1.89 or newer:
+With a Rust toolchain, 1.89 or newer, and a C compiler for bundled SQLite:
 
 ```sh
 cargo install vivac
@@ -372,6 +372,8 @@ cargo install vivac
 `cargo install` is not the fallback: it builds from the source published to
 crates.io, so it stays the auditable path for anyone who cares about the
 supply chain of a tool that reads their work.
+SQLite is compiled into the binary; no system SQLite or Python installation is
+required at runtime. Release archives include the compiled dependency.
 
 To move to a newer release, run `vivac update`. It shows how this vivac was
 installed and what replacing it takes — the `cargo install` that built it, or
@@ -397,7 +399,10 @@ vivac setup claude-code
 Use `vivac setup codex` for Codex. Setup also installs `vivac-artifacts` for
 visual or interactive previews: self-contained HTML or a complete HTML/CSS/JS
 frontend, preferably without a backend. Each captured revision needs a brief
-description. Other file deliveries require the person's explicit selection.
+description. A contained SQLite frontend also needs the installed
+`sqlite_application` capability and a fixed JavaScript runtime supplied by vivac
+and retained with the revision. Other file deliveries require the person's
+explicit selection.
 Setup does not capture files automatically. See
 [Artifact custody](docs/ARTIFACTS.md).
 
@@ -522,7 +527,7 @@ Not there yet: team mode. The project is in `0.x` and
 | [**Versioning**](docs/VERSIONING.md) | what breaks when, and what keeps `1.0` away |
 | [**Where it sits**](docs/POSITION.md) | what each category of tool stores, and where each is better than this |
 | [**Pillars**](docs/PILLARS.md) | the four arbiters every decision here is judged against |
-| [**Artifact custody**](docs/ARTIFACTS.md) | retain text files and complete static bundles, reference exact revisions and recover their bytes |
+| [**Artifact custody**](docs/ARTIFACTS.md) | retain selected files and complete frontend bundles, including supported SQLite applications; reference and recover exact revisions |
 
 ## Licence
 
