@@ -122,13 +122,47 @@ isolation. Native Codex persisted fixture state in its isolated home. The result
 establishes the tested manual and controlled automatic transport, not default
 context-window limits, model comprehension or behavior on other versions.
 
+### Native Codex subagent controls
+
+A separate control on Codex CLI 0.163.0 with vivac 0.20.0 spawned one native
+subagent with `fork_context: false`. The stream confirmed a completed
+`spawnAgent` call and its parent/child thread identifiers. The receiver matched
+each request's `thread-id` header against those native identifiers; the shared
+`session-id` and `prompt_cache_key` did not identify the receiving thread.
+
+Both parent requests contained the complete 28,923-character vivac opening block
+once. The child's sole request contained that block zero times, although its
+task arrived and its turn completed. A marker present only in the parent's
+conversation was absent from the child. The probe therefore distinguished
+successful delegation from failed delivery of the measured opening block.
+
+An inherited-context control with `fork_context: true` received the complete
+same block once in the child, together with the parent's conversation marker.
+Both controls completed their parent and child turns, with three provider
+requests and one aggregate startup capture/receipt each. They used the same
+approved hooks, stable reference content, isolated homes and synthetic loopback
+provider. The hooks added execution receipts; the probe did not attribute those
+captures to individual child openings. No inference or model comprehension was
+tested. Four external proxy attempts per run were refused without providing
+operating-system network isolation.
+
+The inherited control establishes transport through conversation history, not a
+repair for isolated delegation or freshness after tree changes. The tested setup
+installed `SessionStart`, `UserPromptSubmit` and `Stop`, with no child-opening
+handler. Do not infer subagent reception from the principal's opening receipt.
+The [hook reference](https://learn.chatgpt.com/docs/hooks) documents
+`SubagentStart` context injection, but also states that its `continue: false`
+does not prevent the subagent from starting. A separate bootstrap therefore
+needs native delivery and failure controls before it can justify removing a
+source of instructions. These controls did not test such a bootstrap.
+
+## Experimental Claude module producer
+
 Claude Code setup installs an experimental opening module and an independent
 prompt guard instead of the original plain-text opening command. Re-run setup
 to review that upgrade. The isolated checks below found that a plain
 `SessionStart` response with `continue: false` did not prevent a provider
 request; the module and guard therefore have their own rejection contract.
-
-## Experimental Claude module producer
 
 `vivac session start --hook --context claude-module` prepares a bounded snapshot
 for the experimental module installed by `vivac setup claude-code`.
