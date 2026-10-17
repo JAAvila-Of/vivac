@@ -80,7 +80,7 @@ reader still recovers readable events so `vivac brief` and `vivac check` can
 help inspect a damaged store. Recoverable text is useful for repair, but cannot
 establish that an omitted line contained no required instruction.
 
-### Native Codex compaction control
+### Native Codex compaction controls
 
 An isolated control on Codex CLI 0.163.0 with vivac 0.20.0 exercised manual
 compaction through `thread/compact/start`. The three project hooks were reviewed
@@ -98,11 +98,28 @@ The next completed turn sent one provider request containing the complete new
 The new constraint was present, with one compact producer capture and one compact
 opening receipt. The probe exited with status 0 after all acceptance checks.
 
-This control used invented data, isolated project and harness homes, and a
+An automatic-compaction control reused the approved fixture without calling
+`thread/compact/start`. Command-line overrides set `model_context_window` to
+200,000 and `model_auto_compact_token_limit` to 100,000. The local provider
+reported 110,000 input tokens in its first response and a small usage count in
+later responses. These were synthetic usage values, not measured token costs.
+Startup completed without compaction and delivered its entire 28,860-character
+context. A new per-run sentinel was absent from that context. After adding it
+to the tree, an ordinary `turn/start` triggered one
+native compaction item with matching start/completion identifiers. Three provider
+requests covered startup, summary generation and continuation. The sole request
+after the compact hook contained the full new 28,923-character context once,
+including the new sentinel, and the previous complete context zero times.
+One compact capture and receipt were
+recorded, and the continuation turn completed. The probe exited with status 0.
+The [configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference)
+describes the threshold setting; this control does not test its default value.
+
+These controls used invented data, isolated project and harness homes, and a
 synthetic loopback provider without inference or API credentials. Four external
-proxy attempts were refused; the proxy was not operating-system network
+proxy attempts per run were refused; the proxy was not operating-system network
 isolation. Native Codex persisted fixture state in its isolated home. The result
-establishes the tested manual transport, not automatic compaction, default
+establishes the tested manual and controlled automatic transport, not default
 context-window limits, model comprehension or behavior on other versions.
 
 Claude Code setup installs an experimental opening module and an independent
@@ -1150,7 +1167,7 @@ establishes delivery for a deeply nested focus or the original project's
 instructions. No check established that a model read the saved output or
 consulted rule bodies. The clear check exercised the app-server API, not the
 interactive `/clear` command. Those historical Codex controls did not test actual
-compaction; the separate 0.163.0 manual control above did. For Claude, the revised
+compaction; the separate 0.163.0 controls above did. For Claude, the revised
 consumer passed native manual and automatic
 compaction controls using instrumented copies of its executable body, as
 described above. Those controls did not activate setup; the uninstrumented bundle
