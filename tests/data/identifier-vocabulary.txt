@@ -46,6 +46,7 @@ admits
 admitted
 adopt
 adopted
+adopting
 adoption
 adopts
 advance
@@ -813,6 +814,7 @@ edges
 edit
 edited
 editing
+edits
 effect
 effective
 effects
@@ -2763,6 +2765,7 @@ under
 underneath
 undo
 undoable
+undoes
 undone
 unexpected
 unfetch

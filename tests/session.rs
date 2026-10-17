@@ -158,6 +158,171 @@ fn claude_module_opening_is_complete_and_byte_bounded() {
 }
 
 #[test]
+fn claude_subagent_opening_is_fresh_complete_and_records_only_the_child() {
+    let c = Sandbox::new_seeded("claude-child-fresh");
+    let parent_input =
+        r#"{"hook_event_name":"SessionStart","source":"startup","session_id":"native-parent"}"#;
+    let (parent, stderr, code) = run_stdin_split(&c, CLAUDE_MODULE_START, parent_input);
+    assert_eq!(code, 0, "{parent}{stderr}");
+    let parent: serde_json::Value = serde_json::from_str(&parent).unwrap();
+    let title = "Fresh child mandate: acci\u{f3}n \u{1f9ed} stays complete";
+    c.ok(&[
+        "add",
+        title,
+        "--root",
+        "--type",
+        "constraint",
+        "--why",
+        "Deliver the current mandate to each child",
+    ]);
+    let (expected, code) = c.run_stdin(&["session", "start", "--hook"], "{}");
+    assert_eq!(code, 0);
+    let before = c.log();
+    let (stdout, stderr, code) = run_stdin_split(
+        &c,
+        CLAUDE_MODULE_START,
+        r#"{"hook_event_name":"SubagentStart","source":"compact","session_id":"native-parent","agent_id":"native-child_1"}"#,
+    );
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert!(stderr.is_empty(), "{stderr}");
+    let response: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(
+        response,
+        serde_json::json!({"protocol":"vivac.claude.opening.v1", "status":"ready", "context":expected})
+    );
+    let context = response["context"].as_str().unwrap();
+    assert!(context.contains(title));
+    assert!(context.contains("WRITE AT THESE SEAMS"));
+    assert!(context.len() <= 60_000);
+    assert_ne!(response["context"], parent["context"]);
+    let log = c.log();
+    let added = &log[before.len()..];
+    let receipts: Vec<serde_json::Value> = added
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .filter(|event| event["payload"]["type"] == "session.started")
+        .collect();
+    assert_eq!(receipts.len(), 1, "{added}");
+    assert_eq!(receipts[0]["payload"]["source"], "subagent");
+    assert_eq!(receipts[0]["payload"]["session"], "native-child_1");
+    assert!(!added.contains("native-parent"), "{added}");
+}
+
+#[test]
+fn claude_subagent_invalid_inputs_reject_without_receipts_or_custody() {
+    let c = codex_subagent_custody_fixture("claude-child-invalid");
+    let before = c.log();
+    let config = std::fs::read(c.0.join(".vivac/config")).unwrap();
+    let native = std::fs::read(c.0.join(".claude/agents/reviewer.md")).unwrap();
+    let mut inputs = vec![
+        "DO NOT REFLECT INPUT".to_string(),
+        "{".into(),
+        "[]".into(),
+        "null".into(),
+        "false".into(),
+        "42".into(),
+        r#""text""#.into(),
+        r#"{"hook_event_name":"SubagentStart","session_id":"native-parent"}"#.into(),
+    ];
+    for id in [
+        serde_json::Value::Null,
+        serde_json::json!(false),
+        serde_json::json!(7),
+        serde_json::json!([]),
+        serde_json::json!({}),
+        serde_json::json!(""),
+        serde_json::json!("a".repeat(257)),
+        serde_json::json!("person@example.test"),
+        serde_json::json!("child with spaces"),
+        serde_json::json!("child\nline"),
+        serde_json::json!("child-\u{e1}"),
+        serde_json::json!(format!("ghp_{}", "x".repeat(35))),
+    ] {
+        inputs.push(
+            serde_json::json!({"hook_event_name":"SubagentStart", "agent_id":id,
+            "session_id":"native-parent", "extra":"DO NOT REFLECT INPUT"})
+            .to_string(),
+        );
+    }
+    for event in [
+        serde_json::Value::Null,
+        serde_json::json!(false),
+        serde_json::json!(42),
+        serde_json::json!("SessionEnd"),
+        serde_json::json!("subagentStart"),
+    ] {
+        inputs.push(
+            serde_json::json!({"hook_event_name":event,"agent_id":"native-child"}).to_string(),
+        );
+    }
+    for input in inputs {
+        let (stdout, stderr, code) = run_stdin_split(&c, CLAUDE_MODULE_START, &input);
+        assert_eq!(code, 0, "{stdout}{stderr}");
+        assert!(stderr.is_empty(), "{stderr}");
+        let response: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(
+            response,
+            serde_json::json!({"protocol":"vivac.claude.opening.v1", "status":"rejected", "reason":"invalid-input"})
+        );
+        assert_eq!(
+            c.log(),
+            before,
+            "invalid input wrote a receipt or custody event"
+        );
+        assert_eq!(std::fs::read(c.0.join(".vivac/config")).unwrap(), config);
+        assert_eq!(
+            std::fs::read(c.0.join(".claude/agents/reviewer.md")).unwrap(),
+            native
+        );
+        assert!(!c.0.join(".codex/agents").exists());
+    }
+}
+
+#[test]
+fn claude_subagent_profiles_preserve_parent_defaults_and_child_id_boundaries() {
+    for (input, source, id) in [
+        (String::new(), "unknown", None),
+        ("{}".to_string(), "unknown", None),
+        (r#"{"source":"resume","session_id":"native-parent","agent_id":false}"#.into(), "resume", Some("native-parent".to_string())),
+        (r#"{"hook_event_name":"SessionStart","source":"startup","session_id":"native-parent","agent_id":null}"#.into(), "startup", Some("native-parent".to_string())),
+    ].into_iter().chain(["a".to_string(), "Agent_09-child".to_string(), "a".repeat(256)].into_iter().map(|id| {
+        (serde_json::json!({"hook_event_name":"SubagentStart", "agent_id":id}).to_string(), "subagent", Some(id))
+    })) {
+        let c = Sandbox::new_seeded("claude-profile-recipient");
+        let (stdout, stderr, code) = run_stdin_split(&c, CLAUDE_MODULE_START, &input);
+        assert_eq!(code, 0, "{stdout}{stderr}");
+        let response: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(response["protocol"], "vivac.claude.opening.v1");
+        assert_eq!(response["status"], "ready");
+        let receipt: serde_json::Value = serde_json::from_str(c.log().lines().last().unwrap()).unwrap();
+        assert_eq!(receipt["payload"]["source"], source);
+        assert_eq!(receipt["payload"]["session"], serde_json::json!(id));
+    }
+}
+
+#[test]
+fn claude_subagent_preparation_failure_keeps_the_claude_envelope() {
+    let c = codex_subagent_custody_fixture("claude-child-broken");
+    c.append_unknown_event_type();
+    let before = c.log();
+    for (id, reason) in [
+        (serde_json::json!("native-child"), "preparation-failed"),
+        (serde_json::Value::Null, "invalid-input"),
+    ] {
+        let input = serde_json::json!({"hook_event_name":"SubagentStart", "agent_id":id, "session_id":"DO NOT REFLECT PARENT"});
+        let (stdout, _, code) = run_stdin_split(&c, CLAUDE_MODULE_START, &input.to_string());
+        assert_eq!(code, 0, "{stdout}");
+        let response: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(
+            response,
+            serde_json::json!({"protocol":"vivac.claude.opening.v1", "status":"rejected", "reason":reason})
+        );
+        assert_eq!(c.log(), before);
+        assert!(!c.0.join(".codex/agents").exists());
+    }
+}
+
+#[test]
 fn claude_module_outside_a_tree_emits_absent() {
     let c = Sandbox::new_empty("claude-module-absent");
     let (stdout, stderr, code) = run_stdin_split(&c, CLAUDE_MODULE_START, "{}");
@@ -315,16 +480,21 @@ fn claude_module_unicode_overflow_rejects_before_custody_or_receipt() {
         .join("\n")
         + "\n";
     std::fs::write(c.0.join(".vivac/events"), &log).unwrap();
-    let (stdout, stderr, code) = run_stdin_split(&c, CLAUDE_MODULE_START, "{}");
-    assert_eq!(code, 0, "{stdout}{stderr}");
-    let response: serde_json::Value = serde_json::from_str(&stdout).unwrap();
-    assert_eq!(
-        response,
-        serde_json::json!({"protocol":"vivac.claude.opening.v1", "status":"rejected", "reason":"too-large"})
-    );
-    assert_eq!(c.log(), log);
-    assert!(!c.log().contains("agent.imported"));
-    assert!(!c.0.join(".codex/agents").exists());
+    for input in [
+        "{}",
+        r#"{"hook_event_name":"SubagentStart","agent_id":"native-child","session_id":"native-parent"}"#,
+    ] {
+        let (stdout, stderr, code) = run_stdin_split(&c, CLAUDE_MODULE_START, input);
+        assert_eq!(code, 0, "{stdout}{stderr}");
+        let response: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(
+            response,
+            serde_json::json!({"protocol":"vivac.claude.opening.v1", "status":"rejected", "reason":"too-large"})
+        );
+        assert_eq!(c.log(), log);
+        assert!(!c.log().contains("agent.imported"));
+        assert!(!c.0.join(".codex/agents").exists());
+    }
 }
 
 #[test]
