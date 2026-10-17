@@ -15,6 +15,335 @@ const contextB = 'SYNTHETIC_CONTEXT_B_613f';
 const foreignA = 'SYNTHETIC_FOREIGN_A_55a1';
 const foreignB = 'SYNTHETIC_FOREIGN_B_27b4';
 
+async function openChild(h, agent_id, next = nextResult({ additionalContext: [foreignA] })) {
+  return h.invoke('classic.SubagentStart', { agent_id, cwd: 'child-fixture' }, next);
+}
+
+function childEvent(agentId, text) {
+  return { agentId, origin: { kind: 'hook', event: 'SubagentStart' }, text };
+}
+
+async function attachChild(h, id, reference, text = reference) {
+  return h.invoke('prompt.attachment', childEvent(id, reference), nextResult({ text }));
+}
+
+for (const invalid of [null, 7, false, {}, [], undefined]) {
+  for (const target of ['root', 'child']) {
+    test(`${target} mixed additionalContext rejects ${String(invalid)} without publishing readiness`, async () => {
+      const h = harness();
+      const foreign = { additionalContext: [foreignA, invalid], retained: true };
+      if (target === 'root') {
+        assert.strictEqual(await h.open('A', 'startup', foreign), foreign);
+        assert.equal((await h.receipt()).vivac_opening.status, 'blocked');
+        assert.equal((await h.turn('root-turn')).kind, 'stop');
+      } else {
+        await h.open('A');
+        await openChild(h, 'sibling');
+        assert.strictEqual(await openChild(h, 'target', nextResult(foreign)), foreign);
+        assert.equal((await h.turn('target-turn', 'target')).kind, 'stop');
+        assert.equal((await h.turn('sibling-turn', 'sibling')).kind, 'synthetic-turn');
+        assert.equal((await h.receipt()).vivac_opening.status, 'ready');
+      }
+    });
+  }
+}
+
+for (const duplicate of ['event', 'result', 'both']) {
+  test(`child duplicate marker in ${duplicate} blocks and strips only its reference`, async () => {
+    const h = harness();
+    await h.open('A');
+    const a = (await openChild(h, 'a')).additionalContext.at(-1);
+    const b = (await openChild(h, 'b')).additionalContext.at(-1);
+    await h.turn('root'); await h.turn('a-turn', 'a'); await h.turn('b-turn', 'b');
+    const event = childEvent('a', duplicate === 'result' ? a : a + foreignA + a);
+    const text = foreignA + a + (duplicate === 'event' ? '' : a) + b + marker + foreignB;
+    const fields = { retained: true };
+    const next = nextResult({ text, fields });
+    const result = await h.invoke('prompt.attachment', event, next);
+    assert.equal(result.text, foreignA + b + marker + foreignB);
+    assert.strictEqual(result.fields, fields);
+    assert.equal(result.text.includes(contextA), false);
+    assert.deepEqual(next.calls, [event]);
+    assert.deepEqual(h.abortCalls, ['a-turn']);
+    assert.equal((await h.turn('blocked-a', 'a')).kind, 'stop');
+    assert.equal((await attachChild(h, 'b', b)).text, contextA);
+    assert.equal((await h.receipt()).vivac_opening.status, 'ready');
+  });
+}
+
+test('invalid child identifiers never launch a producer or publish a root reference', async () => {
+  let calls = 0;
+  const h = harness(async () => { calls++; return ready(contextA); });
+  await h.open('A');
+  for (const id of [undefined, null, '', 7, 'é', 'a.b', 'x'.repeat(257)]) {
+    const foreign = { additionalContext: [foreignA] };
+    assert.strictEqual(await openChild(h, id, nextResult(foreign)), foreign);
+  }
+  assert.equal(calls, 1);
+  const maxId = 'x'.repeat(256);
+  assert.equal((await openChild(h, maxId)).additionalContext.length, 2);
+  assert.equal(calls, 2);
+});
+
+test('child attachment selection requires the exact native identity, hook and own marker', async () => {
+  const h = harness();
+  await h.open('A');
+  const a = (await openChild(h, 'a')).additionalContext.at(-1);
+  const b = (await openChild(h, 'b')).additionalContext.at(-1);
+  for (const event of [
+    childEvent(undefined, a), childEvent('unknown', a), childEvent(null, a), childEvent('b', a),
+    { ...childEvent('a', a), origin: { kind: 'hook', event: 'SessionStart' } },
+    { ...childEvent('a', a), origin: { kind: 'file', event: 'SubagentStart' } },
+    { ...ownEvent(), agentId: 'a' },
+  ]) {
+    const result = { text: event.text, retained: true };
+    const next = nextResult(result);
+    assert.strictEqual(await h.invoke('prompt.attachment', event, next), result);
+    assert.deepEqual(next.calls, [event]);
+  }
+  assert.equal((await attachChild(h, 'a', a)).text, contextA);
+  assert.equal((await attachChild(h, 'b', b)).text, contextA);
+});
+
+test('overlapping child producers finish independently without sharing context', async () => {
+  const a = deferred(); const b = deferred();
+  const h = harness(async (_argv, options) => {
+    const id = JSON.parse(options.stdin).agent_id;
+    return id === 'a' ? a.promise : id === 'b' ? b.promise : ready(contextA);
+  });
+  await h.open('A');
+  const first = openChild(h, 'a'); const second = openChild(h, 'b');
+  b.resolve(ready(contextB));
+  const refB = (await second).additionalContext.at(-1);
+  assert.equal((await attachChild(h, 'b', refB)).text, contextB);
+  a.resolve(ready(contextA));
+  const refA = (await first).additionalContext.at(-1);
+  assert.equal((await attachChild(h, 'a', refA)).text, contextA);
+  assert.equal((await h.receipt()).vivac_opening.status, 'ready');
+});
+
+test('compact retains the in-flight root turn as the abort target for a corrupt attachment', async () => {
+  const h = harness();
+  await h.open('A');
+  await h.turn('root-turn');
+  await h.open('B', 'compact');
+  const next = nextResult({ text: foreignA, retained: true });
+  assert.deepEqual(await h.invoke('prompt.attachment', ownEvent(), next), { text: foreignA, retained: true });
+  assert.deepEqual(h.abortCalls, ['root-turn']);
+  assert.equal(next.calls.length, 1);
+  assert.equal((await h.receipt()).vivac_opening.status, 'blocked');
+});
+
+for (const boundary of ['clear', 'replacement']) {
+  test(`child attachment across ${boundary} aborts its old live turn and preserves new recipients`, async () => {
+    const h = harness();
+    await h.open('A');
+    const old = (await openChild(h, 'a')).additionalContext.at(-1);
+    await h.turn('old-turn', 'a');
+    const pending = deferred(); const entered = deferred();
+    const event = childEvent('a', old);
+    const next = nextResult(() => { entered.resolve(); return pending.promise; });
+    const attachment = h.invoke('prompt.attachment', event, next);
+    await entered.promise;
+    if (boundary === 'clear') await h.open('B', 'clear');
+    const fresh = (await openChild(h, 'a')).additionalContext.at(-1);
+    const sibling = (await openChild(h, 'b')).additionalContext.at(-1);
+    await h.turn('fresh-turn', 'a'); await h.turn('sibling-turn', 'b'); await h.turn('root-turn');
+    pending.resolve({ text: foreignA + old + fresh + sibling + marker, retained: true });
+    assert.deepEqual(await attachment, { text: foreignA + fresh + sibling + marker, retained: true });
+    assert.deepEqual(h.abortCalls, ['old-turn']);
+    assert.deepEqual(next.calls, [event]);
+    assert.equal((await attachChild(h, 'a', fresh)).text, contextA);
+    assert.equal((await attachChild(h, 'b', sibling)).text, contextA);
+    assert.equal((await h.receipt()).vivac_opening.status, 'ready');
+  });
+}
+
+test('replacing a child during attachment recovery strips only its captured marker', async () => {
+  const h = harness();
+  await h.open('A');
+  const old = (await openChild(h, 'a')).additionalContext.at(-1);
+  await h.turn('old-turn', 'a');
+  const pending = deferred(); const entered = deferred();
+  const controller = new AbortController();
+  const event = childEvent('a', old);
+  const next = nextResult(() => { entered.resolve(); return pending.promise; }, controller.signal);
+  const result = h.invoke('prompt.attachment', event, next);
+  await entered.promise;
+  const fresh = (await openChild(h, 'a')).additionalContext.at(-1);
+  await h.turn('fresh-turn', 'a');
+  controller.abort();
+  pending.resolve({ text: foreignA + old + fresh + marker, retained: true });
+  assert.deepEqual(await result, { text: foreignA + fresh + marker, retained: true });
+  assert.equal(next.calls.length, 1);
+  assert.deepEqual(h.abortCalls, ['old-turn']);
+  assert.equal((await attachChild(h, 'a', fresh)).text, contextA);
+  assert.equal((await h.turn('still-fresh', 'a')).kind, 'synthetic-turn');
+});
+
+for (const boundary of ['session.end', 'classic.SessionStart', 'classic.SubagentStart']) {
+  test(`${boundary} prevents a late child producer from republishing an old opening`, async () => {
+    const pending = deferred();
+    let calls = 0;
+    const h = harness(async () => ++calls === 2 ? pending.promise : ready(contextB));
+    await h.open('A');
+    const old = openChild(h, 'a');
+    let fresh;
+    if (boundary === 'session.end') await h.invoke(boundary, {}, nextResult({}));
+    else if (boundary === 'classic.SessionStart') await h.open('B', 'resume');
+    else fresh = (await openChild(h, 'a')).additionalContext.at(-1);
+    pending.resolve(ready(contextA));
+    assert.deepEqual((await old).additionalContext, [foreignA]);
+    if (fresh) assert.equal((await attachChild(h, 'a', fresh)).text, contextB);
+    else assert.equal((await h.turn('old-child', 'a')).kind, 'stop');
+  });
+}
+
+test('a disappearing child marker aborts only the captured child turn and preserves next once', async () => {
+  const h = harness();
+  await h.open('A');
+  const a = (await openChild(h, 'a')).additionalContext.at(-1);
+  await openChild(h, 'b');
+  await h.turn('root'); await h.turn('child-a', 'a'); await h.turn('child-b', 'b');
+  const result = { text: foreignA + marker, retained: true };
+  const next = nextResult(result);
+  assert.deepEqual(await h.invoke('prompt.attachment', childEvent('a', a), next), result);
+  assert.equal(next.calls.length, 1);
+  assert.deepEqual(h.abortCalls, ['child-a']);
+  assert.equal((await h.turn('a-blocked', 'a')).kind, 'stop');
+  assert.equal((await h.turn('b-ready', 'b')).kind, 'synthetic-turn');
+  assert.equal((await h.receipt()).vivac_opening.status, 'ready');
+});
+
+for (const failure of ['exception', 'timeout', 'signal during producer', 'signal during next']) {
+  test(`child ${failure} stays blocked without invalidating root`, async () => {
+    const controller = new AbortController();
+    const h = harness(async (_argv, options) => {
+      if (!JSON.parse(options.stdin).agent_id) return ready(contextA);
+      if (failure === 'exception' || failure === 'timeout') throw new Error(failure);
+      if (failure === 'signal during producer') controller.abort();
+      return ready(contextB);
+    });
+    await h.open('A');
+    const foreign = { additionalContext: [foreignA] };
+    const next = nextResult(() => {
+      if (failure === 'signal during next') controller.abort();
+      return foreign;
+    }, controller.signal);
+    assert.strictEqual(await openChild(h, 'a', next), foreign);
+    assert.equal(next.calls.length, 1);
+    assert.equal((await h.turn('a-blocked', 'a')).kind, 'stop');
+    assert.equal((await h.receipt()).vivac_opening.status, 'ready');
+  });
+}
+
+test('absent child opens without publication or parent context and permits only its own turn', async () => {
+  const h = harness(async (_argv, options) => JSON.parse(options.stdin).agent_id
+    ? { exitCode: 0, stdout: JSON.stringify({ protocol, status: 'absent' }) } : ready(contextA));
+  await h.open('A');
+  assert.deepEqual((await openChild(h, 'a')).additionalContext, [foreignA]);
+  assert.equal((await h.turn('absent-child', 'a')).kind, 'synthetic-turn');
+  assert.equal((await h.turn('unknown', 'b')).kind, 'stop');
+  assert.equal((await attachChild(h, 'a', marker)).text, marker);
+});
+
+test('aborted child attachment strips only its marker and preserves root submission guards', async () => {
+  const h = harness();
+  await h.open('A');
+  const a = (await openChild(h, 'a')).additionalContext.at(-1);
+  await h.turn('a-turn', 'a');
+  const controller = new AbortController();
+  const result = { text: a + marker + foreignA, retained: true };
+  const next = nextResult(() => { controller.abort(); return result; }, controller.signal);
+  assert.deepEqual(await h.invoke('prompt.attachment', childEvent('a', a), next),
+    { text: marker + foreignA, retained: true });
+  assert.deepEqual(h.abortCalls, ['a-turn']);
+  assert.equal(next.calls.length, 1);
+  const prompt = { text: 'work' };
+  assert.strictEqual(await h.invoke('prompt.submit', prompt, nextResult(value => value)), prompt);
+  assert.equal((await h.receipt()).vivac_opening.status, 'ready');
+});
+
+test('child downstream rejection recovers once and aborts only its captured turn', async () => {
+  const h = harness();
+  await h.open('A');
+  const a = (await openChild(h, 'a')).additionalContext.at(-1);
+  const b = (await openChild(h, 'b')).additionalContext.at(-1);
+  await h.turn('root'); await h.turn('a-turn', 'a'); await h.turn('b-turn', 'b');
+  const failure = new Error('synthetic child downstream rejection');
+  const next = nextResult((_event, call) => {
+    if (call === 1) throw failure;
+    assert.equal(call, 2);
+    return { text: a + b + marker, retained: true };
+  });
+  assert.deepEqual(await h.invoke('prompt.attachment', childEvent('a', a), next),
+    { text: b + marker, retained: true });
+  assert.strictEqual(h.caught[0].error, failure);
+  assert.equal(next.calls.length, 2);
+  assert.deepEqual(h.abortCalls, ['a-turn']);
+  assert.equal((await attachChild(h, 'b', b)).text, contextA);
+  assert.equal((await h.receipt()).vivac_opening.status, 'ready');
+});
+
+test('child context at exactly 60000 UTF8 bytes expands intact without inferred cwd', async () => {
+  const full = '🧭'.repeat(15000);
+  const calls = [];
+  const h = harness(async (...args) => { calls.push(args); return { ...ready(full), isStdoutTruncated: false, isStderrTruncated: false }; });
+  const event = { agent_id: 'max-child' };
+  const opened = await h.invoke('classic.SubagentStart', event, nextResult({}));
+  const reference = opened.additionalContext[0];
+  assert.equal(Object.hasOwn(calls[0][1], 'cwd'), false);
+  assert.equal((await attachChild(h, 'max-child', reference, foreignA + reference + foreignB)).text,
+    foreignA + full + foreignB);
+  assert.equal((await h.turn('ready-child', 'max-child')).kind, 'synthetic-turn');
+  assert.equal((await h.receipt()).vivac_opening.status, 'blocked');
+});
+
+test('child prepares fresh context after root A and preserves complete foreign fields', async () => {
+  const calls = [];
+  const full = 'prefix:' + '🧭'.repeat(14000) + ':suffix';
+  const h = harness(async (...args) => { calls.push(args); return ready(calls.length === 1 ? contextA : full); });
+  await h.open('A');
+  const opened = await openChild(h, 'child_A-1');
+  const reference = opened.additionalContext.at(-1);
+  assert.notEqual(reference, marker);
+  assert.equal(reference.includes('child_A-1'), false);
+  assert.deepEqual(calls[1], [['vivac', 'session', 'start', '--hook', '--context', 'claude-module'], {
+    stdin: JSON.stringify({ hook_event_name: 'SubagentStart', agent_id: 'child_A-1' }), timeoutMs: 5000, cwd: 'child-fixture',
+  }]);
+  const fields = { retained: true };
+  const next = nextResult({ text: foreignA + reference + foreignB, fields });
+  const result = await h.invoke('prompt.attachment', childEvent('child_A-1', reference), next);
+  assert.equal(result.text, foreignA + full + foreignB);
+  assert.strictEqual(result.fields, fields);
+  assert.equal(next.calls.length, 1);
+  assert.equal((await h.turn('child-turn', 'child_A-1')).kind, 'synthetic-turn');
+  assert.equal((await h.receipt()).vivac_opening.status, 'ready');
+});
+
+test('unknown and malformed child turns never use root readiness', async () => {
+  const h = harness();
+  await h.open('A');
+  for (const id of ['unknown', '', 'x'.repeat(257), 'é', null, 7])
+    assert.equal((await h.turn('blocked-' + String(id), id)).kind, 'stop');
+  assert.equal((await h.turn('root')).kind, 'synthetic-turn');
+});
+
+test('child duplicate marker blocks after one expansion and only aborts its own active turn', async () => {
+  const h = harness();
+  await h.open('A');
+  const a = (await openChild(h, 'a')).additionalContext.at(-1);
+  const b = (await openChild(h, 'b')).additionalContext.at(-1);
+  assert.notEqual(a, b);
+  assert.equal((await attachChild(h, 'a', a)).text, contextA);
+  await h.turn('root'); await h.turn('a-turn', 'a'); await h.turn('b-turn', 'b');
+  assert.equal((await attachChild(h, 'a', a, a + b + marker)).text, b + marker);
+  assert.deepEqual(h.abortCalls, ['a-turn']);
+  assert.equal((await h.turn('a-blocked', 'a')).kind, 'stop');
+  assert.equal((await attachChild(h, 'b', b)).text, contextA);
+  assert.equal((await h.receipt()).vivac_opening.status, 'ready');
+});
+
 function deferred() {
   let resolve;
   let reject;
@@ -60,10 +389,10 @@ function harness(processRun = async (_argv, options) => ready(JSON.parse(options
       return await hook.catcher($, event, next);
     }
   }
-  async function turn(turnId) {
+  async function turn(turnId, agentId) {
     const next = async function* () { yield { kind: 'synthetic-turn' }; return { continued: true }; };
     next.signal = new AbortController().signal;
-    const iterator = hooks.get('turn.step').handler($, { turnId, index: 0 }, next);
+    const iterator = hooks.get('turn.step').handler($, { turnId, index: 0, ...(agentId === undefined ? {} : { agentId }) }, next);
     turns.set(turnId, iterator);
     const first = await iterator.next();
     if (first.done) turns.delete(turnId);
@@ -496,8 +825,14 @@ async function assertBlockedWork(h, diagnostic = 'SYNTHETIC_PRIVATE_DIAGNOSTIC')
   }
 }
 
-test('promotion controls use the frozen native-compatible candidate', () => {
-  assert.equal(candidateSha256, 'B4BB19565116606AFD310765AC16FF46A336294AD38BD905915D91035068E376');
+test('the reviewed opening bundle has the expected candidate bytes', () => {
+  assert.equal(candidateSha256, '415161B5C5A3A02F02CDB147B741D06A53E7A9A57CB44A408FE503D8EFE6BA8C');
+});
+
+test('the historical opening reference preserves the exact native-compatible v1 bytes', async () => {
+  const path = new URL('../src/setup/claude-opening-versions/opening-reference-v1/hooks/register.mjs', import.meta.url);
+  assert.equal(createHash('sha256').update(await readFile(path)).digest('hex').toUpperCase(),
+    'B4BB19565116606AFD310765AC16FF46A336294AD38BD905915D91035068E376');
 });
 
 const producerDiagnostic = 'SYNTHETIC_PRIVATE_DIAGNOSTIC';
@@ -521,12 +856,25 @@ const producerCases = [
   ['scalar envelope', 7],
 ].map(([label, value]) => [label, { exitCode: 0, stdout: JSON.stringify(value) }]);
 producerCases.push(
+  ['stdout truncated', { ...ready(contextB), isStdoutTruncated: true }],
+  ['stderr truncated', { ...ready(contextB), isStderrTruncated: true }],
   ['nonzero exit', { exitCode: 1, stdout: ready(producerDiagnostic).stdout }],
   ['unparseable output', { exitCode: 0, stdout: producerDiagnostic }],
   ['UTF8 60001 bytes', ready('🧭'.repeat(15000) + 'x')],
 );
 
 for (const [label, produced] of producerCases) {
+  test(`child producer ${label} fails closed without damaging root or sibling`, async () => {
+    let failing = false;
+    const h = harness(async () => failing ? produced : ready(contextA));
+    await h.open('A'); await openChild(h, 'sibling'); failing = true;
+    const foreign = { additionalContext: [foreignB], retained: true };
+    assert.strictEqual(await openChild(h, 'target', nextResult(foreign)), foreign);
+    assert.equal((await h.turn('target-turn', 'target')).kind, 'stop');
+    assert.equal((await h.turn('sibling-turn', 'sibling')).kind, 'synthetic-turn');
+    assert.equal((await h.receipt()).vivac_opening.status, 'ready');
+  });
+
   test(`producer ${label} blocks work and keeps diagnostics out of output`, async () => {
     const h = harness(async () => produced);
     const foreign = { additionalContext: [foreignA], foreignField: { retained: true } };
@@ -721,7 +1069,7 @@ test('one preparation per opening retains invocation options and never repeats f
   assert.strictEqual(opening.foreignField, foreign.foreignField);
   assert.deepEqual(foreign.additionalContext, [foreignA]);
   assert.deepEqual(calls, [[['vivac', 'session', 'start', '--hook', '--context', 'claude-module'], {
-    stdin: JSON.stringify({ source: 'startup', session_id: 'A' }), timeoutMs: 5000, cwd: 'synthetic-fixture',
+    stdin: JSON.stringify({ hook_event_name: 'SessionStart', source: 'startup', session_id: 'A' }), timeoutMs: 5000, cwd: 'synthetic-fixture',
   }]]);
   for (let index = 0; index < 2; index++) {
     assert.equal((await h.invoke('prompt.attachment', ownEvent(), nextResult({ text: marker }))).text, contextA);
