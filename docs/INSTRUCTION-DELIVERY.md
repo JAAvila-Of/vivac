@@ -80,6 +80,31 @@ reader still recovers readable events so `vivac brief` and `vivac check` can
 help inspect a damaged store. Recoverable text is useful for repair, but cannot
 establish that an omitted line contained no required instruction.
 
+### Native Codex compaction control
+
+An isolated control on Codex CLI 0.163.0 with vivac 0.20.0 exercised manual
+compaction through `thread/compact/start`. The three project hooks were reviewed
+through the native `/hooks` interface; `hooks/list` confirmed their exact
+definitions, enabled state and trusted status before a thread started. No trust
+bypass or copied trust state was used. A transparent wrapper forwarded the real
+bounded producer's stdout and exit code unchanged and kept its emitted context
+in memory for literal comparison with the local Responses provider's requests.
+
+Startup delivered its complete 28,712-character context once. After adding a
+synthetic constraint, the native stream reported one `contextCompaction` item
+started and completed with the same identifier, and a completed compaction turn.
+The next completed turn sent one provider request containing the complete new
+28,786-character context once and the previous complete context zero times.
+The new constraint was present, with one compact producer capture and one compact
+opening receipt. The probe exited with status 0 after all acceptance checks.
+
+This control used invented data, isolated project and harness homes, and a
+synthetic loopback provider without inference or API credentials. Four external
+proxy attempts were refused; the proxy was not operating-system network
+isolation. Native Codex persisted fixture state in its isolated home. The result
+establishes the tested manual transport, not automatic compaction, default
+context-window limits, model comprehension or behavior on other versions.
+
 Claude Code setup installs an experimental opening module and an independent
 prompt guard instead of the original plain-text opening command. Re-run setup
 to review that upgrade. The isolated checks below found that a plain
@@ -1124,8 +1149,9 @@ synthetic pillar and 62 constraints, with no active focus. Neither case
 establishes delivery for a deeply nested focus or the original project's
 instructions. No check established that a model read the saved output or
 consulted rule bodies. The clear check exercised the app-server API, not the
-interactive `/clear` command. Codex reception after actual compaction remains
-unverified. For Claude, the revised consumer passed native manual and automatic
+interactive `/clear` command. Those historical Codex controls did not test actual
+compaction; the separate 0.163.0 manual control above did. For Claude, the revised
+consumer passed native manual and automatic
 compaction controls using instrumented copies of its executable body, as
 described above. Those controls did not activate setup; the uninstrumented bundle
 installed through setup was checked separately for startup and resume, without
