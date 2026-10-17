@@ -44,6 +44,44 @@ in the input payload does not redirect it. Configure each folder where a
 harness is opened, including a nested repository that shares its parent's
 tree, as described in [Setup](SETUP.md).
 
+## Shared preparation and harness adapters
+
+Bounded opening integrations share one preparation path: render a current snapshot,
+reconcile already authorized agent custody once, include its notices, and apply
+the complete-context byte ceiling. A rejected preparation emits no partial
+context and records no successful opening. An opening receipt establishes
+preparation, not reception or permission to execute work.
+
+Each harness adapter owns its input validation, recipient identity and output
+envelope. It must declare separately whether the consumer can inject context,
+what instruction role receives it, and whether a rejection actually stops work.
+Unknown capabilities remain unknown; one harness's behavior is not a fallback
+contract for another. Keep this boundary separate from snapshot preparation
+rather than duplicating renderers or introducing another context store.
+
+Adding a harness requires a native adapter, reviewed setup and removal rules,
+configuration diagnostics, and controls for its supported lifecycle routes.
+Compare the complete fresh context with the receiving request, identify the
+recipient, and exercise rejected preparation and consumer failures. Record the
+tested harness version and limits. A successful command, marker or inherited
+conversation alone does not establish equivalent instruction delivery.
+
+| Responsibility | Shared preparation | Harness adapter |
+|---|---|---|
+| Snapshot | Current tree, existing brief policy and custody notices | Validate the opening event and opaque recipient |
+| Budget | Complete-context UTF-8 ceiling, including notices | Disable a consumer preview only where its contract supports it |
+| Result | Complete context or explicit rejection | Native ready, absent and rejection envelopes |
+| Evidence | Opening receipt for the prepared snapshot | Native event, receiving request, instruction role and failure behavior |
+
+To extend the integration, add an explicit format adapter rather than treating
+an unknown profile as Codex or Claude. Reuse preparation and its rejection
+tests; keep event names and native input parsing at the adapter boundary.
+Describe setup, migration and undo ownership before adding commands, including
+mixed foreign handlers and malformed configuration. Doctor must report valid
+configuration without turning it into a claim of trusted execution, reception
+or enforced stopping. The adapter's native controls are additional evidence,
+not substitutes for the shared producer checks or another adapter's controls.
+
 ## Bounded Codex opening
 
 The Codex integration uses one synchronous invocation of
@@ -67,6 +105,30 @@ window. Doctor checks the command, synchronous execution and handler limit;
 reception remains separate evidence. Re-running `vivac setup codex` offers the
 upgrade for the recognized original opening handler, preserving foreign hooks.
 Approve the changed handler in Codex before relying on it.
+
+The Codex subagent integration uses `SubagentStart` with the same synchronous
+producer and explicit zero handler limit. It reads the native `agent_id` as the
+opening recipient, records source `subagent`, and emits a `SubagentStart`
+envelope. The parent session identifier is not substituted for a missing child
+identifier. Invalid child input is rejected before custody reconciliation or an
+opening receipt. The adapter does not copy the parent's conversation or rewrite
+the child's task as user instructions.
+
+Child identifiers must be nonempty ASCII letters, digits, underscores or hyphens,
+at most 256 bytes, and pass the session field's sensitive-value guard. For earlier
+session callers, an empty payload or an object without `hook_event_name` still
+selects `SessionStart`. Malformed nonempty JSON and explicitly unknown events
+are rejected rather than interpreted as a different opening.
+
+On the tested Codex CLI 0.163.0, this event injects extra developer context but
+does not stop the child when a handler returns `continue: false`. Vivac rejects
+an incomplete preparation and explains that limitation; it does not offer an
+execution barrier through this event. A `PreToolUse` check is not a replacement:
+explicit denial and failure of the check itself have different behavior, and
+rewritten task text has a different instruction role. Do not retire another
+source of instructions on the assumption that a rejected child opening cannot
+run. Configuration diagnostics must keep this consumer limit separate from a
+correctly installed handler and from unverified reception.
 
 If locating, loading or rendering the context fails, the bounded Codex mode
 also returns `continue: false`, with a fixed explanation rather than error
@@ -122,13 +184,93 @@ isolation. Native Codex persisted fixture state in its isolated home. The result
 establishes the tested manual and controlled automatic transport, not default
 context-window limits, model comprehension or behavior on other versions.
 
+### Native Codex subagent controls
+
+A separate control on Codex CLI 0.163.0 with vivac 0.20.0 spawned one native
+subagent with `fork_context: false`. The stream confirmed a completed
+`spawnAgent` call and its parent/child thread identifiers. The receiver matched
+each request's `thread-id` header against those native identifiers; the shared
+`session-id` and `prompt_cache_key` did not identify the receiving thread.
+
+Both parent requests contained the complete 28,923-character vivac opening block
+once. The child's sole request contained that block zero times, although its
+task arrived and its turn completed. A marker present only in the parent's
+conversation was absent from the child. The probe therefore distinguished
+successful delegation from failed delivery of the measured opening block.
+
+An inherited-context control with `fork_context: true` received the complete
+same block once in the child, together with the parent's conversation marker.
+Both controls completed their parent and child turns, with three provider
+requests and one aggregate startup capture/receipt each. They used the same
+approved hooks, stable reference content, isolated homes and synthetic loopback
+provider. The hooks added execution receipts; the probe did not attribute those
+captures to individual child openings. No inference or model comprehension was
+tested. Four external proxy attempts per run were refused without providing
+operating-system network isolation.
+
+The inherited control establishes transport through conversation history, not a
+repair for isolated delegation or freshness after tree changes. The tested setup
+installed `SessionStart`, `UserPromptSubmit` and `Stop`, with no child-opening
+handler. Do not infer subagent reception from the principal's opening receipt.
+The [hook reference](https://learn.chatgpt.com/docs/hooks) documents
+`SubagentStart` context injection, but also states that its `continue: false`
+does not prevent the subagent from starting. A separate bootstrap therefore
+needs native delivery and failure controls before it can justify removing a
+source of instructions.
+
+A private bootstrap prototype then added a fourth project hook, reviewed through
+the native interface and verified alongside the unchanged original three. Its
+synchronous `SubagentStart` handler used an explicit zero context limit, called
+the installed bounded producer with the native child identifier, and adapted
+only the output event name. After the parent's opening, the probe added a fresh
+constraint. The isolated child's request contained the complete new
+28,955-character block once and the previous block zero times. The fresh
+constraint reached the child without the parent's conversation marker. Native
+thread identifiers linked the capture, request and single child opening receipt;
+both turns completed. This establishes the prototype's tested delivery path,
+not a product integration.
+
+The paired refusal control deliberately rejected preparation before calling the
+producer. Codex reported the child hook as completed with a warning, then sent
+one child request without the vivac block and completed the child turn. No child
+opening receipt was recorded. Both controls verified the four trusted hook
+definitions and unchanged pinned files, using the same isolated synthetic
+provider boundary described above. The refusal probe exited with status 6:
+successful context injection does not establish that a rejected preparation
+prevents delegation. This prototype therefore does not supply an effective
+failure barrier.
+
+An unreleased product build at `394e6a8` then repeated both controls using the
+four direct handlers generated by `vivac setup codex`, approved through the
+native interface. No wrapper adapted the child hook output. After the parent's
+opening, the synthetic fixture gained a fresh constraint. The child's request
+contained the complete updated 4,626-byte block exactly once as developer
+context; the native hook's decoded text matched the same reference exactly.
+The fresh marker was absent from the parent's context and appeared in the
+child with the same multiplicity as the reference block. The child's user task
+arrived once, without the parent's conversation marker. Exact parent, turn,
+call and child identifiers correlated the completed delegation with one native
+child opening receipt. Both turns completed.
+
+In the paired product control, the producer reported that the expanded context
+exceeded its 60,000-byte limit. It rejected the complete preparation without
+partial context or a child opening receipt. The correlated native hook
+completion exposed the fixed rejection reason as a warning and no context
+fields. Codex nevertheless sent one child request and completed both turns.
+This verifies producer rejection
+and the consumer's continuation, not an execution barrier. Both product
+controls passed their observation criteria, including exact spawn correlation,
+the four trusted definitions and unchanged pinned binaries and configuration.
+They used the synthetic provider boundary described above and did not test
+model comprehension or the broader session lifecycle matrix.
+
+## Experimental Claude module producer
+
 Claude Code setup installs an experimental opening module and an independent
 prompt guard instead of the original plain-text opening command. Re-run setup
 to review that upgrade. The isolated checks below found that a plain
 `SessionStart` response with `continue: false` did not prevent a provider
 request; the module and guard therefore have their own rejection contract.
-
-## Experimental Claude module producer
 
 `vivac session start --hook --context claude-module` prepares a bounded snapshot
 for the experimental module installed by `vivac setup claude-code`.

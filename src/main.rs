@@ -594,7 +594,8 @@ fn run() -> i32 {
             let bounded_opening = cmd == "session"
                 && a.positional(0) == Some("start")
                 && a.has("hook")
-                && matches!(a.opt("context"), Some("codex" | "claude-module"))
+                && a.opt("context")
+                    .is_some_and(session::supports_opening_context)
                 && !matches!(e, Failure::Usage(_));
             let c = if bounded_opening {
                 session::opening_preparation_failed(a.opt("context").unwrap());
@@ -947,7 +948,9 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         && a.has("context")
         && (a.positional(0) != Some("start")
             || !a.has("hook")
-            || !matches!(a.opt("context"), Some("codex" | "claude-module")))
+            || !a
+                .opt("context")
+                .is_some_and(session::supports_opening_context))
     {
         return Err(Failure::usage(
             "--context codex or claude-module requires session start --hook.",
@@ -977,8 +980,8 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         // every unrelated directory gets switched off within two days, and
         // the two that matter go with it.
         if cmd == "session" && a.has("hook") {
-            if a.opt("context") == Some("claude-module") {
-                session::claude_module_absent();
+            if let Some(context) = a.opt("context") {
+                session::opening_absent(context);
             }
             return Ok(0);
         }

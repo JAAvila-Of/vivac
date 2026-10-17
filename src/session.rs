@@ -19,6 +19,8 @@ use crate::event::{Body, VivacKind};
 use crate::failure::{Failure, R};
 use crate::output::outln;
 
+mod opening;
+
 /// What the hook is handed on stdin.
 ///
 /// Two fields are read and the rest is left where it is. `transcript_path`
@@ -81,7 +83,7 @@ pub fn guard() {
         .and_then(serde_json::Value::as_object)
         .is_some_and(|receipt| {
             receipt.get("protocol").and_then(serde_json::Value::as_str)
-                == Some(CLAUDE_OPENING_PROTOCOL)
+                == Some(opening::CLAUDE_PROTOCOL)
                 && matches!(
                     receipt.get("status").and_then(serde_json::Value::as_str),
                     Some("ready" | "absent")
@@ -103,7 +105,7 @@ pub fn start(ctx: &mut crate::ops::Ctx, a: &Args, project: &str) -> R {
     if !a.has("hook") {
         return crate::brief::brief(&ctx.tree, &ctx.store.root, &ctx.lane_dir, a, project);
     }
-    if matches!(a.opt("context"), Some("codex" | "claude-module")) {
+    if a.opt("context").is_some_and(supports_opening_context) {
         return bounded_start(ctx, a, project);
     }
     // In hook mode the brief goes straight to stdout, in plain text: Claude
@@ -157,82 +159,46 @@ pub fn start(ctx: &mut crate::ops::Ctx, a: &Args, project: &str) -> R {
     Ok(())
 }
 
-const OPENING_CONTEXT_BYTES: usize = 60_000;
-const CLAUDE_OPENING_PROTOCOL: &str = "vivac.claude.opening.v1";
-
-pub fn claude_module_absent() {
-    outln!(
-        "{}",
-        serde_json::json!({"protocol": CLAUDE_OPENING_PROTOCOL, "status": "absent"})
-    );
+pub fn supports_opening_context(context: &str) -> bool {
+    opening::supports_context(context)
 }
 
-fn claude_module_rejected(reason: &str) {
-    outln!(
-        "{}",
-        serde_json::json!({"protocol": CLAUDE_OPENING_PROTOCOL, "status": "rejected", "reason": reason})
-    );
+pub fn opening_absent(context: &str) {
+    opening::absent(context);
 }
 
 pub fn opening_preparation_failed(context: &str) {
-    if context == "claude-module" {
-        claude_module_rejected("preparation-failed");
-    } else {
-        codex_preparation_failed();
-    }
-}
-
-fn opening_rejected(context: &str) {
-    if context == "claude-module" {
-        claude_module_rejected("too-large");
-    } else {
-        codex_rejected();
-    }
-}
-
-pub fn codex_preparation_failed() {
-    outln!(
-        "{}",
-        serde_json::json!({
-            "continue": false,
-            "systemMessage": "vivac could not prepare the complete opening context. This opening must not continue with missing instructions. Review the diagnostic and restore readable project context before continuing."
-        })
-    );
-}
-
-fn codex_rejected() {
-    outln!(
-        "{}",
-        serde_json::json!({
-            "continue": false,
-            "systemMessage": "vivac could not deliver the complete opening context within its 60000-byte transport limit. This opening must not proceed with partial instructions. Review vivac rules and vivac brief before continuing."
-        })
-    );
+    opening::preparation_failed(context);
 }
 
 fn bounded_start(ctx: &mut crate::ops::Ctx, a: &Args, project: &str) -> R {
-    let context = a.opt("context").unwrap();
+    let request = match opening::Request::read(a.opt("context").unwrap()) {
+        Ok(request) => request,
+        Err(()) => {
+            opening::invalid_input();
+            return Ok(());
+        }
+    };
     if ctx.tree.broken_lines > 0 {
         return Err(Failure::Model("Cannot prepare complete opening context: the tree contains unreadable event lines. Run vivac check to inspect the store; restore a readable log before relying on opening context.".to_string()));
     }
     let mut text =
         crate::brief::to_text(&ctx.tree, &ctx.store.root, &ctx.lane_dir, a, project, true)?;
-    if text.len() > OPENING_CONTEXT_BYTES {
-        opening_rejected(context);
+    if text.len() > opening::CONTEXT_BYTES {
+        request.profile.too_large();
         return Ok(());
     }
     let shown_focus = ctx.tree.focus().map(|n| n.id.clone());
     let shown_vivac = ctx.tree.last_vivac().map(|v| v.id.clone());
     text.push_str(&reconciliation_text(&ctx.lane_dir));
-    if text.len() > OPENING_CONTEXT_BYTES {
-        opening_rejected(context);
+    if text.len() > opening::CONTEXT_BYTES {
+        request.profile.too_large();
         return Ok(());
     }
-    let hook = HookInput::read();
+    let (source, session) = request.receipt();
     match ctx.lock_for_write() {
         Ok(mine) => {
-            crate::ops::session_started(ctx, &hook.source, hook.session, shown_focus, shown_vivac)
-                .ok();
+            crate::ops::session_started(ctx, source, session, shown_focus, shown_vivac).ok();
             if mine {
                 ctx.unlock();
             }
@@ -242,26 +208,14 @@ fn bounded_start(ctx: &mut crate::ops::Ctx, a: &Args, project: &str) -> R {
                 "  Session not recorded: another vivac process held the tree for {} seconds.\n",
                 crate::store::LOCK_DEADLINE.as_secs()
             ));
+            if text.len() > opening::CONTEXT_BYTES {
+                request.profile.too_large();
+                return Ok(());
+            }
         }
         Err(_) => {}
     }
-    if text.len() > OPENING_CONTEXT_BYTES {
-        opening_rejected(context);
-        return Ok(());
-    }
-    if context == "claude-module" {
-        outln!(
-            "{}",
-            serde_json::json!({"protocol": CLAUDE_OPENING_PROTOCOL, "status": "ready", "context": text})
-        );
-    } else {
-        outln!(
-            "{}",
-            serde_json::json!({"hookSpecificOutput": {
-                "hookEventName": "SessionStart", "additionalContext": text
-            }})
-        );
-    }
+    request.profile.ready(text);
     Ok(())
 }
 
