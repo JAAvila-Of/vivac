@@ -154,7 +154,29 @@ The [hook reference](https://learn.chatgpt.com/docs/hooks) documents
 `SubagentStart` context injection, but also states that its `continue: false`
 does not prevent the subagent from starting. A separate bootstrap therefore
 needs native delivery and failure controls before it can justify removing a
-source of instructions. These controls did not test such a bootstrap.
+source of instructions.
+
+A private bootstrap prototype then added a fourth project hook, reviewed through
+the native interface and verified alongside the unchanged original three. Its
+synchronous `SubagentStart` handler used an explicit zero context limit, called
+the installed bounded producer with the native child identifier, and adapted
+only the output event name. After the parent's opening, the probe added a fresh
+constraint. The isolated child's request contained the complete new
+28,955-character block once and the previous block zero times. The fresh
+constraint reached the child without the parent's conversation marker. Native
+thread identifiers linked the capture, request and single child opening receipt;
+both turns completed. This establishes the prototype's tested delivery path,
+not a product integration.
+
+The paired refusal control deliberately rejected preparation before calling the
+producer. Codex reported the child hook as completed with a warning, then sent
+one child request without the vivac block and completed the child turn. No child
+opening receipt was recorded. Both controls verified the four trusted hook
+definitions and unchanged pinned files, using the same isolated synthetic
+provider boundary described above. The refusal probe exited with status 6:
+successful context injection does not establish that a rejected preparation
+prevents delegation. This prototype therefore does not supply an effective
+failure barrier.
 
 ## Experimental Claude module producer
 
