@@ -124,6 +124,13 @@ const EXPECTED_HOOKS: &str = "{\n  \
         ]\n      \
       }\n    \
     ],\n    \
+    \"SubagentStart\": [\n      \
+      {\n        \
+        \"hooks\": [\n          \
+          { \"type\": \"command\", \"command\": \"vivac session start --hook --context codex\", \"additionalContextLimit\": 0, \"async\": false }\n        \
+        ]\n      \
+      }\n    \
+    ],\n    \
     \"UserPromptSubmit\": [\n      \
       {\n        \
         \"hooks\": [\n          \
@@ -433,9 +440,9 @@ fn a_foreign_hooks_json_keeps_its_other_event_and_gains_ours() {
 }
 
 /// `d779`: a project whose `hooks.json` already has the two older hooks
-/// gains only `UserPromptSubmit`, and neither of the first two is touched.
+/// gains `UserPromptSubmit` and `SubagentStart`; the first two stay intact.
 #[test]
-fn a_hooks_json_with_the_two_older_hooks_gains_only_the_third() {
+fn a_hooks_json_with_the_two_older_hooks_gains_the_remaining_two() {
     let c = Sandbox::new_empty("setup-codex-prompt-hook-add-third");
     c.ok(&["init", "--yes"]);
     std::fs::create_dir_all(c.0.join(".codex")).unwrap();
@@ -461,7 +468,10 @@ fn a_hooks_json_with_the_two_older_hooks_gains_only_the_third() {
     let (out, code) = c.run(&["setup", "codex", "--yes"]);
     assert_eq!(code, 0, "{out}");
     assert!(
-        plan_words(&out).contains("add") && plan_words(&out).contains("the UserPromptSubmit hook"),
+        plan_words(&out).contains("add")
+            && plan_words(&out).contains("two hooks")
+            && out.contains("UserPromptSubmit")
+            && out.contains("SubagentStart"),
         "{out}"
     );
 
@@ -768,7 +778,7 @@ fn undo_after_a_clean_setup_leaves_the_folder_as_it_was_except_the_tree() {
     assert!(
         plan_words(&out).contains("remove")
             && plan_words(&out)
-                .contains("the three hooks setup wrote; nothing else is left, so it goes"),
+                .contains("the four hooks setup wrote; nothing else is left, so it goes"),
         "{out}"
     );
     assert!(
@@ -1048,4 +1058,262 @@ fn a_claude_md_at_the_repository_root_is_named_from_the_folder_below() {
         out.contains("Codex finds no AGENTS.md here, only ../CLAUDE.md."),
         "{out}"
     );
+}
+
+fn codex_subagent_definition() -> serde_json::Value {
+    serde_json::json!({"hooks": [{"type": "command", "command": SESSION_START,
+        "additionalContextLimit": 0, "async": false}]})
+}
+
+fn codex_subagent_snapshot(
+    root: &std::path::Path,
+) -> std::collections::BTreeMap<std::path::PathBuf, Vec<u8>> {
+    fn walk(
+        at: &std::path::Path,
+        files: &mut std::collections::BTreeMap<std::path::PathBuf, Vec<u8>>,
+    ) {
+        for entry in std::fs::read_dir(at).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                walk(&path, files);
+            } else {
+                files.insert(path.clone(), std::fs::read(path).unwrap());
+            }
+        }
+    }
+    let mut files = std::collections::BTreeMap::new();
+    walk(root, &mut files);
+    files
+}
+
+#[test]
+fn codex_subagent_clean_setup_installs_exactly_four_hooks_and_is_idempotent() {
+    let c = Sandbox::new_seeded("codex-subagent-clean");
+    let plan = c.ok(&["setup", "codex", "--dry-run"]);
+    assert!(plan.contains("SubagentStart"), "{plan}");
+    assert!(!hooks_path(&c).exists());
+    c.ok(&["setup", "codex", "--yes"]);
+    let hooks: serde_json::Value = serde_json::from_str(&read(&hooks_path(&c))).unwrap();
+    let events = hooks["hooks"].as_object().unwrap();
+    assert_eq!(events.len(), 4, "{hooks}");
+    assert_eq!(
+        events["SubagentStart"],
+        serde_json::json!([codex_subagent_definition()])
+    );
+    assert_eq!(
+        events["SessionStart"][0]["hooks"][0]["command"],
+        SESSION_START
+    );
+    assert_eq!(events["Stop"][0]["hooks"][0]["command"], SESSION_END);
+    assert_eq!(
+        events["UserPromptSubmit"][0]["hooks"][0]["command"],
+        SESSION_PROMPT
+    );
+    let before = codex_subagent_snapshot(&c.0);
+    c.ok(&["setup", "codex", "--yes"]);
+    assert_eq!(codex_subagent_snapshot(&c.0), before);
+}
+
+#[test]
+fn codex_subagent_existing_three_hooks_gain_only_the_fourth() {
+    let c = Sandbox::new_seeded("codex-subagent-upgrade");
+    c.ok(&["setup", "codex", "--yes"]);
+    let mut existing: serde_json::Value = serde_json::from_str(&read(&hooks_path(&c))).unwrap();
+    existing["hooks"]
+        .as_object_mut()
+        .unwrap()
+        .remove("SubagentStart");
+    existing["hooks"]["SessionStart"][0]["hooks"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("async");
+    std::fs::write(hooks_path(&c), existing.to_string()).unwrap();
+    let before = codex_subagent_snapshot(&c.0);
+    let plan = c.ok(&["setup", "codex", "--dry-run"]);
+    assert!(plan.contains("SubagentStart"), "{plan}");
+    assert_eq!(codex_subagent_snapshot(&c.0), before);
+    c.ok(&["setup", "codex", "--yes"]);
+    let mut after: serde_json::Value = serde_json::from_str(&read(&hooks_path(&c))).unwrap();
+    assert_eq!(
+        after["hooks"]
+            .as_object_mut()
+            .unwrap()
+            .remove("SubagentStart"),
+        Some(serde_json::json!([codex_subagent_definition()]))
+    );
+    assert_eq!(after, existing);
+    for path in [config_path(&c), skill_path(&c)] {
+        assert_eq!(std::fs::read(&path).unwrap(), before[&path]);
+    }
+}
+
+#[test]
+fn codex_subagent_mixed_handlers_and_attributes_survive_setup_and_undo() {
+    let c = Sandbox::new_seeded("codex-subagent-mixed");
+    std::fs::create_dir_all(c.0.join(".codex")).unwrap();
+    let mut entry = codex_subagent_definition();
+    entry["foreign"] = 17.into();
+    entry["hooks"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({"type": "command", "command": "other-tool"}));
+    let existing =
+        serde_json::json!({"description": "foreign root", "hooks": {"SubagentStart": [entry]}});
+    std::fs::write(hooks_path(&c), existing.to_string()).unwrap();
+    c.ok(&["setup", "codex", "--yes"]);
+    let after: serde_json::Value = serde_json::from_str(&read(&hooks_path(&c))).unwrap();
+    assert_eq!(
+        after["hooks"]["SubagentStart"],
+        existing["hooks"]["SubagentStart"]
+    );
+    c.ok(&["setup", "codex", "--undo", "--yes"]);
+    let undone: serde_json::Value = serde_json::from_str(&read(&hooks_path(&c))).unwrap();
+    assert_eq!(
+        undone,
+        serde_json::json!({"description": "foreign root", "hooks": {"SubagentStart": [{
+        "foreign": 17, "hooks": [{"type": "command", "command": "other-tool"}]}]}})
+    );
+}
+
+#[test]
+fn codex_subagent_foreign_event_is_preserved_when_adding_and_removing_ours() {
+    let c = Sandbox::new_seeded("codex-subagent-foreign");
+    std::fs::create_dir_all(c.0.join(".codex")).unwrap();
+    let foreign = serde_json::json!({"matcher": "reviewer", "foreign": true,
+        "hooks": [{"type": "command", "command": "other-tool", "timeout": 17}]});
+    let existing = serde_json::json!({"root": 8, "hooks": {"SubagentStart": [foreign.clone()]}});
+    std::fs::write(hooks_path(&c), existing.to_string()).unwrap();
+    c.ok(&["setup", "codex", "--yes"]);
+    let after: serde_json::Value = serde_json::from_str(&read(&hooks_path(&c))).unwrap();
+    let entries = after["hooks"]["SubagentStart"].as_array().unwrap();
+    assert_eq!(entries.len(), 2);
+    assert!(entries.contains(&foreign));
+    assert!(entries.contains(&codex_subagent_definition()));
+    c.ok(&["setup", "codex", "--undo", "--yes"]);
+    let undone: serde_json::Value = serde_json::from_str(&read(&hooks_path(&c))).unwrap();
+    assert_eq!(undone, existing);
+}
+
+#[test]
+fn codex_subagent_custom_duplicate_and_malformed_definitions_require_review_without_writes() {
+    let exact = codex_subagent_definition();
+    let mut cases = vec![
+        serde_json::json!(null),
+        serde_json::json!({}),
+        serde_json::json!("invalid"),
+        serde_json::json!([exact.clone(), exact.clone()]),
+        serde_json::json!([{"hooks": {}}]),
+        serde_json::json!([null]),
+    ];
+    for (key, value) in [
+        ("additionalContextLimit", serde_json::json!(10)),
+        ("additionalContextLimit", serde_json::json!("0")),
+        ("additionalContextLimit", serde_json::json!(0.0)),
+        ("async", serde_json::json!(true)),
+        ("async", serde_json::json!(null)),
+        ("async", serde_json::json!("false")),
+        ("async", serde_json::json!(0)),
+        ("type", serde_json::json!("prompt")),
+        ("command", serde_json::json!("vivac session start --hook")),
+        (
+            "command",
+            serde_json::json!("vivac session start --hook --context codex --budget 1"),
+        ),
+    ] {
+        let mut entry = exact.clone();
+        entry["hooks"][0][key] = value;
+        cases.push(serde_json::json!([entry]));
+    }
+    let mut missing_limit = exact.clone();
+    missing_limit["hooks"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("additionalContextLimit");
+    cases.push(serde_json::json!([missing_limit]));
+    let mut matched = exact.clone();
+    matched["matcher"] = "reviewer".into();
+    cases.push(serde_json::json!([matched]));
+    for event in cases {
+        let malformed = event.as_array().is_none_or(|entries| {
+            entries.iter().any(|entry| {
+                entry.as_object().is_none()
+                    || entry
+                        .get("hooks")
+                        .and_then(serde_json::Value::as_array)
+                        .is_none()
+            })
+        });
+        let c = Sandbox::new_seeded("codex-subagent-conflict");
+        std::fs::create_dir_all(c.0.join(".codex")).unwrap();
+        std::fs::write(
+            hooks_path(&c),
+            serde_json::json!({"hooks": {"SubagentStart": event}}).to_string(),
+        )
+        .unwrap();
+        let before = codex_subagent_snapshot(&c.0);
+        for args in [
+            vec!["setup", "codex", "--dry-run"],
+            vec!["setup", "codex", "--yes"],
+        ] {
+            let (out, code) = c.run(&args);
+            assert_ne!(code, 0, "{out}");
+            assert!(out.contains("SubagentStart"), "{out}");
+            assert_eq!(codex_subagent_snapshot(&c.0), before);
+        }
+        let (out, code) = c.run(&["setup", "codex", "--undo", "--yes"]);
+        if malformed {
+            assert_ne!(code, 0, "{out}");
+        } else {
+            assert_eq!(code, 0, "{out}");
+        }
+        assert_eq!(codex_subagent_snapshot(&c.0), before);
+    }
+}
+
+#[test]
+fn codex_subagent_implicit_sync_and_foreign_empty_groups_are_preserved() {
+    let c = Sandbox::new_seeded("codex-subagent-implicit-sync");
+    std::fs::create_dir_all(c.0.join(".codex")).unwrap();
+    let mut entry = codex_subagent_definition();
+    entry["hooks"][0].as_object_mut().unwrap().remove("async");
+    let foreign = serde_json::json!({"matcher": "reviewer", "hooks": []});
+    let existing =
+        serde_json::json!({"hooks": {"SubagentStart": [entry.clone(), foreign.clone()]}});
+    std::fs::write(hooks_path(&c), existing.to_string()).unwrap();
+    c.ok(&["setup", "codex", "--yes"]);
+    let after: serde_json::Value = serde_json::from_str(&read(&hooks_path(&c))).unwrap();
+    assert_eq!(
+        after["hooks"]["SubagentStart"],
+        existing["hooks"]["SubagentStart"]
+    );
+    c.ok(&["setup", "codex", "--undo", "--yes"]);
+    let undone: serde_json::Value = serde_json::from_str(&read(&hooks_path(&c))).unwrap();
+    assert_eq!(
+        undone,
+        serde_json::json!({"hooks": {"SubagentStart": [foreign]}})
+    );
+}
+
+#[test]
+fn codex_subagent_malformed_parent_refuses_apply_and_undo_without_writes() {
+    for existing in [
+        serde_json::json!([]),
+        serde_json::json!({"hooks": null}),
+        serde_json::json!({"hooks": []}),
+    ] {
+        let c = Sandbox::new_seeded("codex-subagent-malformed-parent");
+        std::fs::create_dir_all(c.0.join(".codex")).unwrap();
+        std::fs::write(hooks_path(&c), existing.to_string()).unwrap();
+        let before = codex_subagent_snapshot(&c.0);
+        for args in [
+            vec!["setup", "codex", "--dry-run"],
+            vec!["setup", "codex", "--yes"],
+            vec!["setup", "codex", "--undo", "--dry-run"],
+            vec!["setup", "codex", "--undo", "--yes"],
+        ] {
+            let (out, code) = c.run(&args);
+            assert_ne!(code, 0, "{out}");
+            assert_eq!(codex_subagent_snapshot(&c.0), before);
+        }
+    }
 }

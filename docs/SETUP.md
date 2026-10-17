@@ -129,8 +129,8 @@ vivac setup codex
 
 The same pieces, in the three places Codex reads inside a project:
 `.codex/config.toml` gets the server, `.codex/hooks.json` gets `SessionStart`,
-`UserPromptSubmit` and `Stop` running the session commands, and `.agents/skills/`
-gets the same `vivac-migrate`, `vivac-agents` and `vivac-artifacts` workflows.
+`SubagentStart`, `UserPromptSubmit` and `Stop` running the session commands, and
+`.agents/skills/` gets the same `vivac-migrate`, `vivac-agents` and `vivac-artifacts` workflows.
 Nothing goes in your own configuration directory.
 
 It refuses where there is no tree, and that refusal is the same argument
@@ -165,8 +165,7 @@ is trusted, which lives in your own configuration, not the project's. The
 first time Codex opens the folder it asks: say yes. If it does not ask, setup
 prints the lines to add to `~/.codex/config.toml` yourself. And every hook is
 approved on its own, against its hash, with `/hooks` inside Codex: the first
-time, and whenever a hook changes, as the third one does for projects set up
-before it existed.
+time, and whenever setup upgrades a handler or adds the subagent handler.
 
 **When the project's instructions live in `CLAUDE.md`**, with no `AGENTS.md`
 anywhere from the folder up to the repository root, setup says that too.
@@ -179,7 +178,8 @@ vivac-migrate skill is what brings it in. The reverse needs no warning: since
 version 2.1.277, Claude Code reads `AGENTS.md` on its own when there is no
 `CLAUDE.md`.
 
-Codex's opening handler runs `vivac session start --hook --context codex`.
+Codex's session and subagent opening handlers run
+`vivac session start --hook --context codex`.
 It returns one JSON response containing the complete opening text and custody
 notices. Setup makes the handler synchronous and sets `additionalContextLimit`
 to `0`, avoiding Codex's default saved-file preview. The producer enforces a
@@ -195,6 +195,14 @@ hooks and reports custom commands or execution settings for review. The brief's
 exceed it. Configuration and successful emission do not prove reception.
 Check received context before replacing instruction files. See
 [Checking instruction delivery](INSTRUCTION-DELIVERY.md).
+
+`SubagentStart` prepares fresh context for the native child identifier and
+delivers it as extra developer context, without copying the parent's
+conversation. Re-run setup on an existing three-hook installation to add this
+handler, then approve it in Codex. On the tested Codex CLI 0.163.0, rejecting
+preparation does not prevent the child from starting. Doctor distinguishes a
+correct handler definition from unverified reception and reports this consumer
+limit; setup does not install a tool guard or promise to stop such a child.
 
 setup takes three flags, and they read the same on both sides: `--dry-run`,
 `--yes` and `--undo`. The four that decide where the tree lives — `--join`,

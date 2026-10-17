@@ -574,3 +574,120 @@ fn managed_configuration_and_runtime_evidence_are_independent_checks() {
     assert_eq!(check(&r, "agent custody")["status"], "error");
     assert!(!r.to_string().contains("private conflicting prompt"));
 }
+
+fn codex_subagent_doctor_definition() -> Value {
+    serde_json::json!({"hooks": [{"type": "command", "command": "vivac session start --hook --context codex",
+        "additionalContextLimit": 0, "async": false}]})
+}
+
+#[test]
+fn codex_subagent_doctor_accepts_configuration_without_claiming_reception_or_blocking() {
+    let c = Sandbox::new_seeded("doctor-codex-subagent-configured");
+    c.ok(&["setup", "codex", "--yes"]);
+    let r = report(&c, Some("codex"), 0);
+    let transport = check(&r, "codex SubagentStart");
+    assert_eq!(transport["status"], "ok");
+    assert!(transport["detail"].as_str().unwrap().contains(
+        "Codex 0.163.0 does not stop subagents on rejected context; provider reception is unverified."), "{transport}");
+    assert_eq!(check(&r, "codex trust")["status"], "warning");
+    let before = snapshot(&c.0);
+    let inventory: Value = serde_json::from_str(&c.ok(&["agents", "inventory"])).unwrap();
+    assert_eq!(snapshot(&c.0), before);
+    assert_eq!(
+        inventory["harnesses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["harness"] == "codex")
+            .unwrap()["configured"],
+        true
+    );
+}
+
+#[test]
+fn codex_subagent_doctor_requires_integer_zero_sync_all_types_and_exact_command() {
+    let exact = codex_subagent_doctor_definition();
+    let mut cases = Vec::new();
+    for (key, value) in [
+        ("additionalContextLimit", serde_json::json!(1)),
+        ("additionalContextLimit", serde_json::json!("0")),
+        ("additionalContextLimit", serde_json::json!(0.0)),
+        ("additionalContextLimit", serde_json::json!(null)),
+        ("async", serde_json::json!(true)),
+        ("async", serde_json::json!(null)),
+        ("async", serde_json::json!("false")),
+        ("async", serde_json::json!(0)),
+        ("type", serde_json::json!("prompt")),
+        ("command", serde_json::json!("vivac session start --hook")),
+    ] {
+        let mut entry = exact.clone();
+        entry["hooks"][0][key] = value;
+        cases.push(serde_json::json!([entry]));
+    }
+    let mut missing = exact.clone();
+    missing["hooks"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("additionalContextLimit");
+    cases.push(serde_json::json!([missing]));
+    for matcher in [
+        serde_json::json!("reviewer"),
+        serde_json::json!("*"),
+        serde_json::json!(null),
+    ] {
+        let mut entry = exact.clone();
+        entry["matcher"] = matcher;
+        cases.push(serde_json::json!([entry]));
+    }
+    cases.extend([
+        serde_json::json!([]),
+        serde_json::json!(null),
+        serde_json::json!({}),
+    ]);
+    for entries in cases {
+        let c = Sandbox::new_seeded("doctor-codex-subagent-custom");
+        c.ok(&["setup", "codex", "--yes"]);
+        let path = c.0.join(".codex/hooks.json");
+        let mut hooks: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        hooks["hooks"]["SubagentStart"] = entries;
+        std::fs::write(&path, hooks.to_string()).unwrap();
+        let r = report(&c, Some("codex"), 0);
+        let transport = check(&r, "codex SubagentStart");
+        assert_eq!(transport["status"], "warning", "{transport}");
+        assert!(transport["fix"].as_str().unwrap().contains("setup codex"));
+        let inventory: Value = serde_json::from_str(&c.ok(&["agents", "inventory"])).unwrap();
+        assert_eq!(
+            inventory["harnesses"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["harness"] == "codex")
+                .unwrap()["configured"],
+            false
+        );
+    }
+}
+
+#[test]
+fn codex_subagent_doctor_reports_duplicates_without_disclosing_custom_commands() {
+    for duplicate in [
+        codex_subagent_doctor_definition(),
+        serde_json::json!({"hooks": [{
+        "type": "command", "command": "vivac session start --hook --context codex --private-sentinel"}]}),
+    ] {
+        let c = Sandbox::new_seeded("doctor-codex-subagent-duplicate");
+        c.ok(&["setup", "codex", "--yes"]);
+        let path = c.0.join(".codex/hooks.json");
+        let mut hooks: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        hooks["hooks"]["SubagentStart"] =
+            serde_json::json!([codex_subagent_doctor_definition(), duplicate]);
+        std::fs::write(&path, hooks.to_string()).unwrap();
+        let r = report(&c, Some("codex"), 0);
+        let transport = check(&r, "codex SubagentStart");
+        assert_eq!(transport["status"], "warning");
+        assert!(transport["detail"].as_str().unwrap().contains("duplicate"));
+        assert!(!r.to_string().contains("private-sentinel"));
+    }
+}

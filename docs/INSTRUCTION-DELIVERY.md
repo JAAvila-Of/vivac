@@ -44,6 +44,44 @@ in the input payload does not redirect it. Configure each folder where a
 harness is opened, including a nested repository that shares its parent's
 tree, as described in [Setup](SETUP.md).
 
+## Shared preparation and harness adapters
+
+Bounded opening integrations share one preparation path: render a current snapshot,
+reconcile already authorized agent custody once, include its notices, and apply
+the complete-context byte ceiling. A rejected preparation emits no partial
+context and records no successful opening. An opening receipt establishes
+preparation, not reception or permission to execute work.
+
+Each harness adapter owns its input validation, recipient identity and output
+envelope. It must declare separately whether the consumer can inject context,
+what instruction role receives it, and whether a rejection actually stops work.
+Unknown capabilities remain unknown; one harness's behavior is not a fallback
+contract for another. Keep this boundary separate from snapshot preparation
+rather than duplicating renderers or introducing another context store.
+
+Adding a harness requires a native adapter, reviewed setup and removal rules,
+configuration diagnostics, and controls for its supported lifecycle routes.
+Compare the complete fresh context with the receiving request, identify the
+recipient, and exercise rejected preparation and consumer failures. Record the
+tested harness version and limits. A successful command, marker or inherited
+conversation alone does not establish equivalent instruction delivery.
+
+| Responsibility | Shared preparation | Harness adapter |
+|---|---|---|
+| Snapshot | Current tree, existing brief policy and custody notices | Validate the opening event and opaque recipient |
+| Budget | Complete-context UTF-8 ceiling, including notices | Disable a consumer preview only where its contract supports it |
+| Result | Complete context or explicit rejection | Native ready, absent and rejection envelopes |
+| Evidence | Opening receipt for the prepared snapshot | Native event, receiving request, instruction role and failure behavior |
+
+To extend the integration, add an explicit format adapter rather than treating
+an unknown profile as Codex or Claude. Reuse preparation and its rejection
+tests; keep event names and native input parsing at the adapter boundary.
+Describe setup, migration and undo ownership before adding commands, including
+mixed foreign handlers and malformed configuration. Doctor must report valid
+configuration without turning it into a claim of trusted execution, reception
+or enforced stopping. The adapter's native controls are additional evidence,
+not substitutes for the shared producer checks or another adapter's controls.
+
 ## Bounded Codex opening
 
 The Codex integration uses one synchronous invocation of
@@ -67,6 +105,30 @@ window. Doctor checks the command, synchronous execution and handler limit;
 reception remains separate evidence. Re-running `vivac setup codex` offers the
 upgrade for the recognized original opening handler, preserving foreign hooks.
 Approve the changed handler in Codex before relying on it.
+
+The Codex subagent integration uses `SubagentStart` with the same synchronous
+producer and explicit zero handler limit. It reads the native `agent_id` as the
+opening recipient, records source `subagent`, and emits a `SubagentStart`
+envelope. The parent session identifier is not substituted for a missing child
+identifier. Invalid child input is rejected before custody reconciliation or an
+opening receipt. The adapter does not copy the parent's conversation or rewrite
+the child's task as user instructions.
+
+Child identifiers must be nonempty ASCII letters, digits, underscores or hyphens,
+at most 256 bytes, and pass the session field's sensitive-value guard. For earlier
+session callers, an empty payload or an object without `hook_event_name` still
+selects `SessionStart`. Malformed nonempty JSON and explicitly unknown events
+are rejected rather than interpreted as a different opening.
+
+On the tested Codex CLI 0.163.0, this event injects extra developer context but
+does not stop the child when a handler returns `continue: false`. Vivac rejects
+an incomplete preparation and explains that limitation; it does not offer an
+execution barrier through this event. A `PreToolUse` check is not a replacement:
+explicit denial and failure of the check itself have different behavior, and
+rewritten task text has a different instruction role. Do not retire another
+source of instructions on the assumption that a rejected child opening cannot
+run. Configuration diagnostics must keep this consumer limit separate from a
+correctly installed handler and from unverified reception.
 
 If locating, loading or rendering the context fails, the bounded Codex mode
 also returns `continue: false`, with a fixed explanation rather than error
