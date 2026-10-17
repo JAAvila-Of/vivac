@@ -21,7 +21,8 @@ pub(super) fn absent(context: &str) {
 pub(super) enum Profile {
     CodexSession,
     CodexSubagent,
-    ClaudeModule,
+    ClaudeSession,
+    ClaudeSubagent,
 }
 
 enum Recipient {
@@ -36,40 +37,16 @@ pub(super) struct Request {
 
 impl Request {
     pub fn read(context: &str) -> Result<Self, ()> {
-        match context {
-            "claude-module" => {
-                let input = super::HookInput::read();
-                return Ok(Self {
-                    profile: Profile::ClaudeModule,
-                    recipient: Recipient::Session {
-                        source: input.source,
-                        id: input.session,
-                    },
-                });
-            }
-            "codex" => {}
-            _ => return Err(()),
+        if !supports_context(context) {
+            return Err(());
         }
-        let value = codex_input()?;
-        let profile = codex_profile(&value)?;
+        let value = native_input()?;
+        let profile = native_profile(context, &value)?;
         let recipient = match profile {
-            Profile::CodexSubagent => {
-                let id = value
-                    .get("agent_id")
-                    .and_then(serde_json::Value::as_str)
-                    .ok_or(())?;
-                if id.is_empty()
-                    || id.len() > 256
-                    || !id
-                        .bytes()
-                        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
-                    || crate::redact::check_field("session", id).is_some()
-                {
-                    return Err(());
-                }
-                Recipient::Subagent(id.to_owned())
+            Profile::CodexSubagent | Profile::ClaudeSubagent => {
+                Recipient::Subagent(agent_id(&value)?.to_owned())
             }
-            Profile::CodexSession => Recipient::Session {
+            Profile::CodexSession | Profile::ClaudeSession => Recipient::Session {
                 source: value
                     .get("source")
                     .and_then(serde_json::Value::as_str)
@@ -80,7 +57,6 @@ impl Request {
                     .and_then(serde_json::Value::as_str)
                     .map(str::to_owned),
             },
-            Profile::ClaudeModule => unreachable!(),
         };
         Ok(Self { profile, recipient })
     }
@@ -93,7 +69,7 @@ impl Request {
     }
 }
 
-fn codex_input() -> Result<serde_json::Value, ()> {
+fn native_input() -> Result<serde_json::Value, ()> {
     let raw = super::hook_stdin();
     if raw.is_empty() {
         return Ok(serde_json::json!({}));
@@ -106,27 +82,51 @@ fn codex_input() -> Result<serde_json::Value, ()> {
     }
 }
 
-fn codex_profile(value: &serde_json::Value) -> Result<Profile, ()> {
-    match value.get("hook_event_name") {
-        None => Ok(Profile::CodexSession),
-        Some(serde_json::Value::String(event)) if event == "SessionStart" => {
-            Ok(Profile::CodexSession)
-        }
-        Some(serde_json::Value::String(event)) if event == "SubagentStart" => {
-            Ok(Profile::CodexSubagent)
-        }
+fn agent_id(value: &serde_json::Value) -> Result<&str, ()> {
+    let id = value
+        .get("agent_id")
+        .and_then(serde_json::Value::as_str)
+        .ok_or(())?;
+    if id.is_empty()
+        || id.len() > 256
+        || !id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+        || crate::redact::check_field("session", id).is_some()
+    {
+        return Err(());
+    }
+    Ok(id)
+}
+
+fn native_profile(context: &str, value: &serde_json::Value) -> Result<Profile, ()> {
+    let child = match value.get("hook_event_name") {
+        None => false,
+        Some(serde_json::Value::String(event)) if event == "SessionStart" => false,
+        Some(serde_json::Value::String(event)) if event == "SubagentStart" => true,
+        _ => return Err(()),
+    };
+    match (context, child) {
+        ("codex", false) => Ok(Profile::CodexSession),
+        ("codex", true) => Ok(Profile::CodexSubagent),
+        ("claude-module", false) => Ok(Profile::ClaudeSession),
+        ("claude-module", true) => Ok(Profile::ClaudeSubagent),
         _ => Err(()),
     }
 }
 
-pub(super) fn invalid_input() {
-    codex_rejection("vivac rejected this Codex opening because its event or recipient is invalid. No partial context was delivered. Codex may still continue; check the hook configuration before continuing.");
+pub(super) fn invalid_input(context: &str) {
+    match context {
+        "claude-module" => outln!("{}", serde_json::json!({"protocol": CLAUDE_PROTOCOL, "status": "rejected", "reason": "invalid-input"})),
+        "codex" => codex_rejection("vivac rejected this Codex opening because its event or recipient is invalid. No partial context was delivered. Codex may still continue; check the hook configuration before continuing."),
+        _ => eprintln!("Unsupported opening context."),
+    }
 }
 
 pub(super) fn preparation_failed(context: &str) {
     let profile = match context {
-        "claude-module" => Ok(Profile::ClaudeModule),
-        "codex" => codex_input().and_then(|value| codex_profile(&value)),
+        "codex" => native_input().and_then(|value| native_profile(context, &value)),
+        "claude-module" => Request::read(context).map(|request| request.profile),
         _ => {
             eprintln!("Unsupported opening context.");
             return;
@@ -134,7 +134,7 @@ pub(super) fn preparation_failed(context: &str) {
     };
     match profile {
         Ok(profile) => profile.preparation_failed(),
-        Err(()) => invalid_input(),
+        Err(()) => invalid_input(context),
     }
 }
 
@@ -155,7 +155,7 @@ fn codex_rejection(message: &str) {
 impl Profile {
     pub fn too_large(self) {
         match self {
-            Self::ClaudeModule => outln!("{}", serde_json::json!({"protocol": CLAUDE_PROTOCOL, "status": "rejected", "reason": "too-large"})),
+            Self::ClaudeSession | Self::ClaudeSubagent => outln!("{}", serde_json::json!({"protocol": CLAUDE_PROTOCOL, "status": "rejected", "reason": "too-large"})),
             Self::CodexSession => codex_rejection("vivac could not deliver the complete opening context within its 60000-byte transport limit. This opening must not proceed with partial instructions. Review vivac rules and vivac brief before continuing."),
             Self::CodexSubagent => codex_rejection("vivac rejected this subagent opening because its complete context exceeds the 60000-byte transport limit. No partial context was delivered. Codex may still start this subagent; restore complete project context before continuing."),
         }
@@ -163,7 +163,7 @@ impl Profile {
 
     fn preparation_failed(self) {
         match self {
-            Self::ClaudeModule => outln!("{}", serde_json::json!({"protocol": CLAUDE_PROTOCOL, "status": "rejected", "reason": "preparation-failed"})),
+            Self::ClaudeSession | Self::ClaudeSubagent => outln!("{}", serde_json::json!({"protocol": CLAUDE_PROTOCOL, "status": "rejected", "reason": "preparation-failed"})),
             Self::CodexSession => codex_rejection("vivac could not prepare the complete opening context. This opening must not continue with missing instructions. Review the diagnostic and restore readable project context before continuing."),
             Self::CodexSubagent => codex_rejection("vivac rejected this subagent opening because complete project context could not be prepared. No partial context was delivered. Codex may still start this subagent; restore readable project context before continuing."),
         }
@@ -171,7 +171,7 @@ impl Profile {
 
     pub fn ready(self, text: String) {
         match self {
-            Self::ClaudeModule => outln!(
+            Self::ClaudeSession | Self::ClaudeSubagent => outln!(
                 "{}",
                 serde_json::json!({"protocol": CLAUDE_PROTOCOL, "status": "ready", "context": text})
             ),
@@ -179,7 +179,7 @@ impl Profile {
                 let event = match self {
                     Self::CodexSession => "SessionStart",
                     Self::CodexSubagent => "SubagentStart",
-                    Self::ClaudeModule => unreachable!(),
+                    Self::ClaudeSession | Self::ClaudeSubagent => unreachable!(),
                 };
                 outln!(
                     "{}",

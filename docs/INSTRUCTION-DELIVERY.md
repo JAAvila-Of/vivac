@@ -280,9 +280,9 @@ a replacement for the opening hook or proof that Claude received its output.
 Every response is one JSON object with `protocol: "vivac.claude.opening.v1"`.
 `status: "ready"` includes the complete `context`, limited to 60,000 UTF-8
 bytes. `status: "absent"` means no vivac tree was found and has no context.
-`status: "rejected"` has no context and names `reason: "too-large"` or
-`reason: "preparation-failed"`. Operational failures leave diagnostics on
-stderr and exit successfully so the consumer can inspect the rejection;
+`status: "rejected"` has no context and names `reason: "too-large"`,
+`reason: "preparation-failed"` or `reason: "invalid-input"`. Operational failures
+leave diagnostics on stderr and exit successfully so the consumer can inspect the rejection;
 invalid commands retain their usage error.
 
 The producer shares Codex's single preparation, custody reconciliation and
@@ -293,21 +293,42 @@ before any subsequent model send. Native module loading, cancellation,
 handler failures and installation require separate evidence; the isolated
 checks below describe the tested runtime and their limits.
 
+The producer accepts explicit `SessionStart` and `SubagentStart` events. A
+subagent opening requires its native `agent_id`, using 1–256 ASCII letters,
+digits, underscores or hyphens and the existing identifier redaction check.
+It never substitutes the principal's `session_id`. Missing event names retain
+the legacy principal opening, including an empty input. Nonempty malformed
+JSON, non-object input, unknown events and invalid subagent identifiers are
+rejected before snapshot preparation or custody reconciliation.
+
 The consumer artifact is in `src/setup/claude-opening/`. It calls the producer
-once per native `SessionStart` and keeps only the current snapshot in memory.
+once per native `SessionStart` or `SubagentStart`. Each subagent invocation
+prepares a fresh snapshot through the same CLI path as the principal.
 With a vivac tree present, the experimental consumer accepts ready context for
 `startup`, `clear`, `resume` and `compact`; unknown sources remain blocked.
 Outside a vivac tree, `absent` permits continuation. The opening handler preserves
 foreign hook context and publishes a small owned reference. Its
-`prompt.attachment` handler expands only that reference in a `SessionStart`
+`prompt.attachment` handler expands only that reference in the matching hook
 attachment, checking the current opening after downstream handlers finish.
+Principal references belong to `SessionStart`; child references belong to
+`SubagentStart` and require the same native `agentId` as their opening.
 For valid text results, it preserves foreign text and result fields. New
-openings and session endings invalidate the old snapshot; a late result cannot
-restore it. Classified
+principal openings and session endings invalidate every prior recipient;
+reopening one child invalidates only that child's prior state. A late result
+cannot restore an invalidated state or invalidate a newer opening. Classified
 attachment failures reuse an already returned downstream result without
 calling `next` again, and abort only the captured turn if it is still active.
 The module does not prepare context again on each render. An opening receipt
 records preparation, not provider reception.
+
+The module keeps recipient state inside `register`, without assuming a separate
+registration for each child. Each recipient has its own generation, publication
+and active turn. A failed child never borrows the principal's snapshot or
+blocks a prepared sibling. After expanding a child's reference once, the module
+releases that snapshot's text; a duplicate reference cannot replay it. A child
+step with an unknown or invalid native identity is blocked instead of using the
+principal's readiness. The prompt guard remains a check of the principal's
+module-to-command path; it is not an independent guard for every child.
 
 `vivac session guard --hook` provides a separate command hook check. It reads
 the `vivac_opening` object supplied by the module through the native
@@ -1000,8 +1021,11 @@ them with an explicit warning that they may still execute.
 An internal Rust ownership module now implements inspection and pure plans for
 that boundary. Receipts must match canonical compiled definitions byte for byte;
 payload reads are limited to 1 MiB each and receipt reads to 16 KiB. The compiled
-catalog now embeds the experimental manifest, hook definition and consumer with
-`include_str!` as `opening-reference-v1`. Setup uses its update and undo plans;
+catalog embeds the experimental manifest, hook definition and consumer with
+`include_str!` as `opening-reference-v2` and retains the exact
+`opening-reference-v1` definition for ownership checks. Setup can upgrade an
+intact previous bundle and undo either version; edited payloads are never
+adopted as owned. Setup uses its update and undo plans;
 doctor inspects the current compiled bundle and the separate command hooks.
 An explicitly selected, ignored test drives the real Rust plans in isolated
 native fixtures; its two marked versions are derived from the embedded consumer,
@@ -1025,13 +1049,14 @@ reason appeared in native informational/result output; a native `continue`
 field was not exposed. This negative control is not a test of setup undo, which
 must also remove its own configuration. A separate driver invocation beneath
 the workspace's existing tree rejected the external ancestor before any write.
-Those driver observations preceded setup integration and do not prove loading
-in other harness versions.
+Those driver observations used the earlier `opening-reference-v1` consumer,
+preceded setup integration and do not prove loading in other harness versions.
 
 ### Native check through setup
 
-A separate Windows fixture used the compiled public commands rather than the
-ignored ownership driver. `vivac setup claude-code --dry-run` left the project
+A separate Windows fixture checked `opening-reference-v1` through the compiled
+public commands rather than the ignored ownership driver.
+`vivac setup claude-code --dry-run` left the project
 unchanged; `--yes` installed the exact current three payloads and canonical
 receipt. Repeating setup changed no project files. Doctor reported no
 configuration errors, while retaining warnings for runtime evidence not yet
@@ -1043,8 +1068,8 @@ and a subsequent startup request each contained the complete current opening
 once, without its internal reference marker. Resume of the same saved session
 after a synthetic context change contained the new complete opening once and
 the previous startup snapshot zero times. The prompt clock and stop verdict
-were observed on these turns; no automatic work stop was written. The setup
-consumer differs from the earlier instrumented controls only in its introductory
+were observed on these turns; no automatic work stop was written. That version's
+consumer differed from the earlier instrumented controls only in its introductory
 comment, leaving the executable body unchanged.
 
 The real `--undo --dry-run` left the project unchanged. Applying undo removed
@@ -1359,6 +1384,49 @@ handlers were reviewed through `/hooks`. In this version, accepting the
 bypass flag before `app-server` did not make its untrusted handlers execute.
 Do not infer execution from argument acceptance or change personal trust
 settings to reproduce an isolated check.
+
+### Native Claude subagent controls
+
+A Windows baseline on Claude Code 2.1.294 found that the previous opening bundle
+delivered the principal's context but supplied no fresh opening to its native
+child. A subsequent control installed `opening-reference-v2` through the real
+`vivac setup claude-code` command and selected that bundle explicitly with
+`--plugin-dir`, without a sidecar module or edits to its executable body.
+After the principal's opening, the synthetic tree changed before a foreground
+`Agent` call. The child's provider request contained the complete fresh context
+once, in `messages[1].content` with role `system`, and contained neither the
+previous snapshot nor the principal-only sentinel. Native call, result,
+metadata, session and response identifiers linked the child to that request;
+the stream alone did not expose the complete chain.
+
+A separate negative fixture kept the same product binary and module unchanged.
+Its fresh reference occupied 4,353 UTF-8 bytes before four real CLI writes made
+the tree exceed the producer's limit. A transparent CLI relay observed the
+actual child's `SubagentStart` preparation return `rejected` with reason
+`too-large` and no context. The relay's native child identifier matched a
+`user` event carrying both that identifier and the `Agent` call identifier,
+within the exact native session. The principal's transcript linked its call
+and error result through call and source-message identifiers; the child's
+transcript independently matched its filename, recipient, session and task.
+Both retained provider requests correlated to the principal, with none from
+the child. No provider error, transport parse failure, denied proxy request,
+timeout or request-budget overrun occurred.
+
+The positive control used no relay. The negative relay was separately checked
+for byte-exact input, output, stderr, arguments and exit codes; it recorded only
+bounded metadata, never request or hook bodies. The native error result used
+a textual `toolUseResult` instead of an object carrying `agentId`. That text
+was not used to infer identity. Fixture inputs, engine and module bytes were
+pinned, and their integrity was checked after each run. These controls used
+synthetic data and a loopback provider; the proxy was not OS network isolation.
+
+These observations establish one foreground child opening and its tested
+oversized-preparation rejection on 2.1.294. They do not establish cancellation,
+later requests or resume of the same child, automatic bundle discovery in every
+project, model compliance or behavior in other harness versions. The module
+releases its child snapshot after one expansion; the native checks do not prove
+continuity after that attachment is invalidated. Doctor therefore continues to
+distinguish intact installation from runtime loading and provider reception.
 
 ## Check a real harness separately
 

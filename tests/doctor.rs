@@ -153,10 +153,11 @@ fn claude_bundle_missing_edited_or_unknown_is_an_error_without_runtime_claims() 
         c.ok(&["setup", "claude-code", "--yes"]);
         let r = report(&c, Some("claude-code"), 0);
         assert_eq!(check(&r, "claude-code opening bundle")["status"], "ok");
-        assert!(check(&r, "claude-code opening bundle")["detail"]
+        let detail = check(&r, "claude-code opening bundle")["detail"]
             .as_str()
-            .unwrap()
-            .contains("checked separately"));
+            .unwrap();
+        assert!(detail.contains("SessionStart and SubagentStart"));
+        assert!(detail.contains("provider reception are unverified"));
         let bundle = c.0.join(".claude/skills/vivac-opening");
         match case {
             0 => std::fs::remove_file(bundle.join("hooks/hooks.json")).unwrap(),

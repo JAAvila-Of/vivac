@@ -20,14 +20,22 @@ pub(super) struct BundleVersion {
 }
 
 pub(super) static CURRENT: BundleVersion = BundleVersion {
-    version: "opening-reference-v1",
+    version: "opening-reference-v2",
     files: [
         include_str!("claude-opening/.claude-plugin/plugin.json"),
         include_str!("claude-opening/hooks/hooks.json"),
         include_str!("claude-opening/hooks/register.mjs"),
     ],
 };
-pub(super) static CATALOG: [BundleVersion; 1] = [CURRENT];
+static PREVIOUS: BundleVersion = BundleVersion {
+    version: "opening-reference-v1",
+    files: [
+        include_str!("claude-opening-versions/opening-reference-v1/.claude-plugin/plugin.json"),
+        include_str!("claude-opening-versions/opening-reference-v1/hooks/hooks.json"),
+        include_str!("claude-opening-versions/opening-reference-v1/hooks/register.mjs"),
+    ],
+};
+pub(super) static CATALOG: [BundleVersion; 2] = [PREVIOUS, CURRENT];
 
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum Outcome {
@@ -485,12 +493,12 @@ mod tests {
                     serde_json::from_str(CURRENT.files[0]).unwrap();
                 manifest["version"] = manifest_version.into();
                 let manifest = format!("{}\n", serde_json::to_string(&manifest).unwrap());
-                let anchor = "additionalContext: [...(result.additionalContext ?? []), marker]";
+                let anchor = "additionalContext: [...(result.additionalContext ?? []), state.marker]";
                 assert_eq!(CURRENT.files[2].matches(anchor).count(), 1);
                 let module = CURRENT.files[2].replace(
                     anchor,
                     &format!(
-                        "additionalContext: [...(result.additionalContext ?? []), marker, '{tag}']"
+                        "additionalContext: [...(result.additionalContext ?? []), state.marker, '{tag}']"
                     ),
                 );
                 BundleVersion {
@@ -622,8 +630,8 @@ mod tests {
     #[test]
     fn compiled_current_catalog_installs_the_exact_embedded_payloads() {
         let project = Project::new();
-        assert_eq!(super::CURRENT.version, "opening-reference-v1");
-        assert_eq!(super::CATALOG.len(), 1);
+        assert_eq!(super::CURRENT.version, "opening-reference-v2");
+        assert_eq!(super::CATALOG.len(), 2);
         let plan = plan_update(&project.0, &super::CATALOG, &super::CURRENT).unwrap();
         assert_eq!(plan.writes.len(), 4);
         plan.commit().unwrap();
