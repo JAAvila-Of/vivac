@@ -80,6 +80,48 @@ reader still recovers readable events so `vivac brief` and `vivac check` can
 help inspect a damaged store. Recoverable text is useful for repair, but cannot
 establish that an omitted line contained no required instruction.
 
+### Native Codex compaction controls
+
+An isolated control on Codex CLI 0.163.0 with vivac 0.20.0 exercised manual
+compaction through `thread/compact/start`. The three project hooks were reviewed
+through the native `/hooks` interface; `hooks/list` confirmed their exact
+definitions, enabled state and trusted status before a thread started. No trust
+bypass or copied trust state was used. A transparent wrapper forwarded the real
+bounded producer's stdout and exit code unchanged and kept its emitted context
+in memory for literal comparison with the local Responses provider's requests.
+
+Startup delivered its complete 28,712-character context once. After adding a
+synthetic constraint, the native stream reported one `contextCompaction` item
+started and completed with the same identifier, and a completed compaction turn.
+The next completed turn sent one provider request containing the complete new
+28,786-character context once and the previous complete context zero times.
+The new constraint was present, with one compact producer capture and one compact
+opening receipt. The probe exited with status 0 after all acceptance checks.
+
+An automatic-compaction control reused the approved fixture without calling
+`thread/compact/start`. Command-line overrides set `model_context_window` to
+200,000 and `model_auto_compact_token_limit` to 100,000. The local provider
+reported 110,000 input tokens in its first response and a small usage count in
+later responses. These were synthetic usage values, not measured token costs.
+Startup completed without compaction and delivered its entire 28,860-character
+context. A new per-run sentinel was absent from that context. After adding it
+to the tree, an ordinary `turn/start` triggered one
+native compaction item with matching start/completion identifiers. Three provider
+requests covered startup, summary generation and continuation. The sole request
+after the compact hook contained the full new 28,923-character context once,
+including the new sentinel, and the previous complete context zero times.
+One compact capture and receipt were
+recorded, and the continuation turn completed. The probe exited with status 0.
+The [configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference)
+describes the threshold setting; this control does not test its default value.
+
+These controls used invented data, isolated project and harness homes, and a
+synthetic loopback provider without inference or API credentials. Four external
+proxy attempts per run were refused; the proxy was not operating-system network
+isolation. Native Codex persisted fixture state in its isolated home. The result
+establishes the tested manual and controlled automatic transport, not default
+context-window limits, model comprehension or behavior on other versions.
+
 Claude Code setup installs an experimental opening module and an independent
 prompt guard instead of the original plain-text opening command. Re-run setup
 to review that upgrade. The isolated checks below found that a plain
@@ -219,8 +261,9 @@ consumer: after adding a fresh Unicode sentinel, the producer prepared and
 `prompt.context` published the new 19,859-unit snapshot, but the provider
 request contained the old snapshot once and the new snapshot zero times.
 The turn guard accepted publication without detecting that difference.
-The current experimental module therefore blocks resume with a present tree;
-this is a refusal, not a completed resume integration.
+At that stage, the experimental module therefore blocked resume with a present
+tree. That refusal was later replaced by the reference-based consumer described
+below; it is not the behavior of the current module.
 
 The corrected artifact then passed a separate native rejection control.
 Startup delivered the complete 19,862-unit baseline once and preserved the
@@ -1123,8 +1166,13 @@ synthetic pillar and 62 constraints, with no active focus. Neither case
 establishes delivery for a deeply nested focus or the original project's
 instructions. No check established that a model read the saved output or
 consulted rule bodies. The clear check exercised the app-server API, not the
-interactive `/clear` command. Actual compaction of the vivac setup integrations
-remains unverified; the synthetic Claude module check above has narrower scope.
+interactive `/clear` command. Those historical Codex controls did not test actual
+compaction; the separate 0.163.0 controls above did. For Claude, the revised
+consumer passed native manual and automatic
+compaction controls using instrumented copies of its executable body, as
+described above. Those controls did not activate setup; the uninstrumented bundle
+installed through setup was checked separately for startup and resume, without
+repeating either compaction control through that installation path.
 
 A separate Claude consumer check used a deterministic test hook with three
 markers in ASCII text. Both plain stdout and JSON `additionalContext` delivered
