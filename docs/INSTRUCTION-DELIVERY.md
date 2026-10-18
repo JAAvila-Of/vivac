@@ -1412,7 +1412,7 @@ Both retained provider requests correlated to the principal, with none from
 the child. No provider error, transport parse failure, denied proxy request,
 timeout or request-budget overrun occurred.
 
-The positive control used no relay. The negative relay was separately checked
+The initial positive control used no relay. The negative relay was separately checked
 for byte-exact input, output, stderr, arguments and exit codes; it recorded only
 bounded metadata, never request or hook bodies. The native error result used
 a textual `toolUseResult` instead of an object carrying `agentId`. That text
@@ -1420,13 +1420,34 @@ was not used to infer identity. Fixture inputs, engine and module bytes were
 pinned, and their integrity was checked after each run. These controls used
 synthetic data and a loopback provider; the proxy was not OS network isolation.
 
-These observations establish one foreground child opening and its tested
-oversized-preparation rejection on 2.1.294. They do not establish cancellation,
-later requests or resume of the same child, automatic bundle discovery in every
+A subsequent continuity control used that relay and the unchanged product
+bundle. One child made two provider requests around a native `Glob` call. Both
+requests contained the complete fresh context once in a `system` message. The
+second also contained the complete textual tool result once as `user`, with
+the same tool-use identifier as the child's transcript. All four provider
+requests were attributed to the principal or that child; no provider error,
+parse failure, denied proxy request, timeout or budget overrun occurred.
+
+A separate resume control exposed a remaining delivery failure. After the
+foreground child completed, the tree changed and the principal used
+`SendMessage` with that child's observed identifier. Native session, call,
+result and response identifiers correlated both child turns and all six
+provider requests. Two actual `SubagentStart` preparations returned `ready`,
+with the old and updated context respectively. Nevertheless, the resumed
+child's provider request contained the complete old context once in `system`
+and none of the updated context. Both native initialization/result cycles
+matched the same session. No provider error, parse failure, denied proxy
+request, timeout or budget overrun occurred, and the process exited successfully.
+Fresh preparation therefore did not establish fresh reception on this resume.
+
+These observations establish one foreground child opening, its tested
+oversized-preparation rejection and two-request continuity on 2.1.294. The
+tested same-child resume retained stale context and still needs a delivery fix.
+They do not establish general cancellation, automatic bundle discovery in every
 project, model compliance or behavior in other harness versions. The module
-releases its child snapshot after one expansion; the native checks do not prove
-continuity after that attachment is invalidated. Doctor therefore continues to
-distinguish intact installation from runtime loading and provider reception.
+releases its child snapshot after one expansion; the continuity control does
+not prove delivery after arbitrary attachment invalidation. Doctor continues
+to distinguish intact installation from runtime loading and provider reception.
 
 ## Check a real harness separately
 
