@@ -431,6 +431,373 @@ fn codex_opening_emits_complete_json_context_and_one_receipt() {
     );
 }
 
+fn codex_subagent_custody_fixture(name: &str) -> Sandbox {
+    let c = Sandbox::new_seeded(name);
+    c.ok(&[
+        "agents",
+        "reconcile",
+        "--mode",
+        "automatic",
+        "--yes",
+        "--why",
+        "Preserve approved native agents automatically",
+    ]);
+    std::fs::create_dir_all(c.0.join(".claude/agents")).unwrap();
+    std::fs::write(
+        c.0.join(".claude/agents/reviewer.md"),
+        "---\nname: reviewer\ndescription: Review the change.\nmodel: sonnet\n---\nInspect the requested files.\n",
+    )
+    .unwrap();
+    c
+}
+
+fn codex_subagent_assert_rejected(stdout: &str) {
+    let response: serde_json::Value =
+        serde_json::from_str(stdout).expect("one complete JSON response");
+    assert_eq!(response["continue"], false, "{stdout}");
+    assert!(response.get("hookSpecificOutput").is_none(), "{stdout}");
+    let message = response["systemMessage"].as_str().unwrap();
+    assert!(message.contains("rejected"), "{message}");
+    assert!(message.contains("Codex"), "{message}");
+    assert!(message.contains("may still"), "{message}");
+}
+
+#[test]
+fn codex_subagent_emits_the_complete_root_product_and_records_the_child_identity() {
+    let c = Sandbox::new_seeded("codex-subagent-product");
+    let title = "Complete Unicode mandate: acción β 界 🧭";
+    c.ok(&[
+        "add",
+        title,
+        "--root",
+        "--type",
+        "constraint",
+        "--why",
+        "Preserve the same complete product for an isolated child",
+    ]);
+    let args = &["session", "start", "--hook", "--context", "codex"];
+    let (root, stderr, code) = run_stdin_split(
+        &c,
+        args,
+        r#"{"hook_event_name":"SessionStart","source":"startup","session_id":"native-parent"}"#,
+    );
+    assert_eq!(code, 0, "{root}{stderr}");
+    assert!(stderr.is_empty(), "{stderr}");
+    let root: serde_json::Value = serde_json::from_str(&root).unwrap();
+    let before = c.log();
+    let (stdout, stderr, code) = run_stdin_split(
+        &c,
+        args,
+        r#"{"hook_event_name":"SubagentStart","source":"compact","session_id":"native-parent","agent_id":"native-child_1"}"#,
+    );
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert!(stderr.is_empty(), "{stderr}");
+    let child: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(
+        child["hookSpecificOutput"]["hookEventName"],
+        "SubagentStart"
+    );
+    let context = child["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert_eq!(
+        context.as_bytes(),
+        root["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap()
+            .as_bytes()
+    );
+    assert!(context.contains(title));
+    assert!(context.contains("WRITE AT THESE SEAMS"));
+    assert!(context.len() <= 60_000);
+    let log = c.log();
+    let added = &log[before.len()..];
+    let receipts: Vec<serde_json::Value> = added
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .filter(|event| event["payload"]["type"] == "session.started")
+        .collect();
+    assert_eq!(receipts.len(), 1, "{added}");
+    assert_eq!(receipts[0]["payload"]["source"], "subagent");
+    assert_eq!(receipts[0]["payload"]["session"], "native-child_1");
+    assert!(!added.contains("native-parent"), "{added}");
+}
+
+#[test]
+fn codex_subagent_accepts_opaque_ascii_id_boundaries() {
+    for agent_id in [
+        "a".to_string(),
+        "Agent_09-child".to_string(),
+        "0199d8c2-77b8-7000-a111-222233334444".to_string(),
+        "a".repeat(256),
+    ] {
+        let c = Sandbox::new_seeded("codex-subagent-id-boundary");
+        let input = serde_json::json!({"hook_event_name":"SubagentStart", "agent_id":agent_id});
+        let (stdout, stderr, code) = run_stdin_split(
+            &c,
+            &["session", "start", "--hook", "--context", "codex"],
+            &input.to_string(),
+        );
+        assert_eq!(code, 0, "{stdout}{stderr}");
+        let response: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(
+            response["hookSpecificOutput"]["hookEventName"],
+            "SubagentStart"
+        );
+        let receipt: serde_json::Value =
+            serde_json::from_str(c.log().lines().last().unwrap()).unwrap();
+        assert_eq!(receipt["payload"]["source"], "subagent");
+        assert_eq!(receipt["payload"]["session"], agent_id);
+    }
+}
+
+#[test]
+fn codex_subagent_invalid_or_missing_ids_reject_before_custody_or_receipt() {
+    let c = codex_subagent_custody_fixture("codex-subagent-invalid-id");
+    let before = c.log();
+    let config = std::fs::read(c.0.join(".vivac/config")).unwrap();
+    let native = std::fs::read(c.0.join(".claude/agents/reviewer.md")).unwrap();
+    let mut inputs =
+        vec![serde_json::json!({"hook_event_name":"SubagentStart", "session_id":"native-parent"})];
+    for agent_id in [
+        serde_json::Value::Null,
+        serde_json::json!(false),
+        serde_json::json!(7),
+        serde_json::json!([]),
+        serde_json::json!({"id":"child"}),
+        serde_json::json!(""),
+        serde_json::json!("a".repeat(257)),
+        serde_json::json!("person@example.test"),
+        serde_json::json!(r"C:\Users\Example\private"),
+        serde_json::json!("/home/example/private"),
+        serde_json::json!("child with spaces"),
+        serde_json::json!("child\nline"),
+        serde_json::json!("child-á"),
+        serde_json::json!(format!("ghp_{}", "x".repeat(35))),
+    ] {
+        inputs.push(serde_json::json!({"hook_event_name":"SubagentStart", "session_id":"native-parent", "agent_id":agent_id}));
+    }
+    for input in inputs {
+        let refused_id = input["agent_id"]
+            .as_str()
+            .filter(|id| !id.is_empty())
+            .map(str::to_owned);
+        let input = input.to_string();
+        let (stdout, stderr, code) = run_stdin_split(
+            &c,
+            &["session", "start", "--hook", "--context", "codex"],
+            &input,
+        );
+        assert_eq!(code, 0, "{stdout}{stderr}");
+        codex_subagent_assert_rejected(&stdout);
+        assert!(!stdout.contains("native-parent"));
+        assert!(!stdout.contains("person@example.test"));
+        assert!(!stdout.contains("Example"));
+        if let Some(id) = refused_id {
+            assert!(!stdout.contains(&id), "rejected input was reflected");
+        }
+        assert_eq!(
+            c.log(),
+            before,
+            "invalid input wrote a receipt or custody event"
+        );
+        assert_eq!(std::fs::read(c.0.join(".vivac/config")).unwrap(), config);
+        assert_eq!(
+            std::fs::read(c.0.join(".claude/agents/reviewer.md")).unwrap(),
+            native
+        );
+        assert!(!c.0.join(".codex/agents").exists());
+    }
+}
+
+#[test]
+fn codex_subagent_default_and_explicit_parent_openings_keep_the_session_start_envelope() {
+    for input in [
+        "",
+        "{}",
+        r#"{"agent_id":false}"#,
+        r#"{"hook_event_name":"SessionStart","source":"startup","session_id":"native-parent","agent_id":null}"#,
+    ] {
+        let c = Sandbox::new_seeded("codex-subagent-parent-default");
+        let before = c.log().matches("session.started").count();
+        let (stdout, stderr, code) = run_stdin_split(
+            &c,
+            &["session", "start", "--hook", "--context", "codex"],
+            input,
+        );
+        assert_eq!(code, 0, "{stdout}{stderr}");
+        let response: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(
+            response["hookSpecificOutput"]["hookEventName"],
+            "SessionStart"
+        );
+        assert!(response["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap()
+            .contains("WRITE AT THESE SEAMS"));
+        assert_eq!(c.log().matches("session.started").count(), before + 1);
+    }
+}
+
+#[test]
+fn codex_subagent_malformed_json_or_nonobject_input_rejects_without_effects() {
+    let c = codex_subagent_custody_fixture("codex-subagent-malformed-input");
+    let before = c.log();
+    let config = std::fs::read(c.0.join(".vivac/config")).unwrap();
+    for input in [
+        "DO NOT REFLECT INVALID INPUT",
+        "{",
+        "[]",
+        "null",
+        "false",
+        "42",
+        r#""text""#,
+    ] {
+        let (stdout, stderr, code) = run_stdin_split(
+            &c,
+            &["session", "start", "--hook", "--context", "codex"],
+            input,
+        );
+        assert_eq!(code, 0, "{stdout}{stderr}");
+        let response: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(response["continue"], false);
+        assert!(response.get("hookSpecificOutput").is_none());
+        assert!(!stdout.contains("DO NOT REFLECT"));
+        assert_eq!(c.log(), before);
+        assert_eq!(std::fs::read(c.0.join(".vivac/config")).unwrap(), config);
+        assert!(!c.0.join(".codex/agents").exists());
+    }
+}
+
+#[test]
+fn codex_subagent_explicit_unknown_events_reject_without_effects() {
+    let c = codex_subagent_custody_fixture("codex-subagent-unknown-event");
+    let before = c.log();
+    let config = std::fs::read(c.0.join(".vivac/config")).unwrap();
+    for event in [
+        serde_json::Value::Null,
+        serde_json::json!(42),
+        serde_json::json!("SessionEnd"),
+        serde_json::json!("subagentStart"),
+    ] {
+        let input = serde_json::json!({"hook_event_name":event, "agent_id":"native-child", "session_id":"native-parent"});
+        let (stdout, stderr, code) = run_stdin_split(
+            &c,
+            &["session", "start", "--hook", "--context", "codex"],
+            &input.to_string(),
+        );
+        assert_eq!(code, 0, "{stdout}{stderr}");
+        let response: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(response["continue"], false);
+        assert!(response.get("hookSpecificOutput").is_none());
+        assert_eq!(c.log(), before);
+        assert_eq!(std::fs::read(c.0.join(".vivac/config")).unwrap(), config);
+        assert!(!c.0.join(".codex/agents").exists());
+    }
+}
+
+#[test]
+fn codex_subagent_oversize_unicode_product_rejects_without_partial_context_or_effects() {
+    let c = codex_subagent_custody_fixture("codex-subagent-oversize");
+    c.ok(&[
+        "add",
+        "Large child mandate",
+        "--root",
+        "--type",
+        "constraint",
+        "--why",
+        "Exercise the child transport ceiling",
+    ]);
+    let log = c
+        .log()
+        .lines()
+        .map(|line| {
+            let mut event: serde_json::Value = serde_json::from_str(line).unwrap();
+            if event["payload"]["title"] == "Large child mandate" {
+                event["payload"]["title"] = "🧭".repeat(15_001).into();
+            }
+            event.to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    std::fs::write(c.0.join(".vivac/events"), &log).unwrap();
+    let config = std::fs::read(c.0.join(".vivac/config")).unwrap();
+    let (stdout, stderr, code) = run_stdin_split(
+        &c,
+        &["session", "start", "--hook", "--context", "codex"],
+        r#"{"hook_event_name":"SubagentStart","session_id":"native-parent","agent_id":"native-child"}"#,
+    );
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    codex_subagent_assert_rejected(&stdout);
+    assert!(!stdout.contains('🧭'));
+    assert_eq!(c.log(), log);
+    assert_eq!(std::fs::read(c.0.join(".vivac/config")).unwrap(), config);
+    assert!(!c.0.join(".codex/agents").exists());
+}
+
+#[test]
+fn codex_subagent_broken_context_rejects_without_reflecting_input_or_receipts() {
+    for fault in [
+        "unsupported",
+        "invalid-log",
+        "invalid-utf8",
+        "unreadable-log",
+        "invalid-lane",
+    ] {
+        let c = codex_subagent_custody_fixture("codex-subagent-broken");
+        let events = c.0.join(".vivac/events");
+        match fault {
+            "unsupported" => c.append_unknown_event_type(),
+            "invalid-log" => c.append_raw_line("DO NOT REFLECT BROKEN EVENT"),
+            "invalid-utf8" => {
+                let mut bytes = std::fs::read(&events).unwrap();
+                bytes.extend_from_slice(&[0xff, b'\n']);
+                std::fs::write(&events, bytes).unwrap();
+            }
+            "unreadable-log" => {
+                std::fs::remove_file(&events).unwrap();
+                std::fs::create_dir(&events).unwrap();
+            }
+            "invalid-lane" => {
+                std::fs::write(c.0.join(".vivac/lane"), "DO NOT REFLECT BROKEN LANE").unwrap()
+            }
+            _ => unreachable!(),
+        }
+        let log_before = std::fs::read(&events).ok();
+        let config = std::fs::read(c.0.join(".vivac/config")).unwrap();
+        for agent in [serde_json::json!("native-child"), serde_json::Value::Null] {
+            let input = serde_json::json!({"hook_event_name":"SubagentStart", "agent_id":agent,
+                "session_id":"DO NOT REFLECT PARENT", "extra":"DO NOT REFLECT INPUT"});
+            let (stdout, stderr, code) = run_stdin_split(
+                &c,
+                &["session", "start", "--hook", "--context", "codex"],
+                &input.to_string(),
+            );
+            assert_eq!(code, 0, "{fault}: {stdout}{stderr}");
+            codex_subagent_assert_rejected(&stdout);
+            assert!(!stdout.contains("DO NOT REFLECT"), "{stdout}");
+            assert_eq!(std::fs::read(&events).ok(), log_before);
+            assert_eq!(std::fs::read(c.0.join(".vivac/config")).unwrap(), config);
+            assert!(!c.0.join(".codex/agents").exists());
+        }
+    }
+}
+
+#[test]
+fn codex_subagent_outside_a_tree_preserves_codex_silence() {
+    let c = Sandbox::new_empty("codex-subagent-no-tree");
+    let before = directory_snapshot(&c.0);
+    let (stdout, stderr, code) = run_stdin_split(
+        &c,
+        &["session", "start", "--hook", "--context", "codex"],
+        r#"{"hook_event_name":"SubagentStart","agent_id":"native-child"}"#,
+    );
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert!(stdout.is_empty(), "{stdout}");
+    assert_eq!(directory_snapshot(&c.0), before);
+}
+
 #[test]
 fn codex_context_is_only_valid_for_start_hooks() {
     let c = Sandbox::new_seeded("codex-context-usage");

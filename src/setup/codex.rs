@@ -70,23 +70,50 @@ const SESSION_START_MATCHER: &str = "startup|resume|clear|compact";
 /// its output stops matching this string byte for byte the moment there is
 /// anything to merge with -- one puts `{ "type": ..., "command": ... }` on
 /// one line and the other never does (`t592` tranche 2, piece B).
-fn start_handlers_mut(root: &mut Value) -> impl Iterator<Item = &mut Value> {
+pub(super) fn validate_subagent_structure(root: &Value) -> Result<(), Failure> {
+    let Some(hooks) = root.get("hooks") else {
+        return Ok(());
+    };
+    let malformed = hooks.as_object().is_none()
+        || hooks.get("SubagentStart").is_some_and(|event| {
+            event.as_array().is_none_or(|entries| {
+                entries.iter().any(|entry| {
+                    entry.as_object().is_none()
+                        || entry
+                            .get("hooks")
+                            .and_then(Value::as_array)
+                            .is_none_or(|handlers| {
+                                handlers.iter().any(|handler| handler.as_object().is_none())
+                            })
+                })
+            })
+        });
+    if malformed {
+        return Err(Failure::Model("The Codex SubagentStart configuration is malformed. Review its hooks object, event array and handler arrays; nothing written.".to_string()));
+    }
+    Ok(())
+}
+
+fn opening_handlers_mut<'a>(
+    root: &'a mut Value,
+    event: &'a str,
+) -> impl Iterator<Item = &'a mut Value> {
     root.as_object_mut()
         .into_iter()
         .flatten()
         .filter(|(key, _)| key == "hooks")
         .flat_map(|(_, value)| value.as_object_mut().into_iter().flatten())
-        .filter(|(key, _)| key == "SessionStart")
+        .filter(move |(key, _)| key == event)
         .flat_map(|(_, value)| value.as_array_mut().into_iter().flatten())
         .flat_map(|entry| entry.as_object_mut().into_iter().flatten())
         .filter(|(key, _)| key == "hooks")
         .flat_map(|(_, value)| value.as_array_mut().into_iter().flatten())
 }
 
-fn start_state(root: &Value) -> Result<(HookState, bool), Failure> {
+pub(super) fn opening_state(root: &Value, event: &str) -> Result<(HookState, bool), Failure> {
     let openings = root
         .get("hooks")
-        .and_then(|value| value.get("SessionStart"))
+        .and_then(|value| value.get(event))
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
@@ -105,12 +132,12 @@ fn start_state(root: &Value) -> Result<(HookState, bool), Failure> {
         })
         .count();
     if openings > 1 {
-        return Err(Failure::Model("The Codex SessionStart transport has duplicate opening commands. Review the hooks before applying setup; nothing written.".to_string()));
+        return Err(Failure::Model(format!("The Codex {event} transport has duplicate opening commands. Review the hooks before applying setup; nothing written.")));
     }
     let mut found = None;
     for entry in root
         .get("hooks")
-        .and_then(|v| v.get("SessionStart"))
+        .and_then(|v| v.get(event))
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
@@ -125,40 +152,49 @@ fn start_state(root: &Value) -> Result<(HookState, bool), Failure> {
             if command != SESSION_START_COMMAND && command != LEGACY_START_COMMAND {
                 continue;
             }
-            let legacy = command == LEGACY_START_COMMAND;
+            let legacy = event == "SessionStart" && command == LEGACY_START_COMMAND;
             let limit = handler.get("additionalContextLimit");
             let zero = matches!(limit, Some(Value::Number(n)) if n.as_u64() == Some(0));
-            let scope = entry.get("matcher").and_then(Value::as_str) == Some(SESSION_START_MATCHER);
+            let scope = if event == "SubagentStart" {
+                entry.get("matcher").is_none()
+            } else {
+                entry.get("matcher").and_then(Value::as_str) == Some(SESSION_START_MATCHER)
+            };
             let synchronous = matches!(handler.get("async"), None | Some(Value::Bool(false)));
             if found.is_some()
                 || !scope
                 || !synchronous
                 || handler.get("type").and_then(Value::as_str) != Some("command")
+                || (event == "SubagentStart" && command != SESSION_START_COMMAND)
                 || !(zero || (legacy && limit.is_none()))
             {
-                return Err(Failure::Model("The Codex SessionStart transport has custom or duplicate settings. Review its command, matcher, additionalContextLimit and async settings; nothing written.".to_string()));
+                return Err(Failure::Model(format!("The Codex {event} transport has custom or duplicate settings. Review its command, matcher, additionalContextLimit and async settings; nothing written.")));
             }
             found = Some((HookState::Exact, legacy));
         }
     }
     Ok(found.unwrap_or_else(|| {
         (
-            hook_state(root, "SessionStart", "start", SESSION_START_COMMAND),
+            hook_state(root, event, "start", SESSION_START_COMMAND),
             false,
         )
     }))
 }
 
-fn configure_start(root: &mut Value, missing: bool) {
+fn configure_opening(root: &mut Value, event: &str, missing: bool) {
     if missing {
         append_hook(
             root,
-            "SessionStart",
+            event,
             SESSION_START_COMMAND,
-            Some(SESSION_START_MATCHER),
+            if event == "SessionStart" {
+                Some(SESSION_START_MATCHER)
+            } else {
+                None
+            },
         );
     }
-    for handler in start_handlers_mut(root) {
+    for handler in opening_handlers_mut(root, event) {
         if matches!(
             handler.get("command").and_then(Value::as_str),
             Some(LEGACY_START_COMMAND | SESSION_START_COMMAND)
@@ -170,44 +206,45 @@ fn configure_start(root: &mut Value, missing: bool) {
     }
 }
 
-fn remove_start(root: &mut Value, command: &str) {
+fn remove_opening(root: &mut Value, event: &str, command: &str) {
     let Some(mut hooks) = root.get("hooks").cloned() else {
         return;
     };
     let Some(mut entries) = hooks
-        .get("SessionStart")
+        .get(event)
         .and_then(Value::as_array)
         .map(<[Value]>::to_vec)
     else {
         return;
     };
-    for entry in &mut entries {
+    entries.retain_mut(|entry| {
+        let mut removed = false;
         if let Some(handlers) = entry.get("hooks").and_then(Value::as_array) {
-            let kept = handlers
+            let kept: Vec<_> = handlers
                 .iter()
                 .filter(|handler| handler.get("command").and_then(Value::as_str) != Some(command))
                 .cloned()
                 .collect();
+            removed = kept.len() != handlers.len();
             entry.set("hooks", Value::Array(kept));
         }
-    }
-    entries.retain(|entry| {
-        !entry
-            .get("hooks")
-            .and_then(Value::as_array)
-            .is_some_and(|handlers| handlers.is_empty())
+        (event == "SubagentStart" && !removed)
+            || !entry
+                .get("hooks")
+                .and_then(Value::as_array)
+                .is_some_and(|handlers| handlers.is_empty())
             || entry.as_object().is_some_and(|fields| {
-                fields
-                    .iter()
-                    .any(|(key, _)| key != "matcher" && key != "hooks")
+                fields.iter().any(|(key, _)| {
+                    key != "hooks" && (event == "SubagentStart" || key != "matcher")
+                })
             })
     });
     if entries.is_empty() {
         if let Some(fields) = hooks.as_object_mut() {
-            fields.retain(|(key, _)| key != "SessionStart");
+            fields.retain(|(key, _)| key != event);
         }
     } else {
-        hooks.set("SessionStart", Value::Array(entries));
+        hooks.set(event, Value::Array(entries));
     }
     if hooks.as_object().is_some_and(|fields| fields.is_empty()) {
         if let Some(fields) = root.as_object_mut() {
@@ -225,6 +262,13 @@ fn hooks_content() -> String {
              \"SessionStart\": [\n      \
                {{\n        \
                  \"matcher\": \"{SESSION_START_MATCHER}\",\n        \
+                 \"hooks\": [\n          \
+                   {{ \"type\": \"command\", \"command\": \"{SESSION_START_COMMAND}\", \"additionalContextLimit\": 0, \"async\": false }}\n        \
+                 ]\n      \
+               }}\n    \
+             ],\n    \
+             \"SubagentStart\": [\n      \
+               {{\n        \
                  \"hooks\": [\n          \
                    {{ \"type\": \"command\", \"command\": \"{SESSION_START_COMMAND}\", \"additionalContextLimit\": 0, \"async\": false }}\n        \
                  ]\n      \
@@ -463,6 +507,7 @@ fn plan_items(
     start_upgrade: bool,
     stop_missing: bool,
     prompt_missing: bool,
+    subagent_missing: bool,
     skill_file_state: &SkillState,
     agents_skill: &super::agents_skill::Skill,
     artifacts_skill: &super::agents_skill::Skill,
@@ -477,17 +522,31 @@ fn plan_items(
         config_item = config_item.with_sub("run", "vivac mcp");
     }
 
-    let (hooks_verb, hooks_what) = match (hooks_exists, start_missing, stop_missing, prompt_missing)
-    {
-        (_, false, false, false) => ("keep", "already has all three hooks"),
-        (_, true, false, false) => ("add", "the SessionStart hook"),
-        (_, false, true, false) => ("add", "the Stop hook"),
-        (_, false, false, true) => ("add", "the UserPromptSubmit hook"),
-        (_, true, true, false) | (_, true, false, true) | (_, false, true, true) => {
-            ("add", "two hooks")
-        }
-        (false, true, true, true) => ("create", "three hooks"),
-        (true, true, true, true) => ("add", "three hooks"),
+    let missing = [
+        start_missing,
+        stop_missing,
+        prompt_missing,
+        subagent_missing,
+    ]
+    .into_iter()
+    .filter(|missing| *missing)
+    .count();
+    let hooks_verb = if missing == 0 {
+        "keep"
+    } else if hooks_exists {
+        "add"
+    } else {
+        "create"
+    };
+    let hooks_what = match missing {
+        0 => "already has all four hooks",
+        1 if start_missing => "the SessionStart hook",
+        1 if stop_missing => "the Stop hook",
+        1 if prompt_missing => "the UserPromptSubmit hook",
+        1 => "the SubagentStart hook",
+        2 => "two hooks",
+        3 => "three hooks",
+        _ => "four hooks",
     };
     let (hooks_verb, hooks_what) = if start_upgrade {
         (
@@ -503,6 +562,9 @@ fn plan_items(
             "SessionStart",
             "complete bounded JSON context; additionalContextLimit 0; synchronous",
         );
+    }
+    if subagent_missing {
+        hooks_item = hooks_item.with_sub("SubagentStart", SESSION_START_COMMAND);
     }
     match start_hook_state {
         HookState::Missing => {
@@ -616,7 +678,13 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     let config_state = config_state_result.expect("checked above");
 
     let hooks_root = hooks.value.clone().unwrap_or_else(|| Value::object(vec![]));
-    let (start_hook_state, start_upgrade) = start_state(&hooks_root)?;
+    validate_subagent_structure(&hooks_root)?;
+    let (start_hook_state, start_upgrade) = opening_state(&hooks_root, "SessionStart")?;
+    let (subagent_hook_state, _) = opening_state(&hooks_root, "SubagentStart")?;
+    if matches!(subagent_hook_state, HookState::Different(_)) {
+        return Err(Failure::Model("The Codex SubagentStart transport has a custom opening command. Review it before applying setup; nothing written.".to_string()));
+    }
+    let subagent_missing = matches!(subagent_hook_state, HookState::Missing);
     let stop_hook_state = hook_state(&hooks_root, "Stop", "end", SESSION_END_COMMAND);
     let prompt_hook_state = hook_state(
         &hooks_root,
@@ -633,7 +701,8 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     );
 
     let config_needs_write = !matches!(config_state, ConfigState::Already);
-    let hooks_needs_write = start_missing || start_upgrade || stop_missing || prompt_missing;
+    let hooks_needs_write =
+        start_missing || start_upgrade || stop_missing || prompt_missing || subagent_missing;
 
     let nothing_to_write = !config_needs_write
         && !hooks_needs_write
@@ -656,6 +725,7 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
                 start_upgrade,
                 stop_missing,
                 prompt_missing,
+                subagent_missing,
                 &skill_file_state,
                 &agents_skill,
                 &artifacts_skill,
@@ -734,7 +804,12 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     if hooks_needs_write {
         if hooks.exists {
             let mut new_hooks = hooks_root.clone();
-            configure_start(&mut new_hooks, start_missing);
+            if start_missing || start_upgrade {
+                configure_opening(&mut new_hooks, "SessionStart", start_missing);
+            }
+            if subagent_missing {
+                configure_opening(&mut new_hooks, "SubagentStart", true);
+            }
             if stop_missing {
                 append_hook(&mut new_hooks, "Stop", SESSION_END_COMMAND, None);
             }
@@ -753,7 +828,7 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
             );
             let mut before = hooks_root.clone();
             if start_upgrade {
-                configure_start(&mut before, false);
+                configure_opening(&mut before, "SessionStart", false);
             }
             writes.push(super::PlannedWrite {
                 path: target.hooks.clone(),
@@ -838,7 +913,8 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
     let config_ours = matches!(config_state, Some(ConfigUndoState::Ours));
 
     let hooks_root = hooks.value.clone().unwrap_or_else(|| Value::object(vec![]));
-    let (start_hook_state, start_legacy) = start_state(&hooks_root).unwrap_or((
+    validate_subagent_structure(&hooks_root)?;
+    let (start_hook_state, start_legacy) = opening_state(&hooks_root, "SessionStart").unwrap_or((
         HookState::Different("custom transport settings".to_string()),
         false,
     ));
@@ -854,6 +930,11 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
         "prompt",
         SESSION_PROMPT_COMMAND,
     );
+    let (subagent_hook_state, _) = opening_state(&hooks_root, "SubagentStart").unwrap_or((
+        HookState::Different("custom transport settings".to_string()),
+        false,
+    ));
+    let subagent_ours = matches!(subagent_hook_state, HookState::Exact);
     let start_ours = matches!(start_hook_state, HookState::Exact);
     let stop_ours = matches!(stop_hook_state, HookState::Exact);
     let prompt_ours = matches!(prompt_hook_state, HookState::Exact);
@@ -861,6 +942,7 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
 
     let nothing_to_undo = !config_ours
         && !start_ours
+        && !subagent_ours
         && !stop_ours
         && !prompt_ours
         && !skill_ours
@@ -873,7 +955,7 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
 
     let mut preview = hooks_root.clone();
     if start_ours {
-        remove_start(&mut preview, undo_start_command);
+        remove_opening(&mut preview, "SessionStart", undo_start_command);
     }
     if stop_ours {
         remove_hook(&mut preview, "Stop", SESSION_END_COMMAND);
@@ -881,25 +963,29 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
     if prompt_ours {
         remove_hook(&mut preview, "UserPromptSubmit", SESSION_PROMPT_COMMAND);
     }
+    if subagent_ours {
+        remove_opening(&mut preview, "SubagentStart", SESSION_START_COMMAND);
+    }
     let hooks_becomes_empty = preview
         .as_object()
         .is_some_and(|s: &[(String, Value)]| s.is_empty());
 
-    let (hooks_verb, hooks_what): (&'static str, &'static str) =
-        match (start_ours, stop_ours, prompt_ours) {
-            (true, true, true) if hooks_becomes_empty => (
-                "remove",
-                "the three hooks setup wrote; nothing else is left, so it goes",
-            ),
-            (true, true, true) => ("remove", "the three hooks setup wrote"),
-            (true, true, false) | (true, false, true) | (false, true, true) => {
-                ("remove", "the two hooks setup wrote")
-            }
-            (true, false, false) => ("remove", "the SessionStart hook"),
-            (false, true, false) => ("remove", "the Stop hook"),
-            (false, false, true) => ("remove", "the UserPromptSubmit hook"),
-            (false, false, false) => ("keep", "left as it is"),
-        };
+    let own_count = [start_ours, stop_ours, prompt_ours, subagent_ours]
+        .into_iter()
+        .filter(|ours| *ours)
+        .count();
+    let hooks_verb = if own_count == 0 { "keep" } else { "remove" };
+    let hooks_what = match own_count {
+        4 if hooks_becomes_empty => "the four hooks setup wrote; nothing else is left, so it goes",
+        4 => "the four hooks setup wrote",
+        3 => "the three hooks setup wrote",
+        2 => "the two hooks setup wrote",
+        1 if start_ours => "the SessionStart hook",
+        1 if stop_ours => "the Stop hook",
+        1 if prompt_ours => "the UserPromptSubmit hook",
+        1 => "the SubagentStart hook",
+        _ => "left as it is",
+    };
 
     // `t592` tranche 2 §5: a half-written block is not this run's to guess
     // the end of, so the file is left alone and the line says why. A status
@@ -940,6 +1026,13 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
     };
 
     let mut hooks_item = PlanItem::new(hooks_verb, HOOKS_LABEL, hooks_what);
+    if let HookState::Different(_) = &subagent_hook_state {
+        hooks_item = hooks_item.with_sub(
+            "SubagentStart",
+            "custom or duplicate settings; left as it is",
+        );
+    }
+
     if let HookState::Different(_) = &start_hook_state {
         hooks_item = hooks_item.with_sub("SessionStart", "runs vivac another way; left as it is");
     }
@@ -1012,20 +1105,23 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
         }
     }
 
-    if start_ours || stop_ours || prompt_ours {
+    if start_ours || stop_ours || prompt_ours || subagent_ours {
         let original = hooks.raw.clone().into_bytes();
         if hooks_becomes_empty {
             writes.push(super::PlannedWrite::delete(target.hooks.clone(), original));
         } else {
             let mut new_hooks = hooks_root.clone();
             if start_ours {
-                remove_start(&mut new_hooks, undo_start_command);
+                remove_opening(&mut new_hooks, "SessionStart", undo_start_command);
             }
             if stop_ours {
                 remove_hook(&mut new_hooks, "Stop", SESSION_END_COMMAND);
             }
             if prompt_ours {
                 remove_hook(&mut new_hooks, "UserPromptSubmit", SESSION_PROMPT_COMMAND);
+            }
+            if subagent_ours {
+                remove_opening(&mut new_hooks, "SubagentStart", SESSION_START_COMMAND);
             }
             let rendered = json::finalize(
                 &json::render(&new_hooks, &hooks.indent),

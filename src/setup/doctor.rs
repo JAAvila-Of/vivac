@@ -122,6 +122,7 @@ fn hooks(root: &Value, harness: &str, report: &mut Report) {
     }
     for (event, word) in [
         ("SessionStart", "start"),
+        ("SubagentStart", "start"),
         ("UserPromptSubmit", "guard"),
         ("UserPromptSubmit", "prompt"),
         ("Stop", "end"),
@@ -135,6 +136,20 @@ fn hooks(root: &Value, harness: &str, report: &mut Report) {
         } else {
             format!("{harness} {event}")
         };
+        if harness == "codex" && event == "SubagentStart" {
+            let text = serde_json::to_string(root).expect("JSON value");
+            let parsed = super::json::parse(&text).expect("JSON value");
+            let state = super::codex::validate_subagent_structure(&parsed)
+                .and_then(|()| super::codex::opening_state(&parsed, event));
+            let exact = matches!(state, Ok((super::claude_code::HookState::Exact, false)));
+            report.add(&name, if exact { "ok" } else { "warning" },
+                if exact {
+                    "Expected command is configured. Codex 0.163.0 does not stop subagents on rejected context; provider reception is unverified."
+                } else {
+                    "Missing, custom, duplicate or malformed SubagentStart configuration; provider reception is unverified."
+                }, if exact { None } else { Some(&fix) });
+            continue;
+        }
         let expected = if harness == "codex" && event == "SessionStart" {
             "vivac session start --hook --context codex".to_string()
         } else {

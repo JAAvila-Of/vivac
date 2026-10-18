@@ -34,6 +34,7 @@ adapter
 adapters
 add
 added
+adding
 additional
 additions
 addr
@@ -814,6 +815,7 @@ edited
 editing
 effect
 effective
+effects
 effort
 efforts
 eight
@@ -1066,6 +1068,7 @@ full
 function
 future
 g1
+gain
 gains
 gap
 garbage
@@ -1619,6 +1622,7 @@ none
 nonempty
 nonexistent
 noninteractive
+nonobject
 nonoverlapping
 nonterminal
 nonzero
@@ -1741,6 +1745,7 @@ overflow
 overlapped
 overlong
 overrides
+oversize
 oversized
 overwrite
 overwrites
@@ -2026,6 +2031,7 @@ received
 receiver
 reception
 recheck
+recipient
 recognise
 recognised
 recognized
@@ -2056,6 +2062,7 @@ reference
 referenced
 references
 referrer
+reflecting
 refname
 refold
 refolding
@@ -2087,6 +2094,7 @@ reindex
 reinstalled
 reject
 rejected
+rejection
 rejections
 rejects
 rel
@@ -2527,11 +2535,13 @@ stripped
 strips
 struck
 struct
+structure
 structured
 style
 styled
 styles
 sub
+subagent
 subdirectory
 subdirs
 subfolder
@@ -2557,6 +2567,7 @@ supersedes
 superseding
 supplied
 supported
+supports
 surface
 surplus
 survive
