@@ -22,6 +22,7 @@ impl Server {
         let mut child = Command::new(env!("CARGO_BIN_EXE_vivac"))
             .current_dir(&c.0)
             .env("VIVAC_HOME", c.global_home())
+            .env("CODEX_HOME", c.0.join(".codex"))
             .args(["web", "--port", "0", "--no-open"])
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
