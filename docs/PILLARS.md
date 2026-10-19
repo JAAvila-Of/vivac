@@ -144,6 +144,17 @@ its manifest. Supported profiles are a UTF-8 file, a complete static frontend
 bundle, and a complete frontend application with one explicitly selected
 standalone SQLite database retained through a fresh logical export. This does
 not permit generic binary capture or active-WAL ingestion.
+An explicitly reviewed web-media bundle may additionally retain supported PNG
+and MP4 members. Its automatic inspection covers supported structure and
+accessible textual metadata; a person must review the exact visual and audible
+content before capture. This profile does not imply automated image or speech
+inspection and does not enable native application projects.
+PNG inspection additionally limits the sum of expanded scanlines, including
+filter bytes, to 32 MiB per complete revision. Compressed size alone does not
+bound inspection work; an exceeded expansion budget rejects the whole delivery.
+H.264 inspection additionally limits a complete revision to 8,192 video samples
+and 16,384 sample NAL units. Counters are shared across media members; excessive work
+rejects the complete revision rather than shortening inspection.
 For a SQLite application whose fixed product runtime already exceeds 1 MiB,
 measure the smallest complete revision and a complete revision containing the
 runtime plus 1 MiB of other content, including the manifest. Both retain the
@@ -297,6 +308,13 @@ tree is a map of where a system is weak and not yet fixed.**
   inspect supported content for sensitive values before storing it, refuse
   unsupported content, and stay outside ordinary tree writes and session hooks.
   Copies are excluded from Git by default and are never uploaded automatically.
+  For the explicit reviewed-media profile, automatic inspection covers supported
+  structure and accessible textual metadata. Prior human review covers the exact
+  visual and audible content. The declaration is bound to the member digests; it
+  is caller attestation, not proof of a person's identity or approval of the work.
+  Unknown structures and recognized sensitive metadata are refused even when a
+  review is declared. A changed member requires a new review. Media review never
+  authorizes generic binary custody or bypasses an automatic refusal.
   A retained revision is not an approval, a filesystem snapshot or a backup of
   the disk. Human review names the exact retained revision. Secret and personal
   data guards still apply; local retention has no bypass or force option.

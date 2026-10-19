@@ -463,6 +463,52 @@ cargo test --locked --release --bin vivac artifacts::bundle::tests::retained_sql
 cargo test --locked --release --bin vivac artifacts::tests::measure_one_hundred_complete_sqlite_receipt_commits_with_ten_thousand_prior_artifacts -- --ignored --exact --nocapture --test-threads=1
 ```
 
+## Reviewed web-media retention
+
+Measured on **19 October 2026**, on Windows x86_64, with Rust 1.94.1
+(`e408947bf`), Cargo 1.94.1 and the release profile. Fixtures used the local
+NTFS temporary volume, separately from the repository volume. Each case has
+100 complete captures. Each benchmark runs with one test thread under its own
+shared RustWork lease.
+The benchmarks construct their fixtures outside the timer and remove each
+retained object after its measured capture.
+
+| Fixture | Complete revision bytes | p99 / max (ms) | Peak auxiliary heap (bytes) |
+|---|---:|---:|---:|
+| PNG, near 1 MiB | 1,042,759 | 37.18 / 93.55 | 363,124 |
+| PNG, near 10 MiB | 10,480,084 | 211.39 / 237.79 | 366,708 |
+| High-expansion RGBA16 PNG, at most 1 MiB | At most 1,048,576 | 36.68 / 48.88 | 375,988 |
+| Two MP4 files, near 1 MiB | 1,047,294 | 341.25 / 376.20 | 201,682 |
+| Two MP4 files, near 10 MiB | 10,484,480 | 955.09 / 1,042.09 | 201,682 |
+
+PNG fixtures use deterministic noise, or a uniform 2048 by 2047 RGBA16 image
+for the high-expansion case. That case expands to 33,540,095 scanline bytes,
+including filter bytes, close to the complete revision's 32 MiB limit. Each
+MP4 fixture contains two videos of 4096 samples each, with one VCL and one
+UTF-8 user-data SEI NAL per sample. Together they exercise the shared limits of
+8192 samples and 16,384 sample NAL units; the larger case increases SEI text.
+Codec configuration remains separately restricted to one SPS and one PPS per
+video. These are inspection fixtures, not browser playback measurements.
+
+The measured capture includes source opening, format and accessible-text
+inspection, digest comparisons against the review declaration, complete member
+copying, manifest construction, identity checks, synchronization, verification
+and exclusive native publication. It excludes tree loading, receipt append,
+CLI startup and browser execution. It does not measure standalone check or
+restore latency. Add a 128 KiB stack allowance to each heap value: the largest
+combined auxiliary total is 507,060 bytes, below 2 MiB. Every measured p99 fits
+its 500 ms or 2,000 ms ceiling in this run; these results do not establish
+performance on another filesystem or machine.
+
+Reproduce from the crate directory, coordinating each Rust command separately
+with the shared Windows RustWork launcher where required:
+
+```text
+cargo clean -p vivac
+cargo test --locked --release --bin vivac artifacts::bundle::tests::retained_reviewed_media_release_benchmark -- --ignored --exact --nocapture --test-threads=1
+cargo test --locked --release --bin vivac artifacts::bundle::tests::retained_reviewed_video_release_benchmark -- --ignored --exact --nocapture --test-threads=1
+```
+
 ## Context
 
 Context is the budget that actually binds an agent, so the payloads are

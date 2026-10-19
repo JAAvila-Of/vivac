@@ -280,6 +280,9 @@
       if (generation !== detailGeneration || selected !== entry) return;
       const members = result.members || [];
       box.replaceChildren(element('h3', 'Members of this revision'), element('p', 'Metadata only; bytes have not been checked. Check selected revision verifies the complete bundle, regardless of this page.', 'small muted'));
+      if (result.media_review && result.media_review.profile === 'reviewed-media-v1') {
+        box.append(element('p', 'Prior human media review is declared for these member digests. Automatic inspection covers structure and accessible text, not pixels or speech. The declaration does not imply approval of the work.', 'notice'));
+      }
       const table = element('table'), header = element('tr');
       for (const label of ['Member path', 'Media type', 'Bytes', 'SHA-256']) header.append(element('th', label));
       const head = element('thead'); head.append(header); table.append(head);

@@ -48,6 +48,10 @@ cap-fs-ext = "=4.0.3"
 libsqlite3-sys = { version = "=0.38.2", features = ["bundled"] }
 # Materialize the fixed product runtime with a bounded Rust-only decoder.
 flate2 = { version = "=1.1.10", default-features = false, features = ["miniz_oxide"] }
+# Inspect explicitly reviewed web media with bounded format parsers.
+png = "=0.18.1"
+mp4-atom = { version = "=0.16.2", features = ["strict"] }
+h264-reader = "=0.9.0"
 
 # `f443`: titles are cut and padded by what a terminal shows. A cut that
 # splits a grapheme drops an accent or leaves half a flag, and a column

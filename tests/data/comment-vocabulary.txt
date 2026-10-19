@@ -265,6 +265,7 @@ attacker
 attacks
 attempt
 attention
+attestation
 attribute
 attributes
 attribution
@@ -273,6 +274,7 @@ audiences
 audit
 auditable
 authenticates
+authentication
 author
 authored
 authorised
@@ -778,6 +780,7 @@ connects
 consecutive
 consequence
 conservative
+consistent
 console
 constant
 constantly
@@ -1553,6 +1556,7 @@ forces
 forcing
 foreign
 forever
+forged
 forget
 forgets
 forgetting
@@ -2883,6 +2887,7 @@ printer
 printf
 printing
 prints
+prior
 priority
 privacy
 private

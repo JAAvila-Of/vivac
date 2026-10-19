@@ -137,11 +137,21 @@ fn escape(value: &str) -> String {
 }
 
 fn wrapper(selected: &PreviewRevision, token: &str) -> String {
+    let media_review = if selected.bundle.as_ref().is_some_and(|bundle| {
+        bundle
+            .members
+            .values()
+            .any(|member| matches!(member.media_type.as_str(), "image/png" | "video/mp4"))
+    }) {
+        "<p class=\"small\">Prior human media review is declared for this revision's member digests. Automatic inspection covers structure and accessible text, not pixels or speech. This declaration does not imply approval of the work.</p>"
+    } else {
+        ""
+    };
     let runtime = selected.runtime.as_ref().map_or_else(String::new, |runtime| {
         format!("<dt>Runtime pinned to this revision</dt><dd>{}</dd><dt>Runtime SHA-256</dt><dd>{}</dd><dt>Runtime recovery</dt><dd>Updating vivac does not replace this runtime. Restore includes its complete bytes and license notices.</dd>", escape(&runtime.id), escape(&runtime.sha256))
     });
     format!(
-        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><meta name=\"referrer\" content=\"origin\"><title>Preview retained revision</title><style>body{{font-family:system-ui;margin:0;background:#f5f7fa;color:#17212b}}main{{padding:20px;max-width:1400px;margin:auto}}h1{{margin:0;font-size:22px}}code,dd{{overflow-wrap:anywhere;word-break:break-word}}.small{{font-size:13px}}.controls{{display:flex;gap:12px;flex-wrap:wrap}}form{{display:inline}}button{{padding:10px 14px}}iframe{{display:block;width:100%;height:calc(100vh - 260px);min-height:420px;box-sizing:border-box;border:1px solid #ccd4df;border-radius:8px;margin-top:16px;background:white}}</style></head><body><main><h1>Preview retained revision</h1><p>Source: <code>{}</code><br>Revision: <code>{}</code></p><details><summary>Revision details</summary><dl><dt>Description</dt><dd>{description}</dd><dt>Artifact</dt><dd>{}</dd><dt>Producer</dt><dd>{}</dd><dt>Digest</dt><dd>{}</dd>{runtime}</dl></details><p class=\"small\">JavaScript runs with browser restrictions. Complete network isolation is not guaranteed. Preview does not imply approval.</p><p class=\"small\">The local server expires after 15 minutes. Close this tab to stop HTML that is already running.</p><div class=\"controls\"><form action=\"/run\" method=\"post\" target=\"retained\"><input type=\"hidden\" name=\"token\" value=\"{token}\"><button type=\"submit\">Run HTML</button></form><form action=\"/close\" method=\"post\" target=\"_self\"><input type=\"hidden\" name=\"token\" value=\"{token}\"><button type=\"submit\">Close preview</button></form></div><iframe name=\"retained\" sandbox=\"allow-scripts\" referrerpolicy=\"origin\" title=\"Retained HTML\"></iframe></main></body></html>",
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><meta name=\"referrer\" content=\"origin\"><title>Preview retained revision</title><style>body{{font-family:system-ui;margin:0;background:#f5f7fa;color:#17212b}}main{{padding:20px;max-width:1400px;margin:auto}}h1{{margin:0;font-size:22px}}code,dd{{overflow-wrap:anywhere;word-break:break-word}}.small{{font-size:13px}}.controls{{display:flex;gap:12px;flex-wrap:wrap}}form{{display:inline}}button{{padding:10px 14px}}iframe{{display:block;width:100%;height:calc(100vh - 260px);min-height:420px;box-sizing:border-box;border:1px solid #ccd4df;border-radius:8px;margin-top:16px;background:white}}</style></head><body><main><h1>Preview retained revision</h1><p>Source: <code>{}</code><br>Revision: <code>{}</code></p><details><summary>Revision details</summary><dl><dt>Description</dt><dd>{description}</dd><dt>Artifact</dt><dd>{}</dd><dt>Producer</dt><dd>{}</dd><dt>Digest</dt><dd>{}</dd>{runtime}</dl></details>{media_review}<p class=\"small\">JavaScript runs with browser restrictions. Complete network isolation is not guaranteed. Preview does not imply approval.</p><p class=\"small\">The local server expires after 15 minutes. Close this tab to stop HTML that is already running.</p><div class=\"controls\"><form action=\"/run\" method=\"post\" target=\"retained\"><input type=\"hidden\" name=\"token\" value=\"{token}\"><button type=\"submit\">Run HTML</button></form><form action=\"/close\" method=\"post\" target=\"_self\"><input type=\"hidden\" name=\"token\" value=\"{token}\"><button type=\"submit\">Close preview</button></form></div><iframe name=\"retained\" sandbox=\"allow-scripts\" referrerpolicy=\"origin\" title=\"Retained HTML\"></iframe></main></body></html>",
         escape(&selected.source),
         escape(&selected.revision),
         escape(&selected.artifact),
@@ -171,6 +181,14 @@ fn serve(
         .replace(
             "style-src 'unsafe-inline'",
             &format!("style-src 'unsafe-inline' {asset_origin}"),
+        )
+        .replace(
+            "img-src data: blob:",
+            &format!("img-src data: blob: {asset_origin}"),
+        )
+        .replace(
+            "media-src data: blob:",
+            &format!("media-src data: blob: {asset_origin}"),
         );
     let child_policy = if selected.bundle.as_ref().is_some_and(|bundle| {
         bundle
@@ -231,7 +249,7 @@ fn serve(
                             );
                         }
                     }
-                    Ok(Action::Asset(offered)) => {
+                    Ok(Action::Asset(offered, range)) => {
                         let member = offered.strip_prefix(resources).and_then(member_path);
                         let found = if running {
                             match (member, selected.bundle.as_mut()) {
@@ -242,12 +260,42 @@ fn serve(
                             None
                         };
                         if let Some(member) = found {
-                            if member.reader.rewind().is_ok() {
-                                let size = member.reader.size();
+                            let total = member.reader.size();
+                            let mut status = 200;
+                            let mut offset = 0;
+                            let mut size = total;
+                            let mut extra = String::new();
+                            if member.media_type == "video/mp4" {
+                                extra.push_str("Accept-Ranges: bytes\r\n");
+                                if let Some(range) = range {
+                                    match video_range(&range, total) {
+                                        Some((start, end)) => {
+                                            status = 206;
+                                            offset = start;
+                                            size = end - start + 1;
+                                            extra.push_str(&format!(
+                                                "Content-Range: bytes {start}-{end}/{total}\r\n"
+                                            ));
+                                        }
+                                        None => {
+                                            status = 416;
+                                            size = 0;
+                                            extra.push_str(&format!(
+                                                "Content-Range: bytes */{total}\r\n"
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                            if member.reader.seek(offset).is_ok() {
                                 let _ = respond(
                                     &mut socket,
-                                    200,
-                                    ResponsePolicy::Asset(&member.media_type, &child_policy),
+                                    status,
+                                    ResponsePolicy::Asset(
+                                        &member.media_type,
+                                        &child_policy,
+                                        &extra,
+                                    ),
                                     &mut member.reader,
                                     size,
                                     response_deadline,
@@ -306,15 +354,49 @@ enum Action {
     Wrapper,
     Run,
     Close,
-    Asset(String),
+    Asset(String, Option<Vec<u8>>),
 }
 
 enum ResponsePolicy<'a> {
     Wrapper,
     Child,
     Trusted,
-    Asset(&'a str, &'a str),
+    Asset(&'a str, &'a str, &'a str),
     Redirect(&'a str),
+}
+
+fn video_range(offered: &[u8], size: u64) -> Option<(u64, u64)> {
+    if size == 0 {
+        return None;
+    }
+    let offered = std::str::from_utf8(offered).ok()?.strip_prefix("bytes=")?;
+    let (start, end) = offered.split_once('-')?;
+    let number = |value: &str| {
+        if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+            None
+        } else {
+            value.parse::<u64>().ok()
+        }
+    };
+    if start.is_empty() {
+        let suffix = number(end)?;
+        if suffix == 0 {
+            return None;
+        }
+        Some((size.saturating_sub(suffix), size - 1))
+    } else {
+        let start = number(start)?;
+        let end = if end.is_empty() {
+            size - 1
+        } else {
+            number(end)?
+        };
+        if start >= size || end < start {
+            None
+        } else {
+            Some((start, end.min(size - 1)))
+        }
+    }
 }
 
 fn member_path(offered: &str) -> Option<String> {
@@ -374,6 +456,7 @@ fn admit(
         return Err(403);
     }
     let offered_origin = unique(request.headers, "Origin")?;
+    let range = unique(request.headers, "Range")?;
     let asset = request.method == Some("GET")
         && request
             .path
@@ -404,9 +487,10 @@ fn admit(
     }
     match (request.method, request.path) {
         (Some("GET"), Some(offered)) if offered == path && length == 0 => Ok((Action::Wrapper, 0)),
-        (Some("GET"), Some(offered)) if asset && length == 0 => {
-            Ok((Action::Asset(offered.to_owned()), 0))
-        }
+        (Some("GET"), Some(offered)) if asset && length == 0 => Ok((
+            Action::Asset(offered.to_owned(), range.map(<[u8]>::to_vec)),
+            0,
+        )),
         (Some("POST"), Some("/run" | "/close")) => {
             if offered_origin != Some(origin.as_bytes()) {
                 return Err(403);
@@ -568,19 +652,21 @@ fn respond(
             "text/html; charset=utf-8",
             String::new(),
         ),
-        ResponsePolicy::Asset(media_type, policy) => {
+        ResponsePolicy::Asset(media_type, policy, extra) => {
             let media_type = match media_type {
                 "text/html" => "text/html; charset=utf-8",
                 "text/css" => "text/css; charset=utf-8",
                 "text/javascript" => "text/javascript; charset=utf-8",
                 "application/vnd.sqlite3" => "application/vnd.sqlite3",
+                "image/png" => "image/png",
+                "video/mp4" => "video/mp4",
                 _ => return Err(io::Error::other("Unsupported preview media type.")),
             };
             (
                 policy,
                 "no-referrer",
                 media_type,
-                "Access-Control-Allow-Origin: null\r\n".into(),
+                format!("Access-Control-Allow-Origin: null\r\n{extra}"),
             )
         }
         ResponsePolicy::Redirect(location) => (
@@ -592,10 +678,12 @@ fn respond(
     };
     let reason = match status {
         200 => "OK",
+        206 => "Partial Content",
         303 => "See Other",
         403 => "Forbidden",
         404 => "Not Found",
         405 => "Method Not Allowed",
+        416 => "Range Not Satisfiable",
         _ => "Bad Request",
     };
     let header = format!("HTTP/1.1 {status} {reason}\r\nContent-Type: {media_type}\r\nContent-Length: {size}\r\nConnection: close\r\nContent-Security-Policy: {policy}\r\nReferrer-Policy: {referrer_policy}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nX-DNS-Prefetch-Control: off\r\nPermissions-Policy: camera=(), microphone=(), geolocation=()\r\nCross-Origin-Opener-Policy: same-origin\r\n{extra}\r\n");
@@ -841,6 +929,140 @@ mod tests {
         let (host, token) = parts(url);
         let body = format!("token={token}");
         request(url, "POST", &format!("/{action}"), &format!("Origin: http://{host}\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\n",body.len()), &body)
+    }
+
+    #[test]
+    fn bundle_preview_serves_media_and_single_video_ranges() {
+        let _guard = SERVERS.lock().unwrap_or_else(|error| error.into_inner());
+        let mut delivery = selected(b"<html>media fixture</html>");
+        let mut members = std::collections::BTreeMap::new();
+        for (path, media_type, body) in [
+            ("index.html", "text/html", "<html>media fixture</html>"),
+            ("image.png", "image/png", "retained PNG bytes"),
+            ("video.mp4", "video/mp4", "0123456789"),
+            ("empty.mp4", "video/mp4", ""),
+        ] {
+            members.insert(
+                path.into(),
+                super::super::bundle::PreviewMember {
+                    media_type: media_type.into(),
+                    reader: selected(body.as_bytes()).reader,
+                },
+            );
+        }
+        delivery.bundle = Some(super::super::bundle::PreviewResources {
+            entrypoint: "index.html".into(),
+            members,
+        });
+        let preview = start_for(delivery, Duration::from_secs(12)).unwrap();
+        let (host, _) = parts(preview.url());
+        let resources = &preview.resources;
+        let video = format!("{resources}video.mp4");
+        assert!(request(preview.url(), "GET", &video, "", "").starts_with("HTTP/1.1 404"));
+        assert!(post(preview.url(), "run").starts_with("HTTP/1.1 303"));
+        for (path, mime, body) in [
+            ("image.png", "image/png", "retained PNG bytes"),
+            ("video.mp4", "video/mp4", "0123456789"),
+        ] {
+            let response = request(
+                preview.url(),
+                "GET",
+                &format!("{resources}{path}"),
+                "Origin: null\r\n",
+                "",
+            );
+            assert!(response.starts_with("HTTP/1.1 200"));
+            assert!(response.contains(&format!("Content-Type: {mime}\r\n")));
+            assert_eq!(response.split_once("\r\n\r\n").unwrap().1, body);
+            assert!(response.contains("X-Content-Type-Options: nosniff\r\n"));
+            assert!(response.contains(&format!("img-src data: blob: http://{host}{resources};")));
+            assert!(response.contains(&format!("media-src data: blob: http://{host}{resources};")));
+            assert!(response.contains("connect-src 'none';"));
+            if mime == "video/mp4" {
+                assert!(response.contains("Accept-Ranges: bytes\r\n"));
+            }
+        }
+        for (range, expected, content_range) in [
+            ("bytes=2-5", "2345", "bytes 2-5/10"),
+            ("bytes=7-", "789", "bytes 7-9/10"),
+            ("bytes=-3", "789", "bytes 7-9/10"),
+            ("bytes=8-999", "89", "bytes 8-9/10"),
+            ("bytes=-99", "0123456789", "bytes 0-9/10"),
+        ] {
+            let response = request(
+                preview.url(),
+                "GET",
+                &video,
+                &format!("Range: {range}\r\n"),
+                "",
+            );
+            assert!(response.starts_with("HTTP/1.1 206"), "{range}: {response}");
+            assert!(response.contains(&format!("Content-Range: {content_range}\r\n")));
+            assert!(response.contains(&format!("Content-Length: {}\r\n", expected.len())));
+            assert_eq!(response.split_once("\r\n\r\n").unwrap().1, expected);
+        }
+        for range in [
+            "bytes=10-",
+            "bytes=5-2",
+            "bytes=-0",
+            "bytes=",
+            "bytes=0-1,4-5",
+            "bytes=18446744073709551616-",
+            "bytes=+1-2",
+            "items=1-2",
+        ] {
+            let response = request(
+                preview.url(),
+                "GET",
+                &video,
+                &format!("Range: {range}\r\n"),
+                "",
+            );
+            assert!(response.starts_with("HTTP/1.1 416"), "{range}: {response}");
+            assert!(response.contains("Content-Range: bytes */10\r\n"));
+        }
+        let empty = request(
+            preview.url(),
+            "GET",
+            &format!("{resources}empty.mp4"),
+            "Range: bytes=0-\r\n",
+            "",
+        );
+        assert!(empty.starts_with("HTTP/1.1 416"));
+        assert!(empty.contains("Content-Range: bytes */0\r\n"));
+        for path in [&video, &format!("{resources}image.png")] {
+            assert!(request(
+                preview.url(),
+                "GET",
+                path,
+                "Range: bytes=0-1\r\nRange: bytes=2-3\r\n",
+                ""
+            )
+            .starts_with("HTTP/1.1 400"));
+            assert!(request(
+                preview.url(),
+                "GET",
+                path,
+                "Origin: https://example.com\r\n",
+                ""
+            )
+            .starts_with("HTTP/1.1 403"));
+        }
+        let image = request(
+            preview.url(),
+            "GET",
+            &format!("{resources}image.png"),
+            "Range: bytes=0-1\r\n",
+            "",
+        );
+        assert!(image.starts_with("HTTP/1.1 200"));
+        assert!(image.ends_with("retained PNG bytes"));
+        assert!(
+            request(preview.url(), "GET", "/assets/wrong/video.mp4", "", "")
+                .starts_with("HTTP/1.1 404")
+        );
+        post(preview.url(), "close");
+        preview.wait();
     }
 
     #[test]
