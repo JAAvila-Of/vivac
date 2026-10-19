@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "packages": [
+    {
+      "name": "hex-slice",
+      "version": "0.1.4",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "license": "MIT",
+      "upstream_archive_sha256": "5491a308e0214554f07a81d8944abe45f552871c12e3c3c6e7e5d354039a6c4c",
+      "provenance": {
+        "license_source": "https://metadata.ftp-master.debian.org/changelogs//main/r/rust-hex-slice/rust-hex-slice_0.1.4-1_copyright",
+        "license_source_sha256": "eae604cfacc3badfb1423a899fd89298f2da4e1ecc9bac1649df5aebfc31f0f3",
+        "source_package": "https://packages.debian.org/source/stable/rust-hex-slice",
+        "debian_source_version": "0.1.4-1",
+        "debian_orig_archive_md5": "f9adb954d0ecfda5d0ff80b0a79e1fe3",
+        "matching_source_files": 8,
+        "notice_transformation": "Preserve the upstream Files: * copyright line and unfold the MIT license paragraph from Debian copyright format."
+      },
+      "files": [
+        {
+          "path": "third-party-licenses/hex-slice-0.1.4/LICENSE-MIT",
+          "sha256": "062fe007d77252e7b5928878914a4f407e0ac3726d5d4e76d61f5fecedc15f61"
+        }
+      ]
+    },
+    {
+      "name": "mp4ra-rust",
+      "version": "0.6.0",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "license": "MIT/Apache-2.0",
+      "upstream_archive_sha256": "50e73e22289737589d1575517eefead53c7bbd7e11546437f97b3859694c1a08",
+      "provenance": {
+        "repository": "https://github.com/dholroyd/mp4ra-rust",
+        "commit": "3fc2d3a508b7867f3aa981ca902b24260fb0223f",
+        "package_path": "mp4ra-rust",
+        "license_sources": [
+          "https://raw.githubusercontent.com/dholroyd/mp4ra-rust/3fc2d3a508b7867f3aa981ca902b24260fb0223f/LICENSE-MIT",
+          "https://raw.githubusercontent.com/dholroyd/mp4ra-rust/3fc2d3a508b7867f3aa981ca902b24260fb0223f/LICENSE-APACHE"
+        ],
+        "notice_transformation": "None; exact upstream root license files at the packaged VCS commit."
+      },
+      "files": [
+        {
+          "path": "third-party-licenses/mp4ra-rust-0.6.0/LICENSE-MIT",
+          "sha256": "dea4b0f988296a5d89651e94c7e367a8815960498fb5678de839061702b056e6"
+        },
+        {
+          "path": "third-party-licenses/mp4ra-rust-0.6.0/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        }
+      ]
+    }
+  ]
+}

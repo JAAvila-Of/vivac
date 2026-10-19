@@ -92,7 +92,8 @@ pub(super) fn inspect_with_budget(
                 require(!brands && start <= 16 && (8..=256).contains(&size) && size % 4 == 0)?;
                 let mut bytes = vec![0; size];
                 reader.read_exact(&mut bytes)?;
-                for brand in std::iter::once(&bytes[..4]).chain(bytes[8..].chunks_exact(4)) {
+                let first: &[u8; 4] = bytes[..4].try_into().map_err(|_| unsupported())?;
+                for brand in std::iter::once(first).chain(bytes[8..].as_chunks::<4>().0) {
                     require(matches!(
                         brand,
                         b"isom" | b"iso2" | b"avc1" | b"mp41" | b"mp42"
@@ -278,7 +279,7 @@ impl<'a> Movie<'a> {
                         b"stss" => self.sync = Some(body),
                         b"elst" => {
                             require(count <= 2)?;
-                            for entry in body[8..].chunks_exact(12) {
+                            for entry in body[8..].as_chunks::<12>().0 {
                                 require(
                                     word(entry, 0)? as u64 <= u64::from(self.movie_timescale) * 300
                                         && word(entry, 8)? == 0x10000,
@@ -416,7 +417,7 @@ impl<'a> Movie<'a> {
         let timing = self.timing.ok_or_else(unsupported)?;
         let mut samples = 0u64;
         let mut ticks = 0u64;
-        for entry in timing[8..].chunks_exact(8) {
+        for entry in timing[8..].as_chunks::<8>().0 {
             let n = word(entry, 0)?;
             let delta = word(entry, 4)?;
             require(n > 0 && delta > 0)?;
@@ -428,7 +429,7 @@ impl<'a> Movie<'a> {
         require(samples == count as u64 && ticks <= u64::from(self.timescale) * 300)?;
         if let Some(composition) = self.composition {
             let mut total = 0u64;
-            for entry in composition[8..].chunks_exact(8) {
+            for entry in composition[8..].as_chunks::<8>().0 {
                 let n = word(entry, 0)?;
                 require(n > 0)?;
                 total += u64::from(n);
@@ -444,7 +445,7 @@ impl<'a> Movie<'a> {
         }
         if let Some(sync) = self.sync {
             let mut previous = 0;
-            for entry in sync[8..].chunks_exact(4) {
+            for entry in sync[8..].as_chunks::<4>().0 {
                 let index = word(entry, 0)?;
                 require(index > previous && index <= count as u32)?;
                 previous = index;
@@ -456,7 +457,7 @@ impl<'a> Movie<'a> {
         let entries = &mapping[8..];
         require(!entries.is_empty() && word(entries, 0)? == 1 && chunk_count > 0)?;
         let mut previous = 0;
-        for entry in entries.chunks_exact(12) {
+        for entry in entries.as_chunks::<12>().0 {
             let chunk = word(entry, 0)?;
             require(
                 chunk > previous
