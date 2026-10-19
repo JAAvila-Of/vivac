@@ -17,8 +17,11 @@ crate contributes every licence and notice file it ships (`LICENSE*`,
 printed once, under all of their names.
 
 It stops, rather than printing a partial file, when a crate ships no licence
-file at all: that crate has to be looked at by a person, because an archive
-missing a notice is the failure this exists to prevent.
+file and has no reviewed entry in `third-party-notices.json`. A reviewed entry
+binds local notices to an exact package identity and licence expression;
+their hashes are checked before output. The source and review evidence live
+beside those files. Unknown identities and changed notices still stop the
+archive, because a missing notice is the failure this exists to prevent.
 
 The output is not committed. A generated file checked in is a copy that goes
 stale; the release step writes it fresh for each archive. No dependencies,
@@ -26,12 +29,16 @@ for the reason `check-commits.py` gives.
 """
 
 import argparse
+import hashlib
 import json
 import os
+from pathlib import Path
 import subprocess
 import sys
 
 PREFIXES = ("LICENSE", "LICENCE", "COPYING", "NOTICE")
+REVIEWED_MANIFEST = Path(__file__).resolve().with_name("third-party-notices.json")
+CRATES_IO_SOURCE = "registry+https://github.com/rust-lang/crates.io-index"
 
 
 def metadata(target):
@@ -81,6 +88,42 @@ def notice_files(package):
     return [os.path.join(folder, name) for name in found]
 
 
+def reviewed_notice_files(package):
+    if package.get("source") != CRATES_IO_SOURCE:
+        return []
+    try:
+        manifest = json.loads(REVIEWED_MANIFEST.read_text(encoding="utf-8"))
+        if manifest["schema_version"] != 1:
+            raise ValueError("unsupported manifest schema")
+        matches = [entry for entry in manifest["packages"]
+                   if all(entry[key] == package.get(key)
+                          for key in ("name", "version", "source", "license"))]
+        if not matches:
+            return []
+        if len(matches) != 1:
+            raise ValueError("duplicate reviewed package")
+        files = matches[0]["files"]
+        if not files:
+            raise ValueError("reviewed package has no notice files")
+        folder = REVIEWED_MANIFEST.parent.resolve()
+        paths = []
+        for item in files:
+            relative = Path(item["path"])
+            path = (folder / relative).resolve()
+            if relative.is_absolute() or not path.is_relative_to(folder):
+                raise ValueError("reviewed notice path is outside tools")
+            content = path.read_bytes()
+            if not content.strip():
+                raise ValueError(f"empty reviewed notice: {relative}")
+            if hashlib.sha256(content).hexdigest() != item["sha256"]:
+                raise ValueError(f"reviewed notice SHA256 mismatch: {relative}")
+            paths.append(str(path))
+        return paths
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        sys.exit(f"cannot verify reviewed notices for "
+                 f"{package['name']} {package['version']}: {error}")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--target", required=True)
@@ -92,7 +135,7 @@ def main():
     missing = []
     for package in crates:
         label = f"{package['name']} {package['version']}"
-        files = notice_files(package)
+        files = notice_files(package) or reviewed_notice_files(package)
         if not files:
             missing.append(f"{label} ({package.get('license') or 'no licence'})")
             continue

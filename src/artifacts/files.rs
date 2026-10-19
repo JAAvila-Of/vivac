@@ -37,6 +37,10 @@ impl Download {
     pub(crate) fn rewind(&mut self) -> io::Result<()> {
         self.reader.seek(SeekFrom::Start(0)).map(|_| ())
     }
+
+    pub(crate) fn seek(&mut self, offset: u64) -> io::Result<()> {
+        self.reader.seek(SeekFrom::Start(offset)).map(|_| ())
+    }
 }
 
 impl Read for Download {

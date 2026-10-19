@@ -57,6 +57,8 @@ on:
       - Cargo.lock
       - rust-toolchain.toml
       - tools/third-party-notices.py
+      - tools/third-party-notices.json
+      - tools/third-party-licenses/**
 
 permissions:
   contents: read

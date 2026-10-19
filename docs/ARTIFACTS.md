@@ -202,13 +202,82 @@ identity before publication and refuses a mismatch. The restored
 revision metadata, not an application member. Restoration does not create a new
 artifact revision or execute the delivery.
 
-A bundle accepts at most 64 explicitly selected UTF-8 `.html`, `.css` and `.js`
-members. The entry point must be an HTML member. Paths use portable ASCII
+A bundle accepts at most 64 explicitly selected `.html`, `.css` and `.js`
+members, with PNG and MP4 members under the reviewed-media profile below. Text
+members must be UTF-8. The entry point must be an HTML member. Paths use portable ASCII
 components; ambiguous names, case-insensitive collisions, traversal, Windows
 reserved names and links are refused. The complete revision, including its
 manifest, is limited to 10 MiB; the manifest is limited to 64 KiB. The operation's
-auxiliary memory limit remains 2 MiB. Every member and its metadata pass the
-complete sensitive-value guards.
+auxiliary memory limit remains 2 MiB. Text members and manifest fields pass the
+complete sensitive-value guards. Media inspection follows the explicit profile
+below; its visual review is separate from automatic text inspection.
+
+### Reviewed web media
+
+A web preview can retain its selected PNG images and MP4 videos in the same
+revision as its HTML/CSS/JS. The software that produced an image or video is
+not a runtime requirement of that web preview. Retaining a comparison rendered
+by Unity does not retain or run the Unity project.
+
+The `reviewed-media-v1` profile combines automatic inspection of supported
+structure and accessible textual metadata with prior human review of the exact
+visual content. The engine does not perform OCR, face recognition or speech
+inspection. The caller must obtain the person's explicit confirmation for the
+selected media before capture and declare each exact member path relative to
+the selected root and its SHA-256 in the selector:
+
+```json
+{
+  "root": "previews/comparison",
+  "entrypoint": "index.html",
+  "members": ["index.html", "before.png", "after.mp4"],
+  "requirements": [],
+  "media_review": {
+    "profile": "reviewed-media-v1",
+    "members": [
+      {"path": "before.png", "sha256": "<SHA-256 of the reviewed PNG>"},
+      {"path": "after.mp4", "sha256": "<SHA-256 of the reviewed MP4>"}
+    ]
+  }
+}
+```
+
+Replace the placeholders with actual lowercase 64-character digests. Capture
+computes and checks the bytes itself; supplied digests do not establish trusted
+content. Every selected medium needs exactly one matching declaration, with no
+extra members. A changed medium needs a new review. An explicit privacy review
+can be reused for identical media digests in a later revision, even when its
+HTML, CSS or JavaScript changes. The retained manifest binds
+the declaration to those bytes. This is caller attestation, not authentication
+of the person, an automatic privacy verdict or approval of the work shown.
+Unsupported structure or recognized sensitive metadata still rejects capture;
+review cannot override that refusal.
+
+The initial PNG profile accepts static, noninterlaced images up to 4096 pixels
+on either side and 16,777,216 pixels total. It validates checksums, bounded text
+decompression and image rows. All selected PNG scanlines, including filter bytes,
+must fit a combined 32 MiB expansion budget per revision, checked before decoding.
+Unsupported chunks, including EXIF, ICC profiles,
+animation and unknown private chunks, are refused. The initial MP4 profile
+accepts a nonfragmented file with one H.264 video track, no audio or subtitles,
+at most 300 seconds per video. A complete revision is limited to 8,192 video
+samples and 16,384 H.264 sample NAL units across all selected videos. Codec
+configuration is separately restricted to one sequence parameter set and one
+picture parameter set per video. Unknown boxes and unsupported metadata,
+tracks or codec structures are refused. File extensions alone are insufficient.
+Media and SQLite application profiles cannot be combined in this version.
+
+The complete revision, including all media and its manifest, remains limited
+to 10 MiB. Check and restore inspect the media again and verify their exact
+digests. Restore preserves the selected bytes; capture does not strip metadata,
+transcode a video or reduce image quality. A refusal leaves the complete delivery
+outside custody. Do not remove required resources or embed them in HTML to
+bypass an unsupported profile.
+
+Preview serves only the verified revision's media with explicit MIME types and
+browser restrictions. MP4 supports single byte-range requests for seeking.
+It exposes no project directory or Vivac API to the artifact. Browser codec
+availability and human approval remain separate from successful custody.
 
 The preview serves a verified private copy of this exact revision from an
 independent loopback origin. **Run HTML** enables the entry point and declared
@@ -424,7 +493,8 @@ The engine retains a UTF-8 file or a complete selected frontend bundle per
 revision, up to 10 MiB including bundle metadata. A self-contained HTML file can
 include JavaScript and remain a single delivery. A contained SQLite database
 requires the explicit `sqlite_application` capability and profile described
-above. Other binary formats are unsupported. Recognizing a filename does not
+above, and explicitly reviewed PNG/MP4 members use the reviewed-media bundle
+profile. Other binary formats are unsupported. Recognizing a filename does not
 make it eligible for custody. Retaining a supported
 code file does not prove that an entire application can be recovered or run.
 The engine offers restricted browser preview for retained HTML revisions.

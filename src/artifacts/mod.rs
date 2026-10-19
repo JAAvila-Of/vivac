@@ -2,6 +2,7 @@
 pub(crate) mod bundle;
 mod files;
 mod guard;
+mod media;
 mod native;
 pub(crate) mod preview;
 pub(crate) mod projection;
@@ -56,7 +57,10 @@ pub(crate) fn deserialize_description<'de, D: serde::Deserializer<'de>>(
 fn capabilities() -> Value {
     let bundles = bundle::SUPPORTED;
     let bundle_capabilities = if bundles {
-        json!({"supported":true,"formats":["html","css","js"],"max_bytes":MAX_FILE_BYTES,"max_members":64,"max_manifest_bytes":65536})
+        json!({"supported":true,"formats":["html","css","js","png","mp4"],"max_bytes":MAX_FILE_BYTES,"max_members":64,"max_manifest_bytes":65536,
+            "media": {"profile":"reviewed-media-v1", "review_required":true, "review_scope":"exact_member_digests", "review_evidence":"caller_attestation", "automatic_inspection":"structure_and_accessible_text", "visual_inspection":false, "audio_inspection":false,
+                "png":{"profile":"static-png-v1","max_width":4096,"max_height":4096,"max_pixels":16777216,"max_decoded_bytes_per_revision":media::MAX_DECODED_BYTES,"interlaced":false,"max_metadata_bytes":65536,"max_chunks":1024,"unknown_chunks":"refused"},
+                "mp4":{"profile":"h264-video-v1","fragmented":false,"audio":false,"max_tracks":1,"max_seconds":300,"max_samples":8192,"max_samples_per_revision":media::MAX_VIDEO_SAMPLES,"max_nal_units_per_revision":media::MAX_NAL_UNITS,"nal_budget_scope":"sample_nal_units","max_width":4096,"max_height":4096,"max_pixels":16000000,"max_metadata_bytes":65536,"max_boxes":1024,"sequence_parameter_sets":1,"picture_parameter_sets":1,"slice_groups":false,"sei":"utf8_user_data_unregistered","unknown_boxes":"refused"}}})
     } else {
         json!({"supported":false,"reason":"Complete bundle custody is not supported on this platform."})
     };
@@ -1371,6 +1375,10 @@ fn execute_read(ctx: &Ctx, args: &Args) -> Result<(Value, i32), Failure> {
                             json!((next < manifest.members.len()).then_some(next));
                         value["entrypoint"] = json!(manifest.entrypoint);
                         value["requirements"] = json!(manifest.requirements);
+                        if let Some(review) = &manifest.media_review {
+                            value["media_review"] = json!(review);
+                            value["media_inspection"] = json!({"automatic":"structure_and_accessible_text","visual":false,"audio":false,"review_evidence":"caller_attestation","approval":"not_inferred"});
+                        }
                         value["manifest_status"] =
                             json!({"status":"readable","members_checked":false});
                     }
@@ -1645,6 +1653,7 @@ fn print(value: &Value) -> Result<(), Failure> {
         let max_mib = MAX_FILE_BYTES / (1024 * 1024);
         if bundle::SUPPORTED {
             crate::output::outln!("Artifacts: UTF-8 files or complete selected HTML/CSS/JS bundles, up to {max_mib} MiB per revision; bundles up to 64 members and 64 KiB manifest; pages up to {MAX_PAGE_SIZE}.");
+            crate::output::outln!("Web media: selected static PNG and single-track H.264 MP4 without audio. Prior human review of exact media bytes is required; automatic inspection covers structure and accessible text, not visual content. Unknown structures are refused.");
         } else {
             crate::output::outln!("Artifacts: one UTF-8 text file per revision, up to {max_mib} MiB; pages up to {MAX_PAGE_SIZE}. Complete bundle custody is not supported on this platform.");
         }
@@ -2954,6 +2963,7 @@ mod tests {
             requirements: vec![],
             database: None,
             runtime: None,
+            media_review: None,
         };
         let retained = bundle::capture(root, &selection, &revision).unwrap();
         Body::ArtifactBundleCaptured {

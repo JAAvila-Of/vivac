@@ -57,6 +57,7 @@ jobs:
         with:
           components: rustfmt, clippy
       - run: cargo fmt --check
+      - run: python3 tools/test-third-party-notices.py
       - run: cargo clippy --locked --all-targets -- -D warnings
       # The profile every other step uses carries `debug_assertions`, so code
       # that only a debug-only block reaches counts as live in all of them.

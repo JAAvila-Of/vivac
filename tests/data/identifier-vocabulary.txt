@@ -40,6 +40,8 @@ additions
 addr
 address
 adds
+adler
+adler32
 admission
 admit
 admits
@@ -69,6 +71,7 @@ al
 alane
 alias
 aliases
+aligned
 aligns
 all
 alloc
@@ -92,6 +95,7 @@ also
 alternate
 alternatives
 always
+ama
 ambient
 ambiguity
 ambiguous
@@ -104,6 +108,7 @@ ancestral
 anchor
 anchoring
 anchors
+ancillary
 and
 animations
 annotations
@@ -177,12 +182,14 @@ assumed
 assuming
 assumption
 at
+atom
 atomic
 atomically
 attached
 attempt
 attempting
 attempts
+attestation
 attr
 attribute
 attributes
@@ -203,6 +210,8 @@ automation
 aux
 auxiliary
 available
+avc
+avcc
 avoids
 away
 aws
@@ -253,6 +262,7 @@ binding
 bindings
 birth
 births
+bit
 bits
 bk
 black
@@ -270,6 +280,8 @@ body
 bogus
 bold
 bolds
+bomb
+bombs
 bookkeeping
 bool
 boolean
@@ -287,11 +299,14 @@ bounded
 bounds
 box
 boxed
+boxes
 brackets
 branch
 branched
 branches
 branching
+brand
+brands
 break
 breaks
 brief
@@ -302,6 +317,7 @@ browsing
 btree
 bucket
 budget
+budgets
 buf
 buffer
 build
@@ -499,6 +515,7 @@ component
 components
 composition
 compound
+compressed
 compute
 concat
 concurrent
@@ -574,6 +591,7 @@ crash
 crate
 crates
 crates2
+crc
 create
 created
 creates
@@ -672,6 +690,7 @@ deliver
 delivered
 deliveries
 delivery
+delta
 denial
 denied
 deny
@@ -725,6 +744,8 @@ digest
 digit
 digits
 dim
+dimension
+dimensions
 dims
 dir
 direct
@@ -840,7 +861,9 @@ enabled
 enables
 encode
 encoded
+encoder
 end
+ended
 endings
 endless
 ends
@@ -898,6 +921,7 @@ example
 exceeded
 exceeds
 except
+excess
 excessive
 exchange
 excl
@@ -919,6 +943,8 @@ exists
 exit
 exits
 expand
+expanded
+expansion
 expect
 expected
 expecting
@@ -937,6 +963,7 @@ extend
 extended
 extends
 extension
+extensions
 extern
 external
 extra
@@ -1066,12 +1093,14 @@ fronts
 fs
 fstat
 fsync
+ftyp
 full
 function
 future
 g1
 gain
 gains
+gamma
 gap
 garbage
 gate
@@ -1125,6 +1154,7 @@ guessed
 guessing
 guidance
 gutter
+h264
 had
 half
 hand
@@ -1200,6 +1230,7 @@ however
 hr
 href
 hrefs
+hrm
 hs
 html
 http
@@ -1209,6 +1240,7 @@ huge
 human
 hundred
 hunts
+hys
 i16
 i32
 i64
@@ -1217,20 +1249,24 @@ icon
 icons
 id
 id2
+idat
 idempotence
 idempotent
 ident
 identical
 identically
 identifier
+identifiers
 identities
 identity
 ids
 idx
+iend
 if
 ignore
 ignored
 ignores
+ihdr
 image
 immediately
 impl
@@ -1281,6 +1317,7 @@ inside
 inspect
 inspected
 inspection
+inspects
 install
 installed
 installs
@@ -1296,10 +1333,14 @@ integer
 integrity
 intent
 interactive
+interlaced
+interlacing
 interleaved
 intern
+international
 interrupted
 interruption
+intervals
 into
 invalid
 invalidates
@@ -1326,6 +1367,7 @@ iter
 iterator
 its
 itself
+itxt
 jar
 javascript
 join
@@ -1347,6 +1389,7 @@ key
 keyboard
 keys
 keyword
+kgd
 kids
 kill
 kind
@@ -1362,11 +1405,13 @@ landing
 lands
 lane
 lanes
+language
 large
 last
 late
 later
 latest
+latin1
 launch
 launched
 layout
@@ -1505,6 +1550,7 @@ max
 maximum
 may
 maybe
+mbs
 mcp
 md
 mday
@@ -1523,6 +1569,7 @@ mentioned
 merely
 merged
 message
+messages
 messy
 metadata
 method
@@ -1545,6 +1592,7 @@ mine
 mint
 minted
 minus
+minus1
 minute
 minutes
 mismatch
@@ -1561,13 +1609,16 @@ modified
 module
 mon
 month
+moov
 more
 most
 move
 moved
 moves
+movie
 moving
 mp
+mp4
 mpsc
 ms
 msg
@@ -1582,6 +1633,8 @@ mutex
 mx
 n1
 n2
+nal
+nals
 name
 named
 names
@@ -1782,6 +1835,7 @@ panics
 paragraph
 paragraphs
 parallel
+param
 parameter
 parameters
 params
@@ -1835,9 +1889,11 @@ phase
 phases
 phrase
 physical
+pic
 pick
 picked
 picks
+picture
 pieces
 pii
 pile
@@ -1849,6 +1905,7 @@ pipe
 piped
 pipelined
 pixel
+pixels
 pk
 place
 placed
@@ -1863,9 +1920,11 @@ planted
 planting
 plants
 platform
+plte
 plural
 pluralised
 plus
+png
 point
 pointer
 pointing
@@ -1884,6 +1943,7 @@ positionals
 positive
 post
 power
+pps
 pragma
 precedence
 precision
@@ -1909,6 +1969,7 @@ previews
 previous
 primary
 prime
+primitive
 print
 printed
 println
@@ -2001,6 +2062,7 @@ ranges
 rank
 rather
 raw
+rbsp
 rc
 rd
 rdlck
@@ -2033,6 +2095,7 @@ received
 receiver
 reception
 recheck
+rechecks
 recipient
 recognise
 recognised
@@ -2224,6 +2287,7 @@ rev
 revalidate
 reverse
 review
+reviewable
 reviewed
 reviewer
 revised
@@ -2238,10 +2302,14 @@ rewriting
 rewritten
 rfc3339
 rfind
+rgb
+rgba
+rgba16
 rid
 right
 ring
 risk
+rns
 rollback
 rolls
 room
@@ -2289,6 +2357,8 @@ sb
 scalar
 scalars
 scan
+scanline
+scanlines
 scanned
 scans
 scenario
@@ -2328,6 +2398,7 @@ sees
 seg
 segment
 segmentation
+sei
 select
 selected
 selection
@@ -2418,7 +2489,9 @@ site
 sites
 sits
 six
+sixteen
 size
+sizes
 skill
 skills
 skip
@@ -2439,6 +2512,7 @@ snapshot
 snippet
 so
 socket
+solid
 some
 something
 sort
@@ -2465,9 +2539,11 @@ spellings
 spent
 spin
 spine
+splice
 split
 splitn
 spoken
+sps
 sql
 sqlite
 sqlite3
@@ -2530,6 +2606,7 @@ streams
 stretch
 strict
 strictly
+stride
 string
 strings
 strip
@@ -2652,6 +2729,7 @@ three
 threshold
 through
 ticking
+ticks
 tidy
 tie
 tight
@@ -2659,6 +2737,7 @@ time
 timed
 timeout
 times
+timescale
 timing
 tiny
 tiocgwinsz
@@ -2704,6 +2783,7 @@ transfer
 transfers
 transformation
 transient
+translated
 transport
 transpose
 travels
@@ -2737,6 +2817,7 @@ twice
 twin
 twins
 two
+txt
 type
 typed
 types
@@ -2747,6 +2828,7 @@ u16
 u32
 u64
 u8
+ue
 uid
 uk
 ulid
@@ -2760,6 +2842,7 @@ unblocks
 unbound
 unchanged
 unclaimed
+uncompressed
 undeclared
 under
 underneath
@@ -2777,6 +2860,7 @@ uninit
 union
 unique
 unit
+units
 unix
 unjoined
 unknown
@@ -2792,7 +2876,9 @@ unreachable
 unreadable
 unrecognised
 unrecorded
+unreferenced
 unregister
+unregistered
 unrelated
 unremoved
 unrepresentable
@@ -2801,6 +2887,7 @@ unrestorable
 unrestored
 unreviewed
 unsafe
+unsigned
 unstable
 unstack
 unsupported
@@ -2874,6 +2961,7 @@ versions
 very
 vfs
 via
+video
 view
 views
 violation
@@ -2884,6 +2972,7 @@ visited
 visiting
 visitor
 visits
+visual
 vivac
 vivacs
 vm
@@ -3001,4 +3090,6 @@ your
 zero
 zeroed
 zip
+zlib
 zone
+ztxt

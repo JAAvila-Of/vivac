@@ -517,8 +517,26 @@ fn capabilities_need_no_project_and_ignore_an_unreadable_tree() {
     if bundles {
         assert_eq!(
             expected["delivery_types"]["bundle"]["formats"],
-            serde_json::json!(["html", "css", "js"])
+            serde_json::json!(["html", "css", "js", "png", "mp4"])
         );
+        let media = &expected["delivery_types"]["bundle"]["media"];
+        assert_eq!(media["profile"], "reviewed-media-v1");
+        assert_eq!(media["review_required"], true);
+        assert_eq!(media["review_scope"], "exact_member_digests");
+        assert_eq!(media["review_evidence"], "caller_attestation");
+        assert_eq!(
+            media["automatic_inspection"],
+            "structure_and_accessible_text"
+        );
+        assert_eq!(media["visual_inspection"], false);
+        assert_eq!(media["audio_inspection"], false);
+        assert_eq!(
+            media["png"]["max_decoded_bytes_per_revision"],
+            32 * 1024 * 1024
+        );
+        assert_eq!(media["mp4"]["max_samples_per_revision"], 8192);
+        assert_eq!(media["mp4"]["max_nal_units_per_revision"], 16384);
+        assert_eq!(media["mp4"]["nal_budget_scope"], "sample_nal_units");
         assert_eq!(expected["delivery_types"]["bundle"]["max_members"], 64);
         assert_eq!(
             expected["delivery_types"]["bundle"]["max_manifest_bytes"],

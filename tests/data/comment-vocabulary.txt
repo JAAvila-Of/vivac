@@ -265,6 +265,7 @@ attacker
 attacks
 attempt
 attention
+attestation
 attribute
 attributes
 attribution
@@ -273,6 +274,7 @@ audiences
 audit
 auditable
 authenticates
+authentication
 author
 authored
 authorised
@@ -667,6 +669,7 @@ cmd
 coarser
 coarsest
 code
+codec
 coded
 codepoints
 codes
@@ -778,6 +781,7 @@ connects
 consecutive
 consequence
 conservative
+consistent
 console
 constant
 constantly
@@ -795,6 +799,7 @@ consumer
 contain
 contained
 container
+containing
 contains
 contended
 content
@@ -1002,6 +1007,7 @@ delimiting
 delivered
 deliveries
 delivering
+delivery
 delta
 demand
 demanded
@@ -1090,6 +1096,7 @@ digit
 digits
 diluted
 dim
+dimensions
 dimmed
 dimming
 dims
@@ -1391,6 +1398,7 @@ explained
 explaining
 explains
 explicit
+explicitly
 export
 exported
 exports
@@ -1553,6 +1561,7 @@ forces
 forcing
 foreign
 forever
+forged
 forget
 forgets
 forgetting
@@ -1682,6 +1691,7 @@ granting
 granularity
 graph
 grapheme
+grayscale
 green
 greenwich
 gregorian
@@ -1844,6 +1854,7 @@ identified
 identifier
 identifiers
 identifies
+identities
 identity
 idf
 idiom
@@ -1940,6 +1951,7 @@ inside
 insists
 inspectable
 inspecting
+inspection
 install
 installed
 installer
@@ -2007,6 +2019,7 @@ invocation
 invoke
 invoked
 invokes
+invoking
 involved
 io
 iquorum
@@ -2257,6 +2270,7 @@ machinery
 machines
 macos
 macro
+macroblock
 made
 magic
 main
@@ -2333,6 +2347,7 @@ meets
 megabyte
 megabytes
 member
+members
 membership
 memory
 mention
@@ -2436,6 +2451,7 @@ mutually
 my
 n
 naive
+nal
 name
 nameable
 named
@@ -2883,6 +2899,7 @@ printer
 printf
 printing
 prints
+prior
 priority
 privacy
 private
@@ -3412,6 +3429,7 @@ said
 sake
 same
 sample
+samples
 sandbox
 sandboxes
 sanitized
@@ -4237,6 +4255,7 @@ union
 unique
 uniqueness
 unit
+units
 universal
 unix
 unjoined
@@ -4526,6 +4545,7 @@ yourself
 zero
 zeroed
 zeros
+zlib
 zombie
 zone
 zwj

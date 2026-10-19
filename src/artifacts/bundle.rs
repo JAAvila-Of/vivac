@@ -39,6 +39,30 @@ pub(crate) struct BundleSelection {
         deserialize_with = "deserialize_selection_identity"
     )]
     pub(crate) runtime: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_media_review"
+    )]
+    pub(crate) media_review: Option<MediaReview>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct MediaReview {
+    // Caller attestation of prior human review, not authentication or proof of safety.
+    pub(crate) profile: String,
+    pub(crate) members: Vec<ReviewedMember>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ReviewedMember {
+    pub(crate) path: String,
+    pub(crate) sha256: String,
+}
+fn deserialize_media_review<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<MediaReview>, D::Error> {
+    MediaReview::deserialize(deserializer).map(Some)
 }
 fn deserialize_selection_identity<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
@@ -65,6 +89,12 @@ pub(crate) struct Manifest {
         deserialize_with = "deserialize_runtime"
     )]
     pub(super) runtime: Option<runtime::Descriptor>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_media_review"
+    )]
+    pub(crate) media_review: Option<MediaReview>,
     #[serde(skip)]
     pub(crate) manifest_bytes: u64,
 }
@@ -118,6 +148,10 @@ fn media_type(path: &str) -> Result<&'static str, Failure> {
         Ok("text/css")
     } else if extension.eq_ignore_ascii_case("js") {
         Ok("text/javascript")
+    } else if extension.eq_ignore_ascii_case("png") {
+        Ok("image/png")
+    } else if extension.eq_ignore_ascii_case("mp4") {
+        Ok("video/mp4")
     } else if ["sqlite", "sqlite3", "db"]
         .iter()
         .any(|value| extension.eq_ignore_ascii_case(value))
@@ -125,9 +159,69 @@ fn media_type(path: &str) -> Result<&'static str, Failure> {
         Ok(SQLITE_MEDIA_TYPE)
     } else {
         Err(Failure::usage(
-            "Bundle members must be HTML, CSS, or JavaScript files.",
+            "Bundle members must be HTML, CSS, JavaScript, PNG, or MP4 files.",
         ))
     }
+}
+fn is_media(media_type: &str) -> bool {
+    matches!(media_type, "image/png" | "video/mp4")
+}
+fn validate_media_review(selection: &BundleSelection) -> Result<(), Failure> {
+    let media: BTreeSet<_> = selection
+        .members
+        .iter()
+        .filter(|path| media_type(path).is_ok_and(is_media))
+        .map(String::as_str)
+        .collect();
+    let Some(review) = &selection.media_review else {
+        return if media.is_empty() {
+            Ok(())
+        } else {
+            Err(Failure::usage(
+                "Media members require prior human review of their exact bytes.",
+            ))
+        };
+    };
+    if media.is_empty()
+        || selection.database.is_some()
+        || selection.runtime.is_some()
+        || review.profile != "reviewed-media-v1"
+        || review.members.len() != media.len()
+    {
+        return Err(Failure::usage(
+            "Invalid media review selection or mixed application bundle.",
+        ));
+    }
+    let mut reviewed = BTreeSet::new();
+    for member in &review.members {
+        member_path(&member.path)?;
+        if !valid_digest(&member.sha256)
+            || !media.contains(member.path.as_str())
+            || !reviewed.insert(&member.path)
+        {
+            return Err(Failure::usage(
+                "Media review must exactly name each media member once with its lowercase SHA-256.",
+            ));
+        }
+    }
+    Ok(())
+}
+fn match_media_review(
+    review: Option<&MediaReview>,
+    path: &str,
+    digest: &str,
+) -> Result<(), Failure> {
+    if !review.is_some_and(|review| {
+        review
+            .members
+            .iter()
+            .any(|member| member.path == path && member.sha256 == digest)
+    }) {
+        return Err(Failure::usage(
+            "Media bytes do not match the declared prior human review.",
+        ));
+    }
+    Ok(())
 }
 pub(crate) fn validate_path(path: &str) -> Result<(), Failure> {
     member_path(path)
@@ -248,6 +342,7 @@ fn validate_selection_shape(selection: &BundleSelection) -> Result<(), Failure> 
         }
     }
     validate_directory_spelling(&selection.members)?;
+    validate_media_review(selection)?;
     for path in &folded {
         let mut prefix = String::new();
         let mut components = path.split('/').peekable();
@@ -652,6 +747,8 @@ struct BorrowedManifest<'a> {
     database: Option<&'a DatabaseMetadata>,
     #[serde(skip_serializing_if = "Option::is_none")]
     runtime: Option<&'a runtime::Descriptor>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    media_review: Option<&'a MediaReview>,
 }
 fn write_manifest(root: &Dir, bytes: &[u8]) -> Result<(), Failure> {
     let mut output = new_member(root, MANIFEST)?;
@@ -699,8 +796,15 @@ pub(crate) fn capture(
     let mut preparation = Preparation::new(&objects)?;
     files::check_git(root, &object, &preparation.name)?;
     let mut total = 0u64;
+    let mut media_budget = super::media::Budget::default();
     let mut manifest = Manifest {
-        schema_version: if selection.database.is_some() { 3 } else { 1 },
+        schema_version: if selection.media_review.is_some() {
+            4
+        } else if selection.database.is_some() {
+            3
+        } else {
+            1
+        },
         delivery_type: if selection.database.is_some() {
             "sqlite_application"
         } else {
@@ -711,6 +815,7 @@ pub(crate) fn capture(
         requirements: vec![],
         database: None,
         runtime,
+        media_review: selection.media_review.clone(),
         members: Vec::with_capacity(sources.len()),
         manifest_bytes: 0,
     };
@@ -734,6 +839,20 @@ pub(crate) fn capture(
                 digest: snapshot.sha256,
                 size: snapshot.bytes,
             }
+        } else if is_media(media_type(&source.path)?) {
+            let receipt = super::media::copy_checked_with_budget(
+                &mut source.file,
+                &mut output,
+                media_type(&source.path)?,
+                MAX_BYTES - total,
+                &mut media_budget,
+            )?;
+            match_media_review(
+                selection.media_review.as_ref(),
+                &source.path,
+                &receipt.digest,
+            )?;
+            receipt
         } else {
             guard::copy_checked_limit(&mut source.file, &mut output, MAX_BYTES - total)?
         };
@@ -781,6 +900,7 @@ pub(crate) fn capture(
         members: &manifest.members,
         database: manifest.database.as_ref(),
         runtime: manifest.runtime.as_ref(),
+        media_review: manifest.media_review.as_ref(),
     })?;
     total = total
         .checked_add(bytes.len() as u64)
@@ -831,9 +951,12 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), Failure> {
             manifest.schema_version,
             manifest.delivery_type.as_str(),
             manifest.database.as_ref(),
-            manifest.runtime.as_ref()
+            manifest.runtime.as_ref(),
+            manifest.media_review.as_ref()
         ),
-        (1, "bundle", None, None) | (3, "sqlite_application", Some(_), Some(_))
+        (1, "bundle", None, None, None)
+            | (3, "sqlite_application", Some(_), Some(_), None)
+            | (4, "bundle", None, None, Some(_))
     ) {
         return Err(Failure::usage("Unsupported bundle manifest schema."));
     }
@@ -876,6 +999,7 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), Failure> {
             .as_ref()
             .map(|database| database.path.clone()),
         runtime: manifest.runtime.as_ref().map(|runtime| runtime.id.clone()),
+        media_review: manifest.media_review.clone(),
     };
     validate_selection_shape(&selection)?;
     if let Some(database) = &manifest.database {
@@ -895,6 +1019,9 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), Failure> {
     }
     let mut previous = None;
     for member in &manifest.members {
+        if is_media(media_type(&member.path)?) {
+            match_media_review(manifest.media_review.as_ref(), &member.path, &member.sha256)?;
+        }
         if previous.is_some_and(|value: &str| value >= member.path.as_str()) {
             return Err(Failure::usage(
                 "Bundle manifest members must be sorted and unique.",
@@ -1055,6 +1182,7 @@ fn verify_directory_inner(
             "The prepared product runtime was not verified.",
         ));
     }
+    let mut media_budget = super::media::Budget::default();
     for (source, member) in sources.iter_mut().zip(&manifest.members) {
         let product_runtime = manifest
             .runtime
@@ -1089,6 +1217,14 @@ fn verify_directory_inner(
             let mut output = new_member(destination, &member.path)?;
             let receipt = if binary {
                 copy_binary_limit(&source.file, &mut output, member.bytes)?
+            } else if is_media(&member.media_type) {
+                super::media::copy_checked_with_budget(
+                    &mut source.file,
+                    &mut output,
+                    &member.media_type,
+                    member.bytes,
+                    &mut media_budget,
+                )?
             } else {
                 guard::copy_checked_limit(&mut source.file, &mut output, member.bytes)?
             };
@@ -1097,11 +1233,26 @@ fn verify_directory_inner(
         } else {
             if binary {
                 copy_binary_limit(&source.file, io::sink(), member.bytes)?
+            } else if is_media(&member.media_type) {
+                super::media::copy_checked_with_budget(
+                    &mut source.file,
+                    io::sink(),
+                    &member.media_type,
+                    member.bytes,
+                    &mut media_budget,
+                )?
             } else {
                 guard::copy_checked_limit(&mut source.file, io::sink(), member.bytes)?
             }
         };
         files::matching(&receipt.digest, receipt.size, &member.sha256, member.bytes)?;
+        if is_media(&member.media_type) {
+            match_media_review(
+                manifest.media_review.as_ref(),
+                &member.path,
+                &receipt.digest,
+            )?;
+        }
     }
     recheck_all(root, &sources)?;
     manifest_source.recheck(root)?;
@@ -1299,6 +1450,7 @@ pub(crate) fn source_check(
             sources.push(Held::open(&source, &member.path)?);
         }
         let mut matches = runtime_matches;
+        let mut media_budget = super::media::Budget::default();
         for (held, member) in sources.iter_mut().zip(members) {
             if let Some(database) = manifest
                 .database
@@ -1308,6 +1460,15 @@ pub(crate) fn source_check(
                 let receipt = copy_binary_limit(&held.file, io::sink(), MAX_BYTES)?;
                 matches &= receipt.digest == database.source_sha256
                     && receipt.size == database.source_bytes;
+            } else if is_media(&member.media_type) {
+                let receipt = super::media::copy_checked_with_budget(
+                    &mut held.file,
+                    io::sink(),
+                    &member.media_type,
+                    MAX_BYTES,
+                    &mut media_budget,
+                )?;
+                matches &= receipt.digest == member.sha256 && receipt.size == member.bytes;
             } else {
                 let receipt = guard::copy_checked_limit(&mut held.file, io::sink(), MAX_BYTES)?;
                 matches &= receipt.digest == member.sha256 && receipt.size == member.bytes;
@@ -1332,6 +1493,354 @@ mod tests {
     use super::*;
     use std::fs;
     use std::path::PathBuf;
+
+    #[test]
+    fn reviewed_media_selection_requires_exact_complete_attestation() {
+        let valid = json!({
+            "root": ".", "entrypoint": "index.html",
+            "members": ["index.html", "assets/frame.png", "clip.mp4"],
+            "media_review": {"profile": "reviewed-media-v1", "members": [
+                {"path": "assets/frame.png", "sha256": "a".repeat(64)},
+                {"path": "clip.mp4", "sha256": "b".repeat(64)}
+            ]}
+        });
+        let parse = |value: &Value| serde_json::from_value::<BundleSelection>(value.clone());
+        assert!(validate_selection(&parse(&valid).expect("reviewed media selector")).is_ok());
+        let mut invalid = Vec::new();
+        let mut value = valid.clone();
+        value.as_object_mut().unwrap().remove("media_review");
+        invalid.push(value);
+        let mut value = valid.clone();
+        value["media_review"] = Value::Null;
+        invalid.push(value);
+        for (field, replacement) in [
+            ("profile", json!("automatic-media-v1")),
+            ("members", json!([])),
+        ] {
+            let mut value = valid.clone();
+            value["media_review"][field] = replacement;
+            invalid.push(value);
+        }
+        for (field, replacement) in [
+            ("path", json!("assets/FRAME.png")),
+            ("sha256", json!("A".repeat(64))),
+            ("path", json!("index.html")),
+        ] {
+            let mut value = valid.clone();
+            value["media_review"]["members"][0][field] = replacement;
+            invalid.push(value);
+        }
+        let mut value = valid.clone();
+        value["media_review"]["members"]
+            .as_array_mut()
+            .unwrap()
+            .pop();
+        invalid.push(value);
+        let mut value = valid.clone();
+        let duplicate = value["media_review"]["members"][0].clone();
+        value["media_review"]["members"]
+            .as_array_mut()
+            .unwrap()
+            .push(duplicate);
+        invalid.push(value);
+        let mut value = valid.clone();
+        value["members"] = json!(["index.html"]);
+        invalid.push(value);
+        let mut value = valid.clone();
+        value["members"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("data.sqlite"));
+        value["database"] = json!("data.sqlite");
+        value["runtime"] = json!(runtime::ID);
+        invalid.push(value);
+        for value in invalid {
+            assert!(
+                parse(&value).map_or(true, |selection| validate_selection(&selection).is_err()),
+                "accepted invalid media review: {value}"
+            );
+        }
+    }
+
+    #[test]
+    fn reviewed_media_manifest_requires_schema_four_and_matching_member_hashes() {
+        let valid = json!({
+            "schema_version": 4, "delivery_type": "bundle", "entrypoint": "index.html",
+            "requirements": [], "members": [
+                {"path": "frame.png", "bytes": 100, "sha256": "a".repeat(64), "media_type": "image/png"},
+                {"path": "index.html", "bytes": 10, "sha256": "b".repeat(64), "media_type": "text/html"}
+            ],
+            "media_review": {"profile": "reviewed-media-v1", "members": [
+                {"path": "frame.png", "sha256": "a".repeat(64)}
+            ]}
+        });
+        let parse = |value: &Value| serde_json::from_value::<Manifest>(value.clone());
+        assert!(validate_manifest(&parse(&valid).expect("media manifest")).is_ok());
+        for schema in [1, 2, 3] {
+            let mut value = valid.clone();
+            value["schema_version"] = json!(schema);
+            assert!(validate_manifest(&parse(&value).unwrap()).is_err());
+        }
+        let mut value = valid.clone();
+        value["media_review"]["members"][0]["sha256"] = json!("c".repeat(64));
+        assert!(validate_manifest(&parse(&value).unwrap()).is_err());
+        let mut value = valid.clone();
+        value.as_object_mut().unwrap().remove("media_review");
+        assert!(validate_manifest(&parse(&value).unwrap()).is_err());
+        let mut value = valid.clone();
+        value["members"].as_array_mut().unwrap().remove(0);
+        value.as_object_mut().unwrap().remove("media_review");
+        assert!(validate_manifest(&parse(&value).unwrap()).is_err());
+    }
+
+    #[test]
+    fn reviewed_media_custody_preserves_exact_bytes_and_rechecks_structure() {
+        let (root, mut selection) = fixture();
+        let png = include_bytes!("../../tests/data/artifact-media/sample.png");
+        let mp4 = include_bytes!("../../tests/data/artifact-media/sample.mp4");
+        let members = [
+            ("assets/frame.png", png.as_slice()),
+            ("clip.mp4", mp4.as_slice()),
+        ];
+        let reviewed = members
+            .iter()
+            .map(|(path, bytes)| {
+                fs::write(root.0.join("app").join(path), bytes).unwrap();
+                selection.members.push((*path).into());
+                ReviewedMember {
+                    path: (*path).into(),
+                    sha256: format!("{:x}", Sha256::digest(bytes)),
+                }
+            })
+            .collect();
+        selection.media_review = Some(MediaReview {
+            profile: "reviewed-media-v1".into(),
+            members: reviewed,
+        });
+        let saved = capture(&root.0, &selection, &crate::id::ulid())
+            .unwrap()
+            .retained;
+        let mut manifest = check(&root.0, &saved.object, &saved.digest, saved.size).unwrap();
+        assert_eq!(manifest.schema_version, 4);
+        let retained_manifest = fs::read(
+            root.0
+                .join(".vivac-artifacts")
+                .join(&saved.object)
+                .join(MANIFEST),
+        )
+        .unwrap();
+        assert_eq!(
+            saved.digest,
+            format!("{:x}", Sha256::digest(&retained_manifest))
+        );
+        for (path, bytes) in members {
+            assert!(manifest
+                .media_review
+                .as_ref()
+                .unwrap()
+                .members
+                .iter()
+                .any(|member| member.path == path
+                    && member.sha256 == format!("{:x}", Sha256::digest(bytes))));
+        }
+        assert_eq!(
+            source_check(&root.0, "app", None, &manifest)["status"],
+            "matches"
+        );
+        restore(
+            &root.0,
+            &saved.object,
+            &saved.digest,
+            saved.size,
+            "restored-media",
+        )
+        .unwrap();
+        for (path, bytes) in members {
+            assert_eq!(
+                fs::read(root.0.join("restored-media").join(path)).unwrap(),
+                bytes
+            );
+        }
+        selection.media_review.as_mut().unwrap().members[0].sha256 = "0".repeat(64);
+        assert!(capture(&root.0, &selection, &crate::id::ulid()).is_err());
+
+        // A self-consistent forged manifest must still pass the media structure guard.
+        let damaged = b"Invalid media structure";
+        let digest = format!("{:x}", Sha256::digest(damaged));
+        let member = manifest
+            .members
+            .iter_mut()
+            .find(|member| member.path == "assets/frame.png")
+            .unwrap();
+        member.bytes = damaged.len() as u64;
+        member.sha256 = digest.clone();
+        manifest
+            .media_review
+            .as_mut()
+            .unwrap()
+            .members
+            .iter_mut()
+            .find(|member| member.path == "assets/frame.png")
+            .unwrap()
+            .sha256 = digest;
+        let object = root.0.join(".vivac-artifacts").join(&saved.object);
+        fs::write(object.join("assets/frame.png"), damaged).unwrap();
+        let bytes = manifest_bytes(&manifest).unwrap();
+        fs::write(object.join(MANIFEST), &bytes).unwrap();
+        let digest = format!("{:x}", Sha256::digest(&bytes));
+        let total = bytes.len() as u64
+            + manifest
+                .members
+                .iter()
+                .map(|member| member.bytes)
+                .sum::<u64>();
+        assert!(check(&root.0, &saved.object, &digest, total).is_err());
+        assert!(restore(&root.0, &saved.object, &digest, total, "refused-media").is_err());
+        assert!(!root.0.join("refused-media").exists());
+    }
+
+    fn solid_png_review(
+        root: &Path,
+        path: &str,
+        width: u32,
+        height: u32,
+        rgba16: bool,
+    ) -> ReviewedMember {
+        let image_path = root.join(path);
+        let mut encoder = png::Encoder::new(fs::File::create(&image_path).unwrap(), width, height);
+        encoder.set_color(if rgba16 {
+            png::ColorType::Rgba
+        } else {
+            png::ColorType::Rgb
+        });
+        encoder.set_depth(if rgba16 {
+            png::BitDepth::Sixteen
+        } else {
+            png::BitDepth::Eight
+        });
+        let mut writer = encoder.write_header().unwrap();
+        {
+            let mut stream = writer.stream_writer_with_size(64 * 1024).unwrap();
+            let row = vec![0u8; width as usize * if rgba16 { 8 } else { 3 }];
+            for _ in 0..height {
+                stream.write_all(&row).unwrap();
+            }
+            stream.finish().unwrap();
+        }
+        writer.finish().unwrap();
+        let mut source = fs::File::open(&image_path).unwrap();
+        let mut digest = Sha256::new();
+        let mut buffer = [0u8; 64 * 1024];
+        loop {
+            let count = source.read(&mut buffer).unwrap();
+            if count == 0 {
+                break;
+            }
+            digest.update(&buffer[..count]);
+        }
+        ReviewedMember {
+            path: path.into(),
+            sha256: format!("{:x}", digest.finalize()),
+        }
+    }
+
+    #[test]
+    fn reviewed_media_expansion_budget_is_shared_by_all_png_members() {
+        let (root, mut selection) = fixture();
+        let mut review = MediaReview {
+            profile: "reviewed-media-v1".into(),
+            members: Vec::new(),
+        };
+        for index in 0..3 {
+            let path = format!("frame-{index}.png");
+            review.members.push(solid_png_review(
+                &root.0.join("app"),
+                &path,
+                2048,
+                2048,
+                false,
+            ));
+            selection.members.push(path);
+        }
+        let compressed_bytes: u64 = review
+            .members
+            .iter()
+            .map(|member| {
+                fs::metadata(root.0.join("app").join(&member.path))
+                    .unwrap()
+                    .len()
+            })
+            .sum();
+        assert!(compressed_bytes < MAX_BYTES - MAX_MANIFEST_BYTES);
+        selection.media_review = Some(review);
+        assert!(
+            capture(&root.0, &selection, &crate::id::ulid()).is_err(),
+            "Three individually valid PNGs exceed the revision expansion budget."
+        );
+        selection.members.pop();
+        selection.media_review.as_mut().unwrap().members.pop();
+        let saved = capture(&root.0, &selection, &crate::id::ulid())
+            .unwrap()
+            .retained;
+        let mut manifest = check(&root.0, &saved.object, &saved.digest, saved.size).unwrap();
+        // An internally consistent retained revision must enforce the same aggregate limit.
+        let path = "frame-2.png";
+        let source = root.0.join("app").join(path);
+        let bytes = fs::metadata(&source).unwrap().len();
+        let digest = format!("{:x}", Sha256::digest(fs::read(&source).unwrap()));
+        let object = root.0.join(".vivac-artifacts").join(&saved.object);
+        fs::copy(source, object.join(path)).unwrap();
+        manifest.members.push(Member {
+            path: path.into(),
+            bytes,
+            sha256: digest.clone(),
+            media_type: "image/png".into(),
+        });
+        manifest
+            .members
+            .sort_by(|left, right| left.path.cmp(&right.path));
+        manifest
+            .media_review
+            .as_mut()
+            .unwrap()
+            .members
+            .push(ReviewedMember {
+                path: path.into(),
+                sha256: digest,
+            });
+        let raw = manifest_bytes(&manifest).unwrap();
+        fs::write(object.join(MANIFEST), &raw).unwrap();
+        let digest = format!("{:x}", Sha256::digest(&raw));
+        let total = raw.len() as u64
+            + manifest
+                .members
+                .iter()
+                .map(|member| member.bytes)
+                .sum::<u64>();
+        assert!(check(&root.0, &saved.object, &digest, total).is_err());
+        assert!(restore(&root.0, &saved.object, &digest, total, "over-budget").is_err());
+        assert!(!root.0.join("over-budget").exists());
+        assert_eq!(
+            source_check(&root.0, "app", None, &manifest)["status"],
+            "read_failed"
+        );
+    }
+
+    #[test]
+    fn reviewed_media_rejects_single_png_above_revision_expansion_budget() {
+        let (root, mut selection) = fixture();
+        let review = solid_png_review(&root.0.join("app"), "large.png", 4096, 4096, true);
+        assert!(
+            fs::metadata(root.0.join("app/large.png")).unwrap().len()
+                < MAX_BYTES - MAX_MANIFEST_BYTES
+        );
+        selection.members.push("large.png".into());
+        selection.media_review = Some(MediaReview {
+            profile: "reviewed-media-v1".into(),
+            members: vec![review],
+        });
+        assert!(capture(&root.0, &selection, &crate::id::ulid()).is_err());
+    }
 
     fn prepared_runtime_fixture() -> (Scratch, Dir, File, files::Retained) {
         let (root, selection, _, _, _) = sqlite_benchmark_fixture(None);
@@ -1574,6 +2083,7 @@ mod tests {
             requirements: vec![],
             database: None,
             runtime: None,
+            media_review: None,
         };
         assert!(validate_selection(&selection).is_err());
         selection.members[2] = "Assets/b.css".into();
@@ -1590,6 +2100,7 @@ mod tests {
             requirements: vec![],
             database: None,
             runtime: None,
+            media_review: None,
             manifest_bytes: 0,
             members: vec![
                 Member {
@@ -1626,6 +2137,7 @@ mod tests {
             requirements: vec![String::new(); 10_000],
             database: None,
             runtime: None,
+            media_review: None,
         };
         let (result, peak) = crate::test_alloc::measure(|| validate_selection(&selection));
         result.unwrap();
@@ -1730,6 +2242,7 @@ mod tests {
             requirements: vec![],
             database: None,
             runtime: None,
+            media_review: None,
         };
         (root, selection)
     }
@@ -1876,6 +2389,7 @@ mod tests {
                 requirements: vec![],
                 database: None,
                 runtime: None,
+                media_review: None,
             };
             for index in 1..count {
                 selection.members.push(format!("style-{index}.css"));
@@ -1901,6 +2415,7 @@ mod tests {
                     requirements: vec![],
                     database: None,
                     runtime: None,
+                    media_review: None,
                     members,
                     manifest_bytes: 0,
                 };
@@ -1948,6 +2463,329 @@ mod tests {
             );
         }
     }
+    #[test]
+    #[ignore = "Run explicitly in release mode with --test-threads=1 to measure reviewed media retention."]
+    fn retained_reviewed_media_release_benchmark() {
+        assert!(
+            std::hint::black_box(!cfg!(debug_assertions)),
+            "Run this benchmark in release mode."
+        );
+        let mut failures = Vec::new();
+        for (label, target, budget, high_expansion) in [
+            ("one_mib", 1024 * 1024, 500.0, false),
+            ("ten_mib", 10 * 1024 * 1024, 2000.0, false),
+            ("high_expansion_rgba16", 1024 * 1024, 500.0, true),
+        ] {
+            let root = Scratch::new();
+            fs::write(
+                root.0.join("index.html"),
+                b"<!doctype html><img src=frame.png alt='Synthetic noise'>",
+            )
+            .unwrap();
+            let width = if high_expansion { 2048u32 } else { 1024u32 };
+            let row_bytes = width as usize * if high_expansion { 8 } else { 3 };
+            let mut height = if high_expansion {
+                2047
+            } else {
+                ((target - 4096) / row_bytes) as u32
+            };
+            let image_path = root.0.join("frame.png");
+            let image_bytes = loop {
+                assert!(
+                    width <= 4096
+                        && height <= 4096
+                        && u64::from(width) * u64::from(height) <= 16_777_216
+                );
+                let mut encoder =
+                    png::Encoder::new(fs::File::create(&image_path).unwrap(), width, height);
+                encoder.set_color(if high_expansion {
+                    png::ColorType::Rgba
+                } else {
+                    png::ColorType::Rgb
+                });
+                encoder.set_depth(if high_expansion {
+                    png::BitDepth::Sixteen
+                } else {
+                    png::BitDepth::Eight
+                });
+                let mut writer = encoder.write_header().unwrap();
+                {
+                    let mut stream = writer.stream_writer_with_size(64 * 1024).unwrap();
+                    let mut row = vec![0u8; row_bytes];
+                    let mut state = 0x6d2b_79f5u32;
+                    for _ in 0..height {
+                        if !high_expansion {
+                            for byte in &mut row {
+                                state ^= state << 13;
+                                state ^= state >> 17;
+                                state ^= state << 5;
+                                *byte = state as u8;
+                            }
+                        }
+                        stream.write_all(&row).unwrap();
+                    }
+                    stream.finish().unwrap();
+                }
+                writer.finish().unwrap();
+                let length = fs::metadata(&image_path).unwrap().len() as usize;
+                if high_expansion {
+                    assert!(
+                        length <= target - 4096,
+                        "High expansion fixture must stay below one MiB."
+                    );
+                    break length;
+                }
+                if length <= target - 4096 {
+                    break length;
+                }
+                let excess = length - (target - 4096);
+                height -= excess.div_ceil(row_bytes) as u32;
+            };
+            let mut digest = Sha256::new();
+            let mut image = fs::File::open(&image_path).unwrap();
+            let mut buffer = [0u8; 64 * 1024];
+            loop {
+                let count = image.read(&mut buffer).unwrap();
+                if count == 0 {
+                    break;
+                }
+                digest.update(&buffer[..count]);
+            }
+            let selection = BundleSelection {
+                root: ".".into(),
+                entrypoint: "index.html".into(),
+                members: vec!["frame.png".into(), "index.html".into()],
+                requirements: vec![],
+                database: None,
+                runtime: None,
+                media_review: Some(MediaReview {
+                    profile: "reviewed-media-v1".into(),
+                    members: vec![ReviewedMember {
+                        path: "frame.png".into(),
+                        sha256: format!("{:x}", digest.finalize()),
+                    }],
+                }),
+            };
+            let mut samples = Vec::with_capacity(100);
+            let mut maximum_heap = 0;
+            let mut measured_total = 0;
+            for _ in 0..100 {
+                let revision = crate::id::ulid();
+                let started = std::time::Instant::now();
+                let (result, heap) =
+                    crate::test_alloc::measure(|| capture(&root.0, &selection, &revision));
+                samples.push(started.elapsed().as_secs_f64() * 1000.0);
+                maximum_heap = maximum_heap.max(heap);
+                let retained = result.unwrap().retained;
+                measured_total = retained.size;
+                if high_expansion {
+                    assert!(measured_total <= target as u64);
+                } else {
+                    assert!((target as u64 - 8192..=target as u64).contains(&measured_total));
+                }
+                let project = files::open_root(&root.0).unwrap();
+                files::store(&project, false)
+                    .unwrap()
+                    .remove_dir_all(&retained.object)
+                    .unwrap();
+            }
+            samples.sort_by(f64::total_cmp);
+            eprintln!(
+                "{}",
+                json!({"benchmark":"reviewed_media_retention","case":label,"samples":100,"profile":"release","os":std::env::consts::OS,"arch":std::env::consts::ARCH,"filesystem_root":root.0,"total_bytes":measured_total,"image_bytes":image_bytes,"decoded_raster_bytes":row_bytes as u64 * u64::from(height),"width":width,"height":height,"members":2,"review_profile":"reviewed-media-v1","guards":"complete_png_structure_decode_metadata_review_hash_source_identity_git_native_exclusive","p50_ms":samples[49],"p99_ms":samples[98],"max_ms":samples[99],"peak_auxiliary_heap_bytes":maximum_heap,"stack_allowance_bytes":128*1024})
+            );
+            if samples[98] >= budget {
+                failures.push(format!(
+                    "{label} p99 {} ms exceeds {budget} ms",
+                    samples[98]
+                ));
+            }
+            if maximum_heap + 128 * 1024 > 2 * 1024 * 1024 {
+                failures.push(format!(
+                    "{label} auxiliary heap {maximum_heap} bytes plus stack exceeds 2 MiB"
+                ));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("; "));
+    }
+
+    fn video_benchmark_bytes(text_bytes: usize) -> Vec<u8> {
+        const SAMPLE: &[u8] = include_bytes!("../../tests/data/artifact-media/sample.mp4");
+        const SAMPLES: u32 = 4096;
+        fn atom(kind: &[u8], body: &[u8]) -> Vec<u8> {
+            let mut result = Vec::with_capacity(8 + body.len());
+            result.extend_from_slice(&u32::try_from(8 + body.len()).unwrap().to_be_bytes());
+            result.extend_from_slice(kind);
+            result.extend_from_slice(body);
+            result
+        }
+        fn words(values: &[u32]) -> Vec<u8> {
+            values
+                .iter()
+                .flat_map(|value| value.to_be_bytes())
+                .collect()
+        }
+        fn rewrite(bytes: &[u8], sample_size: u32, media_start: u32) -> Vec<u8> {
+            let mut result = Vec::new();
+            let mut position = 0;
+            while position < bytes.len() {
+                let length =
+                    u32::from_be_bytes(bytes[position..position + 4].try_into().unwrap()) as usize;
+                let kind = &bytes[position + 4..position + 8];
+                let body = &bytes[position + 8..position + length];
+                let replacement = match kind {
+                    b"trak" | b"mdia" | b"minf" | b"stbl" => {
+                        rewrite(body, sample_size, media_start)
+                    }
+                    b"stsz" => words(&[0, sample_size, SAMPLES]),
+                    b"stts" => words(&[0, 1, SAMPLES, 1]),
+                    b"stsc" => words(&[0, 1, 1, SAMPLES, 1]),
+                    b"stco" => words(&[0, 1, media_start]),
+                    b"ctts" | b"stss" | b"edts" => {
+                        position += length;
+                        continue;
+                    }
+                    _ => body.to_vec(),
+                };
+                result.extend(atom(kind, &replacement));
+                position += length;
+            }
+            result
+        }
+        let mut sei = vec![6, 5];
+        let mut payload_size = 16 + text_bytes + 1;
+        while payload_size >= 255 {
+            sei.push(255);
+            payload_size -= 255;
+        }
+        sei.push(payload_size as u8);
+        sei.extend_from_slice(b"synthetic-video!");
+        for index in 0..text_bytes {
+            sei.push(b"Synthetic video benchmark. "[index % 27]);
+        }
+        sei.extend_from_slice(&[0, 128]);
+        let mut sample = vec![0, 0, 0, 2, 0x65, 0x80];
+        sample.extend_from_slice(&u32::try_from(sei.len()).unwrap().to_be_bytes());
+        sample.extend_from_slice(&sei);
+        let mut ftyp = None;
+        let mut moov = None;
+        let mut position = 0;
+        while position < SAMPLE.len() {
+            let length =
+                u32::from_be_bytes(SAMPLE[position..position + 4].try_into().unwrap()) as usize;
+            match &SAMPLE[position + 4..position + 8] {
+                b"ftyp" => ftyp = Some(&SAMPLE[position..position + length]),
+                b"moov" => moov = Some(&SAMPLE[position + 8..position + length]),
+                _ => {}
+            }
+            position += length;
+        }
+        let mut result = ftyp.unwrap().to_vec();
+        let media_start = u32::try_from(result.len() + 8).unwrap();
+        result.extend_from_slice(
+            &u32::try_from(8 + sample.len() * SAMPLES as usize)
+                .unwrap()
+                .to_be_bytes(),
+        );
+        result.extend_from_slice(b"mdat");
+        for _ in 0..SAMPLES {
+            result.extend_from_slice(&sample);
+        }
+        result.extend(atom(
+            b"moov",
+            &rewrite(moov.unwrap(), sample.len() as u32, media_start),
+        ));
+        result
+    }
+
+    #[test]
+    #[ignore = "Run explicitly in release mode with --test-threads=1 to measure reviewed video retention."]
+    fn retained_reviewed_video_release_benchmark() {
+        assert!(
+            std::hint::black_box(!cfg!(debug_assertions)),
+            "Run this benchmark in release mode."
+        );
+        let mut failures = Vec::new();
+        for (label, target, budget) in [
+            ("one_mib", 1024 * 1024, 500.0),
+            ("ten_mib", 10 * 1024 * 1024, 2000.0),
+        ] {
+            let root = Scratch::new();
+            let mut text_bytes = (target - 4096) / 8192;
+            let video = loop {
+                let video = video_benchmark_bytes(text_bytes);
+                if video.len() * 2 <= target - 4096 {
+                    break video;
+                }
+                text_bytes -= 1;
+            };
+            let video_bytes = video.len() * 2;
+            let digest = format!("{:x}", Sha256::digest(&video));
+            for name in ["first.mp4", "second.mp4"] {
+                fs::write(root.0.join(name), &video).unwrap();
+            }
+            drop(video);
+            let mut html = b"<!doctype html><video src=first.mp4 controls></video><video src=second.mp4 controls></video>".to_vec();
+            html.resize(target - video_bytes - 2048, b' ');
+            fs::write(root.0.join("index.html"), &html).unwrap();
+            drop(html);
+            let selection = BundleSelection {
+                root: ".".into(),
+                entrypoint: "index.html".into(),
+                members: vec!["first.mp4".into(), "index.html".into(), "second.mp4".into()],
+                requirements: vec![],
+                database: None,
+                runtime: None,
+                media_review: Some(MediaReview {
+                    profile: "reviewed-media-v1".into(),
+                    members: ["first.mp4", "second.mp4"]
+                        .into_iter()
+                        .map(|path| ReviewedMember {
+                            path: path.into(),
+                            sha256: digest.clone(),
+                        })
+                        .collect(),
+                }),
+            };
+            let mut samples = Vec::with_capacity(100);
+            let mut maximum_heap = 0;
+            let mut measured_total = 0;
+            for _ in 0..100 {
+                let revision = crate::id::ulid();
+                let started = std::time::Instant::now();
+                let (result, heap) =
+                    crate::test_alloc::measure(|| capture(&root.0, &selection, &revision));
+                samples.push(started.elapsed().as_secs_f64() * 1000.0);
+                maximum_heap = maximum_heap.max(heap);
+                let retained = result.unwrap().retained;
+                measured_total = retained.size;
+                assert!((target as u64 - 8192..=target as u64).contains(&measured_total));
+                let project = files::open_root(&root.0).unwrap();
+                files::store(&project, false)
+                    .unwrap()
+                    .remove_dir_all(&retained.object)
+                    .unwrap();
+            }
+            samples.sort_by(f64::total_cmp);
+            eprintln!(
+                "{}",
+                json!({"benchmark":"reviewed_video_retention","case":label,"samples":100,"profile":"release","os":std::env::consts::OS,"arch":std::env::consts::ARCH,"filesystem_root":root.0,"total_bytes":measured_total,"video_bytes":video_bytes,"members":3,"video_members":2,"video_samples":8192,"nal_units":16384,"sei_text_bytes_per_sample":text_bytes,"review_profile":"reviewed-media-v1","guards":"complete_mp4_structure_sample_coverage_sei_metadata_review_hash_shared_work_budgets_source_identity_git_native_exclusive","p50_ms":samples[49],"p99_ms":samples[98],"max_ms":samples[99],"peak_auxiliary_heap_bytes":maximum_heap,"stack_allowance_bytes":128*1024})
+            );
+            if samples[98] >= budget {
+                failures.push(format!(
+                    "{label} p99 {} ms exceeds {budget} ms",
+                    samples[98]
+                ));
+            }
+            if maximum_heap + 128 * 1024 > 2 * 1024 * 1024 {
+                failures.push(format!(
+                    "{label} auxiliary heap {maximum_heap} bytes plus stack exceeds 2 MiB"
+                ));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("; "));
+    }
+
     fn sqlite_benchmark_fixture(
         target: Option<usize>,
     ) -> (Scratch, BundleSelection, u64, u64, u64) {
@@ -1961,6 +2799,7 @@ mod tests {
             requirements: vec![],
             database: Some("data.sqlite".into()),
             runtime: Some(runtime::ID.into()),
+            media_review: None,
         };
         fs::write(
             root.0.join("index.html"),
@@ -2218,6 +3057,7 @@ mod tests {
             requirements: vec![],
             database: None,
             runtime: None,
+            media_review: None,
         };
         let bytes = vec![b' '; (MAX_BYTES - MAX_MANIFEST_BYTES) as usize];
         fs::write(root.0.join("index.html"), &bytes).unwrap();
@@ -2260,6 +3100,7 @@ mod tests {
             requirements: vec![],
             database: None,
             runtime: None,
+            media_review: None,
         };
         assert!(validate_selection(&selection).is_err());
     }

@@ -28,6 +28,33 @@ engine supplies and retains that runtime with the revision. Prefer this containe
 frontend over a backend when it meets the task. Never select a database merely
 because it exists.
 
+For an HTML preview with images or video, query the installed bundle's `media`
+capability. A web comparison rendered by Unity is a web delivery; it does not
+require retaining or running the Unity project. Select all required media with
+the HTML, CSS and JavaScript, including any shared media in other project
+subdirectories. They belong to the same revision, not separate artifacts.
+Do not omit a required medium or capture a partial HTML page.
+
+The `reviewed-media-v1` profile requires the person to review the exact PNG/MP4
+content before capture. Explain that automatic checks cover supported structure
+and accessible text, not pixels or speech. Obtain explicit confirmation for
+those files; do not infer it from general permission to create a preview, a
+model's visual judgment or an approval of an earlier version. Reuse an explicit
+privacy review when its media digests are identical; changes to HTML/CSS/JS alone
+do not require reviewing the same media again. Put the engine-matching SHA-256
+digests in the selector's `media_review.members` with the exact member paths
+and `media_review.profile: "reviewed-media-v1"`. This is an attestation of prior
+review, not authentication or approval of the work. Changed bytes require a new
+review. Recognized sensitive metadata and unsupported structures still refuse
+capture. Do not use a review declaration to bypass a rejection.
+
+Read the installed profile's limits: the first MP4 profile accepts one H.264
+video track without audio or fragmentation; PNG is static and noninterlaced.
+Do not re-encode, strip metadata, embed binary data in HTML or reduce quality to
+get an unsupported item accepted. Keep the complete delivery outside custody
+and explain the exact limitation. Native Unity scenes remain outside this
+profile; their exported web previews can be eligible independently.
+
 An artifact is the selected delivery intended to be viewed or used. A file is not
 an artifact merely because it was created, modified, mentioned in the answer or
 accepted as UTF-8 by the engine. Do not capture reports, Markdown documentation,
