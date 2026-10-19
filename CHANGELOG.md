@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.1](https://github.com/JAAvila-Of/vivac/compare/v0.20.0...v0.20.1) - 2026-10-19
+
+### Added
+
+- *(artifacts)* retain reviewed PNG and H264 web media
+- *(claude)* deliver fresh context to native subagents ([#292](https://github.com/JAAvila-Of/vivac/pull/292))
+- *(codex)* deliver fresh context to native subagents
+
+### Internal
+
+- isolate Codex catalogs and clarify delivery evidence ([#289](https://github.com/JAAvila-Of/vivac/pull/289))
+
 ## [0.20.0](https://github.com/JAAvila-Of/vivac/compare/v0.19.6...v0.20.0) - 2026-10-16
 
 ### Added
