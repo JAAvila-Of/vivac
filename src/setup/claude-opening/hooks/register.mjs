@@ -2,6 +2,7 @@
 const protocol = 'vivac.claude.opening.v1';
 const marker = '@@VIVAC_OPENING_CURRENT_REFERENCE_8f716aa0c351448fb5ce9c8b21e7a699@@';
 const blockedMessage = 'The vivac opening context is not ready. Check the integration and restart the session.';
+const continuationBlockedMessage = 'Vivac cannot guarantee current context for SendMessage continuations. SendMessage is disabled while Vivac manages this session. Start a new subagent with Agent instead.';
 
 function utf8Bytes(text) {
   let bytes = 0;
@@ -153,6 +154,11 @@ export function register(on) {
 
   on('session.end', async ($, event, next) => {
     invalidateAll(true);
+    return next(event);
+  });
+
+  on('classic.PreToolUse', ($, event, next) => {
+    if (event.tool === 'SendMessage' && root.phase !== 'absent') return { deny: continuationBlockedMessage };
     return next(event);
   });
 

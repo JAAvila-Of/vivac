@@ -14,6 +14,175 @@ const contextA = 'SYNTHETIC_CONTEXT_A_9d2d';
 const contextB = 'SYNTHETIC_CONTEXT_B_613f';
 const foreignA = 'SYNTHETIC_FOREIGN_A_55a1';
 const foreignB = 'SYNTHETIC_FOREIGN_B_27b4';
+const continuationBlockedMessage = 'Vivac cannot guarantee current context for SendMessage continuations. SendMessage is disabled while Vivac manages this session. Start a new subagent with Agent instead.';
+
+function toolHook(h) {
+  const hook = h.hooks.get('classic.PreToolUse');
+  assert.ok(hook, 'SendMessage continuation guard must be registered');
+  assert.equal(hook.catcher, null, 'downstream failures must not retry next');
+  return hook.handler;
+}
+
+async function assertSendDenied(h, event = { tool: 'SendMessage' }) {
+  const next = nextResult({ native: true });
+  const inaccessibleApi = new Proxy({}, { get() { assert.fail('denial must not access the SDK'); } });
+  assert.deepEqual(await toolHook(h)(inaccessibleApi, event, next), { deny: continuationBlockedMessage });
+  assert.deepEqual(next.calls, []);
+}
+
+test('managed SendMessage rejects every target and forged metadata without reading arguments', async () => {
+  let producerCalls = 0;
+  const h = harness(async () => { producerCalls++; return ready(contextA); });
+  await h.open('A');
+  await openChild(h, 'known-child');
+  const before = await h.receipt();
+  for (const target of ['known-child', 'unknown-child', 'teammate', 'other-session', 'agent-prefix', '', undefined]) {
+    const event = { tool: 'SendMessage', recipient: target, agentId: 'forged-child',
+      model: 'forged-model', session_id: 'other-session' };
+    Object.defineProperty(event, 'arguments', { get() { assert.fail('SYNTHETIC_SECRET_ARGUMENT'); } });
+    Object.defineProperty(event, 'input', { get() { assert.fail('SYNTHETIC_SECRET_INPUT'); } });
+    await assertSendDenied(h, event);
+  }
+  assert.deepEqual(await h.receipt(), before);
+  assert.equal(producerCalls, 2);
+  assert.deepEqual(h.abortCalls, []);
+  assert.deepEqual(h.caught, []);
+});
+
+test('managed denial does not expose argument content', async () => {
+  const h = harness();
+  await h.open('A');
+  const secret = 'SYNTHETIC_SECRET_NEVER_RETURN_8ae4';
+  const next = nextResult({ native: true });
+  const result = await toolHook(h)(h.$, { tool: 'SendMessage', input: { recipient: secret, message: secret } }, next);
+  assert.deepEqual(result, { deny: continuationBlockedMessage });
+  assert.equal(JSON.stringify(result).includes(secret), false);
+  assert.deepEqual(next.calls, []);
+});
+
+test('absent SendMessage preserves exact event, promise and result with one next call', async () => {
+  const h = harness(async () => ({ exitCode: 0, stdout: JSON.stringify({ protocol, status: 'absent' }) }));
+  await h.open('A');
+  const event = { tool: 'SendMessage', input: { recipient: 'native-target', message: 'native-message' } };
+  const result = { native: true };
+  const promise = Promise.resolve(result);
+  const calls = [];
+  const next = value => { calls.push(value); return promise; };
+  const returned = toolHook(h)(h.$, event, next);
+  assert.strictEqual(returned, promise);
+  assert.strictEqual(await returned, result);
+  assert.deepEqual(calls, [event]);
+  assert.strictEqual(calls[0], event);
+});
+
+for (const failureKind of ['throw', 'reject']) {
+  test(`absent SendMessage propagates downstream ${failureKind} once`, async () => {
+    const h = harness(async () => ({ exitCode: 0, stdout: JSON.stringify({ protocol, status: 'absent' }) }));
+    await h.open('A');
+    const event = { tool: 'SendMessage' };
+    const failure = new Error('synthetic downstream failure');
+    const calls = [];
+    const next = value => {
+      calls.push(value);
+      if (failureKind === 'throw') throw failure;
+      return Promise.reject(failure);
+    };
+    const handler = toolHook(h);
+    if (failureKind === 'throw') assert.throws(() => handler(h.$, event, next), error => error === failure);
+    else await assert.rejects(handler(h.$, event, next), error => error === failure);
+    assert.deepEqual(calls, [event]);
+  });
+}
+
+for (const tool of ['Agent', 'Read', 'sendmessage', undefined]) {
+  test(`managed ${tool ?? 'missing tool'} passes through exactly once`, async () => {
+    const h = harness();
+    await h.open('A');
+    const event = { tool, input: { synthetic: true } };
+    const result = { native: true };
+    const calls = [];
+    const returned = toolHook(h)(h.$, event, value => { calls.push(value); return result; });
+    assert.strictEqual(returned, result);
+    assert.deepEqual(calls, [event]);
+    assert.strictEqual(calls[0], event);
+  });
+}
+
+test('SendMessage is denied before SessionStart, during preparation and after blocking', async () => {
+  const pending = deferred();
+  const h = harness(() => pending.promise);
+  await assertSendDenied(h);
+  const opening = h.open('A');
+  await assertSendDenied(h);
+  pending.resolve({ exitCode: 1, stdout: '' });
+  await opening;
+  await assertSendDenied(h);
+  await h.invoke('session.end', {}, nextResult({}));
+  await assertSendDenied(h);
+});
+
+for (const source of ['clear', 'resume', 'compact']) {
+  test(`SendMessage follows managed to absent to managed generations through ${source}`, async () => {
+    let absent = false;
+    const h = harness(async () => absent
+      ? { exitCode: 0, stdout: JSON.stringify({ protocol, status: 'absent' }) } : ready(contextA));
+    await h.open('A');
+    await assertSendDenied(h);
+    absent = true;
+    await h.open('B', source);
+    const event = { tool: 'SendMessage' };
+    const result = { native: true };
+    const next = nextResult(result);
+    assert.strictEqual(await toolHook(h)(h.$, event, next), result);
+    assert.deepEqual(next.calls, [event]);
+    absent = false;
+    await h.open('C', source);
+    await assertSendDenied(h);
+  });
+}
+
+test('denial preserves root receipt and permits fresh Agent context and its own child turn', async () => {
+  const full = 'synthetic-child-context:'.repeat(2000);
+  const calls = [];
+  const h = harness(async (...args) => { calls.push(args); return ready(calls.length === 1 ? contextA : full); });
+  await h.open('A');
+  const before = await h.receipt();
+  await assertSendDenied(h);
+  const event = { tool: 'Agent', input: { prompt: 'synthetic work' } };
+  const result = { nativeAgent: true };
+  const next = nextResult(result);
+  assert.strictEqual(await toolHook(h)(h.$, event, next), result);
+  assert.deepEqual(next.calls, [event]);
+  const opened = await openChild(h, 'fresh-child');
+  assert.equal(calls.length, 2);
+  assert.deepEqual(JSON.parse(calls[1][1].stdin), { hook_event_name: 'SubagentStart', agent_id: 'fresh-child' });
+  const reference = opened.additionalContext.at(-1);
+  assert.equal((await attachChild(h, 'fresh-child', reference)).text, full);
+  assert.equal((await h.turn('fresh-child-turn', 'fresh-child')).kind, 'synthetic-turn');
+  assert.deepEqual(await h.receipt(), before);
+  assert.deepEqual(h.abortCalls, []);
+});
+
+test('child sender readiness cannot override the root SendMessage policy', async () => {
+  let rootAbsent = false;
+  let childAbsent = true;
+  const h = harness(async (_argv, options) => {
+    const absent = JSON.parse(options.stdin).agent_id ? childAbsent : rootAbsent;
+    return absent ? { exitCode: 0, stdout: JSON.stringify({ protocol, status: 'absent' }) } : ready(contextA);
+  });
+  await h.open('A');
+  await openChild(h, 'absent-child');
+  await assertSendDenied(h, { tool: 'SendMessage', agentId: 'absent-child' });
+  rootAbsent = true;
+  childAbsent = false;
+  await h.open('B', 'clear');
+  await openChild(h, 'ready-child');
+  const event = { tool: 'SendMessage', agentId: 'ready-child' };
+  const result = { native: true };
+  const next = nextResult(result);
+  assert.strictEqual(await toolHook(h)(h.$, event, next), result);
+  assert.deepEqual(next.calls, [event]);
+});
 
 async function openChild(h, agent_id, next = nextResult({ additionalContext: [foreignA] })) {
   return h.invoke('classic.SubagentStart', { agent_id, cwd: 'child-fixture' }, next);
@@ -826,7 +995,7 @@ async function assertBlockedWork(h, diagnostic = 'SYNTHETIC_PRIVATE_DIAGNOSTIC')
 }
 
 test('the reviewed opening bundle has the expected candidate bytes', () => {
-  assert.equal(candidateSha256, '415161B5C5A3A02F02CDB147B741D06A53E7A9A57CB44A408FE503D8EFE6BA8C');
+  assert.equal(candidateSha256, '7A3AFC91606D1E756BACABAEFF84B98A3415392865DCB0E6BFBED946B58C84AF');
 });
 
 test('the historical opening reference preserves the exact native-compatible v1 bytes', async () => {

@@ -88,7 +88,7 @@ fn opening_bundle_installs_exact_payloads_and_a_current_run_preserves_bytes() {
     );
     let receipt: serde_json::Value = serde_json::from_slice(&read_bytes(&paths[3])).unwrap();
     assert_eq!(receipt["schema"], 1);
-    assert_eq!(receipt["version"], "opening-reference-v2");
+    assert_eq!(receipt["version"], "opening-reference-v3");
     assert_eq!(receipt["files"].as_object().unwrap().len(), 3);
     let before = paths.map(|path| read_bytes(&path));
     let settings = read_bytes(&settings_path(&c));
@@ -98,9 +98,10 @@ fn opening_bundle_installs_exact_payloads_and_a_current_run_preserves_bytes() {
     assert_eq!(read_bytes(&settings_path(&c)), settings);
 }
 
-fn restore_previous_opening_bundle(c: &Sandbox) {
+fn restore_previous_opening_bundle(c: &Sandbox, version: &str) {
     use sha2::{Digest, Sha256};
-    let files: [(&str, &[u8]); 3] = [
+    let files: [(&str, &[u8]); 3] = if version == "opening-reference-v1" {
+        [
         (
             ".claude-plugin/plugin.json",
             include_bytes!("../src/setup/claude-opening-versions/opening-reference-v1/.claude-plugin/plugin.json"),
@@ -113,7 +114,15 @@ fn restore_previous_opening_bundle(c: &Sandbox) {
             "hooks/register.mjs",
             include_bytes!("../src/setup/claude-opening-versions/opening-reference-v1/hooks/register.mjs"),
         ),
-    ];
+    ]
+    } else {
+        assert_eq!(version, "opening-reference-v2");
+        [
+            (".claude-plugin/plugin.json", include_bytes!("../src/setup/claude-opening-versions/opening-reference-v2/.claude-plugin/plugin.json")),
+            ("hooks/hooks.json", include_bytes!("../src/setup/claude-opening-versions/opening-reference-v2/hooks/hooks.json")),
+            ("hooks/register.mjs", include_bytes!("../src/setup/claude-opening-versions/opening-reference-v2/hooks/register.mjs")),
+        ]
+    };
     let root = c.0.join(".claude/skills/vivac-opening");
     let mut hashes = std::collections::BTreeMap::new();
     for (path, bytes) in files {
@@ -123,7 +132,7 @@ fn restore_previous_opening_bundle(c: &Sandbox) {
     let receipt = serde_json::json!({
         "files": hashes,
         "schema": 1,
-        "version": "opening-reference-v1"
+        "version": version
     });
     std::fs::write(
         root.join(".vivac-owned.json"),
@@ -134,44 +143,46 @@ fn restore_previous_opening_bundle(c: &Sandbox) {
 
 #[test]
 fn previous_opening_bundle_updates_and_undoes_without_adopting_edits() {
-    for action in ["update", "undo", "edited"] {
-        let c = Sandbox::new_seeded("setup-opening-previous");
-        c.ok(&["setup", "claude-code", "--yes"]);
-        restore_previous_opening_bundle(&c);
-        let root = c.0.join(".claude/skills/vivac-opening");
-        let extra = root.join("hooks/foreign.txt");
-        std::fs::write(&extra, "foreign content").unwrap();
-        if action == "edited" {
-            std::fs::write(
-                root.join("hooks/register.mjs"),
-                "export const edited = true;\n",
-            )
-            .unwrap();
-            let before = bundle_paths(&c).map(|path| read_bytes(&path));
-            let settings = read_bytes(&settings_path(&c));
-            let (_, code) = c.run(&["setup", "claude-code", "--yes"]);
-            assert_ne!(code, 0);
-            assert_eq!(bundle_paths(&c).map(|path| read_bytes(&path)), before);
-            assert_eq!(read_bytes(&settings_path(&c)), settings);
-            c.ok(&["setup", "claude-code", "--undo", "--yes"]);
-            assert_eq!(bundle_paths(&c).map(|path| read_bytes(&path)), before);
-        } else if action == "undo" {
-            c.ok(&["setup", "claude-code", "--undo", "--yes"]);
-            assert!(bundle_paths(&c).iter().all(|path| !path.exists()));
-        } else {
+    for version in ["opening-reference-v1", "opening-reference-v2"] {
+        for action in ["update", "undo", "edited"] {
+            let c = Sandbox::new_seeded("setup-opening-previous");
             c.ok(&["setup", "claude-code", "--yes"]);
-            let paths = bundle_paths(&c);
-            assert_eq!(
-                read_bytes(&paths[2]),
-                include_bytes!("../src/setup/claude-opening/hooks/register.mjs")
-            );
-            let receipt: serde_json::Value =
-                serde_json::from_slice(&read_bytes(&paths[3])).unwrap();
-            assert_eq!(receipt["version"], "opening-reference-v2");
-            c.ok(&["setup", "claude-code", "--undo", "--yes"]);
-            assert!(bundle_paths(&c).iter().all(|path| !path.exists()));
+            restore_previous_opening_bundle(&c, version);
+            let root = c.0.join(".claude/skills/vivac-opening");
+            let extra = root.join("hooks/foreign.txt");
+            std::fs::write(&extra, "foreign content").unwrap();
+            if action == "edited" {
+                std::fs::write(
+                    root.join("hooks/register.mjs"),
+                    "export const edited = true;\n",
+                )
+                .unwrap();
+                let before = bundle_paths(&c).map(|path| read_bytes(&path));
+                let settings = read_bytes(&settings_path(&c));
+                let (_, code) = c.run(&["setup", "claude-code", "--yes"]);
+                assert_ne!(code, 0);
+                assert_eq!(bundle_paths(&c).map(|path| read_bytes(&path)), before);
+                assert_eq!(read_bytes(&settings_path(&c)), settings);
+                c.ok(&["setup", "claude-code", "--undo", "--yes"]);
+                assert_eq!(bundle_paths(&c).map(|path| read_bytes(&path)), before);
+            } else if action == "undo" {
+                c.ok(&["setup", "claude-code", "--undo", "--yes"]);
+                assert!(bundle_paths(&c).iter().all(|path| !path.exists()));
+            } else {
+                c.ok(&["setup", "claude-code", "--yes"]);
+                let paths = bundle_paths(&c);
+                assert_eq!(
+                    read_bytes(&paths[2]),
+                    include_bytes!("../src/setup/claude-opening/hooks/register.mjs")
+                );
+                let receipt: serde_json::Value =
+                    serde_json::from_slice(&read_bytes(&paths[3])).unwrap();
+                assert_eq!(receipt["version"], "opening-reference-v3");
+                c.ok(&["setup", "claude-code", "--undo", "--yes"]);
+                assert!(bundle_paths(&c).iter().all(|path| !path.exists()));
+            }
+            assert_eq!(read(&extra), "foreign content");
         }
-        assert_eq!(read(&extra), "foreign content");
     }
 }
 

@@ -317,7 +317,9 @@ principal openings and session endings invalidate every prior recipient;
 reopening one child invalidates only that child's prior state. A late result
 cannot restore an invalidated state or invalidate a newer opening. Classified
 attachment failures reuse an already returned downstream result without
-calling `next` again, and abort only the captured turn if it is still active.
+calling `next` again, and attempt to abort the captured turn if it is still active.
+That attempt does not establish cancellation of a child's native turn. Late
+attachment checks are not a substitute for the pre-tool refusal below.
 The module does not prepare context again on each render. An opening receipt
 records preparation, not provider reception.
 
@@ -329,6 +331,17 @@ releases that snapshot's text; a duplicate reference cannot replay it. A child
 step with an unknown or invalid native identity is blocked instead of using the
 principal's readiness. The prompt guard remains a check of the principal's
 module-to-command path; it is not an independent guard for every child.
+
+The module's `classic.PreToolUse` handler refuses `SendMessage` unless the
+current principal opening is `absent`. This disables the whole tool in a
+vivac-managed session, including messages to teammates and other sessions;
+it does not infer a recipient class from model-supplied fields, names or IDs.
+The refusal explains that current context cannot be guaranteed for message
+continuations and directs the model to create a new subagent with `Agent`.
+It does not invalidate the principal or change other tools. Outside a vivac
+tree, `absent` preserves the native `SendMessage` path. This is a restriction
+on the tool path, not a claim that every plugin transport or engine version
+has a verified execution barrier.
 
 `vivac session guard --hook` provides a separate command hook check. It reads
 the `vivac_opening` object supplied by the module through the native
@@ -1022,9 +1035,10 @@ An internal Rust ownership module now implements inspection and pure plans for
 that boundary. Receipts must match canonical compiled definitions byte for byte;
 payload reads are limited to 1 MiB each and receipt reads to 16 KiB. The compiled
 catalog embeds the experimental manifest, hook definition and consumer with
-`include_str!` as `opening-reference-v2` and retains the exact
-`opening-reference-v1` definition for ownership checks. Setup can upgrade an
-intact previous bundle and undo either version; edited payloads are never
+`include_str!` as `opening-reference-v3` and retains the exact
+`opening-reference-v1` and `opening-reference-v2` definitions for ownership
+checks. Setup can upgrade an intact previous bundle and undo any recognized
+version; edited payloads are never
 adopted as owned. Setup uses its update and undo plans;
 doctor inspects the current compiled bundle and the separate command hooks.
 An explicitly selected, ignored test drives the real Rust plans in isolated
@@ -1442,7 +1456,9 @@ Fresh preparation therefore did not establish fresh reception on this resume.
 
 These observations establish one foreground child opening, its tested
 oversized-preparation rejection and two-request continuity on 2.1.294. The
-tested same-child resume retained stale context and still needs a delivery fix.
+tested same-child resume retained stale context. Fresh preparation is not a
+guarantee of renewed reception, so same-child continuation remains unsupported
+in vivac-managed sessions and the pre-tool policy above refuses `SendMessage`.
 They do not establish general cancellation, automatic bundle discovery in every
 project, model compliance or behavior in other harness versions. The module
 releases its child snapshot after one expansion; the continuity control does
