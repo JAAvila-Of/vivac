@@ -311,7 +311,7 @@ fn harness(here: &Path, name: &str, report: &mut Report) {
     if name == "claude-code" {
         let bundle = super::opening_bundle::inspect(here, &super::opening_bundle::CATALOG);
         let current = matches!(bundle, Ok(super::opening_bundle::Inspection::Intact { version, .. }) if version.version == super::opening_bundle::CURRENT.version && version.files == super::opening_bundle::CURRENT.files);
-        report.add("claude-code opening bundle", if current { "ok" } else { "error" }, if current { "current owned files are intact; module loading and context reception are checked separately" } else { "the current owned opening bundle is missing, edited or conflicting" }, if current { None } else { Some(&fix) });
+        report.add("claude-code opening bundle", if current { "ok" } else { "error" }, if current { "current owned SessionStart and SubagentStart handlers are intact; module loading and provider reception are unverified" } else { "the current owned opening bundle is missing, edited or conflicting" }, if current { None } else { Some(&fix) });
         let local = here.join(".claude/settings.local.json");
         if local.exists() {
             if let Some(v) = read_json(&local, ".claude/settings.local.json", "Inspect the project's .claude/settings.local.json; it can override shared hook settings.", report) {

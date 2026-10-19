@@ -20,14 +20,30 @@ pub(super) struct BundleVersion {
 }
 
 pub(super) static CURRENT: BundleVersion = BundleVersion {
-    version: "opening-reference-v1",
+    version: "opening-reference-v3",
     files: [
         include_str!("claude-opening/.claude-plugin/plugin.json"),
         include_str!("claude-opening/hooks/hooks.json"),
         include_str!("claude-opening/hooks/register.mjs"),
     ],
 };
-pub(super) static CATALOG: [BundleVersion; 1] = [CURRENT];
+static PREVIOUS: BundleVersion = BundleVersion {
+    version: "opening-reference-v1",
+    files: [
+        include_str!("claude-opening-versions/opening-reference-v1/.claude-plugin/plugin.json"),
+        include_str!("claude-opening-versions/opening-reference-v1/hooks/hooks.json"),
+        include_str!("claude-opening-versions/opening-reference-v1/hooks/register.mjs"),
+    ],
+};
+static PREVIOUS_V2: BundleVersion = BundleVersion {
+    version: "opening-reference-v2",
+    files: [
+        include_str!("claude-opening-versions/opening-reference-v2/.claude-plugin/plugin.json"),
+        include_str!("claude-opening-versions/opening-reference-v2/hooks/hooks.json"),
+        include_str!("claude-opening-versions/opening-reference-v2/hooks/register.mjs"),
+    ],
+};
+pub(super) static CATALOG: [BundleVersion; 3] = [PREVIOUS, PREVIOUS_V2, CURRENT];
 
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum Outcome {
@@ -485,12 +501,12 @@ mod tests {
                     serde_json::from_str(CURRENT.files[0]).unwrap();
                 manifest["version"] = manifest_version.into();
                 let manifest = format!("{}\n", serde_json::to_string(&manifest).unwrap());
-                let anchor = "additionalContext: [...(result.additionalContext ?? []), marker]";
+                let anchor = "additionalContext: [...(result.additionalContext ?? []), state.marker]";
                 assert_eq!(CURRENT.files[2].matches(anchor).count(), 1);
                 let module = CURRENT.files[2].replace(
                     anchor,
                     &format!(
-                        "additionalContext: [...(result.additionalContext ?? []), marker, '{tag}']"
+                        "additionalContext: [...(result.additionalContext ?? []), state.marker, '{tag}']"
                     ),
                 );
                 BundleVersion {
@@ -620,10 +636,65 @@ mod tests {
     }
 
     #[test]
+    fn compiled_catalog_updates_and_undoes_real_v2_without_adopting_edits() {
+        static PREVIOUS_CATALOG: [BundleVersion; 1] = [BundleVersion {
+            version: "opening-reference-v2",
+            files: [
+                include_str!(
+                    "claude-opening-versions/opening-reference-v2/.claude-plugin/plugin.json"
+                ),
+                include_str!("claude-opening-versions/opening-reference-v2/hooks/hooks.json"),
+                include_str!("claude-opening-versions/opening-reference-v2/hooks/register.mjs"),
+            ],
+        }];
+        assert_eq!(
+            digest(PREVIOUS_CATALOG[0].files[2].as_bytes()),
+            "415161b5c5a3a02f02cdb147b741d06a53e7a9a57cb44a408fe503d8efe6ba8c"
+        );
+        for action in ["update", "undo", "edited"] {
+            let project = Project::new();
+            plan_update(&project.0, &PREVIOUS_CATALOG, &PREVIOUS_CATALOG[0])
+                .unwrap()
+                .commit()
+                .unwrap();
+            if action == "edited" {
+                fs::write(&owned_paths(&project)[2], "export const edited = true;\n").unwrap();
+                let before = snapshot(&project);
+                assert!(plan_update(&project.0, &super::CATALOG, &super::CURRENT).is_err());
+                let undo = plan_undo(&project.0, &super::CATALOG).unwrap();
+                assert_eq!(undo.outcome, Outcome::Kept);
+                undo.commit().unwrap();
+                assert_eq!(snapshot(&project), before);
+            } else if action == "undo" {
+                let undo = plan_undo(&project.0, &super::CATALOG).unwrap();
+                assert_eq!(undo.outcome, Outcome::Removed);
+                undo.commit().unwrap();
+                assert!(owned_paths(&project).iter().all(|path| !path.exists()));
+            } else {
+                let update = plan_update(&project.0, &super::CATALOG, &super::CURRENT).unwrap();
+                assert_eq!(update.outcome, Outcome::Updated);
+                update.commit().unwrap();
+                assert!(matches!(
+                    inspect(&project.0, &super::CATALOG).unwrap(),
+                    Inspection::Intact { version, .. } if version.version == "opening-reference-v3"
+                ));
+                for (path, expected) in owned_paths(&project)[..3].iter().zip(super::CURRENT.files)
+                {
+                    assert_eq!(fs::read(path).unwrap(), expected.as_bytes());
+                }
+                let undo = plan_undo(&project.0, &super::CATALOG).unwrap();
+                assert_eq!(undo.outcome, Outcome::Removed);
+                undo.commit().unwrap();
+                assert!(owned_paths(&project).iter().all(|path| !path.exists()));
+            }
+        }
+    }
+
+    #[test]
     fn compiled_current_catalog_installs_the_exact_embedded_payloads() {
         let project = Project::new();
-        assert_eq!(super::CURRENT.version, "opening-reference-v1");
-        assert_eq!(super::CATALOG.len(), 1);
+        assert_eq!(super::CURRENT.version, "opening-reference-v3");
+        assert_eq!(super::CATALOG.len(), 3);
         let plan = plan_update(&project.0, &super::CATALOG, &super::CURRENT).unwrap();
         assert_eq!(plan.writes.len(), 4);
         plan.commit().unwrap();

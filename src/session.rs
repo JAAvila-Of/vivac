@@ -175,7 +175,7 @@ fn bounded_start(ctx: &mut crate::ops::Ctx, a: &Args, project: &str) -> R {
     let request = match opening::Request::read(a.opt("context").unwrap()) {
         Ok(request) => request,
         Err(()) => {
-            opening::invalid_input();
+            opening::invalid_input(a.opt("context").unwrap());
             return Ok(());
         }
     };
