@@ -415,8 +415,10 @@ VM steps and two seconds of work per operation.
 SQLite and Rust share the 2 MiB auxiliary-memory budget. Exceeding a limit
 refuses capture rather than truncating inspection.
 
-The new receipt is `artifact.sqlite_application_captured`; its manifest uses
-schema version 3 with a required runtime descriptor. The experimental SQLite
+The receipt is `artifact.sqlite_application_captured`; its manifest uses
+schema version 3 for standalone inputs or version 5 for explicit WAL inputs.
+Both require a runtime descriptor; version 5 also requires the database source
+profile and WAL metadata. The experimental SQLite
 version 2 is refused without automatic migration. Older engines must refuse
 the receipt rather than treat the
 application as a static bundle. Use compatible engines in every harness sharing
