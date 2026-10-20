@@ -452,7 +452,7 @@ fn wal_source_budget_includes_frontend_and_runtime_bytes() {
     ]);
     assert_ne!(status, 0);
     assert!(
-        message.contains("complete source bundle exceeds 10 MiB"),
+        message.contains("The complete source bundle exceeds its profile byte budget."),
         "{message}"
     );
     assert_eq!(sandbox.log(), before);
