@@ -2,6 +2,7 @@ use std::io::{Read, Write};
 
 use sha2::{Digest, Sha256};
 
+use super::policy::{CapturePolicy, Inspection, Sensitivity};
 use crate::failure::Failure;
 use crate::redact::{self, Finding};
 
@@ -14,7 +15,49 @@ pub struct Receipt {
     pub size: u64,
 }
 
-pub fn copy_checked(mut reader: impl Read, mut writer: impl Write) -> Result<Receipt, Failure> {
+#[derive(Debug)]
+pub(super) struct ObservedReceipt {
+    pub receipt: Receipt,
+    pub inspection: Inspection,
+}
+
+pub(super) fn copy_observed(
+    reader: impl Read,
+    writer: impl Write,
+    limit: u64,
+) -> Result<ObservedReceipt, Failure> {
+    copy_text(
+        reader,
+        writer,
+        limit.min(super::MAX_FILE_BYTES),
+        Inspection::permissive(),
+    )
+}
+
+pub(super) fn check_text_observed(text: &str) -> Result<Inspection, Failure> {
+    let mut inspection = Inspection::permissive();
+    for token in text.split(redact::is_token_separator) {
+        if token.len() > TOKEN_LIMIT {
+            return Err(Failure::usage(
+                "Artifact token exceeds the 64 KiB inspection limit.",
+            ));
+        }
+        inspect_token(token, &mut inspection)?;
+    }
+    Ok(inspection)
+}
+
+pub fn copy_checked(reader: impl Read, writer: impl Write) -> Result<Receipt, Failure> {
+    copy_text(reader, writer, super::MAX_FILE_BYTES, Inspection::strict())
+        .map(|observed| observed.receipt)
+}
+
+fn copy_text(
+    mut reader: impl Read,
+    mut writer: impl Write,
+    limit: u64,
+    mut inspection: Inspection,
+) -> Result<ObservedReceipt, Failure> {
     let mut input = [0u8; CHUNK_SIZE + 3];
     let mut pending = 0;
     let mut token = String::with_capacity(TOKEN_LIMIT);
@@ -37,8 +80,11 @@ pub fn copy_checked(mut reader: impl Read, mut writer: impl Write) -> Result<Rec
             break;
         }
         size += count as u64;
-        if size > super::MAX_FILE_BYTES {
-            return Err(Failure::usage("Artifact content exceeds the 10 MiB limit."));
+        if size > limit {
+            return Err(Failure::usage(format!(
+                "Artifact content exceeds the {} byte limit.",
+                limit
+            )));
         }
         let available = pending + count;
         let valid = match std::str::from_utf8(&input[..available]) {
@@ -50,7 +96,7 @@ pub fn copy_checked(mut reader: impl Read, mut writer: impl Write) -> Result<Rec
             .map_err(|_| Failure::usage("Artifact content must be valid UTF-8."))?;
         for character in text.chars() {
             if redact::is_token_separator(character) {
-                flush_token(&mut token, &mut output)?;
+                flush_token(&mut token, &mut output, &mut inspection)?;
                 let mut encoded = [0u8; 4];
                 output.append(character.encode_utf8(&mut encoded).as_bytes())?;
             } else {
@@ -65,11 +111,14 @@ pub fn copy_checked(mut reader: impl Read, mut writer: impl Write) -> Result<Rec
         pending = available - valid;
         input.copy_within(valid..available, 0);
     }
-    flush_token(&mut token, &mut output)?;
+    flush_token(&mut token, &mut output, &mut inspection)?;
     output.flush()?;
-    Ok(Receipt {
-        digest: format!("{:x}", output.digest.finalize()),
-        size,
+    Ok(ObservedReceipt {
+        receipt: Receipt {
+            digest: format!("{:x}", output.digest.finalize()),
+            size,
+        },
+        inspection,
     })
 }
 
@@ -87,11 +136,25 @@ pub(super) fn copy_checked_limit(
     Ok(receipt)
 }
 
-fn flush_token(token: &mut String, output: &mut CheckedOutput<'_>) -> Result<(), Failure> {
-    check_token(token)?;
+fn flush_token(
+    token: &mut String,
+    output: &mut CheckedOutput<'_>,
+    inspection: &mut Inspection,
+) -> Result<(), Failure> {
+    inspect_token(token, inspection)?;
     output.append(token.as_bytes())?;
     token.clear();
     Ok(())
+}
+
+fn inspect_token(token: &str, inspection: &mut Inspection) -> Result<(), Failure> {
+    match check_token(token) {
+        Err(Failure::Redaction(_)) if inspection.policy == CapturePolicy::AllowInsecure => {
+            inspection.sensitivity = Sensitivity::Detected;
+            Ok(())
+        }
+        result => result,
+    }
 }
 
 pub(super) fn check_text(text: &str) -> Result<(), Failure> {
@@ -172,6 +235,205 @@ mod tests {
         result
             .err()
             .map(|error| (error.code(), format!("{error:?}")))
+    }
+
+    #[test]
+    fn observed_preserves_sensitive_bytes_and_hash_across_read_boundaries() {
+        use super::super::policy::{CapturePolicy, Coverage, Sensitivity};
+        let input = "café safe (person@example.com) -----BEGIN PRIVATE KEY-----";
+        for width in [1, 2, 7, CHUNK_SIZE] {
+            let mut output = Vec::new();
+            let observed = copy_observed(
+                TinyReader {
+                    remaining: input.as_bytes(),
+                    width,
+                },
+                &mut output,
+                input.len() as u64,
+            )
+            .unwrap();
+            assert_eq!(output, input.as_bytes());
+            assert_eq!(observed.receipt.size, input.len() as u64);
+            assert_eq!(
+                observed.receipt.digest,
+                format!("{:x}", Sha256::digest(input.as_bytes()))
+            );
+            assert_eq!(observed.inspection.policy, CapturePolicy::AllowInsecure);
+            assert_eq!(observed.inspection.sensitivity, Sensitivity::Detected);
+            assert_eq!(observed.inspection.coverage, Coverage::Complete);
+            assert!(observed.inspection.review_required);
+            observed.inspection.validate().unwrap();
+        }
+    }
+
+    #[test]
+    fn observed_text_records_sensitive_content_without_changing_technical_bounds() {
+        use super::super::policy::{Coverage, Sensitivity};
+        let inspection = check_text_observed("safe person@example.com").unwrap();
+        assert_eq!(inspection.sensitivity, Sensitivity::Detected);
+        assert_eq!(inspection.coverage, Coverage::Complete);
+        assert!(inspection.review_required);
+        assert_eq!(
+            check_text_observed(&"a".repeat(TOKEN_LIMIT + 1))
+                .unwrap_err()
+                .code(),
+            2
+        );
+        let oversized = format!("person@example.com {}", "a".repeat(TOKEN_LIMIT + 1));
+        assert_eq!(check_text_observed(&oversized).unwrap_err().code(), 2);
+        assert_eq!(
+            copy_observed(
+                Cursor::new(oversized.as_bytes()),
+                io::sink(),
+                oversized.len() as u64
+            )
+            .unwrap_err()
+            .code(),
+            2
+        );
+    }
+
+    #[test]
+    fn observed_large_input_detects_the_final_token_with_bounded_memory() {
+        use super::super::policy::{Coverage, Sensitivity};
+        let mut input = vec![b' '; super::super::MAX_FILE_BYTES as usize];
+        assert_eq!(input.len(), 100 * 1024 * 1024);
+        let sensitive = b"person@example.com";
+        let start = input.len() - sensitive.len();
+        input[start..].copy_from_slice(sensitive);
+        let expected_digest = format!("{:x}", Sha256::digest(&input));
+        let (result, peak) = crate::test_alloc::measure(|| {
+            copy_observed(Cursor::new(&input), io::sink(), input.len() as u64)
+        });
+        let observed = result.unwrap();
+        assert_eq!(observed.receipt.size, input.len() as u64);
+        assert_eq!(observed.receipt.digest, expected_digest);
+        assert_eq!(observed.inspection.sensitivity, Sensitivity::Detected);
+        assert_eq!(observed.inspection.coverage, Coverage::Complete);
+        assert!(peak + 128 * 1024 <= 2 * 1024 * 1024, "peak: {peak}");
+    }
+
+    #[test]
+    fn observed_matches_strict_sensitive_rules_across_full_chunk_boundaries() {
+        for sensitive in [
+            "person@example.com",
+            "-----BEGIN PRIVATE KEY-----",
+            "AKIAIOSFODNN7EXAMPLE",
+        ] {
+            for offset in 1..sensitive.len() {
+                let mut input = vec![b' '; CHUNK_SIZE - offset];
+                input.extend_from_slice(sensitive.as_bytes());
+                let mut output = Vec::new();
+                let observed =
+                    copy_observed(Cursor::new(&input), &mut output, input.len() as u64).unwrap();
+                assert_eq!(output, input);
+                assert_eq!(
+                    observed.inspection.sensitivity,
+                    super::super::policy::Sensitivity::Detected
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn observed_preserves_utf8_profile_bounds() {
+        for input in [
+            b"safe \xff person@example.com".as_slice(),
+            b"safe \xed\xa0\x80 person@example.com",
+            b"safe \xf0\x9f\xa6",
+        ] {
+            for width in [1, 2, CHUNK_SIZE] {
+                let mut output = Vec::new();
+                let error = copy_observed(
+                    TinyReader {
+                        remaining: input,
+                        width,
+                    },
+                    &mut output,
+                    input.len() as u64,
+                )
+                .unwrap_err();
+                assert_eq!(error.code(), 2);
+                assert!(error.message().contains("UTF-8"));
+                assert!(!error.message().contains("person@example.com"));
+            }
+        }
+    }
+
+    #[test]
+    fn observed_preserves_token_bounds_and_bounded_memory() {
+        let input = vec![b'a'; 4 * TOKEN_LIMIT];
+        let (result, peak) = crate::test_alloc::measure(|| {
+            copy_observed(Cursor::new(&input), io::sink(), input.len() as u64)
+        });
+        let error = result.unwrap_err();
+        assert_eq!(error.code(), 2);
+        assert!(error.message().contains("64 KiB"));
+        assert!(peak + 128 * 1024 < 2 * 1024 * 1024, "peak: {peak}");
+        let mut input = vec![b'a'; TOKEN_LIMIT];
+        input.extend_from_slice(b" person@example.com");
+        let mut output = Vec::new();
+        let observed = copy_observed(Cursor::new(&input), &mut output, input.len() as u64).unwrap();
+        assert_eq!(output, input);
+        assert_eq!(
+            observed.inspection.sensitivity,
+            super::super::policy::Sensitivity::Detected
+        );
+        assert_eq!(
+            observed.inspection.coverage,
+            super::super::policy::Coverage::Complete
+        );
+    }
+
+    #[test]
+    fn observed_enforces_limits_without_truncation_or_io_suppression() {
+        let input = b"selected bytes";
+        for limit in [0, input.len() as u64 - 1] {
+            assert_eq!(
+                copy_observed(Cursor::new(input), io::sink(), limit)
+                    .unwrap_err()
+                    .code(),
+                2
+            );
+        }
+        assert_eq!(
+            copy_observed(Cursor::new(input), io::sink(), input.len() as u64)
+                .unwrap()
+                .receipt
+                .size,
+            input.len() as u64
+        );
+        assert_eq!(
+            copy_observed(Cursor::new([]), io::sink(), 0)
+                .unwrap()
+                .receipt
+                .size,
+            0
+        );
+        struct Broken;
+        impl Read for Broken {
+            fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+                Err(io::Error::other("reader failed"))
+            }
+        }
+        impl Write for Broken {
+            fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+                Err(io::Error::other("writer failed"))
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        assert_eq!(
+            copy_observed(Broken, io::sink(), 100).unwrap_err().code(),
+            5
+        );
+        assert_eq!(
+            copy_observed(Cursor::new(input), Broken, 100)
+                .unwrap_err()
+                .code(),
+            5
+        );
     }
 
     fn assert_text_parity(text: &str, expected: Option<i32>) {
@@ -355,7 +617,7 @@ mod tests {
 
     #[test]
     fn enforces_exact_size_and_token_limits() {
-        const LIMIT: usize = 10 * 1024 * 1024;
+        const LIMIT: usize = super::super::MAX_FILE_BYTES as usize;
         let input = vec![b' '; LIMIT];
         let mut output = Vec::new();
         assert_eq!(
@@ -367,7 +629,7 @@ mod tests {
         assert!(copy_checked(Cursor::new(oversized), io::sink())
             .unwrap_err()
             .message()
-            .contains("10 MiB"));
+            .contains(&format!("{LIMIT} byte limit")));
         let token = vec![b'a'; 64 * 1024];
         let mut output = Vec::new();
         copy_checked(Cursor::new(&token), &mut output).unwrap();
@@ -438,7 +700,8 @@ mod tests {
 
     #[test]
     fn maximum_input_stays_within_the_auxiliary_memory_budget() {
-        let mut input = vec![b' '; 10 * 1024 * 1024];
+        let mut input = vec![b' '; super::super::MAX_FILE_BYTES as usize];
+        assert_eq!(input.len(), 100 * 1024 * 1024);
         input[..64 * 1024].fill(b'a');
         for (offset, text) in [
             (2 * 64 * 1024 - 1, "🦀"),

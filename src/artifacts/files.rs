@@ -1,3 +1,4 @@
+use super::policy::{CapturePolicy, Inspection};
 use crate::failure::Failure;
 use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
 use cap_std::fs::{Dir, File, Metadata, OpenOptions};
@@ -49,11 +50,42 @@ impl Read for Download {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn download(
     root: &Path,
     object: &str,
     digest: &str,
     size: u64,
+) -> Result<Download, Failure> {
+    download_with_policy(root, object, digest, size, CapturePolicy::Strict)
+}
+#[cfg(test)]
+pub(crate) fn download_with_policy(
+    root: &Path,
+    object: &str,
+    digest: &str,
+    size: u64,
+    policy: CapturePolicy,
+) -> Result<Download, Failure> {
+    download_prepared(root, object, digest, size, policy, None)
+}
+pub(crate) fn download_with_inspection(
+    root: &Path,
+    object: &str,
+    digest: &str,
+    size: u64,
+    inspection: Option<&Inspection>,
+) -> Result<Download, Failure> {
+    let policy = expected_policy(inspection)?;
+    download_prepared(root, object, digest, size, policy, inspection)
+}
+fn download_prepared(
+    root: &Path,
+    object: &str,
+    digest: &str,
+    size: u64,
+    policy: CapturePolicy,
+    inspection: Option<&Inspection>,
 ) -> Result<Download, Failure> {
     object_path(object)?;
     let root_dir = open_root(root)?;
@@ -74,7 +106,8 @@ pub(crate) fn download(
     let mut staged = objects.open_with(&temporary, &options)?;
     let result = (|| {
         check_git(root, object, &temporary)?;
-        let receipt = super::guard::copy_checked(&mut saved, &mut staged)?;
+        let (receipt, actual_inspection) = copy_with_policy(&mut saved, &mut staged, policy)?;
+        match_inspection(inspection, actual_inspection)?;
         matching(&receipt.digest, receipt.size, digest, size)?;
         unchanged(&before, &saved.metadata()?)?;
         let current = regular(&store, object)?;
@@ -102,21 +135,50 @@ pub(crate) fn download(
     result
 }
 
+#[cfg(test)]
 pub fn capture(root: &Path, source: &str, revision: &str) -> Result<Retained, Failure> {
+    capture_with_policy(root, source, revision, CapturePolicy::Strict).map(|(retained, _)| retained)
+}
+pub fn capture_with_policy(
+    root: &Path,
+    source: &str,
+    revision: &str,
+    policy: CapturePolicy,
+) -> Result<(Retained, Inspection), Failure> {
     source_path(source)?;
     opaque_id(revision)?;
     let root_dir = open_root(root)?;
     let source_file = regular(&root_dir, source)?;
-    capture_opened(root, root_dir, source, revision, source_file)
+    capture_opened_with_policy(root, root_dir, source, revision, source_file, policy)
 }
 
+#[cfg(test)]
 fn capture_opened(
     root: &Path,
     root_dir: Dir,
     source: &str,
     revision: &str,
-    mut source_file: File,
+    source_file: File,
 ) -> Result<Retained, Failure> {
+    capture_opened_with_policy(
+        root,
+        root_dir,
+        source,
+        revision,
+        source_file,
+        CapturePolicy::Strict,
+    )
+    .map(|(retained, _)| retained)
+}
+
+fn capture_opened_with_policy(
+    root: &Path,
+    root_dir: Dir,
+    source: &str,
+    revision: &str,
+    mut source_file: File,
+    policy: CapturePolicy,
+) -> Result<(Retained, Inspection), Failure> {
     let before = source_file.metadata()?;
     #[cfg(windows)]
     let before_identity = file_identity(&source_file)?;
@@ -128,7 +190,7 @@ fn capture_opened(
     let (temporary, mut staged) = temporary(&objects)?;
     let result = (|| {
         check_git(root, &object, &temporary)?;
-        let receipt = super::guard::copy_checked(&mut source_file, &mut staged)?;
+        let (receipt, inspection) = copy_with_policy(&mut source_file, &mut staged, policy)?;
         unchanged(&before, &source_file.metadata()?)?;
         // A replacement of the pathname is observable even when the open
         // source handle still refers to the original file.
@@ -154,12 +216,15 @@ fn capture_opened(
             .remove_file(&temporary)
             .map_err(|_| published_failure(&object))?;
         sync_directory(&objects).map_err(|_| published_failure(&object))?;
-        Ok(Retained {
-            digest: receipt.digest,
-            size: receipt.size,
-            object: object.clone(),
-            site,
-        })
+        Ok((
+            Retained {
+                digest: receipt.digest,
+                size: receipt.size,
+                object: object.clone(),
+                site,
+            },
+            inspection,
+        ))
     })();
     // Only the temporary file belongs to this invocation. Published revisions
     // remain available for diagnosis if a subsequent durability step fails.
@@ -226,6 +291,47 @@ pub fn site_id(root: &Path) -> Result<Option<String>, Failure> {
     }
 }
 
+pub fn inspect_retained_with_inspection(
+    root: &Path,
+    object: &str,
+    inspection: Option<&Inspection>,
+) -> Result<Option<(String, u64)>, Failure> {
+    let Some(expected) = inspection else {
+        return inspect_retained(root, object);
+    };
+    let policy = expected_policy(Some(expected))?;
+    object_path(object)?;
+    let root = open_root(root)?;
+    let result = (|| {
+        let store = store(&root, false)?;
+        let mut file = regular(&store, object)?;
+        let before = file.metadata()?;
+        let (receipt, actual) = copy_with_policy(&mut file, io::sink(), policy)?;
+        match_inspection(Some(expected), actual)?;
+        unchanged(&before, &file.metadata()?)?;
+        Ok((receipt.digest, receipt.size))
+    })();
+    match result {
+        Ok(actual) => Ok(Some(actual)),
+        Err(Failure::Io(error)) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+fn expected_policy(inspection: Option<&Inspection>) -> Result<CapturePolicy, Failure> {
+    if let Some(inspection) = inspection {
+        inspection.validate()?;
+    }
+    Ok(inspection.map_or(CapturePolicy::Strict, |inspection| inspection.policy))
+}
+fn match_inspection(expected: Option<&Inspection>, actual: Inspection) -> Result<(), Failure> {
+    if expected.is_some_and(|expected| *expected != actual) {
+        return Err(Failure::Model(
+            "Retained artifact inspection does not match its saved classification.".into(),
+        ));
+    }
+    Ok(())
+}
+
 pub fn inspect_retained(root: &Path, object: &str) -> Result<Option<(String, u64)>, Failure> {
     object_path(object)?;
     let root = open_root(root)?;
@@ -251,6 +357,45 @@ pub fn restore(
     size: u64,
     destination: &str,
 ) -> Result<(), Failure> {
+    restore_with_policy(
+        root,
+        object,
+        digest,
+        size,
+        destination,
+        CapturePolicy::Strict,
+    )
+}
+pub fn restore_with_policy(
+    root: &Path,
+    object: &str,
+    digest: &str,
+    size: u64,
+    destination: &str,
+    policy: CapturePolicy,
+) -> Result<(), Failure> {
+    restore_prepared(root, object, digest, size, destination, policy, None)
+}
+pub fn restore_with_inspection(
+    root: &Path,
+    object: &str,
+    digest: &str,
+    size: u64,
+    destination: &str,
+    inspection: Option<&Inspection>,
+) -> Result<(), Failure> {
+    let policy = expected_policy(inspection)?;
+    restore_prepared(root, object, digest, size, destination, policy, inspection)
+}
+fn restore_prepared(
+    root: &Path,
+    object: &str,
+    digest: &str,
+    size: u64,
+    destination: &str,
+    policy: CapturePolicy,
+    inspection: Option<&Inspection>,
+) -> Result<(), Failure> {
     object_path(object)?;
     source_path(destination)?;
     let root_dir = open_root(root)?;
@@ -269,7 +414,8 @@ pub fn restore(
     }
     let (temporary, mut staged) = temporary(&parent)?;
     let result = (|| {
-        let receipt = super::guard::copy_checked(&mut saved, &mut staged)?;
+        let (receipt, actual_inspection) = copy_with_policy(&mut saved, &mut staged, policy)?;
+        match_inspection(inspection, actual_inspection)?;
         matching(&receipt.digest, receipt.size, digest, size)?;
         unchanged(&before, &saved.metadata()?)?;
         staged.sync_all()?;
@@ -287,6 +433,21 @@ pub fn restore(
         let _ = parent.remove_file(&temporary);
     }
     result
+}
+
+fn copy_with_policy(
+    reader: impl Read,
+    writer: impl Write,
+    policy: CapturePolicy,
+) -> Result<(super::guard::Receipt, Inspection), Failure> {
+    match policy {
+        CapturePolicy::Strict => super::guard::copy_checked(reader, writer)
+            .map(|receipt| (receipt, Inspection::strict())),
+        CapturePolicy::AllowInsecure => {
+            super::guard::copy_observed(reader, writer, super::MAX_FILE_BYTES)
+                .map(|observed| (observed.receipt, observed.inspection))
+        }
+    }
 }
 
 pub fn for_each_object(
@@ -588,7 +749,7 @@ fn temporary(dir: &Dir) -> Result<(String, File), Failure> {
 
 fn hash(file: &mut File) -> Result<(String, u64), Failure> {
     if file.metadata()?.len() > super::MAX_FILE_BYTES {
-        return Err(Failure::usage("Artifact files must not exceed 10 MiB."));
+        return Err(Failure::usage("Artifact files must not exceed 100 MiB."));
     }
     let mut digest = Sha256::new();
     let mut size = 0;
@@ -601,7 +762,7 @@ fn hash(file: &mut File) -> Result<(String, u64), Failure> {
         digest.update(&buffer[..count]);
         size += count as u64;
         if size > super::MAX_FILE_BYTES {
-            return Err(Failure::usage("Artifact files must not exceed 10 MiB."));
+            return Err(Failure::usage("Artifact files must not exceed 100 MiB."));
         }
     }
     Ok((format!("{:x}", digest.finalize()), size))
@@ -906,6 +1067,102 @@ mod tests {
     use std::{fs, process::Command};
     const REVISION: &str = "01arz3ndektsv4rrffq69g5fav";
     #[test]
+    fn policy_permissive_file_rejects_forged_inspection_before_recovery() {
+        let dir = Scratch::new();
+        fs::write(dir.0.join("source.txt"), b"person@example.com").unwrap();
+        let (retained, inspection) =
+            capture_with_policy(&dir.0, "source.txt", REVISION, CapturePolicy::AllowInsecure)
+                .unwrap();
+        let mut forged = inspection;
+        forged.sensitivity = super::super::policy::Sensitivity::NotDetected;
+        forged.validate().unwrap();
+        assert!(download_with_inspection(
+            &dir.0,
+            &retained.object,
+            &retained.digest,
+            retained.size,
+            Some(&forged)
+        )
+        .is_err());
+        assert!(inspect_retained_with_inspection(&dir.0, &retained.object, Some(&forged)).is_err());
+        assert!(restore_with_inspection(
+            &dir.0,
+            &retained.object,
+            &retained.digest,
+            retained.size,
+            "copy.txt",
+            Some(&forged)
+        )
+        .is_err());
+        assert!(!dir.0.join("copy.txt").exists());
+        restore_with_inspection(
+            &dir.0,
+            &retained.object,
+            &retained.digest,
+            retained.size,
+            "copy.txt",
+            Some(&inspection),
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read(dir.0.join("copy.txt")).unwrap(),
+            b"person@example.com"
+        );
+        for path in ["../source.txt", ".env", ".vivac/config.toml"] {
+            assert!(capture_with_policy(
+                &dir.0,
+                path,
+                &crate::id::ulid(),
+                CapturePolicy::AllowInsecure
+            )
+            .is_err());
+        }
+        fs::write(dir.0.join("invalid.txt"), [255]).unwrap();
+        assert!(capture_with_policy(
+            &dir.0,
+            "invalid.txt",
+            &crate::id::ulid(),
+            CapturePolicy::AllowInsecure
+        )
+        .is_err());
+    }
+    #[test]
+    fn policy_permissive_file_retains_sensitive_bytes_and_recovers_them() {
+        let dir = Scratch::new();
+        let bytes = b"Selected contact: person@example.com\n";
+        fs::write(dir.0.join("source.txt"), bytes).unwrap();
+        assert!(capture(&dir.0, "source.txt", REVISION).is_err());
+        let (retained, inspection) =
+            capture_with_policy(&dir.0, "source.txt", REVISION, CapturePolicy::AllowInsecure)
+                .unwrap();
+        assert_eq!(
+            inspection.sensitivity,
+            super::super::policy::Sensitivity::Detected
+        );
+        restore_with_policy(
+            &dir.0,
+            &retained.object,
+            &retained.digest,
+            retained.size,
+            "copy.txt",
+            CapturePolicy::AllowInsecure,
+        )
+        .unwrap();
+        assert_eq!(fs::read(dir.0.join("copy.txt")).unwrap(), bytes);
+        assert!(download(&dir.0, &retained.object, &retained.digest, retained.size).is_err());
+        let mut downloaded = download_with_policy(
+            &dir.0,
+            &retained.object,
+            &retained.digest,
+            retained.size,
+            CapturePolicy::AllowInsecure,
+        )
+        .unwrap();
+        let mut recovered = Vec::new();
+        downloaded.read_to_end(&mut recovered).unwrap();
+        assert_eq!(recovered, bytes);
+    }
+    #[test]
     fn git_output_is_bounded_before_a_large_stream_is_collected() {
         struct Huge {
             read: usize,
@@ -1047,7 +1304,7 @@ mod tests {
         let dir = Scratch::new();
         let mut source = fs::File::create(dir.0.join("source.txt")).unwrap();
         let block = [b' '; 64 * 1024];
-        for _ in 0..160 {
+        for _ in 0..super::super::MAX_FILE_BYTES / block.len() as u64 {
             source.write_all(&block).unwrap();
         }
         drop(source);
@@ -1184,7 +1441,7 @@ mod tests {
                 .join(format!(".vivac-artifacts/objects/{REVISION}.blob")),
         )
         .unwrap();
-        file.set_len(10 * 1024 * 1024 + 1).unwrap();
+        file.set_len(100 * 1024 * 1024 + 1).unwrap();
         assert!(inspect_retained(&dir.0, &format!("objects/{REVISION}.blob")).is_err());
     }
     #[test]

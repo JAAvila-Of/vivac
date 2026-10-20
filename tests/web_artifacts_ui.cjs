@@ -120,6 +120,24 @@ const button = text => all(document.elements['revision-content']).find(e => e.ta
     });
     await settle(); return copy;
   }
+  for (const [sensitivity, coverage, expected] of [
+    ['detected', 'complete', /Sensitive content detected/],
+    ['unknown', 'partial', /Sensitivity unknown.*Partial; some content was not inspected/],
+    ['not_detected', 'complete', /No sensitive content detected in inspected text/]
+  ]) {
+    const report = { policy: 'allow_insecure', sensitivity, coverage, review_required: true };
+    const riskView = await reload({ fetch: async (url, options) => {
+      const body = JSON.parse(options.body);
+      if (body.operation !== 'show') return fetch(url, options);
+      const entry = { ...revision('r1'), inspection: report };
+      return { ok: true, json: async () => ({ result: { revisions: [entry], latest_revision: 'r2', total: 1, next_offset: null } }) };
+    } });
+    const text = riskView.elements['revision-content'].textContent;
+    assert.match(text, expected);
+    assert.match(text, /Explicit permissive custody policy/);
+    assert.match(text, /At capture: human review required.*Custody does not imply approval/);
+    assert(!text.includes('content is safe'), 'Inspection must not claim safety');
+  }
   for (const [execution, message] of [[{ provided: false }, 'Execution: not provided by this engine.'], [{ provided: true, scope: 'other' }, 'Execution: not supported in this view.'], [undefined, 'Execution: support unknown.']]) {
     caps.execution = execution;
     const unsupported = await reload();
@@ -138,7 +156,7 @@ const button = text => all(document.elements['revision-content']).find(e => e.ta
   const bundleRevision = id => ({ ...revision(id, 'delivery-root'), artifact: 'bundle-artifact', delivery_type: 'bundle', entrypoint: 'pages/index.html', member_count: 21, selection: 'bundle-selection.json' });
   const bundleView = await reload({ artifact: 'bundle-artifact', fetch: async (url, options) => {
     const body = JSON.parse(options.body); bundleRequests.push(body);
-    if (body.operation === 'capabilities') return { ok: true, json: async () => ({ result: { ...caps, delivery_types: { ...caps.delivery_types, bundle: { supported: true, formats: ['html', 'css', 'js'], max_bytes: 10485760 } }, execution: { ...caps.execution, bundle_preview: true } } }) };
+    if (body.operation === 'capabilities') return { ok: true, json: async () => ({ result: { ...caps, delivery_types: { ...caps.delivery_types, bundle: { supported: true, formats: ['html', 'css', 'js', 'png', 'mp4'], max_bytes: 104857600, media: { max_revision_bytes: 10485760 } } }, execution: { ...caps.execution, bundle_preview: true } } }) };
     if (body.operation === 'list') return { ok: true, json: async () => ({ result: { artifacts: [bundleRevision('r2')], total: 1, next_offset: null } }) };
     if (body.operation === 'show') return { ok: true, json: async () => ({ result: { revisions: body.revision ? [bundleRevision(body.revision)] : [bundleRevision('r1'), bundleRevision('r2')], latest_revision: 'r2', total: 2, next_offset: null, members: body.offset ? [{ path: 'scripts/app.js', bytes: 17, sha256: 'b'.repeat(64), media_type: 'text/javascript' }] : Array.from({ length: 20 }, (_, i) => ({ path: 'styles/file' + i + '.css', bytes: 23, sha256: 'a'.repeat(64), media_type: 'text/css' })), total_members: 21, members_next_offset: body.offset ? null : 20 } }) };
     if (body.operation === 'capture') return { ok: true, json: async () => ({ result: { delivery: bundleRevision('r3') } }) };
@@ -167,6 +185,8 @@ const button = text => all(document.elements['revision-content']).find(e => e.ta
   assert.equal(bundleView.elements['capture-type'].value, 'bundle');
   assert.equal(bundleView.elements['capture-path'].value, 'bundle-selection.json');
   assert.match(bundleView.elements['dialog-content'].textContent, /Bundle selection file/);
+  assert.match(bundleView.elements['dialog-content'].textContent, /Maximum revision size: 100 MiB/);
+  assert.match(bundleView.elements['dialog-content'].textContent, /Revisions with media are limited to 10 MiB/);
   assert.equal(bundleView.elements['capture-description'].value, '', 'An old revision must not prefill its newer revision description');
   bundleView.elements['capture-producer'].value = 't1';
   bundleView.elements['capture-description'].value = '  Explore the bundled dashboard.  ';

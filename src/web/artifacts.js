@@ -18,6 +18,7 @@
   const descriptionText = entry => entry.description || 'No description recorded.';
   const deliveryLabel = entry => isBundle(entry) ? typeLabel(entry.delivery_type) + ' · Entry: ' + entry.entrypoint + ' · ' + entry.member_count + ' members' + (entry.database ? ' · Database: ' + entry.database : '') : typeLabel('file');
   const formats = values => (values || []).map(value => value === 'utf8_text' ? 'UTF-8 text' : value).join(', ');
+  const mediaLimitText = capability => Number.isSafeInteger(capability?.media?.max_revision_bytes) ? ' Revisions with media are limited to ' + sizeLabel(capability.media.max_revision_bytes) + '.' : '';
   const observationStorageKey = 'vivac.artifact-checks.v1';
   const observations = new Map();
   const observationFields = ['project', 'site', 'artifact', 'revision', 'digest', 'size', 'retained', 'source', 'checked_at'];
@@ -241,6 +242,12 @@
     box.append(element('h2', basename(entry.source)), selectedLabel, element('p', descriptionText(entry), 'delivery-description'), element('p', entry.source, 'muted'), element('p', deliveryLabel(entry), 'small muted'));
     const facts = element('div', undefined, 'facts');
     facts.append(element('p', entry.size + ' bytes'), element('p', 'Digest: ' + entry.digest, 'mono'), element('p', 'Producer'), producer(entry)); box.append(facts);
+    if (entry.inspection) {
+      const report = entry.inspection;
+      const sensitivity = { detected: 'Sensitive content detected.', not_detected: 'No sensitive content detected in inspected text.', unknown: 'Sensitivity unknown.' }[report.sensitivity] || 'Sensitivity unknown.';
+      const coverage = { complete: 'Complete for the supported inspection profile.', partial: 'Partial; some content was not inspected.', unavailable: 'Inspection unavailable.' }[report.coverage] || 'Inspection coverage unknown.';
+      box.append(element('p', 'Explicit permissive custody policy. ' + sensitivity + ' ' + coverage + ' At capture: human review required. Custody does not imply approval.', 'notice'));
+    }
     if (entry.delivery_type === 'sqlite_application') {
       box.append(element('p', 'Database profile: ' + entry.profile, 'small muted'),
         element('p', 'Runtime pinned to this revision: ' + entry.runtime, 'small muted'),
@@ -363,7 +370,7 @@
     const limits = element('p', '', 'small muted');
     function describeLimits() {
       const capability = caps.delivery_types[types.value];
-      limits.textContent = capability ? 'Formats: ' + formats(capability.formats) + '. Maximum ' + (bundleType(types.value) ? 'revision' : 'file') + ' size: ' + sizeLabel(capability.max_bytes) + '.' : '';
+      limits.textContent = capability ? 'Formats: ' + formats(capability.formats) + '. Maximum ' + (bundleType(types.value) ? 'revision' : 'file') + ' size: ' + sizeLabel(capability.max_bytes) + '.' + mediaLimitText(capability) : '';
     }
     describeLimits(); $('dialog-content').append(limits);
     $('dialog-content').append(element('p', 'Capture retains a delivery locally and records its producer. It does not record approval.'));
@@ -419,7 +426,7 @@
   $('capabilities').addEventListener('click', async () => {
     try {
       const caps = await getCapabilities(); modal('Supported types');
-      Object.entries(caps.delivery_types).forEach(([type, capability]) => $('dialog-content').append(element('h3', typeLabel(type)), element('p', capability.supported ? 'Supported. Formats: ' + formats(capability.formats) + '. Maximum size: ' + sizeLabel(capability.max_bytes) + '.' : capability.reason)));
+      Object.entries(caps.delivery_types).forEach(([type, capability]) => $('dialog-content').append(element('h3', typeLabel(type)), element('p', capability.supported ? 'Supported. Formats: ' + formats(capability.formats) + '. Maximum size: ' + sizeLabel(capability.max_bytes) + '.' + mediaLimitText(capability) : capability.reason)));
       let execution = 'Execution: support unknown.';
       if (caps.execution?.provided === false) execution = 'Execution: not provided by this engine.';
       if (caps.execution?.provided === true) execution = caps.execution.scope === 'retained_html_preview' ? 'Execution: restricted preview of retained HTML revisions. Complete network isolation is not guaranteed.' + (caps.execution.bundle_preview === true ? ' Bundle preview serves declared HTML, CSS and JavaScript members.' : '') : 'Execution: not supported in this view.';

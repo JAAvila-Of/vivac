@@ -188,9 +188,11 @@ const USAGE: &str = r#"vivac - provenance of work
   Local artifact custody
 
     vivac artifacts [--all] [--json]         selected deliveries; no byte checks
+    vivac artifacts policy [--allow-insecure-artifacts=<true|false|1|0>] [--json]
+                                            inspect or explicitly change project capture policy
     vivac artifacts capabilities [--json]    engine formats and limits; no project needed
     vivac artifacts capture <path> --from <node> --description <text> [--artifact <id>] [--json]
-                                            retain guarded UTF-8 locally, up to 10 MiB
+                                            retain UTF-8 locally, up to 100 MiB; strict privacy by default
     vivac artifacts capture --bundle <selection.json> --from <node> --description <text> [--artifact <id>] [--json]
                                             retain a complete frontend revision; query capabilities for SQLite
       --description <text>                  what the delivery does; one line, up to 280 characters

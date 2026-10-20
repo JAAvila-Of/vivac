@@ -206,6 +206,9 @@ pub fn collect<'a>(tree: &'a Tree, log: &[Event], since_seq: u64) -> Changed<'a>
             | Body::ArtifactBundleCaptured { producer, .. }
             | Body::ArtifactCapturedV2 { producer, .. }
             | Body::ArtifactBundleCapturedV2 { producer, .. }
+            | Body::ArtifactCapturedV3 { producer, .. }
+            | Body::ArtifactBundleCapturedV3 { producer, .. }
+            | Body::ArtifactSqliteApplicationCapturedV2 { producer, .. }
             | Body::ArtifactSqliteApplicationCaptured { producer, .. } => match tree.node(producer)
             {
                 Some(_) => result.tail.artifacts += 1,

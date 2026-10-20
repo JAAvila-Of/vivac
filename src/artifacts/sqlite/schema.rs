@@ -39,18 +39,20 @@ enum Token {
 
 struct Parser<'a> {
     source: &'a str,
+    work: &'a super::Work,
     offset: usize,
     next: Token,
 }
 
 impl<'a> Parser<'a> {
-    fn new(source: &'a str) -> Result<Self, Failure> {
+    fn new(source: &'a str, work: &'a super::Work) -> Result<Self, Failure> {
         if source.len() > 65536 {
             return Err(super::refused());
         }
-        super::checked_text(source)?;
+        super::checked_text(source, work)?;
         let mut parser = Self {
             source,
+            work,
             offset: 0,
             next: Token::End,
         };
@@ -168,7 +170,7 @@ impl<'a> Parser<'a> {
         if value.is_empty() || value.len() > 128 || value.contains('\0') {
             return Err(super::refused());
         }
-        super::checked_text(&value)?;
+        super::checked_text(&value, self.work)?;
         Ok(value)
     }
 
@@ -261,7 +263,7 @@ impl<'a> Parser<'a> {
         };
         let literal = match self.advance()? {
             Token::Text(value) if sign.is_empty() => {
-                super::checked_text(&value)?;
+                super::checked_text(&value, self.work)?;
                 format!("'{}'", value.replace('\'', "''"))
             }
             Token::Word(value) if sign.is_empty() && value.eq_ignore_ascii_case("NULL") => {
@@ -276,7 +278,7 @@ impl<'a> Parser<'a> {
                 {
                     return Err(super::refused());
                 }
-                super::checked_text(&number)?;
+                super::checked_text(&number, self.work)?;
                 number
             }
             _ => return Err(super::refused()),
@@ -343,22 +345,26 @@ fn quoted(names: &[String]) -> String {
         .join(",")
 }
 
-pub(super) fn default_literal(sql: &str) -> Result<String, Failure> {
-    let mut parser = Parser::new(sql)?;
+pub(super) fn default_literal_with_work(sql: &str, work: &super::Work) -> Result<String, Failure> {
+    let mut parser = Parser::new(sql, work)?;
     let literal = parser.literal()?;
     parser.finish()?;
     Ok(literal)
 }
 
-pub(super) fn type_name(sql: &str) -> Result<String, Failure> {
-    let mut parser = Parser::new(sql)?;
+pub(super) fn type_name_with_work(sql: &str, work: &super::Work) -> Result<String, Failure> {
+    let mut parser = Parser::new(sql, work)?;
     let name = parser.column_type()?;
     parser.finish()?;
     Ok(name)
 }
 
+#[cfg(test)]
 pub(super) fn table(sql: &str) -> Result<Table, Failure> {
-    let mut parser = Parser::new(sql)?;
+    table_with_work(sql, &super::Work::new(super::MAX_STEPS))
+}
+pub(super) fn table_with_work(sql: &str, work: &super::Work) -> Result<Table, Failure> {
+    let mut parser = Parser::new(sql, work)?;
     parser.require("CREATE")?;
     parser.require("TABLE")?;
     let name = parser.name()?;
@@ -513,8 +519,12 @@ pub(super) fn table(sql: &str) -> Result<Table, Failure> {
     })
 }
 
+#[cfg(test)]
 pub(super) fn index(sql: &str) -> Result<Index, Failure> {
-    let mut parser = Parser::new(sql)?;
+    index_with_work(sql, &super::Work::new(super::MAX_STEPS))
+}
+pub(super) fn index_with_work(sql: &str, work: &super::Work) -> Result<Index, Failure> {
+    let mut parser = Parser::new(sql, work)?;
     parser.require("CREATE")?;
     let unique = parser.keyword("UNIQUE")?;
     parser.require("INDEX")?;

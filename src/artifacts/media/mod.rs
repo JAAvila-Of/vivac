@@ -1,4 +1,5 @@
 //! Format inspection for explicitly reviewed members of a complete web delivery.
+use super::policy::{CapturePolicy, Coverage, Inspection, Sensitivity};
 mod mp4;
 mod png;
 
@@ -15,6 +16,7 @@ pub(super) struct Budget {
     decoded_remaining: u64,
     sample_remaining: usize,
     nal_remaining: usize,
+    inspection: Inspection,
 }
 
 impl Default for Budget {
@@ -23,19 +25,66 @@ impl Default for Budget {
             decoded_remaining: MAX_DECODED_BYTES,
             sample_remaining: MAX_VIDEO_SAMPLES,
             nal_remaining: MAX_NAL_UNITS,
+            inspection: Inspection::strict(),
         }
     }
 }
 
+impl Budget {
+    fn check_text(&mut self, value: &str) -> Result<(), Failure> {
+        match self.inspection.policy {
+            CapturePolicy::Strict => super::guard::check_text(value),
+            CapturePolicy::AllowInsecure => {
+                self.inspection
+                    .merge(super::guard::check_text_observed(value)?);
+                Ok(())
+            }
+        }
+    }
+}
+
+#[cfg(test)]
 pub(super) fn copy_checked_with_budget(
+    reader: impl Read + Seek,
+    writer: impl Write,
+    media_type: &str,
+    limit: u64,
+    budget: &mut Budget,
+) -> Result<Receipt, Failure> {
+    copy_with_policy_with_budget(
+        reader,
+        writer,
+        media_type,
+        limit,
+        budget,
+        CapturePolicy::Strict,
+    )
+    .map(|observed| observed.receipt)
+}
+
+pub(super) fn copy_with_policy_with_budget(
     mut reader: impl Read + Seek,
     mut writer: impl Write,
     media_type: &str,
     limit: u64,
     budget: &mut Budget,
-) -> Result<Receipt, Failure> {
+    policy: CapturePolicy,
+) -> Result<super::guard::ObservedReceipt, Failure> {
+    if budget.inspection.policy != policy {
+        budget.inspection = if policy == CapturePolicy::Strict {
+            Inspection::strict()
+        } else {
+            Inspection::permissive()
+        };
+    }
+    if policy == CapturePolicy::AllowInsecure {
+        budget.inspection.coverage = Coverage::Partial;
+        if budget.inspection.sensitivity != Sensitivity::Detected {
+            budget.inspection.sensitivity = Sensitivity::Unknown;
+        }
+    }
     let size = reader.seek(SeekFrom::End(0))?;
-    if size == 0 || size > limit || size > super::MAX_FILE_BYTES {
+    if size == 0 || size > limit || size > 10 * 1024 * 1024 {
         return Err(Failure::usage(
             "Media content exceeds the complete revision byte budget or is empty.",
         ));
@@ -69,9 +118,12 @@ pub(super) fn copy_checked_with_budget(
             "The media source changed during inspection.",
         ));
     }
-    Ok(Receipt {
-        digest: format!("{:x}", digest.finalize()),
-        size,
+    Ok(super::guard::ObservedReceipt {
+        receipt: Receipt {
+            digest: format!("{:x}", digest.finalize()),
+            size,
+        },
+        inspection: budget.inspection,
     })
 }
 

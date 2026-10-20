@@ -35,9 +35,9 @@ the HTML, CSS and JavaScript, including any shared media in other project
 subdirectories. They belong to the same revision, not separate artifacts.
 Do not omit a required medium or capture a partial HTML page.
 
-The `reviewed-media-v1` profile requires the person to review the exact PNG/MP4
+By default, the `reviewed-media-v1` profile requires the person to review the exact PNG/MP4
 content before capture. Explain that automatic checks cover supported structure
-and accessible text, not pixels or speech. Obtain explicit confirmation for
+and accessible text, not pixels or speech. Under that strict policy, obtain explicit confirmation for
 those files; do not infer it from general permission to create a preview, a
 model's visual judgment or an approval of an earlier version. Reuse an explicit
 privacy review when its media digests are identical; changes to HTML/CSS/JS alone
@@ -46,7 +46,17 @@ digests in the selector's `media_review.members` with the exact member paths
 and `media_review.profile: "reviewed-media-v1"`. This is an attestation of prior
 review, not authentication or approval of the work. Changed bytes require a new
 review. Recognized sensitive metadata and unsupported structures still refuse
-capture. Do not use a review declaration to bypass a rejection.
+capture under that default. Do not use a review declaration to bypass a rejection.
+
+Inspect the project's `artifacts policy` when supported by the installed engine.
+An explicitly enabled `allow_insecure_artifacts` setting permits sensitive
+content and media without prior privacy review within supported profiles.
+Never enable it on the person's behalf just to retry a refusal. Report each
+revision's recorded sensitivity, inspection coverage and review requirement;
+unknown or partial inspection is not evidence of safety. The setting preserves
+all format, resource, integrity and path restrictions, and provenance metadata
+must still pass its guards. Disabling it does not prevent recovery of revisions
+already retained under that policy.
 
 Read the installed profile's limits: the first MP4 profile accepts one H.264
 video track without audio or fragmentation; PNG is static and noninterlaced.
@@ -221,10 +231,13 @@ changes. Do not promise persistence or backend execution from preview support.
 
 Use real returned node and revision identities, not the example values above.
 Report each successful capture and each refusal separately. A refusal is not a
-delivery. Stop the refused item; do not retry around a sensitive-content guard,
+delivery. Stop the refused item; do not autonomously retry around a sensitive-content guard,
 hard limit, unknown format or concurrent-revision conflict. Refresh a conflicted
 item only to present the changed selection for a new review. Earlier successful
 captures stay recorded; do not claim a batch was atomic.
+If the person explicitly changes the project privacy policy, continue within
+that authorization and report the resulting inspection findings. This does not
+permit retries around format, resource or integrity restrictions.
 
 ## Hand back the retained revision
 
