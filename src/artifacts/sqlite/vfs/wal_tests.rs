@@ -149,8 +149,8 @@ fn wal_writer_child() {
     );
     let sql = std::env::var("VIVAC_WAL_FIXTURE_SQL").unwrap();
     assert_eq!(execute(db, &sql), ffi::SQLITE_OK);
-    println!("WAL-RESULT ready");
-    std::io::stdout().flush().unwrap();
+    crate::output::outln!("WAL-RESULT ready");
+    crate::output::flush();
     for line in std::io::stdin().lock().lines() {
         let line = line.unwrap();
         let result = match line.as_str() {
@@ -179,8 +179,8 @@ fn wal_writer_child() {
             "exit" => break,
             _ => panic!("unknown writer command"),
         };
-        println!("WAL-RESULT {result}");
-        std::io::stdout().flush().unwrap();
+        crate::output::outln!("WAL-RESULT {result}");
+        crate::output::flush();
     }
     assert_eq!(unsafe { ffi::sqlite3_close(db) }, ffi::SQLITE_OK);
 }
@@ -506,10 +506,11 @@ fn native_recovery_reader_child() {
         unsafe { ffi::sqlite3_close(db) }
     };
     // Observe every return code and close even when the SELECT is refused.
-    println!(
+    crate::output::outln!(
         "WAL-RECOVERY {opened} {selected} {step} {} {closed}",
         rows.unwrap_or(-1)
     );
+    crate::output::flush();
 }
 
 fn recovery_codes(output: io::Result<std::process::Output>) -> [i32; 5] {
