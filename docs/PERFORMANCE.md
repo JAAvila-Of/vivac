@@ -159,7 +159,7 @@ its separately bounded stack buffer is 131,072 bytes.
 Reproduce the receipt measurement with:
 
 ```sh
-cargo clean -p vivac
+cargo clean -p vivac --release
 cargo test --locked --release measure_one_hundred_complete_receipt_commits_with_ten_thousand_prior_artifacts -- --ignored --nocapture --test-threads=1
 cargo test --locked --release measure_one_hundred_receipt_commits_after_external_writes -- --ignored --nocapture --test-threads=1
 cargo test --locked --release measure_one_hundred_resident_receipt_commits_after_external_writes -- --ignored --nocapture --test-threads=1
@@ -363,7 +363,7 @@ Reproduce from the repository with the shared Rust command coordinator where
 required by the development environment:
 
 ```sh
-cargo clean -p vivac
+cargo clean -p vivac --release
 cargo test --locked --release --bin vivac artifacts::bundle::tests::retained_bundle_release_benchmark -- --ignored --exact --nocapture --test-threads=1
 cargo test --locked --release --bin vivac artifacts::tests::measure_one_hundred_complete_bundle_receipt_commits_with_ten_thousand_prior_artifacts -- --ignored --exact --nocapture --test-threads=1
 ```
@@ -458,9 +458,74 @@ Reproduce from the crate directory, coordinating each Rust command separately
 with the shared Windows RustWork launcher where required:
 
 ```text
-cargo clean -p vivac
+cargo clean -p vivac --release
 cargo test --locked --release --bin vivac artifacts::bundle::tests::retained_sqlite_application_release_benchmark -- --ignored --exact --nocapture --test-threads=1
 cargo test --locked --release --bin vivac artifacts::tests::measure_one_hundred_complete_sqlite_receipt_commits_with_ten_thousand_prior_artifacts -- --ignored --exact --nocapture --test-threads=1
+```
+
+## Read-only WAL application retention
+
+Measured on **20 October 2026**, Windows 11 x86_64, on an AMD Ryzen 5 5600G
+(6 cores, 12 logical processors), using Rust and Cargo **1.94.1** with the
+MSVC target. The source commit was
+`d54ff6a37c89d590efbf88027c223e3a2a847149`. A release package clean removed
+the previous executables; the test target was then freshly compiled. Its SHA-256
+was `8ab70a4901ff05530515c7b1b58c32562816fd9b67504505db628b696c1d2e52`.
+The checkout was on H: NTFS and the synthetic fixtures on C: NTFS, outside Git.
+
+Each case used **100 captures** through the complete product capture path,
+including source opening and identity checks, native WAL leases, logical
+inspection and export, runtime materialization and verification, synchronization
+and publication. Fixture preparation, calibration, cleanup and receipt append
+were outside the timer. All samples remain included; p99 is the 99th sorted
+sample. The producer connection stayed open, and database, WAL and SHM bytes
+were checked for invariance after each case.
+
+Each retained revision contains HTML, JavaScript, a standalone logical database,
+the fixed 1,357,427-byte runtime and its manifest. Database-heavy fixtures
+checkpoint the bulk data before a final pending update; WAL-heavy fixtures
+checkpoint before the bulk transaction. Their source DB/WAL sizes were
+8,192/4,152 bytes for the minimum, 929,792/4,152 and 8,044,544/4,152 bytes for
+the database-heavy cases, and 8,192/939,392 and 8,192/8,095,832 bytes for the
+WAL-heavy cases. The benchmark emits source digests for each generated fixture.
+
+| Complete application | Input bytes | Retained bytes | p50 (ms) | p99 (ms) | Maximum (ms) | Strict p99 ceiling (ms) |
+|---|---:|---:|---:|---:|---:|---:|
+| Minimum | 1,369,867 | 1,366,937 | 42.3685 | 173.4051 | 243.8824 | 500 |
+| Runtime plus 1 MiB, database-heavy | 2,408,925 | 2,406,003 | 176.9497 | 245.9534 | 247.5047 | 500 |
+| Near 10 MiB, database-heavy | 10,485,760 | 10,482,841 | 1,271.7121 | 1,350.8699 | 1,355.6966 | 2,000 |
+| Runtime plus 1 MiB, WAL-heavy | 2,422,565 | 2,406,003 | 178.9671 | 252.6409 | 267.7621 | 500 |
+| Near 10 MiB, WAL-heavy | 10,485,760 | 10,427,513 | 1,279.0820 | 1,482.3390 | 1,585.5744 | 2,000 |
+
+Both input and retained size limits apply. The two largest fixtures fill the
+10 MiB input limit; their retained revisions are respectively 2,919 and 58,247
+bytes below the retained limit. These are measured sizes, not a discounted
+runtime or an increase in the production limit.
+
+| Auxiliary memory | Minimum (bytes) | Runtime plus 1 MiB, either layout (bytes) | Near 10 MiB, either layout (bytes) |
+|---|---:|---:|---:|
+| Peak live Rust heap | 204,370 | 204,370 | 204,370 |
+| Peak SQLite heap | 211,456 | 254,968 | 263,704 |
+| Stack allowance | 131,072 | 131,072 | 131,072 |
+| Embedded compressed runtime | 453,701 | 453,701 | 453,701 |
+| Conservative total | 1,000,599 | 1,044,111 | 1,052,847 |
+
+All five cases meet their latency and 2 MiB auxiliary-memory budgets in this
+run. The totals add the separate Rust and SQLite peaks, the stack allowance
+and the compressed runtime; the complete runtime body is streamed. They do not
+measure process RSS or browser memory. A direct Windows CPU sample was 78%
+before the coordinator wait and 34% during the run, after the fourth case.
+There was no exact start sample or continuous load trace. These observations
+establish neither sustained idle conditions nor performance on another machine,
+filesystem or operating system. They exclude the receipt, whose ordinary write
+budget still applies separately.
+
+Reproduce from the crate directory, coordinating each Rust command separately
+with the shared Windows RustWork launcher where required:
+
+```text
+cargo clean -p vivac --release
+cargo test --locked --release --bin vivac artifacts::bundle::wal_bench::retained_wal_sqlite_application_release_benchmark -- --ignored --exact --nocapture --test-threads=1
 ```
 
 ## Reviewed web-media retention
@@ -504,7 +569,7 @@ Reproduce from the crate directory, coordinating each Rust command separately
 with the shared Windows RustWork launcher where required:
 
 ```text
-cargo clean -p vivac
+cargo clean -p vivac --release
 cargo test --locked --release --bin vivac artifacts::bundle::tests::retained_reviewed_media_release_benchmark -- --ignored --exact --nocapture --test-threads=1
 cargo test --locked --release --bin vivac artifacts::bundle::tests::retained_reviewed_video_release_benchmark -- --ignored --exact --nocapture --test-threads=1
 ```
