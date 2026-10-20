@@ -207,7 +207,7 @@ const USAGE: &str = r#"vivac - provenance of work
     vivac session start [--hook]              the brief, ready to inject
       --context codex                        bounded complete JSON; requires --hook
       --context claude-module                experimental complete JSON; requires --hook
-                                             module not installed by setup
+                                             module installed by setup claude-code
     vivac session end   [--hook]              automatic stop at close
           --dry-run  what closing would do, and what the hook last did
     vivac session prompt [--hook]             a nudge when nothing was written
