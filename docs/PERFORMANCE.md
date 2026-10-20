@@ -666,7 +666,53 @@ This receipt run measured p50 **0.967 ms**, p99 **6.5917 ms**, maximum
 **8.4889 ms**, and peak Rust heap **44,486 bytes**. It completed all 100
 commits, then failed the unchanged **p99 < 5 ms** assertion with exit code
 101. **The capture results do not establish receipt-budget compliance.**
-The failed receipt result is retained; its cause remains under investigation.
+The failed receipt result is retained. The later diagnosis and candidate
+measurement below do not establish its cause.
+
+### Receipt phase diagnosis and candidate measurement
+
+A fresh release test executable from
+[`3da1637`](https://github.com/JAAvila-Of/vivac/commit/3da1637f3d2eb196dbc5fa91f62078d2688af6d0)
+adds optional test-only phase instrumentation to the real commit route. Its
+SHA-256 was
+`4dcd1068f95bf729cd3570dfd72c4aca29aaf696323fb0aae4348bcfba1ccd84`.
+Compiler, machine and filesystem were the same as above. Production builds
+exclude the profiling hooks; the capture backends are unchanged.
+
+One diagnostic run completed 100 commits over 10,000 prior receipts, retaining
+every sample by index. It measured p50 / p99 / maximum at **0.6459 / 3.8097 /
+5.3731 ms**, including its instrumentation. The first commit spent 2.7605 ms
+in the append configuration-marker/write phase and took 3.8097 ms overall.
+The second commit spent 4.6473 ms in the fresh policy lookup and took 5.3731 ms
+overall. These locate elapsed time in that run; they do not prove the cause
+of the earlier receipt tail. The diagnostic does not certify a budget.
+Its whole-process global CPU observation was 20.00%, over one interval.
+
+The six append subphases are nested within the capture's emit phase. Residual
+time is total minus the five capture phases and unlock; the append subphases
+are not subtracted again. Residual p50 / p99 / maximum was 500 / 1,300 /
+7,400 ns, including profiling-wrapper overhead.
+
+Exactly one subsequent compliance run used the same executable with phase
+collection inactive and the original budget assertion unchanged. The test-only
+hooks remain compiled and check their inactive state. All 100 commits are
+included, including the first configuration upgrade:
+
+| Complete permissive receipt | Result |
+|---|---:|
+| p50 | 0.594 ms |
+| p99 | 3.4348 ms |
+| Maximum | 6.3954 ms |
+| Peak Rust heap | 44,486 bytes |
+| Whole-process global CPU mean / p50 / maximum | 22.33 / 22.33 / 22.33% |
+| CPU intervals | 1 |
+
+This candidate run passed the **p99 < 5 ms** assertion with exit code 0. Its
+maximum exceeded 5 ms and is retained: the budget is a percentile bound, not a
+guarantee for every call. The earlier 6.5917 ms p99 remains above as a failed
+observation. No production optimization was made between these runs. These
+observations do not establish why their tails differ. The receipt timing and
+memory exclusions above still apply.
 
 To reproduce a capture cell, run it separately in release mode:
 
@@ -681,6 +727,12 @@ separately:
 
 ```sh
 cargo test --locked --release --bin vivac artifacts::tests::measure_permissive_receipt_commits_with_ten_thousand_prior_artifacts -- --ignored --exact --nocapture --test-threads=1
+```
+
+The optional phase diagnostic is separate from compliance:
+
+```sh
+cargo test --locked --release --bin vivac artifacts::tests::diagnose_permissive_receipt_commit_phases_with_ten_thousand_prior_artifacts -- --ignored --exact --nocapture --test-threads=1
 ```
 
 ## Context
