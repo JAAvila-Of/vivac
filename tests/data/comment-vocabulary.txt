@@ -37,6 +37,7 @@ accumulator
 ace
 acl
 acquired
+acquiring
 acronym
 across
 act
@@ -288,7 +289,6 @@ auto
 automatic
 automatically
 autos
-auxiliary
 availability
 available
 avoid
@@ -519,7 +519,6 @@ canonicalized
 canonicalizing
 canonically
 cap
-capabilities
 capability
 capable
 capital
@@ -583,6 +582,7 @@ checker
 checking
 checkout
 checkouts
+checkpointed
 checks
 checksum
 checksums
@@ -937,6 +937,7 @@ datum
 day
 daylight
 days
+db
 ddl
 de
 dead
@@ -949,6 +950,7 @@ decide
 decided
 decides
 deciding
+decimal
 decision
 decisions
 declaration
@@ -1293,6 +1295,7 @@ ends
 enforce
 enforced
 engages
+engine
 english
 enough
 enter
@@ -1610,6 +1613,7 @@ frontmatter
 fronts
 froze
 frozen
+fstatat
 full
 fully
 function
@@ -1929,6 +1933,8 @@ inheriting
 inherits
 init
 initialization
+initialize
+initialized
 inject
 injected
 injecting
@@ -1949,6 +1955,7 @@ inset
 insets
 inside
 insists
+inspect
 inspectable
 inspecting
 inspection
@@ -2001,6 +2008,7 @@ introduce
 introduced
 introduces
 invalid
+invariance
 invariant
 invariants
 invent
@@ -2134,6 +2142,7 @@ learned
 learning
 learns
 lease
+leases
 least
 leave
 leaves
@@ -2281,6 +2290,7 @@ make
 makes
 making
 malformed
+man
 managed
 manager
 manages
@@ -2447,6 +2457,7 @@ mutably
 mutate
 mutating
 mutation
+mutex
 mutually
 my
 n
@@ -2867,6 +2878,7 @@ prefixed
 prefixes
 preflight
 premise
+preopened
 preparation
 prepare
 prepared
@@ -3056,6 +3068,7 @@ readers
 reading
 readings
 readme
+readonly
 reads
 ready
 real
@@ -3585,6 +3598,7 @@ shin
 ship
 shipped
 ships
+shm
 short
 shortcut
 shorten
@@ -3776,6 +3790,7 @@ starter
 starting
 starts
 startup
+stat
 state
 statement
 statements
@@ -4284,6 +4299,7 @@ unrecognised
 unrecorded
 unregistering
 unrelated
+unreliable
 unresolvable
 unresolved
 unsaid
@@ -4411,6 +4427,7 @@ waiting
 waits
 wake
 wakes
+wal
 walk
 walked
 walker

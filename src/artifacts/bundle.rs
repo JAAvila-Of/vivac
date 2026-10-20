@@ -16,6 +16,7 @@ pub(crate) const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
 const MAX_BYTES: u64 = 10 * 1024 * 1024;
 pub(crate) const SUPPORTED: bool = super::native::SUPPORTED;
 pub(crate) const SQLITE_PROFILE: &str = "sqlite-standalone-v1";
+pub(crate) const WAL_PROFILE: &str = "readonly-wal-v1";
 const SQLITE_TRANSFORMATION: &str = "logical-export-v1";
 const SQLITE_MEDIA_TYPE: &str = "application/vnd.sqlite3";
 
@@ -36,6 +37,12 @@ pub(crate) struct BundleSelection {
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_database_source"
+    )]
+    pub(crate) database_source: Option<DatabaseSource>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
         deserialize_with = "deserialize_selection_identity"
     )]
     pub(crate) runtime: Option<String>,
@@ -52,6 +59,18 @@ pub(crate) struct MediaReview {
     // Caller attestation of prior human review, not authentication or proof of safety.
     pub(crate) profile: String,
     pub(crate) members: Vec<ReviewedMember>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DatabaseSource {
+    pub(crate) profile: String,
+    pub(crate) wal: String,
+    pub(crate) shm: String,
+}
+fn deserialize_database_source<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<DatabaseSource>, D::Error> {
+    DatabaseSource::deserialize(deserializer).map(Some)
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -106,6 +125,31 @@ pub(crate) struct DatabaseMetadata {
     pub(crate) transformation: String,
     pub(crate) source_bytes: u64,
     pub(crate) source_sha256: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_retained_source"
+    )]
+    pub(crate) source: Option<RetainedDatabaseSource>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RetainedDatabaseSource {
+    pub(crate) profile: String,
+    pub(crate) wal: RetainedWal,
+    pub(crate) shm: String,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RetainedWal {
+    pub(crate) path: String,
+    pub(crate) bytes: u64,
+    pub(crate) sha256: String,
+}
+fn deserialize_retained_source<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<RetainedDatabaseSource>, D::Error> {
+    RetainedDatabaseSource::deserialize(deserializer).map(Some)
 }
 fn deserialize_database<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
@@ -301,6 +345,12 @@ fn validate_selection_shape(selection: &BundleSelection) -> Result<(), Failure> 
             "Bundles must select between 1 and 64 members.",
         ));
     }
+    if let Some(source) = &selection.database_source {
+        let database = selection.database.as_deref().ok_or_else(|| {
+            Failure::usage("A database source requires a selected database and product runtime.")
+        })?;
+        validate_database_source(database, source)?;
+    }
     member_path(&selection.entrypoint)?;
     if media_type(&selection.entrypoint)? != "text/html"
         || !selection.members.contains(&selection.entrypoint)
@@ -364,6 +414,18 @@ fn validate_selection_shape(selection: &BundleSelection) -> Result<(), Failure> 
         }
     }
     bounded_json(selection)?;
+    Ok(())
+}
+fn validate_database_source(database: &str, source: &DatabaseSource) -> Result<(), Failure> {
+    validate_database_path(database)?;
+    if source.profile != WAL_PROFILE
+        || source.wal != format!("{database}-wal")
+        || source.shm != format!("{database}-shm")
+    {
+        return Err(Failure::usage(
+            "The WAL source must exactly select the database's WAL and SHM paths.",
+        ));
+    }
     Ok(())
 }
 
@@ -484,6 +546,43 @@ impl Held {
             prepared_runtime: false,
         })
     }
+    fn check_wal_identity(&self) -> Result<(), Failure> {
+        let metadata = self.file.metadata()?;
+        files::reject_link(&metadata)?;
+        files::require_single_link(&self.file)?;
+        files::unchanged(&self.before, &metadata)?;
+        #[cfg(unix)]
+        {
+            use cap_std::fs::MetadataExt;
+            let named = stat_name(&self.parent, &self.name)?.ok_or_else(|| {
+                Failure::usage("A SQLite source name disappeared during capture.")
+            })?;
+            if named.st_mode & libc::S_IFMT != libc::S_IFREG
+                || named.st_nlink != 1
+                || named.st_dev as i128 != i128::from(metadata.dev())
+                || named.st_ino as u128 != u128::from(metadata.ino())
+            {
+                return Err(Failure::usage(
+                    "A SQLite source identity changed during capture.",
+                ));
+            }
+        }
+        #[cfg(windows)]
+        {
+            use cap_std::fs::OpenOptionsExt;
+            use windows_sys::Win32::Storage::FileSystem::{FILE_READ_ATTRIBUTES, SYNCHRONIZE};
+            let mut options = OpenOptions::new();
+            options
+                .read(true)
+                .follow(FollowSymlinks::No)
+                .access_mode(FILE_READ_ATTRIBUTES | SYNCHRONIZE);
+            let named = self.parent.open_with(&self.name, &options)?;
+            files::reject_link(&named.metadata()?)?;
+            files::require_single_link(&named)?;
+            files::same_source(&self.file, &named)?;
+        }
+        Ok(())
+    }
     fn recheck(&self, root: &Dir) -> Result<(), Failure> {
         files::unchanged(&self.before, &self.file.metadata()?)?;
         #[cfg(windows)]
@@ -551,12 +650,60 @@ fn member_parent(root: &Dir, path: &str) -> Result<(Dir, String), Failure> {
     Err(Failure::usage("Invalid SQLite member path."))
 }
 
+#[cfg(unix)]
+fn stat_name(parent: &Dir, name: &str) -> Result<Option<libc::stat>, Failure> {
+    use std::os::fd::AsRawFd;
+    let name =
+        std::ffi::CString::new(name).map_err(|_| Failure::usage("Invalid SQLite source name."))?;
+    let mut metadata = std::mem::MaybeUninit::<libc::stat>::uninit();
+    // SAFETY: the capability directory remains live and the name is terminated.
+    // fstatat fills the output on success without opening another file descriptor.
+    let result = unsafe {
+        libc::fstatat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            metadata.as_mut_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    if result == 0 {
+        // SAFETY: a successful fstatat initialized the complete stat value.
+        return Ok(Some(unsafe { metadata.assume_init() }));
+    }
+    let error = io::Error::last_os_error();
+    if error.kind() == io::ErrorKind::NotFound {
+        Ok(None)
+    } else {
+        Err(error.into())
+    }
+}
+fn name_exists(parent: &Dir, name: &str) -> Result<bool, Failure> {
+    #[cfg(unix)]
+    return stat_name(parent, name).map(|metadata| metadata.is_some());
+    #[cfg(not(unix))]
+    match parent.symlink_metadata(name) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}
+fn check_wal_sources(database: &Held, wal: &Held, shm: &Held) -> Result<(), Failure> {
+    super::native::same_directory(&database.parent, &wal.parent)?;
+    super::native::same_directory(&database.parent, &shm.parent)?;
+    for source in [database, wal, shm] {
+        source.check_wal_identity()?;
+    }
+    if name_exists(&database.parent, &format!("{}-journal", database.name))? {
+        return Err(Failure::usage(
+            "SQLite rollback journals are not supported.",
+        ));
+    }
+    Ok(())
+}
 fn check_auxiliary(parent: &Dir, name: &str) -> Result<(), Failure> {
     for suffix in ["-wal", "-shm", "-journal"] {
-        match parent.symlink_metadata(format!("{name}{suffix}")) {
-            Ok(_) => return Err(Failure::usage("SQLite auxiliary files are not supported.")),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
+        if name_exists(parent, &format!("{name}{suffix}"))? {
+            return Err(Failure::usage("SQLite auxiliary files are not supported."));
         }
     }
     Ok(())
@@ -787,6 +934,22 @@ pub(crate) fn capture(
         }
         sources.push(source);
     }
+    let mut auxiliary = Vec::new();
+    if let Some(selected) = &selection.database_source {
+        auxiliary.push(Held::open(&source_dir, &selected.wal)?);
+        auxiliary.push(Held::open(&source_dir, &selected.shm)?);
+        expected_bytes = expected_bytes
+            .checked_add(auxiliary[0].before.len())
+            .ok_or_else(|| Failure::usage("Bundle size overflow."))?;
+        if expected_bytes > MAX_BYTES {
+            return Err(Failure::usage("The complete source bundle exceeds 10 MiB."));
+        }
+        let database = sources
+            .iter()
+            .find(|source| selection.database.as_ref() == Some(&source.path))
+            .ok_or_else(|| Failure::usage("Missing selected SQLite source."))?;
+        check_wal_sources(database, &auxiliary[0], &auxiliary[1])?;
+    }
     files::check_tracking(root)?;
     let store_parent = files::directory(&root_dir, ".vivac-artifacts", true)?;
     super::native::require_controlled_parent(&store_parent)?;
@@ -798,7 +961,9 @@ pub(crate) fn capture(
     let mut total = 0u64;
     let mut media_budget = super::media::Budget::default();
     let mut manifest = Manifest {
-        schema_version: if selection.media_review.is_some() {
+        schema_version: if selection.database_source.is_some() {
+            5
+        } else if selection.media_review.is_some() {
             4
         } else if selection.database.is_some() {
             3
@@ -822,9 +987,34 @@ pub(crate) fn capture(
     for source in &mut sources {
         let mut output = new_member(&preparation.dir, &source.path)?;
         let receipt = if selection.database.as_ref() == Some(&source.path) {
-            let snapshot = super::sqlite::normalize(&source.file, &output, || {
-                check_auxiliary(&source.parent, &source.name)
-            })?;
+            let (snapshot, retained_source) = if let Some(selected) = &selection.database_source {
+                let captured = super::sqlite::normalize_wal(
+                    &source.file,
+                    &auxiliary[0].file,
+                    &auxiliary[1].file,
+                    &output,
+                    || check_wal_sources(source, &auxiliary[0], &auxiliary[1]),
+                )?;
+                (
+                    captured.snapshot,
+                    Some(RetainedDatabaseSource {
+                        profile: WAL_PROFILE.into(),
+                        wal: RetainedWal {
+                            path: selected.wal.clone(),
+                            bytes: captured.wal_bytes,
+                            sha256: captured.wal_sha256,
+                        },
+                        shm: selected.shm.clone(),
+                    }),
+                )
+            } else {
+                (
+                    super::sqlite::normalize(&source.file, &output, || {
+                        check_auxiliary(&source.parent, &source.name)
+                    })?,
+                    None,
+                )
+            };
             if snapshot.bytes > MAX_BYTES - total {
                 return Err(Failure::usage("The complete bundle exceeds 10 MiB."));
             }
@@ -834,6 +1024,7 @@ pub(crate) fn capture(
                 transformation: SQLITE_TRANSFORMATION.into(),
                 source_bytes: snapshot.source_bytes,
                 source_sha256: snapshot.source_sha256,
+                source: retained_source,
             });
             guard::Receipt {
                 digest: snapshot.sha256,
@@ -892,6 +1083,7 @@ pub(crate) fn capture(
             .sort_by(|left, right| left.path.cmp(&right.path));
     }
     recheck_all(&source_dir, &sources)?;
+    recheck_all(&source_dir, &auxiliary)?;
     let bytes = manifest_bytes(&BorrowedManifest {
         schema_version: manifest.schema_version,
         delivery_type: &manifest.delivery_type,
@@ -922,6 +1114,15 @@ pub(crate) fn capture(
     )?;
     recheck_all(&source_dir, &sources)?;
     recheck_selected_root(&root_dir, &source_dir, &selection.root, &sources)?;
+    recheck_all(&source_dir, &auxiliary)?;
+    recheck_selected_root(&root_dir, &source_dir, &selection.root, &auxiliary)?;
+    if !auxiliary.is_empty() {
+        let database = sources
+            .iter()
+            .find(|source| selection.database.as_ref() == Some(&source.path))
+            .ok_or_else(|| Failure::usage("Missing selected SQLite source."))?;
+        check_wal_sources(database, &auxiliary[0], &auxiliary[1])?;
+    }
     sync_tree(&preparation.dir)?;
     let site = files::site(&store)?;
     files::check_git(root, &object, &preparation.name)?;
@@ -956,6 +1157,7 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), Failure> {
         ),
         (1, "bundle", None, None, None)
             | (3, "sqlite_application", Some(_), Some(_), None)
+            | (5, "sqlite_application", Some(_), Some(_), None)
             | (4, "bundle", None, None, Some(_))
     ) {
         return Err(Failure::usage("Unsupported bundle manifest schema."));
@@ -998,6 +1200,15 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), Failure> {
             .database
             .as_ref()
             .map(|database| database.path.clone()),
+        database_source: manifest
+            .database
+            .as_ref()
+            .and_then(|database| database.source.as_ref())
+            .map(|source| DatabaseSource {
+                profile: source.profile.clone(),
+                wal: source.wal.path.clone(),
+                shm: source.shm.clone(),
+            }),
         runtime: manifest.runtime.as_ref().map(|runtime| runtime.id.clone()),
         media_review: manifest.media_review.clone(),
     };
@@ -1010,6 +1221,30 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), Failure> {
             || !valid_digest(&database.source_sha256)
         {
             return Err(Failure::usage("Invalid SQLite application metadata."));
+        }
+        if (manifest.schema_version == 5) != database.source.is_some() {
+            return Err(Failure::usage(
+                "SQLite source metadata does not match the manifest schema.",
+            ));
+        }
+        if let Some(source) = &database.source {
+            let source_total = database
+                .source_bytes
+                .checked_add(source.wal.bytes)
+                .and_then(|bytes| {
+                    manifest
+                        .members
+                        .iter()
+                        .filter(|member| member.path != database.path)
+                        .try_fold(bytes, |total, member| total.checked_add(member.bytes))
+                });
+            // An empty WAL is legitimate after TRUNCATE. A partial header is not.
+            if (1..32).contains(&source.wal.bytes)
+                || source_total.is_none_or(|bytes| bytes > MAX_BYTES)
+                || !valid_digest(&source.wal.sha256)
+            {
+                return Err(Failure::usage("Invalid SQLite WAL source metadata."));
+            }
         }
     }
     for requirement in &manifest.requirements {
@@ -1429,7 +1664,18 @@ pub(crate) fn source_check(
                 selector.ok_or_else(|| Failure::usage("Missing bundle selection reference."))?;
             // Compare the selected identity without consulting capture availability
             // or opening a project file at the generated member's path.
-            read_selection(root, selector)?.runtime.as_deref() == Some(runtime.id.as_str())
+            let selected = read_selection(root, selector)?;
+            let expected_source = manifest
+                .database
+                .as_ref()
+                .and_then(|database| database.source.as_ref())
+                .map(|source| DatabaseSource {
+                    profile: source.profile.clone(),
+                    wal: source.wal.path.clone(),
+                    shm: source.shm.clone(),
+                });
+            selected.runtime.as_deref() == Some(runtime.id.as_str())
+                && selected.database_source == expected_source
         } else {
             true
         };
@@ -1450,6 +1696,7 @@ pub(crate) fn source_check(
             sources.push(Held::open(&source, &member.path)?);
         }
         let mut matches = runtime_matches;
+        let mut auxiliary = Vec::new();
         let mut media_budget = super::media::Budget::default();
         for (held, member) in sources.iter_mut().zip(members) {
             if let Some(database) = manifest
@@ -1460,6 +1707,19 @@ pub(crate) fn source_check(
                 let receipt = copy_binary_limit(&held.file, io::sink(), MAX_BYTES)?;
                 matches &= receipt.digest == database.source_sha256
                     && receipt.size == database.source_bytes;
+                if let Some(selected) = &database.source {
+                    let wal = Held::open(&source, &selected.wal.path)?;
+                    let shm = Held::open(&source, &selected.shm)?;
+                    check_wal_sources(held, &wal, &shm)?;
+                    let receipt = copy_binary_limit(
+                        &wal.file,
+                        io::sink(),
+                        MAX_BYTES - database.source_bytes,
+                    )?;
+                    matches &=
+                        receipt.digest == selected.wal.sha256 && receipt.size == selected.wal.bytes;
+                    auxiliary.extend([wal, shm]);
+                }
             } else if is_media(&member.media_type) {
                 let receipt = super::media::copy_checked_with_budget(
                     &mut held.file,
@@ -1476,6 +1736,8 @@ pub(crate) fn source_check(
         }
         recheck_all(&source, &sources)?;
         recheck_selected_root(&root, &source, source_root_path, &sources)?;
+        recheck_all(&source, &auxiliary)?;
+        recheck_selected_root(&root, &source, source_root_path, &auxiliary)?;
         Ok(matches)
     })();
     match result {
@@ -1493,6 +1755,131 @@ mod tests {
     use super::*;
     use std::fs;
     use std::path::PathBuf;
+
+    #[cfg(unix)]
+    #[test]
+    fn wal_checks_keep_the_original_directory_and_reject_replaced_names() {
+        let scratch = Scratch::new();
+        fs::create_dir(scratch.0.join("app")).unwrap();
+        for name in ["data.sqlite", "data.sqlite-wal", "data.sqlite-shm"] {
+            fs::write(scratch.0.join("app").join(name), []).unwrap();
+        }
+        let root = files::open_root(&scratch.0).unwrap();
+        let source = source_root(&root, "app").unwrap();
+        let database = Held::open(&source, "data.sqlite").unwrap();
+        let wal = Held::open(&source, "data.sqlite-wal").unwrap();
+        let shm = Held::open(&source, "data.sqlite-shm").unwrap();
+        check_wal_sources(&database, &wal, &shm).unwrap();
+        fs::rename(scratch.0.join("app"), scratch.0.join("old")).unwrap();
+        fs::create_dir(scratch.0.join("app")).unwrap();
+        for name in ["data.sqlite", "data.sqlite-wal", "data.sqlite-shm"] {
+            fs::write(scratch.0.join("app").join(name), []).unwrap();
+        }
+        fs::write(scratch.0.join("old/data.sqlite-journal"), []).unwrap();
+        assert!(check_wal_sources(&database, &wal, &shm).is_err());
+        fs::remove_file(scratch.0.join("old/data.sqlite-journal")).unwrap();
+        fs::rename(
+            scratch.0.join("old/data.sqlite-wal"),
+            scratch.0.join("old/previous-wal"),
+        )
+        .unwrap();
+        fs::write(scratch.0.join("old/data.sqlite-wal"), []).unwrap();
+        assert!(check_wal_sources(&database, &wal, &shm).is_err());
+        assert!(recheck_selected_root(&root, &source, "app", &[database, wal, shm]).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn wal_name_checks_preserve_the_outer_sqlite_leases() {
+        use libsqlite3_sys as ffi;
+        use std::cell::RefCell;
+        let writer = RefCell::new(super::super::sqlite::vfs::wal_tests::Writer::start());
+        let path = writer.borrow().path("");
+        let root = files::open_root(path.parent().unwrap()).unwrap();
+        let database = Held::open(&root, "source.db").unwrap();
+        let wal = Held::open(&root, "source.db-wal").unwrap();
+        let shm = Held::open(&root, "source.db-shm").unwrap();
+        let output = new_member(&root, "snapshot.db").unwrap();
+        let calls = std::cell::Cell::new(0);
+        super::super::sqlite::normalize_wal(&database.file, &wal.file, &shm.file, &output, || {
+            check_wal_sources(&database, &wal, &shm)?;
+            calls.set(calls.get() + 1);
+            assert_eq!(writer.borrow_mut().command("write"), ffi::SQLITE_BUSY);
+            assert_eq!(writer.borrow_mut().command("checkpoint"), ffi::SQLITE_BUSY);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(calls.get(), 2);
+        assert_eq!(writer.borrow_mut().command("write"), ffi::SQLITE_OK);
+        assert_eq!(writer.borrow_mut().command("checkpoint"), ffi::SQLITE_OK);
+    }
+
+    #[test]
+    fn wal_source_manifest_requires_exact_versioned_metadata() {
+        let value = json!({
+            "schema_version":5,"delivery_type":"sqlite_application","entrypoint":"index.html","requirements":[],
+            "runtime":runtime::descriptor(runtime::ID).unwrap(),
+            "database":{"path":"data.sqlite","profile":SQLITE_PROFILE,"transformation":SQLITE_TRANSFORMATION,"source_bytes":512,"source_sha256":"a".repeat(64),
+            "source":{"profile":WAL_PROFILE,"wal":{"path":"data.sqlite-wal","bytes":32,"sha256":"b".repeat(64)},"shm":"data.sqlite-shm"}},
+            "members":[{"path":"data.sqlite","bytes":512,"sha256":"c".repeat(64),"media_type":SQLITE_MEDIA_TYPE},
+            {"path":"index.html","bytes":1,"sha256":"d".repeat(64),"media_type":"text/html"},
+            {"path":runtime::PATH,"bytes":runtime::BYTES,"sha256":runtime::SHA256,"media_type":"text/javascript"}]
+        });
+        let valid = |value: &Value| {
+            serde_json::from_value::<Manifest>(value.clone())
+                .is_ok_and(|manifest| validate_manifest(&manifest).is_ok())
+        };
+        assert!(valid(&value));
+        let mut empty = value.clone();
+        empty["database"]["source"]["wal"]["bytes"] = json!(0);
+        assert!(valid(&empty));
+        let mut cases = Vec::new();
+        let mut excessive_input = value.clone();
+        excessive_input["database"]["source_bytes"] = json!(MAX_BYTES - runtime::BYTES);
+        cases.push(excessive_input);
+        for bytes in [1, 31, MAX_BYTES] {
+            let mut case = value.clone();
+            case["database"]["source"]["wal"]["bytes"] = json!(bytes);
+            cases.push(case);
+        }
+        for version in [1, 3, 4] {
+            let mut case = value.clone();
+            case["schema_version"] = json!(version);
+            cases.push(case);
+        }
+        for source in [
+            Value::Null,
+            json!({}),
+            json!({"profile":WAL_PROFILE,"wal":{"path":"data.sqlite-wal","bytes":32,"sha256":"b".repeat(64)},"shm":"data.sqlite-shm","extra":true}),
+        ] {
+            let mut case = value.clone();
+            case["database"]["source"] = source;
+            cases.push(case);
+        }
+        let mut missing = value.clone();
+        missing["database"]
+            .as_object_mut()
+            .unwrap()
+            .remove("source");
+        cases.push(missing);
+        for (field, entry) in [("profile", json!("other")), ("shm", json!("other-shm"))] {
+            let mut case = value.clone();
+            case["database"]["source"][field] = entry;
+            cases.push(case);
+        }
+        for (field, entry) in [
+            ("path", json!("../data.sqlite-wal")),
+            ("sha256", json!("A".repeat(64))),
+            ("extra", json!(true)),
+        ] {
+            let mut case = value.clone();
+            case["database"]["source"]["wal"][field] = entry;
+            cases.push(case);
+        }
+        for case in cases {
+            assert!(!valid(&case), "accepted invalid source metadata: {case}");
+        }
+    }
 
     #[test]
     fn reviewed_media_selection_requires_exact_complete_attestation() {
@@ -2082,6 +2469,7 @@ mod tests {
             ],
             requirements: vec![],
             database: None,
+            database_source: None,
             runtime: None,
             media_review: None,
         };
@@ -2136,6 +2524,7 @@ mod tests {
             members,
             requirements: vec![String::new(); 10_000],
             database: None,
+            database_source: None,
             runtime: None,
             media_review: None,
         };
@@ -2241,6 +2630,7 @@ mod tests {
             members: vec!["index.html".into(), "assets/style.css".into()],
             requirements: vec![],
             database: None,
+            database_source: None,
             runtime: None,
             media_review: None,
         };
@@ -2388,6 +2778,7 @@ mod tests {
                 members: vec!["index.html".into()],
                 requirements: vec![],
                 database: None,
+                database_source: None,
                 runtime: None,
                 media_review: None,
             };
@@ -2557,6 +2948,7 @@ mod tests {
                 members: vec!["frame.png".into(), "index.html".into()],
                 requirements: vec![],
                 database: None,
+                database_source: None,
                 runtime: None,
                 media_review: Some(MediaReview {
                     profile: "reviewed-media-v1".into(),
@@ -2735,6 +3127,7 @@ mod tests {
                 members: vec!["first.mp4".into(), "index.html".into(), "second.mp4".into()],
                 requirements: vec![],
                 database: None,
+                database_source: None,
                 runtime: None,
                 media_review: Some(MediaReview {
                     profile: "reviewed-media-v1".into(),
@@ -2798,6 +3191,7 @@ mod tests {
             members: vec!["data.sqlite".into(), "index.html".into(), "main.js".into()],
             requirements: vec![],
             database: Some("data.sqlite".into()),
+            database_source: None,
             runtime: Some(runtime::ID.into()),
             media_review: None,
         };
@@ -3056,6 +3450,7 @@ mod tests {
             members: vec!["index.html".into()],
             requirements: vec![],
             database: None,
+            database_source: None,
             runtime: None,
             media_review: None,
         };
@@ -3099,9 +3494,13 @@ mod tests {
             members: vec!["index.html".into(), "INDEX.html".into()],
             requirements: vec![],
             database: None,
+            database_source: None,
             runtime: None,
             media_review: None,
         };
         assert!(validate_selection(&selection).is_err());
     }
 }
+
+#[cfg(test)]
+mod wal_bench;

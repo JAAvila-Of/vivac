@@ -80,6 +80,19 @@ fn capabilities() -> Value {
                 "journal_mode": "standalone_rollback",
                 "encoding": "utf8",
                 "auxiliary_files": "refused",
+                "source_profiles": {
+                    "sqlite-standalone-v1": {"supported": bundles, "auxiliary_files": "refused"},
+                    "readonly-wal-v1": {
+                        "supported": bundles,
+                        "selection": "database_source",
+                        "existing_inputs": ["database", "wal", "shm"],
+                        "max_data_input_bytes": MAX_FILE_BYTES,
+                        "max_wal_input_bytes": MAX_FILE_BYTES,
+                        "shared_memory_contents_read": false,
+                        "source_writes": false,
+                        "retained_profile": bundle::SQLITE_PROFILE
+                    }
+                },
                 "runtime": {"api":"initSqlJs", "generated_member":runtime::PATH, "known":[{"id":runtime::ID,"path":runtime::PATH,"bytes":runtime::BYTES,"sha256":runtime::SHA256}], "available_for_capture":[runtime::ID]},
                 "max_bytes": MAX_FILE_BYTES,
                 "max_members": 64,
@@ -1658,7 +1671,8 @@ fn print(value: &Value) -> Result<(), Failure> {
             crate::output::outln!("Artifacts: one UTF-8 text file per revision, up to {max_mib} MiB; pages up to {MAX_PAGE_SIZE}. Complete bundle custody is not supported on this platform.");
         }
         if value["delivery_types"]["sqlite_application"]["supported"] == true {
-            crate::output::outln!("SQLite applications: complete HTML/CSS/JS with one explicit standalone database, retained as a logical export. Vivac supplies a fixed JavaScript runtime and retains it with the revision; no backend is provided.");
+            crate::output::outln!("SQLite applications: complete HTML/CSS/JS with one explicit database, retained as a standalone logical export. Vivac supplies a fixed JavaScript runtime and retains it with the revision; no backend is provided.");
+            crate::output::outln!("SQLite WAL input requires the explicit readonly-wal-v1 source profile and existing database, WAL and SHM inputs. Native coordination locks protect the read; source files are not written or checkpointed.");
         } else {
             crate::output::outln!("SQLite application custody is not supported by this engine.");
         }
@@ -2964,6 +2978,7 @@ mod tests {
             database: None,
             runtime: None,
             media_review: None,
+            database_source: None,
         };
         let retained = bundle::capture(root, &selection, &revision).unwrap();
         Body::ArtifactBundleCaptured {

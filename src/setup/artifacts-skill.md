@@ -200,6 +200,20 @@ schema constructs refuse the complete delivery. Do not change journal mode,
 delete sidecars, remove tables or flatten the database to get capture accepted.
 Explain a refusal and keep the complete delivery outside custody.
 
+For a live WAL source, first query the installed
+`sqlite_application.source_profiles.readonly-wal-v1.supported` capability. Only
+when it is true, explicitly select `database_source` with
+`profile: "readonly-wal-v1"`, `wal: "data.sqlite-wal"` and
+`shm: "data.sqlite-shm"`, using the exact chosen database path plus those
+suffixes. Both auxiliary inputs must already exist under the selection root.
+Keep them out of `members`: the retained database remains the inspected logical
+export, not a raw DB/WAL/SHM copy. The engine reads by authorized handles and
+holds native coordination locks; it must not create, update or delete source
+sidecars. Missing inputs, a rollback journal, links, source changes or conflicting
+locks refuse the complete delivery. Do not enable a source profile merely because
+its selector fields are documented. Without this explicit supported profile,
+the standalone source restrictions above still apply.
+
 Database custody declares a fresh logical export, with source and retained
 digests recorded separately. Browser edits stay in memory and do not modify the
 retained revision. Capture a deliberate new complete revision to retain later

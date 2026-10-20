@@ -142,8 +142,15 @@ are in the `README`.
 Local artifact retention accepts at most 10 MiB per complete revision, including
 its manifest. Supported profiles are a UTF-8 file, a complete static frontend
 bundle, and a complete frontend application with one explicitly selected
-standalone SQLite database retained through a fresh logical export. This does
-not permit generic binary capture or active-WAL ingestion.
+SQLite database retained as a standalone database through a fresh logical export.
+SQLite source profiles are explicit: the default refuses auxiliary files; the
+read-only WAL profile requires existing database, WAL and SHM files and holds
+native locks without writing or checkpointing them. WAL and SHM are source
+inputs, never retained members. The complete data input, including the WAL and
+product runtime, also stays within 10 MiB; SHM is used only for coordination.
+WAL source encoding is checked through SQLite's locked logical view. A physical
+main-file header with an unset encoding is accepted only when that view is UTF-8.
+This does not permit generic binary capture or retaining raw WAL files.
 An explicitly reviewed web-media bundle may additionally retain supported PNG
 and MP4 members. Its automatic inspection covers supported structure and
 accessible textual metadata; a person must review the exact visual and audible

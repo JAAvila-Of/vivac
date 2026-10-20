@@ -98,6 +98,397 @@ fn object(sandbox: &Sandbox, delivery: &Value) -> std::path::PathBuf {
 }
 
 const DATABASE_FIXTURE: &str = "CREATE TABLE items(id INTEGER PRIMARY KEY, label TEXT NOT NULL); INSERT INTO items VALUES(1,'First revision');";
+struct WalWriter(std::process::Child);
+impl WalWriter {
+    fn stop(&mut self) {
+        use std::io::Write;
+        self.0.stdin.as_mut().unwrap().write_all(b"exit\n").unwrap();
+        assert!(self.0.wait().unwrap().success());
+    }
+}
+impl Drop for WalWriter {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+fn wal_writer(sandbox: &Sandbox) -> WalWriter {
+    let ready = sandbox.0.join("writer-ready");
+    let child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "wal_source_process", "--nocapture"])
+        .env("VIVAC_TEST_WAL_ROOT", &sandbox.0)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut writer = WalWriter(child);
+    let start = std::time::Instant::now();
+    while !ready.exists() {
+        assert!(writer.0.try_wait().unwrap().is_none(), "WAL writer exited");
+        assert!(start.elapsed().as_secs() < 15, "WAL writer did not start");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    writer
+}
+#[test]
+fn wal_source_process() {
+    let Some(root) = std::env::var_os("VIVAC_TEST_WAL_ROOT") else {
+        return;
+    };
+    let root = std::path::PathBuf::from(root);
+    let name = CString::new(root.join("app/data.sqlite").to_str().unwrap()).unwrap();
+    unsafe {
+        let mut db = ptr::null_mut();
+        assert_eq!(ffi::sqlite3_open(name.as_ptr(), &mut db), ffi::SQLITE_OK);
+        assert_eq!(ffi::sqlite3_exec(db, c"PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; INSERT INTO items VALUES(2,'Committed in WAL');".as_ptr(), None, ptr::null_mut(), ptr::null_mut()), ffi::SQLITE_OK);
+        fs::write(root.join("writer-ready"), b"ready").unwrap();
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line).unwrap();
+        assert_eq!(ffi::sqlite3_close(db), ffi::SQLITE_OK);
+    }
+}
+fn select_wal(sandbox: &Sandbox) {
+    let mut selected: Value =
+        serde_json::from_slice(&fs::read(sandbox.0.join("selection.json")).unwrap()).unwrap();
+    selected["database_source"] =
+        json!({"profile":"readonly-wal-v1","wal":"data.sqlite-wal","shm":"data.sqlite-shm"});
+    fs::write(
+        sandbox.0.join("selection.json"),
+        serde_json::to_vec(&selected).unwrap(),
+    )
+    .unwrap();
+}
+#[test]
+fn explicit_wal_capture_retains_committed_rows_and_exact_source_metadata() {
+    let sandbox = fixture("sqlite-wal-opt-in", DATABASE_FIXTURE);
+    let mut writer = wal_writer(&sandbox);
+    assert_capture_refused(&sandbox);
+    select_wal(&sandbox);
+    let db = fs::read(sandbox.0.join("app/data.sqlite")).unwrap();
+    let wal = fs::read(sandbox.0.join("app/data.sqlite-wal")).unwrap();
+    let shm = fs::read(sandbox.0.join("app/data.sqlite-shm")).unwrap();
+    let delivery = capture(&sandbox, &[]);
+    let retained = object(&sandbox, &delivery);
+    let manifest: Value =
+        serde_json::from_slice(&fs::read(retained.join(".vivac-delivery.json")).unwrap()).unwrap();
+    assert_eq!(manifest["schema_version"], 5);
+    assert_eq!(
+        manifest["database"]["source"],
+        json!({"profile":"readonly-wal-v1","wal":{"path":"data.sqlite-wal","bytes":wal.len(),"sha256":format!("{:x}",Sha256::digest(&wal))},"shm":"data.sqlite-shm"})
+    );
+    assert_eq!(
+        manifest["database"]["source_sha256"],
+        format!("{:x}", Sha256::digest(&db))
+    );
+    assert_eq!(manifest["database"]["profile"], "sqlite-standalone-v1");
+    assert!(!retained.join("data.sqlite-wal").exists());
+    assert!(!retained.join("data.sqlite-shm").exists());
+    database(&retained.join("data.sqlite"), "CREATE TEMP TABLE expected(id INTEGER PRIMARY KEY,label TEXT NOT NULL); INSERT INTO expected VALUES(1,'First revision'),(2,'Committed in WAL'); CREATE TEMP TABLE verified(value INTEGER CHECK(value=0)); INSERT INTO verified SELECT count(*) FROM (SELECT * FROM items EXCEPT SELECT * FROM expected); INSERT INTO verified SELECT count(*) FROM (SELECT * FROM expected EXCEPT SELECT * FROM items);");
+    assert_eq!(fs::read(sandbox.0.join("app/data.sqlite")).unwrap(), db);
+    assert_eq!(
+        fs::read(sandbox.0.join("app/data.sqlite-wal")).unwrap(),
+        wal
+    );
+    assert_eq!(
+        fs::read(sandbox.0.join("app/data.sqlite-shm")).unwrap(),
+        shm
+    );
+    let artifact = delivery["artifact"].as_str().unwrap();
+    let revision = delivery["revision"].as_str().unwrap();
+    let checked: Value =
+        serde_json::from_str(&sandbox.ok(&["artifacts", "check", artifact, "--json"])).unwrap();
+    assert_eq!(checked["source"]["status"], "matches");
+    assert_eq!(checked["retained"]["status"], "matches");
+    database(
+        &sandbox.0.join("app/data.sqlite"),
+        "UPDATE items SET label='Later source' WHERE id=2;",
+    );
+    let (checked, status) = sandbox.run(&["artifacts", "check", artifact, "--json"]);
+    assert_ne!(status, 0);
+    let checked: Value = serde_json::from_str(&checked).unwrap();
+    assert_eq!(checked["source"]["status"], "changed");
+    assert_eq!(checked["retained"]["status"], "matches");
+    writer.stop();
+    for suffix in ["-wal", "-shm"] {
+        let path = sandbox.0.join(format!("app/data.sqlite{suffix}"));
+        if path.exists() {
+            fs::remove_file(path).unwrap();
+        }
+    }
+    sandbox.ok(&["artifacts", "check", "--store", "--json"]);
+    sandbox.ok(&[
+        "artifacts",
+        "restore",
+        artifact,
+        "--revision",
+        revision,
+        "--to",
+        "restored",
+        "--json",
+    ]);
+    assert_eq!(
+        fs::read(sandbox.0.join("restored/data.sqlite")).unwrap(),
+        fs::read(retained.join("data.sqlite")).unwrap()
+    );
+    assert!(!sandbox.log().contains("Committed in WAL"));
+    assert!(!sandbox.log().contains("First revision"));
+}
+fn assert_capture_refused(sandbox: &Sandbox) {
+    let before = sandbox.log();
+    let (_, status) = sandbox.run(&[
+        "artifacts",
+        "capture",
+        "--description",
+        "Selected database application",
+        "--bundle",
+        "selection.json",
+        "--from",
+        "g1",
+        "--json",
+    ]);
+    assert_ne!(status, 0);
+    assert_eq!(sandbox.log(), before);
+    let objects = sandbox.0.join(".vivac-artifacts/objects");
+    assert!(!objects.exists() || fs::read_dir(objects).unwrap().next().is_none());
+}
+
+#[test]
+fn wal_selector_rejects_null_unknown_alias_and_non_database_inputs() {
+    let sandbox = fixture("sqlite-wal-selector", DATABASE_FIXTURE);
+    select_wal(&sandbox);
+    let base: Value =
+        serde_json::from_slice(&fs::read(sandbox.0.join("selection.json")).unwrap()).unwrap();
+    let mut cases = Vec::new();
+    for value in [
+        Value::Null,
+        json!({}),
+        json!({"profile":"readonly-wal-v1","wal":"data.sqlite-wal","shm":"data.sqlite-shm","extra":true}),
+    ] {
+        let mut selected = base.clone();
+        selected["database_source"] = value;
+        cases.push(selected);
+    }
+    for (field, values) in [
+        (
+            "profile",
+            vec![Value::Null, json!("unknown"), json!("READONLY-WAL-V1")],
+        ),
+        (
+            "wal",
+            vec![
+                Value::Null,
+                json!("DATA.sqlite-wal"),
+                json!("../data.sqlite-wal"),
+                json!("file:data.sqlite-wal"),
+                json!("other/data.sqlite-wal"),
+            ],
+        ),
+        (
+            "shm",
+            vec![
+                Value::Null,
+                json!("DATA.sqlite-shm"),
+                json!("./data.sqlite-shm"),
+                json!("data.sqlite-wal"),
+            ],
+        ),
+    ] {
+        for value in values {
+            let mut selected = base.clone();
+            selected["database_source"][field] = value;
+            cases.push(selected);
+        }
+    }
+    for field in ["database", "runtime"] {
+        let mut selected = base.clone();
+        selected.as_object_mut().unwrap().remove(field);
+        cases.push(selected);
+    }
+    for selected in cases {
+        fs::write(
+            sandbox.0.join("selection.json"),
+            serde_json::to_vec(&selected).unwrap(),
+        )
+        .unwrap();
+        assert_capture_refused(&sandbox);
+    }
+}
+
+#[test]
+fn wal_capture_refuses_missing_auxiliary_journal_and_hard_links_atomically() {
+    for name in [
+        "missing-wal",
+        "missing-shm",
+        "journal",
+        "hard-link",
+        "hard-link-db",
+        "hard-link-shm",
+        "partial-wal",
+    ] {
+        let sandbox = fixture(name, DATABASE_FIXTURE);
+        let writer = wal_writer(&sandbox);
+        drop(writer);
+        select_wal(&sandbox);
+        match name {
+            "missing-wal" => fs::rename(
+                sandbox.0.join("app/data.sqlite-wal"),
+                sandbox.0.join("app/hidden-wal"),
+            )
+            .unwrap(),
+            "missing-shm" => fs::rename(
+                sandbox.0.join("app/data.sqlite-shm"),
+                sandbox.0.join("app/hidden-shm"),
+            )
+            .unwrap(),
+            "journal" => fs::write(sandbox.0.join("app/data.sqlite-journal"), []).unwrap(),
+            "hard-link" => fs::hard_link(
+                sandbox.0.join("app/data.sqlite-wal"),
+                sandbox.0.join("app/alias"),
+            )
+            .unwrap(),
+            "hard-link-db" => fs::hard_link(
+                sandbox.0.join("app/data.sqlite"),
+                sandbox.0.join("app/alias"),
+            )
+            .unwrap(),
+            "hard-link-shm" => fs::hard_link(
+                sandbox.0.join("app/data.sqlite-shm"),
+                sandbox.0.join("app/alias"),
+            )
+            .unwrap(),
+            "partial-wal" => fs::write(sandbox.0.join("app/data.sqlite-wal"), [0; 31]).unwrap(),
+            _ => unreachable!(),
+        }
+        assert_capture_refused(&sandbox);
+    }
+}
+#[cfg(unix)]
+#[test]
+fn wal_capture_refuses_symbolic_auxiliary_links_atomically() {
+    for suffix in ["-wal", "-shm"] {
+        let sandbox = fixture("sqlite-wal-link", DATABASE_FIXTURE);
+        let writer = wal_writer(&sandbox);
+        drop(writer);
+        select_wal(&sandbox);
+        fs::rename(
+            sandbox.0.join(format!("app/data.sqlite{suffix}")),
+            sandbox.0.join("app/hidden"),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink("hidden", sandbox.0.join(format!("app/data.sqlite{suffix}")))
+            .unwrap();
+        assert_capture_refused(&sandbox);
+    }
+}
+#[test]
+fn wal_capture_refuses_sensitive_rows_and_unsupported_schema_atomically() {
+    for (name, sql) in [
+        (
+            "wal-secret",
+            "UPDATE items SET label='person@example.com' WHERE id=2;",
+        ),
+        ("wal-view", "CREATE VIEW visible AS SELECT * FROM items;"),
+        ("wal-blob", "ALTER TABLE items ADD COLUMN binary BLOB;"),
+    ] {
+        let sandbox = fixture(name, DATABASE_FIXTURE);
+        let _writer = wal_writer(&sandbox);
+        database(&sandbox.0.join("app/data.sqlite"), sql);
+        select_wal(&sandbox);
+        assert_capture_refused(&sandbox);
+    }
+}
+#[test]
+fn wal_capture_accepts_an_empty_wal_after_checkpoint() {
+    let sandbox = fixture("sqlite-empty-wal", DATABASE_FIXTURE);
+    let _writer = wal_writer(&sandbox);
+    database(
+        &sandbox.0.join("app/data.sqlite"),
+        "PRAGMA wal_checkpoint(TRUNCATE);",
+    );
+    assert_eq!(
+        fs::metadata(sandbox.0.join("app/data.sqlite-wal"))
+            .unwrap()
+            .len(),
+        0
+    );
+    select_wal(&sandbox);
+    let delivery = capture(&sandbox, &[]);
+    let manifest: Value = serde_json::from_slice(
+        &fs::read(object(&sandbox, &delivery).join(".vivac-delivery.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(manifest["database"]["source"]["wal"]["bytes"], 0);
+    assert_eq!(
+        manifest["database"]["source"]["wal"]["sha256"],
+        format!("{:x}", Sha256::digest([]))
+    );
+}
+#[test]
+fn wal_source_budget_includes_frontend_and_runtime_bytes() {
+    let sandbox = fixture("sqlite-wal-source-budget", DATABASE_FIXTURE);
+    let writer = wal_writer(&sandbox);
+    drop(writer);
+    select_wal(&sandbox);
+    let database_bytes = fs::metadata(sandbox.0.join("app/data.sqlite"))
+        .unwrap()
+        .len();
+    fs::OpenOptions::new()
+        .write(true)
+        .open(sandbox.0.join("app/data.sqlite-wal"))
+        .unwrap()
+        .set_len(10 * 1024 * 1024 - database_bytes)
+        .unwrap();
+    let before = sandbox.log();
+    let (message, status) = sandbox.run(&[
+        "artifacts",
+        "capture",
+        "--description",
+        "Selected database application",
+        "--bundle",
+        "selection.json",
+        "--from",
+        "g1",
+        "--json",
+    ]);
+    assert_ne!(status, 0);
+    assert!(
+        message.contains("complete source bundle exceeds 10 MiB"),
+        "{message}"
+    );
+    assert_eq!(sandbox.log(), before);
+    let objects = sandbox.0.join(".vivac-artifacts/objects");
+    assert!(!objects.exists() || fs::read_dir(objects).unwrap().next().is_none());
+}
+#[cfg(unix)]
+#[test]
+fn wal_capture_reads_readonly_sources_without_creating_source_files() {
+    use std::os::unix::fs::PermissionsExt;
+    let sandbox = fixture("sqlite-readonly-wal", DATABASE_FIXTURE);
+    let _writer = wal_writer(&sandbox);
+    select_wal(&sandbox);
+    let app = sandbox.0.join("app");
+    for name in ["data.sqlite", "data.sqlite-wal", "data.sqlite-shm"] {
+        fs::set_permissions(app.join(name), fs::Permissions::from_mode(0o444)).unwrap();
+    }
+    fs::set_permissions(&app, fs::Permissions::from_mode(0o555)).unwrap();
+    let mut before: Vec<_> = fs::read_dir(&app)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    let delivery = capture(&sandbox, &[]);
+    assert_eq!(delivery["member_count"], 4);
+    let mut after: Vec<_> = fs::read_dir(&app)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    before.sort();
+    after.sort();
+    assert_eq!(before, after);
+    fs::set_permissions(&app, fs::Permissions::from_mode(0o755)).unwrap();
+    for name in ["data.sqlite", "data.sqlite-wal", "data.sqlite-shm"] {
+        fs::set_permissions(app.join(name), fs::Permissions::from_mode(0o644)).unwrap();
+    }
+}
 const PRODUCT_RUNTIME_ID: &str = "sqljs-asm-1.14.2";
 const PRODUCT_RUNTIME_PATH: &str = "vivac-sqlite.js";
 const PRODUCT_RUNTIME_BYTES: u64 = 1357427;

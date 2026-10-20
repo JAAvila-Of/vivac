@@ -463,6 +463,44 @@ pub(super) fn regular(root: &Dir, path: &str) -> Result<File, Failure> {
     Ok(file)
 }
 
+pub(super) fn require_single_link(file: &File) -> Result<(), Failure> {
+    #[cfg(unix)]
+    let links = {
+        use cap_std::fs::MetadataExt;
+        file.metadata()?.nlink()
+    };
+    #[cfg(windows)]
+    let links = {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FileStandardInfo, GetFileInformationByHandleEx, FILE_STANDARD_INFO,
+        };
+        let mut information = FILE_STANDARD_INFO::default();
+        // SAFETY: the live file handle and correctly sized output buffer remain
+        // valid throughout the call. The buffer is read only on success.
+        if unsafe {
+            GetFileInformationByHandleEx(
+                file.as_raw_handle(),
+                FileStandardInfo,
+                (&mut information as *mut FILE_STANDARD_INFO).cast(),
+                std::mem::size_of::<FILE_STANDARD_INFO>() as u32,
+            )
+        } == 0
+        {
+            return Err(io::Error::last_os_error().into());
+        }
+        u64::from(information.NumberOfLinks)
+    };
+    #[cfg(not(any(unix, windows)))]
+    let links = 0;
+    if links != 1 {
+        return Err(Failure::usage(
+            "SQLite source files must have exactly one hard link.",
+        ));
+    }
+    Ok(())
+}
+
 pub(super) fn reject_link(metadata: &Metadata) -> Result<(), Failure> {
     let linked = metadata.file_type().is_symlink();
     #[cfg(windows)]
