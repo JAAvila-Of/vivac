@@ -574,6 +574,115 @@ cargo test --locked --release --bin vivac artifacts::bundle::tests::retained_rev
 cargo test --locked --release --bin vivac artifacts::bundle::tests::retained_reviewed_video_release_benchmark -- --ignored --exact --nocapture --test-threads=1
 ```
 
+## Larger captures and explicit custody policy
+
+Measured on **20 October 2026**, from commit
+[`4a18bd2`](https://github.com/JAAvila-Of/vivac/commit/4a18bd21962d84a3251e97299eb2a893f72b9dc3), using a freshly built
+release Rust test executable with the test allocation counter. The compiler was
+`rustc 1.94.1 (e408947bf 2026-03-25)`. The machine ran Windows 11 Enterprise
+10.0.26200, build 26200, on an AMD Ryzen 5 5600G with 12 logical processors.
+Both C: and H: used NTFS; temporary source and retained fixtures were on C:,
+and the executable was on H:.
+
+The release test executable's SHA-256 was
+`6bf83075d3f64772909d4348ba086ac07bb467ac3575c736ca6c654cc3e9d74d`.
+
+Each capture cell has **100 samples**, including initial calls. Percentiles
+use the nearest rank. The timer covers complete backend retention, including
+inspection, copying, hashing and publication of the retained object. The policy
+is passed to the backend; its project-configuration lookup is not timed here.
+The timer also excludes project loading, receipt commits, fixture preparation,
+source verification and cleanup. These are backend measurements, not complete
+CLI or browser latency.
+
+Files contain valid synthetic HTML. Static bundles contain an HTML entrypoint
+and two CSS files; their exact retained size includes the generated manifest.
+The permissive fixtures place a synthetic sensitive marker near the end of
+the HTML body, before its closing tags. Each sample verifies the returned
+inspection, including detection and the review requirement. Bundle calibration
+also verifies the inspection in the retained manifest, outside the timer.
+Source hashes are checked outside the timer. Repeated captures use the same
+prepared source; these are not cold-cache results.
+
+| Profile | Policy | MiB | p50 / p99 / maximum (ms) | Peak Rust heap (bytes) | Heap + stack allowance (bytes) |
+|---|---|---:|---:|---:|---:|
+| File | Strict | 1 | 46.634 / 67.893 / 70.763 | 131,219 | 262,291 |
+| File | Strict | 10 | 425.008 / 561.778 / 562.840 | 131,219 | 262,291 |
+| File | Strict | 100 | 4,406.394 / 6,069.747 / 6,628.525 | 131,219 | 262,291 |
+| File | Allow insecure | 1 | 48.065 / 66.076 / 113.241 | 131,266 | 262,338 |
+| File | Allow insecure | 10 | 408.333 / 460.506 / 504.677 | 131,266 | 262,338 |
+| File | Allow insecure | 100 | 4,846.141 / 11,254.579 / 11,487.514 | 131,266 | 262,338 |
+| Static bundle | Strict | 1 | 95.158 / 122.907 / 206.339 | 201,368 | 332,440 |
+| Static bundle | Strict | 10 | 765.520 / 1,143.051 / 1,517.166 | 201,368 | 332,440 |
+| Static bundle | Strict | 100 | 7,690.778 / 12,207.946 / 14,008.264 | 201,368 | 332,440 |
+| Static bundle | Allow insecure | 1 | 95.144 / 144.162 / 146.970 | 201,415 | 332,487 |
+| Static bundle | Allow insecure | 10 | 790.844 / 1,173.457 / 1,186.673 | 201,415 | 332,487 |
+| Static bundle | Allow insecure | 100 | 7,764.007 / 13,679.653 / 14,231.647 | 201,415 | 332,487 |
+
+All twelve capture p99 values meet their respective bounds: 500 ms at 1 MiB,
+2,000 ms at 10 MiB and 20,000 ms at 100 MiB. The auxiliary totals remain below
+2 MiB under the accounting described below. Each ignored capture test passed.
+
+Peak Rust heap is measured by the test allocator. The auxiliary total adds a
+fixed 128 KiB stack allowance; stack usage is not directly sampled. The text
+copy uses a 64 KiB + 3-byte local buffer, and these bundles have shallow
+directory traversal. The result applies to these fixtures and excludes RSS,
+filesystem caches and child-process memory. These fixtures are outside Git.
+
+CPU samples use global Windows system counters at one-second intervals over
+each whole native test process, including fixture preparation and cleanup.
+They can include unrelated programs and do not isolate the capture timer.
+Their reported mean is an unweighted interval mean, not a time-weighted mean.
+
+| Profile and policy | MiB | Global CPU mean / p50 / maximum (%) | Intervals |
+|---|---:|---:|---:|
+| File, strict | 1 | 22.19 / 20.74 / 30.08 | 6 |
+| File, strict | 10 | 17.07 / 15.10 / 34.51 | 44 |
+| File, strict | 100 | 23.92 / 19.14 / 99.18 | 463 |
+| File, allow insecure | 1 | 29.62 / 27.99 / 41.67 | 6 |
+| File, allow insecure | 10 | 16.40 / 14.84 / 31.25 | 42 |
+| File, allow insecure | 100 | 28.55 / 25.65 / 95.96 | 519 |
+| Static bundle, strict | 1 | 14.79 / 14.99 / 19.05 | 11 |
+| Static bundle, strict | 10 | 19.53 / 13.54 / 76.69 | 83 |
+| Static bundle, strict | 100 | 24.70 / 18.25 / 100.00 | 828 |
+| Static bundle, allow insecure | 1 | 14.93 / 14.84 / 17.97 | 11 |
+| Static bundle, allow insecure | 10 | 18.83 / 17.06 / 44.14 | 88 |
+| Static bundle, allow insecure | 100 | 30.86 / 24.09 / 100.00 | 848 |
+| Permissive receipt | — | 68.59 / 68.59 / 68.59 | 1 |
+
+The receipt process was shorter than one sampling interval. Its single CPU
+observation does not establish what caused the receipt latency. CPU samples
+were sorted for ranking; they are not a chronological trace.
+
+The separate receipt fixture starts with 10,000 distinct prior strict artifact
+receipts and commits 100 new permissive receipts with 280-character
+descriptions and synthetic object metadata. Its timer includes fresh policy
+authority, the write lock, guards, the first required configuration upgrade,
+append, response and unlock. It excludes copying retained bytes and loading
+the project context. Its allocation figure is peak Rust heap, without an
+observed stack measurement.
+
+This receipt run measured p50 **0.967 ms**, p99 **6.5917 ms**, maximum
+**8.4889 ms**, and peak Rust heap **44,486 bytes**. It completed all 100
+commits, then failed the unchanged **p99 < 5 ms** assertion with exit code
+101. **The capture results do not establish receipt-budget compliance.**
+The failed receipt result is retained; its cause remains under investigation.
+
+To reproduce a capture cell, run it separately in release mode:
+
+```sh
+cargo clean -p vivac --release
+cargo test --locked --release --bin vivac artifacts::policy_budgets::file_strict_one_mib -- --ignored --exact --nocapture --test-threads=1
+```
+
+Substitute `file` or `bundle`, `strict` or `allow_insecure`, and `one`, `ten`
+or `hundred` in the test name to select each cell. Run the receipt case
+separately:
+
+```sh
+cargo test --locked --release --bin vivac artifacts::tests::measure_permissive_receipt_commits_with_ten_thousand_prior_artifacts -- --ignored --exact --nocapture --test-threads=1
+```
+
 ## Context
 
 Context is the budget that actually binds an agent, so the payloads are

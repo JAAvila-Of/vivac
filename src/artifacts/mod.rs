@@ -1258,13 +1258,55 @@ fn commit_capture(ctx: &mut Ctx, body: Body) -> Result<Value, Failure> {
     commit_capture_with(ctx, body, |ctx, body| ctx.emit(vec![body]))
 }
 
+#[cfg(test)]
+std::thread_local! {
+    static CAPTURE_PROFILE: std::cell::RefCell<Option<(std::time::Instant, [std::time::Duration; 5], usize)>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn capture_profile_start() {
+    CAPTURE_PROFILE.with(|profile| {
+        if let Some((last, _, _)) = profile.borrow_mut().as_mut() {
+            *last = std::time::Instant::now();
+        }
+    });
+}
+
+#[cfg(test)]
+fn capture_profile_step(index: usize) {
+    CAPTURE_PROFILE.with(|profile| {
+        if let Some((last, phases, steps)) = profile.borrow_mut().as_mut() {
+            let now = std::time::Instant::now();
+            phases[index] += now.duration_since(*last);
+            *last = now;
+            *steps += 1;
+        }
+    });
+}
+
+#[cfg(test)]
+fn profile_capture<T>(f: impl FnOnce() -> T) -> (T, [std::time::Duration; 5], usize) {
+    CAPTURE_PROFILE.with(|profile| {
+        assert!(profile.borrow().is_none());
+        *profile.borrow_mut() =
+            Some((std::time::Instant::now(), [std::time::Duration::ZERO; 5], 0));
+    });
+    let result = f();
+    let (_, phases, steps) = CAPTURE_PROFILE.with(|profile| profile.borrow_mut().take().unwrap());
+    (result, phases, steps)
+}
+
 fn commit_capture_with(
     ctx: &mut Ctx,
     body: Body,
     emit: impl FnOnce(&mut Ctx, Body) -> Result<(), Failure>,
 ) -> Result<Value, Failure> {
     // File I/O is complete before the tree's lock is acquired.
+    #[cfg(test)]
+    capture_profile_start();
     ctx.lock_for_write()?;
+    #[cfg(test)]
+    capture_profile_step(0);
     if ctx.tree.broken_lines != 0 {
         return Err(Failure::Model("The event log became unreadable; retained bytes are unrecorded. Run artifacts check --store.".into()));
     }
@@ -1282,18 +1324,25 @@ fn commit_capture_with(
     }
     // Pending lanes are declared by emit; their event lane remains the authority.
     metadata(&entry)?;
+    #[cfg(test)]
+    capture_profile_step(1);
     if entry.capture_policy() == CapturePolicy::AllowInsecure
         && current_capture_policy(ctx)? != CapturePolicy::AllowInsecure
     {
         return Err(Failure::Model("Artifact capture policy changed; retained bytes are unrecorded. Run artifacts check --store.".into()));
     }
+    #[cfg(test)]
+    capture_profile_step(2);
     drop(now);
     let revision = entry.revision.to_owned();
     emit(ctx, body)?;
+    #[cfg(test)]
+    capture_profile_step(3);
     let recorded = replay(&ctx.tree)?;
-    Ok(
-        json!({"operation":"capture","already_recorded":false,"delivery":describe(&ctx.tree,&recorded.get(&revision).expect("the emitted revision is recorded")),"source_snapshot":"not_proven","retention":"local_only"}),
-    )
+    let response = json!({"operation":"capture","already_recorded":false,"delivery":describe(&ctx.tree,&recorded.get(&revision).expect("the emitted revision is recorded")),"source_snapshot":"not_proven","retention":"local_only"});
+    #[cfg(test)]
+    capture_profile_step(4);
+    Ok(response)
 }
 
 fn checked(result: Result<Option<(String, u64)>, Failure>, revision: &Revision) -> Value {
@@ -5331,6 +5380,151 @@ mod tests {
         eprintln!("Permissive receipt commit: 100 samples, 10000 prior distinct artifacts, synthetic object metadata, 280-character descriptions; p50={:?}, p99={:?}, max={:?}, auxiliary_heap={peak} bytes. Includes fresh policy authority, lock, guards, config upgrade, append, response and unlock; excludes retained byte copying and context loading.", durations[49], durations[98], durations[99]);
         assert!(durations[98] < std::time::Duration::from_millis(5));
         assert!(peak <= 2 * 1024 * 1024);
+        drop(ctx);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[ignore = "Run explicitly in release mode to diagnose receipt commit phases."]
+    fn diagnose_permissive_receipt_commit_phases_with_ten_thousand_prior_artifacts() {
+        super::policy_budgets::require_release_mode();
+        let (root, ctx, producer) = capture_commit_fixture();
+        drop(ctx);
+        let mut store = Store::open_strict(root.clone()).unwrap();
+        let bodies: Vec<_> = (0..10_000u64)
+            .map(|index| {
+                let revision = format!("{:026x}", 20_000 + index);
+                Body::ArtifactCapturedV2 {
+                    description: "Selected layout revision. "
+                        .repeat(12)
+                        .chars()
+                        .take(280)
+                        .collect(),
+                    artifact: format!("{:026x}", 10_000 + index),
+                    revision: revision.clone(),
+                    operation: format!("{:026x}", 30_000 + index),
+                    producer: producer.clone(),
+                    previous: None,
+                    source: "mockup.html".into(),
+                    site: format!("{:026x}", 2),
+                    size: 17,
+                    digest: "a".repeat(64),
+                    object: format!("objects/{revision}.blob"),
+                }
+            })
+            .collect();
+        assert!(bodies.iter().all(|body| matches!(body, Body::ArtifactCapturedV2 { description, .. } if description.chars().count() == 280)));
+        let lock = store.lock_for_write().unwrap();
+        store
+            .append(&lock, crate::lane::MAIN, bodies, 0, false)
+            .unwrap();
+        store.set_allow_insecure_artifacts(&lock, true).unwrap();
+        drop(lock);
+        let mut ctx = Ctx::load_for_capture(store, Whose::Founding).unwrap();
+        assert_eq!(ctx.tree.artifact_history.len(), 10_000);
+        assert_eq!(ctx.store.config.version, store::ConfigVersion::Artifacts);
+        let mut samples = Vec::with_capacity(100);
+        for index in 0..100u64 {
+            let revision = format!("{:026x}", 50_000 + index);
+            let inspection = Inspection {
+                sensitivity: policy::Sensitivity::Detected,
+                ..Inspection::permissive()
+            };
+            let body = Body::ArtifactCapturedV3 {
+                description: "Selected layout revision. "
+                    .repeat(12)
+                    .chars()
+                    .take(280)
+                    .collect(),
+                artifact: format!("{:026x}", 60_000 + index),
+                revision: revision.clone(),
+                operation: format!("{:026x}", 40_000 + index),
+                producer: producer.clone(),
+                previous: None,
+                source: "mockup.html".into(),
+                site: format!("{:026x}", 2),
+                size: 17,
+                digest: "a".repeat(64),
+                object: format!("objects/{revision}.blob"),
+                inspection,
+            };
+            assert!(
+                matches!(&body, Body::ArtifactCapturedV3 { description, .. } if description.chars().count() == 280)
+            );
+            let ((result, total, phases, steps, append_phases, unlock), allocated) =
+                crate::test_alloc::measure(|| {
+                    let started = std::time::Instant::now();
+                    let ((result, append_phases), phases, steps) = profile_capture(|| {
+                        store::profile_append(|| commit_capture(&mut ctx, body))
+                    });
+                    let unlock_started = std::time::Instant::now();
+                    ctx.unlock();
+                    let unlock = unlock_started.elapsed();
+                    (
+                        result,
+                        started.elapsed(),
+                        phases,
+                        steps,
+                        append_phases,
+                        unlock,
+                    )
+                });
+            let response = result.unwrap();
+            assert_eq!(steps, 5);
+            assert_eq!(response["already_recorded"], false);
+            assert_eq!(response["delivery"]["revision"], revision);
+            assert_eq!(response["delivery"]["inspection"], json!(inspection));
+            assert_eq!(
+                ctx.store.config.version,
+                store::ConfigVersion::ArtifactPolicy
+            );
+            samples.push((index, total, phases, append_phases, unlock, allocated));
+        }
+        assert_eq!(samples.len(), 100);
+        assert_eq!(ctx.tree.artifact_history.len(), 10_100);
+        let (events, broken) = ctx.store.read_all().unwrap();
+        assert_eq!(broken, 0);
+        assert_eq!(events.len(), 10_101);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(&event.payload, Body::ArtifactCapturedV3 { .. }))
+                .count(),
+            100
+        );
+        assert_eq!(
+            Store::open_strict(root.clone()).unwrap().config.version,
+            store::ConfigVersion::ArtifactPolicy
+        );
+        for (index, total, phases, append_phases, unlock, allocated) in samples {
+            eprintln!(
+                "{}",
+                json!({
+                    "diagnostic": "permissive_receipt_commit",
+                    "sample_index": index,
+                    "first_config_upgrade": index == 0,
+                    "total_ns": total.as_nanos(),
+                    "capture_phases_ns": {
+                        "lock_refresh": phases[0].as_nanos(),
+                        "replay_plan_metadata": phases[1].as_nanos(),
+                        "fresh_policy_lookup": phases[2].as_nanos(),
+                        "drop_replay_clone_revision_emit": phases[3].as_nanos(),
+                        "replay_response": phases[4].as_nanos()
+                    },
+                    "append_phases_ns": {
+                        "ids_serialization": append_phases[0].as_nanos(),
+                        "open": append_phases[1].as_nanos(),
+                        "metadata": append_phases[2].as_nanos(),
+                        "seek_tail_read": append_phases[3].as_nanos(),
+                        "config_marker_write": append_phases[4].as_nanos(),
+                        "handle_close": append_phases[5].as_nanos()
+                    },
+                    "unlock_ns": unlock.as_nanos(),
+                    "auxiliary_heap_bytes": allocated,
+                    "budget_certification": false
+                })
+            );
+        }
         drop(ctx);
         fs::remove_dir_all(root).unwrap();
     }
