@@ -99,11 +99,13 @@ fn report(label: &str, policy: CapturePolicy, target: usize, mut samples: Vec<f6
     );
 }
 
+pub(super) fn require_release_mode() {
+    #[cfg(debug_assertions)]
+    panic!("Run this benchmark in release mode.");
+}
+
 fn measure_file(policy: CapturePolicy, target: usize) {
-    assert!(
-        !cfg!(debug_assertions),
-        "Run this benchmark in release mode."
-    );
+    require_release_mode();
     let fixture = Fixture::new(&format!("file-{}-{target}", checked_policy(policy)));
     let source = fixture.path().join("delivery.html");
     let mut file = File::create(&source).unwrap();
@@ -332,10 +334,7 @@ fn bundle_source_hashes(root: &Path, selection: &BundleSelection) -> Vec<(String
 }
 
 fn measure_bundle(policy: CapturePolicy, target: usize) {
-    assert!(
-        !cfg!(debug_assertions),
-        "Run this benchmark in release mode."
-    );
+    require_release_mode();
     let fixture = Fixture::new(&format!("bundle-{}-{target}", checked_policy(policy)));
     let selection = calibrate_bundle(&fixture, target, policy);
     let expected_sources = bundle_source_hashes(fixture.path(), &selection);

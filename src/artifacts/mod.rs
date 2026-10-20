@@ -1174,7 +1174,7 @@ fn prepare_capture(ctx: &Ctx, args: &Args) -> Result<CapturePlan, Failure> {
             ));
         }
         let retained = bundle::capture_with_policy(&ctx.lane_dir, &selection, &revision, policy)?;
-        let inspection = retained.inspection.clone();
+        let inspection = retained.inspection;
         if let Some(database) = selection.database {
             let runtime = retained.runtime.ok_or_else(|| {
                 Failure::Model("Missing generated product runtime metadata.".into())
@@ -5259,10 +5259,7 @@ mod tests {
     #[test]
     #[ignore = "Run explicitly in release mode to measure complete receipt commits."]
     fn measure_permissive_receipt_commits_with_ten_thousand_prior_artifacts() {
-        assert!(
-            !cfg!(debug_assertions),
-            "Run this benchmark in release mode."
-        );
+        super::policy_budgets::require_release_mode();
         let (root, ctx, producer) = capture_commit_fixture();
         drop(ctx);
         let mut store = Store::open_strict(root.clone()).unwrap();
