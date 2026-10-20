@@ -374,39 +374,44 @@ macro_rules! ignored_case {
     };
 }
 
-ignored_case!(file_strict_1mib, measure_file, Strict, MIB);
-ignored_case!(file_strict_10mib, measure_file, Strict, 10 * MIB);
-ignored_case!(file_strict_100mib, measure_file, Strict, 100 * MIB);
-ignored_case!(file_allow_insecure_1mib, measure_file, AllowInsecure, MIB);
+ignored_case!(file_strict_one_mib, measure_file, Strict, MIB);
+ignored_case!(file_strict_ten_mib, measure_file, Strict, 10 * MIB);
+ignored_case!(file_strict_hundred_mib, measure_file, Strict, 100 * MIB);
 ignored_case!(
-    file_allow_insecure_10mib,
+    file_allow_insecure_one_mib,
+    measure_file,
+    AllowInsecure,
+    MIB
+);
+ignored_case!(
+    file_allow_insecure_ten_mib,
     measure_file,
     AllowInsecure,
     10 * MIB
 );
 ignored_case!(
-    file_allow_insecure_100mib,
+    file_allow_insecure_hundred_mib,
     measure_file,
     AllowInsecure,
     100 * MIB
 );
-ignored_case!(bundle_strict_1mib, measure_bundle, Strict, MIB);
-ignored_case!(bundle_strict_10mib, measure_bundle, Strict, 10 * MIB);
-ignored_case!(bundle_strict_100mib, measure_bundle, Strict, 100 * MIB);
+ignored_case!(bundle_strict_one_mib, measure_bundle, Strict, MIB);
+ignored_case!(bundle_strict_ten_mib, measure_bundle, Strict, 10 * MIB);
+ignored_case!(bundle_strict_hundred_mib, measure_bundle, Strict, 100 * MIB);
 ignored_case!(
-    bundle_allow_insecure_1mib,
+    bundle_allow_insecure_one_mib,
     measure_bundle,
     AllowInsecure,
     MIB
 );
 ignored_case!(
-    bundle_allow_insecure_10mib,
+    bundle_allow_insecure_ten_mib,
     measure_bundle,
     AllowInsecure,
     10 * MIB
 );
 ignored_case!(
-    bundle_allow_insecure_100mib,
+    bundle_allow_insecure_hundred_mib,
     measure_bundle,
     AllowInsecure,
     100 * MIB
