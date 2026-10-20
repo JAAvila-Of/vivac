@@ -27,6 +27,55 @@ pub(super) struct Snapshot {
     pub sha256: String,
 }
 
+#[derive(Debug)]
+pub(super) struct WalSnapshot {
+    pub snapshot: Snapshot,
+    pub wal_bytes: u64,
+    pub wal_sha256: String,
+}
+
+pub(super) fn normalize_wal(
+    source: &cap_std::fs::File,
+    wal: &cap_std::fs::File,
+    shm: &cap_std::fs::File,
+    target: &cap_std::fs::File,
+    check_aux: impl Fn() -> Result<(), Failure>,
+) -> Result<WalSnapshot, Failure> {
+    if target.metadata().map_err(|_| refused())?.len() != 0 {
+        return Err(refused());
+    }
+    let _engine = vfs::engine_guard()?;
+    // Clone every descriptor before acquiring any process-wide POSIX lock.
+    let source = source.try_clone().map_err(|_| refused())?.into_std();
+    let wal = wal.try_clone().map_err(|_| refused())?.into_std();
+    let shm = shm.try_clone().map_err(|_| refused())?.into_std();
+    let target = target.try_clone().map_err(|_| refused())?.into_std();
+    let work = Work::new(MAX_STEPS);
+    let registered = vfs::RegisteredVfs::new_wal(source, wal, shm, Some(target), MAX_BYTES)?;
+    check_aux()?;
+    let result = (|| {
+        header_with_version(registered.source(), 2)?;
+        let wal = registered.wal().ok_or_else(refused)?;
+        let wal_bytes = wal.metadata().map_err(|_| refused())?.len();
+        if (1..32).contains(&wal_bytes) {
+            return Err(refused());
+        }
+        let snapshot = normalize_registered(&registered, &work)?;
+        let (wal_bytes, wal_sha256) = hash(wal, &work)?;
+        Ok(WalSnapshot {
+            snapshot,
+            wal_bytes,
+            wal_sha256,
+        })
+    })();
+    let checked = check_aux();
+    result.and_then(|value| {
+        checked?;
+        work.check()?;
+        Ok(value)
+    })
+}
+
 fn refused() -> Failure {
     Failure::usage("SQLite snapshot does not satisfy the standalone profile.")
 }
@@ -200,7 +249,12 @@ fn execute(db: *mut ffi::sqlite3, sql: &str, work: &Work) -> Result<(), Failure>
     Ok(())
 }
 
-fn configure(db: *mut ffi::sqlite3, target: bool, work: &Work) -> Result<(), Failure> {
+fn configure(
+    db: *mut ffi::sqlite3,
+    target: bool,
+    work: &Work,
+    require_source_utf8: bool,
+) -> Result<(), Failure> {
     if target {
         // The destination is still empty. Select its construction journal mode
         // before defensive mode forbids changing it to OFF.
@@ -260,6 +314,12 @@ fn configure(db: *mut ffi::sqlite3, target: bool, work: &Work) -> Result<(), Fai
     } else {
         execute(db, "PRAGMA query_only=ON", work)?;
     }
+    if require_source_utf8 {
+        let mut query = Statement::new(db, "PRAGMA encoding")?;
+        if !query.next(work)? || query.text(0)? != "UTF-8" || query.next(work)? {
+            return Err(refused());
+        }
+    }
     let context = if target {
         std::ptr::dangling_mut::<u8>().cast()
     } else {
@@ -285,6 +345,10 @@ fn read_at(_file: &std::fs::File, _bytes: &mut [u8], _offset: u64) -> io::Result
 }
 
 fn header(file: &std::fs::File) -> Result<(), Failure> {
+    header_with_version(file, 1)
+}
+
+fn header_with_version(file: &std::fs::File, version: u8) -> Result<(), Failure> {
     let size = file.metadata().map_err(|_| refused())?.len();
     if !(100..=MAX_BYTES).contains(&size) {
         return Err(refused());
@@ -292,11 +356,11 @@ fn header(file: &std::fs::File) -> Result<(), Failure> {
     let mut bytes = [0u8; 100];
     if read_at(file, &mut bytes, 0).map_err(|_| refused())? != bytes.len()
         || &bytes[..16] != b"SQLite format 3\0"
-        || bytes[18] != 1
-        || bytes[19] != 1
+        || bytes[18] != version
+        || bytes[19] != version
         || bytes[20] != 0
         || bytes[21..24] != [64, 32, 32]
-        || bytes[56..60] != [0, 0, 0, 1]
+        || (bytes[56..60] != [0, 0, 0, 1] && !(version == 2 && bytes[56..60] == [0; 4]))
         || bytes[72..92] != [0; 20]
         || bytes[24..28] != bytes[92..96]
     {
@@ -821,52 +885,54 @@ pub(super) fn normalize(
         Some(target),
         check_aux,
         MAX_STEPS,
-        |registered, work| {
-            let source = registered.source_connection()?;
-            configure(source.raw(), false, work)?;
-            let model = model(source.raw(), work)?;
-            rows(source.raw(), None, &model, work)?;
-            sequences(source.raw(), None, &model, work)?;
-            let (source_bytes, source_sha256) = hash(registered.source(), work)?;
-            {
-                let target = registered.target_connection()?;
-                configure(target.raw(), true, work)?;
-                execute(target.raw(), "BEGIN", work)?;
-                for table in &model.tables {
-                    execute(target.raw(), &table.sql, work)?;
-                }
-                rows(source.raw(), Some(target.raw()), &model, work)?;
-                sequences(source.raw(), Some(target.raw()), &model, work)?;
-                for index in &model.indexes {
-                    execute(target.raw(), &index.sql, work)?;
-                }
-                execute(
-                    target.raw(),
-                    &format!("PRAGMA user_version={}", model.user_version),
-                    work,
-                )?;
-                execute(
-                    target.raw(),
-                    &format!("PRAGMA application_id={}", model.application_id),
-                    work,
-                )?;
-                execute(target.raw(), "COMMIT", work)?;
-                integrity(target.raw(), work)?;
-                metadata(target.raw(), &model, work)?;
-                verify_data(source.raw(), target.raw(), &model, work)?;
-            }
-            drop(source);
-            let target = registered.target().ok_or_else(refused)?;
-            header(target)?;
-            let (bytes, sha256) = hash(target, work)?;
-            Ok(Snapshot {
-                source_bytes,
-                source_sha256,
-                bytes,
-                sha256,
-            })
-        },
+        normalize_registered,
     )
+}
+
+fn normalize_registered(registered: &vfs::RegisteredVfs, work: &Work) -> Result<Snapshot, Failure> {
+    let source = registered.source_connection()?;
+    configure(source.raw(), false, work, registered.wal().is_some())?;
+    let model = model(source.raw(), work)?;
+    rows(source.raw(), None, &model, work)?;
+    sequences(source.raw(), None, &model, work)?;
+    let (source_bytes, source_sha256) = hash(registered.source(), work)?;
+    {
+        let target = registered.target_connection()?;
+        configure(target.raw(), true, work, false)?;
+        execute(target.raw(), "BEGIN", work)?;
+        for table in &model.tables {
+            execute(target.raw(), &table.sql, work)?;
+        }
+        rows(source.raw(), Some(target.raw()), &model, work)?;
+        sequences(source.raw(), Some(target.raw()), &model, work)?;
+        for index in &model.indexes {
+            execute(target.raw(), &index.sql, work)?;
+        }
+        execute(
+            target.raw(),
+            &format!("PRAGMA user_version={}", model.user_version),
+            work,
+        )?;
+        execute(
+            target.raw(),
+            &format!("PRAGMA application_id={}", model.application_id),
+            work,
+        )?;
+        execute(target.raw(), "COMMIT", work)?;
+        integrity(target.raw(), work)?;
+        metadata(target.raw(), &model, work)?;
+        verify_data(source.raw(), target.raw(), &model, work)?;
+    }
+    drop(source);
+    let target = registered.target().ok_or_else(refused)?;
+    header(target)?;
+    let (bytes, sha256) = hash(target, work)?;
+    Ok(Snapshot {
+        source_bytes,
+        source_sha256,
+        bytes,
+        sha256,
+    })
 }
 
 pub(super) fn inspect(
@@ -875,7 +941,7 @@ pub(super) fn inspect(
 ) -> Result<super::guard::Receipt, Failure> {
     operation(source, None, check_aux, MAX_STEPS, |registered, work| {
         let source = registered.source_connection()?;
-        configure(source.raw(), false, work)?;
+        configure(source.raw(), false, work, false)?;
         let model = model(source.raw(), work)?;
         rows(source.raw(), None, &model, work)?;
         sequences(source.raw(), None, &model, work)?;
@@ -1112,7 +1178,7 @@ mod tests {
             1000,
             |registered, work| {
                 let source = registered.source_connection()?;
-                configure(source.raw(), false, work)?;
+                configure(source.raw(), false, work, false)?;
                 let model = model(source.raw(), work)?;
                 rows(source.raw(), None, &model, work)
             }
@@ -1243,3 +1309,6 @@ mod tests {
         assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
     }
 }
+
+#[cfg(test)]
+mod wal_tests;

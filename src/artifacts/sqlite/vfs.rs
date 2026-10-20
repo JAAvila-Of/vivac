@@ -48,7 +48,14 @@ pub(super) struct RegisteredVfs {
     name: CString,
 }
 
+struct WalSource {
+    wal: File,
+    shm: File,
+    opened: Cell<bool>,
+}
+
 struct State {
+    wal: Option<WalSource>,
     source: File,
     target: Option<File>,
     max_bytes: u64,
@@ -57,7 +64,36 @@ struct State {
 }
 
 impl RegisteredVfs {
+    // Trusted callers supply readonly DB, WAL and SHM handles.
+    pub(super) fn new_wal(
+        source: File,
+        wal: File,
+        shm: File,
+        target: Option<File>,
+        max_bytes: u64,
+    ) -> Result<Self, Failure> {
+        Self::register(
+            source,
+            target,
+            max_bytes,
+            Some(WalSource {
+                wal,
+                shm,
+                opened: Cell::new(false),
+            }),
+        )
+    }
+
     pub(super) fn new(source: File, target: Option<File>, max_bytes: u64) -> Result<Self, Failure> {
+        Self::register(source, target, max_bytes, None)
+    }
+
+    fn register(
+        source: File,
+        target: Option<File>,
+        max_bytes: u64,
+        wal: Option<WalSource>,
+    ) -> Result<Self, Failure> {
         if max_bytes > FILE_LIMIT
             || !source.metadata()?.is_file()
             || source.metadata()?.len() > max_bytes
@@ -73,10 +109,28 @@ impl RegisteredVfs {
                 return Err(refused());
             }
         }
+        if let Some(wal) = &wal {
+            validate_wal(&source, wal, target.as_ref(), max_bytes)?;
+        }
         let name =
             CString::new(format!("vivac-handles-{}", crate::id::ulid())).map_err(|_| refused())?;
         hold_source(&source)?;
+        if let Some(wal) = &wal {
+            if hold_wal(&wal.shm).is_err() {
+                release_source(&source);
+                return Err(refused());
+            }
+        }
+        if let Some(wal) = &wal {
+            // Sizes and link counts may change while acquiring the leases.
+            if validate_wal(&source, wal, target.as_ref(), max_bytes).is_err() {
+                release_wal(&wal.shm);
+                release_source(&source);
+                return Err(refused());
+            }
+        }
         let state = Box::new(State {
+            wal,
             source,
             target,
             max_bytes,
@@ -101,6 +155,9 @@ impl RegisteredVfs {
         raw.xSleep = Some(sleep);
         raw.xCurrentTime = Some(current_time);
         if unsafe { ffi::sqlite3_vfs_register(&mut *raw, 0) } != ffi::SQLITE_OK {
+            if let Some(wal) = &state.wal {
+                release_wal(&wal.shm);
+            }
             release_source(&state.source);
             return Err(refused());
         }
@@ -109,6 +166,9 @@ impl RegisteredVfs {
 
     pub(super) fn source(&self) -> &File {
         &self.state.source
+    }
+    pub(super) fn wal(&self) -> Option<&File> {
+        self.state.wal.as_ref().map(|wal| &wal.wal)
     }
     pub(super) fn target(&self) -> Option<&File> {
         self.state.target.as_ref()
@@ -157,6 +217,9 @@ impl Drop for RegisteredVfs {
     fn drop(&mut self) {
         // Database borrows prevent this point being reached with connections.
         unsafe { ffi::sqlite3_vfs_unregister(&mut *self.raw) };
+        if let Some(wal) = &self.state.wal {
+            release_wal(&wal.shm);
+        }
         release_source(&self.state.source);
     }
 }
@@ -189,6 +252,39 @@ impl Drop for Database<'_> {
     }
 }
 
+fn validate_wal(
+    source: &File,
+    wal: &WalSource,
+    target: Option<&File>,
+    max_bytes: u64,
+) -> Result<(), Failure> {
+    let inputs = [source, &wal.wal, &wal.shm];
+    for (index, file) in inputs.iter().enumerate() {
+        if !file.metadata()?.is_file() || links(file)? != 1 || file.metadata()?.len() > max_bytes {
+            return Err(refused());
+        }
+        for other in &inputs[..index] {
+            if same_file(file, other)? {
+                return Err(refused());
+            }
+        }
+        if let Some(target) = target {
+            if same_file(file, target)? || links(target)? != 1 {
+                return Err(refused());
+            }
+        }
+    }
+    if source
+        .metadata()?
+        .len()
+        .checked_add(wal.wal.metadata()?.len())
+        .is_none_or(|sum| sum > max_bytes)
+    {
+        return Err(refused());
+    }
+    Ok(())
+}
+
 fn refused() -> Failure {
     Failure::usage("SQLite handle operation does not satisfy the standalone profile.")
 }
@@ -198,6 +294,7 @@ struct HandleFile {
     base: ffi::sqlite3_file,
     state: *const State,
     target: bool,
+    wal: bool,
     lock: c_int,
 }
 
@@ -206,7 +303,9 @@ impl HandleFile {
         &*self.state
     }
     unsafe fn file(&self) -> Option<&File> {
-        if self.target {
+        if self.wal {
+            self.state().wal.as_ref().map(|wal| &wal.wal)
+        } else if self.target {
             self.state().target.as_ref()
         } else {
             Some(&self.state().source)
@@ -236,6 +335,76 @@ static METHODS: ffi::sqlite3_io_methods = ffi::sqlite3_io_methods {
     xUnfetch: None,
 };
 
+static WAL_METHODS: ffi::sqlite3_io_methods = ffi::sqlite3_io_methods {
+    iVersion: 2,
+    xShmMap: Some(shm_map),
+    xShmLock: Some(shm_lock),
+    xShmBarrier: Some(shm_barrier),
+    xShmUnmap: Some(shm_unmap),
+    ..METHODS
+};
+
+unsafe extern "C" fn shm_map(
+    file: *mut ffi::sqlite3_file,
+    page: c_int,
+    size: c_int,
+    extend: c_int,
+    out: *mut *mut c_void,
+) -> c_int {
+    if out.is_null() {
+        return ffi::SQLITE_IOERR_SHMMAP;
+    }
+    *out = ptr::null_mut();
+    let handle = &*file.cast::<HandleFile>();
+    if handle.target
+        || handle.wal
+        || handle.state().wal.is_none()
+        || page < 0
+        || size != 32768
+        || !matches!(extend, 0 | 1)
+    {
+        return ffi::SQLITE_IOERR_SHMMAP;
+    }
+    // SQLite's maintained unreliable-SHM path builds a private WAL index.
+    ffi::SQLITE_READONLY_CANTINIT
+}
+
+unsafe extern "C" fn shm_lock(
+    file: *mut ffi::sqlite3_file,
+    offset: c_int,
+    count: c_int,
+    flags: c_int,
+) -> c_int {
+    let handle = &*file.cast::<HandleFile>();
+    let shared = ffi::SQLITE_SHM_SHARED;
+    let exclusive = ffi::SQLITE_SHM_EXCLUSIVE;
+    let action = flags & (ffi::SQLITE_SHM_LOCK | ffi::SQLITE_SHM_UNLOCK);
+    if handle.target
+        || handle.wal
+        || handle.state().wal.is_none()
+        || offset < 0
+        || count <= 0
+        || offset.checked_add(count).is_none_or(|end| end > 8)
+        || !matches!(action, ffi::SQLITE_SHM_LOCK | ffi::SQLITE_SHM_UNLOCK)
+        || (flags != (action | shared) && flags != (action | exclusive))
+    {
+        return ffi::SQLITE_IOERR_SHMLOCK;
+    }
+    if flags & exclusive != 0 {
+        ffi::SQLITE_BUSY
+    } else {
+        ffi::SQLITE_OK
+    }
+}
+
+unsafe extern "C" fn shm_barrier(_: *mut ffi::sqlite3_file) {
+    std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst);
+}
+
+unsafe extern "C" fn shm_unmap(_: *mut ffi::sqlite3_file, _: c_int) -> c_int {
+    ffi::SQLITE_OK
+}
+
 // SQLite supplies valid objects and buffers to these callbacks. No callback
 // opens, duplicates or closes an OS handle, delegates to a native VFS, allocates
 // an input-sized Rust collection, or unwraps a fallible result.
@@ -254,21 +423,42 @@ unsafe extern "C" fn open(
         | ffi::SQLITE_OPEN_NOMUTEX
         | ffi::SQLITE_OPEN_PRIVATECACHE
         | ffi::SQLITE_OPEN_EXRESCODE
-        | ffi::SQLITE_OPEN_NOFOLLOW;
-    if name.is_null() || flags & !allowed != 0 || flags & ffi::SQLITE_OPEN_MAIN_DB == 0 {
+        | ffi::SQLITE_OPEN_NOFOLLOW
+        | ffi::SQLITE_OPEN_WAL;
+    if name.is_null()
+        || flags & !allowed != 0
+        || flags & (ffi::SQLITE_OPEN_MAIN_DB | ffi::SQLITE_OPEN_WAL) == 0
+    {
         return ffi::SQLITE_CANTOPEN;
     }
     let state = &*(*vfs).pAppData.cast::<State>();
+    let wal = flags & ffi::SQLITE_OPEN_WAL != 0;
     let target = match CStr::from_ptr(name).to_bytes() {
+        b"source-wal"
+            if wal
+                && flags & ffi::SQLITE_OPEN_MAIN_DB == 0
+                && flags & ffi::SQLITE_OPEN_READONLY == 0
+                && flags & (ffi::SQLITE_OPEN_READWRITE | ffi::SQLITE_OPEN_CREATE)
+                    == (ffi::SQLITE_OPEN_READWRITE | ffi::SQLITE_OPEN_CREATE)
+                && state
+                    .wal
+                    .as_ref()
+                    .is_some_and(|wal| !wal.opened.replace(true)) =>
+        {
+            false
+        }
+
         b"source"
-            if flags & (ffi::SQLITE_OPEN_READWRITE | ffi::SQLITE_OPEN_CREATE) == 0
+            if !wal
+                && flags & (ffi::SQLITE_OPEN_READWRITE | ffi::SQLITE_OPEN_CREATE) == 0
                 && flags & ffi::SQLITE_OPEN_READONLY != 0
                 && !state.source_opened.replace(true) =>
         {
             false
         }
         b"target"
-            if flags & ffi::SQLITE_OPEN_READWRITE != 0
+            if !wal
+                && flags & ffi::SQLITE_OPEN_READWRITE != 0
                 && flags & ffi::SQLITE_OPEN_READONLY == 0
                 && state.target.is_some()
                 && !state.target_opened.replace(true) =>
@@ -280,14 +470,25 @@ unsafe extern "C" fn open(
     ptr::write(
         file.cast::<HandleFile>(),
         HandleFile {
-            base: ffi::sqlite3_file { pMethods: &METHODS },
+            base: ffi::sqlite3_file {
+                pMethods: if state.wal.is_some() && !target && !wal {
+                    &WAL_METHODS
+                } else {
+                    &METHODS
+                },
+            },
             state,
             target,
+            wal,
             lock: ffi::SQLITE_LOCK_NONE,
         },
     );
     if !out.is_null() {
-        *out = flags;
+        *out = if wal {
+            ffi::SQLITE_OPEN_READONLY | ffi::SQLITE_OPEN_WAL
+        } else {
+            flags
+        };
     }
     ffi::SQLITE_OK
 }
@@ -471,13 +672,19 @@ unsafe extern "C" fn delete(_: *mut ffi::sqlite3_vfs, _: *const c_char, _: c_int
     ffi::SQLITE_READONLY
 }
 unsafe extern "C" fn access(
-    _: *mut ffi::sqlite3_vfs,
-    _: *const c_char,
-    _: c_int,
+    vfs: *mut ffi::sqlite3_vfs,
+    name: *const c_char,
+    flags: c_int,
     out: *mut c_int,
 ) -> c_int {
-    // Auxiliary paths are checked through directory capabilities by the caller.
-    *out = 0;
+    // Only the exact preopened WAL token exists in the experimental profile.
+    let state = &*(*vfs).pAppData.cast::<State>();
+    *out = i32::from(
+        state.wal.is_some()
+            && !name.is_null()
+            && CStr::from_ptr(name).to_bytes() == b"source-wal"
+            && matches!(flags, ffi::SQLITE_ACCESS_EXISTS | ffi::SQLITE_ACCESS_READ),
+    );
     ffi::SQLITE_OK
 }
 unsafe extern "C" fn full_path(
@@ -536,6 +743,28 @@ unsafe extern "C" fn current_time(_: *mut ffi::sqlite3_vfs, out: *mut f64) -> c_
         }
         Err(_) => ffi::SQLITE_ERROR,
     }
+}
+
+// SQLite 3.53.2 uses SHM lock bytes 120..127 and dead-man-switch byte 128.
+fn hold_wal(file: &File) -> io::Result<()> {
+    wal_range(file, 128, 1, false)?;
+    if let Err(error) = wal_range(file, 120, 8, false) {
+        let _ = wal_range(file, 128, 1, true);
+        return Err(error);
+    }
+    Ok(())
+}
+fn release_wal(file: &File) {
+    let _ = wal_range(file, 120, 8, true);
+    let _ = wal_range(file, 128, 1, true);
+}
+#[cfg(unix)]
+fn wal_range(file: &File, start: u64, length: u64, unlock: bool) -> io::Result<()> {
+    range(file, start, length, unlock)
+}
+#[cfg(windows)]
+fn wal_range(file: &File, start: u64, length: u64, unlock: bool) -> io::Result<()> {
+    range(file, start, length, false, unlock)
 }
 
 #[cfg(unix)]
@@ -772,7 +1001,7 @@ mod tests {
         }
     }
 
-    fn execute(db: *mut ffi::sqlite3, sql: &str) -> i32 {
+    pub(super) fn execute(db: *mut ffi::sqlite3, sql: &str) -> i32 {
         let sql = CString::new(sql).unwrap();
         unsafe {
             ffi::sqlite3_exec(
@@ -1074,3 +1303,6 @@ mod tests {
         native_writer(&fixture.path(), ffi::SQLITE_OK);
     }
 }
+
+#[cfg(test)]
+pub(in crate::artifacts) mod wal_tests;

@@ -346,6 +346,48 @@ databases and hard-linked sources are refused. Vivac holds a native SQLite read
 lock on the authorized source handle throughout inspection and hashing. It
 does not checkpoint, compact or write the source.
 
+### Explicit read-only WAL inputs
+
+For a live WAL database, check that
+`delivery_types.sqlite_application.source_profiles.readonly-wal-v1.supported`
+is true in the installed engine. Keep the complete frontend selection and add:
+
+```json
+"database_source": {
+  "profile": "readonly-wal-v1",
+  "wal": "data.sqlite-wal",
+  "shm": "data.sqlite-shm"
+}
+```
+
+Both paths are relative to the selection's `root` and must exactly match the
+chosen database path with the `-wal` and `-shm` suffixes. They must already
+exist. They are inputs to the export, rather than retained bundle members;
+keep `data.sqlite` in `members`. A missing input, rollback journal, linked or
+replaced source, or conflicting lock refuses the complete capture. Without
+`database_source`, the standalone profile continues to refuse WAL and sidecars.
+An empty WAL is allowed; a WAL of 1–31 bytes is refused as a partial input.
+
+Vivac reads the authorized database and WAL handles while holding native
+coordination locks on the database and SHM. SQLite builds its WAL index in
+private memory; vivac does not create, map, update or delete the source SHM.
+It does not checkpoint the database, change its journal mode or mark an active
+database immutable. A busy or changing source may require a later capture.
+For a newly created database whose schema is still in WAL, vivac checks UTF-8
+through the locked logical view; an unset encoding in the physical main-file
+header does not require a checkpoint. UTF-16 sources remain unsupported.
+
+The retained database is still a standalone logical export for the fixed
+runtime. Its manifest records the input profile, auxiliary paths and WAL size
+and digest together with the database source digest from the same locked read.
+Check, restore and preview verify that retained export independently of later
+changes to, or removal of, the original WAL and SHM. Checking the current source
+is a separate observation. All data-input bytes, including WAL and the generated
+runtime, count toward the existing 10 MiB input limit; the complete retained
+revision, including its manifest, also remains limited to 10 MiB.
+
+### Logical data and limits
+
 The retained database is a fresh **logical export**, not a byte-for-byte source
 copy. The manifest identifies `logical-export-v1` and records the source size
 and digest separately from the retained member's size and digest. This removes
