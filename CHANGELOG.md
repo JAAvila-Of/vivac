@@ -7,16 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.20.2](https://github.com/JAAvila-Of/vivac/compare/v0.20.1...v0.20.2) - 2026-10-21
+## [0.21.0](https://github.com/JAAvila-Of/vivac/compare/v0.20.1...v0.21.0) - 2026-10-21
+
+### Upgrading
+
+Upgrade every CLI, MCP server and session hook that shares a project before
+using the new artifact profiles or limits. On Windows, run `vivac update` in a
+terminal and restart existing sessions to load the new engine.
+
+The first permissive capture writes new inspection receipts and marks the tree
+as requiring an engine that understands them. Older engines then refuse to open
+the tree. Turning the policy off affects new captures; it does not downgrade
+the tree or erase inspection records. Existing revisions remain readable and
+recoverable with this release. Historical receipts gain no inspection report.
+
+Strict capture remains the default. Enable sensitive or unreviewed custody only
+as an explicit project choice with
+`vivac artifacts policy --allow-insecure-artifacts=true`; use `false` to disable
+it. This option adds no formats and leaves technical guards in force. UTF-8 files
+and complete text-only static bundles now accept up to 100 MiB; media and SQLite
+profiles retain their 10 MiB bounds. Custody does not imply approval.
 
 ### Added
 
-- *(artifacts)* add explicit local capture policy ([#297](https://github.com/JAAvila-Of/vivac/pull/297))
-- *(artifacts)* export SQLite WAL without source writes ([#296](https://github.com/JAAvila-Of/vivac/pull/296))
+- *(artifacts)* retain sensitive or unreviewed content through an explicit project policy, with recorded sensitivity, inspection coverage and outstanding review ([#297](https://github.com/JAAvila-Of/vivac/pull/297))
+- *(artifacts)* raise UTF-8 file and complete text-only static-bundle limits to 100 MiB ([#297](https://github.com/JAAvila-Of/vivac/pull/297))
+- *(artifacts)* retain committed SQLite WAL data through a read-only logical export without writing or checkpointing source files ([#296](https://github.com/JAAvila-Of/vivac/pull/296))
 
 ### Fixed
 
-- *(help)* describe the installed Claude opening module
+- *(help)* describe the installed Claude opening module ([#294](https://github.com/JAAvila-Of/vivac/pull/294))
 
 ## [0.20.1](https://github.com/JAAvila-Of/vivac/compare/v0.20.0...v0.20.1) - 2026-10-19
 
