@@ -1852,6 +1852,9 @@ fn build_tree(bytes: &[u8], header: &Header) -> Option<Tree> {
                 | crate::event::Body::ArtifactCapturedV2 { .. }
                 | crate::event::Body::ArtifactBundleCapturedV2 { .. }
                 | crate::event::Body::ArtifactSqliteApplicationCaptured { .. }
+                | crate::event::Body::ArtifactCapturedV3 { .. }
+                | crate::event::Body::ArtifactBundleCapturedV3 { .. }
+                | crate::event::Body::ArtifactSqliteApplicationCapturedV2 { .. }
         )
     }) {
         return None;
@@ -3993,6 +3996,57 @@ mod tests {
             tail.artifact_history
         );
         fs::remove_dir_all(&store.root).unwrap();
+    }
+
+    #[test]
+    fn inspected_artifact_history_survives_cached_sections_and_tail_replay() {
+        for tag in [
+            "artifact.captured_v3",
+            "artifact.bundle_captured_v3",
+            "artifact.sqlite_application_captured_v2",
+        ] {
+            let store = tmp_store("inspected-artifact-history");
+            let inspected = |seq, previous| {
+                let mut event = artifact_event(seq, previous);
+                let mut value = serde_json::to_value(&event.payload).unwrap();
+                value["type"] = tag.into();
+                value["description"] = "Selected application".into();
+                value["selection"] = "selection.json".into();
+                value["entrypoint"] = "index.html".into();
+                value["member_count"] = 3.into();
+                value["manifest_bytes"] = 500.into();
+                value["database"] = "data.sqlite".into();
+                value["profile"] = "sqlite-standalone-v1".into();
+                value["runtime"] = "sqljs-asm-1.14.2".into();
+                value["runtime_sha256"] = "a".repeat(64).into();
+                value["inspection"] =
+                    serde_json::to_value(crate::artifacts::policy::Inspection::permissive())
+                        .unwrap();
+                event.payload = serde_json::from_value(value).unwrap();
+                event
+            };
+            let first = inspected(1, None);
+            write_raw_locked(&store, std::slice::from_ref(&first));
+            let fresh = load(&store, true).unwrap();
+            assert_eq!(fresh.artifact_history, vec![(first.lane, first.payload)]);
+            assert_eq!(
+                load(&store, false).unwrap().artifact_history,
+                fresh.artifact_history
+            );
+            let bytes = fs::read(store.index_path()).unwrap();
+            let next = inspected(2, Some(fixed_id(101)));
+            write_raw_locked(&store, std::slice::from_ref(&next));
+            let tail = load(&store, false).unwrap();
+            assert_eq!(tail.artifact_history.len(), 2);
+            assert_eq!(tail.artifact_history[1], (next.lane, next.payload));
+            assert_eq!(fs::read(store.index_path()).unwrap(), bytes);
+            fs::remove_file(store.index_path()).unwrap();
+            assert_eq!(
+                load(&store, false).unwrap().artifact_history,
+                tail.artifact_history
+            );
+            fs::remove_dir_all(&store.root).unwrap();
+        }
     }
 
     #[test]

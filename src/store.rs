@@ -209,6 +209,21 @@ pub enum ConfigVersion {
     Agents,
     AgentAutomation,
     Artifacts,
+    ArtifactPolicy,
+}
+
+impl ConfigVersion {
+    fn rank(self) -> u8 {
+        match self {
+            Self::One => 0,
+            Self::Locked => 1,
+            Self::Lanes => 2,
+            Self::Agents => 3,
+            Self::AgentAutomation => 4,
+            Self::Artifacts => 5,
+            Self::ArtifactPolicy => 6,
+        }
+    }
 }
 
 /// The sentence a config's `version` becomes the moment its tree gains a
@@ -235,6 +250,8 @@ pub const AGENT_AUTOMATION_SENTENCE: &str =
 
 pub const ARTIFACT_SENTENCE: &str =
     "this tree holds artifact custody, and this vivac is too old to read it: update vivac";
+pub const ARTIFACT_POLICY_SENTENCE: &str =
+    "this tree holds artifact inspection policy, and this vivac is too old to read it: update vivac";
 
 impl Serialize for ConfigVersion {
     fn serialize<S>(&self, s: S) -> Result<S::Ok, S::Error>
@@ -248,6 +265,7 @@ impl Serialize for ConfigVersion {
             ConfigVersion::Agents => s.serialize_str(AGENT_SENTENCE),
             ConfigVersion::AgentAutomation => s.serialize_str(AGENT_AUTOMATION_SENTENCE),
             ConfigVersion::Artifacts => s.serialize_str(ARTIFACT_SENTENCE),
+            ConfigVersion::ArtifactPolicy => s.serialize_str(ARTIFACT_POLICY_SENTENCE),
         }
     }
 }
@@ -272,6 +290,9 @@ impl<'de> Deserialize<'de> for ConfigVersion {
                 Ok(ConfigVersion::AgentAutomation)
             }
             serde_json::Value::String(s) if s == ARTIFACT_SENTENCE => Ok(ConfigVersion::Artifacts),
+            serde_json::Value::String(s) if s == ARTIFACT_POLICY_SENTENCE => {
+                Ok(ConfigVersion::ArtifactPolicy)
+            }
             _ => Err(serde::de::Error::custom("unsupported config version")),
         }
     }
@@ -291,6 +312,28 @@ pub struct Config {
     /// existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub share: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_artifact_consent"
+    )]
+    pub allow_insecure_artifacts: Option<bool>,
+}
+
+fn deserialize_artifact_consent<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    match value {
+        serde_json::Value::Null => Ok(None),
+        serde_json::Value::Bool(enabled) => Ok(Some(enabled)),
+        serde_json::Value::Number(number) if number.as_u64() == Some(0) => Ok(Some(false)),
+        serde_json::Value::Number(number) if number.as_u64() == Some(1) => Ok(Some(true)),
+        _ => Err(serde::de::Error::custom(
+            "allow_insecure_artifacts must be a boolean, 0, 1 or null",
+        )),
+    }
 }
 
 impl Config {
@@ -300,11 +343,16 @@ impl Config {
             project_id: id::ulid(),
             actor: format!("a_{}", &id::ulid()[..12]),
             share: None,
+            allow_insecure_artifacts: None,
         }
     }
 
     pub fn shares(&self) -> bool {
         self.share != Some(false)
+    }
+
+    pub fn allows_insecure_artifacts(&self) -> bool {
+        self.allow_insecure_artifacts == Some(true)
     }
 
     /// Whether a read that comes from the project `own` (its `project_id`,
@@ -1498,6 +1546,24 @@ impl Store {
         self.config = fresh;
         Ok(())
     }
+
+    pub fn set_allow_insecure_artifacts(
+        &mut self,
+        lock: &WriteLock,
+        enabled: bool,
+    ) -> Result<(), Failure> {
+        if !lock.covers(&self.lock_path()) {
+            return Err(Failure::Io(std::io::Error::other(
+                "write lock does not cover this tree",
+            )));
+        }
+        let raw = fs::read_to_string(self.root.join(DIR).join(CONFIG))?;
+        let mut fresh = read_config(&raw)?;
+        fresh.allow_insecure_artifacts = Some(enabled);
+        write_config_atomic(&self.root, &fresh)?;
+        self.config = fresh;
+        Ok(())
+    }
 }
 
 fn write_config(root: &Path, c: &Config) -> std::io::Result<()> {
@@ -1585,6 +1651,7 @@ fn check_config_version(version: Option<&serde_json::Value>) -> Result<(), Failu
         Some(serde_json::Value::String(s)) if s == AGENT_SENTENCE => Ok(()),
         Some(serde_json::Value::String(s)) if s == AGENT_AUTOMATION_SENTENCE => Ok(()),
         Some(serde_json::Value::String(s)) if s == ARTIFACT_SENTENCE => Ok(()),
+        Some(serde_json::Value::String(s)) if s == ARTIFACT_POLICY_SENTENCE => Ok(()),
         Some(serde_json::Value::String(s)) => Err(Failure::newer_vivac(format!(
             "This tree was written by a newer vivac: its config says {s:?}. Update vivac \
              to read it. A session or vivac web opened before an update keeps the old \
@@ -1614,6 +1681,7 @@ fn regenerated_version(root: &Path) -> ConfigVersion {
     let mut agents = false;
     let mut automatic_agents = false;
     let mut artifacts = false;
+    let mut artifact_policy = false;
     for line in BufReader::new(f).lines().map_while(Result::ok) {
         if line.trim().is_empty() {
             continue;
@@ -1622,6 +1690,9 @@ fn regenerated_version(root: &Path) -> ConfigVersion {
             continue;
         };
         match v["payload"]["type"].as_str() {
+            Some("artifact.captured_v3")
+            | Some("artifact.bundle_captured_v3")
+            | Some("artifact.sqlite_application_captured_v2") => artifact_policy = true,
             Some("lane.declared") | Some("lane.claimed") => lanes = true,
             Some("artifact.captured")
             | Some("artifact.bundle_captured")
@@ -1641,7 +1712,9 @@ fn regenerated_version(root: &Path) -> ConfigVersion {
             _ => {}
         }
     }
-    if artifacts {
+    if artifact_policy {
+        ConfigVersion::ArtifactPolicy
+    } else if artifacts {
         ConfigVersion::Artifacts
     } else if automatic_agents {
         ConfigVersion::AgentAutomation
@@ -1966,6 +2039,20 @@ impl Store {
         body: impl Iterator<Item = &'a crate::event::Body> + Clone,
         tree_already_governed: bool,
     ) -> std::io::Result<()> {
+        if self.config.version == ConfigVersion::ArtifactPolicy {
+            return Ok(());
+        }
+        if body.clone().any(|b| {
+            matches!(
+                b,
+                crate::event::Body::ArtifactCapturedV3 { .. }
+                    | crate::event::Body::ArtifactBundleCapturedV3 { .. }
+                    | crate::event::Body::ArtifactSqliteApplicationCapturedV2 { .. }
+            )
+        }) {
+            self.upgrade_config(ConfigVersion::ArtifactPolicy)?;
+            return Ok(());
+        }
         if self.config.version != ConfigVersion::Artifacts
             && body.clone().any(|b| {
                 matches!(
@@ -1978,14 +2065,7 @@ impl Store {
                 )
             })
         {
-            let locked = Config {
-                version: ConfigVersion::Artifacts,
-                project_id: self.config.project_id.clone(),
-                actor: self.config.actor.clone(),
-                share: self.config.share,
-            };
-            write_config_atomic(&self.root, &locked)?;
-            self.config = locked;
+            self.upgrade_config(ConfigVersion::Artifacts)?;
         }
         if self.config.version == ConfigVersion::Artifacts {
             return Ok(());
@@ -1993,14 +2073,7 @@ impl Store {
         if self.config.version != ConfigVersion::AgentAutomation
             && body.clone().any(|b| matches!(b, crate::event::Body::AgentAutomationConfigured { .. }) || matches!(b, crate::event::Body::AgentRecorded { definition, .. } if definition.prompt.is_some()))
         {
-            let locked = Config {
-                version: ConfigVersion::AgentAutomation,
-                project_id: self.config.project_id.clone(),
-                actor: self.config.actor.clone(),
-                share: self.config.share,
-            };
-            write_config_atomic(&self.root, &locked)?;
-            self.config = locked;
+            self.upgrade_config(ConfigVersion::AgentAutomation)?;
         }
         if !matches!(
             self.config.version,
@@ -2015,14 +2088,7 @@ impl Store {
                     | crate::event::Body::AgentObserved { .. }
             )
         }) {
-            let locked = Config {
-                version: ConfigVersion::Agents,
-                project_id: self.config.project_id.clone(),
-                actor: self.config.actor.clone(),
-                share: self.config.share,
-            };
-            write_config_atomic(&self.root, &locked)?;
-            self.config = locked;
+            self.upgrade_config(ConfigVersion::Agents)?;
         }
         if self.config.version != ConfigVersion::One {
             return Ok(());
@@ -2039,14 +2105,22 @@ impl Store {
         if !tree_already_governed && !creates_governance {
             return Ok(());
         }
-        let locked = Config {
-            version: ConfigVersion::Locked,
-            project_id: self.config.project_id.clone(),
-            actor: self.config.actor.clone(),
-            share: self.config.share,
-        };
-        write_config_atomic(&self.root, &locked)?;
-        self.config = locked;
+        self.upgrade_config(ConfigVersion::Locked)
+    }
+
+    fn upgrade_config(&mut self, target: ConfigVersion) -> std::io::Result<()> {
+        if self.config.version.rank() >= target.rank() {
+            return Ok(());
+        }
+        let raw = fs::read_to_string(self.root.join(DIR).join(CONFIG))?;
+        let mut fresh = read_config(&raw).map_err(|_| {
+            std::io::Error::other("Project configuration cannot be read for a version upgrade.")
+        })?;
+        if fresh.version.rank() < target.rank() {
+            fresh.version = target;
+            write_config_atomic(&self.root, &fresh)?;
+        }
+        self.config = fresh;
         Ok(())
     }
 
@@ -2069,18 +2143,11 @@ impl Store {
                 | ConfigVersion::Agents
                 | ConfigVersion::AgentAutomation
                 | ConfigVersion::Artifacts
+                | ConfigVersion::ArtifactPolicy
         ) {
             return Ok(());
         }
-        let locked = Config {
-            version: ConfigVersion::Lanes,
-            project_id: self.config.project_id.clone(),
-            actor: self.config.actor.clone(),
-            share: self.config.share,
-        };
-        write_config_atomic(&self.root, &locked)?;
-        self.config = locked;
-        Ok(())
+        self.upgrade_config(ConfigVersion::Lanes)
     }
 }
 
@@ -2417,6 +2484,180 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn insecure_artifact_config_preserves_explicit_consent() {
+        let mut value = serde_json::to_value(Config::new_seeded()).unwrap();
+        assert!(value.get("allow_insecure_artifacts").is_none());
+        assert!(!read_config(&value.to_string())
+            .unwrap()
+            .allows_insecure_artifacts());
+        value["allow_insecure_artifacts"] = serde_json::json!(true);
+        let config = read_config(&value.to_string()).unwrap();
+        assert!(config.allows_insecure_artifacts());
+        assert_eq!(
+            serde_json::to_value(config).unwrap()["allow_insecure_artifacts"],
+            serde_json::json!(true)
+        );
+    }
+
+    #[test]
+    fn insecure_artifact_config_accepts_only_boolean_or_binary_consent() {
+        let base = serde_json::to_value(Config::new_seeded()).unwrap();
+        for (input, expected) in [
+            (serde_json::Value::Null, serde_json::Value::Null),
+            (serde_json::json!(false), serde_json::json!(false)),
+            (serde_json::json!(true), serde_json::json!(true)),
+            (serde_json::json!(0), serde_json::json!(false)),
+            (serde_json::json!(1), serde_json::json!(true)),
+        ] {
+            let mut value = base.clone();
+            value["allow_insecure_artifacts"] = input;
+            let config = read_config(&value.to_string()).unwrap();
+            assert_eq!(
+                config.allows_insecure_artifacts(),
+                expected.as_bool() == Some(true)
+            );
+            assert_eq!(
+                serde_json::to_value(config).unwrap()["allow_insecure_artifacts"],
+                expected
+            );
+        }
+        for input in [
+            serde_json::json!(2),
+            serde_json::json!(-1),
+            serde_json::json!(1.0),
+            serde_json::json!("private-input-sentinel"),
+            serde_json::json!([]),
+            serde_json::json!({"private-input-sentinel": true}),
+        ] {
+            let mut value = base.clone();
+            value["allow_insecure_artifacts"] = input;
+            let error = read_config(&value.to_string()).unwrap_err().message();
+            assert!(error.contains("allow_insecure_artifacts"));
+            assert!(!error.contains("private-input-sentinel"));
+        }
+    }
+
+    #[test]
+    fn insecure_artifact_config_changes_preserve_fresh_authority_and_event_bytes() {
+        let root = std::env::temp_dir().join(format!("vivac-consent-{}", id::ulid()));
+        let mut store = Store::create(&root).unwrap();
+        let path = root.join(DIR).join(CONFIG);
+        let before = fs::read(store.log()).unwrap();
+        let mut fresh = Config::new_seeded();
+        fresh.version = ConfigVersion::Artifacts;
+        fresh.share = Some(false);
+        write_config_atomic(&root, &fresh).unwrap();
+        let lock = store.lock_for_write().unwrap();
+        store.set_allow_insecure_artifacts(&lock, true).unwrap();
+        assert!(store.config.allows_insecure_artifacts());
+        assert_eq!(store.config.version, fresh.version);
+        assert_eq!(store.config.project_id, fresh.project_id);
+        assert_eq!(store.config.actor, fresh.actor);
+        assert_eq!(store.config.share, fresh.share);
+        assert!(Store::open(root.clone())
+            .unwrap()
+            .config
+            .allows_insecure_artifacts());
+        store.set_allow_insecure_artifacts(&lock, false).unwrap();
+        assert!(!store.config.allows_insecure_artifacts());
+        assert_eq!(store.config.allow_insecure_artifacts, Some(false));
+        assert_eq!(fs::read(store.log()).unwrap(), before);
+        drop(lock);
+        let on_disk = fs::read(&path).unwrap();
+        Store::open(root.clone()).unwrap();
+        assert_eq!(fs::read(path).unwrap(), on_disk);
+        drop(store);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn insecure_artifact_config_refuses_foreign_locks_and_invalid_fresh_config() {
+        let root = std::env::temp_dir().join(format!("vivac-consent-{}", id::ulid()));
+        let other = std::env::temp_dir().join(format!("vivac-consent-{}", id::ulid()));
+        let mut store = Store::create(&root).unwrap();
+        let foreign = Store::create(&other).unwrap();
+        let path = root.join(DIR).join(CONFIG);
+        let before = fs::read(&path).unwrap();
+        let lock = foreign.lock_for_write().unwrap();
+        assert!(store.set_allow_insecure_artifacts(&lock, true).is_err());
+        assert_eq!(fs::read(&path).unwrap(), before);
+        assert!(!store.config.allows_insecure_artifacts());
+        drop(lock);
+        fs::write(&path, b"invalid config").unwrap();
+        let lock = store.lock_for_write().unwrap();
+        assert!(store.set_allow_insecure_artifacts(&lock, true).is_err());
+        assert_eq!(fs::read(path).unwrap(), b"invalid config");
+        assert!(!store.config.allows_insecure_artifacts());
+        drop(lock);
+        drop(store);
+        drop(foreign);
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(other).unwrap();
+    }
+
+    #[test]
+    fn insecure_artifact_config_survives_sharing_and_version_changes_but_not_regeneration() {
+        for target in [
+            ConfigVersion::Locked,
+            ConfigVersion::Lanes,
+            ConfigVersion::Agents,
+            ConfigVersion::AgentAutomation,
+            ConfigVersion::Artifacts,
+        ] {
+            let root = std::env::temp_dir().join(format!("vivac-consent-{}", id::ulid()));
+            let mut store = Store::create(&root).unwrap();
+            let lock = store.lock_for_write().unwrap();
+            store.set_allow_insecure_artifacts(&lock, true).unwrap();
+            match target {
+                ConfigVersion::Locked => store.lock_if_needed(std::iter::empty(), true).unwrap(),
+                ConfigVersion::Lanes => store.lock_lanes_in_config(&lock).unwrap(),
+                ConfigVersion::Agents => store
+                    .lock_if_needed(
+                        [crate::event::Body::AgentBound {
+                            agent: id::ulid(),
+                            harness: "codex".into(),
+                            path: ".codex/agents/reviewer.toml".into(),
+                            baseline: None,
+                        }]
+                        .iter(),
+                        false,
+                    )
+                    .unwrap(),
+                ConfigVersion::AgentAutomation => store
+                    .lock_if_needed(
+                        [crate::event::Body::AgentAutomationConfigured {
+                            node: id::ulid(),
+                            enabled: true,
+                        }]
+                        .iter(),
+                        false,
+                    )
+                    .unwrap(),
+                ConfigVersion::Artifacts => store
+                    .lock_if_needed([captured_artifact()].iter(), false)
+                    .unwrap(),
+                ConfigVersion::One | ConfigVersion::ArtifactPolicy => unreachable!(),
+            }
+            assert_eq!(store.config.version, target);
+            assert!(store.config.allows_insecure_artifacts());
+            drop(lock);
+            store.set_sharing(false).unwrap();
+            store.set_sharing(true).unwrap();
+            assert!(Store::open(root.clone())
+                .unwrap()
+                .config
+                .allows_insecure_artifacts());
+            fs::remove_file(root.join(DIR).join(CONFIG)).unwrap();
+            assert!(!Store::open(root.clone())
+                .unwrap()
+                .config
+                .allows_insecure_artifacts());
+            drop(store);
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
 
     #[test]
     fn capture_without_a_supported_physical_identity_refuses_before_writing() {
@@ -3849,6 +4090,237 @@ mod tests {
             size: 17,
             digest: "a".repeat(64),
             object: "objects/revision".into(),
+        }
+    }
+
+    #[test]
+    fn stale_config_upgrade_preserves_fresh_artifact_consent() {
+        let root = std::env::temp_dir().join(format!("vivac-stale-consent-{}", id::ulid()));
+        let mut writer = Store::create(&root).unwrap();
+        let mut stale = Store::open(root.clone()).unwrap();
+        let lock = writer.lock_for_write().unwrap();
+        writer.set_allow_insecure_artifacts(&lock, true).unwrap();
+        drop(lock);
+        let mut value = serde_json::to_value(captured_artifact()).unwrap();
+        value["type"] = "artifact.captured_v3".into();
+        value["description"] = "Selected fixture".into();
+        value["inspection"] =
+            serde_json::to_value(crate::artifacts::policy::Inspection::permissive()).unwrap();
+        let receipt: crate::event::Body = serde_json::from_value(value).unwrap();
+        let lock = stale.lock_for_write().unwrap();
+        stale.lock_if_needed([receipt].iter(), false).unwrap();
+        assert!(stale.config.allows_insecure_artifacts());
+        assert!(Store::open(root.clone())
+            .unwrap()
+            .config
+            .allows_insecure_artifacts());
+        assert_eq!(stale.config.version, ConfigVersion::ArtifactPolicy);
+        drop(lock);
+        drop(stale);
+        drop(writer);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn stale_config_upgrades_never_restore_revoked_consent_or_replace_fresh_authority() {
+        for target in [
+            ConfigVersion::Locked,
+            ConfigVersion::Lanes,
+            ConfigVersion::Agents,
+            ConfigVersion::AgentAutomation,
+            ConfigVersion::Artifacts,
+        ] {
+            let root = std::env::temp_dir().join(format!("vivac-stale-revocation-{}", id::ulid()));
+            let mut stale = Store::create(&root).unwrap();
+            let lock = stale.lock_for_write().unwrap();
+            stale.set_allow_insecure_artifacts(&lock, true).unwrap();
+            drop(lock);
+            let mut writer = Store::open(root.clone()).unwrap();
+            let lock = writer.lock_for_write().unwrap();
+            writer.set_allow_insecure_artifacts(&lock, false).unwrap();
+            writer.config.version = ConfigVersion::ArtifactPolicy;
+            writer.config.project_id = id::ulid();
+            writer.config.actor = format!("a_{}", &id::ulid()[..12]);
+            writer.config.share = Some(false);
+            write_config_atomic(&root, &writer.config).unwrap();
+            drop(lock);
+            let lock = stale.lock_for_write().unwrap();
+            match target {
+                ConfigVersion::Locked => stale.lock_if_needed(std::iter::empty(), true).unwrap(),
+                ConfigVersion::Lanes => stale.lock_lanes_in_config(&lock).unwrap(),
+                ConfigVersion::Agents => stale
+                    .lock_if_needed(
+                        [crate::event::Body::AgentBound {
+                            agent: id::ulid(),
+                            harness: "codex".into(),
+                            path: ".codex/agents/reviewer.toml".into(),
+                            baseline: None,
+                        }]
+                        .iter(),
+                        false,
+                    )
+                    .unwrap(),
+                ConfigVersion::AgentAutomation => stale
+                    .lock_if_needed(
+                        [crate::event::Body::AgentAutomationConfigured {
+                            node: id::ulid(),
+                            enabled: true,
+                        }]
+                        .iter(),
+                        false,
+                    )
+                    .unwrap(),
+                ConfigVersion::Artifacts => stale
+                    .lock_if_needed([captured_artifact()].iter(), false)
+                    .unwrap(),
+                _ => unreachable!(),
+            }
+            assert!(!stale.config.allows_insecure_artifacts());
+            assert_eq!(stale.config.version, ConfigVersion::ArtifactPolicy);
+            assert_eq!(stale.config.project_id, writer.config.project_id);
+            assert_eq!(stale.config.actor, writer.config.actor);
+            assert_eq!(stale.config.share, writer.config.share);
+            let disk = Store::open(root.clone()).unwrap();
+            assert!(!disk.config.allows_insecure_artifacts());
+            assert_eq!(disk.config.version, ConfigVersion::ArtifactPolicy);
+            drop(lock);
+            drop(disk);
+            drop(stale);
+            drop(writer);
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn config_upgrade_refuses_invalid_fresh_authority_without_writes_or_value_echo() {
+        let root = std::env::temp_dir().join(format!("vivac-invalid-upgrade-{}", id::ulid()));
+        let mut store = Store::create(&root).unwrap();
+        let config = root.join(DIR).join(CONFIG);
+        let mut invalid = serde_json::to_value(&store.config).unwrap();
+        invalid["version"] = "private-input-sentinel".into();
+        let bytes = serde_json::to_vec(&invalid).unwrap();
+        fs::write(&config, &bytes).unwrap();
+        let before = fs::read(store.log()).unwrap();
+        let lock = store.lock_for_write().unwrap();
+        let error = match store.append(
+            &lock,
+            crate::lane::MAIN,
+            vec![captured_artifact()],
+            0,
+            false,
+        ) {
+            Err(error) => error,
+            Ok(_) => panic!("invalid fresh configuration allowed an append"),
+        };
+        assert!(!error.to_string().contains("private-input-sentinel"));
+        assert_eq!(fs::read(&config).unwrap(), bytes);
+        assert_eq!(fs::read(store.log()).unwrap(), before);
+        assert_eq!(store.config.version, ConfigVersion::One);
+        let error = store.lock_lanes_in_config(&lock).unwrap_err();
+        assert!(!error.to_string().contains("private-input-sentinel"));
+        assert_eq!(fs::read(config).unwrap(), bytes);
+        assert_eq!(fs::read(store.log()).unwrap(), before);
+        drop(lock);
+        drop(store);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn ordinary_high_version_append_does_not_reread_missing_config() {
+        let root = std::env::temp_dir().join(format!("vivac-ordinary-config-{}", id::ulid()));
+        let mut store = Store::create(&root).unwrap();
+        store.config.version = ConfigVersion::ArtifactPolicy;
+        write_config_atomic(&root, &store.config).unwrap();
+        let config = root.join(DIR).join(CONFIG);
+        fs::rename(&config, root.join(DIR).join("config-held")).unwrap();
+        let lock = store.lock_for_write().unwrap();
+        store
+            .append(
+                &lock,
+                crate::lane::MAIN,
+                vec![crate::event::Body::NodeNoted {
+                    node: id::ulid(),
+                    note: "Ordinary fixture note".into(),
+                }],
+                0,
+                false,
+            )
+            .unwrap();
+        assert!(!config.exists());
+        assert_eq!(store.read_all().unwrap().0.len(), 1);
+        drop(lock);
+        drop(store);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn artifact_policy_config_precedes_receipts_and_survives_older_events() {
+        let sentence = serde_json::to_value(ConfigVersion::ArtifactPolicy).unwrap();
+        assert_ne!(
+            sentence,
+            serde_json::to_value(ConfigVersion::Artifacts).unwrap()
+        );
+        check_config_version(Some(&sentence)).unwrap();
+        for tag in [
+            "artifact.captured_v3",
+            "artifact.bundle_captured_v3",
+            "artifact.sqlite_application_captured_v2",
+        ] {
+            let root = std::env::temp_dir().join(format!("vivac-policy-{}", id::ulid()));
+            let mut store = Store::create(&root).unwrap();
+            let lock = store.lock_for_write().unwrap();
+            store.set_allow_insecure_artifacts(&lock, true).unwrap();
+            assert_eq!(store.config.version, ConfigVersion::One);
+            let mut value = serde_json::to_value(captured_artifact()).unwrap();
+            value["type"] = tag.into();
+            value["description"] = "Selected application".into();
+            value["selection"] = "selection.json".into();
+            value["entrypoint"] = "index.html".into();
+            value["member_count"] = 3.into();
+            value["manifest_bytes"] = 500.into();
+            value["database"] = "data.sqlite".into();
+            value["profile"] = "sqlite-standalone-v1".into();
+            value["runtime"] = "sqljs-asm-1.14.2".into();
+            value["runtime_sha256"] = "a".repeat(64).into();
+            value["inspection"] =
+                serde_json::to_value(crate::artifacts::policy::Inspection::permissive()).unwrap();
+            let body: crate::event::Body = serde_json::from_value(value).unwrap();
+            store.lock_if_needed([body.clone()].iter(), false).unwrap();
+            assert_eq!(store.read_all().unwrap().0.len(), 0);
+            assert_eq!(
+                peek_config_version(&root),
+                Some(ConfigVersion::ArtifactPolicy)
+            );
+            store
+                .append(&lock, crate::lane::MAIN, vec![body], 0, false)
+                .unwrap();
+            store
+                .lock_if_needed([captured_artifact()].iter(), true)
+                .unwrap();
+            store.lock_lanes_in_config(&lock).unwrap();
+            store
+                .lock_if_needed(
+                    [crate::event::Body::AgentAutomationConfigured {
+                        node: id::ulid(),
+                        enabled: true,
+                    }]
+                    .iter(),
+                    true,
+                )
+                .unwrap();
+            assert_eq!(store.config.version, ConfigVersion::ArtifactPolicy);
+            drop(lock);
+            store.set_sharing(false).unwrap();
+            assert!(store.config.allows_insecure_artifacts());
+            assert_eq!(store.config.version, ConfigVersion::ArtifactPolicy);
+            assert_eq!(regenerated_version(&root), ConfigVersion::ArtifactPolicy);
+            fs::remove_file(root.join(DIR).join(CONFIG)).unwrap();
+            let reopened = Store::open(root.clone()).unwrap();
+            assert_eq!(reopened.config.version, ConfigVersion::ArtifactPolicy);
+            assert!(!reopened.config.allows_insecure_artifacts());
+            drop(reopened);
+            drop(store);
+            fs::remove_dir_all(root).unwrap();
         }
     }
 

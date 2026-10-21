@@ -484,7 +484,7 @@ fn capabilities_need_no_project_and_ignore_an_unreadable_tree() {
     );
     assert_eq!(
         expected["delivery_types"]["file"]["max_bytes"],
-        10 * 1024 * 1024
+        100 * 1024 * 1024
     );
     assert_eq!(
         expected["limits"]["max_file_bytes"],
@@ -877,7 +877,7 @@ fn unsafe_or_oversized_bodies_never_enter_the_log_or_a_delivery() {
     }
     fs::write(
         sandbox.0.join("large.html"),
-        vec![b' '; 10 * 1024 * 1024 + 1],
+        vec![b' '; 100 * 1024 * 1024 + 1],
     )
     .unwrap();
     assert_ne!(
@@ -902,7 +902,7 @@ fn unsafe_or_oversized_bodies_never_enter_the_log_or_a_delivery() {
             .unwrap()
             .is_empty()
     );
-    let body = vec![b' '; 10 * 1024 * 1024];
+    let body = vec![b' '; 100 * 1024 * 1024];
     fs::write(sandbox.0.join("limit.html"), &body).unwrap();
     let accepted = capture(&sandbox, "limit.html");
     assert_eq!(accepted["size"], body.len() as u64);

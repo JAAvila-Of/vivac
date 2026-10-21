@@ -1,4 +1,3 @@
-use super::super::guard;
 use super::Budget;
 use crate::failure::Failure;
 use flate2::{Decompress, FlushDecompress, Status};
@@ -22,7 +21,7 @@ fn strict_options() -> DecodeOptions {
     options
 }
 
-fn check_text(value: &str, total: &mut usize) -> Result<(), Failure> {
+fn check_text(value: &str, total: &mut usize, budget: &mut Budget) -> Result<(), Failure> {
     *total = total.checked_add(value.len()).ok_or_else(refused)?;
     if *total > MAX_METADATA
         || value
@@ -31,20 +30,21 @@ fn check_text(value: &str, total: &mut usize) -> Result<(), Failure> {
     {
         return Err(refused());
     }
-    guard::check_text(value)
+    budget.check_text(value)
 }
 
 fn inspect_text(
     decoder: &StreamingDecoder,
     kind: chunk::ChunkType,
     total: &mut usize,
+    budget: &mut Budget,
 ) -> Result<(), Failure> {
     let info = decoder.info().ok_or_else(refused)?;
     match kind {
         chunk::tEXt => {
             let text = info.uncompressed_latin1_text.last().ok_or_else(refused)?;
-            check_text(&text.keyword, total)?;
-            check_text(&text.text, total)?;
+            check_text(&text.keyword, total, budget)?;
+            check_text(&text.text, total, budget)?;
         }
         chunk::zTXt => {
             let mut text = info
@@ -52,19 +52,19 @@ fn inspect_text(
                 .last()
                 .ok_or_else(refused)?
                 .clone();
-            check_text(&text.keyword, total)?;
+            check_text(&text.keyword, total, budget)?;
             text.decompress_text_with_limit(MAX_METADATA - *total)
                 .map_err(|_| refused())?;
-            check_text(&text.get_text().map_err(|_| refused())?, total)?;
+            check_text(&text.get_text().map_err(|_| refused())?, total, budget)?;
         }
         chunk::iTXt => {
             let mut text = info.utf8_text.last().ok_or_else(refused)?.clone();
-            check_text(&text.keyword, total)?;
-            check_text(&text.language_tag, total)?;
-            check_text(&text.translated_keyword, total)?;
+            check_text(&text.keyword, total, budget)?;
+            check_text(&text.language_tag, total, budget)?;
+            check_text(&text.translated_keyword, total, budget)?;
             text.decompress_text_with_limit(MAX_METADATA - *total)
                 .map_err(|_| refused())?;
-            check_text(&text.get_text().map_err(|_| refused())?, total)?;
+            check_text(&text.get_text().map_err(|_| refused())?, total, budget)?;
         }
         _ => {}
     }
@@ -164,7 +164,7 @@ pub(super) fn inspect_with_budget(
                             .checked_sub(expanded)
                             .ok_or_else(refused)?;
                     }
-                    inspect_text(&decoder, kind, &mut text_bytes)?;
+                    inspect_text(&decoder, kind, &mut text_bytes, budget)?;
                     if kind == chunk::IEND {
                         if consumed != count || reader.read(&mut buffer[..1])? != 0 {
                             return Err(refused());
@@ -268,6 +268,47 @@ mod tests {
 
     const SAMPLE: &[u8] = include_bytes!("../../../tests/data/artifact-media/sample.png");
 
+    #[test]
+    fn policy_permissive_png_retains_sensitive_metadata_without_relaxing_structure() {
+        let bytes = image(&[(*b"tEXt", b"Contact\0person@example.com")]);
+        let mut output = Vec::new();
+        assert!(super::super::copy_checked(
+            Cursor::new(&bytes),
+            &mut output,
+            "image/png",
+            bytes.len() as u64
+        )
+        .is_err());
+        let observed = super::super::copy_with_policy_with_budget(
+            Cursor::new(&bytes),
+            &mut output,
+            "image/png",
+            bytes.len() as u64,
+            &mut Budget::default(),
+            super::super::super::policy::CapturePolicy::AllowInsecure,
+        )
+        .unwrap();
+        assert_eq!(output, bytes);
+        assert_eq!(
+            observed.inspection.sensitivity,
+            super::super::super::policy::Sensitivity::Detected
+        );
+        assert_eq!(
+            observed.inspection.coverage,
+            super::super::super::policy::Coverage::Partial
+        );
+        let mut malformed = bytes;
+        malformed.extend_from_slice(b"trailing");
+        assert!(super::super::copy_with_policy_with_budget(
+            Cursor::new(&malformed),
+            std::io::sink(),
+            "image/png",
+            malformed.len() as u64,
+            &mut Budget::default(),
+            super::super::super::policy::CapturePolicy::AllowInsecure
+        )
+        .is_err());
+    }
     #[test]
     fn refuses_scanline_bomb_before_reading_image_data() {
         struct HeaderOnly(Cursor<Vec<u8>>);

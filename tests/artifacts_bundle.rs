@@ -551,12 +551,12 @@ fn bundle_capture_member_and_aggregate_limits_do_not_record_partial_revision() {
     );
     fs::write(
         sandbox.0.join("app/index.html"),
-        vec![b' '; 6 * 1024 * 1024],
+        vec![b' '; 60 * 1024 * 1024],
     )
     .unwrap();
     fs::write(
         sandbox.0.join("app/assets/style.css"),
-        vec![b' '; 5 * 1024 * 1024],
+        vec![b' '; 50 * 1024 * 1024],
     )
     .unwrap();
     fs::write(sandbox.0.join("selection.json"), serde_json::to_vec(&json!({"root":"app","entrypoint":"index.html","members":["index.html","assets/style.css"],"requirements":[]})).unwrap()).unwrap();

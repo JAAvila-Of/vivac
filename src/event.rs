@@ -610,6 +610,69 @@ pub enum Body {
         runtime: String,
         runtime_sha256: String,
     },
+    #[serde(rename = "artifact.captured_v3")]
+    ArtifactCapturedV3 {
+        artifact: String,
+        revision: String,
+        operation: String,
+        producer: String,
+        previous: Option<String>,
+        source: String,
+        #[serde(deserialize_with = "crate::artifacts::deserialize_description")]
+        description: String,
+        site: String,
+        size: u64,
+        digest: String,
+        object: String,
+        #[serde(deserialize_with = "deserialize_artifact_inspection")]
+        inspection: crate::artifacts::policy::Inspection,
+    },
+    #[serde(rename = "artifact.bundle_captured_v3")]
+    ArtifactBundleCapturedV3 {
+        artifact: String,
+        revision: String,
+        operation: String,
+        producer: String,
+        previous: Option<String>,
+        source: String,
+        #[serde(deserialize_with = "crate::artifacts::deserialize_description")]
+        description: String,
+        selection: String,
+        site: String,
+        size: u64,
+        digest: String,
+        object: String,
+        entrypoint: String,
+        member_count: usize,
+        manifest_bytes: u64,
+        #[serde(deserialize_with = "deserialize_artifact_inspection")]
+        inspection: crate::artifacts::policy::Inspection,
+    },
+    #[serde(rename = "artifact.sqlite_application_captured_v2")]
+    ArtifactSqliteApplicationCapturedV2 {
+        artifact: String,
+        revision: String,
+        operation: String,
+        producer: String,
+        previous: Option<String>,
+        source: String,
+        #[serde(deserialize_with = "crate::artifacts::deserialize_description")]
+        description: String,
+        selection: String,
+        site: String,
+        size: u64,
+        digest: String,
+        object: String,
+        entrypoint: String,
+        member_count: usize,
+        manifest_bytes: u64,
+        database: String,
+        profile: String,
+        runtime: String,
+        runtime_sha256: String,
+        #[serde(deserialize_with = "deserialize_artifact_inspection")]
+        inspection: crate::artifacts::policy::Inspection,
+    },
     #[serde(rename = "agent.automation.configured")]
     AgentAutomationConfigured { node: String, enabled: bool },
     #[serde(rename = "agent.recorded")]
@@ -652,6 +715,23 @@ pub enum Body {
     },
 }
 
+fn deserialize_artifact_inspection<'de, D>(
+    deserializer: D,
+) -> Result<crate::artifacts::policy::Inspection, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let inspection = crate::artifacts::policy::Inspection::deserialize(deserializer)?;
+    if inspection.policy != crate::artifacts::policy::CapturePolicy::AllowInsecure
+        || inspection.validate().is_err()
+    {
+        return Err(serde::de::Error::custom(
+            "invalid artifact inspection status",
+        ));
+    }
+    Ok(inspection)
+}
+
 impl Body {
     /// Every event-type tag this version's `Body` can read, in enum
     /// declaration order. `t411` §13: a line whose own `type` is well-formed
@@ -685,6 +765,9 @@ impl Body {
         "artifact.captured_v2",
         "artifact.bundle_captured_v2",
         "artifact.sqlite_application_captured",
+        "artifact.captured_v3",
+        "artifact.bundle_captured_v3",
+        "artifact.sqlite_application_captured_v2",
         "agent.automation.configured",
         "agent.recorded",
         "agent.bound",
@@ -769,7 +852,12 @@ mod tests {
             Body::ArtifactCaptured { .. } => "artifact.captured",
             Body::ArtifactBundleCaptured { .. } => "artifact.bundle_captured",
             Body::ArtifactCapturedV2 { .. } => "artifact.captured_v2",
+            Body::ArtifactCapturedV3 { .. } => "artifact.captured_v3",
             Body::ArtifactBundleCapturedV2 { .. } => "artifact.bundle_captured_v2",
+            Body::ArtifactBundleCapturedV3 { .. } => "artifact.bundle_captured_v3",
+            Body::ArtifactSqliteApplicationCapturedV2 { .. } => {
+                "artifact.sqlite_application_captured_v2"
+            }
             Body::ArtifactSqliteApplicationCaptured { .. } => {
                 "artifact.sqlite_application_captured"
             }
@@ -783,7 +871,7 @@ mod tests {
     }
 
     fn one_of_each() -> Vec<Body> {
-        vec![
+        let mut samples = vec![
             Body::ArtifactSqliteApplicationCaptured {
                 description: "Selected layout".into(),
                 artifact: "a".into(),
@@ -1007,7 +1095,28 @@ mod tests {
                     ..Default::default()
                 }],
             },
-        ]
+        ];
+        let inspected: Vec<Body> = samples
+            .iter()
+            .filter_map(|body| {
+                let tag = match body {
+                    Body::ArtifactCapturedV2 { .. } => "artifact.captured_v3",
+                    Body::ArtifactBundleCapturedV2 { .. } => "artifact.bundle_captured_v3",
+                    Body::ArtifactSqliteApplicationCaptured { .. } => {
+                        "artifact.sqlite_application_captured_v2"
+                    }
+                    _ => return None,
+                };
+                let mut value = serde_json::to_value(body).unwrap();
+                value["type"] = tag.into();
+                value["inspection"] =
+                    serde_json::to_value(crate::artifacts::policy::Inspection::permissive())
+                        .unwrap();
+                Some(serde_json::from_value(value).unwrap())
+            })
+            .collect();
+        samples.extend(inspected);
+        samples
     }
 
     #[test]
@@ -1027,6 +1136,46 @@ mod tests {
             Body::KNOWN_EVENTS.len(),
             "a variant or a listed tag is unmatched"
         );
+    }
+
+    #[test]
+    fn inspected_artifact_receipts_require_current_coherent_inspection() {
+        for body in one_of_each().into_iter().filter(|body| {
+            matches!(
+                body,
+                Body::ArtifactCapturedV3 { .. }
+                    | Body::ArtifactBundleCapturedV3 { .. }
+                    | Body::ArtifactSqliteApplicationCapturedV2 { .. }
+            )
+        }) {
+            let value = serde_json::to_value(body).unwrap();
+            assert!(serde_json::from_value::<Body>(value.clone()).is_ok());
+            let mut missing = value.clone();
+            missing.as_object_mut().unwrap().remove("inspection");
+            assert!(serde_json::from_value::<Body>(missing).is_err());
+            for invalid in [
+                serde_json::Value::Null,
+                serde_json::json!({}),
+                serde_json::json!({"policy":"future", "sensitivity":"not_detected", "coverage":"complete", "review_required":true}),
+                serde_json::json!({"policy":"allow_insecure", "sensitivity":"future", "coverage":"complete", "review_required":true}),
+                serde_json::json!({"policy":"allow_insecure", "sensitivity":"not_detected", "coverage":"future", "review_required":true}),
+                serde_json::json!({"policy":"allow_insecure", "sensitivity":"not_detected", "coverage":"partial", "review_required":true}),
+                serde_json::json!({"policy":"allow_insecure", "sensitivity":"not_detected", "coverage":"complete", "review_required":false}),
+                serde_json::to_value(crate::artifacts::policy::Inspection::strict()).unwrap(),
+            ] {
+                let mut malformed = value.clone();
+                malformed["inspection"] = invalid;
+                assert!(serde_json::from_value::<Body>(malformed).is_err());
+            }
+            let mut legacy = value.clone();
+            legacy["type"] = match value["type"].as_str().unwrap() {
+                "artifact.captured_v3" => "artifact.captured_v2",
+                "artifact.bundle_captured_v3" => "artifact.bundle_captured_v2",
+                _ => "artifact.sqlite_application_captured",
+            }
+            .into();
+            assert!(serde_json::from_value::<Body>(legacy).is_ok());
+        }
     }
 
     #[test]

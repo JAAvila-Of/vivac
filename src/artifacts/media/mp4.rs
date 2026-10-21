@@ -36,11 +36,11 @@ fn long(bytes: &[u8], offset: usize) -> Result<u64, Failure> {
     ))
 }
 
-fn text(bytes: &[u8]) -> Result<(), Failure> {
+fn text(bytes: &[u8], budget: &mut Budget) -> Result<(), Failure> {
     let value = std::str::from_utf8(bytes).map_err(|_| unsupported())?;
     value
         .split('\0')
-        .try_for_each(super::super::guard::check_text)
+        .try_for_each(|value| budget.check_text(value))
 }
 
 fn typed(header: &Header, mut bytes: &[u8]) -> Result<Any, Failure> {
@@ -203,7 +203,7 @@ impl<'a> Movie<'a> {
                     require(body[40..42] == [0, 1] && body[74..78] == [0, 24, 255, 255])?;
                     let length = body[42] as usize;
                     require(length <= 31 && body[43 + length..74].iter().all(|byte| *byte == 0))?;
-                    text(&body[43..43 + length])?;
+                    text(&body[43..43 + length], budget)?;
                     let mut visual = &body[..78];
                     mp4_atom::Visual::decode(&mut visual).map_err(|_| unsupported())?;
                     self.walk(*b"avc1", &body[78..], depth + 1, budget)?;
@@ -224,12 +224,12 @@ impl<'a> Movie<'a> {
                         .position(|byte| *byte == 0)
                         .ok_or_else(unsupported)?;
                     require(name[end..].iter().all(|byte| *byte == 0))?;
-                    text(&name[..end])?;
+                    text(&name[..end], budget)?;
                     typed(&header, body)?;
                 }
                 b"data" => {
                     require(word(body, 0)? == 1 && word(body, 4)? == 0)?;
-                    text(&body[8..])?;
+                    text(&body[8..], budget)?;
                 }
                 b"url " => require(body == [0, 0, 0, 1])?,
                 b"avcC" => self.avcc(&header, body)?,
@@ -558,7 +558,7 @@ fn inspect_sample_with_budget(
                 let mut nal = vec![0; size];
                 nal[0] = header[0];
                 reader.read_exact(&mut nal[1..])?;
-                inspect_sei(&nal)?;
+                inspect_sei_with_budget(&nal, budget)?;
             }
             9 => {
                 require(size == 2 && header[0] == 9)?;
@@ -572,7 +572,11 @@ fn inspect_sample_with_budget(
     require(image)
 }
 
+#[cfg(test)]
 fn inspect_sei(nal: &[u8]) -> Result<(), Failure> {
+    inspect_sei_with_budget(nal, &mut Budget::default())
+}
+fn inspect_sei_with_budget(nal: &[u8], budget: &mut Budget) -> Result<(), Failure> {
     use h264_reader::nal::sei::{HeaderType, SeiReader};
     require(nal.len() <= MAX_METADATA)?;
     let rbsp = h264_reader::rbsp::decode_nal(nal).map_err(|_| unsupported())?;
@@ -583,10 +587,10 @@ fn inspect_sei(nal: &[u8]) -> Result<(), Failure> {
         require(
             message.payload_type == HeaderType::UserDataUnregistered && message.payload.len() >= 17,
         )?;
-        super::super::guard::check_text(&String::from_utf8_lossy(&message.payload[..16]))?;
+        budget.check_text(&String::from_utf8_lossy(&message.payload[..16]))?;
         let value = &message.payload[16..];
         require(value.last() == Some(&0) && !value[..value.len() - 1].contains(&0))?;
-        text(&value[..value.len() - 1])?;
+        text(&value[..value.len() - 1], budget)?;
         count += 1;
         require(count <= 1024)?;
     }
@@ -686,6 +690,45 @@ mod tests {
     use super::*;
     use std::io::Cursor;
     const SAMPLE: &[u8] = include_bytes!("../../../tests/data/artifact-media/sample.mp4");
+    #[test]
+    fn policy_permissive_mp4_retains_sensitive_metadata_and_sei() {
+        for sei in [false, true] {
+            let mut bytes = SAMPLE.to_vec();
+            if sei {
+                let marker = b"x264 - core";
+                let offset = bytes
+                    .windows(marker.len())
+                    .position(|value| value == marker)
+                    .unwrap();
+                bytes[offset - 16..offset].copy_from_slice(b"person@test.test");
+            } else {
+                let offset = bytes.windows(4).position(|value| value == b"Lavf").unwrap();
+                bytes[offset..offset + 13].copy_from_slice(b"a@b.test     ");
+            }
+            let mut output = Vec::new();
+            assert!(super::super::copy_checked(
+                Cursor::new(&bytes),
+                &mut output,
+                "video/mp4",
+                bytes.len() as u64
+            )
+            .is_err());
+            let observed = super::super::copy_with_policy_with_budget(
+                Cursor::new(&bytes),
+                &mut output,
+                "video/mp4",
+                bytes.len() as u64,
+                &mut Budget::default(),
+                super::super::super::policy::CapturePolicy::AllowInsecure,
+            )
+            .unwrap();
+            assert_eq!(output, bytes);
+            assert_eq!(
+                observed.inspection.sensitivity,
+                super::super::super::policy::Sensitivity::Detected
+            );
+        }
+    }
     #[test]
     fn accepts_reviewed_video_profile() {
         inspect(&mut Cursor::new(SAMPLE)).unwrap();

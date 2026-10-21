@@ -806,6 +806,7 @@ content
 contention
 contents
 context
+contexts
 contiguous
 continuation
 continues
@@ -1111,6 +1112,7 @@ directly
 directories
 directory
 disable
+disables
 disagree
 disagreed
 disagreeing
@@ -2302,6 +2304,7 @@ manual
 many
 map
 mapped
+mappings
 maps
 march
 margin
@@ -3795,6 +3798,7 @@ state
 statement
 statements
 states
+static
 stating
 station
 stations
@@ -4268,6 +4272,7 @@ unicode
 uninteresting
 union
 unique
+uniquely
 uniqueness
 unit
 units

@@ -1,10 +1,11 @@
+use super::policy::{CapturePolicy, Inspection};
 mod schema;
 pub(super) mod vfs;
 
 use crate::failure::Failure;
 use libsqlite3_sys as ffi;
 use sha2::{Digest, Sha256};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::ffi::CString;
 use std::io;
 use std::ptr;
@@ -21,6 +22,7 @@ pub(super) fn test_engine_guard() -> Result<std::sync::MutexGuard<'static, ()>, 
 
 #[derive(Debug)]
 pub(super) struct Snapshot {
+    pub inspection: Inspection,
     pub source_bytes: u64,
     pub source_sha256: String,
     pub bytes: u64,
@@ -34,12 +36,23 @@ pub(super) struct WalSnapshot {
     pub wal_sha256: String,
 }
 
+#[cfg(test)]
 pub(super) fn normalize_wal(
     source: &cap_std::fs::File,
     wal: &cap_std::fs::File,
     shm: &cap_std::fs::File,
     target: &cap_std::fs::File,
     check_aux: impl Fn() -> Result<(), Failure>,
+) -> Result<WalSnapshot, Failure> {
+    normalize_wal_with_policy(source, wal, shm, target, check_aux, CapturePolicy::Strict)
+}
+pub(super) fn normalize_wal_with_policy(
+    source: &cap_std::fs::File,
+    wal: &cap_std::fs::File,
+    shm: &cap_std::fs::File,
+    target: &cap_std::fs::File,
+    check_aux: impl Fn() -> Result<(), Failure>,
+    policy: CapturePolicy,
 ) -> Result<WalSnapshot, Failure> {
     if target.metadata().map_err(|_| refused())?.len() != 0 {
         return Err(refused());
@@ -50,7 +63,7 @@ pub(super) fn normalize_wal(
     let wal = wal.try_clone().map_err(|_| refused())?.into_std();
     let shm = shm.try_clone().map_err(|_| refused())?.into_std();
     let target = target.try_clone().map_err(|_| refused())?.into_std();
-    let work = Work::new(MAX_STEPS);
+    let work = Work::with_policy(MAX_STEPS, policy);
     let registered = vfs::RegisteredVfs::new_wal(source, wal, shm, Some(target), MAX_BYTES)?;
     check_aux()?;
     let result = (|| {
@@ -80,25 +93,43 @@ fn refused() -> Failure {
     Failure::usage("SQLite snapshot does not satisfy the standalone profile.")
 }
 
-fn checked_text(value: &str) -> Result<(), Failure> {
+fn checked_text(value: &str, work: &Work) -> Result<(), Failure> {
     if value.len() > MAX_VALUE || value.contains('\0') {
         return Err(refused());
     }
-    super::guard::check_text(value).map_err(|_| refused())
+    let policy = work.inspection.borrow().policy;
+    match policy {
+        CapturePolicy::Strict => super::guard::check_text(value).map_err(|_| refused()),
+        CapturePolicy::AllowInsecure => {
+            let observed = super::guard::check_text_observed(value).map_err(|_| refused())?;
+            work.inspection.borrow_mut().merge(observed);
+            Ok(())
+        }
+    }
 }
 
 struct Work {
     start: Instant,
     steps: Cell<u64>,
     maximum: u64,
+    inspection: RefCell<Inspection>,
 }
 
 impl Work {
+    #[cfg(test)]
     fn new(maximum: u64) -> Self {
+        Self::with_policy(maximum, CapturePolicy::Strict)
+    }
+    fn with_policy(maximum: u64, policy: CapturePolicy) -> Self {
         Self {
             start: Instant::now(),
             steps: Cell::new(0),
             maximum,
+            inspection: RefCell::new(if policy == CapturePolicy::Strict {
+                Inspection::strict()
+            } else {
+                Inspection::permissive()
+            }),
         }
     }
     fn check(&self) -> Result<(), Failure> {
@@ -212,15 +243,15 @@ impl Statement {
     fn kind(&self, column: i32) -> i32 {
         unsafe { ffi::sqlite3_column_type(self.0, column) }
     }
-    fn integer(&self, column: i32) -> Result<i64, Failure> {
+    fn integer(&self, column: i32, work: &Work) -> Result<i64, Failure> {
         if self.kind(column) != ffi::SQLITE_INTEGER {
             return Err(refused());
         }
         let value = unsafe { ffi::sqlite3_column_int64(self.0, column) };
-        checked_text(&value.to_string())?;
+        checked_text(&value.to_string(), work)?;
         Ok(value)
     }
-    fn text(&self, column: i32) -> Result<&str, Failure> {
+    fn text(&self, column: i32, work: &Work) -> Result<&str, Failure> {
         if self.kind(column) != ffi::SQLITE_TEXT {
             return Err(refused());
         }
@@ -236,7 +267,7 @@ impl Statement {
         let value =
             std::str::from_utf8(unsafe { std::slice::from_raw_parts(pointer, bytes as usize) })
                 .map_err(|_| refused())?;
-        checked_text(value)?;
+        checked_text(value, work)?;
         Ok(value)
     }
 }
@@ -259,7 +290,7 @@ fn configure(
         // The destination is still empty. Select its construction journal mode
         // before defensive mode forbids changing it to OFF.
         let mut query = Statement::new(db, "PRAGMA journal_mode=OFF")?;
-        if !query.next(work)? || query.text(0)? != "off" || query.next(work)? {
+        if !query.next(work)? || query.text(0, work)? != "off" || query.next(work)? {
             return Err(refused());
         }
     }
@@ -316,7 +347,7 @@ fn configure(
     }
     if require_source_utf8 {
         let mut query = Statement::new(db, "PRAGMA encoding")?;
-        if !query.next(work)? || query.text(0)? != "UTF-8" || query.next(work)? {
+        if !query.next(work)? || query.text(0, work)? != "UTF-8" || query.next(work)? {
             return Err(refused());
         }
     }
@@ -417,7 +448,7 @@ fn scalar_integer(db: *mut ffi::sqlite3, query: &str, work: &Work) -> Result<i64
     if !statement.next(work)? {
         return Err(refused());
     }
-    let value = statement.integer(0)?;
+    let value = statement.integer(0, work)?;
     if statement.next(work)? {
         return Err(refused());
     }
@@ -426,7 +457,7 @@ fn scalar_integer(db: *mut ffi::sqlite3, query: &str, work: &Work) -> Result<i64
 
 fn integrity(db: *mut ffi::sqlite3, work: &Work) -> Result<(), Failure> {
     let mut query = Statement::new(db, "PRAGMA integrity_check")?;
-    if !query.next(work)? || query.text(0)? != "ok" || query.next(work)? {
+    if !query.next(work)? || query.text(0, work)? != "ok" || query.next(work)? {
         return Err(refused());
     }
     let mut query = Statement::new(db, "PRAGMA foreign_key_check")?;
@@ -454,9 +485,9 @@ fn model(db: *mut ffi::sqlite3, work: &Work) -> Result<Model, Failure> {
         if objects > 80 {
             return Err(refused());
         }
-        let kind = query.text(0)?;
-        let name = query.text(1)?;
-        let table_name = query.text(2)?;
+        let kind = query.text(0, work)?;
+        let name = query.text(1, work)?;
+        let table_name = query.text(2, work)?;
         if name.len() > 128 || table_name.len() > 128 {
             return Err(refused());
         }
@@ -466,7 +497,7 @@ fn model(db: *mut ffi::sqlite3, work: &Work) -> Result<Model, Failure> {
             }
             continue;
         }
-        let sql = query.text(3)?;
+        let sql = query.text(3, work)?;
         schema_bytes += sql.len();
         if schema_bytes > 65536 {
             return Err(refused());
@@ -480,7 +511,7 @@ fn model(db: *mut ffi::sqlite3, work: &Work) -> Result<Model, Failure> {
             if tables.len() == 16 {
                 return Err(refused());
             }
-            let table = schema::table(sql)?;
+            let table = schema::table_with_work(sql, work)?;
             if table.name != name || table_name != name {
                 return Err(refused());
             }
@@ -493,7 +524,7 @@ fn model(db: *mut ffi::sqlite3, work: &Work) -> Result<Model, Failure> {
             if indexes.len() == 32 {
                 return Err(refused());
             }
-            let index = schema::index(sql)?;
+            let index = schema::index_with_work(sql, work)?;
             if index.name != name || !index.table.eq_ignore_ascii_case(table_name) {
                 return Err(refused());
             }
@@ -528,13 +559,13 @@ fn metadata(db: *mut ffi::sqlite3, model: &Model, work: &Work) -> Result<(), Fai
         let mut position = 0;
         while query.next(work)? {
             let column = table.definitions.get(position).ok_or_else(refused)?;
-            if query.integer(0)? != position as i64
-                || query.text(1)? != column.name
-                || schema::type_name(query.text(2)?)? != column.declared_type
-                || query.integer(3)?
+            if query.integer(0, work)? != position as i64
+                || query.text(1, work)? != column.name
+                || schema::type_name_with_work(query.text(2, work)?, work)? != column.declared_type
+                || query.integer(3, work)?
                     != i64::from(column.not_null || (table.without_rowid && column.pk != 0))
-                || query.integer(5)? != column.pk as i64
-                || query.integer(6)? != 0
+                || query.integer(5, work)? != column.pk as i64
+                || query.integer(6, work)? != 0
             {
                 return Err(refused());
             }
@@ -542,7 +573,8 @@ fn metadata(db: *mut ffi::sqlite3, model: &Model, work: &Work) -> Result<(), Fai
                 None if query.kind(4) == ffi::SQLITE_NULL => {}
                 Some(expected)
                     if query.kind(4) == ffi::SQLITE_TEXT
-                        && schema::default_literal(query.text(4)?)? == *expected => {}
+                        && schema::default_literal_with_work(query.text(4, work)?, work)?
+                            == *expected => {}
                 _ => return Err(refused()),
             }
             position += 1;
@@ -555,12 +587,12 @@ fn metadata(db: *mut ffi::sqlite3, model: &Model, work: &Work) -> Result<(), Fai
             &format!("PRAGMA table_list({})", schema::quote(&table.name)),
         )?;
         if !query.next(work)?
-            || query.text(0)? != "main"
-            || query.text(1)? != table.name
-            || query.text(2)? != "table"
-            || query.integer(3)? != table.columns.len() as i64
-            || query.integer(4)? != i64::from(table.without_rowid)
-            || query.integer(5)? != 0
+            || query.text(0, work)? != "main"
+            || query.text(1, work)? != table.name
+            || query.text(2, work)? != "table"
+            || query.integer(3, work)? != table.columns.len() as i64
+            || query.integer(4, work)? != i64::from(table.without_rowid)
+            || query.integer(5, work)? != 0
             || query.next(work)?
         {
             return Err(refused());
@@ -575,11 +607,11 @@ fn metadata(db: *mut ffi::sqlite3, model: &Model, work: &Work) -> Result<(), Fai
             if index_count > 32 {
                 return Err(refused());
             }
-            query.integer(0)?;
-            let name = query.text(1)?;
-            query.integer(2)?;
-            let origin = query.text(3)?;
-            if !matches!(origin, "c" | "u" | "pk") || query.integer(4)? != 0 {
+            query.integer(0, work)?;
+            let name = query.text(1, work)?;
+            query.integer(2, work)?;
+            let origin = query.text(3, work)?;
+            if !matches!(origin, "c" | "u" | "pk") || query.integer(4, work)? != 0 {
                 return Err(refused());
             }
             if origin == "pk" {
@@ -595,14 +627,14 @@ fn metadata(db: *mut ffi::sqlite3, model: &Model, work: &Work) -> Result<(), Fai
             let mut info =
                 Statement::new(db, &format!("PRAGMA index_xinfo({})", schema::quote(name)))?;
             while info.next(work)? {
-                info.integer(0)?;
-                let cid = info.integer(1)?;
-                let key = info.integer(5)?;
+                info.integer(0, work)?;
+                let cid = info.integer(1, work)?;
+                let key = info.integer(5, work)?;
                 if cid < -1 || !matches!(key, 0 | 1) {
                     return Err(refused());
                 }
                 if cid >= 0 {
-                    let name = info.text(2)?;
+                    let name = info.text(2, work)?;
                     if table
                         .columns
                         .get(cid as usize)
@@ -613,7 +645,7 @@ fn metadata(db: *mut ffi::sqlite3, model: &Model, work: &Work) -> Result<(), Fai
                 } else if info.kind(2) != ffi::SQLITE_NULL {
                     return Err(refused());
                 }
-                if !matches!(info.integer(3)?, 0 | 1) || info.text(4)? != "BINARY" {
+                if !matches!(info.integer(3, work)?, 0 | 1) || info.text(4, work)? != "BINARY" {
                     return Err(refused());
                 }
             }
@@ -626,10 +658,10 @@ fn metadata(db: *mut ffi::sqlite3, model: &Model, work: &Work) -> Result<(), Fai
             &format!("PRAGMA foreign_key_list({})", schema::quote(&table.name)),
         )?;
         while query.next(work)? {
-            query.integer(0)?;
-            query.integer(1)?;
+            query.integer(0, work)?;
+            query.integer(1, work)?;
             for column in 2..8 {
-                query.text(column)?;
+                query.text(column, work)?;
             }
         }
     }
@@ -679,7 +711,7 @@ fn rows(
                         .as_ref()
                         .map(|insert| unsafe { ffi::sqlite3_bind_null(insert.0, column + 1) }),
                     ffi::SQLITE_INTEGER => {
-                        let value = select.integer(column)?;
+                        let value = select.integer(column, work)?;
                         insert.as_ref().map(|insert| unsafe {
                             ffi::sqlite3_bind_int64(insert.0, column + 1, value)
                         })
@@ -689,13 +721,13 @@ fn rows(
                         if !value.is_finite() {
                             return Err(refused());
                         }
-                        checked_text(&value.to_string())?;
+                        checked_text(&value.to_string(), work)?;
                         insert.as_ref().map(|insert| unsafe {
                             ffi::sqlite3_bind_double(insert.0, column + 1, value)
                         })
                     }
                     ffi::SQLITE_TEXT => {
-                        let value = select.text(column)?;
+                        let value = select.text(column, work)?;
                         insert.as_ref().map(|insert| unsafe {
                             ffi::sqlite3_bind_text(
                                 insert.0,
@@ -745,8 +777,8 @@ fn sequences(
         .transpose()?;
     let mut names = Vec::new();
     while select.next(work)? {
-        let name = select.text(0)?;
-        let value = select.integer(1)?;
+        let name = select.text(0, work)?;
+        let value = select.integer(1, work)?;
         if value < 0
             || names.iter().any(|prior| prior == name)
             || !model
@@ -825,12 +857,14 @@ fn verify_data(
                 }
                 let same = match kind {
                     ffi::SQLITE_NULL => true,
-                    ffi::SQLITE_INTEGER => before.integer(column)? == after.integer(column)?,
+                    ffi::SQLITE_INTEGER => {
+                        before.integer(column, work)? == after.integer(column, work)?
+                    }
                     ffi::SQLITE_FLOAT => unsafe {
                         ffi::sqlite3_column_double(before.0, column)
                             == ffi::sqlite3_column_double(after.0, column)
                     },
-                    ffi::SQLITE_TEXT => before.text(column)? == after.text(column)?,
+                    ffi::SQLITE_TEXT => before.text(column, work)? == after.text(column, work)?,
                     _ => false,
                 };
                 if !same {
@@ -842,11 +876,30 @@ fn verify_data(
     Ok(())
 }
 
+#[cfg(test)]
 fn operation<T>(
     source: &cap_std::fs::File,
     target: Option<&cap_std::fs::File>,
     check_aux: impl Fn() -> Result<(), Failure>,
     maximum: u64,
+    action: impl FnOnce(&vfs::RegisteredVfs, &Work) -> Result<T, Failure>,
+) -> Result<T, Failure> {
+    operation_with_policy(
+        source,
+        target,
+        check_aux,
+        maximum,
+        CapturePolicy::Strict,
+        action,
+    )
+}
+
+fn operation_with_policy<T>(
+    source: &cap_std::fs::File,
+    target: Option<&cap_std::fs::File>,
+    check_aux: impl Fn() -> Result<(), Failure>,
+    maximum: u64,
+    policy: CapturePolicy,
     action: impl FnOnce(&vfs::RegisteredVfs, &Work) -> Result<T, Failure>,
 ) -> Result<T, Failure> {
     let _engine = vfs::engine_guard()?;
@@ -857,7 +910,7 @@ fn operation<T>(
         .map(|file| file.try_clone().map(cap_std::fs::File::into_std))
         .transpose()
         .map_err(|_| refused())?;
-    let work = Work::new(maximum);
+    let work = Work::with_policy(maximum, policy);
     let registered = vfs::RegisteredVfs::new(source, target, MAX_BYTES)?;
     check_aux()?;
     let result = (|| {
@@ -872,19 +925,29 @@ fn operation<T>(
     })
 }
 
+#[cfg(test)]
 pub(super) fn normalize(
     source: &cap_std::fs::File,
     target: &cap_std::fs::File,
     check_aux: impl Fn() -> Result<(), Failure>,
 ) -> Result<Snapshot, Failure> {
+    normalize_with_policy(source, target, check_aux, CapturePolicy::Strict)
+}
+pub(super) fn normalize_with_policy(
+    source: &cap_std::fs::File,
+    target: &cap_std::fs::File,
+    check_aux: impl Fn() -> Result<(), Failure>,
+    policy: CapturePolicy,
+) -> Result<Snapshot, Failure> {
     if target.metadata().map_err(|_| refused())?.len() != 0 {
         return Err(refused());
     }
-    operation(
+    operation_with_policy(
         source,
         Some(target),
         check_aux,
         MAX_STEPS,
+        policy,
         normalize_registered,
     )
 }
@@ -928,6 +991,7 @@ fn normalize_registered(registered: &vfs::RegisteredVfs, work: &Work) -> Result<
     header(target)?;
     let (bytes, sha256) = hash(target, work)?;
     Ok(Snapshot {
+        inspection: *work.inspection.borrow(),
         source_bytes,
         source_sha256,
         bytes,
@@ -935,19 +999,37 @@ fn normalize_registered(registered: &vfs::RegisteredVfs, work: &Work) -> Result<
     })
 }
 
+#[cfg(test)]
 pub(super) fn inspect(
     source: &cap_std::fs::File,
     check_aux: impl Fn() -> Result<(), Failure>,
 ) -> Result<super::guard::Receipt, Failure> {
-    operation(source, None, check_aux, MAX_STEPS, |registered, work| {
-        let source = registered.source_connection()?;
-        configure(source.raw(), false, work, false)?;
-        let model = model(source.raw(), work)?;
-        rows(source.raw(), None, &model, work)?;
-        sequences(source.raw(), None, &model, work)?;
-        let (size, digest) = hash(registered.source(), work)?;
-        Ok(super::guard::Receipt { size, digest })
-    })
+    inspect_with_policy(source, check_aux, CapturePolicy::Strict).map(|observed| observed.receipt)
+}
+pub(super) fn inspect_with_policy(
+    source: &cap_std::fs::File,
+    check_aux: impl Fn() -> Result<(), Failure>,
+    policy: CapturePolicy,
+) -> Result<super::guard::ObservedReceipt, Failure> {
+    operation_with_policy(
+        source,
+        None,
+        check_aux,
+        MAX_STEPS,
+        policy,
+        |registered, work| {
+            let source = registered.source_connection()?;
+            configure(source.raw(), false, work, false)?;
+            let model = model(source.raw(), work)?;
+            rows(source.raw(), None, &model, work)?;
+            sequences(source.raw(), None, &model, work)?;
+            let (size, digest) = hash(registered.source(), work)?;
+            Ok(super::guard::ObservedReceipt {
+                receipt: super::guard::Receipt { size, digest },
+                inspection: *work.inspection.borrow(),
+            })
+        },
+    )
 }
 
 #[cfg(test)]
@@ -1002,6 +1084,37 @@ mod tests {
         (dir, source, target)
     }
 
+    #[test]
+    fn policy_permissive_sqlite_keeps_structural_value_and_encoding_guards() {
+        for sql in [
+            "CREATE TABLE item(id INTEGER PRIMARY KEY,value BLOB); INSERT INTO item VALUES(1,x'00')",
+            "CREATE TABLE item(id INTEGER PRIMARY KEY,value TEXT); INSERT INTO item VALUES(1,CAST(x'ff' AS TEXT))",
+            "CREATE TABLE item(id INTEGER PRIMARY KEY,value TEXT); INSERT INTO item VALUES(1,char(0))",
+            "CREATE TABLE item(id INTEGER PRIMARY KEY); CREATE VIEW hidden AS SELECT * FROM item",
+            "PRAGMA encoding='UTF-16'; CREATE TABLE item(id INTEGER PRIMARY KEY)",
+        ] {
+            let (_dir, source, target) = fixture(sql);
+            assert!(normalize_with_policy(&source, &target, || Ok(()), CapturePolicy::AllowInsecure).is_err());
+            assert_eq!(target.metadata().unwrap().len(), 0);
+        }
+    }
+    #[test]
+    fn policy_permissive_sqlite_preserves_live_sensitive_values_and_schema() {
+        let (_dir, source, target) = fixture("CREATE TABLE item(id INTEGER PRIMARY KEY,value TEXT DEFAULT 'person@example.com'); INSERT INTO item(id) VALUES(1)");
+        assert!(normalize(&source, &target, || Ok(())).is_err());
+        let snapshot =
+            normalize_with_policy(&source, &target, || Ok(()), CapturePolicy::AllowInsecure)
+                .unwrap();
+        assert_eq!(
+            snapshot.inspection.sensitivity,
+            super::super::policy::Sensitivity::Detected
+        );
+        let inspected =
+            inspect_with_policy(&target, || Ok(()), CapturePolicy::AllowInsecure).unwrap();
+        assert_eq!(inspected.receipt.digest, snapshot.sha256);
+        assert_eq!(inspected.inspection, snapshot.inspection);
+        assert!(inspect(&target, || Ok(())).is_err());
+    }
     #[test]
     fn logical_export_reopens_preserving_schema_data_and_counters() {
         let (dir, source, target) = fixture(
@@ -1188,6 +1301,7 @@ mod tests {
             start: Instant::now() - Duration::from_secs(3),
             steps: Cell::new(0),
             maximum: MAX_STEPS,
+            inspection: RefCell::new(Inspection::strict()),
         };
         assert!(expired.check().is_err());
     }

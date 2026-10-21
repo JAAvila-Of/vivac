@@ -4,6 +4,9 @@ mod files;
 mod guard;
 mod media;
 mod native;
+pub(crate) mod policy;
+#[cfg(test)]
+mod policy_budgets;
 pub(crate) mod preview;
 pub(crate) mod projection;
 mod runtime;
@@ -15,12 +18,14 @@ use crate::failure::Failure;
 use crate::model::Tree;
 use crate::ops::{Ctx, Whose};
 use crate::store::{self, Store};
+use policy::{CapturePolicy, Inspection};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
-const MAX_FILE_BYTES: u64 = 10 * 1024 * 1024;
+const MAX_FILE_BYTES: u64 = 100 * 1024 * 1024;
+const MAX_NATIVE_BYTES: u64 = 10 * 1024 * 1024;
 const MAX_PAGE_SIZE: usize = 100;
 
 pub(crate) fn normalize_description(value: &str) -> Result<&str, Failure> {
@@ -58,7 +63,7 @@ fn capabilities() -> Value {
     let bundles = bundle::SUPPORTED;
     let bundle_capabilities = if bundles {
         json!({"supported":true,"formats":["html","css","js","png","mp4"],"max_bytes":MAX_FILE_BYTES,"max_members":64,"max_manifest_bytes":65536,
-            "media": {"profile":"reviewed-media-v1", "review_required":true, "review_scope":"exact_member_digests", "review_evidence":"caller_attestation", "automatic_inspection":"structure_and_accessible_text", "visual_inspection":false, "audio_inspection":false,
+            "media": {"max_revision_bytes":MAX_NATIVE_BYTES,"profile":"reviewed-media-v1", "review_required":true, "review_scope":"exact_member_digests", "review_evidence":"caller_attestation", "automatic_inspection":"structure_and_accessible_text", "visual_inspection":false, "audio_inspection":false,
                 "png":{"profile":"static-png-v1","max_width":4096,"max_height":4096,"max_pixels":16777216,"max_decoded_bytes_per_revision":media::MAX_DECODED_BYTES,"interlaced":false,"max_metadata_bytes":65536,"max_chunks":1024,"unknown_chunks":"refused"},
                 "mp4":{"profile":"h264-video-v1","fragmented":false,"audio":false,"max_tracks":1,"max_seconds":300,"max_samples":8192,"max_samples_per_revision":media::MAX_VIDEO_SAMPLES,"max_nal_units_per_revision":media::MAX_NAL_UNITS,"nal_budget_scope":"sample_nal_units","max_width":4096,"max_height":4096,"max_pixels":16000000,"max_metadata_bytes":65536,"max_boxes":1024,"sequence_parameter_sets":1,"picture_parameter_sets":1,"slice_groups":false,"sei":"utf8_user_data_unregistered","unknown_boxes":"refused"}}})
     } else {
@@ -68,6 +73,7 @@ fn capabilities() -> Value {
         "operation": "capabilities",
         "schema_version": 1,
         "scope": "engine",
+        "capture_policy": {"configuration":"allow_insecure_artifacts", "default":false, "scope":"project", "supported_profiles_only":true, "findings_recorded":true},
         "description": {"required_for_capture": true, "max_characters": 280, "scope": "revision"},
         "delivery_types": {
             "file": {"supported": true, "formats": ["utf8_text"], "max_bytes": MAX_FILE_BYTES},
@@ -86,15 +92,15 @@ fn capabilities() -> Value {
                         "supported": bundles,
                         "selection": "database_source",
                         "existing_inputs": ["database", "wal", "shm"],
-                        "max_data_input_bytes": MAX_FILE_BYTES,
-                        "max_wal_input_bytes": MAX_FILE_BYTES,
+                        "max_data_input_bytes": MAX_NATIVE_BYTES,
+                        "max_wal_input_bytes": MAX_NATIVE_BYTES,
                         "shared_memory_contents_read": false,
                         "source_writes": false,
                         "retained_profile": bundle::SQLITE_PROFILE
                     }
                 },
                 "runtime": {"api":"initSqlJs", "generated_member":runtime::PATH, "known":[{"id":runtime::ID,"path":runtime::PATH,"bytes":runtime::BYTES,"sha256":runtime::SHA256}], "available_for_capture":[runtime::ID]},
-                "max_bytes": MAX_FILE_BYTES,
+                "max_bytes": MAX_NATIVE_BYTES,
                 "max_members": 64,
                 "max_manifest_bytes": 65536,
                 "max_name_bytes": 128,
@@ -166,6 +172,8 @@ struct Revision<'a> {
     profile: Option<&'a str>,
     runtime: Option<&'a str>,
     runtime_sha256: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    inspection: Option<&'a Inspection>,
 }
 
 impl<'a> Revision<'a> {
@@ -210,6 +218,19 @@ impl<'a> Revision<'a> {
                     object,
                     ..
                 }
+                | Body::ArtifactCapturedV3 {
+                    artifact,
+                    revision,
+                    operation,
+                    producer,
+                    previous,
+                    source,
+                    site,
+                    size,
+                    digest,
+                    object,
+                    ..
+                }
                 | Body::ArtifactBundleCapturedV2 {
                     artifact,
                     revision,
@@ -223,7 +244,33 @@ impl<'a> Revision<'a> {
                     object,
                     ..
                 }
+                | Body::ArtifactBundleCapturedV3 {
+                    artifact,
+                    revision,
+                    operation,
+                    producer,
+                    previous,
+                    source,
+                    site,
+                    size,
+                    digest,
+                    object,
+                    ..
+                }
                 | Body::ArtifactSqliteApplicationCaptured {
+                    artifact,
+                    revision,
+                    operation,
+                    producer,
+                    previous,
+                    source,
+                    site,
+                    size,
+                    digest,
+                    object,
+                    ..
+                }
+                | Body::ArtifactSqliteApplicationCapturedV2 {
                     artifact,
                     revision,
                     operation,
@@ -256,6 +303,13 @@ impl<'a> Revision<'a> {
                     member_count,
                     manifest_bytes,
                     ..
+                }
+                | Body::ArtifactBundleCapturedV3 {
+                    selection,
+                    entrypoint,
+                    member_count,
+                    manifest_bytes,
+                    ..
                 } => (
                     Some("bundle"),
                     Some(selection.as_str()),
@@ -266,6 +320,15 @@ impl<'a> Revision<'a> {
                     None,
                 ),
                 Body::ArtifactSqliteApplicationCaptured {
+                    selection,
+                    entrypoint,
+                    member_count,
+                    manifest_bytes,
+                    database,
+                    profile,
+                    ..
+                }
+                | Body::ArtifactSqliteApplicationCapturedV2 {
                     selection,
                     entrypoint,
                     member_count,
@@ -289,6 +352,11 @@ impl<'a> Revision<'a> {
                 runtime,
                 runtime_sha256,
                 ..
+            }
+            | Body::ArtifactSqliteApplicationCapturedV2 {
+                runtime,
+                runtime_sha256,
+                ..
             } => (Some(runtime.as_str()), Some(runtime_sha256.as_str())),
             _ => (None, None),
         };
@@ -301,8 +369,11 @@ impl<'a> Revision<'a> {
             source,
             description: match body {
                 Body::ArtifactCapturedV2 { description, .. }
+                | Body::ArtifactCapturedV3 { description, .. }
                 | Body::ArtifactBundleCapturedV2 { description, .. }
-                | Body::ArtifactSqliteApplicationCaptured { description, .. } => {
+                | Body::ArtifactBundleCapturedV3 { description, .. }
+                | Body::ArtifactSqliteApplicationCaptured { description, .. }
+                | Body::ArtifactSqliteApplicationCapturedV2 { description, .. } => {
                     Some(description.as_str())
                 }
                 _ => None,
@@ -321,7 +392,18 @@ impl<'a> Revision<'a> {
             profile,
             runtime,
             runtime_sha256,
+            inspection: match body {
+                Body::ArtifactCapturedV3 { inspection, .. }
+                | Body::ArtifactBundleCapturedV3 { inspection, .. }
+                | Body::ArtifactSqliteApplicationCapturedV2 { inspection, .. } => Some(inspection),
+                _ => None,
+            },
         })
+    }
+
+    fn capture_policy(&self) -> CapturePolicy {
+        self.inspection
+            .map_or(CapturePolicy::Strict, |inspection| inspection.policy)
     }
 
     fn is_bundle(&self) -> bool {
@@ -418,6 +500,17 @@ fn guard_source_reference(source: &str) -> Result<(), Failure> {
 }
 
 fn metadata(revision: &Revision) -> Result<(), Failure> {
+    if let Some(inspection) = revision.inspection {
+        inspection.validate()?;
+        if inspection.policy != CapturePolicy::AllowInsecure {
+            return Err(Failure::Model("Invalid artifact custody policy.".into()));
+        }
+    }
+    if revision.delivery_type == Some("sqlite_application") && revision.size > MAX_NATIVE_BYTES {
+        return Err(Failure::Model(
+            "SQLite application exceeds its 10 MiB budget.".into(),
+        ));
+    }
     if let Some(description) = revision.description {
         normalize_description(description)?;
     }
@@ -611,6 +704,7 @@ fn validate(args: &Args) -> Result<&str, Failure> {
     let operation = args.positional(0).unwrap_or("list");
     let allowed: &[&str] = match operation {
         "capabilities" => &["json"],
+        "policy" => &["json", "allow-insecure-artifacts"],
         "list" => &["json", "all", "from", "limit", "offset"],
         "show" => &["json", "revision", "limit", "offset"],
         "capture" => &["json", "from", "artifact", "previous", "operation", "bundle", "description"],
@@ -619,12 +713,12 @@ fn validate(args: &Args) -> Result<&str, Failure> {
         "restore" => &["json", "revision", "to", "orphan"],
         "preview" => &["json", "revision", "no-open"],
         _ => return Err(Failure::usage(
-            "Unknown artifact operation; use capabilities, list, show, capture, check, restore or preview.",
+            "Unknown artifact operation; use capabilities, list, show, capture, check, restore, policy or preview.",
         )),
     };
     if !args.unknown(allowed).is_empty()
         || !args
-            .extra(if operation == "list" || operation == "capabilities" {
+            .extra(if matches!(operation, "list" | "capabilities" | "policy") {
                 usize::from(args.positional(0).is_some())
             } else {
                 2
@@ -834,7 +928,152 @@ enum CapturePlan {
     Prepared(Box<Body>),
 }
 
+fn current_capture_policy(ctx: &Ctx) -> Result<CapturePolicy, Failure> {
+    let current = Store::open_strict(ctx.store.root.clone())?;
+    Ok(if current.config.allows_insecure_artifacts() {
+        CapturePolicy::AllowInsecure
+    } else {
+        CapturePolicy::Strict
+    })
+}
+
+fn artifact_policy(ctx: &Ctx, args: &Args) -> Result<Value, Failure> {
+    let mut current = Store::open_strict(ctx.store.root.clone())?;
+    let changed = if let Some(value) = args.opt("allow-insecure-artifacts") {
+        let enabled = match value {
+            "true" | "1" => true,
+            "false" | "0" => false,
+            _ => {
+                return Err(Failure::usage(
+                    "Artifact policy requires true, false, 1 or 0.",
+                ))
+            }
+        };
+        let lock = current.lock_for_write()?;
+        current.set_allow_insecure_artifacts(&lock, enabled)?;
+        true
+    } else {
+        false
+    };
+    Ok(
+        json!({"operation":"policy", "scope":"project", "allow_insecure_artifacts":current.config.allows_insecure_artifacts(), "changed":changed, "event_recorded":false, "approval_implied":false}),
+    )
+}
+
+fn with_inspection(body: Body, inspection: Option<Inspection>) -> Body {
+    let Some(inspection) = inspection else {
+        return body;
+    };
+    match body {
+        Body::ArtifactCapturedV2 {
+            artifact,
+            revision,
+            operation,
+            producer,
+            previous,
+            source,
+            description,
+            site,
+            size,
+            digest,
+            object,
+        } => Body::ArtifactCapturedV3 {
+            artifact,
+            revision,
+            operation,
+            producer,
+            previous,
+            source,
+            description,
+            site,
+            size,
+            digest,
+            object,
+            inspection,
+        },
+        Body::ArtifactBundleCapturedV2 {
+            artifact,
+            revision,
+            operation,
+            producer,
+            previous,
+            source,
+            description,
+            selection,
+            site,
+            size,
+            digest,
+            object,
+            entrypoint,
+            member_count,
+            manifest_bytes,
+        } => Body::ArtifactBundleCapturedV3 {
+            artifact,
+            revision,
+            operation,
+            producer,
+            previous,
+            source,
+            description,
+            selection,
+            site,
+            size,
+            digest,
+            object,
+            entrypoint,
+            member_count,
+            manifest_bytes,
+            inspection,
+        },
+        Body::ArtifactSqliteApplicationCaptured {
+            artifact,
+            revision,
+            operation,
+            producer,
+            previous,
+            source,
+            description,
+            selection,
+            site,
+            size,
+            digest,
+            object,
+            entrypoint,
+            member_count,
+            manifest_bytes,
+            database,
+            profile,
+            runtime,
+            runtime_sha256,
+        } => Body::ArtifactSqliteApplicationCapturedV2 {
+            artifact,
+            revision,
+            operation,
+            producer,
+            previous,
+            source,
+            description,
+            selection,
+            site,
+            size,
+            digest,
+            object,
+            entrypoint,
+            member_count,
+            manifest_bytes,
+            database,
+            profile,
+            runtime,
+            runtime_sha256,
+            inspection,
+        },
+        _ => unreachable!("only current capture receipts carry a new inspection"),
+    }
+}
+
 fn prepare_capture(ctx: &Ctx, args: &Args) -> Result<CapturePlan, Failure> {
+    // Resident contexts must not retain permission after the person disables it.
+    let policy = current_capture_policy(ctx)?;
     let description = normalize_description(required(args, "description")?)?;
     let is_bundle = args.has("bundle");
     let source = args
@@ -921,9 +1160,9 @@ fn prepare_capture(ctx: &Ctx, args: &Args) -> Result<CapturePlan, Failure> {
         ) {
             return Err(Failure::Redaction(Box::new(found)));
         }
-        let selection = bundle::load_selection(&ctx.lane_dir, source)?;
+        let selection = bundle::load_selection_with_policy(&ctx.lane_dir, source, policy)?;
         guard_source_reference(&selection.root)?;
-        bundle::validate_selection(&selection)?;
+        bundle::validate_selection_with_policy(&selection, policy)?;
         let delivery_type = if selection.database.is_some() {
             "sqlite_application"
         } else {
@@ -934,12 +1173,13 @@ fn prepare_capture(ctx: &Ctx, args: &Args) -> Result<CapturePlan, Failure> {
                 "An artifact identity cannot change its delivery type.".into(),
             ));
         }
-        let retained = bundle::capture(&ctx.lane_dir, &selection, &revision)?;
+        let retained = bundle::capture_with_policy(&ctx.lane_dir, &selection, &revision, policy)?;
+        let inspection = retained.inspection;
         if let Some(database) = selection.database {
             let runtime = retained.runtime.ok_or_else(|| {
                 Failure::Model("Missing generated product runtime metadata.".into())
             })?;
-            return Ok(CapturePlan::Prepared(Box::new(
+            return Ok(CapturePlan::Prepared(Box::new(with_inspection(
                 Body::ArtifactSqliteApplicationCaptured {
                     description: description.into(),
                     artifact,
@@ -961,7 +1201,8 @@ fn prepare_capture(ctx: &Ctx, args: &Args) -> Result<CapturePlan, Failure> {
                     runtime: runtime.id,
                     runtime_sha256: runtime.sha256,
                 },
-            )));
+                inspection,
+            ))));
         }
         let body = Body::ArtifactBundleCapturedV2 {
             description: description.into(),
@@ -980,10 +1221,13 @@ fn prepare_capture(ctx: &Ctx, args: &Args) -> Result<CapturePlan, Failure> {
             member_count: retained.members,
             manifest_bytes: retained.manifest_bytes,
         };
-        return Ok(CapturePlan::Prepared(Box::new(body)));
+        return Ok(CapturePlan::Prepared(Box::new(with_inspection(
+            body, inspection,
+        ))));
     }
     guard_source_reference(source)?;
-    let retained = files::capture(&ctx.lane_dir, source, &revision)?;
+    let (retained, inspection) =
+        files::capture_with_policy(&ctx.lane_dir, source, &revision, policy)?;
     let body = Body::ArtifactCapturedV2 {
         description: description.into(),
         artifact,
@@ -997,7 +1241,10 @@ fn prepare_capture(ctx: &Ctx, args: &Args) -> Result<CapturePlan, Failure> {
         digest: retained.digest,
         object: retained.object,
     };
-    Ok(CapturePlan::Prepared(Box::new(body)))
+    Ok(CapturePlan::Prepared(Box::new(with_inspection(
+        body,
+        (policy == CapturePolicy::AllowInsecure).then_some(inspection),
+    ))))
 }
 
 fn capture(ctx: &mut Ctx, args: &Args) -> Result<Value, Failure> {
@@ -1011,13 +1258,55 @@ fn commit_capture(ctx: &mut Ctx, body: Body) -> Result<Value, Failure> {
     commit_capture_with(ctx, body, |ctx, body| ctx.emit(vec![body]))
 }
 
+#[cfg(test)]
+std::thread_local! {
+    static CAPTURE_PROFILE: std::cell::RefCell<Option<(std::time::Instant, [std::time::Duration; 5], usize)>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn capture_profile_start() {
+    CAPTURE_PROFILE.with(|profile| {
+        if let Some((last, _, _)) = profile.borrow_mut().as_mut() {
+            *last = std::time::Instant::now();
+        }
+    });
+}
+
+#[cfg(test)]
+fn capture_profile_step(index: usize) {
+    CAPTURE_PROFILE.with(|profile| {
+        if let Some((last, phases, steps)) = profile.borrow_mut().as_mut() {
+            let now = std::time::Instant::now();
+            phases[index] += now.duration_since(*last);
+            *last = now;
+            *steps += 1;
+        }
+    });
+}
+
+#[cfg(test)]
+fn profile_capture<T>(f: impl FnOnce() -> T) -> (T, [std::time::Duration; 5], usize) {
+    CAPTURE_PROFILE.with(|profile| {
+        assert!(profile.borrow().is_none());
+        *profile.borrow_mut() =
+            Some((std::time::Instant::now(), [std::time::Duration::ZERO; 5], 0));
+    });
+    let result = f();
+    let (_, phases, steps) = CAPTURE_PROFILE.with(|profile| profile.borrow_mut().take().unwrap());
+    (result, phases, steps)
+}
+
 fn commit_capture_with(
     ctx: &mut Ctx,
     body: Body,
     emit: impl FnOnce(&mut Ctx, Body) -> Result<(), Failure>,
 ) -> Result<Value, Failure> {
     // File I/O is complete before the tree's lock is acquired.
+    #[cfg(test)]
+    capture_profile_start();
     ctx.lock_for_write()?;
+    #[cfg(test)]
+    capture_profile_step(0);
     if ctx.tree.broken_lines != 0 {
         return Err(Failure::Model("The event log became unreadable; retained bytes are unrecorded. Run artifacts check --store.".into()));
     }
@@ -1035,13 +1324,25 @@ fn commit_capture_with(
     }
     // Pending lanes are declared by emit; their event lane remains the authority.
     metadata(&entry)?;
+    #[cfg(test)]
+    capture_profile_step(1);
+    if entry.capture_policy() == CapturePolicy::AllowInsecure
+        && current_capture_policy(ctx)? != CapturePolicy::AllowInsecure
+    {
+        return Err(Failure::Model("Artifact capture policy changed; retained bytes are unrecorded. Run artifacts check --store.".into()));
+    }
+    #[cfg(test)]
+    capture_profile_step(2);
     drop(now);
     let revision = entry.revision.to_owned();
     emit(ctx, body)?;
+    #[cfg(test)]
+    capture_profile_step(3);
     let recorded = replay(&ctx.tree)?;
-    Ok(
-        json!({"operation":"capture","already_recorded":false,"delivery":describe(&ctx.tree,&recorded.get(&revision).expect("the emitted revision is recorded")),"source_snapshot":"not_proven","retention":"local_only"}),
-    )
+    let response = json!({"operation":"capture","already_recorded":false,"delivery":describe(&ctx.tree,&recorded.get(&revision).expect("the emitted revision is recorded")),"source_snapshot":"not_proven","retention":"local_only"});
+    #[cfg(test)]
+    capture_profile_step(4);
+    Ok(response)
 }
 
 fn checked(result: Result<Option<(String, u64)>, Failure>, revision: &Revision) -> Value {
@@ -1080,6 +1381,7 @@ fn bundle_manifest(
                 .as_ref()
                 .map(|database| database.profile.as_str())
         || revision.runtime != manifest.runtime.as_ref().map(|runtime| runtime.id.as_str())
+        || revision.inspection != manifest.inspection.as_ref()
         || revision.runtime_sha256
             != manifest
                 .runtime
@@ -1100,7 +1402,10 @@ fn retained_check(root: &Path, revision: &Revision) -> Value {
             Err(error) => json!({"status":"read_failed","exit_code":error.code()}),
         }
     } else {
-        checked(files::inspect_retained(root, revision.object), revision)
+        checked(
+            files::inspect_retained_with_inspection(root, revision.object, revision.inspection),
+            revision,
+        )
     }
 }
 
@@ -1134,7 +1439,7 @@ fn check(ctx: &Ctx, ledger: &Ledger, args: &Args) -> Result<(Value, i32), Failur
             let retained = retained_check(&ctx.lane_dir, &revision);
             failed |= retained["status"] != "matches";
             if (offset..page_end).contains(&index) {
-                recorded.push(json!({"artifact":revision.artifact,"revision":revision.revision,"site":revision.site,"local_site":local,"retained":retained}));
+                recorded.push(json!({"artifact":revision.artifact,"revision":revision.revision,"site":revision.site,"local_site":local,"retained":retained,"inspection":revision.inspection}));
             }
         }
         let mut orphans = Vec::new();
@@ -1223,7 +1528,7 @@ fn check(ctx: &Ctx, ledger: &Ledger, args: &Args) -> Result<(Value, i32), Failur
             json!({"status":"not_checked","bytes_checked":false})
         };
         let code = i32::from(retained["status"] != "matches" || source["status"] != "matches");
-        let value = json!({"operation":"check","artifact":revision.artifact,"revision":revision.revision,"source":source,"retained":retained,"checked_at":crate::clock::now_rfc3339(),"approval":"not_inferred"});
+        let value = json!({"operation":"check","artifact":revision.artifact,"revision":revision.revision,"source":source,"retained":retained,"checked_at":crate::clock::now_rfc3339(),"approval":"not_inferred","inspection":revision.inspection});
         return Ok((value, code));
     }
     let retained = retained_check(&ctx.lane_dir, &revision);
@@ -1234,7 +1539,7 @@ fn check(ctx: &Ctx, ledger: &Ledger, args: &Args) -> Result<(Value, i32), Failur
     };
     let code = i32::from(retained["status"] != "matches" || source["status"] != "matches");
     Ok((
-        json!({"operation":"check","artifact":revision.artifact,"revision":revision.revision,"source":source,"retained":retained,"checked_at":crate::clock::now_rfc3339(),"approval":"not_inferred"}),
+        json!({"operation":"check","artifact":revision.artifact,"revision":revision.revision,"source":source,"retained":retained,"checked_at":crate::clock::now_rfc3339(),"approval":"not_inferred","inspection":revision.inspection}),
         code,
     ))
 }
@@ -1248,7 +1553,7 @@ fn restore(ctx: &Ctx, ledger: &Ledger, args: &Args) -> Result<Value, Failure> {
             ));
         }
         if ctx.tree.artifact_history.iter().any(|(_, body)| {
-            matches!(body, Body::ArtifactCaptured { revision, .. } | Body::ArtifactBundleCaptured { revision, .. } | Body::ArtifactCapturedV2 { revision, .. } | Body::ArtifactBundleCapturedV2 { revision, .. } | Body::ArtifactSqliteApplicationCaptured { revision, .. } if revision == orphan)
+            matches!(body, Body::ArtifactCaptured { revision, .. } | Body::ArtifactBundleCaptured { revision, .. } | Body::ArtifactCapturedV2 { revision, .. } | Body::ArtifactBundleCapturedV2 { revision, .. } | Body::ArtifactSqliteApplicationCaptured { revision, .. } | Body::ArtifactCapturedV3 { revision, .. } | Body::ArtifactBundleCapturedV3 { revision, .. } | Body::ArtifactSqliteApplicationCapturedV2 { revision, .. } if revision == orphan)
         }) {
             return Err(Failure::usage(
                 "This object has a recorded revision; restore its artifact identity.",
@@ -1288,12 +1593,13 @@ fn restore(ctx: &Ctx, ledger: &Ledger, args: &Args) -> Result<Value, Failure> {
             to,
         )?;
     } else {
-        files::restore(
+        files::restore_with_inspection(
             &ctx.lane_dir,
             revision.object,
             revision.digest,
             revision.size,
             to,
+            revision.inspection,
         )?;
     }
     Ok(
@@ -1314,6 +1620,9 @@ fn execute(cwd: &Path, args: &Args) -> Result<(Value, i32), Failure> {
     let diagnose = (operation == "check" && args.has("store"))
         || (operation == "restore" && args.has("orphan"));
     let mut ctx = context(cwd, diagnose, operation == "capture")?;
+    if operation == "policy" {
+        return artifact_policy(&ctx, args).map(|value| (value, 0));
+    }
     if operation == "capture" {
         return capture(&mut ctx, args).map(|value| (value, 0));
     }
@@ -1445,6 +1754,9 @@ pub(crate) fn run_project_value(
         if operation == "capabilities" {
             return Ok((capabilities(), 0));
         }
+        if operation == "policy" {
+            return artifact_policy(project.current()?, args).map(|value| (value, 0));
+        }
         if operation == "capture" {
             let ctx = project.current()?;
             if ctx.tree.broken_lines != 0 {
@@ -1468,6 +1780,7 @@ pub(crate) fn run_project_value(
 pub(crate) use files::Download;
 
 pub(crate) struct PreviewRevision {
+    pub(crate) inspection: Option<Inspection>,
     pub(crate) reader: Download,
     pub(crate) bundle: Option<bundle::PreviewResources>,
     runtime: Option<runtime::Descriptor>,
@@ -1498,6 +1811,7 @@ fn preview_revision(ctx: &Ctx, selected: Revision<'_>) -> Result<PreviewRevision
             selected.size,
         )?;
         return Ok(PreviewRevision {
+            inspection: selected.inspection.copied(),
             reader,
             runtime: selected
                 .runtime
@@ -1524,13 +1838,15 @@ fn preview_revision(ctx: &Ctx, selected: Revision<'_>) -> Result<PreviewRevision
     {
         return Err(Failure::usage("Only retained HTML files can be previewed."));
     }
-    let reader = files::download(
+    let reader = files::download_with_inspection(
         &ctx.lane_dir,
         selected.object,
         selected.digest,
         selected.size,
+        selected.inspection,
     )?;
     Ok(PreviewRevision {
+        inspection: selected.inspection.copied(),
         reader,
         runtime: None,
         description: selected.description.map(str::to_owned),
@@ -1589,11 +1905,12 @@ pub(crate) fn project_download(
         })
         .map(str::to_owned)
         .unwrap_or_else(|| format!("{revision}.bin"));
-    let reader = files::download(
+    let reader = files::download_with_inspection(
         &ctx.lane_dir,
         selected.object,
         selected.digest,
         selected.size,
+        selected.inspection,
     )?;
     Ok((reader, filename))
 }
@@ -1614,6 +1931,7 @@ fn start_preview(cwd: &Path, args: &Args) -> Result<(preview::Preview, Value), F
             "producer": selected.producer,
             "digest": selected.digest,
             "size": selected.reader.size(),
+            "inspection": selected.inspection,
             "network_isolation": false,
             "approval_implied": false
     });
@@ -1662,16 +1980,23 @@ fn print(value: &Value) -> Result<(), Failure> {
         crate::output::outln!("Refused: {message}");
         return Ok(());
     }
+    if value["operation"] == "policy" {
+        crate::output::outln!(
+            "allow_insecure_artifacts: {}",
+            value["allow_insecure_artifacts"]
+        );
+        return Ok(());
+    }
     if value["operation"] == "capabilities" {
         let max_mib = MAX_FILE_BYTES / (1024 * 1024);
         if bundle::SUPPORTED {
             crate::output::outln!("Artifacts: UTF-8 files or complete selected HTML/CSS/JS bundles, up to {max_mib} MiB per revision; bundles up to 64 members and 64 KiB manifest; pages up to {MAX_PAGE_SIZE}.");
-            crate::output::outln!("Web media: selected static PNG and single-track H.264 MP4 without audio. Prior human review of exact media bytes is required; automatic inspection covers structure and accessible text, not visual content. Unknown structures are refused.");
+            crate::output::outln!("Web media: up to 10 MiB, selected static PNG and single-track H.264 MP4 without audio. Prior human review of exact media bytes is required by default; automatic inspection covers structure and accessible text, not visual content. Unknown structures are refused.");
         } else {
             crate::output::outln!("Artifacts: one UTF-8 text file per revision, up to {max_mib} MiB; pages up to {MAX_PAGE_SIZE}. Complete bundle custody is not supported on this platform.");
         }
         if value["delivery_types"]["sqlite_application"]["supported"] == true {
-            crate::output::outln!("SQLite applications: complete HTML/CSS/JS with one explicit database, retained as a standalone logical export. Vivac supplies a fixed JavaScript runtime and retains it with the revision; no backend is provided.");
+            crate::output::outln!("SQLite applications: up to 10 MiB, complete HTML/CSS/JS with one explicit database, retained as a standalone logical export. Vivac supplies a fixed JavaScript runtime and retains it with the revision; no backend is provided.");
             crate::output::outln!("SQLite WAL input requires the explicit readonly-wal-v1 source profile and existing database, WAL and SHM inputs. Native coordination locks protect the read; source files are not written or checkpointed.");
         } else {
             crate::output::outln!("SQLite application custody is not supported by this engine.");
@@ -1704,6 +2029,15 @@ fn print(value: &Value) -> Result<(), Failure> {
                     .unwrap_or("No description recorded.")
             );
         }
+        for entry in entries {
+            if !entry["inspection"].is_null() {
+                crate::output::outln!(
+                    "  Inspection for {}: {}. Custody does not imply approval.",
+                    entry["revision"],
+                    entry["inspection"]
+                );
+            }
+        }
         if entries.is_empty() {
             crate::output::outln!("  No artifacts in this scope. Use --all to list the project.");
         }
@@ -1730,6 +2064,7 @@ pub(crate) fn request_args(value: &Value) -> Result<Args, Failure> {
         orphan: Option<&'a str>,
         all: Option<bool>,
         store: Option<bool>,
+        allow_insecure_artifacts: Option<Value>,
         limit: Option<u64>,
         offset: Option<u64>,
     }
@@ -1747,6 +2082,7 @@ pub(crate) fn request_args(value: &Value) -> Result<Args, Failure> {
         "orphan",
         "all",
         "store",
+        "allow_insecure_artifacts",
         "limit",
         "offset",
     ];
@@ -1783,6 +2119,9 @@ pub(crate) fn request_args(value: &Value) -> Result<Args, Failure> {
         }
         match key.as_str() {
             "all" | "store" => !value.is_boolean(),
+            "allow_insecure_artifacts" => {
+                !(value.is_boolean() || matches!(value.as_u64(), Some(0 | 1)))
+            }
             "limit" | "offset" => value.as_u64().is_none(),
             _ => !value.is_string(),
         }
@@ -1812,12 +2151,17 @@ pub(crate) fn request_args(value: &Value) -> Result<Args, Failure> {
     }
     if (request.all.is_some() && request.operation != "list")
         || (request.store.is_some() && request.operation != "check")
+        || (request.allow_insecure_artifacts.is_some() && request.operation != "policy")
     {
         return Err(Failure::usage(
             "This artifact operation does not take that boolean argument.",
         ));
     }
     let mut flags = Vec::new();
+    if let Some(value) = request.allow_insecure_artifacts {
+        let enabled = value.as_bool().unwrap_or_else(|| value.as_u64() == Some(1));
+        flags.push(format!("--allow-insecure-artifacts={enabled}"));
+    }
     let operation = request.operation;
     let positional = if operation == "capture" {
         request.path.map(str::to_owned)
@@ -1992,6 +2336,61 @@ mod tests {
         project: crate::project::Project,
         root: PreviewRoot,
         delivery: Value,
+    }
+
+    #[test]
+    fn resident_capture_reads_current_consent_and_recovers_the_recorded_policy() {
+        use std::io::Read;
+        let mut fixture = PreviewFixture::new("mockup.html");
+        let set = |enabled| {
+            request_args(&json!({"operation":"policy", "allow_insecure_artifacts":enabled}))
+                .unwrap()
+        };
+        assert_eq!(run_project_value(&mut fixture.project, &set(true)).1, 0);
+        let content = b"<!doctype html><p>person@example.com</p>";
+        fs::write(fixture.root.join("mockup.html"), content).unwrap();
+        let capture_args = request_args(&json!({"operation":"capture", "path":"mockup.html", "from":fixture.delivery["producer"], "description":"Selected privacy policy fixture"})).unwrap();
+        let (captured, code) = run_project_value(&mut fixture.project, &capture_args);
+        assert_eq!(code, 0, "{captured}");
+        assert_eq!(
+            captured["delivery"]["inspection"]["sensitivity"],
+            "detected"
+        );
+        let query = request_args(&json!({"operation":"policy"})).unwrap();
+        assert_eq!(
+            run_project_value(&mut fixture.project, &query).0["allow_insecure_artifacts"],
+            true
+        );
+        assert_eq!(run_project_value(&mut fixture.project, &capture_args).1, 0);
+        assert_eq!(run_project_value(&mut fixture.project, &set(false)).1, 0);
+        assert_eq!(run_project_value(&mut fixture.project, &capture_args).1, 3);
+        let delivery = &captured["delivery"];
+        let artifact = delivery["artifact"].as_str().unwrap();
+        let revision = delivery["revision"].as_str().unwrap();
+        let mut preview = project_preview(&mut fixture.project, artifact, revision).unwrap();
+        assert_eq!(
+            preview.inspection.unwrap().sensitivity,
+            policy::Sensitivity::Detected
+        );
+        let mut bytes = Vec::new();
+        preview.reader.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, content);
+        let (mut download, _) = project_download(&mut fixture.project, artifact, revision).unwrap();
+        bytes.clear();
+        download.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, content);
+        for invalid in [json!(2), json!("true"), json!([])] {
+            assert!(request_args(
+                &json!({"operation":"policy", "allow_insecure_artifacts":invalid})
+            )
+            .is_err());
+        }
+        for valid in [json!(0), json!(1)] {
+            assert!(
+                request_args(&json!({"operation":"policy", "allow_insecure_artifacts":valid}))
+                    .is_ok()
+            );
+        }
     }
 
     struct PreviewRoot(std::path::PathBuf);
@@ -4904,6 +5303,230 @@ mod tests {
             durations[98] < std::time::Duration::from_millis(5),
             "complete SQLite application receipt commit exceeded its strict five millisecond p99 budget"
         );
+    }
+
+    #[test]
+    #[ignore = "Run explicitly in release mode to measure complete receipt commits."]
+    fn measure_permissive_receipt_commits_with_ten_thousand_prior_artifacts() {
+        super::policy_budgets::require_release_mode();
+        let (root, ctx, producer) = capture_commit_fixture();
+        drop(ctx);
+        let mut store = Store::open_strict(root.clone()).unwrap();
+        let bodies: Vec<_> = (0..10_000u64)
+            .map(|index| {
+                let revision = format!("{:026x}", 20_000 + index);
+                Body::ArtifactCapturedV2 {
+                    description: "Selected layout revision. "
+                        .repeat(12)
+                        .chars()
+                        .take(280)
+                        .collect(),
+                    artifact: format!("{:026x}", 10_000 + index),
+                    revision: revision.clone(),
+                    operation: format!("{:026x}", 30_000 + index),
+                    producer: producer.clone(),
+                    previous: None,
+                    source: "mockup.html".into(),
+                    site: format!("{:026x}", 2),
+                    size: 17,
+                    digest: "a".repeat(64),
+                    object: format!("objects/{revision}.blob"),
+                }
+            })
+            .collect();
+        let lock = store.lock_for_write().unwrap();
+        store
+            .append(&lock, crate::lane::MAIN, bodies, 0, false)
+            .unwrap();
+        store.set_allow_insecure_artifacts(&lock, true).unwrap();
+        drop(lock);
+        let mut ctx = Ctx::load_for_capture(store, Whose::Founding).unwrap();
+        let mut durations = Vec::with_capacity(100);
+        let mut peak = 0;
+        for index in 0..100u64 {
+            let revision = format!("{:026x}", 50_000 + index);
+            let body = Body::ArtifactCapturedV3 {
+                description: "Selected layout revision. "
+                    .repeat(12)
+                    .chars()
+                    .take(280)
+                    .collect(),
+                artifact: format!("{:026x}", 60_000 + index),
+                revision: revision.clone(),
+                operation: format!("{:026x}", 40_000 + index),
+                producer: producer.clone(),
+                previous: None,
+                source: "mockup.html".into(),
+                site: format!("{:026x}", 2),
+                size: 17,
+                digest: "a".repeat(64),
+                object: format!("objects/{revision}.blob"),
+                inspection: Inspection {
+                    sensitivity: policy::Sensitivity::Detected,
+                    ..Inspection::permissive()
+                },
+            };
+            let ((result, elapsed), allocated) = crate::test_alloc::measure(|| {
+                let started = std::time::Instant::now();
+                let result = commit_capture(&mut ctx, body);
+                ctx.unlock();
+                (result, started.elapsed())
+            });
+            result.unwrap();
+            durations.push(elapsed);
+            peak = peak.max(allocated);
+        }
+        durations.sort();
+        eprintln!("Permissive receipt commit: 100 samples, 10000 prior distinct artifacts, synthetic object metadata, 280-character descriptions; p50={:?}, p99={:?}, max={:?}, auxiliary_heap={peak} bytes. Includes fresh policy authority, lock, guards, config upgrade, append, response and unlock; excludes retained byte copying and context loading.", durations[49], durations[98], durations[99]);
+        assert!(durations[98] < std::time::Duration::from_millis(5));
+        assert!(peak <= 2 * 1024 * 1024);
+        drop(ctx);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[ignore = "Run explicitly in release mode to diagnose receipt commit phases."]
+    fn diagnose_permissive_receipt_commit_phases_with_ten_thousand_prior_artifacts() {
+        super::policy_budgets::require_release_mode();
+        let (root, ctx, producer) = capture_commit_fixture();
+        drop(ctx);
+        let mut store = Store::open_strict(root.clone()).unwrap();
+        let bodies: Vec<_> = (0..10_000u64)
+            .map(|index| {
+                let revision = format!("{:026x}", 20_000 + index);
+                Body::ArtifactCapturedV2 {
+                    description: "Selected layout revision. "
+                        .repeat(12)
+                        .chars()
+                        .take(280)
+                        .collect(),
+                    artifact: format!("{:026x}", 10_000 + index),
+                    revision: revision.clone(),
+                    operation: format!("{:026x}", 30_000 + index),
+                    producer: producer.clone(),
+                    previous: None,
+                    source: "mockup.html".into(),
+                    site: format!("{:026x}", 2),
+                    size: 17,
+                    digest: "a".repeat(64),
+                    object: format!("objects/{revision}.blob"),
+                }
+            })
+            .collect();
+        assert!(bodies.iter().all(|body| matches!(body, Body::ArtifactCapturedV2 { description, .. } if description.chars().count() == 280)));
+        let lock = store.lock_for_write().unwrap();
+        store
+            .append(&lock, crate::lane::MAIN, bodies, 0, false)
+            .unwrap();
+        store.set_allow_insecure_artifacts(&lock, true).unwrap();
+        drop(lock);
+        let mut ctx = Ctx::load_for_capture(store, Whose::Founding).unwrap();
+        assert_eq!(ctx.tree.artifact_history.len(), 10_000);
+        assert_eq!(ctx.store.config.version, store::ConfigVersion::Artifacts);
+        let mut samples = Vec::with_capacity(100);
+        for index in 0..100u64 {
+            let revision = format!("{:026x}", 50_000 + index);
+            let inspection = Inspection {
+                sensitivity: policy::Sensitivity::Detected,
+                ..Inspection::permissive()
+            };
+            let body = Body::ArtifactCapturedV3 {
+                description: "Selected layout revision. "
+                    .repeat(12)
+                    .chars()
+                    .take(280)
+                    .collect(),
+                artifact: format!("{:026x}", 60_000 + index),
+                revision: revision.clone(),
+                operation: format!("{:026x}", 40_000 + index),
+                producer: producer.clone(),
+                previous: None,
+                source: "mockup.html".into(),
+                site: format!("{:026x}", 2),
+                size: 17,
+                digest: "a".repeat(64),
+                object: format!("objects/{revision}.blob"),
+                inspection,
+            };
+            assert!(
+                matches!(&body, Body::ArtifactCapturedV3 { description, .. } if description.chars().count() == 280)
+            );
+            let ((result, total, phases, steps, append_phases, unlock), allocated) =
+                crate::test_alloc::measure(|| {
+                    let started = std::time::Instant::now();
+                    let ((result, append_phases), phases, steps) = profile_capture(|| {
+                        store::profile_append(|| commit_capture(&mut ctx, body))
+                    });
+                    let unlock_started = std::time::Instant::now();
+                    ctx.unlock();
+                    let unlock = unlock_started.elapsed();
+                    (
+                        result,
+                        started.elapsed(),
+                        phases,
+                        steps,
+                        append_phases,
+                        unlock,
+                    )
+                });
+            let response = result.unwrap();
+            assert_eq!(steps, 5);
+            assert_eq!(response["already_recorded"], false);
+            assert_eq!(response["delivery"]["revision"], revision);
+            assert_eq!(response["delivery"]["inspection"], json!(inspection));
+            assert_eq!(
+                ctx.store.config.version,
+                store::ConfigVersion::ArtifactPolicy
+            );
+            samples.push((index, total, phases, append_phases, unlock, allocated));
+        }
+        assert_eq!(samples.len(), 100);
+        assert_eq!(ctx.tree.artifact_history.len(), 10_100);
+        let (events, broken) = ctx.store.read_all().unwrap();
+        assert_eq!(broken, 0);
+        assert_eq!(events.len(), 10_101);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(&event.payload, Body::ArtifactCapturedV3 { .. }))
+                .count(),
+            100
+        );
+        assert_eq!(
+            Store::open_strict(root.clone()).unwrap().config.version,
+            store::ConfigVersion::ArtifactPolicy
+        );
+        for (index, total, phases, append_phases, unlock, allocated) in samples {
+            eprintln!(
+                "{}",
+                json!({
+                    "diagnostic": "permissive_receipt_commit",
+                    "sample_index": index,
+                    "first_config_upgrade": index == 0,
+                    "total_ns": total.as_nanos(),
+                    "capture_phases_ns": {
+                        "lock_refresh": phases[0].as_nanos(),
+                        "replay_plan_metadata": phases[1].as_nanos(),
+                        "fresh_policy_lookup": phases[2].as_nanos(),
+                        "drop_replay_clone_revision_emit": phases[3].as_nanos(),
+                        "replay_response": phases[4].as_nanos()
+                    },
+                    "append_phases_ns": {
+                        "ids_serialization": append_phases[0].as_nanos(),
+                        "open": append_phases[1].as_nanos(),
+                        "metadata": append_phases[2].as_nanos(),
+                        "seek_tail_read": append_phases[3].as_nanos(),
+                        "config_marker_write": append_phases[4].as_nanos(),
+                        "handle_close": append_phases[5].as_nanos()
+                    },
+                    "unlock_ns": unlock.as_nanos(),
+                    "auxiliary_heap_bytes": allocated,
+                    "budget_certification": false
+                })
+            );
+        }
+        drop(ctx);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

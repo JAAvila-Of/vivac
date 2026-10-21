@@ -16,6 +16,39 @@ Custody does not imply approval. Review the retained revision, then record a
 decision that references that exact revision. Later deliveries keep the same
 artifact identity and receive new revision identities.
 
+## Project capture policy
+
+Sensitive-content refusal and prior media privacy review are the defaults.
+The project can explicitly allow sensitive or unreviewed content within the
+existing supported profiles:
+
+```sh
+vivac artifacts policy --json
+vivac artifacts policy --allow-insecure-artifacts=true --json
+vivac artifacts policy --allow-insecure-artifacts=false --json
+```
+
+The project configuration field is `allow_insecure_artifacts`, default `false`.
+JSON booleans and the integers `0` and `1` are accepted; strings are not.
+The CLI also accepts `1` and `0`. MCP uses operation `policy` and the same
+configuration field. Enabling this option is an explicit project choice;
+an agent must not enable it merely to retry a refused delivery.
+
+Each permissive revision records `inspection`: the applied policy, sensitivity
+(`detected`, `not_detected` or `unknown`), coverage (`complete`, `partial` or
+`unavailable`) and `review_required`. These describe automatic inspection,
+not a safety guarantee. Media remain partially inspected because pixels and
+speech are not examined. Findings contain classifications, never extracted
+values. Custody and a privacy review do not approve the work.
+
+Disabling the option governs new captures. Existing revisions keep their
+recorded policy and remain verifiable, downloadable and recoverable.
+Descriptions, paths and other provenance metadata must still pass their guards.
+The option preserves format, UTF-8, path, identity, integrity, atomicity, resource
+and preview restrictions. It adds no formats and permits no automatic upload.
+Older engines must reject the new receipts rather than interpret them as strict
+captures. Historical receipts without this field have no recorded inspection report.
+
 ## Retain, review and recover a delivery
 
 Capture a project-relative UTF-8 file with an explicit producer:
@@ -207,9 +240,10 @@ members, with PNG and MP4 members under the reviewed-media profile below. Text
 members must be UTF-8. The entry point must be an HTML member. Paths use portable ASCII
 components; ambiguous names, case-insensitive collisions, traversal, Windows
 reserved names and links are refused. The complete revision, including its
-manifest, is limited to 10 MiB; the manifest is limited to 64 KiB. The operation's
+manifest, is limited to 100 MiB for text-only static bundles and 10 MiB for
+media or SQLite profiles; the manifest is limited to 64 KiB. The operation's
 auxiliary memory limit remains 2 MiB. Text members and manifest fields pass the
-complete sensitive-value guards. Media inspection follows the explicit profile
+complete sensitive-value guards under the default policy. Media inspection follows the explicit profile
 below; its visual review is separate from automatic text inspection.
 
 ### Reviewed web media
@@ -222,7 +256,7 @@ by Unity does not retain or run the Unity project.
 The `reviewed-media-v1` profile combines automatic inspection of supported
 structure and accessible textual metadata with prior human review of the exact
 visual content. The engine does not perform OCR, face recognition or speech
-inspection. The caller must obtain the person's explicit confirmation for the
+inspection. Under the default strict policy, the caller must obtain the person's explicit confirmation for the
 selected media before capture and declare each exact member path relative to
 the selected root and its SHA-256 in the selector:
 
@@ -244,14 +278,17 @@ the selected root and its SHA-256 in the selector:
 
 Replace the placeholders with actual lowercase 64-character digests. Capture
 computes and checks the bytes itself; supplied digests do not establish trusted
-content. Every selected medium needs exactly one matching declaration, with no
+content. Under the strict policy, every selected medium needs exactly one matching declaration, with no
 extra members. A changed medium needs a new review. An explicit privacy review
 can be reused for identical media digests in a later revision, even when its
 HTML, CSS or JavaScript changes. The retained manifest binds
 the declaration to those bytes. This is caller attestation, not authentication
 of the person, an automatic privacy verdict or approval of the work shown.
-Unsupported structure or recognized sensitive metadata still rejects capture;
-review cannot override that refusal.
+The permissive project policy allows the declaration to be absent and records
+the outstanding review. A supplied declaration must still match its exact bytes.
+Unsupported structure rejects capture under either policy. Recognized sensitive
+metadata rejects capture by default; a review declaration alone cannot override
+it. The explicit project policy described above records the finding instead.
 
 The initial PNG profile accepts static, noninterlaced images up to 4096 pixels
 on either side and 16,777,216 pixels total. It validates checksums, bounded text
@@ -328,7 +365,8 @@ Do not select a runtime file from the project. The engine generates the reserved
 `vivac-sqlite.js` member, including its complete license notices, from the fixed
 product dependency. Selected paths cannot collide with that name or use it as a
 directory, including case variants. Application files and database values retain
-their full sensitive-value checks. A caller-supplied name, origin or digest never
+their full sensitive-value inspection; refusal depends on the applied policy.
+A caller-supplied name, origin or digest never
 grants a file the product dependency's trust.
 
 The revision pins the runtime identity, size and SHA-256 digest. Check, preview
@@ -391,10 +429,12 @@ revision, including its manifest, also remains limited to 10 MiB.
 The retained database is a fresh **logical export**, not a byte-for-byte source
 copy. The manifest identifies `logical-export-v1` and records the source size
 and digest separately from the retained member's size and digest. This removes
-freed-page remnants; it does not excuse sensitive live data or metadata. Source
+freed-page remnants; live data and metadata still undergo full inspection. Source
 SQL is parsed into a supported schema and never executed as artifact code.
-All logical names, definitions, values and relevant internal metadata pass the
-existing sensitive-value guards, using actual cell storage classes.
+All logical names, definitions, values and relevant internal metadata undergo the
+existing sensitive-value inspection, using actual cell storage classes. Under the
+explicit permissive project policy, sensitive values are retained in the logical
+export and their classification is recorded without copying values into the log.
 
 Tables need a verified `INTEGER PRIMARY KEY` alias or an explicit primary key
 with `WITHOUT ROWID`. Supported keys, ordinary indexes, foreign keys, literal
@@ -415,9 +455,12 @@ VM steps and two seconds of work per operation.
 SQLite and Rust share the 2 MiB auxiliary-memory budget. Exceeding a limit
 refuses capture rather than truncating inspection.
 
-The receipt is `artifact.sqlite_application_captured`; its manifest uses
-schema version 3 for standalone inputs or version 5 for explicit WAL inputs.
-Both require a runtime descriptor; version 5 also requires the database source
+Under the strict policy, the receipt is `artifact.sqlite_application_captured`;
+its manifest uses schema version 3 for standalone inputs or version 5 for
+explicit WAL inputs. Permissive revisions use
+`artifact.sqlite_application_captured_v2` and manifest versions 7 and 8,
+respectively, with their required inspection report.
+All require a runtime descriptor; versions 5 and 8 also require the database source
 profile and WAL metadata. The experimental SQLite
 version 2 is refused without automatic migration. Older engines must refuse
 the receipt rather than treat the
@@ -436,9 +479,10 @@ for browser fetch; it does not need vivac to resolve its runtime.
 
 ## Limits and refusals
 
-File deliveries accept UTF-8 text up to 10 MiB. Invalid UTF-8,
-oversized input and content recognized by the sensitive-data guard are
-refused. Binary formats require an explicit supported delivery profile; the
+File deliveries accept UTF-8 text up to 100 MiB. Invalid UTF-8 and oversized
+input are refused under either policy. Recognized sensitive content is refused
+by default; the explicit project option retains it with its finding recorded.
+Binary formats require an explicit supported delivery profile; the
 single-file operation does not accept them. The guard examines the complete
 stream without truncating inspection; an oversized token is refused.
 No automated detector can certify that an arbitrary document contains no
@@ -447,7 +491,7 @@ sensitive information. Select files deliberately under the project's rules.
 The CLI capture loader folds the event log incrementally. It refuses a log
 line larger than 512 KiB, including its newline, or more than 1,024 JSON keys
 and values combined in one line. Containers count as values. These bounds apply
-to loading the log for CLI capture, separately from the selected file's 10 MiB
+to loading the log for CLI capture, separately from the selected file's 100 MiB
 limit. They do not truncate events or change ordinary indexed reads. Resident
 MCP uses the tree its server already loaded.
 
@@ -534,7 +578,8 @@ that limitation and keep the described delivery outside custody until the engine
 supports it.
 
 The engine retains a UTF-8 file or a complete selected frontend bundle per
-revision, up to 10 MiB including bundle metadata. A self-contained HTML file can
+revision, up to 100 MiB including static bundle metadata; media and SQLite
+profiles retain their 10 MiB bounds. A self-contained HTML file can
 include JavaScript and remain a single delivery. A contained SQLite database
 requires the explicit `sqlite_application` capability and profile described
 above, and explicitly reviewed PNG/MP4 members use the reviewed-media bundle

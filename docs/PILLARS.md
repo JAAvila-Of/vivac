@@ -139,8 +139,14 @@ are in the `README`.
 | semantic search | off the critical path | see the arbitration above |
 | explicitly retaining a selected supported delivery | **p99 < 500 ms at 1 MiB; < 2 s at 10 MiB** | a requested file operation, outside ordinary writes and hooks |
 
-Local artifact retention accepts at most 10 MiB per complete revision, including
-its manifest. Supported profiles are a UTF-8 file, a complete static frontend
+Local file and static-bundle retention accepts at most 100 MiB per complete
+revision, including its manifest. The existing 1 MiB and 10 MiB latency ceilings
+remain unchanged. Above 10 MiB, the p99 ceiling is 0.2 seconds per MiB: less than
+10 seconds at 50 MiB and less than 20 seconds at 100 MiB. These are explicit
+retention operations outside session hooks and ordinary writes; their receipts
+still meet the ordinary write budget. Native inspection and transformation
+profiles retain their separate 10 MiB size, work and memory bounds until accredited
+at larger sizes. Supported inspected profiles are a UTF-8 file, a complete static frontend
 bundle, and a complete frontend application with one explicitly selected
 SQLite database retained as a standalone database through a fresh logical export.
 SQLite source profiles are explicit: the default refuses auxiliary files; the
@@ -153,7 +159,7 @@ main-file header with an unset encoding is accepted only when that view is UTF-8
 This does not permit generic binary capture or retaining raw WAL files.
 An explicitly reviewed web-media bundle may additionally retain supported PNG
 and MP4 members. Its automatic inspection covers supported structure and
-accessible textual metadata; a person must review the exact visual and audible
+accessible textual metadata; under the default strict policy, a person must review the exact visual and audible
 content before capture. This profile does not imply automated image or speech
 inspection and does not enable native application projects.
 PNG inspection additionally limits the sum of expanded scanlines, including
@@ -292,10 +298,10 @@ tree is a map of where a system is weak and not yet fixed.**
 
 ### Hard guards
 
-- **Keys and secrets are never stored.** A redaction guard at write time: known
+- **Keys and secrets never enter the provenance tree.** A redaction guard at write time: known
   prefixes (`sqa_`, `squ_`, `ghp_`, `sk-`, `AKIA`, PEM headers) and high-entropy
   strings. In doubt, refuse the write and say why; never store in silence.
-- **The user's personal data is never stored.** No email, no name, no home path.
+- **The user's personal data never enters the provenance tree.** No email, no name, no home path.
 - **File contents never enter the provenance tree.** Only paths, references and prose about
   what was decided. It is the strongest guard of all because it bounds the blast
   radius of a leak to "what was being worked on", never to "what the code is".
@@ -313,18 +319,31 @@ tree is a map of where a system is weak and not yet fixed.**
   project store. The tree records identities, producer references, sizes and
   digests, never the delivered bytes or extracted fragments. Retention must
   inspect supported content for sensitive values before storing it, refuse
-  unsupported content, and stay outside ordinary tree writes and session hooks.
+  unsupported formats and structures, and stay outside ordinary tree writes and session hooks.
   Copies are excluded from Git by default and are never uploaded automatically.
   For the explicit reviewed-media profile, automatic inspection covers supported
   structure and accessible textual metadata. Prior human review covers the exact
   visual and audible content. The declaration is bound to the member digests; it
   is caller attestation, not proof of a person's identity or approval of the work.
-  Unknown structures and recognized sensitive metadata are refused even when a
-  review is declared. A changed member requires a new review. Media review never
-  authorizes generic binary custody or bypasses an automatic refusal.
+  In the default strict policy, unknown structures and recognized sensitive
+  metadata are refused even when a review is declared. A changed member requires
+  a new review. Media review alone never authorizes generic binary custody or
+  bypasses an automatic refusal.
   A retained revision is not an approval, a filesystem snapshot or a backup of
   the disk. Human review names the exact retained revision. Secret and personal
-  data guards still apply; local retention has no bypass or force option.
+  data guards still apply to the provenance log without exception.
+  A project may explicitly enable `allow_insecure_artifacts`, disabled by
+  default, to retain sensitive or unreviewed content in supported artifact profiles in
+  the separate local artifact store. The revision records the policy used,
+  detected sensitivity, inspection coverage and outstanding review without
+  recording sensitive values or extracted fragments in the provenance log.
+  Missing inspection is recorded as unknown or uninspected, never as proof that
+  content is safe. Disabling the setting governs new captures; it does not make
+  earlier revisions unreadable or erase their recorded risk. This exception
+  never disables path authority, source identity, integrity checks, atomic
+  publication, resource bounds or preview isolation. Custody does not promise a
+  new format or authorize uploading its bytes. UTF-8, supported structures and
+  bounded inspection remain mandatory under either policy.
   A product-supplied program component requires a reviewed, immutable catalog
   compiled into vivac, with a fixed identity, size, digest, license and supply
   recipe. Capture materializes only the product's own bytes. Artifact-controlled
@@ -338,8 +357,9 @@ tree is a map of where a system is weak and not yet fixed.**
   refused without downloading or falling back to another program.
   A database delivery declares its logical-export transformation before
   inspection. All schema definitions, names, values and relevant internal
-  metadata must pass inspection within the supported profile before a fresh
-  database is built; unsupported content rejects the complete revision. Raw
+  metadata must undergo full inspection within the supported profile before a fresh
+  database is built; unsupported structures reject the complete revision.
+  Sensitive-value refusal follows the recorded capture policy. Raw
   page copying does not establish that deleted sensitive data is absent.
   Source and retained digests identify their different bytes; extracted data
   and SQL never enter the provenance log.

@@ -3,6 +3,46 @@ use std::cell::RefCell;
 use std::fs;
 
 #[test]
+fn policy_permissive_wal_keeps_native_locks_and_preserves_source_bytes() {
+    let fixture = Fixture::new("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE item(id INTEGER PRIMARY KEY,value TEXT); INSERT INTO item VALUES(1,'person@example.com')");
+    let paths = [
+        fixture.writer.borrow().path(""),
+        fixture.writer.borrow().path("-wal"),
+        fixture.writer.borrow().path("-shm"),
+    ];
+    let before: Vec<_> = paths.iter().map(|path| fs::read(path).unwrap()).collect();
+    let calls = Cell::new(0);
+    let captured = normalize_wal_with_policy(
+        &fixture.source,
+        &fixture.wal,
+        &fixture.shm,
+        &fixture.target,
+        || {
+            calls.set(calls.get() + 1);
+            assert_eq!(
+                fixture.writer.borrow_mut().command("checkpoint"),
+                ffi::SQLITE_BUSY
+            );
+            Ok(())
+        },
+        CapturePolicy::AllowInsecure,
+    )
+    .unwrap();
+    assert_eq!(calls.get(), 2);
+    assert_eq!(
+        captured.snapshot.inspection.sensitivity,
+        super::super::policy::Sensitivity::Detected
+    );
+    let observed =
+        inspect_with_policy(&fixture.target, || Ok(()), CapturePolicy::AllowInsecure).unwrap();
+    assert_eq!(observed.inspection, captured.snapshot.inspection);
+    assert_eq!(observed.receipt.digest, captured.snapshot.sha256);
+    for (path, bytes) in paths.iter().zip(before) {
+        assert_eq!(fs::read(path).unwrap(), bytes);
+    }
+}
+
+#[test]
 fn logical_wal_export_retains_pending_commit_without_mutating_inputs() {
     let writer = RefCell::new(vfs::wal_tests::Writer::start());
     let path = writer.borrow().path("");
@@ -277,7 +317,7 @@ fn fresh_wal_schema_and_first_commit_export_before_any_checkpoint() {
         let work = Work::new(MAX_STEPS);
         let mut query = Statement::new(source.raw(), "PRAGMA encoding").unwrap();
         assert!(query.next(&work).unwrap());
-        assert_eq!(query.text(0).unwrap(), "UTF-8");
+        assert_eq!(query.text(0, &work).unwrap(), "UTF-8");
         drop(query);
         assert_eq!(
             scalar_integer(

@@ -1,3 +1,4 @@
+use super::policy::{CapturePolicy, Inspection};
 use super::{files, guard, native::Preparation, runtime};
 use crate::failure::Failure;
 use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
@@ -14,6 +15,7 @@ const MANIFEST: &str = ".vivac-delivery.json";
 pub(crate) const MAX_MEMBERS: usize = 64;
 pub(crate) const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
 const MAX_BYTES: u64 = 10 * 1024 * 1024;
+const MAX_STATIC_BYTES: u64 = 100 * 1024 * 1024;
 pub(crate) const SUPPORTED: bool = super::native::SUPPORTED;
 pub(crate) const SQLITE_PROFILE: &str = "sqlite-standalone-v1";
 pub(crate) const WAL_PROFILE: &str = "readonly-wal-v1";
@@ -116,6 +118,12 @@ pub(crate) struct Manifest {
     pub(crate) media_review: Option<MediaReview>,
     #[serde(skip)]
     pub(crate) manifest_bytes: u64,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_inspection"
+    )]
+    pub(crate) inspection: Option<Inspection>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -151,6 +159,11 @@ fn deserialize_retained_source<'de, D: serde::Deserializer<'de>>(
 ) -> Result<Option<RetainedDatabaseSource>, D::Error> {
     RetainedDatabaseSource::deserialize(deserializer).map(Some)
 }
+fn deserialize_inspection<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Inspection>, D::Error> {
+    Inspection::deserialize(deserializer).map(Some)
+}
 fn deserialize_database<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Option<DatabaseMetadata>, D::Error> {
@@ -171,6 +184,7 @@ pub(crate) struct Member {
 }
 pub(crate) struct RetainedBundle {
     pub(crate) retained: files::Retained,
+    pub(crate) inspection: Option<Inspection>,
     pub(crate) entrypoint: String,
     pub(crate) members: usize,
     pub(crate) manifest_bytes: u64,
@@ -210,15 +224,23 @@ fn media_type(path: &str) -> Result<&'static str, Failure> {
 fn is_media(media_type: &str) -> bool {
     matches!(media_type, "image/png" | "video/mp4")
 }
-fn validate_media_review(selection: &BundleSelection) -> Result<(), Failure> {
+fn validate_media_review(
+    selection: &BundleSelection,
+    policy: CapturePolicy,
+) -> Result<(), Failure> {
     let media: BTreeSet<_> = selection
         .members
         .iter()
         .filter(|path| media_type(path).is_ok_and(is_media))
         .map(String::as_str)
         .collect();
+    if !media.is_empty() && (selection.database.is_some() || selection.runtime.is_some()) {
+        return Err(Failure::usage(
+            "Media and SQLite application profiles cannot be mixed.",
+        ));
+    }
     let Some(review) = &selection.media_review else {
-        return if media.is_empty() {
+        return if media.is_empty() || policy == CapturePolicy::AllowInsecure {
             Ok(())
         } else {
             Err(Failure::usage(
@@ -317,14 +339,24 @@ fn source_root(root: &Dir, path: &str) -> Result<Dir, Failure> {
     }
     Ok(directory)
 }
+#[cfg(test)]
 pub(crate) fn validate_selection(selection: &BundleSelection) -> Result<(), Failure> {
-    validate_selection_shape(selection)?;
+    validate_selection_with_policy(selection, CapturePolicy::Strict)
+}
+pub(crate) fn validate_selection_with_policy(
+    selection: &BundleSelection,
+    policy: CapturePolicy,
+) -> Result<(), Failure> {
+    validate_selection_shape_with_policy(selection, policy)?;
     if let Some(id) = &selection.runtime {
         runtime::descriptor(id)?;
     }
     Ok(())
 }
-fn validate_selection_shape(selection: &BundleSelection) -> Result<(), Failure> {
+fn validate_selection_shape_with_policy(
+    selection: &BundleSelection,
+    policy: CapturePolicy,
+) -> Result<(), Failure> {
     if selection.root != "." {
         files::source_path(&selection.root)?;
     }
@@ -392,7 +424,7 @@ fn validate_selection_shape(selection: &BundleSelection) -> Result<(), Failure> 
         }
     }
     validate_directory_spelling(&selection.members)?;
-    validate_media_review(selection)?;
+    validate_media_review(selection, policy)?;
     for path in &folded {
         let mut prefix = String::new();
         let mut components = path.split('/').peekable();
@@ -478,12 +510,24 @@ fn validate_directory_spelling(paths: &[String]) -> Result<(), Failure> {
     }
     Ok(())
 }
+#[cfg(test)]
 pub(crate) fn load_selection(root: &Path, selector: &str) -> Result<BundleSelection, Failure> {
-    let selection = read_selection(root, selector)?;
-    validate_selection(&selection)?;
+    load_selection_with_policy(root, selector, CapturePolicy::Strict)
+}
+pub(crate) fn load_selection_with_policy(
+    root: &Path,
+    selector: &str,
+    policy: CapturePolicy,
+) -> Result<BundleSelection, Failure> {
+    let selection = read_selection_with_policy(root, selector, policy)?;
+    validate_selection_with_policy(&selection, policy)?;
     Ok(selection)
 }
-fn read_selection(root: &Path, selector: &str) -> Result<BundleSelection, Failure> {
+fn read_selection_with_policy(
+    root: &Path,
+    selector: &str,
+    policy: CapturePolicy,
+) -> Result<BundleSelection, Failure> {
     files::source_path(selector)?;
     let root = files::open_root(root)?;
     let mut source = Held::open(&root, selector)?;
@@ -492,7 +536,7 @@ fn read_selection(root: &Path, selector: &str) -> Result<BundleSelection, Failur
     guard::copy_checked(std::io::Cursor::new(&bytes), io::sink())?;
     let mut selection: BundleSelection = serde_json::from_slice(&bytes)
         .map_err(|_| Failure::usage("Invalid bundle selector JSON."))?;
-    validate_selection_shape(&selection)?;
+    validate_selection_shape_with_policy(&selection, policy)?;
     selection.requirements.shrink_to_fit();
     Ok(selection)
 }
@@ -896,6 +940,8 @@ struct BorrowedManifest<'a> {
     runtime: Option<&'a runtime::Descriptor>,
     #[serde(skip_serializing_if = "Option::is_none")]
     media_review: Option<&'a MediaReview>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    inspection: Option<&'a Inspection>,
 }
 fn write_manifest(root: &Dir, bytes: &[u8]) -> Result<(), Failure> {
     let mut output = new_member(root, MANIFEST)?;
@@ -904,13 +950,24 @@ fn write_manifest(root: &Dir, bytes: &[u8]) -> Result<(), Failure> {
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) fn capture(
     root: &Path,
     selection: &BundleSelection,
     revision: &str,
 ) -> Result<RetainedBundle, Failure> {
+    capture_with_policy(root, selection, revision, CapturePolicy::Strict)
+}
+pub(crate) fn capture_with_policy(
+    root: &Path,
+    selection: &BundleSelection,
+    revision: &str,
+    policy: CapturePolicy,
+) -> Result<RetainedBundle, Failure> {
     require_supported()?;
-    validate_selection(selection)?;
+    validate_selection_with_policy(selection, policy)?;
+    let limit = selection_byte_limit(selection);
+    let mut inspection = initial_inspection(policy);
     files::opaque_id(revision)?;
     let root_dir = files::open_root(root)?;
     super::native::require_controlled_parent(&root_dir)?;
@@ -929,8 +986,10 @@ pub(crate) fn capture(
         expected_bytes = expected_bytes
             .checked_add(source.before.len())
             .ok_or_else(|| Failure::usage("Bundle size overflow."))?;
-        if expected_bytes > MAX_BYTES {
-            return Err(Failure::usage("The complete bundle exceeds 10 MiB."));
+        if expected_bytes > limit {
+            return Err(Failure::usage(
+                "The complete bundle exceeds its profile byte budget.",
+            ));
         }
         sources.push(source);
     }
@@ -941,8 +1000,10 @@ pub(crate) fn capture(
         expected_bytes = expected_bytes
             .checked_add(auxiliary[0].before.len())
             .ok_or_else(|| Failure::usage("Bundle size overflow."))?;
-        if expected_bytes > MAX_BYTES {
-            return Err(Failure::usage("The complete source bundle exceeds 10 MiB."));
+        if expected_bytes > limit {
+            return Err(Failure::usage(
+                "The complete source bundle exceeds its profile byte budget.",
+            ));
         }
         let database = sources
             .iter()
@@ -961,7 +1022,15 @@ pub(crate) fn capture(
     let mut total = 0u64;
     let mut media_budget = super::media::Budget::default();
     let mut manifest = Manifest {
-        schema_version: if selection.database_source.is_some() {
+        schema_version: if policy == CapturePolicy::AllowInsecure {
+            if selection.database_source.is_some() {
+                8
+            } else if selection.database.is_some() {
+                7
+            } else {
+                6
+            }
+        } else if selection.database_source.is_some() {
             5
         } else if selection.media_review.is_some() {
             4
@@ -983,17 +1052,19 @@ pub(crate) fn capture(
         media_review: selection.media_review.clone(),
         members: Vec::with_capacity(sources.len()),
         manifest_bytes: 0,
+        inspection: None,
     };
     for source in &mut sources {
         let mut output = new_member(&preparation.dir, &source.path)?;
         let receipt = if selection.database.as_ref() == Some(&source.path) {
             let (snapshot, retained_source) = if let Some(selected) = &selection.database_source {
-                let captured = super::sqlite::normalize_wal(
+                let captured = super::sqlite::normalize_wal_with_policy(
                     &source.file,
                     &auxiliary[0].file,
                     &auxiliary[1].file,
                     &output,
                     || check_wal_sources(source, &auxiliary[0], &auxiliary[1]),
+                    policy,
                 )?;
                 (
                     captured.snapshot,
@@ -1009,14 +1080,20 @@ pub(crate) fn capture(
                 )
             } else {
                 (
-                    super::sqlite::normalize(&source.file, &output, || {
-                        check_auxiliary(&source.parent, &source.name)
-                    })?,
+                    super::sqlite::normalize_with_policy(
+                        &source.file,
+                        &output,
+                        || check_auxiliary(&source.parent, &source.name),
+                        policy,
+                    )?,
                     None,
                 )
             };
-            if snapshot.bytes > MAX_BYTES - total {
-                return Err(Failure::usage("The complete bundle exceeds 10 MiB."));
+            inspection.merge(snapshot.inspection);
+            if snapshot.bytes > limit - total {
+                return Err(Failure::usage(
+                    "The complete bundle exceeds its profile byte budget.",
+                ));
             }
             manifest.database = Some(DatabaseMetadata {
                 path: source.path.clone(),
@@ -1031,21 +1108,31 @@ pub(crate) fn capture(
                 size: snapshot.bytes,
             }
         } else if is_media(media_type(&source.path)?) {
-            let receipt = super::media::copy_checked_with_budget(
+            let observed = super::media::copy_with_policy_with_budget(
                 &mut source.file,
                 &mut output,
                 media_type(&source.path)?,
-                MAX_BYTES - total,
+                limit - total,
                 &mut media_budget,
+                policy,
             )?;
-            match_media_review(
+            inspection.merge(observed.inspection);
+            let receipt = observed.receipt;
+            match_media_review_with_policy(
                 selection.media_review.as_ref(),
                 &source.path,
                 &receipt.digest,
+                policy,
             )?;
             receipt
         } else {
-            guard::copy_checked_limit(&mut source.file, &mut output, MAX_BYTES - total)?
+            copy_text_with_policy(
+                &mut source.file,
+                &mut output,
+                limit - total,
+                policy,
+                &mut inspection,
+            )?
         };
         total += receipt.size;
         output.sync_all()?;
@@ -1058,8 +1145,10 @@ pub(crate) fn capture(
     }
     let mut prepared_runtime = None;
     if let Some(runtime) = &manifest.runtime {
-        if runtime.bytes > MAX_BYTES - total {
-            return Err(Failure::usage("The complete bundle exceeds 10 MiB."));
+        if runtime.bytes > limit - total {
+            return Err(Failure::usage(
+                "The complete bundle exceeds its profile byte budget.",
+            ));
         }
         let mut output = new_member(&preparation.dir, &runtime.path)?;
         let receipt = runtime::materialize(&runtime.id, &mut output)?;
@@ -1084,6 +1173,7 @@ pub(crate) fn capture(
     }
     recheck_all(&source_dir, &sources)?;
     recheck_all(&source_dir, &auxiliary)?;
+    manifest.inspection = (policy == CapturePolicy::AllowInsecure).then_some(inspection);
     let bytes = manifest_bytes(&BorrowedManifest {
         schema_version: manifest.schema_version,
         delivery_type: &manifest.delivery_type,
@@ -1093,13 +1183,14 @@ pub(crate) fn capture(
         database: manifest.database.as_ref(),
         runtime: manifest.runtime.as_ref(),
         media_review: manifest.media_review.as_ref(),
+        inspection: manifest.inspection.as_ref(),
     })?;
     total = total
         .checked_add(bytes.len() as u64)
         .ok_or_else(|| Failure::usage("Bundle size overflow."))?;
-    if total > MAX_BYTES {
+    if total > limit {
         return Err(Failure::usage(
-            "The complete bundle, including its manifest, exceeds 10 MiB.",
+            "The complete bundle, including its manifest, exceeds its profile byte budget.",
         ));
     }
     write_manifest(&preparation.dir, &bytes)?;
@@ -1128,6 +1219,7 @@ pub(crate) fn capture(
     files::check_git(root, &object, &preparation.name)?;
     preparation.publish(&objects, &format!("{revision}.bundle"))?;
     Ok(RetainedBundle {
+        inspection: manifest.inspection,
         retained: files::Retained {
             digest,
             size: total,
@@ -1139,6 +1231,86 @@ pub(crate) fn capture(
         manifest_bytes: bytes.len() as u64,
         runtime: manifest.runtime,
     })
+}
+
+fn initial_inspection(policy: CapturePolicy) -> Inspection {
+    if policy == CapturePolicy::Strict {
+        Inspection::strict()
+    } else {
+        Inspection::permissive()
+    }
+}
+fn selection_byte_limit(selection: &BundleSelection) -> u64 {
+    if selection.database.is_some()
+        || selection
+            .members
+            .iter()
+            .any(|path| media_type(path).is_ok_and(is_media))
+    {
+        MAX_BYTES
+    } else {
+        MAX_STATIC_BYTES
+    }
+}
+fn manifest_byte_limit(manifest: &Manifest) -> u64 {
+    if manifest.database.is_some()
+        || manifest
+            .members
+            .iter()
+            .any(|member| is_media(&member.media_type))
+    {
+        MAX_BYTES
+    } else {
+        MAX_STATIC_BYTES
+    }
+}
+fn manifest_policy(manifest: &Manifest) -> CapturePolicy {
+    manifest
+        .inspection
+        .map_or(CapturePolicy::Strict, |inspection| inspection.policy)
+}
+fn match_media_review_with_policy(
+    review: Option<&MediaReview>,
+    path: &str,
+    digest: &str,
+    policy: CapturePolicy,
+) -> Result<(), Failure> {
+    if review.is_none() && policy == CapturePolicy::AllowInsecure {
+        Ok(())
+    } else {
+        match_media_review(review, path, digest)
+    }
+}
+fn copy_text_with_policy(
+    reader: impl Read,
+    writer: impl Write,
+    limit: u64,
+    policy: CapturePolicy,
+    inspection: &mut Inspection,
+) -> Result<guard::Receipt, Failure> {
+    match policy {
+        CapturePolicy::Strict => guard::copy_checked_limit(reader, writer, limit),
+        CapturePolicy::AllowInsecure => {
+            let observed = guard::copy_observed(reader, writer, limit)?;
+            inspection.merge(observed.inspection);
+            Ok(observed.receipt)
+        }
+    }
+}
+fn copy_media_with_policy(
+    reader: impl Read + std::io::Seek,
+    writer: impl Write,
+    media_type: &str,
+    limit: u64,
+    budget: &mut super::media::Budget,
+    policy: CapturePolicy,
+    inspection: &mut Inspection,
+) -> Result<guard::Receipt, Failure> {
+    let observed = super::media::copy_with_policy_with_budget(
+        reader, writer, media_type, limit, budget, policy,
+    )?;
+    inspection.merge(observed.inspection);
+    Ok(observed.receipt)
 }
 
 fn validate_manifest(manifest: &Manifest) -> Result<(), Failure> {
@@ -1159,9 +1331,27 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), Failure> {
             | (3, "sqlite_application", Some(_), Some(_), None)
             | (5, "sqlite_application", Some(_), Some(_), None)
             | (4, "bundle", None, None, Some(_))
+            | (6, "bundle", None, None, _)
+            | (7 | 8, "sqlite_application", Some(_), Some(_), None)
     ) {
         return Err(Failure::usage("Unsupported bundle manifest schema."));
     }
+    let permissive = matches!(manifest.schema_version, 6..=8);
+    if permissive != manifest.inspection.is_some() {
+        return Err(Failure::usage(
+            "Bundle inspection metadata does not match its manifest schema.",
+        ));
+    }
+    if let Some(inspection) = manifest.inspection {
+        inspection.validate()?;
+        if inspection.policy != CapturePolicy::AllowInsecure {
+            return Err(Failure::usage(
+                "A permissive manifest requires an explicit permissive capture policy.",
+            ));
+        }
+    }
+    let policy = manifest_policy(manifest);
+    let limit = manifest_byte_limit(manifest);
     if let Some(runtime) = &manifest.runtime {
         runtime::validate(runtime)?;
         let mut generated = manifest
@@ -1212,7 +1402,7 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), Failure> {
         runtime: manifest.runtime.as_ref().map(|runtime| runtime.id.clone()),
         media_review: manifest.media_review.clone(),
     };
-    validate_selection_shape(&selection)?;
+    validate_selection_shape_with_policy(&selection, policy)?;
     if let Some(database) = &manifest.database {
         if database.profile != SQLITE_PROFILE
             || database.transformation != SQLITE_TRANSFORMATION
@@ -1222,7 +1412,7 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), Failure> {
         {
             return Err(Failure::usage("Invalid SQLite application metadata."));
         }
-        if (manifest.schema_version == 5) != database.source.is_some() {
+        if (matches!(manifest.schema_version, 5 | 8)) != database.source.is_some() {
             return Err(Failure::usage(
                 "SQLite source metadata does not match the manifest schema.",
             ));
@@ -1255,7 +1445,12 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), Failure> {
     let mut previous = None;
     for member in &manifest.members {
         if is_media(media_type(&member.path)?) {
-            match_media_review(manifest.media_review.as_ref(), &member.path, &member.sha256)?;
+            match_media_review_with_policy(
+                manifest.media_review.as_ref(),
+                &member.path,
+                &member.sha256,
+                policy,
+            )?;
         }
         if previous.is_some_and(|value: &str| value >= member.path.as_str()) {
             return Err(Failure::usage(
@@ -1263,7 +1458,7 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), Failure> {
             ));
         }
         previous = Some(member.path.as_str());
-        if member.bytes > MAX_BYTES
+        if member.bytes > limit
             || member.media_type != media_type(&member.path)?
             || member.sha256.len() != 64
             || !member
@@ -1303,7 +1498,7 @@ fn load_manifest(
             sum.checked_add(member.bytes)
         })
         .ok_or_else(|| Failure::usage("Bundle size overflow."))?;
-    if total > MAX_BYTES || expected.is_some_and(|(_, size)| size != total) {
+    if total > manifest_byte_limit(&manifest) || expected.is_some_and(|(_, size)| size != total) {
         return Err(Failure::Model(
             "The saved bundle does not match the revision size limit or total.".into(),
         ));
@@ -1382,6 +1577,8 @@ fn verify_directory_inner(
     mut prepared_runtime: Option<File>,
 ) -> Result<Manifest, Failure> {
     let (manifest, bytes, manifest_source) = load_manifest(root, expected)?;
+    let policy = manifest_policy(&manifest);
+    let mut inspection = initial_inspection(policy);
     if prepared_runtime.is_some() && manifest.runtime.is_none() {
         return Err(Failure::usage(
             "A prepared product runtime requires matching catalog metadata.",
@@ -1428,9 +1625,13 @@ fn verify_directory_inner(
             .as_ref()
             .is_some_and(|database| database.path == member.path);
         if database {
-            let inspected = super::sqlite::inspect(&source.file, || {
-                check_auxiliary(&source.parent, &source.name)
-            })?;
+            let observed = super::sqlite::inspect_with_policy(
+                &source.file,
+                || check_auxiliary(&source.parent, &source.name),
+                policy,
+            )?;
+            inspection.merge(observed.inspection);
+            let inspected = observed.receipt;
             files::matching(
                 &inspected.digest,
                 inspected.size,
@@ -1453,15 +1654,23 @@ fn verify_directory_inner(
             let receipt = if binary {
                 copy_binary_limit(&source.file, &mut output, member.bytes)?
             } else if is_media(&member.media_type) {
-                super::media::copy_checked_with_budget(
+                copy_media_with_policy(
                     &mut source.file,
                     &mut output,
                     &member.media_type,
                     member.bytes,
                     &mut media_budget,
+                    policy,
+                    &mut inspection,
                 )?
             } else {
-                guard::copy_checked_limit(&mut source.file, &mut output, member.bytes)?
+                copy_text_with_policy(
+                    &mut source.file,
+                    &mut output,
+                    member.bytes,
+                    policy,
+                    &mut inspection,
+                )?
             };
             output.sync_all()?;
             receipt
@@ -1469,25 +1678,42 @@ fn verify_directory_inner(
             if binary {
                 copy_binary_limit(&source.file, io::sink(), member.bytes)?
             } else if is_media(&member.media_type) {
-                super::media::copy_checked_with_budget(
+                copy_media_with_policy(
                     &mut source.file,
                     io::sink(),
                     &member.media_type,
                     member.bytes,
                     &mut media_budget,
+                    policy,
+                    &mut inspection,
                 )?
             } else {
-                guard::copy_checked_limit(&mut source.file, io::sink(), member.bytes)?
+                copy_text_with_policy(
+                    &mut source.file,
+                    io::sink(),
+                    member.bytes,
+                    policy,
+                    &mut inspection,
+                )?
             }
         };
         files::matching(&receipt.digest, receipt.size, &member.sha256, member.bytes)?;
         if is_media(&member.media_type) {
-            match_media_review(
+            match_media_review_with_policy(
                 manifest.media_review.as_ref(),
                 &member.path,
                 &receipt.digest,
+                policy,
             )?;
         }
+    }
+    if manifest
+        .inspection
+        .is_some_and(|expected| expected != inspection)
+    {
+        return Err(Failure::Model(
+            "Retained bundle inspection does not match its saved classification.".into(),
+        ));
     }
     recheck_all(root, &sources)?;
     manifest_source.recheck(root)?;
@@ -1658,13 +1884,16 @@ pub(crate) fn source_check(
     selector: Option<&str>,
     manifest: &Manifest,
 ) -> Value {
+    let policy = manifest_policy(manifest);
+    let limit = manifest_byte_limit(manifest);
+    let mut inspection = initial_inspection(policy);
     let result = (|| {
         let runtime_matches = if let Some(runtime) = &manifest.runtime {
             let selector =
                 selector.ok_or_else(|| Failure::usage("Missing bundle selection reference."))?;
             // Compare the selected identity without consulting capture availability
             // or opening a project file at the generated member's path.
-            let selected = read_selection(root, selector)?;
+            let selected = read_selection_with_policy(root, selector, policy)?;
             let expected_source = manifest
                 .database
                 .as_ref()
@@ -1721,16 +1950,24 @@ pub(crate) fn source_check(
                     auxiliary.extend([wal, shm]);
                 }
             } else if is_media(&member.media_type) {
-                let receipt = super::media::copy_checked_with_budget(
+                let receipt = copy_media_with_policy(
                     &mut held.file,
                     io::sink(),
                     &member.media_type,
                     MAX_BYTES,
                     &mut media_budget,
+                    policy,
+                    &mut inspection,
                 )?;
                 matches &= receipt.digest == member.sha256 && receipt.size == member.bytes;
             } else {
-                let receipt = guard::copy_checked_limit(&mut held.file, io::sink(), MAX_BYTES)?;
+                let receipt = copy_text_with_policy(
+                    &mut held.file,
+                    io::sink(),
+                    limit,
+                    policy,
+                    &mut inspection,
+                )?;
                 matches &= receipt.digest == member.sha256 && receipt.size == member.bytes;
             }
         }
@@ -1756,6 +1993,203 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
 
+    #[test]
+    fn policy_permissive_manifest_schemas_reject_missing_or_incompatible_inspection() {
+        let inspection = serde_json::to_value(Inspection::permissive()).unwrap();
+        let static_manifest = json!({
+            "schema_version":6,"delivery_type":"bundle","entrypoint":"index.html","requirements":[],
+            "inspection":inspection,
+            "members":[{"path":"index.html","bytes":1,"sha256":"d".repeat(64),"media_type":"text/html"}]
+        });
+        let database = json!({
+            "schema_version":7,"delivery_type":"sqlite_application","entrypoint":"index.html","requirements":[],
+            "inspection":inspection,"runtime":runtime::descriptor(runtime::ID).unwrap(),
+            "database":{"path":"data.sqlite","profile":SQLITE_PROFILE,"transformation":SQLITE_TRANSFORMATION,"source_bytes":512,"source_sha256":"a".repeat(64)},
+            "members":[{"path":"data.sqlite","bytes":512,"sha256":"c".repeat(64),"media_type":SQLITE_MEDIA_TYPE},
+            {"path":"index.html","bytes":1,"sha256":"d".repeat(64),"media_type":"text/html"},
+            {"path":runtime::PATH,"bytes":runtime::BYTES,"sha256":runtime::SHA256,"media_type":"text/javascript"}]
+        });
+        let mut wal = database.clone();
+        wal["schema_version"] = json!(8);
+        wal["database"]["source"] = json!({"profile":WAL_PROFILE,"wal":{"path":"data.sqlite-wal","bytes":32,"sha256":"b".repeat(64)},"shm":"data.sqlite-shm"});
+        let valid = |value: &Value| {
+            serde_json::from_value::<Manifest>(value.clone())
+                .is_ok_and(|manifest| validate_manifest(&manifest).is_ok())
+        };
+        for original in [&static_manifest, &database, &wal] {
+            assert!(valid(original));
+            let mut missing = original.clone();
+            missing.as_object_mut().unwrap().remove("inspection");
+            assert!(!valid(&missing));
+            for report in [
+                Value::Null,
+                serde_json::to_value(Inspection::strict()).unwrap(),
+                json!({}),
+            ] {
+                let mut case = original.clone();
+                case["inspection"] = report;
+                assert!(!valid(&case));
+            }
+            for (field, replacement) in [
+                ("policy", json!("future_policy")),
+                ("coverage", json!("future_coverage")),
+                ("sensitivity", json!("future_sensitivity")),
+                ("review_required", json!(false)),
+                ("extra", json!(true)),
+                ("sensitivity", json!("unknown")),
+            ] {
+                let mut case = original.clone();
+                case["inspection"][field] = replacement;
+                assert!(!valid(&case));
+            }
+            let mut future = original.clone();
+            future["schema_version"] = json!(9);
+            assert!(!valid(&future));
+            let mut legacy = original.clone();
+            // Explicit mappings retain the exact pre-policy profile identity.
+            legacy["schema_version"] = json!(match original["schema_version"].as_u64().unwrap() {
+                6 => 1,
+                7 => 3,
+                8 => 5,
+                _ => unreachable!(),
+            });
+            legacy.as_object_mut().unwrap().remove("inspection");
+            assert!(valid(&legacy));
+            legacy["inspection"] = Value::Null;
+            assert!(!valid(&legacy));
+            legacy["inspection"] = inspection.clone();
+            assert!(!valid(&legacy));
+        }
+        let mut mixed = database.clone();
+        mixed["schema_version"] = json!(6);
+        assert!(!valid(&mixed));
+        mixed = wal.clone();
+        mixed["schema_version"] = json!(7);
+        assert!(!valid(&mixed));
+        mixed = database;
+        mixed["schema_version"] = json!(8);
+        assert!(!valid(&mixed));
+    }
+
+    #[test]
+    fn policy_permissive_media_still_requires_matching_declared_review_digests() {
+        let (root, mut selection) = fixture();
+        let bytes = include_bytes!("../../tests/data/artifact-media/sample.png");
+        fs::write(root.0.join("app/frame.png"), bytes).unwrap();
+        selection.members.push("frame.png".into());
+        selection.media_review = Some(MediaReview {
+            profile: "reviewed-media-v1".into(),
+            members: vec![ReviewedMember {
+                path: "frame.png".into(),
+                sha256: "a".repeat(64),
+            }],
+        });
+        assert!(capture_with_policy(
+            &root.0,
+            &selection,
+            &crate::id::ulid(),
+            CapturePolicy::AllowInsecure
+        )
+        .is_err());
+        selection.media_review.as_mut().unwrap().members[0].sha256 =
+            format!("{:x}", Sha256::digest(bytes));
+        let saved = capture_with_policy(
+            &root.0,
+            &selection,
+            &crate::id::ulid(),
+            CapturePolicy::AllowInsecure,
+        )
+        .unwrap();
+        let manifest = check(
+            &root.0,
+            &saved.retained.object,
+            &saved.retained.digest,
+            saved.retained.size,
+        )
+        .unwrap();
+        assert_eq!(manifest.schema_version, 6);
+        assert!(manifest.media_review.is_some());
+        assert_eq!(
+            manifest.inspection.unwrap().coverage,
+            super::super::policy::Coverage::Partial
+        );
+        let mut forged = serde_json::to_value(&manifest).unwrap();
+        forged["media_review"]["members"][0]["sha256"] = json!("a".repeat(64));
+        assert!(validate_manifest(&serde_json::from_value(forged).unwrap()).is_err());
+    }
+
+    #[test]
+    fn policy_permissive_bundle_preserves_sensitive_bytes_and_rechecks_classification() {
+        let (root, selection) = fixture();
+        let bytes = b"<p>person@example.com</p>";
+        fs::write(root.0.join("app/index.html"), bytes).unwrap();
+        let saved = capture_with_policy(
+            &root.0,
+            &selection,
+            &crate::id::ulid(),
+            CapturePolicy::AllowInsecure,
+        )
+        .unwrap();
+        let report = saved.inspection.unwrap();
+        assert_eq!(
+            report.sensitivity,
+            super::super::policy::Sensitivity::Detected
+        );
+        let manifest = check(
+            &root.0,
+            &saved.retained.object,
+            &saved.retained.digest,
+            saved.retained.size,
+        )
+        .unwrap();
+        assert_eq!(manifest.schema_version, 6);
+        assert_eq!(manifest.inspection, Some(report));
+        restore(
+            &root.0,
+            &saved.retained.object,
+            &saved.retained.digest,
+            saved.retained.size,
+            "restored",
+        )
+        .unwrap();
+        assert_eq!(fs::read(root.0.join("restored/index.html")).unwrap(), bytes);
+        assert_eq!(
+            source_check(&root.0, "app", None, &manifest)["status"],
+            "matches"
+        );
+        let path = root
+            .0
+            .join(".vivac-artifacts")
+            .join(&saved.retained.object)
+            .join(MANIFEST);
+        let mut forged = manifest;
+        forged.inspection.as_mut().unwrap().sensitivity =
+            super::super::policy::Sensitivity::NotDetected;
+        let original_manifest_size = forged.manifest_bytes;
+        let forged_bytes = manifest_bytes(&forged).unwrap();
+        let total = saved.retained.size - original_manifest_size + forged_bytes.len() as u64;
+        let digest = format!("{:x}", Sha256::digest(&forged_bytes));
+        fs::write(path, forged_bytes).unwrap();
+        assert!(check(&root.0, &saved.retained.object, &digest, total).is_err());
+        assert!(preview(&root.0, &saved.retained.object, &digest, total).is_err());
+        assert!(restore(&root.0, &saved.retained.object, &digest, total, "forged").is_err());
+        assert!(!root.0.join("forged").exists());
+    }
+    #[test]
+    fn policy_permissive_media_selection_does_not_require_prior_review() {
+        let selection = BundleSelection {
+            root: ".".into(),
+            entrypoint: "index.html".into(),
+            members: vec!["index.html".into(), "image.png".into()],
+            requirements: vec![],
+            database: None,
+            database_source: None,
+            runtime: None,
+            media_review: None,
+        };
+        assert!(validate_selection(&selection).is_err());
+        validate_selection_with_policy(&selection, CapturePolicy::AllowInsecure).unwrap();
+    }
     #[cfg(unix)]
     #[test]
     fn wal_checks_keep_the_original_directory_and_reject_replaced_names() {
@@ -2490,6 +2924,7 @@ mod tests {
             runtime: None,
             media_review: None,
             manifest_bytes: 0,
+            inspection: None,
             members: vec![
                 Member {
                     path: "Assets/index.HTML".into(),
@@ -2809,6 +3244,7 @@ mod tests {
                     media_review: None,
                     members,
                     manifest_bytes: 0,
+                    inspection: None,
                 };
                 payload = target - manifest_bytes(&manifest).unwrap().len();
             }
@@ -3431,7 +3867,7 @@ mod tests {
         selection.members = vec!["index.html".into()];
         fs::write(
             root.0.join("app/index.html"),
-            vec![b' '; MAX_BYTES as usize],
+            vec![b' '; MAX_STATIC_BYTES as usize],
         )
         .unwrap();
         assert!(capture(&root.0, &selection, &crate::id::ulid()).is_err());
@@ -3454,7 +3890,7 @@ mod tests {
             runtime: None,
             media_review: None,
         };
-        let bytes = vec![b' '; (MAX_BYTES - MAX_MANIFEST_BYTES) as usize];
+        let bytes = vec![b' '; (MAX_STATIC_BYTES - MAX_MANIFEST_BYTES) as usize];
         fs::write(root.0.join("index.html"), &bytes).unwrap();
         for index in 1..64 {
             let name = format!("style-{index}.css");
@@ -3465,7 +3901,7 @@ mod tests {
         let (result, peak) = crate::test_alloc::measure(|| capture(&root.0, &selection, &revision));
         let saved = result.unwrap();
         assert_eq!(saved.members, 64);
-        assert!(saved.retained.size <= MAX_BYTES);
+        assert!(saved.retained.size <= MAX_STATIC_BYTES);
         assert!(
             peak + 128 * 1024 <= 2 * 1024 * 1024,
             "auxiliary heap {peak} bytes"

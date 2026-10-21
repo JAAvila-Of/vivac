@@ -344,6 +344,7 @@ c4
 cache
 cached
 calendar
+calibrate
 call
 callback
 callbacks
@@ -439,6 +440,7 @@ claims
 clamp
 class
 classes
+classification
 classify
 claude
 clause
@@ -479,6 +481,7 @@ code4
 codes
 codex
 coexist
+coherent
 col
 cold
 collect
@@ -540,6 +543,7 @@ connection
 connections
 connector
 consecutive
+consent
 console
 const
 constant
@@ -565,6 +569,7 @@ continues
 continuous
 contract
 contracts
+contradictory
 control
 controlled
 controls
@@ -592,6 +597,7 @@ counters
 counting
 counts
 cover
+coverage
 covers
 cow
 crash
@@ -749,6 +755,7 @@ differently
 differs
 diffing
 digest
+digests
 digit
 digits
 dim
@@ -766,6 +773,7 @@ dirty
 disable
 disabled
 disables
+disabling
 disagrees
 disappear
 discard
@@ -1328,6 +1336,7 @@ inner
 ino
 input
 inputs
+insecure
 insert
 inserted
 inside
@@ -1585,6 +1594,7 @@ memory
 memstatus
 mentioned
 merely
+merge
 merged
 message
 messages
@@ -1832,9 +1842,11 @@ ownership
 p11
 p12
 p30
+p50
 p6
 p7
 p8
+p99
 pa
 packed
 pad
@@ -1896,6 +1908,7 @@ permanent
 permanently
 permission
 permissions
+permissive
 perms
 persist
 persisted
@@ -1966,6 +1979,7 @@ power
 pps
 pragma
 precedence
+precedes
 precision
 precomposed
 prefers
@@ -2184,7 +2198,9 @@ rejections
 rejects
 rel
 relative
+relax
 relaxed
+relaxing
 release
 released
 releases
@@ -2198,6 +2214,7 @@ relock
 relocks
 rem
 remain
+remainder
 remaining
 remains
 remedy
@@ -2258,6 +2275,7 @@ required
 requirement
 requirements
 requires
+reread
 rereading
 rescuable
 rescue
@@ -2339,6 +2357,7 @@ roots
 rotate
 round
 rounds
+roundtrip
 route
 routes
 row
@@ -2463,6 +2482,7 @@ sessions
 set
 setlk
 sets
+setting
 settings
 setup
 several
@@ -2637,6 +2657,7 @@ stripped
 strips
 struck
 struct
+structural
 structure
 structured
 style
@@ -2670,6 +2691,7 @@ superseding
 supplied
 supported
 supports
+suppression
 surface
 surplus
 survive
@@ -2718,6 +2740,7 @@ tcp
 tcsanow
 tcsetattr
 teb
+technical
 tell
 tells
 temp
@@ -2934,6 +2957,7 @@ updated
 updates
 upgrade
 upgraded
+upgrades
 upper
 uppercase
 upstream
@@ -2956,6 +2980,7 @@ utf8
 uv
 v1
 v2
+v3
 val
 valid
 validate
