@@ -7,7 +7,7 @@ does.
 Every release opens with what it changes on disk and what to run — see the
 [changelog](../CHANGELOG.md).
 
-## The rule has been spent seventeen times
+## The rule has been spent nineteen times
 
 | | |
 |---|---|
@@ -28,6 +28,8 @@ Every release opens with what it changes on disk and what to run — see the
 | `0.17.0` | made `done` refuse a decision still in force and `pop` leave one standing, and the MCP tools refuse an argument they do not take |
 | `0.18.0` | made `decide --supersedes` refuse anything but a decision, a constraint, a rule or a pillar still in force |
 | `0.19.0` | stops older clients reading a tree once agent custody has been written |
+| `0.20.0` | requires descriptions for new artifact captures and writes receipts older clients refuse |
+| `0.21.0` | stops older clients reading a tree after its first permissive artifact capture |
 
 Each went out as a minor for that reason, and counting them here is cheaper
 than counting them once and letting the sentence go stale.
