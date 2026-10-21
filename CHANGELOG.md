@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.2](https://github.com/JAAvila-Of/vivac/compare/v0.20.1...v0.20.2) - 2026-10-21
+
+### Added
+
+- *(artifacts)* add explicit local capture policy ([#297](https://github.com/JAAvila-Of/vivac/pull/297))
+- *(artifacts)* export SQLite WAL without source writes ([#296](https://github.com/JAAvila-Of/vivac/pull/296))
+
+### Fixed
+
+- *(help)* describe the installed Claude opening module
+
 ## [0.20.1](https://github.com/JAAvila-Of/vivac/compare/v0.20.0...v0.20.1) - 2026-10-19
 
 ### Added
