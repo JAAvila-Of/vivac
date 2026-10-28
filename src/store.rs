@@ -399,6 +399,8 @@ struct CaptureLog {
     rejected: bool,
 }
 
+type OpeningFold = (crate::model::Tree, (u64, Option<std::time::SystemTime>));
+
 #[derive(Clone, Copy)]
 struct CaptureCheckpoint {
     offset: u64,
@@ -428,6 +430,37 @@ impl CaptureCheckpoint {
         self.terminated = bytes.last() == Some(&b'\n');
         self.blank = std::str::from_utf8(bytes).is_ok_and(|line| line.trim().is_empty());
     }
+}
+
+fn opening_checkpoint(file: &mut File, length: u64) -> std::io::Result<CaptureCheckpoint> {
+    let count = length.min((CAPTURE_LINE_LIMIT + 1) as u64);
+    let start = length - count;
+    file.seek(SeekFrom::Start(start))?;
+    let mut bytes = vec![0; count as usize];
+    file.read_exact(&mut bytes)?;
+    let end = bytes.len() - usize::from(bytes.last() == Some(&b'\n'));
+    let line_start = bytes[..end]
+        .iter()
+        .rposition(|byte| *byte == b'\n')
+        .map(|at| at + 1);
+    let line_start = match line_start {
+        Some(at) => at,
+        None if start == 0 => 0,
+        None => return Err(capture_reload_error()),
+    };
+    let mut checkpoint = CaptureCheckpoint {
+        offset: start + line_start as u64,
+        ..CaptureCheckpoint::default()
+    };
+    if !bytes.is_empty() {
+        checkpoint.observe(&bytes[line_start..]);
+    }
+    if !checkpoint.terminated
+        && checkpoint.offset - checkpoint.line_start >= CAPTURE_LINE_LIMIT as u64
+    {
+        return Err(capture_reload_error());
+    }
+    Ok(checkpoint)
 }
 
 const CAPTURE_TAIL_BYTES: usize = 64 * 1024;
@@ -1145,6 +1178,17 @@ pub(crate) fn fingerprint_in(f: &File) -> (u64, Option<std::time::SystemTime>) {
     }
 }
 
+fn opening_fingerprint(
+    before: (u64, Option<std::time::SystemTime>),
+    read_offset: u64,
+) -> (u64, Option<std::time::SystemTime>) {
+    if before == (0, None) {
+        before
+    } else {
+        (read_offset, before.1)
+    }
+}
+
 /// One tree's write lock, held for as long as this value lives (`d598`).
 /// Dropping it releases the lock, and so does the process dying: the
 /// operating system lets go of every lock a dead process held, so there
@@ -1224,6 +1268,90 @@ pub fn first_event_id(root: &Path) -> Option<String> {
 }
 
 impl Store {
+    pub(crate) fn load_for_opening(&mut self) -> Result<OpeningFold, Failure> {
+        let mut file = File::open(self.log())?;
+        let seen = fingerprint_in(&file);
+        if let Some(tree) = crate::index::load_cached_for_opening(self, &file) {
+            if let Ok(checkpoint) = opening_checkpoint(&mut file, seen.0) {
+                let same_file = File::open(self.log()).ok().is_some_and(|current| {
+                    log_identity(&file)
+                        .ok()
+                        .is_some_and(|identity| log_identity(&current).ok() == Some(identity))
+                        && fingerprint_in(&current) == seen
+                });
+                if seen.1.is_some()
+                    && fingerprint_in(&file) == seen
+                    && fingerprint(&self.log()) == seen
+                    && same_file
+                {
+                    self.capture_log = Some(CaptureLog {
+                        identity: log_identity(&file).ok(),
+                        reader: file,
+                        checkpoint,
+                        rejected: false,
+                    });
+                }
+            }
+            return Ok((tree, seen));
+        }
+        self.fold_opening_in(file, true)
+    }
+
+    pub(crate) fn fold_opening_authoritative(&mut self) -> Result<OpeningFold, Failure> {
+        let file = File::open(self.log())?;
+        self.fold_opening_in(file, false)
+    }
+
+    fn fold_opening_in(
+        &mut self,
+        mut file: File,
+        keep_cursor: bool,
+    ) -> Result<OpeningFold, Failure> {
+        let before = fingerprint_in(&file);
+        file.seek(SeekFrom::Start(0))?;
+        let mut tree = crate::model::Tree::default();
+        let mut read_offset = 0;
+        tree.broken_lines = visit_event_lines(
+            &mut BufReader::with_capacity(64 * 1024, &file),
+            false,
+            |line| match serde_json::from_str::<crate::event::Event<crate::event::BorrowedText<'_>>>(
+                line,
+            ) {
+                Ok(event) => {
+                    tree.apply(
+                        event.seq,
+                        event.ts.0.as_ref(),
+                        event.lane.0.as_ref(),
+                        &event.payload,
+                    );
+                    true
+                }
+                Err(_) => false,
+            },
+            |bytes| read_offset += bytes.len() as u64,
+        )?;
+        tree.sort_nodes();
+        let seen = opening_fingerprint(before, read_offset);
+        let checkpoint = if keep_cursor {
+            opening_checkpoint(&mut file, read_offset).ok()
+        } else {
+            None
+        };
+        if let Some(checkpoint) = checkpoint {
+            self.capture_log = Some(CaptureLog {
+                identity: log_identity(&file).ok(),
+                reader: file,
+                checkpoint,
+                rejected: false,
+            });
+        } else {
+            self.capture_log = None;
+            #[cfg(windows)]
+            self.retain_log_reader(&file);
+        }
+        Ok((tree, seen))
+    }
+
     #[cfg(windows)]
     pub(crate) fn needs_log_refold(&self) -> bool {
         self.needs_refold
@@ -2182,6 +2310,26 @@ fn visit_events_observed(
     reader: &mut impl BufRead,
     bounded: bool,
     mut accept: impl FnMut(crate::event::Event),
+    observe: impl FnMut(&[u8]),
+) -> Result<usize, Failure> {
+    visit_event_lines(
+        reader,
+        bounded,
+        |line| match serde_json::from_str::<crate::event::Event>(line) {
+            Ok(event) => {
+                accept(event);
+                true
+            }
+            Err(_) => false,
+        },
+        observe,
+    )
+}
+
+fn visit_event_lines(
+    reader: &mut impl BufRead,
+    bounded: bool,
+    mut decode: impl FnMut(&str) -> bool,
     mut observe: impl FnMut(&[u8]),
 ) -> Result<usize, Failure> {
     let mut broken = 0usize;
@@ -2239,12 +2387,11 @@ fn visit_events_observed(
             broken += 1;
             continue;
         }
-        match serde_json::from_str(line) {
-            Ok(e) => accept(e),
-            Err(_) => match crate::event::unknown_reason_for(line) {
+        if !decode(line) {
+            match crate::event::unknown_reason_for(line) {
                 Some(reason) => return Err(newer_vivac_failure(line_no, reason)),
                 None => broken += 1,
-            },
+            }
         }
     }
     Ok(broken)
@@ -2657,6 +2804,16 @@ mod tests {
             drop(store);
             fs::remove_dir_all(root).unwrap();
         }
+    }
+
+    #[test]
+    fn opening_fold_keeps_unavailable_metadata_unknown() {
+        let stamp = Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(5));
+        assert_eq!(opening_fingerprint((32, stamp), 96), (96, stamp));
+        assert_eq!(opening_fingerprint((32, None), 96), (96, None));
+        assert_eq!(opening_fingerprint((0, stamp), 64), (64, stamp));
+        assert_eq!(opening_fingerprint((0, None), 0), (0, None));
+        assert_eq!(opening_fingerprint((0, None), 64), (0, None));
     }
 
     #[test]

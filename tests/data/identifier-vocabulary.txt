@@ -350,6 +350,7 @@ callback
 callbacks
 called
 caller
+callers
 calling
 calls
 came
@@ -906,11 +907,13 @@ envelope
 eof
 eol
 epoch
+eprint
 eprintln
 eq
 equal
 equals
 equiv
+equivalence
 equivalent
 era
 erase
@@ -1130,6 +1133,7 @@ gates
 generated
 generates
 generation
+generations
 get
 geteuid
 getlk
@@ -1300,6 +1304,7 @@ import
 importable
 imported
 importing
+imports
 in
 include
 includes
@@ -1500,6 +1505,7 @@ lo
 load
 loaded
 loading
+loads
 local
 localhost
 localtime
@@ -2001,6 +2007,7 @@ prev
 preview
 previews
 previous
+previously
 primary
 prime
 primitive
@@ -2121,6 +2128,7 @@ rebase
 rebased
 rebasing
 rebuild
+rebuilds
 rebuilt
 receipt
 receipts
@@ -2136,6 +2144,7 @@ recognised
 recognized
 recommends
 reconcile
+reconciles
 reconciliation
 record
 recorded
@@ -2145,6 +2154,7 @@ recovered
 recovers
 recovery
 recreates
+recreating
 recreation
 rect
 recursive
@@ -2165,6 +2175,7 @@ reflecting
 refname
 refold
 refolding
+refolds
 refresh
 refreshed
 refreshes
@@ -2332,10 +2343,12 @@ revised
 revision
 revisions
 revived
+revocation
 revoked
 rewind
 rewinds
 rewrite
+rewrites
 rewriting
 rewritten
 rfc3339
@@ -2551,6 +2564,7 @@ slug
 slugs
 small
 snapshot
+snapshots
 snippet
 so
 socket
@@ -2831,6 +2845,7 @@ transfers
 transformation
 transient
 translated
+transparent
 transport
 transpose
 travels

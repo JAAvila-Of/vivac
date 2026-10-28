@@ -846,6 +846,7 @@ correct
 correction
 correctly
 corrects
+corresponding
 corrupt
 corrupted
 corrupting
@@ -3124,6 +3125,7 @@ recomputing
 reconcile
 reconciled
 reconciles
+reconciliation
 reconciling
 reconsider
 reconstruct
@@ -3350,6 +3352,7 @@ results
 resume
 retain
 retained
+retaining
 retains
 retirable
 retired

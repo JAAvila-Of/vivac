@@ -609,6 +609,15 @@ pub fn fold(events: &[Event], broken: usize) -> Tree {
     a
 }
 
+/// Look up an existing lane without allocating another copy of its key.
+fn ensure_lane<'a>(lanes: &'a mut BTreeMap<String, LaneState>, lane: &str) -> &'a mut LaneState {
+    if lanes.contains_key(lane) {
+        lanes.get_mut(lane).expect("The lane was just found.")
+    } else {
+        lanes.entry(lane.to_owned()).or_default()
+    }
+}
+
 impl Tree {
     pub(crate) fn rebuild_artifact_projection(&mut self) {
         let mut projection = crate::artifacts::projection::Projection::default();
@@ -650,13 +659,13 @@ impl Tree {
         // after I did?" counts a lane declaring itself and a branch moving
         // just as much as a node, so this runs ahead of the dispatch that
         // decides what counts as a change or a stop.
-        let s = self.lanes.entry(lane.to_string()).or_default();
+        let s = ensure_lane(&mut self.lanes, lane);
         s.seq_wrote = s.seq_wrote.max(seq);
         if matches!(body, Body::VivacCreated { .. }) {
             // The event's own lane, not the context's: a stop closes the
             // segment of the lane that made it, never another one's
             // (`t594` ruling B).
-            let s = self.lanes.entry(lane.to_string()).or_default();
+            let s = ensure_lane(&mut self.lanes, lane);
             s.seq_vivac = s.seq_vivac.max(seq);
             s.seg_new = 0;
             s.seg_closed = 0;
@@ -706,7 +715,7 @@ impl Tree {
             // and close a segment nobody opened -- one lane arming another
             // lane's stop, or a context event arming one of its own.
         } else {
-            let s = self.lanes.entry(lane.to_string()).or_default();
+            let s = ensure_lane(&mut self.lanes, lane);
             s.seq_change = s.seq_change.max(seq);
             s.seg_events += 1;
             // Before the close below, so a close counts itself.
@@ -935,7 +944,7 @@ impl Tree {
                 // fix-up-on-arrival treatment as a forward-referenced
                 // `parent` gets.
                 let num = self.resolve_pending(node);
-                let s = self.lanes.entry(lane.to_string()).or_default();
+                let s = ensure_lane(&mut self.lanes, lane);
                 if !s.stack.contains(&num) {
                     s.stack.push(num);
                 }
@@ -943,9 +952,7 @@ impl Tree {
             }
             Body::Popped { node } => {
                 let num = self.resolve_ulid(node);
-                self.lanes
-                    .entry(lane.to_string())
-                    .or_default()
+                ensure_lane(&mut self.lanes, lane)
                     .stack
                     .retain(|&x| x != num);
                 self.record_focus_candidates(seq, lane);
@@ -1072,7 +1079,7 @@ impl Tree {
                 // The stack is cut at the promoted node: it becomes the root
                 // of its own. The provenance chain is untouched: where it was
                 // born does not change because its rank did.
-                let s = self.lanes.entry(lane.to_string()).or_default();
+                let s = ensure_lane(&mut self.lanes, lane);
                 if let Some(i) = s.stack.iter().position(|&x| x == num) {
                     s.stack.drain(..i);
                 }
@@ -1085,7 +1092,7 @@ impl Tree {
             // the repositories or the name change replaces both rather than
             // accumulating.
             Body::LaneDeclared { name, repos, .. } => {
-                let s = self.lanes.entry(lane.to_string()).or_default();
+                let s = ensure_lane(&mut self.lanes, lane);
                 s.name = name.clone();
                 s.repos = repos.clone();
             }
@@ -1099,7 +1106,7 @@ impl Tree {
                 // so it exists: the counters this creates it with are left
                 // at their default zero, since the exclusion above already
                 // kept this from counting as work.
-                self.lanes.entry(lane.to_string()).or_default();
+                ensure_lane(&mut self.lanes, lane);
                 self.wheres.push(Where {
                     seq,
                     lane: lane.to_string(),
@@ -2273,6 +2280,125 @@ mod tests {
                 },
             ),
         ]
+    }
+
+    fn complete_lane_snapshot(tree: &Tree) -> serde_json::Value {
+        let lanes: BTreeMap<_, _> = tree
+            .lanes
+            .iter()
+            .map(|(key, state)| {
+                let written: BTreeMap<_, _> = state
+                    .written
+                    .iter()
+                    .map(|(&num, &seq)| (num, seq))
+                    .collect();
+                (
+                    key,
+                    serde_json::json!({
+                        "name": state.name, "repos": state.repos, "stack": state.stack,
+                        "seq_change": state.seq_change, "seq_vivac": state.seq_vivac,
+                        "seq_wrote": state.seq_wrote, "seg_new": state.seg_new,
+                        "seg_closed": state.seg_closed, "seg_notes": state.seg_notes,
+                        "seg_events": state.seg_events,
+                        "stretch": {
+                            "created": state.stretch.created, "closed": state.stretch.closed,
+                            "noted": state.stretch.noted,
+                            "newest_created": state.stretch.newest_created,
+                            "newest_closed": state.stretch.newest_closed
+                        },
+                        "since_spoken": state.since_spoken,
+                        "since_spoken_at_close": state.since_spoken_at_close,
+                        "close_crossing": state.close_crossing, "written": written
+                    }),
+                )
+            })
+            .collect();
+        serde_json::json!({
+            "seq": tree.seq, "next_num": tree.next_num, "next_vivac_num": tree.next_vivac_num,
+            "lanes": lanes, "open": crate::render::open_data(tree),
+            "rules": crate::render::rules_data(tree),
+            "nodes": tree.nodes_sorted().iter().map(|node| serde_json::json!({
+                "id": node.id, "num": node.num, "kind": node.kind, "state": node.state,
+                "title": node.title(tree), "why": node.why(tree), "note": node.note(tree),
+                "outcome": node.outcome(tree), "parent": node.parent,
+                "refs": node.refs(tree), "governs": node.governs(tree)
+            })).collect::<Vec<_>>(),
+            "vivacs": format!("{:?}", tree.vivacs), "wheres": format!("{:?}", tree.wheres)
+        })
+    }
+
+    #[test]
+    fn interleaved_lane_updates_preserve_complete_state() {
+        let mut events = interleaved_three_lanes();
+        events.extend([
+            lane_declares_repo(10, "a", "core", Some("root-a")),
+            lane_where_at(11, "a", "core", "topic"),
+            lane_declares_repo(12, "b", "web", Some("root-b")),
+            lane_where_at(13, "b", "web", "topic"),
+            lane_event(
+                14,
+                "a",
+                Body::NodeNoted {
+                    node: "n1".into(),
+                    note: "Work in lane a".into(),
+                },
+            ),
+            lane_event(15, "b", closed(15, 3).payload),
+            lane_event(16, "c", Body::Pushed { node: "n2".into() }),
+            lane_event(17, "a", Body::Promoted { node: "n2".into() }),
+            lane_event(18, "c", Body::Popped { node: "n2".into() }),
+            spoken_stop(19, VivacKind::Manual, "Continue lane a", "a"),
+            lane_event(
+                20,
+                "a",
+                Body::NodeNoted {
+                    node: "n2".into(),
+                    note: "More work in lane a".into(),
+                },
+            ),
+            lane_event(21, "b", Body::Pushed { node: "n4".into() }),
+            lane_event(22, "b", Body::Promoted { node: "n4".into() }),
+            lane_where_at(23, "c", "docs", "next"),
+            lane_declares_repo(24, "c", "docs", None),
+            spoken_stop(25, VivacKind::Auto, "", "b"),
+            lane_declares_repo(26, "lane-雪", "extra", None),
+            lane_where_at(27, "lane-雪", "extra", "topic"),
+        ]);
+        for seq in 28..53 {
+            events.push(lane_event(
+                seq,
+                "c",
+                Body::NodeNoted {
+                    node: "n4".into(),
+                    note: format!("Work in lane c at {seq}"),
+                },
+            ));
+        }
+        events.push(lane_event(53, "c", closed(53, 4).payload));
+        events.push(spoken_stop(54, VivacKind::Pop, "Continue lane c", "c"));
+
+        let mut tree = Tree::default();
+        let mut snapshots = Vec::new();
+        for event in events {
+            tree.apply(event.seq, &event.ts, &event.lane, &event.payload);
+            tree.sort_nodes();
+            snapshots.push(complete_lane_snapshot(&tree));
+        }
+        assert_eq!(tree.lanes["a"].stack, vec![2]);
+        assert_eq!(tree.lanes["b"].stack, vec![4]);
+        assert_eq!(tree.lanes["c"].stack, vec![4]);
+        assert_eq!(tree.lanes["a"].seg_notes, 1);
+        assert_eq!(tree.lanes["b"].stretch.closed, 1);
+        assert_eq!(tree.lanes["c"].stretch.noted, 25);
+        assert_eq!(tree.lanes["c"].since_spoken, 0);
+        assert_eq!(tree.lanes["lane-雪"].seq_change, 0);
+        assert_eq!(tree.node("n2").unwrap().kind, Kind::Goal);
+        assert!(snapshots
+            .iter()
+            .any(|snapshot| snapshot["lanes"]["c"]["close_crossing"] == true));
+        if let Some(path) = std::env::var_os("VIVAC_MODEL_FOLD_SNAPSHOT") {
+            std::fs::write(path, serde_json::to_vec_pretty(&snapshots).unwrap()).unwrap();
+        }
     }
 
     /// B writes ten times after A's own stop; A never writes again.

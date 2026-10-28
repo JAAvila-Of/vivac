@@ -815,3 +815,190 @@ before and after the complete run, and CLI/MCP response schemas matched.
 These are pure inventory, new-agent planning and current-file comparison
 measurements. They do not measure applying a plan, loading agents in a harness,
 or interactive browser latency.
+
+## Bounded opening snapshot preparation
+
+Measured on **25 October 2026**, on Windows 11 AMD64 (build 26200), a Ryzen 5
+5600G with 12 logical CPUs, using Rust 1.94.1 and the locked release profile.
+The baseline is unmodified `2d263c6`; the candidate is the opening-consistency
+working-tree patch on that revision. Both executables report `0.21.0`, so the
+version string alone does not identify either build. Their SHA-256 digests are:
+
+- Baseline: `f6e600d116281bdfc6f4def2760cb43f1e6ed5571a18960b1b5aba75fd71d390`.
+- Candidate: `c6be512376df7804cb0cd8f79f5e4599589d2bf13cd72948be6e8a8133afcaed`.
+
+`tools/measure-opening-context.py` creates an isolated synthetic project outside
+existing trees, with manual custody and no native agent files. It alternates
+both executables and their legacy, Codex and Claude-module producer modes on
+the **same** fixture, rotating the six-cell order between samples. Each cell
+has five warmups and 200 measured fresh processes. The first candidate legacy
+opening is recorded separately and excluded from those percentiles; that is a
+first-call observation, not a measurement of a cold machine.
+
+Wall times include process startup, tree and index loading, reconciliation,
+the opening receipt, serialization and pipe transfer. No startup time is
+subtracted. The table uses the median for p50 and nearest rank for p99.
+
+| Nodes / open fronts | Producer mode | Baseline p50 / p99 (ms) | Candidate p50 / p99 (ms) |
+|---|---|---:|---:|
+| 101 / 100 | Legacy hook | 14.683 / 26.121 | 14.592 / 26.881 |
+| 101 / 100 | Codex | 14.702 / 29.755 | 14.578 / 26.811 |
+| 101 / 100 | Claude module | 14.678 / 27.189 | 14.564 / 26.669 |
+| 10,000 / 100 | Legacy hook | 111.519 / 165.165 | 110.477 / 170.531 |
+| 10,000 / 100 | Codex | 113.044 / 158.312 | 111.607 / 152.070 |
+| 10,000 / 100 | Claude module | 113.004 / 192.056 | 111.582 / 156.146 |
+
+The CLI fixture is on **H: NTFS**. The 101-node case emitted the same 4,403 UTF-8
+bytes in every cell; the 10,000-node case emitted 5,358 bytes. Each case appended
+exactly 1,231 opening receipts. The helper verifies exact context equality, the unchanged
+synthetic event-log prefix, every appended opening receipt, and both executable
+digests after the run. Its JSON report retains every sample, maxima, fixture
+hashes, executable ages and checkout metadata. Random identifiers from `init`
+can change the complete fixture hash between runs; the graph shape and text
+generation are fixed. Checkout metadata is recorded separately from the
+executable digest and does not by itself attest a build's source.
+
+These runs serialize managed Rust work and leave other user applications
+running. They do not establish idle-host, other-filesystem or cross-platform
+performance, nor do percentile differences identify their cause. The complete
+opening has no separately established aggregate latency ceiling here; these
+numbers do not certify the node-write or resident-read budgets by subtracting
+startup or summing independently measured percentiles. The fixtures do not
+measure custody imports, materialization, a second preparation attempt, or
+native harness reception.
+
+To reproduce, build the baseline and candidate separately with the same
+toolchain and locked dependencies. Pass their actual executable paths through
+`--binary` and `--baseline-binary`, with `--samples 200 --warmup 5`, a fixture
+size through `--nodes` and `--fronts`, and `--temp-dir` outside existing trees.
+Use `--output` to preserve the complete JSON report. The helper refuses
+executables whose file modification times are less than 300 seconds old;
+that safeguard does not prove when they were built or that the host is idle.
+
+### Instrumented phase diagnostic
+
+The opt-in release test
+`session::tests::measure_opening_preparation_and_receipt` separately measures
+context loading, real preparation and receipt recording after another context
+appends a note. It uses independent fixtures on **C: NTFS**, with 100 open
+root tasks, five warmups and 200 samples per size. The 10,000-node fixture closes
+the remaining tasks. Both emit 4,292 context bytes. These are different shapes
+from the CLI fixtures above.
+
+| Nodes / open fronts | Load p50 / p99 (ms) | Prepare p50 / p99 (ms) | Receipt with refresh p50 / p99 (ms) |
+|---|---:|---:|---:|
+| 100 / 100 | 0.871 / 1.563 | 2.166 / 3.294 | 7.996 / 10.047 |
+| 10,000 / 100 | 48.542 / 67.720 | 51.676 / 72.255 | 56.388 / 76.416 |
+
+Both quantiles use nearest rank. Setup, the intervening append and assertions
+are outside their phase timers. Preparation excludes the native input parser
+and output envelope; receipt recording includes a real lock and refresh.
+The test harness's `cfg(test)` counting allocator remains active, including in
+release mode. These diagnostic timings neither certify production latency nor
+establish a production budget violation. Do not subtract or add these phases to
+the fresh-process measurements, which use production executables and different
+fixtures. Neither experiment measures native model reception.
+
+Build the release test executable with `cargo test --locked --release --bin vivac
+--no-run`, then run that executable with the exact test name and
+`--ignored --exact --nocapture --test-threads=1` after the same aging and workload
+controls. A debug build refuses this diagnostic instead of reporting timings.
+
+### Opening phases with the normal allocator
+
+Measured on **25 October 2026**, on the Windows host above, with Rust 1.94.1,
+the locked release profile and fixtures on **H: NTFS**. The reference already
+contains the bounded-snapshot consistency changes; the candidate also reuses
+the snapshot for custody, retains a validated receipt cursor and avoids
+temporary metadata and lane-key copies. Both are patches on `2d263c6` and
+report version `0.21.0`. Executable SHA-256 digests identify the builds:
+
+- Reference: `681640359873381f49a9e2488aae7540d0c095b8a2f63c307f5d05b35ead0ec1`.
+- Candidate: `1d4573db7fe220decd2450f32f5bc46920dd01a1152c0565fa7f2d54b7a4b1cd`.
+
+Two independent 10,000-node candidate runs stayed below **50 ms p99** for
+combined loading and preparation and **5 ms p99** for receipts in every cell.
+Their slowest combined p99 was **48.0521 ms**, leaving **1.9479 ms** below
+50 ms. This is observed headroom in these fixtures, not a guarantee for other
+workloads or a measurement of complete CLI latency.
+
+`tools/measure-opening-phases.py` prepares a separate copy of the public crate
+and injects `tools/opening-phases.rs` there. An ordinary locked release build
+calls the real opening functions without `cfg(test)` or the counting allocator.
+The distributed executable gains no profiling option. The helper records the
+source inventory, copy and driver hashes, injection recipe, executable digest,
+declared toolchain and filesystem, and every sample. It verifies the frozen
+copy and executable before and after measurement. Checkout metadata at run time
+is recorded separately from the source inventory used to prepare the copy.
+
+Each run has four independent synthetic fixtures: index absent or available,
+and a stable receipt or a receipt after one concurrent node note. The available
+index is generated before warmup and can accumulate a tail during the run;
+the absent-index cases do not generate one. Each fixture has 100 open root
+tasks; the larger shape closes the remaining tasks. Every case has five warmups
+and 200 measured iterations. Both quantiles use nearest rank.
+
+The combined load-and-preparation timer measures both phases directly; it is
+not a sum of their percentiles. Receipt timing includes acquiring the lock,
+refreshing, appending and unlocking. Fixture creation, index generation, the
+external note and result validation are outside those timers. Validation checks
+the prepared focus, byte ceiling, broken-line count, receipt count, sequence
+and shown focus and stop. Process startup, initial project discovery, native
+input parsing and output envelopes are outside the phase timers. These phase
+measurements do not replace the complete-process benchmark above or establish
+native reception.
+
+The tracked opening path reuses a valid index and folds the log in a streaming
+pass when no index can be used. Event metadata can borrow the input line;
+escaped strings retain owned decoding. Both views share the required fields
+and JSON value types. It reuses the loaded tree for the preliminary
+custody query, with separate policy checks under the lock before applying any
+authorized changes. A retained reader and checkpoint allow an ordinary appended
+tail to refresh the receipt without folding the history again. A changed file
+identity, incompatible checkpoint or tail outside the fast path causes a full
+authoritative reload. This fallback preserves supported input rather than
+imposing the strict artifact-capture limits on session opening.
+
+The first reference and candidate runs produced these **p99 times in ms**:
+
+| Nodes / index / receipt | Reference load + prepare | Candidate load + prepare | Reference receipt | Candidate receipt |
+|---|---:|---:|---:|---:|
+| 100 / absent / stable | 2.3701 | 1.7607 | 0.2788 | 0.3240 |
+| 100 / absent / concurrent | 3.0407 | 2.4327 | 9.7660 | 0.3734 |
+| 100 / available / stable | 2.1652 | 2.0476 | 0.2788 | 0.3582 |
+| 100 / available / concurrent | 2.7377 | 2.0951 | 8.7506 | 0.3505 |
+| 10,000 / absent / stable | 107.7031 | 46.4430 | 0.3508 | 0.4044 |
+| 10,000 / absent / concurrent | 108.8979 | 46.2401 | 63.8698 | 0.4709 |
+| 10,000 / available / stable | 16.2331 | 11.4059 | 0.3068 | 0.3814 |
+| 10,000 / available / concurrent | 19.0359 | 9.8989 | 15.4090 | 0.4846 |
+
+A second candidate run used fresh independent fixtures of 10,000 nodes,
+again with five warmups and 200 samples per cell. These are separate p99s;
+no percentiles were averaged or pooled:
+
+| Index / receipt | Load + prepare, first / second (ms) | Receipt, first / second (ms) |
+|---|---:|---:|
+| Absent / stable | 46.4430 / 48.0521 | 0.4044 / 0.3980 |
+| Absent / concurrent | 46.2401 / 46.2715 | 0.4709 / 0.4891 |
+| Available / stable | 11.4059 / 9.8940 | 0.3814 / 0.3826 |
+| Available / concurrent | 9.8989 / 10.8004 | 0.4846 / 0.4503 |
+
+All shapes emitted 4,235 context bytes in stable cases and 4,305 after the
+concurrent-note warmup. Custody was manual, with no native agent files. Runs
+were sequential rather than interleaved; managed Rust jobs were serialized
+while other user applications remained running. Quantile differences alone
+do not identify their cause. The reports retain every sample and maximum.
+
+These runs do not time automatic imports, materialization, a second preparation
+attempt or the full authoritative fallback for an incompatible cursor or large
+tail. They do not update the earlier complete-process measurements to this
+candidate or accredit other platforms and native model reception.
+
+To reproduce, run `python tools/measure-opening-phases.py prepare --build-dir
+<new-external-directory>` from the checkout, then run `cargo clean -p vivac`
+and `cargo build --locked --release --bin vivac` in that copy, using the
+required Rust coordinator where applicable. After the executable is at least
+300 seconds old, run the helper's `run` command with `--build-dir`, a new
+`--fixture-root`, `--output`, `--nodes`, `--fronts`, `--samples`, `--warmups`,
+`--filesystem` and `--rust-build`. The last two describe the verified environment;
+they do not discover it. File age does not prove build age or an idle host.

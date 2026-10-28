@@ -181,7 +181,25 @@ const TAIL_REFRESH_THRESHOLD: usize = 200;
 /// vivac could have written.
 pub fn load(store: &Store, allow_persist: bool) -> Result<Tree, Failure> {
     if let Some(loaded) = try_load_index(store) {
-        return Ok(match loaded {
+        return Ok(loaded.into_tree(store, allow_persist));
+    }
+    let tail = read_tracked(&store.log(), 0)?;
+    let mut tree = fold(&tail.events, tail.broken);
+    if allow_persist {
+        persist(store, &tree, tail.end_offset, tail.last.as_ref());
+    }
+    // Same reasoning as above: added only now, never persisted.
+    tree.broken_lines += usize::from(tail.unterminated);
+    Ok(tree)
+}
+
+pub(crate) fn load_cached_for_opening(store: &Store, file: &File) -> Option<Tree> {
+    try_load_index_in(store, Some(file)).map(|loaded| loaded.into_tree(store, false))
+}
+
+impl Loaded {
+    fn into_tree(self, store: &Store, allow_persist: bool) -> Tree {
+        match self {
             Loaded::Fresh(tree) => tree,
             Loaded::Grown {
                 mut tree,
@@ -200,16 +218,8 @@ pub fn load(store: &Store, allow_persist: bool) -> Result<Tree, Failure> {
                 tree.broken_lines += usize::from(unterminated);
                 tree
             }
-        });
+        }
     }
-    let tail = read_tracked(&store.log(), 0)?;
-    let mut tree = fold(&tail.events, tail.broken);
-    if allow_persist {
-        persist(store, &tree, tail.end_offset, tail.last.as_ref());
-    }
-    // Same reasoning as above: added only now, never persisted.
-    tree.broken_lines += usize::from(tail.unterminated);
-    Ok(tree)
 }
 
 enum Loaded {
@@ -379,8 +389,12 @@ pub(crate) fn read_tracked_in(f: &File, path: &Path, from_offset: u64) -> Result
 // ---------------------------------------------------------------------------
 
 fn fingerprint(path: &Path) -> (u64, i64, u32) {
-    match fs::metadata(path) {
-        Ok(m) => {
+    fingerprint_metadata(fs::metadata(path).ok())
+}
+
+fn fingerprint_metadata(metadata: Option<fs::Metadata>) -> (u64, i64, u32) {
+    match metadata {
+        Some(m) => {
             let (secs, nanos) = m
                 .modified()
                 .ok()
@@ -389,7 +403,7 @@ fn fingerprint(path: &Path) -> (u64, i64, u32) {
                 .unwrap_or((0, 0));
             (m.len(), secs, nanos)
         }
-        Err(_) => (0, 0, 0),
+        None => (0, 0, 0),
     }
 }
 
@@ -438,38 +452,53 @@ pub(crate) fn event_still_at_in(f: &File, last: &LastEvent) -> bool {
 /// Confirms the last event this index ever folded is still sitting where
 /// the header says it is -- the check that tells "the log grew" apart from
 /// "the log changed", per `LOADING.md` §4 "Vigencia".
-fn control_still_there(log_path: &Path, header: &Header) -> bool {
+fn control_still_there(log_path: &Path, header: &Header, file: Option<&File>) -> bool {
     if !header.has_last {
         // Nothing was ever folded, so there is nothing to confirm: growing
         // from byte zero needs no control check.
         return header.fold_end_offset == 0;
     }
-    event_still_at(
-        log_path,
-        &LastEvent {
-            line_offset: header.last_line_offset,
-            id: header.last_ulid.clone(),
-            seq: header.last_seq,
-        },
-    )
+    let last = LastEvent {
+        line_offset: header.last_line_offset,
+        id: header.last_ulid.clone(),
+        seq: header.last_seq,
+    };
+    match file {
+        Some(file) => event_still_at_in(file, &last),
+        None => event_still_at(log_path, &last),
+    }
 }
 
 fn try_load_index(store: &Store) -> Option<Loaded> {
+    try_load_index_in(store, None)
+}
+
+fn try_load_index_in(store: &Store, file: Option<&File>) -> Option<Loaded> {
     let bytes = fs::read(store.index_path()).ok()?;
     let header = Header::parse(&bytes)?;
     let log_path = store.log();
-    let (cur_len, cur_secs, cur_nanos) = fingerprint(&log_path);
+    let (cur_len, cur_secs, cur_nanos) = match file {
+        Some(file) => fingerprint_metadata(file.metadata().ok()),
+        None => fingerprint(&log_path),
+    };
 
     if header.log_len == cur_len && header.mtime_secs == cur_secs && header.mtime_nanos == cur_nanos
     {
+        if file.is_some() && !control_still_there(&log_path, &header, file) {
+            return None;
+        }
         return build_tree(&bytes, &header).map(Loaded::Fresh);
     }
 
-    if cur_len < header.fold_end_offset || !control_still_there(&log_path, &header) {
+    if cur_len < header.fold_end_offset || !control_still_there(&log_path, &header, file) {
         return None;
     }
 
-    let tail = read_tracked(&log_path, header.fold_end_offset).ok()?;
+    let tail = match file {
+        Some(file) => read_tracked_in(file, &log_path, header.fold_end_offset),
+        None => read_tracked(&log_path, header.fold_end_offset),
+    }
+    .ok()?;
     let mut tree = build_tree(&bytes, &header)?;
     for e in &tail.events {
         tree.apply(e.seq, &e.ts, &e.lane, &e.payload);

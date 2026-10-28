@@ -621,6 +621,29 @@ fn codex_subagent_custody_fixture(name: &str) -> Sandbox {
     c
 }
 
+#[test]
+fn bounded_opening_imports_automatic_custody_and_records_one_stable_snapshot() {
+    let c = codex_subagent_custody_fixture("opening-custody-snapshot");
+    let before = c.log().matches("session.started").count();
+    let (stdout, stderr, code) = run_stdin_split(&c, CLAUDE_MODULE_START, "{}");
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert!(stderr.is_empty(), "{stderr}");
+    let response: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(response["status"], "ready");
+    let context = response["context"].as_str().unwrap();
+    assert!(
+        context.contains("changes applied true; needs review 0; blocked 0."),
+        "{context}"
+    );
+    let log = c.log();
+    assert_eq!(log.matches("session.started").count(), before + 1);
+    assert!(log.contains("agent.recorded"), "{log}");
+    let (expected, code) = c.run_stdin(&["session", "start", "--hook"], "{}");
+    assert_eq!(code, 0);
+    let expected = expected.replace("changes applied false;", "changes applied true;");
+    assert_eq!(context, expected);
+}
+
 fn codex_subagent_assert_rejected(stdout: &str) {
     let response: serde_json::Value =
         serde_json::from_str(stdout).expect("one complete JSON response");

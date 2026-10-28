@@ -433,11 +433,17 @@ fn candidate_matches(candidate: &Candidate, assignment: &Assignment) -> bool {
 }
 
 fn read_ledger(cwd: &Path) -> Result<(Located, String, Ledger), Failure> {
+    read_ledger_with_snapshot(cwd, None)
+}
+
+fn read_ledger_with_snapshot(
+    cwd: &Path,
+    snapshot: Option<&Ctx>,
+) -> Result<(Located, String, Ledger), Failure> {
     let located = store::locate(cwd)?.ok_or(Failure::NoStore)?;
     safe_root(&located.lane_dir)?;
     let store = Store::open_strict(located.root.clone())?;
-    let tree = crate::index::load(&store, false)?;
-    if tree.broken_lines != 0 {
+    if snapshot.is_some_and(|ctx| ctx.tree.broken_lines != 0) {
         return Err(Failure::Io(std::io::Error::other(
             "Agent custody refuses an unreadable event log.",
         )));
@@ -447,7 +453,31 @@ fn read_ledger(cwd: &Path) -> Result<(Located, String, Ledger), Failure> {
         .as_ref()
         .map(|lane| lane.id.clone())
         .unwrap_or_else(|| crate::lane::MAIN.to_string());
-    let ledger = replay(&tree)?;
+    let loaded;
+    let tree = if let Some(ctx) = snapshot.filter(|ctx| ctx.lane.is_some()) {
+        if fs::canonicalize(&located.root)? != fs::canonicalize(&ctx.store.root)?
+            || fs::canonicalize(&located.lane_dir)? != fs::canonicalize(&ctx.lane_dir)?
+            || store.config.project_id != ctx.store.config.project_id
+            || ctx.lane.as_deref() != Some(lane.as_str())
+        {
+            return Err(Failure::Model(
+                "Agent custody refuses an opening snapshot from a different project or lane."
+                    .into(),
+            ));
+        }
+        &ctx.tree
+    } else {
+        // A pending worktree has no lane snapshot corresponding to this
+        // lookup yet, so it keeps the standalone reconciliation read.
+        loaded = crate::index::load(&store, false)?;
+        &loaded
+    };
+    if tree.broken_lines != 0 {
+        return Err(Failure::Io(std::io::Error::other(
+            "Agent custody refuses an unreadable event log.",
+        )));
+    }
+    let ledger = replay(tree)?;
     Ok((located, lane, ledger))
 }
 
@@ -775,6 +805,10 @@ pub(crate) fn run_value(cwd: &Path, args: &Args) -> (Value, i32) {
 
 pub(crate) fn reconcile_for_hook(cwd: &Path) -> (Value, i32) {
     reconcile::hook(cwd)
+}
+
+pub(crate) fn reconcile_for_opening(ctx: &Ctx) -> (Value, i32) {
+    reconcile::opening(ctx)
 }
 
 pub fn run(cwd: &Path, args: &Args) -> Result<i32, Failure> {

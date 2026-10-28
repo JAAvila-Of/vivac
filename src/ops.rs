@@ -145,6 +145,7 @@ pub struct Ctx {
     /// check built to catch the folder with no file at all.
     lane_assumed: bool,
     capture_loading: bool,
+    opening_loading: bool,
 }
 
 impl Ctx {
@@ -197,6 +198,7 @@ impl Ctx {
             caller_declared: whose_lane.caller_declared,
             lane_assumed: whose_lane.lane_assumed,
             capture_loading: false,
+            opening_loading: false,
         };
         ctx.adopt(tree);
         ctx
@@ -215,6 +217,15 @@ impl Ctx {
     /// (`LOADING.md` §4, "when it is rewritten").
     pub fn load_for_write(store: Store, whose: Whose) -> Result<Ctx, Failure> {
         Ctx::load_opt(store, false, whose)
+    }
+
+    pub(crate) fn load_for_opening(mut store: Store, whose: Whose) -> Result<Ctx, Failure> {
+        let (tree, seen) = store.load_for_opening()?;
+        let tree_has_lanes = tree.has_a_declared_lane();
+        let whose_lane = resolve_whose(whose, &tree, tree_has_lanes, &store.root);
+        let mut ctx = Ctx::finish(store, tree, seen, whose_lane);
+        ctx.opening_loading = true;
+        Ok(ctx)
     }
 
     pub(crate) fn load_for_capture(mut store: Store, whose: Whose) -> Result<Ctx, Failure> {
@@ -339,7 +350,31 @@ impl Ctx {
         let requires_refold = self.store.needs_log_refold();
         #[cfg(not(windows))]
         let requires_refold = false;
-        if refresh && self.capture_loading {
+        if refresh && self.opening_loading {
+            match self
+                .store
+                .refresh_capture(&lock, now.0 == self.seen.0 && now.1 != self.seen.1)
+            {
+                Ok(events) => {
+                    if !events.is_empty() {
+                        for event in events {
+                            self.tree
+                                .apply(event.seq, &event.ts, &event.lane, &event.payload);
+                        }
+                        self.tree.sort_nodes();
+                    }
+                    self.seen = self.store.capture_seen()?;
+                }
+                Err(_) => {
+                    let mut store = Store::open_strict(self.store.root.clone())?;
+                    let (tree, seen) = store.fold_opening_authoritative()?;
+                    self.adopt(tree);
+                    self.store = store;
+                    self.seen = seen;
+                    self.opening_loading = false;
+                }
+            }
+        } else if refresh && self.capture_loading {
             let events = self
                 .store
                 .refresh_capture(&lock, now.0 == self.seen.0 && now.1 != self.seen.1)?;
@@ -2937,6 +2972,9 @@ pub fn declare_lane(ctx: &mut Ctx, name: String, repos: Vec<crate::event::Repo>)
         .unwrap_or_else(|| crate::lane::MAIN.to_string());
     ctx.emit(vec![Body::LaneDeclared { lane, name, repos }])
 }
+
+#[cfg(test)]
+mod opening_tests;
 
 #[cfg(test)]
 mod tests {

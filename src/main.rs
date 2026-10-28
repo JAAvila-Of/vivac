@@ -1165,7 +1165,14 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
     // stays free either way.
     // `check` reads without rewriting the index either (`f940`): it is the
     // command that says what the tree holds, and it writes nothing.
-    let mut ctx = if may_append(cmd) || cmd == "check" {
+    let mut ctx = if cmd == "session"
+        && a.positional(0) == Some("start")
+        && a.has("hook")
+        && a.opt("context")
+            .is_some_and(session::supports_opening_context)
+    {
+        ops::Ctx::load_for_opening(store::Store::open(root)?, ops::Whose::Resolved(&located))?
+    } else if may_append(cmd) || cmd == "check" {
         ops::Ctx::load_for_write(store::Store::open(root)?, ops::Whose::Resolved(&located))?
     } else {
         ops::Ctx::load(store::Store::open(root)?, ops::Whose::Resolved(&located))?
