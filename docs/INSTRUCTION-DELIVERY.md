@@ -65,11 +65,22 @@ The custody notice also reports whether either attempt applied authorized
 changes. Rejection does not undo custody changes already applied. A later writer
 can advance the tree before the opening receipt is appended; that receipt keeps
 the focus and stop actually shown, not their replacements after a refresh.
-Bounded openings retain a log reader and checkpoint so receipt recording can
-validate and apply a new tail under the write lock. If the checkpoint, file
+Bounded openings fold the authoritative log directly, without reusing the
+derived index. The same read computes a SHA-256 state over the complete prefix
+in fixed-size blocks. A retained reader, prefix state and checkpoint let
+receipt recording validate and apply a new tail under the write lock. Before
+accepting growth, it compares the complete prior prefix with that state; a
+rewrite followed by an append cannot hide behind an unchanged last line.
+If the prefix, checkpoint, file
 identity or tail cannot be validated by that path, vivac reloads the complete
-authoritative log. A large tail does not shorten the context or introduce an
-artifact-capture limit into opening preparation.
+authoritative log. On Windows, retained opening readers also compare the file's
+native update sequence number. A changed sequence without growth invalidates
+the cursor even when the file size, modification time and last line match.
+If this read-only query is unavailable, opening uses the full authoritative
+fold instead of retaining an incremental cursor. These checks complement the
+append-only log protocol; they do not establish integrity against privileged
+volume or journal manipulation. A large tail does not shorten the context or
+introduce an artifact-capture limit into opening preparation.
 This snapshot contract covers the provenance log, not an atomic snapshot of
 repository files, Git state or native harness configuration.
 

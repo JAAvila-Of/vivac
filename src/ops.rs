@@ -353,7 +353,7 @@ impl Ctx {
         if refresh && self.opening_loading {
             match self
                 .store
-                .refresh_capture(&lock, now.0 == self.seen.0 && now.1 != self.seen.1)
+                .refresh_opening(&lock, now.0 == self.seen.0 && now.1 != self.seen.1)
             {
                 Ok(events) => {
                     if !events.is_empty() {

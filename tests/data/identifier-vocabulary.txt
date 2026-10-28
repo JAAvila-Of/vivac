@@ -1115,6 +1115,7 @@ frontend
 frontmatter
 fronts
 fs
+fsctl
 fstat
 fstatat
 fsync
@@ -1546,6 +1547,7 @@ made
 magenta
 magic
 main
+major
 make
 makes
 malformed
@@ -1623,6 +1625,7 @@ milliseconds
 mime
 min
 mine
+minimum
 mint
 minted
 minus
@@ -2329,6 +2332,7 @@ retried
 retries
 retry
 return
+returned
 returning
 returns
 reuse
@@ -2989,6 +2993,7 @@ userprofile
 uses
 using
 usize
+usn
 utc
 utf16
 utf8

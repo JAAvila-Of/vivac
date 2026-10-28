@@ -916,6 +916,10 @@ report version `0.21.0`. Executable SHA-256 digests identify the builds:
 - Reference: `681640359873381f49a9e2488aae7540d0c095b8a2f63c307f5d05b35ead0ec1`.
 - Candidate: `1d4573db7fe220decd2450f32f5bc46920dd01a1152c0565fa7f2d54b7a4b1cd`.
 
+These measurements identify that historical candidate. They do not cover the
+subsequent full-prefix and physical-identity checks described in
+[Instruction Delivery](INSTRUCTION-DELIVERY.md#shared-preparation-and-harness-adapters).
+
 Two independent 10,000-node candidate runs stayed below **50 ms p99** for
 combined loading and preparation and **5 ms p99** for receipts in every cell.
 Their slowest combined p99 was **48.0521 ms**, leaving **1.9479 ms** below
@@ -948,15 +952,15 @@ input parsing and output envelopes are outside the phase timers. These phase
 measurements do not replace the complete-process benchmark above or establish
 native reception.
 
-The tracked opening path reuses a valid index and folds the log in a streaming
-pass when no index can be used. Event metadata can borrow the input line;
-escaped strings retain owned decoding. Both views share the required fields
-and JSON value types. It reuses the loaded tree for the preliminary
+That measured candidate reused a valid index and folded the log in a streaming
+pass when no index could be used. Event metadata could borrow the input line;
+escaped strings retained owned decoding. Both views shared the required fields
+and JSON value types. It reused the loaded tree for the preliminary
 custody query, with separate policy checks under the lock before applying any
-authorized changes. A retained reader and checkpoint allow an ordinary appended
-tail to refresh the receipt without folding the history again. A changed file
-identity, incompatible checkpoint or tail outside the fast path causes a full
-authoritative reload. This fallback preserves supported input rather than
+authorized changes. A retained reader and checkpoint let an ordinary appended
+tail refresh the receipt without folding the history again. A changed file
+identity, incompatible checkpoint or tail outside the fast path caused a full
+authoritative reload. This fallback preserved supported input rather than
 imposing the strict artifact-capture limits on session opening.
 
 The first reference and candidate runs produced these **p99 times in ms**:

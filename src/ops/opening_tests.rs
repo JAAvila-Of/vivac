@@ -328,6 +328,106 @@ fn opening_receipts_accept_unterminated_blank_lines_at_the_capture_boundary() {
 }
 
 #[test]
+fn opening_load_refolds_a_rewrite_with_an_identical_index_fingerprint() {
+    let f = Fixture::new();
+    crate::index::load(&f.store(), true).unwrap();
+    let index_before = fs::read(f.store().index_path()).unwrap();
+    let log = f.store().log();
+    let stamp = fs::metadata(&log).unwrap().modified().unwrap();
+    let before = crate::store::fingerprint(&log);
+    let original = fs::read_to_string(&log).unwrap();
+    let changed = original.replace("Initial work", "Changed work");
+    assert_eq!(original.len(), changed.len());
+    let lock = f.store().lock_for_write().unwrap();
+    fs::write(&log, changed).unwrap();
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&log)
+        .unwrap()
+        .set_times(fs::FileTimes::new().set_modified(stamp))
+        .unwrap();
+    assert_eq!(crate::store::fingerprint(&log), before);
+    drop(lock);
+    let ctx = f.opening();
+    assert_fresh(&ctx);
+    assert_eq!(
+        ctx.tree.resolve("t1").unwrap().title(&ctx.tree),
+        "Changed work"
+    );
+    assert_eq!(fs::read(f.store().index_path()).unwrap(), index_before);
+}
+
+#[test]
+fn opening_receipt_refolds_a_rewritten_prefix_followed_by_a_valid_append() {
+    for cached in [false, true] {
+        let f = Fixture::new();
+        if cached {
+            crate::index::load(&f.store(), true).unwrap();
+        }
+        let mut ctx = f.opening();
+        let shown_focus = ctx.tree.focus().map(|node| node.id.clone());
+        let log = ctx.store.log();
+        let original = fs::read_to_string(&log).unwrap();
+        let changed = original.replace("Initial work", "Changed work");
+        assert_eq!(original.len(), changed.len());
+        assert_eq!(original.lines().last(), changed.lines().last());
+        let mut event = metadata_event();
+        event["payload"] = serde_json::to_value(note("A valid appended note")).unwrap();
+        let lock = f.store().lock_for_write().unwrap();
+        let mut bytes = changed.into_bytes();
+        serde_json::to_writer(&mut bytes, &event).unwrap();
+        bytes.push(b'\n');
+        fs::write(&log, bytes).unwrap();
+        drop(lock);
+        ctx.lock_for_write().unwrap();
+        session_started(&mut ctx, "startup", None, shown_focus, None).unwrap();
+        ctx.unlock();
+        assert_fresh(&ctx);
+        assert_eq!(
+            ctx.tree.resolve("t1").unwrap().title(&ctx.tree),
+            "Changed work"
+        );
+    }
+}
+
+#[test]
+#[cfg(windows)]
+fn opening_receipt_refolds_a_rewrite_with_an_identical_fingerprint() {
+    for cached in [false, true] {
+        let f = Fixture::new();
+        if cached {
+            crate::index::load(&f.store(), true).unwrap();
+        }
+        let log = f.store().log();
+        let stamp = fs::metadata(&log).unwrap().modified().unwrap();
+        let mut ctx = f.opening();
+        let before = crate::store::fingerprint(&log);
+        let original = fs::read_to_string(&log).unwrap();
+        let changed = original.replace("Initial work", "Changed work");
+        assert_eq!(original.len(), changed.len());
+        assert_eq!(original.lines().last(), changed.lines().last());
+        let lock = f.store().lock_for_write().unwrap();
+        fs::write(&log, changed).unwrap();
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&log)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(stamp))
+            .unwrap();
+        assert_eq!(crate::store::fingerprint(&log), before);
+        drop(lock);
+        ctx.lock_for_write().unwrap();
+        session_started(&mut ctx, "startup", None, Some(node_id(1)), None).unwrap();
+        ctx.unlock();
+        assert_fresh(&ctx);
+        assert_eq!(
+            ctx.tree.resolve("t1").unwrap().title(&ctx.tree),
+            "Changed work"
+        );
+    }
+}
+
+#[test]
 fn opening_receipt_refolds_a_replacement_with_an_identical_fingerprint() {
     for cached in [false, true] {
         let f = Fixture::new();
