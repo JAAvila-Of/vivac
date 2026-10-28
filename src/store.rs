@@ -412,7 +412,7 @@ impl OpeningPrefix {
             .checked_sub(self.offset)
             .ok_or_else(capture_reload_error)?;
         reader.seek(SeekFrom::Start(self.offset))?;
-        let mut bytes = [0u8; 64 * 1024];
+        let mut bytes = [0u8; OPENING_READ_BYTES];
         while remaining > 0 {
             let count = remaining.min(bytes.len() as u64) as usize;
             reader.read_exact(&mut bytes[..count])?;
@@ -485,29 +485,28 @@ impl CaptureCheckpoint {
     }
 }
 
-fn opening_checkpoint(file: &mut File, length: u64) -> std::io::Result<CaptureCheckpoint> {
-    let count = length.min((CAPTURE_LINE_LIMIT + 1) as u64);
-    let start = length - count;
-    file.seek(SeekFrom::Start(start))?;
+fn opening_checkpoint(
+    file: &mut File,
+    length: u64,
+    last_line_start: u64,
+) -> std::io::Result<CaptureCheckpoint> {
+    let count = length
+        .checked_sub(last_line_start)
+        .ok_or_else(capture_reload_error)?;
+    if count > CAPTURE_LINE_LIMIT as u64 {
+        return Err(capture_reload_error());
+    }
+    if count == 0 {
+        return Ok(CaptureCheckpoint::default());
+    }
+    file.seek(SeekFrom::Start(last_line_start))?;
     let mut bytes = vec![0; count as usize];
     file.read_exact(&mut bytes)?;
-    let end = bytes.len() - usize::from(bytes.last() == Some(&b'\n'));
-    let line_start = bytes[..end]
-        .iter()
-        .rposition(|byte| *byte == b'\n')
-        .map(|at| at + 1);
-    let line_start = match line_start {
-        Some(at) => at,
-        None if start == 0 => 0,
-        None => return Err(capture_reload_error()),
-    };
     let mut checkpoint = CaptureCheckpoint {
-        offset: start + line_start as u64,
+        offset: last_line_start,
         ..CaptureCheckpoint::default()
     };
-    if !bytes.is_empty() {
-        checkpoint.observe(&bytes[line_start..]);
-    }
+    checkpoint.observe(&bytes);
     if !checkpoint.terminated
         && checkpoint.offset - checkpoint.line_start >= CAPTURE_LINE_LIMIT as u64
     {
@@ -516,6 +515,7 @@ fn opening_checkpoint(file: &mut File, length: u64) -> std::io::Result<CaptureCh
     Ok(checkpoint)
 }
 
+const OPENING_READ_BYTES: usize = 256 * 1024;
 const CAPTURE_TAIL_BYTES: usize = 64 * 1024;
 const CAPTURE_TAIL_EVENTS: usize = 64;
 
@@ -1340,12 +1340,13 @@ impl Store {
         file.seek(SeekFrom::Start(0))?;
         let mut tree = crate::model::Tree::default();
         let mut read_offset = 0;
+        let mut last_line_start = 0;
         let mut reader = OpeningReader {
             reader: &file,
             prefix: OpeningPrefix::default(),
         };
         tree.broken_lines = visit_event_lines(
-            &mut BufReader::with_capacity(64 * 1024, &mut reader),
+            &mut BufReader::with_capacity(OPENING_READ_BYTES, &mut reader),
             false,
             |line| match serde_json::from_str::<crate::event::Event<crate::event::BorrowedText<'_>>>(
                 line,
@@ -1361,13 +1362,16 @@ impl Store {
                 }
                 Err(_) => false,
             },
-            |bytes| read_offset += bytes.len() as u64,
+            |bytes| {
+                last_line_start = read_offset;
+                read_offset += bytes.len() as u64;
+            },
         )?;
         let prefix = reader.prefix;
         tree.sort_nodes();
         let seen = opening_fingerprint(before, read_offset);
         let checkpoint = if keep_cursor && prefix.offset == read_offset {
-            opening_checkpoint(&mut file, read_offset).ok()
+            opening_checkpoint(&mut file, read_offset, last_line_start).ok()
         } else {
             None
         };

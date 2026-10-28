@@ -883,6 +883,7 @@ encoder
 encoding
 end
 ended
+ending
 endings
 endless
 ends

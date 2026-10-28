@@ -1006,3 +1006,78 @@ required Rust coordinator where applicable. After the executable is at least
 `--fixture-root`, `--output`, `--nodes`, `--fronts`, `--samples`, `--warmups`,
 `--filesystem` and `--rust-build`. The last two describe the verified environment;
 they do not discover it. File age does not prove build age or an idle host.
+
+### Opening with full prefix validation
+
+Measured on **28 October 2026**, on the same Windows host, with Rust/Cargo
+1.94.1, the locked release profile, the system allocator and fixtures on
+**H: NTFS**. This candidate folds the authoritative log without reusing its
+derived index. It hashes the bytes during that read and validates the complete
+prior prefix before every incremental opening receipt, including a receipt
+with no intervening append. File timestamps or change-journal records do not
+replace that comparison. An incompatible cursor falls back to a complete
+authoritative fold. The opening reader uses 256 KiB blocks and obtains the last
+line checkpoint from the offset already observed during parsing.
+
+The source inventory SHA-256 is
+`b0595127b4630c7e1a3661a66c6c85512e4abd8c7d90d89eb915daf76d5cd9bc`.
+The measured executable SHA-256 is
+`b4ae3cfe05ff8d8794d8d7fb080ad8499cdf8ffa1ecce16355b3234052f9aa7c`.
+The copied build used the same helper and injected driver described above,
+without `cfg(test)` or a counting allocator. Its dependency cache excluded all
+`vivac` outputs and fingerprints; the build compiled `vivac` afresh. The helper
+verified the frozen copy and executable before and after each run.
+
+Each cell has five warmups and 200 measured iterations. Both quantiles use
+nearest rank. All three runs used the same executable; the two 10,000-node runs
+used fresh independent fixtures. They are separate series, not pooled samples
+or averaged percentiles. An available index is created before warmup and left
+unchanged by opening; this candidate does not use it as a source of tree data.
+
+| 100 nodes / index / receipt | Load + prepare p50 / p99 (ms) | Receipt p50 / p99 (ms) |
+|---|---:|---:|
+| Absent / stable | 1.5957 / 2.2634 | 0.3012 / 0.4941 |
+| Absent / concurrent | 1.6702 / 2.3786 | 0.3266 / 0.4723 |
+| Available / stable | 1.5139 / 1.9392 | 0.2896 / 0.4310 |
+| Available / concurrent | 1.6384 / 2.4345 | 0.3177 / 0.4595 |
+
+| 10,000 nodes / series / index / receipt | Load + prepare p50 / p99 (ms) | Receipt p50 / p99 (ms) |
+|---|---:|---:|
+| A / absent / stable | 32.6760 / 48.6537 | 3.7590 / 4.8180 |
+| A / absent / concurrent | 32.0927 / 35.9122 | 3.7724 / 4.1964 |
+| A / available / stable | 31.6502 / 35.3146 | 3.7013 / 4.1759 |
+| A / available / concurrent | 32.0020 / **52.4156** | 3.8937 / **5.9444** |
+| B / absent / stable | 32.0010 / 36.5075 | 3.6498 / 4.2457 |
+| B / absent / concurrent | 32.2910 / 43.0368 | 3.8071 / 4.2426 |
+| B / available / stable | 32.8823 / 40.4664 | 3.7624 / 4.6603 |
+| B / available / concurrent | 32.0169 / 36.6962 | 3.8603 / 4.4397 |
+
+The 100-node run and series B meet both nominal targets in every cell. Series A
+exceeds 50 ms for loading plus preparation and 5 ms for the receipt in one cell.
+These results do not establish that every cell meets the nominal targets.
+The exceeding cell is retained; percentile differences alone do not establish
+their cause.
+
+Under the [latency tolerance and repeatability policy](PILLARS.md#latency-tolerance-and-repeatability),
+the 52.4156 ms reading falls within the 55 ms tolerance band. The 5.9444 ms
+receipt exceeds the 5.5 ms band in series A, while the corresponding cell in
+independent series B takes 4.4397 ms p99. That unreproduced exceedance is a
+warning to retain and investigate, not an integration blocker. This
+classification does not change any recorded time or waive a security check.
+
+Each fixture has 100 open root tasks; the larger shape closes the remaining
+tasks. Stable contexts contain 4,235 bytes and concurrent contexts 4,305 bytes
+after warmup. Custody is manual, without native agent files. The helper checks
+receipt count, sequence, shown focus and stop, complete-context size and broken
+lines outside the timers. It preserves all samples and maxima in its JSON
+reports. Managed Rust work is serialized while other user applications remain
+running; the experiment does not establish an idle host.
+
+The combined timer covers loading and preparation directly. Receipt timing
+includes locking, prefix validation, refresh, append and unlock. Startup,
+initial discovery, native input and envelopes are excluded. These runs do not
+measure automatic imports, materialization, a second preparation attempt,
+authoritative fallback latency, other platforms or native model reception.
+Reproduce with the same `prepare` and `run` commands and aging controls above;
+identify the actual source and executable instead of relying on their shared
+`0.21.0` version string.

@@ -328,6 +328,28 @@ fn opening_receipts_accept_unterminated_blank_lines_at_the_capture_boundary() {
 }
 
 #[test]
+fn opening_receipts_accept_short_final_lines_with_each_line_ending() {
+    for tail in [b"".as_slice(), b"\n", b"\r\n", b" \t", b" \t\n", b" \t\r\n"] {
+        let f = Fixture::new();
+        append_raw(&f, tail);
+        let mut ctx = f.opening();
+        assert_eq!(ctx.tree.broken_lines, 0);
+        ctx.lock_for_write().unwrap();
+        session_started(&mut ctx, "startup", None, Some(node_id(1)), None).unwrap();
+        ctx.unlock();
+        assert_fresh(&ctx);
+        let (events, broken) = ctx.store.read_all().unwrap();
+        assert_eq!(broken, 0);
+        assert_eq!(events.len(), 3);
+        assert_eq!(ctx.tree.seq, 3);
+        assert!(matches!(
+            &events.last().unwrap().payload,
+            Body::SessionStarted { focus, .. } if focus == &Some(node_id(1))
+        ));
+    }
+}
+
+#[test]
 fn opening_load_refolds_a_rewrite_with_an_identical_index_fingerprint() {
     let f = Fixture::new();
     crate::index::load(&f.store(), true).unwrap();
