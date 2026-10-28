@@ -282,6 +282,20 @@ interface in the way, and every one of those reads takes `--json` — every one
 but the `brief`, which is written to be injected into a session and read as
 prose, never parsed.
 
+Full node JSON, including `tree --json` and `why --json`, distinguishes
+two closure fields:
+
+- `false_close` is structural: a `done` node still has open blockers. It
+  remains true when that closure was forced.
+- `forced_close` records whether the node's current closure was forced.
+  It can remain true after its blockers are resolved. A forced close records
+  an override, not verification of the work.
+
+`triage` and `check` report unforced false closes. The tree, web map and
+`stats` still mark or count the structural condition, including forced closes.
+From node JSON, select the diagnostic subset with
+`false_close && !forced_close`.
+
 `doctor` checks the configuration in the current lane's folder and reads the
 evidence left by its hooks, without changing any files or starting a harness.
 Without an argument it examines the harnesses with project configuration;
