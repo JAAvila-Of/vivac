@@ -194,3 +194,154 @@ fn a_date_that_is_not_all_digits_where_digits_go_refuses_rather_than_panicking()
         assert_eq!(log_text(&c), before, "{date}: the import wrote events");
     }
 }
+
+fn legacy_node(num: u64, kind: serde_json::Value, parent: Option<u64>) -> serde_json::Value {
+    serde_json::json!({
+        "id": num, "title": "Imported", "kind": kind, "status": "active",
+        "parent": parent, "opened": "2026-09-08"
+    })
+}
+
+fn assert_unchanged_empty_tree(c: &Sandbox, before: &str) {
+    let after = log_text(c);
+    assert_eq!(after, before, "the refused import changed the event log");
+    assert!(
+        !after.contains("\"type\":\"node.created\""),
+        "the tree must still have no nodes"
+    );
+}
+
+#[test]
+fn all_six_legacy_kinds_preserve_numbers_and_parent_links() {
+    let c = Sandbox::new_seeded("import-spike-kinds");
+    let mut nodes = serde_json::Map::new();
+    for (num, kind, parent) in [
+        (8, "goal", None),
+        (11, "decision", Some(8)),
+        (17, "finding", Some(11)),
+        (23, "work", Some(8)),
+        (31, "run", Some(23)),
+        (42, "issue", Some(23)),
+    ] {
+        nodes.insert(num.to_string(), legacy_node(num, kind.into(), parent));
+    }
+    let tree = write_tree(&c, &serde_json::json!({ "nodes": nodes }).to_string());
+    c.ok(&["import", tree.to_str().unwrap()]);
+    let created: Vec<serde_json::Value> = log_text(&c)
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .map(|event| event["payload"].clone())
+        .filter(|event| event["type"] == "node.created")
+        .collect();
+    assert_eq!(created.len(), 6);
+    for (index, (num, kind, parent_index)) in [
+        (8, "goal", None),
+        (11, "decision", Some(0)),
+        (17, "finding", Some(1)),
+        (23, "task", Some(0)),
+        (31, "task", Some(3)),
+        (42, "task", Some(3)),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let event = &created[index];
+        assert_eq!(event["num"], num);
+        assert_eq!(event["kind"], kind);
+        let parent = parent_index
+            .map(|i: usize| created[i]["node"].clone())
+            .unwrap_or(serde_json::Value::Null);
+        assert_eq!(event["parent"], parent);
+    }
+}
+
+#[test]
+fn a_late_unsupported_kind_refuses_even_the_valid_earlier_node() {
+    let c = Sandbox::new_seeded("import-late-kind");
+    let before = log_text(&c);
+    let tree = write_tree(
+        &c,
+        &serde_json::json!({"nodes": {
+            "1": legacy_node(1, "goal".into(), None),
+            "99": legacy_node(99, "question".into(), Some(1))
+        }})
+        .to_string(),
+    );
+    let (out, code) = c.run(&["import", tree.to_str().unwrap()]);
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("#99 kind"), "{out}");
+    assert_unchanged_empty_tree(&c, &before);
+}
+
+#[test]
+fn unsupported_kinds_name_every_field_without_echoing_source_values() {
+    let c = Sandbox::new_seeded("import-private-kinds");
+    let before = log_text(&c);
+    let private_kind = "S7vQ2mN9xK4pR8tW6zB3cD5fG1hJ0lU7";
+    let source_title = "source-title-sentinel";
+    let mut first = legacy_node(7, private_kind.into(), None);
+    first["title"] = source_title.into();
+    let tree = write_tree(
+        &c,
+        &serde_json::json!({"nodes": {
+            "7": first,
+            "19": legacy_node(19, "question".into(), None),
+            "41": legacy_node(41, "constraint".into(), None)
+        }})
+        .to_string(),
+    );
+    let (out, code) = c.run(&["import", tree.to_str().unwrap()]);
+    assert_eq!(code, 2, "{out}");
+    for num in [7, 19, 41] {
+        assert!(out.contains(&format!("#{num} kind")), "{out}");
+    }
+    for value in [private_kind, source_title, "question", "constraint"] {
+        assert!(!out.contains(value), "source value leaked: {out}");
+    }
+    assert_unchanged_empty_tree(&c, &before);
+}
+
+#[test]
+fn current_unknown_and_malformed_kinds_refuse_without_mutation() {
+    for (i, kind) in [
+        Some(serde_json::json!("task")),
+        Some(serde_json::json!("question")),
+        Some(serde_json::json!("constraint")),
+        Some(serde_json::json!("assumption")),
+        Some(serde_json::json!("pillar")),
+        Some(serde_json::json!("rule")),
+        Some(serde_json::json!("unknown")),
+        Some(serde_json::json!("")),
+        Some(serde_json::json!("Goal")),
+        Some(serde_json::json!("g\u{f3}al")),
+        None,
+        Some(serde_json::json!(null)),
+        Some(serde_json::json!(42)),
+        Some(serde_json::json!(true)),
+        Some(serde_json::json!([])),
+        Some(serde_json::json!({})),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let c = Sandbox::new_seeded(&format!("import-bad-kind-{i}"));
+        let before = log_text(&c);
+        let mut node = legacy_node(1, serde_json::Value::Null, None);
+        let string_kind = kind.as_ref().is_some_and(serde_json::Value::is_string);
+        match kind {
+            Some(value) => node["kind"] = value,
+            None => {
+                node.as_object_mut().unwrap().remove("kind");
+            }
+        }
+        let tree = write_tree(&c, &serde_json::json!({"nodes": {"1": node}}).to_string());
+        let (out, code) = c.run(&["import", tree.to_str().unwrap()]);
+        assert_eq!(code, 2, "case {i}: {out}");
+        if string_kind {
+            assert!(out.contains("#1 kind"), "case {i}: {out}");
+        } else {
+            assert!(out.contains("not a spike tree.json"), "case {i}: {out}");
+        }
+        assert_unchanged_empty_tree(&c, &before);
+    }
+}
