@@ -1261,6 +1261,7 @@ mod tests {
         let _guard = SERVERS.lock().unwrap_or_else(|error| error.into_inner());
         let preview =
             start_for(selected(b"<html>selected</html>"), Duration::from_secs(2)).unwrap();
+        let started = Instant::now();
         let (host, token) = parts(preview.url());
         let path = String::from("/run");
         let body = format!("token={token}");
@@ -1303,6 +1304,10 @@ mod tests {
             assert!(!response.contains("<html>selected</html>"));
         }
         assert!(post(preview.url(), "run").contains("<html>selected</html>"));
+        eprintln!(
+            "preview admission sequence before close: {:?}",
+            started.elapsed()
+        );
         post(preview.url(), "close");
         preview.wait();
     }
