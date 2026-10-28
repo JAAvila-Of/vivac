@@ -20,6 +20,8 @@ use crate::failure::{Failure, R};
 use crate::output::outln;
 
 mod opening;
+#[cfg(test)]
+mod tests;
 
 /// What the hook is handed on stdin.
 ///
@@ -179,30 +181,18 @@ fn bounded_start(ctx: &mut crate::ops::Ctx, a: &Args, project: &str) -> R {
             return Ok(());
         }
     };
-    if ctx.tree.broken_lines > 0 {
-        return Err(Failure::Model("Cannot prepare complete opening context: the tree contains unreadable event lines. Run vivac check to inspect the store; restore a readable log before relying on opening context.".to_string()));
-    }
-    let mut text =
-        crate::brief::to_text(&ctx.tree, &ctx.store.root, &ctx.lane_dir, a, project, true)?;
-    if text.len() > opening::CONTEXT_BYTES {
+    let Some(PreparedOpening {
+        mut text,
+        shown_focus,
+        shown_vivac,
+    }) = prepare_opening(ctx, a, project, crate::agents::reconcile_for_opening)?
+    else {
         request.profile.too_large();
         return Ok(());
-    }
-    let shown_focus = ctx.tree.focus().map(|n| n.id.clone());
-    let shown_vivac = ctx.tree.last_vivac().map(|v| v.id.clone());
-    text.push_str(&reconciliation_text(&ctx.lane_dir));
-    if text.len() > opening::CONTEXT_BYTES {
-        request.profile.too_large();
-        return Ok(());
-    }
+    };
     let (source, session) = request.receipt();
-    match ctx.lock_for_write() {
-        Ok(mine) => {
-            crate::ops::session_started(ctx, source, session, shown_focus, shown_vivac).ok();
-            if mine {
-                ctx.unlock();
-            }
-        }
+    match record_opening(ctx, source, session, shown_focus, shown_vivac) {
+        Ok(()) => {}
         Err(Failure::Busy(_)) => {
             text.push_str(&format!(
                 "  Session not recorded: another vivac process held the tree for {} seconds.\n",
@@ -217,6 +207,77 @@ fn bounded_start(ctx: &mut crate::ops::Ctx, a: &Args, project: &str) -> R {
     }
     request.profile.ready(text);
     Ok(())
+}
+
+struct PreparedOpening {
+    text: String,
+    shown_focus: Option<String>,
+    shown_vivac: Option<String>,
+}
+
+fn record_opening(
+    ctx: &mut crate::ops::Ctx,
+    source: &str,
+    session: Option<String>,
+    shown_focus: Option<String>,
+    shown_vivac: Option<String>,
+) -> R {
+    let mine = ctx.lock_for_write()?;
+    crate::ops::session_started(ctx, source, session, shown_focus, shown_vivac).ok();
+    if mine {
+        ctx.unlock();
+    }
+    Ok(())
+}
+
+fn prepare_opening(
+    ctx: &mut crate::ops::Ctx,
+    a: &Args,
+    project: &str,
+    mut reconcile: impl FnMut(&crate::ops::Ctx) -> (serde_json::Value, i32),
+) -> Result<Option<PreparedOpening>, Failure> {
+    let mut applied = false;
+    for attempt in 0..2 {
+        if ctx.seen == (0, None) {
+            return Err(Failure::Model("Cannot prepare complete opening context: the event log metadata is unavailable. Retry the session opening when the log is readable.".into()));
+        }
+        if ctx.tree.broken_lines > 0 {
+            return Err(Failure::Model("Cannot prepare complete opening context: the tree contains unreadable event lines. Run vivac check to inspect the store; restore a readable log before relying on opening context.".to_string()));
+        }
+        let seen = ctx.seen;
+        let mut text =
+            crate::brief::to_text(&ctx.tree, &ctx.store.root, &ctx.lane_dir, a, project, true)?;
+        if text.len() > opening::CONTEXT_BYTES {
+            return Ok(None);
+        }
+        let shown_focus = ctx.tree.focus().map(|n| n.id.clone());
+        let shown_vivac = ctx.tree.last_vivac().map(|v| v.id.clone());
+        let (mut report, code) = reconcile(ctx);
+        applied |= report["applied"].as_bool().unwrap_or(false);
+        if applied && report.get("policy").is_some() {
+            report["applied"] = serde_json::Value::Bool(true);
+        }
+        text.push_str(&custody_text(&ctx.lane_dir, &report, code));
+        if crate::store::fingerprint(&ctx.store.log()) != seen {
+            if attempt == 1 {
+                return Err(Failure::Model("Cannot prepare complete opening context: the event log changed during both preparation attempts. Retry the session opening when the tree is stable.".into()));
+            }
+            let mine = ctx.lock_for_write()?;
+            if mine {
+                ctx.unlock();
+            }
+            continue;
+        }
+        if text.len() > opening::CONTEXT_BYTES {
+            return Ok(None);
+        }
+        return Ok(Some(PreparedOpening {
+            text,
+            shown_focus,
+            shown_vivac,
+        }));
+    }
+    unreachable!("opening preparation has at most two attempts")
 }
 
 pub fn end(ctx: &mut crate::ops::Ctx, a: &Args, located: &crate::store::Located) -> R {
@@ -784,6 +845,10 @@ fn reconciliation(cwd: &std::path::Path) {
 
 fn reconciliation_text(cwd: &std::path::Path) -> String {
     let (report, code) = crate::agents::reconcile_for_hook(cwd);
+    custody_text(cwd, &report, code)
+}
+
+fn custody_text(cwd: &std::path::Path, report: &serde_json::Value, code: i32) -> String {
     if report.get("policy").is_none() {
         if code > 1 && crate::store::locate(cwd).ok().flatten().is_some() {
             return "  Agent custody could not complete; inspect vivac agents reconcile. Use vivac agents to inspect configuration errors.\n".to_string();
@@ -792,7 +857,10 @@ fn reconciliation_text(cwd: &std::path::Path) -> String {
     }
     let pending = report["needs_review"].as_array().map_or(0, Vec::len);
     let blocked = report["blocked"].as_array().map_or(0, Vec::len);
-    if report["policy"]["mode"] == "automatic" || pending + blocked > 0 {
+    if report["policy"]["mode"] == "automatic"
+        || pending + blocked > 0
+        || report["applied"].as_bool().unwrap_or(false)
+    {
         return format!("  Agent custody: mode {}; changes applied {}; needs review {}; blocked {}. Inspect vivac agents reconcile; review configuration changes with vivac agents sync.\n",
             report["policy"]["mode"].as_str().unwrap_or("manual"), report["applied"], pending, blocked);
     }

@@ -309,16 +309,18 @@ pub struct RepoAnchor {
 }
 
 /// One event from the log. `MODEL.md` §3.2.
+/// Metadata is owned by default. A fold can borrow those strings for one line
+/// while retaining the same event schema.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Event {
+pub struct Event<Text = String> {
     pub seq: u64,
-    pub id: String,
-    pub ts: String,
+    pub id: Text,
+    pub ts: Text,
     /// Opaque identifier of whoever originated it. **Never email or name**:
     /// `MODEL.md` §3.4 proposed `git config user.email` and the security
     /// pillar vetoes it. Generated at `init` and kept in `config`.
-    pub actor: String,
-    pub lane: String,
+    pub actor: Text,
+    pub lane: Text,
     /// The body is **nested**, not flattened.
     ///
     /// `#[serde(flatten)]` forces serde through an intermediate map, and that
@@ -327,6 +329,10 @@ pub struct Event {
     /// it was a convenience of mine, not a decision of the model.
     pub payload: Body,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(transparent)]
+pub(crate) struct BorrowedText<'a>(#[serde(borrow)] pub(crate) std::borrow::Cow<'a, str>);
 
 /// The event body.
 ///

@@ -127,10 +127,10 @@ user pays for by waiting.
 
 ### Budgets
 
-**To be measured and corrected, not truths.** The numbers measured against them
-are in the `README`.
+**To be measured and corrected, not truths.** Measurements and their conditions
+are recorded in [Performance](PERFORMANCE.md).
 
-| Operation | Ceiling | Why |
+| Operation | Nominal latency target | Why |
 |---|---|---|
 | writing a node (`add`, `done`, `note`) | **p99 < 5 ms** | it sits on the critical path of the agent's turn |
 | `why` over 10,000 nodes | **< 50 ms** | it is interactive reading; above that you feel it |
@@ -138,6 +138,29 @@ are in the `README`.
 | text search | **< 100 ms** | same |
 | semantic search | off the critical path | see the arbitration above |
 | explicitly retaining a selected supported delivery | **p99 < 500 ms at 1 MiB; < 2 s at 10 MiB** | a requested file operation, outside ordinary writes and hooks |
+
+### Latency tolerance and repeatability
+
+These latency figures are nominal targets. Acceptance uses an initial **10%
+tolerance band** for measurement variability: a 50 ms target has a 55 ms band
+and a 5 ms target a 5.5 ms band. A result within that band is reported as within
+tolerance, not rewritten as meeting the nominal target.
+
+An isolated result above the band is a warning to investigate. It does not
+block integration on its own. A performance rejection requires an above-band
+result reproduced in at least two independent series for the same operation
+and fixture shape under comparable, declared controls. Keep every series and
+sample, including the failures; do not average percentiles, subtract waiting
+time or discard unfavorable runs to obtain a pass. State the nominal target,
+observed result, tolerance and repeatability separately.
+
+This is an acceptance policy for measured latency, not a runtime deadline that
+aborts an operation a few milliseconds late. It does not apply tolerance to
+security checks, input or expansion bounds, work counters, size limits or
+memory ceilings. Those remain hard guards. A repeated latency rejection also
+does not permit shortened inspection, partial context or reduced correctness.
+
+### Retention profiles
 
 Local file and static-bundle retention accepts at most 100 MiB per complete
 revision, including its manifest. The existing 1 MiB and 10 MiB latency ceilings
@@ -171,7 +194,7 @@ rejects the complete revision rather than shortening inspection.
 For a SQLite application whose fixed product runtime already exceeds 1 MiB,
 measure the smallest complete revision and a complete revision containing the
 runtime plus 1 MiB of other content, including the manifest. Both retain the
-strict 500 ms p99 ceiling; 10 MiB complete revisions retain the two-second
+nominal 500 ms p99 target; 10 MiB complete revisions retain the two-second
 ceiling. Runtime bytes are never discounted from delivery size.
 Artifact operations use at most 2 MiB of auxiliary memory, including SQLite's
 native heap, caches and adapters as well as Rust allocations, and excluding the

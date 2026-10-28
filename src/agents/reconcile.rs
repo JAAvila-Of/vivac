@@ -111,6 +111,16 @@ fn finish(mut result: Value, plan: &Plan, applied: bool, imported: &[Value]) -> 
 
 pub(super) fn execute(cwd: &Path, args: &Args, hook: bool) -> Result<(Value, i32), Failure> {
     let (located, lane, ledger) = read_ledger(cwd)?;
+    execute_loaded(located, lane, ledger, args, hook)
+}
+
+fn execute_loaded(
+    located: Located,
+    lane: String,
+    ledger: Ledger,
+    args: &Args,
+    hook: bool,
+) -> Result<(Value, i32), Failure> {
     let write = args.has("yes") || (hook && automatic(&ledger, &lane));
     if !write {
         let (plan, result) = prepared(&located.lane_dir, &lane, &ledger, args)?;
@@ -330,4 +340,12 @@ fn import(ctx: &mut Ctx, ledger: &Ledger, args: &Args) -> Result<(Value, i32), F
 pub(crate) fn hook(cwd: &Path) -> (Value, i32) {
     let args = Args::parse(["reconcile".into()]).unwrap();
     response(execute(cwd, &args, true))
+}
+
+pub(crate) fn opening(ctx: &Ctx) -> (Value, i32) {
+    let args = Args::parse(["reconcile".into()]).unwrap();
+    response(
+        read_ledger_with_snapshot(&ctx.lane_dir, Some(ctx))
+            .and_then(|(located, lane, ledger)| execute_loaded(located, lane, ledger, &args, true)),
+    )
 }

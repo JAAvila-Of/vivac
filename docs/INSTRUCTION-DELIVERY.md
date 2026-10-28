@@ -47,10 +47,44 @@ tree, as described in [Setup](SETUP.md).
 ## Shared preparation and harness adapters
 
 Bounded opening integrations share one preparation path: render a current snapshot,
-reconcile already authorized agent custody once, include its notices, and apply
-the complete-context byte ceiling. A rejected preparation emits no partial
-context and records no successful opening. An opening receipt establishes
-preparation, not reception or permission to execute work.
+reconcile already authorized agent custody, include its notices, and apply the
+complete-context byte ceiling. Preparation requires a known event-log fingerprint
+and checks that the log has not changed since that snapshot was loaded. An
+unavailable initial fingerprint rejects preparation before reconciliation. A
+concurrent writer or custody import can change the log during rendering or
+reconciliation; vivac refreshes the tree and rebuilds the complete context once.
+If the log changes again, preparation is rejected rather than combining
+generations or retrying without a bound.
+Rendering and the preliminary custody query do not hold the tree's write lock.
+The query reuses the loaded tree when its project and resolved lane match;
+pending worktrees retain the standalone custody lookup. Authorized custody
+mutations still reload state and recheck policy under their own write lock.
+
+The stable attempt supplies the brief, custody status, shown focus and last stop.
+The custody notice also reports whether either attempt applied authorized
+changes. Rejection does not undo custody changes already applied. A later writer
+can advance the tree before the opening receipt is appended; that receipt keeps
+the focus and stop actually shown, not their replacements after a refresh.
+Bounded openings fold the authoritative log directly, without reusing the
+derived index. The same read computes a SHA-256 state over the complete prefix
+in fixed-size blocks. A retained reader, prefix state and checkpoint let
+receipt recording validate and apply a new tail under the write lock. Before
+accepting growth, it compares the complete prior prefix with that state; a
+rewrite followed by an append cannot hide behind an unchanged last line.
+If the prefix, checkpoint, file
+identity or tail cannot be validated by that path, vivac reloads the complete
+authoritative log. The complete prefix is checked even when the file size,
+modification time and last line match. File timestamps and native change-journal
+records do not substitute for checking those bytes. An authoritative refresh
+keeps the context on this opening path; a later receipt cannot silently return
+to metadata-only refresh. A large tail does not shorten the context or introduce
+an artifact-capture limit into opening preparation.
+This snapshot contract covers the provenance log, not an atomic snapshot of
+repository files, Git state or native harness configuration.
+
+A rejected preparation emits no partial context and records no successful
+opening. An opening receipt establishes preparation, not reception or permission
+to execute work.
 
 Each harness adapter owns its input validation, recipient identity and output
 envelope. It must declare separately whether the consumer can inject context,

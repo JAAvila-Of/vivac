@@ -397,7 +397,62 @@ struct CaptureLog {
     identity: Option<(u64, [u8; 16])>,
     checkpoint: CaptureCheckpoint,
     rejected: bool,
+    opening_prefix: Option<OpeningPrefix>,
 }
+
+#[derive(Default)]
+struct OpeningPrefix {
+    offset: u64,
+    digest: Sha256,
+}
+
+impl OpeningPrefix {
+    fn extend_to(&mut self, reader: &mut File, end: u64) -> std::io::Result<()> {
+        let mut remaining = end
+            .checked_sub(self.offset)
+            .ok_or_else(capture_reload_error)?;
+        reader.seek(SeekFrom::Start(self.offset))?;
+        let mut bytes = [0u8; OPENING_READ_BYTES];
+        while remaining > 0 {
+            let count = remaining.min(bytes.len() as u64) as usize;
+            reader.read_exact(&mut bytes[..count])?;
+            self.digest.update(&bytes[..count]);
+            self.offset += count as u64;
+            remaining -= count as u64;
+        }
+        Ok(())
+    }
+}
+
+struct OpeningReader<'a> {
+    reader: &'a File,
+    prefix: OpeningPrefix,
+}
+
+impl Read for OpeningReader<'_> {
+    fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+        let count = self.reader.read(bytes)?;
+        self.prefix.digest.update(&bytes[..count]);
+        self.prefix.offset += count as u64;
+        Ok(count)
+    }
+}
+
+fn opening_changed_error() -> std::io::Error {
+    std::io::Error::other(
+        "The event log changed while loading the opening context; retry loading it.",
+    )
+}
+
+fn validate_opening_file(file: &File, path: &Path) -> std::io::Result<()> {
+    let current = File::open(path)?;
+    if log_identity(file)? != log_identity(&current)? {
+        return Err(opening_changed_error());
+    }
+    Ok(())
+}
+
+type OpeningFold = (crate::model::Tree, (u64, Option<std::time::SystemTime>));
 
 #[derive(Clone, Copy)]
 struct CaptureCheckpoint {
@@ -430,6 +485,37 @@ impl CaptureCheckpoint {
     }
 }
 
+fn opening_checkpoint(
+    file: &mut File,
+    length: u64,
+    last_line_start: u64,
+) -> std::io::Result<CaptureCheckpoint> {
+    let count = length
+        .checked_sub(last_line_start)
+        .ok_or_else(capture_reload_error)?;
+    if count > CAPTURE_LINE_LIMIT as u64 {
+        return Err(capture_reload_error());
+    }
+    if count == 0 {
+        return Ok(CaptureCheckpoint::default());
+    }
+    file.seek(SeekFrom::Start(last_line_start))?;
+    let mut bytes = vec![0; count as usize];
+    file.read_exact(&mut bytes)?;
+    let mut checkpoint = CaptureCheckpoint {
+        offset: last_line_start,
+        ..CaptureCheckpoint::default()
+    };
+    checkpoint.observe(&bytes);
+    if !checkpoint.terminated
+        && checkpoint.offset - checkpoint.line_start >= CAPTURE_LINE_LIMIT as u64
+    {
+        return Err(capture_reload_error());
+    }
+    Ok(checkpoint)
+}
+
+const OPENING_READ_BYTES: usize = 256 * 1024;
 const CAPTURE_TAIL_BYTES: usize = 64 * 1024;
 const CAPTURE_TAIL_EVENTS: usize = 64;
 
@@ -1145,6 +1231,17 @@ pub(crate) fn fingerprint_in(f: &File) -> (u64, Option<std::time::SystemTime>) {
     }
 }
 
+fn opening_fingerprint(
+    before: (u64, Option<std::time::SystemTime>),
+    read_offset: u64,
+) -> (u64, Option<std::time::SystemTime>) {
+    if before == (0, None) {
+        before
+    } else {
+        (read_offset, before.1)
+    }
+}
+
 /// One tree's write lock, held for as long as this value lives (`d598`).
 /// Dropping it releases the lock, and so does the process dying: the
 /// operating system lets go of every lock a dead process held, so there
@@ -1224,6 +1321,77 @@ pub fn first_event_id(root: &Path) -> Option<String> {
 }
 
 impl Store {
+    pub(crate) fn load_for_opening(&mut self) -> Result<OpeningFold, Failure> {
+        let file = File::open(self.log())?;
+        self.fold_opening_in(file, true)
+    }
+
+    pub(crate) fn fold_opening_authoritative(&mut self) -> Result<OpeningFold, Failure> {
+        let file = File::open(self.log())?;
+        self.fold_opening_in(file, false)
+    }
+
+    fn fold_opening_in(
+        &mut self,
+        mut file: File,
+        keep_cursor: bool,
+    ) -> Result<OpeningFold, Failure> {
+        let before = fingerprint_in(&file);
+        file.seek(SeekFrom::Start(0))?;
+        let mut tree = crate::model::Tree::default();
+        let mut read_offset = 0;
+        let mut last_line_start = 0;
+        let mut reader = OpeningReader {
+            reader: &file,
+            prefix: OpeningPrefix::default(),
+        };
+        tree.broken_lines = visit_event_lines(
+            &mut BufReader::with_capacity(OPENING_READ_BYTES, &mut reader),
+            false,
+            |line| match serde_json::from_str::<crate::event::Event<crate::event::BorrowedText<'_>>>(
+                line,
+            ) {
+                Ok(event) => {
+                    tree.apply(
+                        event.seq,
+                        event.ts.0.as_ref(),
+                        event.lane.0.as_ref(),
+                        &event.payload,
+                    );
+                    true
+                }
+                Err(_) => false,
+            },
+            |bytes| {
+                last_line_start = read_offset;
+                read_offset += bytes.len() as u64;
+            },
+        )?;
+        let prefix = reader.prefix;
+        tree.sort_nodes();
+        let seen = opening_fingerprint(before, read_offset);
+        let checkpoint = if keep_cursor && prefix.offset == read_offset {
+            opening_checkpoint(&mut file, read_offset, last_line_start).ok()
+        } else {
+            None
+        };
+        validate_opening_file(&file, &self.log())?;
+        if let Some(checkpoint) = checkpoint {
+            self.capture_log = Some(CaptureLog {
+                identity: log_identity(&file).ok(),
+                reader: file,
+                checkpoint,
+                rejected: false,
+                opening_prefix: Some(prefix),
+            });
+        } else {
+            self.capture_log = None;
+            #[cfg(windows)]
+            self.retain_log_reader(&file);
+        }
+        Ok((tree, seen))
+    }
+
     #[cfg(windows)]
     pub(crate) fn needs_log_refold(&self) -> bool {
         self.needs_refold
@@ -1303,6 +1471,7 @@ impl Store {
             identity,
             checkpoint,
             rejected: false,
+            opening_prefix: None,
         });
         #[cfg(windows)]
         {
@@ -1311,6 +1480,35 @@ impl Store {
             self.needs_refold = false;
         }
         Ok(tree)
+    }
+
+    pub(crate) fn refresh_opening(
+        &mut self,
+        lock: &WriteLock,
+        changed_date_without_growth: bool,
+    ) -> Result<Vec<crate::event::Event>, Failure> {
+        if !lock.covers(&self.lock_path()) {
+            return Err(capture_reload_error().into());
+        }
+        let capture = self.capture_log.as_mut().ok_or_else(capture_reload_error)?;
+        let retained = capture
+            .opening_prefix
+            .as_ref()
+            .ok_or_else(capture_reload_error)?;
+        if retained.offset != capture.checkpoint.offset {
+            return Err(capture_reload_error().into());
+        }
+        let mut prefix = OpeningPrefix::default();
+        prefix.extend_to(&mut capture.reader, retained.offset)?;
+        if prefix.digest.clone().finalize() != retained.digest.clone().finalize() {
+            capture.rejected = true;
+            return Err(capture_reload_error().into());
+        }
+        let events = self.refresh_capture(lock, changed_date_without_growth)?;
+        let capture = self.capture_log.as_mut().ok_or_else(capture_reload_error)?;
+        prefix.extend_to(&mut capture.reader, capture.checkpoint.offset)?;
+        capture.opening_prefix = Some(prefix);
+        Ok(events)
     }
 
     pub(crate) fn refresh_capture(
@@ -2182,6 +2380,26 @@ fn visit_events_observed(
     reader: &mut impl BufRead,
     bounded: bool,
     mut accept: impl FnMut(crate::event::Event),
+    observe: impl FnMut(&[u8]),
+) -> Result<usize, Failure> {
+    visit_event_lines(
+        reader,
+        bounded,
+        |line| match serde_json::from_str::<crate::event::Event>(line) {
+            Ok(event) => {
+                accept(event);
+                true
+            }
+            Err(_) => false,
+        },
+        observe,
+    )
+}
+
+fn visit_event_lines(
+    reader: &mut impl BufRead,
+    bounded: bool,
+    mut decode: impl FnMut(&str) -> bool,
     mut observe: impl FnMut(&[u8]),
 ) -> Result<usize, Failure> {
     let mut broken = 0usize;
@@ -2239,12 +2457,11 @@ fn visit_events_observed(
             broken += 1;
             continue;
         }
-        match serde_json::from_str(line) {
-            Ok(e) => accept(e),
-            Err(_) => match crate::event::unknown_reason_for(line) {
+        if !decode(line) {
+            match crate::event::unknown_reason_for(line) {
                 Some(reason) => return Err(newer_vivac_failure(line_no, reason)),
                 None => broken += 1,
-            },
+            }
         }
     }
     Ok(broken)
@@ -2657,6 +2874,64 @@ mod tests {
             drop(store);
             fs::remove_dir_all(root).unwrap();
         }
+    }
+
+    #[test]
+    #[cfg(any(unix, windows))]
+    fn opening_file_validation_rejects_a_replacement_with_an_identical_fingerprint() {
+        let root = crate::artifacts::standalone_root("opening-file-identity");
+        let store = Store::create(&root).unwrap();
+        let path = store.log();
+        let bytes = b"Original log bytes\n";
+        fs::write(&path, bytes).unwrap();
+        let reader = File::open(&path).unwrap();
+        let stamp = reader.metadata().unwrap().modified().unwrap();
+        let before = fingerprint(&path);
+        validate_opening_file(&reader, &path).unwrap();
+        replace_whole(&path, &root.join("replacement"), bytes).unwrap();
+        OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(stamp))
+            .unwrap();
+        assert_eq!(fingerprint(&path), before);
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        assert_ne!(
+            log_identity(&reader).unwrap(),
+            log_identity(&File::open(&path).unwrap()).unwrap()
+        );
+        assert!(validate_opening_file(&reader, &path).is_err());
+        drop(reader);
+        drop(store);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn opening_refresh_without_a_retained_prefix_requires_an_authoritative_fold() {
+        let root = crate::artifacts::standalone_root("opening-prefix");
+        let mut store = Store::create(&root).unwrap();
+        store.load_for_opening().unwrap();
+        store.capture_log.as_mut().unwrap().opening_prefix = None;
+        let before = fs::read(store.log()).unwrap();
+        let lock = store.lock_for_write().unwrap();
+        assert!(store.refresh_opening(&lock, false).is_err());
+        let (tree, _) = store.fold_opening_authoritative().unwrap();
+        assert_eq!(tree.seq, 0);
+        assert_eq!(fs::read(store.log()).unwrap(), before);
+        drop(lock);
+        drop(store);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn opening_fold_keeps_unavailable_metadata_unknown() {
+        let stamp = Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(5));
+        assert_eq!(opening_fingerprint((32, stamp), 96), (96, stamp));
+        assert_eq!(opening_fingerprint((32, None), 96), (96, None));
+        assert_eq!(opening_fingerprint((0, stamp), 64), (64, stamp));
+        assert_eq!(opening_fingerprint((0, None), 0), (0, None));
+        assert_eq!(opening_fingerprint((0, None), 64), (0, None));
     }
 
     #[test]
