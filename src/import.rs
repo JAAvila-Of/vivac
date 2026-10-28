@@ -50,15 +50,16 @@ struct OldNode {
     closed: Option<String>,
 }
 
-fn kind_of(kind: &str) -> Kind {
+fn kind_of(kind: &str) -> Option<Kind> {
     match kind {
-        "goal" => Kind::Goal,
-        "decision" => Kind::Decision,
-        "finding" => Kind::Finding,
+        "goal" => Some(Kind::Goal),
+        "decision" => Some(Kind::Decision),
+        "finding" => Some(Kind::Finding),
         // `run` and `issue` were work subtypes in the spike. The model does
         // not distinguish them: `MODEL.md` §4.2 leaves `task` as the only work
         // entity, and `finding` fits as a field, not as a state.
-        _ => Kind::Task,
+        "work" | "run" | "issue" => Some(Kind::Task),
+        _ => None,
     }
 }
 
@@ -245,6 +246,20 @@ pub fn import(ctx: &mut Ctx, args: &Args) -> R {
         )));
     }
 
+    let bad_kinds: Vec<String> = nodes
+        .iter()
+        .filter(|n| kind_of(&n.kind).is_none())
+        .map(|n| format!("#{} kind", n.id))
+        .collect();
+    if !bad_kinds.is_empty() {
+        return Err(Failure::usage(format!(
+            "import cannot map these spike node kinds, so nothing was\n  \
+             written:\n\n  {}\n\n  \
+             Supported spike kinds: goal, decision, finding, work, run, issue.",
+            bad_kinds.join("\n  ")
+        )));
+    }
+
     let ulids: BTreeMap<u64, String> = nodes.iter().map(|n| (n.id, id::ulid())).collect();
 
     // `t594`: `lock_for_write` can reload the tree if
@@ -295,7 +310,7 @@ pub fn import(ctx: &mut Ctx, args: &Args) -> R {
             Body::NodeCreated {
                 node: ulids[&n.id].clone(),
                 num: n.id,
-                kind: kind_of(&n.kind),
+                kind: kind_of(&n.kind).expect("validated in the pre-pass above"),
                 title: n.title.clone(),
                 why: n.why.clone(),
                 parent: n.parent.and_then(|p| ulids.get(&p).cloned()),

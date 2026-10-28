@@ -451,6 +451,13 @@ it would be a different tree with the same titles.
 `tree.json` of the Python prototype vivac grew out of, which is how the
 trees that predate this binary got here, and it refuses any other file.
 
+The accepted node kinds are `goal`, `decision`, `finding`, `work`, `run`,
+and `issue`. The first three keep their kind; `work`, `run`, and `issue`
+become `task`. Any other kind refuses the entire import before any events
+are written, naming each offending node and its `kind` field. Modern
+kinds such as `constraint` or `rule` are not accepted by this legacy
+format; they are never silently converted to tasks.
+
 The log underneath, `.vivac/events`, is plain JSON lines and nothing stops you
 reading it. What is not written down anywhere is what a line means, and that
 is on purpose rather than an oversight: the format is still moving, which is
