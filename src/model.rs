@@ -655,6 +655,16 @@ impl Tree {
     /// into whichever one the caller is looking from.
     pub fn apply(&mut self, seq: u64, ts: &str, lane: &str, body: &Body) {
         self.seq = self.seq.max(seq);
+        let can_create = match body {
+            Body::NodeCreated { node, num, .. } => {
+                !self.ulid_index.contains_key(node) && !self.nodes.contains_key(num)
+            }
+            _ => false,
+        };
+        let state_num = match body {
+            Body::StateChanged { node, .. } => self.ulid_index.get(node).copied(),
+            _ => None,
+        };
         // No exclusion here, unlike every arm below: "did that lane write
         // after I did?" counts a lane declaring itself and a branch moving
         // just as much as a node, so this runs ahead of the dispatch that
@@ -665,7 +675,6 @@ impl Tree {
             // The event's own lane, not the context's: a stop closes the
             // segment of the lane that made it, never another one's
             // (`t594` ruling B).
-            let s = ensure_lane(&mut self.lanes, lane);
             s.seq_vivac = s.seq_vivac.max(seq);
             s.seg_new = 0;
             s.seg_closed = 0;
@@ -715,7 +724,6 @@ impl Tree {
             // and close a segment nobody opened -- one lane arming another
             // lane's stop, or a context event arming one of its own.
         } else {
-            let s = ensure_lane(&mut self.lanes, lane);
             s.seq_change = s.seq_change.max(seq);
             s.seg_events += 1;
             // Before the close below, so a close counts itself.
@@ -732,9 +740,9 @@ impl Tree {
                 _ => {}
             }
             match body {
-                Body::StateChanged { node, state, .. } if *state == State::Done => {
+                Body::StateChanged { state, .. } if *state == State::Done => {
                     s.stretch.closed += 1;
-                    if let Some(&num) = self.ulid_index.get(node) {
+                    if let Some(num) = state_num {
                         s.stretch.name_closed(num);
                     }
                 }
@@ -750,11 +758,9 @@ impl Tree {
                     s.written.clear();
                     None
                 }
-                Body::NodeCreated { node, num, .. } => (!self.ulid_index.contains_key(node)
-                    && !self.nodes.contains_key(num))
-                .then_some(*num),
-                Body::StateChanged { node, .. }
-                | Body::NodeNoted { node, .. }
+                Body::NodeCreated { num, .. } => can_create.then_some(*num),
+                Body::StateChanged { .. } => state_num,
+                Body::NodeNoted { node, .. }
                 | Body::BlockChanged { node, .. }
                 | Body::FlagRaised { node, .. }
                 | Body::FlagCleared { node, .. }
@@ -785,26 +791,28 @@ impl Tree {
                 arms,
                 against,
             } => {
-                if self.ulid_index.contains_key(node) {
-                    // Repeated creation: commutative, the first one wins.
-                    return;
-                }
-                if let Some(current) = self.nodes.get(num) {
-                    // Two different ULIDs claiming the same `num` -- a hand
-                    // edit, since `next_num` never repeats one on its own.
-                    // With `num` as the key, the second one cannot be kept
-                    // beside the first the way two different ULIDs used to
-                    // sit side by side: one of them has to give way, and the
-                    // same rule as above decides which -- the first stands.
-                    // What used to be findable by scanning `nodes` afterwards
-                    // is recorded here instead, since the losing side never
-                    // makes it into that scan.
-                    self.repeated_nums.push(RepeatedNum {
-                        num: *num,
-                        first: current.alias(),
-                        second: format!("{}{}", kind.prefix(), num),
-                    });
-                    return;
+                if !can_create {
+                    if self.ulid_index.contains_key(node) {
+                        // Repeated creation: commutative, the first one wins.
+                        return;
+                    }
+                    if let Some(current) = self.nodes.get(num) {
+                        // Two different ULIDs claiming the same `num` -- a hand
+                        // edit, since `next_num` never repeats one on its own.
+                        // With `num` as the key, the second one cannot be kept
+                        // beside the first the way two different ULIDs used to
+                        // sit side by side: one of them has to give way, and the
+                        // same rule as above decides which -- the first stands.
+                        // What used to be findable by scanning `nodes` afterwards
+                        // is recorded here instead, since the losing side never
+                        // makes it into that scan.
+                        self.repeated_nums.push(RepeatedNum {
+                            num: *num,
+                            first: current.alias(),
+                            second: format!("{}{}", kind.prefix(), num),
+                        });
+                        return;
+                    }
                 }
                 if matches!(kind, Kind::Pillar | Kind::Rule) {
                     self.has_governance = true;
@@ -889,11 +897,11 @@ impl Tree {
                 self.apply_pending(node, *num);
             }
             Body::StateChanged {
-                node,
                 state,
                 outcome,
                 forced,
                 until,
+                ..
             } => {
                 // Interned **before** the mutable borrow of `self.nodes`
                 // below, so the two never overlap: `intern` needs the whole
@@ -904,7 +912,7 @@ impl Tree {
                 // above -- this is what the index persists.
                 let closed_span = (!state.is_open()).then(|| self.intern(ts));
                 let until_span = until.as_deref().map(|u| self.intern(u));
-                let num = self.resolve_ulid(node);
+                let num = state_num.unwrap_or(u64::MAX);
                 if let Some(n) = self.nodes.get_mut(&num) {
                     n.state = *state;
                     if let Some(s) = outcome_span {

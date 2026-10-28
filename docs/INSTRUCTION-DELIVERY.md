@@ -73,14 +73,12 @@ accepting growth, it compares the complete prior prefix with that state; a
 rewrite followed by an append cannot hide behind an unchanged last line.
 If the prefix, checkpoint, file
 identity or tail cannot be validated by that path, vivac reloads the complete
-authoritative log. On Windows, retained opening readers also compare the file's
-native update sequence number. A changed sequence without growth invalidates
-the cursor even when the file size, modification time and last line match.
-If this read-only query is unavailable, opening uses the full authoritative
-fold instead of retaining an incremental cursor. These checks complement the
-append-only log protocol; they do not establish integrity against privileged
-volume or journal manipulation. A large tail does not shorten the context or
-introduce an artifact-capture limit into opening preparation.
+authoritative log. The complete prefix is checked even when the file size,
+modification time and last line match. File timestamps and native change-journal
+records do not substitute for checking those bytes. An authoritative refresh
+keeps the context on this opening path; a later receipt cannot silently return
+to metadata-only refresh. A large tail does not shorten the context or introduce
+an artifact-capture limit into opening preparation.
 This snapshot contract covers the provenance log, not an atomic snapshot of
 repository files, Git state or native harness configuration.
 

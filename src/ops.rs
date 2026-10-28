@@ -371,7 +371,6 @@ impl Ctx {
                     self.adopt(tree);
                     self.store = store;
                     self.seen = seen;
-                    self.opening_loading = false;
                 }
             }
         } else if refresh && self.capture_loading {

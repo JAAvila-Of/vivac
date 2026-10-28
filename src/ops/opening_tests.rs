@@ -1,6 +1,6 @@
 use super::*;
 use std::fs;
-use std::io::Write;
+use std::io::{Seek, SeekFrom, Write};
 
 struct Fixture(std::path::PathBuf);
 
@@ -391,7 +391,90 @@ fn opening_receipt_refolds_a_rewritten_prefix_followed_by_a_valid_append() {
 }
 
 #[test]
-#[cfg(windows)]
+fn opening_receipt_refolds_a_rewrite_after_an_earlier_refresh_fallback() {
+    let f = Fixture::new();
+    let mut ctx = f.opening();
+    let shown_focus = ctx.tree.focus().map(|node| node.id.clone());
+    f.append(vec![note("A concurrent note"); 65]);
+    ctx.lock_for_write().unwrap();
+    ctx.unlock();
+    let log = ctx.store.log();
+    let stamp = fs::metadata(&log).unwrap().modified().unwrap();
+    let before = crate::store::fingerprint(&log);
+    let original = fs::read_to_string(&log).unwrap();
+    let changed = original.replace("Initial work", "Changed work");
+    assert_eq!(original.len(), changed.len());
+    let lock = f.store().lock_for_write().unwrap();
+    fs::write(&log, changed).unwrap();
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&log)
+        .unwrap()
+        .set_times(fs::FileTimes::new().set_modified(stamp))
+        .unwrap();
+    assert_eq!(crate::store::fingerprint(&log), before);
+    drop(lock);
+    ctx.lock_for_write().unwrap();
+    session_started(&mut ctx, "startup", None, shown_focus, None).unwrap();
+    ctx.unlock();
+    assert_fresh(&ctx);
+    assert_eq!(
+        ctx.tree.resolve("t1").unwrap().title(&ctx.tree),
+        "Changed work"
+    );
+}
+
+#[test]
+fn opening_receipt_refolds_a_rewrite_while_its_writer_remains_open() {
+    let f = Fixture::new();
+    let log = f.store().log();
+    let original = fs::read_to_string(&log).unwrap();
+    let stamp = fs::metadata(&log).unwrap().modified().unwrap();
+    let before = crate::store::fingerprint(&log);
+    let mut writer = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&log)
+        .unwrap();
+    let lock = f.store().lock_for_write().unwrap();
+    writer.seek(SeekFrom::Start(0)).unwrap();
+    writer.write_all(original.as_bytes()).unwrap();
+    writer.flush().unwrap();
+    writer
+        .set_times(fs::FileTimes::new().set_modified(stamp))
+        .unwrap();
+    drop(lock);
+    let mut ctx = f.opening();
+    let shown_focus = ctx.tree.focus().map(|node| node.id.clone());
+    assert_eq!(
+        ctx.tree.resolve("t1").unwrap().title(&ctx.tree),
+        "Initial work"
+    );
+    assert_eq!(crate::store::fingerprint(&log), before);
+    let changed = original.replace("Initial work", "Changed work");
+    assert_eq!(original.len(), changed.len());
+    assert_eq!(original.lines().last(), changed.lines().last());
+    let lock = f.store().lock_for_write().unwrap();
+    writer.seek(SeekFrom::Start(0)).unwrap();
+    writer.write_all(changed.as_bytes()).unwrap();
+    writer.flush().unwrap();
+    writer
+        .set_times(fs::FileTimes::new().set_modified(stamp))
+        .unwrap();
+    assert_eq!(crate::store::fingerprint(&log), before);
+    drop(lock);
+    ctx.lock_for_write().unwrap();
+    session_started(&mut ctx, "startup", None, shown_focus, None).unwrap();
+    ctx.unlock();
+    assert_fresh(&ctx);
+    assert_eq!(
+        ctx.tree.resolve("t1").unwrap().title(&ctx.tree),
+        "Changed work"
+    );
+    drop(writer);
+}
+
+#[test]
 fn opening_receipt_refolds_a_rewrite_with_an_identical_fingerprint() {
     for cached in [false, true] {
         let f = Fixture::new();

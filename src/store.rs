@@ -398,8 +398,6 @@ struct CaptureLog {
     checkpoint: CaptureCheckpoint,
     rejected: bool,
     opening_prefix: Option<OpeningPrefix>,
-    #[cfg(windows)]
-    opening_usn: Option<i64>,
 }
 
 #[derive(Default)]
@@ -438,53 +436,6 @@ impl Read for OpeningReader<'_> {
         self.prefix.offset += count as u64;
         Ok(count)
     }
-}
-
-#[cfg(windows)]
-fn parse_opening_usn(bytes: &[u8]) -> Option<i64> {
-    let length = u32::from_le_bytes(bytes.get(..4)?.try_into().ok()?) as usize;
-    let version = u16::from_le_bytes(bytes.get(4..6)?.try_into().ok()?);
-    let (minimum, offset) = match version {
-        2 => (60, 24),
-        3 => (76, 40),
-        _ => return None,
-    };
-    if length < minimum || length > bytes.len() {
-        return None;
-    }
-    let usn = i64::from_le_bytes(bytes.get(offset..offset + 8)?.try_into().ok()?);
-    (usn != 0).then_some(usn)
-}
-
-#[cfg(windows)]
-fn opening_usn(file: &File) -> Option<i64> {
-    use std::os::windows::io::AsRawHandle;
-    use windows_sys::Win32::System::Ioctl::{FSCTL_READ_FILE_USN_DATA, READ_FILE_USN_DATA};
-    use windows_sys::Win32::System::IO::DeviceIoControl;
-
-    let versions = READ_FILE_USN_DATA {
-        MinMajorVersion: 2,
-        MaxMajorVersion: 3,
-    };
-    let mut bytes = [0u8; 4096];
-    let mut returned = 0;
-    // Both buffers remain valid for this synchronous, read-only query.
-    let success = unsafe {
-        DeviceIoControl(
-            file.as_raw_handle(),
-            FSCTL_READ_FILE_USN_DATA,
-            std::ptr::from_ref(&versions).cast(),
-            std::mem::size_of_val(&versions) as u32,
-            bytes.as_mut_ptr().cast(),
-            bytes.len() as u32,
-            &mut returned,
-            std::ptr::null_mut(),
-        )
-    };
-    if success == 0 {
-        return None;
-    }
-    parse_opening_usn(bytes.get(..returned as usize)?)
 }
 
 fn opening_changed_error() -> std::io::Error {
@@ -1386,8 +1337,6 @@ impl Store {
         keep_cursor: bool,
     ) -> Result<OpeningFold, Failure> {
         let before = fingerprint_in(&file);
-        #[cfg(windows)]
-        let before_usn = opening_usn(&file);
         file.seek(SeekFrom::Start(0))?;
         let mut tree = crate::model::Tree::default();
         let mut read_offset = 0;
@@ -1417,17 +1366,6 @@ impl Store {
         let prefix = reader.prefix;
         tree.sort_nodes();
         let seen = opening_fingerprint(before, read_offset);
-        #[cfg(windows)]
-        let after_usn = opening_usn(&file);
-        #[cfg(windows)]
-        if before_usn
-            .zip(after_usn)
-            .is_some_and(|(before, after)| before != after)
-        {
-            return Err(opening_changed_error().into());
-        }
-        #[cfg(windows)]
-        let keep_cursor = keep_cursor && before_usn.is_some() && before_usn == after_usn;
         let checkpoint = if keep_cursor && prefix.offset == read_offset {
             opening_checkpoint(&mut file, read_offset).ok()
         } else {
@@ -1441,8 +1379,6 @@ impl Store {
                 checkpoint,
                 rejected: false,
                 opening_prefix: Some(prefix),
-                #[cfg(windows)]
-                opening_usn: after_usn,
             });
         } else {
             self.capture_log = None;
@@ -1532,8 +1468,6 @@ impl Store {
             checkpoint,
             rejected: false,
             opening_prefix: None,
-            #[cfg(windows)]
-            opening_usn: None,
         });
         #[cfg(windows)]
         {
@@ -1549,20 +1483,6 @@ impl Store {
         lock: &WriteLock,
         changed_date_without_growth: bool,
     ) -> Result<Vec<crate::event::Event>, Failure> {
-        #[cfg(windows)]
-        {
-            self.refresh_opening_with(lock, changed_date_without_growth, opening_usn)
-        }
-        #[cfg(not(windows))]
-        self.refresh_opening_prefix(lock, changed_date_without_growth, true)
-    }
-
-    fn refresh_opening_prefix(
-        &mut self,
-        lock: &WriteLock,
-        changed_date_without_growth: bool,
-        verify_prefix: bool,
-    ) -> Result<Vec<crate::event::Event>, Failure> {
         if !lock.covers(&self.lock_path()) {
             return Err(capture_reload_error().into());
         }
@@ -1574,56 +1494,16 @@ impl Store {
         if retained.offset != capture.checkpoint.offset {
             return Err(capture_reload_error().into());
         }
-        let mut prefix = if verify_prefix {
-            let mut actual = OpeningPrefix::default();
-            actual.extend_to(&mut capture.reader, retained.offset)?;
-            if actual.digest.clone().finalize() != retained.digest.clone().finalize() {
-                capture.rejected = true;
-                return Err(capture_reload_error().into());
-            }
-            actual
-        } else {
-            OpeningPrefix {
-                offset: retained.offset,
-                digest: retained.digest.clone(),
-            }
-        };
+        let mut prefix = OpeningPrefix::default();
+        prefix.extend_to(&mut capture.reader, retained.offset)?;
+        if prefix.digest.clone().finalize() != retained.digest.clone().finalize() {
+            capture.rejected = true;
+            return Err(capture_reload_error().into());
+        }
         let events = self.refresh_capture(lock, changed_date_without_growth)?;
         let capture = self.capture_log.as_mut().ok_or_else(capture_reload_error)?;
         prefix.extend_to(&mut capture.reader, capture.checkpoint.offset)?;
         capture.opening_prefix = Some(prefix);
-        Ok(events)
-    }
-
-    #[cfg(windows)]
-    fn refresh_opening_with(
-        &mut self,
-        lock: &WriteLock,
-        changed_date_without_growth: bool,
-        mut query: impl FnMut(&File) -> Option<i64>,
-    ) -> Result<Vec<crate::event::Event>, Failure> {
-        if !lock.covers(&self.lock_path()) {
-            return Err(capture_reload_error().into());
-        }
-        let capture = self.capture_log.as_mut().ok_or_else(capture_reload_error)?;
-        let before = query(&capture.reader).ok_or_else(capture_reload_error)?;
-        let retained = capture.opening_usn.ok_or_else(capture_reload_error)?;
-        let length = capture.reader.metadata()?.len();
-        if (length <= capture.checkpoint.offset && before != retained)
-            || (length > capture.checkpoint.offset && before == retained)
-        {
-            capture.rejected = true;
-            return Err(capture_reload_error().into());
-        }
-        let verify_prefix = length > capture.checkpoint.offset;
-        let events =
-            self.refresh_opening_prefix(lock, changed_date_without_growth, verify_prefix)?;
-        let capture = self.capture_log.as_mut().ok_or_else(capture_reload_error)?;
-        if query(&capture.reader) != Some(before) {
-            capture.rejected = true;
-            return Err(capture_reload_error().into());
-        }
-        capture.opening_usn = Some(before);
         Ok(events)
     }
 
@@ -3024,37 +2904,14 @@ mod tests {
     }
 
     #[test]
-    #[cfg(windows)]
-    fn opening_usn_records_require_supported_versions_complete_bounds_and_nonzero_values() {
-        for (version, length, offset) in [(2u16, 60usize, 24usize), (3, 76, 40)] {
-            let mut bytes = vec![0; length];
-            bytes[..4].copy_from_slice(&(length as u32).to_le_bytes());
-            bytes[4..6].copy_from_slice(&version.to_le_bytes());
-            bytes[offset..offset + 8].copy_from_slice(&42i64.to_le_bytes());
-            assert_eq!(parse_opening_usn(&bytes), Some(42));
-            for end in 0..length {
-                assert_eq!(parse_opening_usn(&bytes[..end]), None);
-            }
-            bytes[..4].copy_from_slice(&((length - 1) as u32).to_le_bytes());
-            assert_eq!(parse_opening_usn(&bytes), None);
-            bytes[..4].copy_from_slice(&(length as u32).to_le_bytes());
-            bytes[offset..offset + 8].fill(0);
-            assert_eq!(parse_opening_usn(&bytes), None);
-            bytes[4..6].copy_from_slice(&4u16.to_le_bytes());
-            assert_eq!(parse_opening_usn(&bytes), None);
-        }
-    }
-
-    #[test]
-    #[cfg(windows)]
-    fn opening_refresh_with_an_unavailable_usn_requires_an_authoritative_fold() {
-        let root = crate::artifacts::standalone_root("opening-usn");
+    fn opening_refresh_without_a_retained_prefix_requires_an_authoritative_fold() {
+        let root = crate::artifacts::standalone_root("opening-prefix");
         let mut store = Store::create(&root).unwrap();
-        store.fold_for_capture().unwrap();
-        store.capture_log.as_mut().unwrap().opening_usn = Some(42);
+        store.load_for_opening().unwrap();
+        store.capture_log.as_mut().unwrap().opening_prefix = None;
         let before = fs::read(store.log()).unwrap();
         let lock = store.lock_for_write().unwrap();
-        assert!(store.refresh_opening_with(&lock, false, |_| None).is_err());
+        assert!(store.refresh_opening(&lock, false).is_err());
         let (tree, _) = store.fold_opening_authoritative().unwrap();
         assert_eq!(tree.seq, 0);
         assert_eq!(fs::read(store.log()).unwrap(), before);
