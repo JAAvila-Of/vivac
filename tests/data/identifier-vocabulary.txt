@@ -174,6 +174,7 @@ assemble
 assert
 assertions
 asset
+assets
 assign
 assignment
 assignments
@@ -223,6 +224,7 @@ backed
 backend
 backslash
 backtick
+backup
 backwards
 bad
 badge
@@ -639,6 +641,7 @@ cuts
 cwd
 cyan
 cycle
+cycles
 d200
 dacl
 damage
@@ -777,6 +780,7 @@ disables
 disabling
 disagrees
 disappear
+disappears
 discard
 discarding
 disclosing
@@ -952,6 +956,7 @@ exclude
 excluded
 excludes
 excluding
+exclusion
 exclusive
 excuse
 exe
@@ -1023,6 +1028,7 @@ fetched
 ffi
 field
 fields
+fifo
 file
 filename
 fileno
@@ -1439,6 +1445,7 @@ lane
 lanes
 language
 large
+larger
 last
 late
 later
@@ -1706,6 +1713,7 @@ nofollow
 nomutex
 non
 nonalert
+nonblock
 nonblocking
 noncanonical
 nonce
@@ -1715,6 +1723,7 @@ nonexistent
 noninteractive
 nonobject
 nonoverlapping
+nonregular
 nonterminal
 nonzero
 noon
@@ -1801,6 +1810,7 @@ order
 ordered
 ordering
 orders
+ordinal
 ordinary
 orientation
 orig
@@ -1845,6 +1855,7 @@ overwritten
 own
 owned
 owner
+owners
 ownership
 p11
 p12
@@ -2018,6 +2029,7 @@ println
 prints
 prior
 prioritizes
+privacy
 private
 privatecache
 probe
@@ -2151,6 +2163,7 @@ record
 recorded
 recording
 records
+recover
 recovered
 recovers
 recovery
@@ -2158,6 +2171,7 @@ recreates
 recreating
 recreation
 rect
+recursion
 recursive
 recv
 red
@@ -2200,6 +2214,7 @@ registered
 registers
 registry
 regular
+rehashed
 rehashing
 reindex
 reinstalled
@@ -2297,6 +2312,7 @@ reservation
 reservations
 reserve
 reserved
+reserves
 reset
 resident
 residual
@@ -2314,6 +2330,7 @@ response
 responses
 rest
 restamp
+restoration
 restore
 restored
 restores
@@ -2590,6 +2607,7 @@ speaking
 speaks
 spec
 specific
+specification
 spelled
 spelling
 spellings
@@ -2745,6 +2763,7 @@ take
 taken
 takes
 taking
+tampering
 tar
 target
 targets
@@ -2850,6 +2869,7 @@ transparent
 transport
 transpose
 travels
+traversal
 treat
 treated
 tree
