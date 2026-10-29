@@ -1,9 +1,9 @@
 //! Selected local deliveries retain bytes outside the provenance tree.
 pub(crate) mod bundle;
-mod files;
+pub(crate) mod files;
 mod guard;
 mod media;
-mod native;
+pub(crate) mod native;
 pub(crate) mod policy;
 #[cfg(test)]
 mod policy_budgets;
@@ -626,6 +626,83 @@ fn replay(tree: &Tree) -> Result<Ledger<'_>, Failure> {
         projection: Some(&tree.artifact_projection),
         ..Ledger::default()
     })
+}
+
+pub(crate) fn backup_lanes(tree: &Tree) -> Result<std::collections::BTreeSet<String>, Failure> {
+    Ok(replay(tree)?
+        .entries()
+        .map(|revision| revision.lane.to_owned())
+        .collect())
+}
+
+#[cfg(test)]
+pub(crate) fn backup_files(
+    tree: &Tree,
+    lane: &str,
+    root: &Path,
+) -> Result<Vec<(String, String)>, Failure> {
+    if !backup_lanes(tree)?.contains(lane) {
+        return Ok(Vec::new());
+    }
+    let root = files::open_root(root)?;
+    backup_files_in(tree, lane, &root)
+}
+
+pub(crate) fn backup_files_in(
+    tree: &Tree,
+    lane: &str,
+    root: &cap_std::fs::Dir,
+) -> Result<Vec<(String, String)>, Failure> {
+    let ledger = replay(tree)?;
+    let mut files = Vec::new();
+    let mut has_revisions = false;
+    for revision in ledger.entries().filter(|revision| revision.lane == lane) {
+        has_revisions = true;
+        if revision.is_bundle() {
+            let manifest = bundle::check_in(root, revision.object, revision.digest, revision.size)?;
+            match_bundle_manifest(&revision, &manifest)?;
+            files.push((
+                format!(".vivac-artifacts/{}/.vivac-delivery.json", revision.object),
+                revision.digest.to_owned(),
+            ));
+            files.extend(manifest.members.into_iter().map(|member| {
+                (
+                    format!(".vivac-artifacts/{}/{}", revision.object, member.path),
+                    member.sha256,
+                )
+            }));
+        } else {
+            let actual = files::inspect_retained_with_inspection_in(
+                root,
+                revision.object,
+                revision.inspection,
+            )?;
+            if actual
+                .as_ref()
+                .is_none_or(|(digest, size)| digest != revision.digest || *size != revision.size)
+            {
+                return Err(Failure::Model(
+                    "A required retained artifact is missing or changed.".into(),
+                ));
+            }
+            files.push((
+                format!(".vivac-artifacts/{}", revision.object),
+                revision.digest.to_owned(),
+            ));
+        }
+        if files.len() > 4096 {
+            return Err(Failure::usage("Backup custody exceeds the file limit."));
+        }
+    }
+    if has_revisions {
+        if let Some(site) = files::site_id_in(root)? {
+            files.push((
+                ".vivac-artifacts/.site".into(),
+                crate::agents::adapters::digest(site.as_bytes()),
+            ));
+        }
+    }
+    Ok(files)
 }
 
 fn diagnostic_ledger(tree: &Tree) -> Ledger<'_> {
@@ -1366,6 +1443,11 @@ fn bundle_manifest(
     } else {
         bundle::read_manifest(root, revision.object, revision.digest, revision.size)?
     };
+    match_bundle_manifest(revision, &manifest)?;
+    Ok(manifest)
+}
+
+fn match_bundle_manifest(revision: &Revision, manifest: &bundle::Manifest) -> Result<(), Failure> {
     if revision.entrypoint != Some(manifest.entrypoint.as_str())
         || revision.member_count != Some(manifest.members.len())
         || revision.manifest_bytes != Some(manifest.manifest_bytes)
@@ -1392,7 +1474,7 @@ fn bundle_manifest(
             "Bundle manifest does not match its custody receipt.".into(),
         ));
     }
-    Ok(manifest)
+    Ok(())
 }
 
 fn retained_check(root: &Path, revision: &Revision) -> Value {
@@ -2336,6 +2418,125 @@ mod tests {
         project: crate::project::Project,
         root: PreviewRoot,
         delivery: Value,
+    }
+
+    #[test]
+    fn backup_inventory_requires_retained_bytes_and_excludes_unrecorded_files() {
+        let (root, mut ctx, producer) = capture_commit_fixture();
+        let args = Args::parse(vec![
+            "capture".into(),
+            "--description=Selected backup fixture".into(),
+            "mockup.html".into(),
+            format!("--from={producer}"),
+        ])
+        .unwrap();
+        let delivery = capture(&mut ctx, &args).unwrap()["delivery"].clone();
+        let object = format!(".vivac-artifacts/{}", delivery["object"].as_str().unwrap());
+        fs::write(
+            root.join(".vivac-artifacts/objects/unrecorded.blob"),
+            b"orphan",
+        )
+        .unwrap();
+        let lane = ctx.lane.as_deref().unwrap_or(crate::lane::MAIN);
+        let files = backup_files(&ctx.tree, lane, &root).unwrap();
+        assert_eq!(files.len(), 2);
+        assert!(files.iter().any(
+            |(path, digest)| path == &object && digest == delivery["digest"].as_str().unwrap()
+        ));
+        assert!(files
+            .iter()
+            .any(|(path, _)| path == ".vivac-artifacts/.site"));
+        fs::remove_file(root.join(object)).unwrap();
+        assert!(backup_files(&ctx.tree, lane, &root).is_err());
+        ctx.unlock();
+        drop(ctx);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn backup_inventory_preserves_all_revisions_and_historical_insecure_policy() {
+        let mut fixture = PreviewFixture::new("mockup.html");
+        let policy = |enabled| {
+            request_args(&json!({"operation":"policy", "allow_insecure_artifacts":enabled}))
+                .unwrap()
+        };
+        assert_eq!(run_project_value(&mut fixture.project, &policy(true)).1, 0);
+        fs::write(
+            fixture.root.join("mockup.html"),
+            b"<html>person@example.com</html>",
+        )
+        .unwrap();
+        let args = request_args(&json!({
+            "operation":"capture", "path":"mockup.html", "from":fixture.delivery["producer"],
+            "artifact":fixture.delivery["artifact"], "previous":fixture.delivery["revision"],
+            "description":"Selected historical policy fixture"
+        }))
+        .unwrap();
+        let (captured, code) = run_project_value(&mut fixture.project, &args);
+        assert_eq!(code, 0);
+        let later = captured["delivery"].clone();
+        assert_eq!(later["inspection"]["sensitivity"], "detected");
+        assert_eq!(run_project_value(&mut fixture.project, &policy(false)).1, 0);
+        fs::remove_file(fixture.root.join("mockup.html")).unwrap();
+        let files = fixture
+            .project
+            .write(|ctx| {
+                backup_files(
+                    &ctx.tree,
+                    ctx.lane.as_deref().unwrap_or(crate::lane::MAIN),
+                    &ctx.lane_dir,
+                )
+            })
+            .unwrap();
+        assert_eq!(files.len(), 3);
+        for revision in [&fixture.delivery, &later] {
+            let path = format!(".vivac-artifacts/{}", revision["object"].as_str().unwrap());
+            assert!(files.iter().any(|(member, digest)| member == &path
+                && digest == revision["digest"].as_str().unwrap()));
+        }
+    }
+
+    #[test]
+    fn backup_inventory_reads_retained_blobs_through_a_pinned_preparation() {
+        use std::io::Write;
+        let mut fixture = PreviewFixture::new("mockup.html");
+        let expected = fixture
+            .project
+            .write(|ctx| {
+                backup_files(
+                    &ctx.tree,
+                    ctx.lane.as_deref().unwrap_or(crate::lane::MAIN),
+                    &ctx.lane_dir,
+                )
+            })
+            .unwrap();
+        let parent = files::open_root(&fixture.root).unwrap();
+        let preparation = native::Preparation::new(&parent).unwrap();
+        preparation.dir.create_dir(".vivac-artifacts").unwrap();
+        preparation
+            .dir
+            .create_dir(".vivac-artifacts/objects")
+            .unwrap();
+        for (path, _) in &expected {
+            let bytes = fs::read(fixture.root.join(path)).unwrap();
+            preparation
+                .dir
+                .create(path)
+                .unwrap()
+                .write_all(&bytes)
+                .unwrap();
+        }
+        let actual = fixture
+            .project
+            .write(|ctx| {
+                backup_files_in(
+                    &ctx.tree,
+                    ctx.lane.as_deref().unwrap_or(crate::lane::MAIN),
+                    &preparation.dir,
+                )
+            })
+            .unwrap();
+        assert_eq!(actual, expected);
     }
 
     #[test]

@@ -4,9 +4,9 @@ use cap_fs_ext::DirExt;
 use cap_std::fs::Dir;
 use std::io;
 
-pub(super) const SUPPORTED: bool = cfg!(any(target_os = "linux", target_os = "macos", windows));
+pub(crate) const SUPPORTED: bool = cfg!(any(target_os = "linux", target_os = "macos", windows));
 
-pub(super) fn sync_preparation(dir: &Dir) -> Result<(), Failure> {
+pub(crate) fn sync_preparation(dir: &Dir) -> Result<(), Failure> {
     #[cfg(windows)]
     {
         // The retained native handle has FILE_ALL_ACCESS. Reopening a directory
@@ -21,15 +21,15 @@ pub(super) fn sync_preparation(dir: &Dir) -> Result<(), Failure> {
     }
 }
 
-pub(super) struct Preparation {
+pub(crate) struct Preparation {
     parent: Dir,
-    pub(super) name: String,
-    pub(super) dir: Dir,
+    pub(crate) name: String,
+    pub(crate) dir: Dir,
     published: bool,
 }
 
 impl Preparation {
-    pub(super) fn new(parent: &Dir) -> Result<Self, Failure> {
+    pub(crate) fn new(parent: &Dir) -> Result<Self, Failure> {
         if !SUPPORTED {
             return Err(Failure::usage(
                 "Exclusive native bundle publication is unavailable on this platform.",
@@ -45,7 +45,7 @@ impl Preparation {
         })
     }
 
-    pub(super) fn publish(&mut self, destination: &Dir, name: &str) -> Result<(), Failure> {
+    pub(crate) fn publish(&mut self, destination: &Dir, name: &str) -> Result<(), Failure> {
         self.same_directory()?;
         publish_exclusive(&self.parent, &self.name, &self.dir, destination, name)?;
         self.published = true;

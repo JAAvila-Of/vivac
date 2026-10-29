@@ -16,9 +16,8 @@
 //! `Config::project_id`: `Store::open` regenerates a missing `config`,
 //! which would mint a fresh id for a project that already has one.
 //!
-//! Written as a side effect of using a project, never as its own command,
-//! and never allowed to turn a working command into a failing one: see
-//! `note`.
+//! Ordinary sightings never fail their caller: see `note`. Explicit moves,
+//! backup creation and recovery require a durable registry update instead.
 
 use crate::failure::Failure;
 use serde::{Deserialize, Serialize};
@@ -52,7 +51,7 @@ const VERSION: u32 = 2;
 /// (`t640`) rather than derived from whichever folder `path` happens to
 /// name today -- `None` is exactly today's shape, and stays the shape of
 /// every entry nobody ever named on purpose.
-#[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 struct Project {
     path: String,
     #[serde(default)]
@@ -185,6 +184,329 @@ pub fn record_move(store_dir: &Path, project_id: &str, s: Sighting<'_>) -> std::
     };
     apply_sighting(&mut projects, project_id, &s);
     write(store_dir, &path, &projects)
+}
+
+/// Records the authoritative source durably before publishing a backup.
+pub(crate) fn backup_origin(project_id: &str, root: &Path) -> Result<(), Failure> {
+    let registry = recovery_registry_dir()?;
+    backup_origin_in(&registry, project_id, root)
+}
+
+fn recovery_registry_dir() -> Result<PathBuf, Failure> {
+    crate::store::store_dir().ok_or_else(|| {
+        Failure::Io(std::io::Error::other(
+            "The local project registry is unavailable",
+        ))
+    })
+}
+
+fn backup_origin_in(store_dir: &Path, project_id: &str, root: &Path) -> Result<(), Failure> {
+    std::fs::create_dir_all(store_dir)?;
+    let _lock = crate::store::lock_with_deadline(&store_dir.join(LOCK), LOCK_WAIT)?;
+    let path = store_dir.join(FILE);
+    let mut projects = read_strict(&path)?;
+    if first_event_id_strict(root)?.as_deref() != Some(project_id) {
+        return Err(Failure::Model(
+            "The backup source no longer holds the expected tree".into(),
+        ));
+    }
+    if let Some(entry) = projects.get(project_id) {
+        for other in
+            std::iter::once(entry.path.as_str()).chain(entry.copies.iter().map(String::as_str))
+        {
+            let other = Path::new(other);
+            if !crate::anchor::same_folder(other, root)
+                && first_event_id_strict(other)?.as_deref() == Some(project_id)
+            {
+                return Err(Failure::Model(
+                    "Another known live copy of this tree must be retired before backup".into(),
+                ));
+            }
+        }
+    }
+    let root = std::fs::canonicalize(root)?;
+    let root = registry_path(&root)?;
+    let entry = projects.entry(project_id.to_owned()).or_default();
+    entry.path = root;
+    write(store_dir, &path, &projects)?;
+    Ok(())
+}
+
+/// Reserves the new authority under the registry lock before publication.
+pub(crate) fn publish_recovery<F>(
+    project_id: &str,
+    destination: &Path,
+    lane_roots: &BTreeMap<String, PathBuf>,
+    publish: F,
+) -> Result<(), Failure>
+where
+    F: FnOnce() -> Result<(), Failure>,
+{
+    let registry = recovery_registry_dir()?;
+    publish_recovery_in(&registry, project_id, destination, lane_roots, publish)
+}
+
+fn publish_recovery_in<F>(
+    store_dir: &Path,
+    project_id: &str,
+    destination: &Path,
+    lane_roots: &BTreeMap<String, PathBuf>,
+    publish: F,
+) -> Result<(), Failure>
+where
+    F: FnOnce() -> Result<(), Failure>,
+{
+    let destination = absolute(destination);
+    let lane_paths = recovery_lane_paths(&destination, lane_roots)?;
+    std::fs::create_dir_all(store_dir)?;
+    let _lock = crate::store::lock_with_deadline(&store_dir.join(LOCK), LOCK_WAIT)?;
+    let path = store_dir.join(FILE);
+    let mut projects = read_strict(&path)?;
+    match std::fs::symlink_metadata(&destination) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+        Ok(_) => {
+            return Err(Failure::Model(
+                "The recovery destination already exists".into(),
+            ))
+        }
+    }
+    if let Some(entry) = projects.get(project_id) {
+        for root in
+            std::iter::once(entry.path.as_str()).chain(entry.copies.iter().map(String::as_str))
+        {
+            if first_event_id_strict(Path::new(root))?.as_deref() == Some(project_id) {
+                return Err(Failure::Model(
+                    "A known live tree with this identity must be retired before recovery".into(),
+                ));
+            }
+        }
+    }
+    let previous = projects.remove(project_id);
+    let mut reservation = previous.clone().unwrap_or_else(|| {
+        use sha2::{Digest, Sha256};
+        let digest = format!("{:x}", Sha256::digest(project_id.as_bytes()));
+        Project {
+            name: Some(format!("recovered-{}", &digest[..12])),
+            ..Project::default()
+        }
+    });
+    reservation.path = registry_path(&destination)?;
+    reservation.lanes = lane_paths;
+    projects.insert(project_id.to_owned(), reservation.clone());
+    write(store_dir, &path, &projects)?;
+    let result = publish().and_then(|()| {
+        if first_event_id_strict(&destination)?.as_deref() == Some(project_id) {
+            Ok(())
+        } else {
+            Err(Failure::Model(
+                "The published recovery does not hold the expected tree".into(),
+            ))
+        }
+    });
+    if let Err(error) = result {
+        let authority = first_event_id_strict(&destination).map_err(|check| {
+            Failure::Io(std::io::Error::other(format!(
+                "{}; could not determine the published recovery authority: {}",
+                error.message(),
+                check.message()
+            )))
+        })?;
+        if authority.as_deref() != Some(project_id) {
+            let rollback = (|| -> Result<(), Failure> {
+                let mut projects = read_strict(&path)?;
+                if projects.get(project_id) != Some(&reservation) {
+                    return Ok(());
+                }
+                match previous {
+                    Some(entry) => {
+                        projects.insert(project_id.to_owned(), entry);
+                    }
+                    None => {
+                        projects.remove(project_id);
+                    }
+                }
+                write(store_dir, &path, &projects)?;
+                Ok(())
+            })();
+            if let Err(rollback) = rollback {
+                return Err(Failure::Io(std::io::Error::other(format!(
+                    "{}; could not undo the recovery reservation: {}",
+                    error.message(),
+                    rollback.message()
+                ))));
+            }
+        }
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn recovery_lane_paths(
+    destination: &Path,
+    lane_roots: &BTreeMap<String, PathBuf>,
+) -> Result<BTreeMap<String, String>, Failure> {
+    let mut aliases = std::collections::BTreeSet::new();
+    let mut owners = 0;
+    let mut paths = BTreeMap::new();
+    for (lane, root) in lane_roots {
+        crate::backup::lane_id(lane)?;
+        if !aliases.insert(lane.to_ascii_lowercase()) {
+            return Err(Failure::Model(
+                "Recovery lane identities must not have case aliases".into(),
+            ));
+        }
+        if root == destination {
+            owners += 1;
+        } else if root != &destination.join("lanes").join(lane) {
+            return Err(Failure::Model(
+                "Recovery lane roots must use their declared destination layout".into(),
+            ));
+        }
+        paths.insert(lane.clone(), registry_path(root)?);
+    }
+    if owners != 1 {
+        return Err(Failure::Model(
+            "Recovery requires exactly one lane at the destination root".into(),
+        ));
+    }
+    Ok(paths)
+}
+
+fn registry_path(path: &Path) -> Result<String, Failure> {
+    path.to_str().map(str::to_owned).ok_or_else(|| {
+        Failure::Model("The project path cannot be represented in the local registry".into())
+    })
+}
+
+fn first_event_id_strict(root: &Path) -> Result<Option<String>, Failure> {
+    use crate::artifacts::files;
+    use cap_fs_ext::{FollowSymlinks, OpenOptionsFollowExt};
+    use std::io::{BufRead, Read};
+
+    let store = root.join(crate::store::DIR);
+    let path = store.join(crate::store::LOG);
+    for directory in [root, store.as_path()] {
+        let metadata = match std::fs::symlink_metadata(directory) {
+            Ok(metadata) => cap_std::fs::Metadata::from_just_metadata(metadata),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        files::reject_link(&metadata)?;
+        if !metadata.is_dir() {
+            return Err(Failure::usage("A known tree requires regular directories."));
+        }
+    }
+    let before = match std::fs::symlink_metadata(&path) {
+        Ok(metadata) => cap_std::fs::Metadata::from_just_metadata(metadata),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    files::reject_link(&before)?;
+    if !before.is_file() {
+        return Err(Failure::usage("A known tree requires a regular event log."));
+    }
+    let mut options = cap_std::fs::OpenOptions::new();
+    options.read(true).follow(FollowSymlinks::No);
+    #[cfg(unix)]
+    {
+        use cap_std::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    // Open the leaf directly: reopening the workspace directory would conflict
+    // with a recovered preparation's retained Windows DELETE pin.
+    let file =
+        match cap_std::fs::File::open_ambient_with(&path, &options, cap_std::ambient_authority()) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+    let metadata = file.metadata()?;
+    files::reject_link(&metadata)?;
+    files::require_single_link(&file)?;
+    if !metadata.is_file() || metadata.len() > crate::backup::MAX_FILE {
+        return Err(Failure::usage(
+            "A known tree event log exceeds its supported profile.",
+        ));
+    }
+    let mut line = String::new();
+    std::io::BufReader::new(file.take(metadata.len())).read_line(&mut line)?;
+    let event: crate::event::Event = serde_json::from_str(line.trim_end()).map_err(|_| {
+        Failure::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "A known tree has an unreadable first event",
+        ))
+    })?;
+    Ok(Some(event.id))
+}
+
+/// Maintenance must preserve a registry it cannot understand.
+fn read_strict(path: &Path) -> Result<BTreeMap<String, Project>, Failure> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct StrictProject {
+        path: String,
+        #[serde(default)]
+        repos: Vec<String>,
+        #[serde(default)]
+        lanes: BTreeMap<String, String>,
+        #[serde(default)]
+        copies: Vec<String>,
+        #[serde(default)]
+        name: Option<String>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StrictEntry {
+        V1(String),
+        V2(StrictProject),
+    }
+
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct StrictRegistry {
+        version: u32,
+        projects: BTreeMap<String, StrictEntry>,
+    }
+
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
+        Err(error) => return Err(error.into()),
+    };
+    let on_disk: StrictRegistry = serde_json::from_str(&text).map_err(|_| {
+        Failure::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "The local project registry is corrupt",
+        ))
+    })?;
+    if !(1..=VERSION).contains(&on_disk.version) {
+        return Err(Failure::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "The local project registry version is unsupported",
+        )));
+    }
+    Ok(on_disk
+        .projects
+        .into_iter()
+        .map(|(id, entry)| {
+            let project = match entry {
+                StrictEntry::V1(path) => Project {
+                    path,
+                    ..Project::default()
+                },
+                StrictEntry::V2(project) => Project {
+                    path: project.path,
+                    repos: project.repos,
+                    lanes: project.lanes,
+                    copies: project.copies,
+                    name: project.name,
+                },
+            };
+            (id, project)
+        })
+        .collect())
 }
 
 /// Whether another folder on this machine still holds a tree that starts
@@ -1148,6 +1470,655 @@ mod tests {
         let root = temp_dir(prefix);
         let id = seed_at(&root);
         (root, id)
+    }
+
+    fn recovery_lane_roots(destination: &Path) -> BTreeMap<String, PathBuf> {
+        BTreeMap::from([(crate::lane::MAIN.to_owned(), destination.to_path_buf())])
+    }
+
+    #[test]
+    fn backup_origin_is_idempotent_and_preserves_other_projects() {
+        let registry = Owned(temp_dir("backup-origin-registry"));
+        let (root, id) = seeded_project("backup-origin");
+        let root = Owned(root);
+        let (other, other_id) = seeded_project("backup-other");
+        let other = Owned(other);
+        note(&registry.0, &other_id, sighting(&other.0));
+        let before = read(&registry.0.join(FILE)).unwrap();
+        backup_origin_in(&registry.0, &id, &root.0).unwrap();
+        backup_origin_in(&registry.0, &id, &root.0).unwrap();
+        let after = read(&registry.0.join(FILE)).unwrap();
+        assert_eq!(after.get(&other_id), before.get(&other_id));
+        assert!(crate::anchor::same_folder(
+            Path::new(&after.get(&id).unwrap().path),
+            &root.0
+        ));
+    }
+
+    #[test]
+    fn backup_origin_refuses_a_known_live_copy_or_wrong_identity() {
+        let registry = Owned(temp_dir("backup-copy-registry"));
+        let (root, id) = seeded_project("backup-copy-origin");
+        let root = Owned(root);
+        let copy = Owned(temp_dir("backup-copy"));
+        std::fs::create_dir_all(copy.0.join(store::DIR)).unwrap();
+        std::fs::copy(
+            root.0.join(store::DIR).join(store::LOG),
+            copy.0.join(store::DIR).join(store::LOG),
+        )
+        .unwrap();
+        note(&registry.0, &id, sighting(&root.0));
+        note(&registry.0, &id, sighting(&copy.0));
+        let before = std::fs::read(registry.0.join(FILE)).unwrap();
+        assert!(backup_origin_in(&registry.0, &id, &root.0).is_err());
+        assert!(backup_origin_in(&registry.0, "wrong", &root.0).is_err());
+        assert_eq!(std::fs::read(registry.0.join(FILE)).unwrap(), before);
+    }
+
+    #[test]
+    fn recovery_refuses_live_authority_without_calling_publish() {
+        let registry = Owned(temp_dir("recovery-live-registry"));
+        let (root, id) = seeded_project("recovery-live-origin");
+        let root = Owned(root);
+        let destination = Owned(temp_dir("recovery-live-destination"));
+        note(&registry.0, &id, sighting(&root.0));
+        let called = std::cell::Cell::new(false);
+        assert!(publish_recovery_in(
+            &registry.0,
+            &id,
+            &destination.0,
+            &recovery_lane_roots(&destination.0),
+            || {
+                called.set(true);
+                Ok(())
+            }
+        )
+        .is_err());
+        assert!(!called.get());
+        assert!(!destination.0.exists());
+    }
+
+    #[test]
+    fn recovery_reserves_before_publication_after_original_disappears() {
+        let registry = Owned(temp_dir("recovery-reserve-registry"));
+        let (root, id) = seeded_project("recovery-reserve-origin");
+        let root = Owned(root);
+        let destination = Owned(temp_dir("recovery-reserve-destination"));
+        note(&registry.0, &id, sighting(&root.0));
+        let staging = Owned(temp_dir("recovery-reserve-staging"));
+        std::fs::rename(&root.0, &staging.0).unwrap();
+        publish_recovery_in(
+            &registry.0,
+            &id,
+            &destination.0,
+            &recovery_lane_roots(&destination.0),
+            || {
+                let projects = read(&registry.0.join(FILE)).unwrap();
+                assert_eq!(Path::new(&projects.get(&id).unwrap().path), destination.0);
+                assert!(!destination.0.exists());
+                std::fs::rename(&staging.0, &destination.0)?;
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            store::first_event_id(&destination.0).as_deref(),
+            Some(id.as_str())
+        );
+    }
+
+    #[test]
+    fn recovery_failed_publication_restores_only_its_reservation() {
+        let registry = Owned(temp_dir("recovery-failed-registry"));
+        let (other, other_id) = seeded_project("recovery-failed-other");
+        let other = Owned(other);
+        note(&registry.0, &other_id, sighting(&other.0));
+        let before = read(&registry.0.join(FILE)).unwrap();
+        let destination = Owned(temp_dir("recovery-failed-destination"));
+        let result = publish_recovery_in(
+            &registry.0,
+            "unknown-id",
+            &destination.0,
+            &recovery_lane_roots(&destination.0),
+            || {
+                assert!(read(&registry.0.join(FILE))
+                    .unwrap()
+                    .contains_key("unknown-id"));
+                Err(Failure::Model("publication failed".into()))
+            },
+        );
+        assert!(matches!(result, Err(Failure::Model(message)) if message == "publication failed"));
+        assert_eq!(read(&registry.0.join(FILE)).unwrap(), before);
+    }
+
+    #[test]
+    fn recovery_refuses_a_live_copy_after_original_disappears() {
+        let registry = Owned(temp_dir("recovery-copy-registry"));
+        let (root, id) = seeded_project("recovery-copy-origin");
+        let root = Owned(root);
+        let copy = Owned(temp_dir("recovery-copy"));
+        std::fs::create_dir_all(copy.0.join(store::DIR)).unwrap();
+        std::fs::copy(
+            root.0.join(store::DIR).join(store::LOG),
+            copy.0.join(store::DIR).join(store::LOG),
+        )
+        .unwrap();
+        note(&registry.0, &id, sighting(&root.0));
+        note(&registry.0, &id, sighting(&copy.0));
+        std::fs::remove_dir_all(&root.0).unwrap();
+        let destination = Owned(temp_dir("recovery-copy-destination"));
+        assert!(publish_recovery_in(
+            &registry.0,
+            &id,
+            &destination.0,
+            &recovery_lane_roots(&destination.0),
+            || { panic!("a live copy must refuse before publication") }
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn recovery_keeps_reservation_if_failed_publication_left_a_live_tree() {
+        let registry = Owned(temp_dir("recovery-partial-registry"));
+        let (staging, id) = seeded_project("recovery-partial-staging");
+        let staging = Owned(staging);
+        let destination = Owned(temp_dir("recovery-partial-destination"));
+        let result = publish_recovery_in(
+            &registry.0,
+            &id,
+            &destination.0,
+            &recovery_lane_roots(&destination.0),
+            || {
+                std::fs::rename(&staging.0, &destination.0)?;
+                Err(Failure::Model("publication sync failed".into()))
+            },
+        );
+        assert!(
+            matches!(result, Err(Failure::Model(message)) if message == "publication sync failed")
+        );
+        let projects = read(&registry.0.join(FILE)).unwrap();
+        assert_eq!(Path::new(&projects.get(&id).unwrap().path), destination.0);
+    }
+
+    #[test]
+    fn recovery_failed_publication_restores_previous_project_metadata() {
+        let registry = Owned(temp_dir("recovery-restore-registry"));
+        let (root, id) = seeded_project("recovery-restore-origin");
+        let root = Owned(root);
+        note(
+            &registry.0,
+            &id,
+            Sighting {
+                root: &root.0,
+                lane: Some((crate::lane::MAIN, &root.0)),
+                repos: Some(&["repository-root".into()]),
+            },
+        );
+        note(
+            &registry.0,
+            &id,
+            Sighting {
+                root: &root.0,
+                lane: Some(("01j00000000000000000000000", &root.0.join("old-lane"))),
+                repos: None,
+            },
+        );
+        set_name(&registry.0, &id, "Named project");
+        std::fs::remove_dir_all(&root.0).unwrap();
+        let before = read(&registry.0.join(FILE)).unwrap();
+        let destination = Owned(temp_dir("recovery-restore-destination"));
+        assert!(publish_recovery_in(
+            &registry.0,
+            &id,
+            &destination.0,
+            &recovery_lane_roots(&destination.0),
+            || {
+                let projects = read(&registry.0.join(FILE)).unwrap();
+                let reserved = projects.get(&id).unwrap();
+                assert_eq!(reserved.lanes.len(), 1);
+                assert_eq!(
+                    Path::new(reserved.lanes.get(crate::lane::MAIN).unwrap()),
+                    destination.0
+                );
+                Err(Failure::Model("publication failed".into()))
+            }
+        )
+        .is_err());
+        assert_eq!(read(&registry.0.join(FILE)).unwrap(), before);
+    }
+
+    #[test]
+    fn backup_recovery_reservation_replaces_previous_lane_paths() {
+        let registry = Owned(temp_dir("recovery-lanes-registry"));
+        let (root, id) = seeded_project("recovery-lanes-origin");
+        let root = Owned(root);
+        let old_lane = Owned(temp_dir("recovery-lanes-old"));
+        let other_lane = "01j00000000000000000000000";
+        note(
+            &registry.0,
+            &id,
+            Sighting {
+                root: &root.0,
+                lane: Some((crate::lane::MAIN, &root.0)),
+                repos: Some(&["repository-root".into()]),
+            },
+        );
+        note(
+            &registry.0,
+            &id,
+            Sighting {
+                root: &root.0,
+                lane: Some((other_lane, &old_lane.0)),
+                repos: None,
+            },
+        );
+        set_name(&registry.0, &id, "Named project");
+        let staging = Owned(temp_dir("recovery-lanes-staging"));
+        std::fs::rename(&root.0, &staging.0).unwrap();
+        let destination = Owned(temp_dir("recovery-lanes-destination"));
+        let expected = BTreeMap::from([
+            (
+                crate::lane::MAIN.into(),
+                destination.0.to_string_lossy().into_owned(),
+            ),
+            (
+                other_lane.into(),
+                destination
+                    .0
+                    .join("lanes")
+                    .join(other_lane)
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+        ]);
+        let lane_roots = BTreeMap::from([
+            (crate::lane::MAIN.into(), destination.0.clone()),
+            (
+                other_lane.into(),
+                destination.0.join("lanes").join(other_lane),
+            ),
+        ]);
+        publish_recovery_in(&registry.0, &id, &destination.0, &lane_roots, || {
+            let projects = read(&registry.0.join(FILE)).unwrap();
+            let project = projects.get(&id).unwrap();
+            assert_eq!(project.lanes, expected);
+            assert_eq!(project.name.as_deref(), Some("Named project"));
+            assert_eq!(project.repos, ["repository-root"]);
+            std::fs::rename(&staging.0, &destination.0)?;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(
+            read(&registry.0.join(FILE))
+                .unwrap()
+                .get(&id)
+                .unwrap()
+                .lanes,
+            expected
+        );
+    }
+
+    #[test]
+    fn backup_recovery_refuses_invalid_lane_layout_without_publishing() {
+        let registry = Owned(temp_dir("recovery-layout-registry"));
+        let destination = Owned(temp_dir("recovery-layout-destination"));
+        let other = Owned(temp_dir("recovery-layout-outside"));
+        let lane = "01j00000000000000000000000";
+        let cases = [
+            BTreeMap::new(),
+            BTreeMap::from([(crate::lane::MAIN.into(), other.0.clone())]),
+            BTreeMap::from([(crate::lane::MAIN.into(), destination.0.join("lanes/main"))]),
+            BTreeMap::from([
+                (crate::lane::MAIN.into(), destination.0.clone()),
+                (lane.into(), destination.0.clone()),
+            ]),
+            BTreeMap::from([("../outside".into(), destination.0.clone())]),
+            BTreeMap::from([("nul".into(), destination.0.clone())]),
+            BTreeMap::from([
+                (crate::lane::MAIN.into(), destination.0.clone()),
+                (lane.into(), other.0.clone()),
+            ]),
+            BTreeMap::from([
+                (crate::lane::MAIN.into(), destination.0.clone()),
+                (lane.into(), destination.0.join("lanes/wrong")),
+            ]),
+            BTreeMap::from([
+                (crate::lane::MAIN.into(), destination.0.clone()),
+                (lane.into(), destination.0.join("lanes").join(lane)),
+                (
+                    lane.to_ascii_uppercase(),
+                    destination.0.join("lanes").join(lane.to_ascii_uppercase()),
+                ),
+            ]),
+        ];
+        for lane_roots in cases {
+            assert!(
+                publish_recovery_in(
+                    &registry.0,
+                    "unknown-id",
+                    &destination.0,
+                    &lane_roots,
+                    || { panic!("an invalid lane layout must refuse before publication") }
+                )
+                .is_err(),
+                "accepted invalid layout {lane_roots:?}"
+            );
+        }
+        assert!(!destination.0.exists());
+        assert!(!registry.0.join(FILE).exists());
+    }
+
+    #[test]
+    fn backup_recovery_layout_allows_an_owning_lane_other_than_main() {
+        let destination = temp_dir("recovery-other-owner");
+        let owner = "01j00000000000000000000000";
+        let lane_roots = BTreeMap::from([
+            (owner.into(), destination.clone()),
+            (crate::lane::MAIN.into(), destination.join("lanes/main")),
+        ]);
+        let paths = recovery_lane_paths(&destination, &lane_roots).unwrap();
+        assert_eq!(Path::new(paths.get(owner).unwrap()), destination);
+        assert_eq!(
+            Path::new(paths.get(crate::lane::MAIN).unwrap()),
+            destination.join("lanes/main")
+        );
+    }
+
+    #[test]
+    fn recovery_refuses_an_existing_destination_without_publishing() {
+        let registry = Owned(temp_dir("recovery-existing-registry"));
+        let destination = Owned(temp_dir("recovery-existing-destination"));
+        std::fs::create_dir_all(&destination.0).unwrap();
+        assert!(publish_recovery_in(
+            &registry.0,
+            "unknown-id",
+            &destination.0,
+            &recovery_lane_roots(&destination.0),
+            || { panic!("an existing destination must refuse before publication") }
+        )
+        .is_err());
+        assert!(!registry.0.join(FILE).exists());
+    }
+
+    #[test]
+    fn recovery_unknown_identity_is_registered_without_losing_other_projects() {
+        let registry = Owned(temp_dir("recovery-unknown-registry"));
+        let (other, other_id) = seeded_project("recovery-unknown-other");
+        let other = Owned(other);
+        note(&registry.0, &other_id, sighting(&other.0));
+        let before = read(&registry.0.join(FILE)).unwrap();
+        let (staging, id) = seeded_project("recovery-unknown-staging");
+        let staging = Owned(staging);
+        let destination = Owned(temp_dir("recovery-unknown-destination"));
+        publish_recovery_in(
+            &registry.0,
+            &id,
+            &destination.0,
+            &recovery_lane_roots(&destination.0),
+            || {
+                std::fs::rename(&staging.0, &destination.0)?;
+                Ok(())
+            },
+        )
+        .unwrap();
+        let after = read(&registry.0.join(FILE)).unwrap();
+        assert_eq!(after.get(&other_id), before.get(&other_id));
+        use sha2::{Digest, Sha256};
+        let digest = format!("{:x}", Sha256::digest(id.as_bytes()));
+        let expected = format!("recovered-{}", &digest[..12]);
+        assert_eq!(
+            after.get(&id).unwrap().name.as_deref(),
+            Some(expected.as_str())
+        );
+        assert_eq!(
+            store::first_event_id(&destination.0).as_deref(),
+            Some(id.as_str())
+        );
+    }
+
+    #[test]
+    fn recovery_publication_must_actually_produce_the_expected_tree() {
+        let registry = Owned(temp_dir("recovery-empty-registry"));
+        let destination = Owned(temp_dir("recovery-empty-destination"));
+        assert!(publish_recovery_in(
+            &registry.0,
+            "unknown-id",
+            &destination.0,
+            &recovery_lane_roots(&destination.0),
+            || Ok(())
+        )
+        .is_err());
+        assert!(!read(&registry.0.join(FILE))
+            .unwrap()
+            .contains_key("unknown-id"));
+    }
+
+    #[test]
+    fn backup_and_recovery_refuse_an_unreadable_known_tree() {
+        let registry = Owned(temp_dir("backup-unreadable-registry"));
+        let (root, id) = seeded_project("backup-unreadable-origin");
+        let root = Owned(root);
+        let copy = Owned(temp_dir("backup-unreadable-copy"));
+        std::fs::create_dir_all(copy.0.join(store::DIR)).unwrap();
+        std::fs::copy(
+            root.0.join(store::DIR).join(store::LOG),
+            copy.0.join(store::DIR).join(store::LOG),
+        )
+        .unwrap();
+        note(&registry.0, &id, sighting(&root.0));
+        note(&registry.0, &id, sighting(&copy.0));
+        std::fs::write(copy.0.join(store::DIR).join(store::LOG), b"invalid event\n").unwrap();
+        let before = std::fs::read(registry.0.join(FILE)).unwrap();
+        assert!(backup_origin_in(&registry.0, &id, &root.0).is_err());
+        std::fs::remove_dir_all(&root.0).unwrap();
+        let destination = Owned(temp_dir("backup-unreadable-destination"));
+        assert!(publish_recovery_in(
+            &registry.0,
+            &id,
+            &destination.0,
+            &recovery_lane_roots(&destination.0),
+            || { panic!("an unreadable known tree must refuse before publication") }
+        )
+        .is_err());
+        assert_eq!(std::fs::read(registry.0.join(FILE)).unwrap(), before);
+    }
+
+    #[test]
+    fn backup_and_recovery_refuse_an_unsupported_registry_version() {
+        let registry = Owned(temp_dir("backup-newer-registry"));
+        std::fs::create_dir_all(&registry.0).unwrap();
+        let bytes = br#"{"version":99,"projects":{}}"#;
+        std::fs::write(registry.0.join(FILE), bytes).unwrap();
+        let (root, id) = seeded_project("backup-newer-origin");
+        let root = Owned(root);
+        let destination = Owned(temp_dir("backup-newer-destination"));
+        assert!(backup_origin_in(&registry.0, &id, &root.0).is_err());
+        assert!(publish_recovery_in(
+            &registry.0,
+            &id,
+            &destination.0,
+            &recovery_lane_roots(&destination.0),
+            || { panic!("an unsupported registry must refuse before publication") }
+        )
+        .is_err());
+        assert_eq!(std::fs::read(registry.0.join(FILE)).unwrap(), bytes);
+    }
+
+    #[test]
+    fn backup_registry_refuses_unknown_fields_without_overwriting() {
+        let registry = Owned(temp_dir("backup-unknown-fields-registry"));
+        std::fs::create_dir_all(&registry.0).unwrap();
+        let (root, id) = seeded_project("backup-unknown-fields-origin");
+        let root = Owned(root);
+        let destination = Owned(temp_dir("backup-unknown-fields-destination"));
+        let cases = [
+            serde_json::json!({
+                "version": VERSION,
+                "projects": {},
+                "extension": true,
+            }),
+            serde_json::json!({
+                "version": VERSION,
+                "projects": {
+                    "another-project": {
+                        "path": "unavailable-project",
+                        "extension": true,
+                    },
+                },
+            }),
+        ];
+        for registry_data in cases {
+            let bytes = serde_json::to_vec(&registry_data).unwrap();
+            std::fs::write(registry.0.join(FILE), &bytes).unwrap();
+            assert!(backup_origin_in(&registry.0, &id, &root.0).is_err());
+            assert_eq!(std::fs::read(registry.0.join(FILE)).unwrap(), bytes);
+            assert!(publish_recovery_in(
+                &registry.0,
+                &id,
+                &destination.0,
+                &recovery_lane_roots(&destination.0),
+                || panic!("unknown registry fields must refuse before publication"),
+            )
+            .is_err());
+            assert_eq!(std::fs::read(registry.0.join(FILE)).unwrap(), bytes);
+        }
+    }
+
+    #[test]
+    fn backup_registry_preserves_legacy_string_entries() {
+        let registry = Owned(temp_dir("backup-legacy-registry"));
+        std::fs::create_dir_all(&registry.0).unwrap();
+        let (root, id) = seeded_project("backup-legacy-origin");
+        let root = Owned(root);
+        for version in [1, VERSION] {
+            let projects = BTreeMap::from([
+                (id.clone(), root.0.to_string_lossy().into_owned()),
+                ("other-project".into(), "legacy-other-project".into()),
+            ]);
+            let bytes = serde_json::to_vec(&serde_json::json!({
+                "version": version,
+                "projects": projects,
+            }))
+            .unwrap();
+            std::fs::write(registry.0.join(FILE), bytes).unwrap();
+            backup_origin_in(&registry.0, &id, &root.0).unwrap();
+            let restored = read_strict(&registry.0.join(FILE)).unwrap();
+            assert_eq!(
+                restored.get("other-project").unwrap().path,
+                "legacy-other-project"
+            );
+            assert!(crate::anchor::same_folder(
+                Path::new(&restored.get(&id).unwrap().path),
+                &root.0
+            ));
+        }
+    }
+
+    #[test]
+    fn backup_registry_refuses_an_event_log_larger_than_the_file_limit() {
+        let registry = Owned(temp_dir("backup-large-log-registry"));
+        let (root, id) = seeded_project("backup-large-log-origin");
+        let root = Owned(root);
+        note(&registry.0, &id, sighting(&root.0));
+        let before = std::fs::read(registry.0.join(FILE)).unwrap();
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(root.0.join(store::DIR).join(store::LOG))
+            .unwrap();
+        file.set_len(256 * 1024 * 1024 + 1).unwrap();
+        drop(file);
+        assert!(backup_origin_in(&registry.0, &id, &root.0).is_err());
+        let destination = Owned(temp_dir("backup-large-log-destination"));
+        assert!(publish_recovery_in(
+            &registry.0,
+            &id,
+            &destination.0,
+            &recovery_lane_roots(&destination.0),
+            || panic!("an oversized known event log must refuse before publication"),
+        )
+        .is_err());
+        assert_eq!(std::fs::read(registry.0.join(FILE)).unwrap(), before);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn backup_registry_refuses_nonregular_event_logs_without_blocking() {
+        use std::process::{Command, Stdio};
+        const CHILD_ROOT: &str = "VIVAC_BACKUP_REGISTRY_FIFO_ROOT";
+        const CHILD_REGISTRY: &str = "VIVAC_BACKUP_REGISTRY_FIFO_STORE";
+        const CHILD_ID: &str = "VIVAC_BACKUP_REGISTRY_FIFO_ID";
+        if let Some(root) = std::env::var_os(CHILD_ROOT) {
+            let root = PathBuf::from(root);
+            let registry = PathBuf::from(std::env::var_os(CHILD_REGISTRY).unwrap());
+            let id = std::env::var(CHILD_ID).unwrap();
+            let before = std::fs::read(registry.join(FILE)).unwrap();
+            assert!(backup_origin_in(&registry, &id, &root).is_err());
+            let destination = root.join("new-destination");
+            assert!(publish_recovery_in(
+                &registry,
+                &id,
+                &destination,
+                &recovery_lane_roots(&destination),
+                || panic!("a nonregular known event log must refuse before publication"),
+            )
+            .is_err());
+            assert_eq!(std::fs::read(registry.join(FILE)).unwrap(), before);
+            return;
+        }
+        let registry = Owned(temp_dir("backup-fifo-registry"));
+        let (root, id) = seeded_project("backup-fifo-origin");
+        let root = Owned(root);
+        note(&registry.0, &id, sighting(&root.0));
+        let log = root.0.join(store::DIR).join(store::LOG);
+        std::fs::remove_file(&log).unwrap();
+        assert!(Command::new("mkfifo").arg(log).status().unwrap().success());
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "registry::tests::backup_registry_refuses_nonregular_event_logs_without_blocking",
+            ])
+            .env(CHILD_ROOT, &root.0)
+            .env(CHILD_REGISTRY, &registry.0)
+            .env(CHILD_ID, &id)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                assert!(status.success(), "Nonregular event logs must be refused");
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                panic!("The registry reader blocked on a nonregular event log");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
+    #[test]
+    fn backup_and_recovery_refuse_corrupt_registry_without_overwriting_it() {
+        let registry = Owned(temp_dir("backup-corrupt-registry"));
+        std::fs::create_dir_all(&registry.0).unwrap();
+        let bytes = b"not a registry";
+        std::fs::write(registry.0.join(FILE), bytes).unwrap();
+        let (root, id) = seeded_project("backup-corrupt-origin");
+        let root = Owned(root);
+        let destination = Owned(temp_dir("backup-corrupt-destination"));
+        assert!(backup_origin_in(&registry.0, &id, &root.0).is_err());
+        assert!(publish_recovery_in(
+            &registry.0,
+            &id,
+            &destination.0,
+            &recovery_lane_roots(&destination.0),
+            || { panic!("a corrupt registry must refuse before publication") }
+        )
+        .is_err());
+        assert_eq!(std::fs::read(registry.0.join(FILE)).unwrap(), bytes);
     }
 
     /// One more write to an already-seeded tree, the same kind of append a

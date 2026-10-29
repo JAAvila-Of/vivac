@@ -174,6 +174,7 @@ assemble
 assert
 assertions
 asset
+assets
 assign
 assignment
 assignments
@@ -189,6 +190,7 @@ atomic
 atomically
 attached
 attempt
+attempted
 attempting
 attempts
 attestation
@@ -223,6 +225,7 @@ backed
 backend
 backslash
 backtick
+backup
 backwards
 bad
 badge
@@ -271,6 +274,7 @@ bk
 black
 blank
 blessed
+blobs
 block
 blocked
 blocker
@@ -488,6 +492,7 @@ cold
 collect
 collected
 collecting
+collection
 collections
 collides
 collision
@@ -639,6 +644,7 @@ cuts
 cwd
 cyan
 cycle
+cycles
 d200
 dacl
 damage
@@ -728,6 +734,7 @@ despite
 dest
 destination
 destinations
+detach
 detached
 detachment
 detail
@@ -777,6 +784,7 @@ disables
 disabling
 disagrees
 disappear
+disappears
 discard
 discarding
 disclosing
@@ -952,6 +960,7 @@ exclude
 excluded
 excludes
 excluding
+exclusion
 exclusive
 excuse
 exe
@@ -1023,6 +1032,7 @@ fetched
 ffi
 field
 fields
+fifo
 file
 filename
 fileno
@@ -1249,6 +1259,7 @@ honor
 hook
 hooks
 host
+hostile
 hosts
 hour
 hours
@@ -1422,6 +1433,7 @@ keyboard
 keys
 keyword
 kgd
+kib
 kids
 kill
 kind
@@ -1439,6 +1451,7 @@ lane
 lanes
 language
 large
+larger
 last
 late
 later
@@ -1706,6 +1719,7 @@ nofollow
 nomutex
 non
 nonalert
+nonblock
 nonblocking
 noncanonical
 nonce
@@ -1715,6 +1729,7 @@ nonexistent
 noninteractive
 nonobject
 nonoverlapping
+nonregular
 nonterminal
 nonzero
 noon
@@ -1765,6 +1780,7 @@ offer
 offered
 offering
 offers
+offline
 offset
 offsets
 ok
@@ -1801,6 +1817,7 @@ order
 ordered
 ordering
 orders
+ordinal
 ordinary
 orientation
 orig
@@ -1833,6 +1850,7 @@ over
 overall
 overdue
 overflow
+overlap
 overlapped
 overlong
 overrides
@@ -1845,7 +1863,9 @@ overwritten
 own
 owned
 owner
+owners
 ownership
+owning
 p11
 p12
 p30
@@ -1855,6 +1875,7 @@ p7
 p8
 p99
 pa
+package
 packed
 pad
 padded
@@ -1996,6 +2017,7 @@ preparation
 preparations
 prepare
 prepared
+preparing
 present
 presentation
 preserve
@@ -2018,6 +2040,7 @@ println
 prints
 prior
 prioritizes
+privacy
 private
 privatecache
 probe
@@ -2027,6 +2050,7 @@ proceeds
 process
 processed
 processing
+produce
 produced
 producer
 producers
@@ -2071,6 +2095,7 @@ publication
 publish
 published
 publishes
+publishing
 punctuation
 pure
 purpose
@@ -2151,6 +2176,7 @@ record
 recorded
 recording
 records
+recover
 recovered
 recovers
 recovery
@@ -2158,6 +2184,7 @@ recreates
 recreating
 recreation
 rect
+recursion
 recursive
 recv
 red
@@ -2200,6 +2227,7 @@ registered
 registers
 registry
 regular
+rehashed
 rehashing
 reindex
 reinstalled
@@ -2297,6 +2325,7 @@ reservation
 reservations
 reserve
 reserved
+reserves
 reset
 resident
 residual
@@ -2314,6 +2343,7 @@ response
 responses
 rest
 restamp
+restoration
 restore
 restored
 restores
@@ -2393,6 +2423,7 @@ runtime
 rust
 sa
 safe
+safepoints
 said
 same
 sample
@@ -2471,6 +2502,7 @@ sentinels
 sep
 separate
 separated
+separately
 separates
 separator
 separators
@@ -2590,6 +2622,7 @@ speaking
 speaks
 spec
 specific
+specification
 spelled
 spelling
 spellings
@@ -2745,6 +2778,7 @@ take
 taken
 takes
 taking
+tampering
 tar
 target
 targets
@@ -2850,6 +2884,7 @@ transparent
 transport
 transpose
 travels
+traversal
 treat
 treated
 tree
@@ -3021,6 +3056,7 @@ verdict
 verdicts
 verification
 verified
+verifies
 verify
 version
 versioned

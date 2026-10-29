@@ -45,6 +45,7 @@ pub(crate) const SWITCHES: &[&str] = &[
     "new-tree",
     "lanes",
     "store",
+    "source-retired",
 ];
 
 #[derive(Debug, Default)]

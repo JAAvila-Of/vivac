@@ -461,6 +461,18 @@ from it. It leaves out the [lane](LANES.md) each node was written in, the
 commits each one was anchored to and the safepoints, so a tree rebuilt from
 it would be a different tree with the same titles.
 
+For a complete local recovery copy, including retained artifacts and managed
+native agent files, use `vivac backup create <new-directory>`. The private
+package preserves raw history and custody bytes instead of reconstructing
+them from display JSON. It is not encrypted or uploaded.
+
+`vivac backup verify <backup-directory>` checks it without activating a tree.
+`vivac backup recover <backup-directory> --to <new-directory> --source-retired`
+recovers it only after the previous authority has been retired; known live
+copies still refuse recovery. Additional lanes with custody files need explicit
+`--lane-root <lane-id>=<directory>` inputs when creating the backup. See
+[Local backups and recovery](BACKUP.md) for the complete scope, limits and drill.
+
 `vivac import <tree.json>` is not that way back. It reads only the
 `tree.json` of the Python prototype vivac grew out of, which is how the
 trees that predate this binary got here, and it refuses any other file.

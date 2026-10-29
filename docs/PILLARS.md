@@ -396,6 +396,30 @@ tree is a map of where a system is weak and not yet fixed.**
   `cargo`, or `curl` and `tar` -- so the binary carries no network code of its
   own. With no terminal there is no yes to give, and it installs nothing.
 
+### Local recovery copies
+
+An explicitly requested local backup may copy the authoritative tree and the
+committed artifact revisions and managed native agent files that it references.
+Those bytes stay outside the provenance log. A backup is a private, versioned
+recovery package, never another active tree or an automatic upload. It excludes
+the machine registry, credentials, harness settings, caches and uncommitted files.
+Recorded artifact inspection policies remain part of the recovered history;
+copying a revision does not turn unknown inspection into approval.
+
+Backup creation and recovery publish only a complete, verified new destination.
+They never replace an existing destination. Recovery refuses a known live tree
+with the same identity and requires an explicit declaration that its previous
+authority has been retired. That declaration does not establish distributed
+ownership or detect copies on other machines. Verification does not activate a
+tree, reconfigure a harness or run a retained program.
+New backup and recovery destinations stay outside existing Git working trees;
+their private preparations are ignored before any payload is written.
+
+These are explicit maintenance operations, outside ordinary writes and hooks.
+Payloads stream through bounded buffers; manifests, file counts and total bytes
+have explicit limits and an exceeded limit refuses the complete operation.
+No inspection or member is silently omitted to fit a limit.
+
 ### Encryption
 
 - **Local**: optional encryption at rest.
