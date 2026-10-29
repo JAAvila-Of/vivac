@@ -230,6 +230,220 @@ fn replay(tree: &crate::model::Tree) -> Result<Ledger, Failure> {
     Ok(ledger)
 }
 
+struct BackupInput {
+    lane: String,
+    harness: String,
+    path: String,
+    digest: String,
+    assignment: Option<Assignment>,
+}
+
+#[derive(Default)]
+struct BackupInventory {
+    inputs: BTreeMap<(String, String, String, bool), BackupInput>,
+    paths: std::collections::BTreeSet<(String, String)>,
+}
+
+impl BackupInventory {
+    fn insert(&mut self, input: BackupInput) -> Result<(), Failure> {
+        let key = (
+            input.lane.clone(),
+            input.harness.clone(),
+            input.path.clone(),
+            input.assignment.is_some(),
+        );
+        if let Some(previous) = self.inputs.get(&key) {
+            if previous.digest != input.digest || previous.assignment != input.assignment {
+                return Err(Failure::Model(
+                    "Conflicting required native agent inputs.".into(),
+                ));
+            }
+            return Ok(());
+        }
+        let path = (input.lane.clone(), input.path.clone());
+        if !self.paths.contains(&path) && self.paths.len() >= 4096 {
+            return Err(Failure::usage("Backup custody exceeds the file limit."));
+        }
+        self.paths.insert(path);
+        self.inputs.insert(key, input);
+        Ok(())
+    }
+}
+
+fn backup_inputs(tree: &crate::model::Tree) -> Result<Vec<BackupInput>, Failure> {
+    let ledger = replay(tree)?;
+    let mut inputs = BackupInventory::default();
+    let mut bound = HashSet::new();
+    for (key, binding) in &ledger.bindings {
+        let agent = find_agent(&ledger, &binding.agent)?;
+        let native = adapter(&key.1)?;
+        let digest = if let Some(receipt) = ledger.receipts.get(&owned(key, &binding.agent)) {
+            if !equivalent_receipt(&ledger, receipt, agent, &key.1, native.version()) {
+                return Err(Failure::Model(
+                    "A required native agent needs synchronization before backup.".into(),
+                ));
+            }
+            receipt.digest.clone()
+        } else {
+            binding.baseline.clone().ok_or_else(|| {
+                Failure::Model("A required native agent has no retained fingerprint.".into())
+            })?
+        };
+        inputs.insert(BackupInput {
+            lane: key.0.clone(),
+            harness: key.1.clone(),
+            path: key.2.clone(),
+            digest,
+            assignment: Some(assignment(agent, &key.1)?.clone()),
+        })?;
+        bound.insert(agent.agent.clone());
+        if let Some(source) = &agent.definition.prompt {
+            backup_prompt(&mut inputs, &ledger, &key.0, source)?;
+        }
+    }
+    for agent in ledger
+        .agents
+        .values()
+        .filter(|agent| !agent.definition.retired && !bound.contains(&agent.agent))
+    {
+        if let Some(source) = &agent.definition.prompt {
+            let lane = tree
+                .agent_history
+                .iter()
+                .rev()
+                .find_map(|(lane, body)| {
+                    matches!(body, Body::AgentRecorded { agent: id, node, .. }
+                    if id == &agent.agent && node == &agent.revision)
+                    .then_some(lane)
+                })
+                .ok_or_else(|| {
+                    Failure::Model("A required agent prompt has no source lane.".into())
+                })?;
+            if ledger.detached.contains(&(
+                lane.clone(),
+                source.harness.clone(),
+                source.path.clone(),
+            )) {
+                continue;
+            }
+            backup_prompt(&mut inputs, &ledger, lane, source)?;
+        }
+    }
+    Ok(inputs.inputs.into_values().collect())
+}
+
+fn backup_prompt(
+    inputs: &mut BackupInventory,
+    ledger: &Ledger,
+    lane: &str,
+    source: &PromptSource,
+) -> Result<(), Failure> {
+    if ledger
+        .detached
+        .contains(&(lane.to_owned(), source.harness.clone(), source.path.clone()))
+    {
+        return Err(Failure::Model(
+            "A required agent prompt is outside managed custody.".into(),
+        ));
+    }
+    inputs.insert(BackupInput {
+        lane: lane.to_owned(),
+        harness: source.harness.clone(),
+        path: source.path.clone(),
+        digest: source.digest.clone(),
+        assignment: None,
+    })
+}
+
+pub(crate) fn backup_lanes(
+    tree: &crate::model::Tree,
+) -> Result<std::collections::BTreeSet<String>, Failure> {
+    Ok(backup_inputs(tree)?
+        .into_iter()
+        .map(|input| input.lane)
+        .collect())
+}
+
+#[cfg(test)]
+pub(crate) fn backup_files(
+    tree: &crate::model::Tree,
+    lane: &str,
+    root: &Path,
+) -> Result<Vec<(String, String, String)>, Failure> {
+    if !backup_lanes(tree)?.contains(lane) {
+        return Ok(Vec::new());
+    }
+    let directory = crate::artifacts::files::open_root(root)?;
+    backup_files_in(tree, lane, root, &directory)
+}
+
+pub(crate) fn backup_files_in(
+    tree: &crate::model::Tree,
+    lane: &str,
+    root: &Path,
+    directory: &cap_std::fs::Dir,
+) -> Result<Vec<(String, String, String)>, Failure> {
+    use std::io::Read;
+    let inputs = backup_inputs(tree)?;
+    let mut files = BTreeMap::<String, (String, String)>::new();
+    for input in inputs.into_iter().filter(|input| input.lane == lane) {
+        safe_target(root, &input.harness, &input.path)?;
+        let file = crate::artifacts::files::regular(directory, &input.path)?;
+        crate::artifacts::files::require_single_link(&file)?;
+        if file.metadata()?.len() > 1024 * 1024 {
+            return Err(Failure::usage(
+                "A required native agent exceeds its size limit.",
+            ));
+        }
+        let mut bytes = Vec::new();
+        file.take(1024 * 1024 + 1).read_to_end(&mut bytes)?;
+        if bytes.len() > 1024 * 1024 {
+            return Err(Failure::usage(
+                "A required native agent exceeds its size limit.",
+            ));
+        }
+        let digest = adapters::digest(&bytes);
+        let (candidate, prompt) =
+            adapters::backup_native_from_bytes(&input.harness, &input.path, &bytes)?;
+        if let Some(assignment) = &input.assignment {
+            if digest != input.digest
+                || candidate.digest != digest
+                || !candidate_matches(&candidate, assignment)
+            {
+                return Err(Failure::Model(
+                    "A required native agent is changed or unsupported.".into(),
+                ));
+            }
+        } else {
+            let prompt = prompt
+                .filter(|prompt| !prompt.trim().is_empty())
+                .ok_or_else(|| Failure::Model("A required native prompt is missing.".into()))?;
+            if candidate.problem.is_some()
+                || !candidate.unsupported.is_empty()
+                || adapters::digest(prompt.as_bytes()) != input.digest
+            {
+                return Err(Failure::Model(
+                    "A required native prompt is changed.".into(),
+                ));
+            }
+        }
+        if let Some(previous) = files.insert(input.path, (digest.clone(), input.harness.clone())) {
+            if previous != (digest, input.harness) {
+                return Err(Failure::Model(
+                    "Conflicting required native agent files.".into(),
+                ));
+            }
+        }
+        if files.len() > 4096 {
+            return Err(Failure::usage("Backup custody exceeds the file limit."));
+        }
+    }
+    Ok(files
+        .into_iter()
+        .map(|(path, (digest, harness))| (path, digest, harness))
+        .collect())
+}
+
 fn checked(field: &str, value: &str, limit: usize) -> Result<(), Failure> {
     if let Some(finding) = crate::redact::check_field(field, value) {
         return Err(Failure::Redaction(Box::new(finding)));
@@ -1370,6 +1584,297 @@ fn apply_plan(ctx: &mut Ctx, plan: &Plan) -> Result<(Value, i32), Failure> {
 mod tests {
     use super::*;
 
+    fn backup_adopted_native_refuses_sensitive_bytes(harness: &str, path: &str, native: &str) {
+        let root =
+            std::env::temp_dir().join(format!("vivac-backup-sensitive-{}", crate::id::ulid()));
+        fs::create_dir_all(root.join(path).parent().unwrap()).unwrap();
+        fs::write(root.join(path), native).unwrap();
+        let store = Store::create(&root).unwrap();
+        let mut ctx = Ctx::load_with_log(store, ops::Whose::Founding).unwrap().0;
+        ctx.lock_for_write().unwrap();
+        let definition = json!({"schema_version":1,"name":"reviewer","contract":{"purpose":"Review the scoped change.","duties":["Return evidence."],"limits":["Do not publish."],"acceptance":["Cite changed lines."]},"assignments":[{"harness":harness,"name":"reviewer","model":"inherit","effort":"high","settings":{}}]}).to_string();
+        let (created, _) = local(
+            &mut ctx,
+            &args(&[
+                "add",
+                "--definition",
+                &definition,
+                "--why",
+                "Declare the reviewed assignment",
+            ]),
+        )
+        .unwrap();
+        let agent = created["agent"].as_str().unwrap();
+        let digest = adapters::digest(native.as_bytes());
+        assert_eq!(
+            local(
+                &mut ctx,
+                &args(&[
+                    "adopt",
+                    agent,
+                    "--harness",
+                    harness,
+                    "--path",
+                    path,
+                    "--digest",
+                    &digest,
+                    "--why",
+                    "Adopt the reviewed native bytes",
+                ])
+            )
+            .unwrap()
+            .1,
+            0
+        );
+        let result = backup_files(&ctx.tree, crate::lane::MAIN, &root);
+        ctx.unlock();
+        drop(ctx);
+        fs::remove_dir_all(root).unwrap();
+        let error = result
+            .expect_err("Backup must refuse sensitive native bytes without a prompt reference.");
+        assert!(!error.message().contains(&"a".repeat(24)));
+    }
+
+    #[test]
+    fn backup_refuses_adopted_codex_secret_description_without_a_prompt_reference() {
+        let native = format!("name = \"reviewer\"\nmodel = \"inherit\"\nmodel_reasoning_effort = \"high\"\ndescription = \"sk-{}\"\ndeveloper_instructions = \"Review the scope.\"\n", "a".repeat(24));
+        backup_adopted_native_refuses_sensitive_bytes(
+            "codex",
+            ".codex/agents/reviewer.toml",
+            &native,
+        );
+    }
+
+    #[test]
+    fn backup_refuses_adopted_codex_escaped_secret_instructions() {
+        let native = format!("name = \"reviewer\"\nmodel = \"inherit\"\nmodel_reasoning_effort = \"high\"\ndescription = \"Review the scope.\"\ndeveloper_instructions = \"\\u0073k-{}\"\n", "a".repeat(24));
+        backup_adopted_native_refuses_sensitive_bytes(
+            "codex",
+            ".codex/agents/reviewer.toml",
+            &native,
+        );
+    }
+
+    #[test]
+    fn backup_refuses_adopted_codex_secret_comments() {
+        let native = format!("# sk-{}\nname = \"reviewer\"\nmodel = \"inherit\"\nmodel_reasoning_effort = \"high\"\ndescription = \"Review the scope.\"\ndeveloper_instructions = \"Review the scope.\"\n", "a".repeat(24));
+        backup_adopted_native_refuses_sensitive_bytes(
+            "codex",
+            ".codex/agents/reviewer.toml",
+            &native,
+        );
+    }
+
+    #[test]
+    fn backup_refuses_adopted_claude_secret_body_without_a_prompt_reference() {
+        let native = format!("---\nname: reviewer\nmodel: inherit\neffort: high\ndescription: Review the scope.\n---\nsk-{}\n", "a".repeat(24));
+        backup_adopted_native_refuses_sensitive_bytes(
+            "claude-code",
+            ".claude/agents/reviewer.md",
+            &native,
+        );
+    }
+
+    #[test]
+    fn backup_refuses_adopted_claude_escaped_secret_description() {
+        let native = format!("---\nname: reviewer\nmodel: inherit\neffort: high\ndescription: \"\\u0073k-{}\"\n---\nReview the scope.\n", "a".repeat(24));
+        backup_adopted_native_refuses_sensitive_bytes(
+            "claude-code",
+            ".claude/agents/reviewer.md",
+            &native,
+        );
+    }
+
+    #[test]
+    fn backup_keeps_a_current_unbound_prompt_after_an_unrelated_target_detach() {
+        let root = std::env::temp_dir().join(format!("vivac-backup-detach-{}", crate::id::ulid()));
+        fs::create_dir_all(root.join(".example/agents")).unwrap();
+        let path = ".example/agents/source.json";
+        let body = "Inspect the reviewed scope.";
+        fs::write(
+            root.join(path),
+            json!({"name":"reviewer","model":"inherit","effort":"high","instructions":body})
+                .to_string(),
+        )
+        .unwrap();
+        let store = Store::create(&root).unwrap();
+        let mut ctx = Ctx::load_with_log(store, ops::Whose::Founding).unwrap().0;
+        ctx.lock_for_write().unwrap();
+        let definition = json!({"schema_version":1,"name":"reviewer","contract":{"purpose":"Review the scoped change.","duties":["Return evidence."],"limits":["Do not publish."],"acceptance":["Cite changed lines."]},"assignments":[{"harness":"example","name":"reviewer","model":"inherit","effort":"high","settings":{}}],"prompt":{"harness":"example","path":path,"digest":adapters::digest(body.as_bytes())}}).to_string();
+        let (created, _) = local(
+            &mut ctx,
+            &args(&[
+                "add",
+                "--definition",
+                &definition,
+                "--why",
+                "Declare the reviewed prompt source",
+            ]),
+        )
+        .unwrap();
+        let agent = created["agent"].as_str().unwrap().to_owned();
+        ctx.tree.agent_history.push((
+            crate::lane::MAIN.into(),
+            Body::AgentDetached {
+                agent: agent.clone(),
+                harness: "example".into(),
+                path: ".example/agents/other.json".into(),
+            },
+        ));
+        let files = backup_files(&ctx.tree, crate::lane::MAIN, &root).unwrap();
+        assert_eq!(
+            files.len(),
+            1,
+            "An unrelated detached target cannot remove the current prompt source."
+        );
+        assert_eq!(files[0].0, path);
+        ctx.tree.agent_history.push((
+            crate::lane::MAIN.into(),
+            Body::AgentDetached {
+                agent: agent.clone(),
+                harness: "example".into(),
+                path: path.into(),
+            },
+        ));
+        assert!(backup_files(&ctx.tree, crate::lane::MAIN, &root)
+            .unwrap()
+            .is_empty());
+        let current = ".example/agents/current.json";
+        fs::copy(root.join(path), root.join(current)).unwrap();
+        let mut revised: Value = serde_json::from_str(&definition).unwrap();
+        revised["prompt"]["path"] = json!(current);
+        local(
+            &mut ctx,
+            &args(&[
+                "set",
+                &agent,
+                "--definition",
+                &revised.to_string(),
+                "--why",
+                "Review the replacement native source",
+            ]),
+        )
+        .unwrap();
+        let files = backup_files(&ctx.tree, crate::lane::MAIN, &root).unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].0, current);
+        ctx.unlock();
+        drop(ctx);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn backup_rejects_an_oversized_native_inventory_before_reading_files() {
+        let root = std::env::temp_dir().join(format!("vivac-backup-count-{}", crate::id::ulid()));
+        fs::create_dir_all(&root).unwrap();
+        let store = Store::create(&root).unwrap();
+        let mut ctx = Ctx::load_with_log(store, ops::Whose::Founding).unwrap().0;
+        ctx.lock_for_write().unwrap();
+        let definition = json!({"schema_version":1,"name":"reviewer","contract":{"purpose":"Review the scoped change.","duties":["Return evidence."],"limits":["Do not publish."],"acceptance":["Cite changed lines."]},"assignments":[{"harness":"example","name":"reviewer","model":"inherit","effort":"high","settings":{}}]}).to_string();
+        let (created, _) = local(
+            &mut ctx,
+            &args(&[
+                "add",
+                "--definition",
+                &definition,
+                "--why",
+                "Declare the reviewed assignment",
+            ]),
+        )
+        .unwrap();
+        let agent = created["agent"].as_str().unwrap();
+        for index in 0..4097 {
+            ctx.tree.agent_history.push((
+                crate::lane::MAIN.into(),
+                Body::AgentBound {
+                    agent: agent.into(),
+                    harness: "example".into(),
+                    path: format!(".example/agents/target{index}.json"),
+                    baseline: Some("a".repeat(64)),
+                },
+            ));
+        }
+        let refused = backup_inputs(&ctx.tree).is_err();
+        ctx.unlock();
+        drop(ctx);
+        fs::remove_dir_all(root).unwrap();
+        assert!(
+            refused,
+            "Backup must bound the inventory before materializing its native inputs."
+        );
+    }
+
+    #[test]
+    fn backup_preserves_an_adopted_baseline_and_excludes_detached_files() {
+        let root = std::env::temp_dir().join(format!("vivac-agent-backup-{}", crate::id::ulid()));
+        fs::create_dir_all(root.join(".example/agents")).unwrap();
+        let store = Store::create(&root).unwrap();
+        let mut ctx = Ctx::load_with_log(store, ops::Whose::Founding).unwrap().0;
+        ctx.lock_for_write().unwrap();
+        let definition = json!({"schema_version":1,"name":"reviewer","contract":{"purpose":"Review the scoped change.","duties":["Return evidence."],"limits":["Do not publish."],"acceptance":["Cite changed lines."]},"assignments":[{"harness":"example","name":"reviewer","model":"inherit","effort":"high","settings":{}}]}).to_string();
+        let (created, _) = local(
+            &mut ctx,
+            &args(&[
+                "add",
+                "--definition",
+                &definition,
+                "--why",
+                "Declare the reviewed assignment",
+            ]),
+        )
+        .unwrap();
+        let agent = created["agent"].as_str().unwrap();
+        let relative = ".example/agents/reviewer.json";
+        let original = json!({"name":"reviewer","model":"inherit","effort":"high","instructions":"Existing reviewed native body."}).to_string();
+        fs::write(root.join(relative), &original).unwrap();
+        fs::write(root.join(".example/agents/unmanaged.json"), b"unmanaged").unwrap();
+        let digest = adapters::digest(original.as_bytes());
+        assert_eq!(
+            local(
+                &mut ctx,
+                &args(&[
+                    "adopt",
+                    agent,
+                    "--harness",
+                    "example",
+                    "--path",
+                    relative,
+                    "--digest",
+                    &digest,
+                    "--why",
+                    "Adopt the reviewed native bytes",
+                ])
+            )
+            .unwrap()
+            .1,
+            0
+        );
+        let files = backup_files(&ctx.tree, crate::lane::MAIN, &root).unwrap();
+        assert_eq!(
+            files,
+            vec![(relative.to_owned(), digest, "example".to_owned())]
+        );
+        fs::write(root.join(relative), format!("{original}\n")).unwrap();
+        assert!(backup_files(&ctx.tree, crate::lane::MAIN, &root).is_err());
+        assert_eq!(
+            local(
+                &mut ctx,
+                &args(&["detach", agent, "--harness", "example", "--path", relative,])
+            )
+            .unwrap()
+            .1,
+            0
+        );
+        assert!(backup_files(&ctx.tree, crate::lane::MAIN, &root)
+            .unwrap()
+            .is_empty());
+        assert!(backup_lanes(&ctx.tree).unwrap().is_empty());
+        assert!(root.join(relative).exists());
+        ctx.unlock();
+        drop(ctx);
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn a_source_prompt_changed_after_planning_cannot_be_materialized() {
         let root = std::env::temp_dir().join(format!("vivac-prompt-race-{}", crate::id::ulid()));
@@ -1422,7 +1927,7 @@ mod tests {
                 validate_definition(&definition)?;
                 record_revision(ctx, &ledger, args, command, Some(definition))
             }
-            command @ ("bind" | "adopt") => bind(ctx, &ledger, args, command),
+            command @ ("bind" | "adopt" | "detach") => bind(ctx, &ledger, args, command),
             "sync" if args.has("yes") => sync(ctx, &ledger, args),
             "sync" | "diff" => {
                 let plan = plan(&ctx.lane_dir, crate::lane::MAIN, &ledger, args)?;

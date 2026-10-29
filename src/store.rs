@@ -1282,6 +1282,15 @@ pub(crate) fn lock_with_deadline(
         .write(true)
         .truncate(false)
         .open(path)?;
+    lock_opened_with_deadline(file, path, deadline)
+}
+
+/// Accepts an already authorized handle without reopening its path.
+pub(crate) fn lock_opened_with_deadline(
+    file: File,
+    path: &Path,
+    deadline: std::time::Duration,
+) -> Result<WriteLock, Failure> {
     let start = std::time::Instant::now();
     loop {
         match file.try_lock() {
@@ -2363,8 +2372,15 @@ pub(crate) fn read_all_from(path: &Path) -> Result<(Vec<crate::event::Event>, us
         Err(e) => return Err(e.into()),
     };
     let mut reader = BufReader::new(f);
+    read_all_in(&mut reader)
+}
+
+/// Reads through the caller's handle; it never opens or repairs a path.
+pub(crate) fn read_all_in(
+    reader: &mut impl BufRead,
+) -> Result<(Vec<crate::event::Event>, usize), Failure> {
     let mut events = Vec::new();
-    let broken = visit_events(&mut reader, false, |event| events.push(event))?;
+    let broken = visit_events(reader, false, |event| events.push(event))?;
     Ok((events, broken))
 }
 

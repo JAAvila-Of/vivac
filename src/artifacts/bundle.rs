@@ -1733,6 +1733,11 @@ fn open_object(root: &Path, object: &str) -> Result<(Dir, Dir, Dir), Failure> {
     require_supported()?;
     let revision = object_path(object)?;
     let root_dir = files::open_root(root)?;
+    open_object_in(&root_dir, revision)
+}
+
+fn open_object_in(root: &Dir, revision: &str) -> Result<(Dir, Dir, Dir), Failure> {
+    let root_dir = root.try_clone()?;
     let store = files::store(&root_dir, false)?;
     let objects = files::directory(&store, "objects", false)?;
     let name = format!("{revision}.bundle");
@@ -1764,6 +1769,18 @@ pub(crate) fn check(
     total: u64,
 ) -> Result<Manifest, Failure> {
     let (_, _, bundle) = open_object(root, object)?;
+    verify_directory(&bundle, Some((digest, total)), None)
+}
+
+pub(crate) fn check_in(
+    root: &Dir,
+    object: &str,
+    digest: &str,
+    total: u64,
+) -> Result<Manifest, Failure> {
+    require_supported()?;
+    let revision = object_path(object)?;
+    let (_, _, bundle) = open_object_in(root, revision)?;
     verify_directory(&bundle, Some((digest, total)), None)
 }
 pub(crate) fn inspect_retained(
@@ -1992,6 +2009,40 @@ mod tests {
     use super::*;
     use std::fs;
     use std::path::PathBuf;
+
+    #[test]
+    fn backup_bundle_checks_match_through_a_pinned_preparation() {
+        use std::io::Write;
+        let (root, selection) = fixture();
+        let saved = capture(&root.0, &selection, &crate::id::ulid())
+            .unwrap()
+            .retained;
+        let expected = check(&root.0, &saved.object, &saved.digest, saved.size).unwrap();
+        let parent = files::open_root(&root.0).unwrap();
+        let preparation = Preparation::new(&parent).unwrap();
+        preparation
+            .dir
+            .create_dir_all(format!(".vivac-artifacts/{}/assets", saved.object))
+            .unwrap();
+        let paths = std::iter::once(MANIFEST)
+            .chain(expected.members.iter().map(|member| member.path.as_str()));
+        for path in paths {
+            let relative = format!(".vivac-artifacts/{}/{path}", saved.object);
+            let bytes = fs::read(root.0.join(&relative)).unwrap();
+            preparation
+                .dir
+                .create(&relative)
+                .unwrap()
+                .write_all(&bytes)
+                .unwrap();
+        }
+        let actual = check_in(&preparation.dir, &saved.object, &saved.digest, saved.size).unwrap();
+        assert_eq!(actual.manifest_bytes, expected.manifest_bytes);
+        assert_eq!(
+            serde_json::to_value(actual).unwrap(),
+            serde_json::to_value(expected).unwrap()
+        );
+    }
 
     #[test]
     fn policy_permissive_manifest_schemas_reject_missing_or_incompatible_inspection() {

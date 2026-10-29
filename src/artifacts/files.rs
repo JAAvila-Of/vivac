@@ -275,8 +275,12 @@ pub fn verify(root: &Path, object: &str, digest: &str, size: u64) -> Result<(), 
 
 pub fn site_id(root: &Path) -> Result<Option<String>, Failure> {
     let root = open_root(root)?;
+    site_id_in(&root)
+}
+
+pub(super) fn site_id_in(root: &Dir) -> Result<Option<String>, Failure> {
     let result = (|| {
-        let store = store(&root, false)?;
+        let store = store(root, false)?;
         let mut site = String::new();
         regular(&store, ".site")?
             .take(27)
@@ -302,8 +306,30 @@ pub fn inspect_retained_with_inspection(
     let policy = expected_policy(Some(expected))?;
     object_path(object)?;
     let root = open_root(root)?;
+    inspect_retained_with_policy_in(&root, object, expected, policy)
+}
+
+pub(super) fn inspect_retained_with_inspection_in(
+    root: &Dir,
+    object: &str,
+    inspection: Option<&Inspection>,
+) -> Result<Option<(String, u64)>, Failure> {
+    let Some(expected) = inspection else {
+        return inspect_retained_in(root, object);
+    };
+    let policy = expected_policy(Some(expected))?;
+    object_path(object)?;
+    inspect_retained_with_policy_in(root, object, expected, policy)
+}
+
+fn inspect_retained_with_policy_in(
+    root: &Dir,
+    object: &str,
+    expected: &Inspection,
+    policy: CapturePolicy,
+) -> Result<Option<(String, u64)>, Failure> {
     let result = (|| {
-        let store = store(&root, false)?;
+        let store = store(root, false)?;
         let mut file = regular(&store, object)?;
         let before = file.metadata()?;
         let (receipt, actual) = copy_with_policy(&mut file, io::sink(), policy)?;
@@ -335,8 +361,13 @@ fn match_inspection(expected: Option<&Inspection>, actual: Inspection) -> Result
 pub fn inspect_retained(root: &Path, object: &str) -> Result<Option<(String, u64)>, Failure> {
     object_path(object)?;
     let root = open_root(root)?;
+    inspect_retained_in(&root, object)
+}
+
+fn inspect_retained_in(root: &Dir, object: &str) -> Result<Option<(String, u64)>, Failure> {
+    object_path(object)?;
     let result = (|| {
-        let store = store(&root, false)?;
+        let store = store(root, false)?;
         let mut file = regular(&store, object)?;
         let before = file.metadata()?;
         let actual = hash(&mut file)?;
@@ -585,7 +616,7 @@ fn object_path(path: &str) -> Result<(), Failure> {
     opaque_id(id)
 }
 
-pub(super) fn open_root(root: &Path) -> Result<Dir, Failure> {
+pub(crate) fn open_root(root: &Path) -> Result<Dir, Failure> {
     let absolute = std::path::absolute(root)?;
     let parent_path = absolute
         .parent()
@@ -597,7 +628,7 @@ pub(super) fn open_root(root: &Path) -> Result<Dir, Failure> {
     Ok(parent.open_dir_nofollow(leaf)?)
 }
 
-pub(super) fn parent(root: &Dir, path: &str) -> Result<(Dir, String), Failure> {
+pub(crate) fn parent(root: &Dir, path: &str) -> Result<(Dir, String), Failure> {
     let mut parts = path.split('/').peekable();
     let mut dir = root.try_clone()?;
     while let Some(part) = parts.next() {
@@ -610,11 +641,20 @@ pub(super) fn parent(root: &Dir, path: &str) -> Result<(Dir, String), Failure> {
     Err(Failure::usage("Empty artifact path."))
 }
 
-pub(super) fn regular(root: &Dir, path: &str) -> Result<File, Failure> {
+pub(crate) fn regular(root: &Dir, path: &str) -> Result<File, Failure> {
     let (parent, leaf) = parent(root, path)?;
-    reject_link(&parent.symlink_metadata(&leaf)?)?;
+    let before = parent.symlink_metadata(&leaf)?;
+    reject_link(&before)?;
+    if !before.is_file() {
+        return Err(Failure::usage("Artifacts must be regular files."));
+    }
     let mut options = OpenOptions::new();
     options.read(true).follow(FollowSymlinks::No);
+    #[cfg(unix)]
+    {
+        use cap_std::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK);
+    }
     let file = parent.open_with(leaf, &options)?;
     let metadata = file.metadata()?;
     if !metadata.is_file() {
@@ -624,7 +664,7 @@ pub(super) fn regular(root: &Dir, path: &str) -> Result<File, Failure> {
     Ok(file)
 }
 
-pub(super) fn require_single_link(file: &File) -> Result<(), Failure> {
+pub(crate) fn require_single_link(file: &File) -> Result<(), Failure> {
     #[cfg(unix)]
     let links = {
         use cap_std::fs::MetadataExt;
@@ -662,7 +702,7 @@ pub(super) fn require_single_link(file: &File) -> Result<(), Failure> {
     Ok(())
 }
 
-pub(super) fn reject_link(metadata: &Metadata) -> Result<(), Failure> {
+pub(crate) fn reject_link(metadata: &Metadata) -> Result<(), Failure> {
     let linked = metadata.file_type().is_symlink();
     #[cfg(windows)]
     let linked = {
@@ -1025,7 +1065,7 @@ fn git_command(root: &Path) -> Command {
     command
 }
 
-pub(super) fn sync_directory(dir: &Dir) -> Result<(), Failure> {
+pub(crate) fn sync_directory(dir: &Dir) -> Result<(), Failure> {
     #[cfg(windows)]
     {
         use cap_fs_ext::OpenOptionsMaybeDirExt;
@@ -1066,6 +1106,69 @@ mod tests {
     use super::*;
     use std::{fs, process::Command};
     const REVISION: &str = "01arz3ndektsv4rrffq69g5fav";
+
+    #[cfg(windows)]
+    #[test]
+    fn backup_preparation_pin_refuses_path_reopens_and_preserves_capability_reads() {
+        let scratch = Scratch::new();
+        let parent = open_root(&scratch.0).unwrap();
+        let preparation = super::super::native::Preparation::new(&parent).unwrap();
+        let mut source = preparation.dir.create("evidence.txt").unwrap();
+        source.write_all(b"Retained recovery evidence.").unwrap();
+        drop(source);
+        assert!(open_root(&scratch.0.join(&preparation.name)).is_err());
+        let mut bytes = Vec::new();
+        regular(&preparation.dir, "evidence.txt")
+            .unwrap()
+            .read_to_end(&mut bytes)
+            .unwrap();
+        assert_eq!(bytes, b"Retained recovery evidence.");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn backup_regular_refuses_fifo_without_waiting_for_a_writer() {
+        const CHILD_ROOT: &str = "VIVAC_BACKUP_FIFO_TEST_ROOT";
+        if let Some(root) = std::env::var_os(CHILD_ROOT) {
+            let directory = open_root(Path::new(&root)).unwrap();
+            assert!(regular(&directory, "input.fifo").is_err());
+            return;
+        }
+        let scratch = Scratch::new();
+        assert!(Command::new("mkfifo")
+            .arg(scratch.0.join("input.fifo"))
+            .status()
+            .unwrap()
+            .success());
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "artifacts::files::tests::backup_regular_refuses_fifo_without_waiting_for_a_writer",
+            ])
+            .env(CHILD_ROOT, &scratch.0)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                assert!(
+                    status.success(),
+                    "FIFO fixture must be refused by the reader."
+                );
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                panic!("The reader blocked on the FIFO fixture.");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
     #[test]
     fn policy_permissive_file_rejects_forged_inspection_before_recovery() {
         let dir = Scratch::new();

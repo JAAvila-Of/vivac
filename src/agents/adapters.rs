@@ -94,6 +94,116 @@ pub fn read_prompt(root: &Path, harness: &str, relative: &str) -> Result<String,
     read_source(root, harness, relative).map(|source| source.0)
 }
 
+pub(crate) fn backup_native_from_bytes(
+    harness: &str,
+    relative: &str,
+    bytes: &[u8],
+) -> Result<(Candidate, Option<String>), Failure> {
+    let refused = || Failure::Model("Required native agent bytes are invalid or sensitive.".into());
+    let adapter = get(harness).ok_or_else(refused)?;
+    if bytes.len() as u64 > MAX_NATIVE_BYTES {
+        return Err(refused());
+    }
+    let text = std::str::from_utf8(bytes).map_err(|_| refused())?;
+    if crate::redact::check_prompt(text).is_some() {
+        return Err(refused());
+    }
+    let mut candidate = empty_candidate(harness, relative, bytes);
+    let (values, prompt, core, settings, effort) = match harness {
+        "codex" => {
+            let values = toml::from_str::<toml::Table>(text).map_err(|_| refused())?;
+            let values: BTreeMap<String, Value> = serde_json::to_value(values)
+                .and_then(serde_json::from_value)
+                .map_err(|_| refused())?;
+            let prompt = values
+                .get("developer_instructions")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            if values.get("description").and_then(Value::as_str).is_none() || prompt.is_none() {
+                candidate.problem =
+                    Some("Codex agent description or instructions are missing.".into());
+            }
+            (
+                values,
+                prompt,
+                &[
+                    "name",
+                    "description",
+                    "model",
+                    "model_reasoning_effort",
+                    "developer_instructions",
+                ][..],
+                CODEX_SETTINGS,
+                "model_reasoning_effort",
+            )
+        }
+        "claude-code" => {
+            let rest = text
+                .strip_prefix("---\r\n")
+                .or_else(|| text.strip_prefix("---\n"))
+                .ok_or_else(refused)?;
+            let mut offset = 0;
+            let mut sections = None;
+            for line in rest.split_inclusive('\n') {
+                if line.trim_end_matches(['\r', '\n']) == "---" {
+                    sections = Some((&rest[..offset], &rest[offset + line.len()..]));
+                    break;
+                }
+                offset += line.len();
+            }
+            let (header, body) = sections.ok_or_else(refused)?;
+            let values: BTreeMap<String, Value> =
+                serde_norway::from_str(header).map_err(|_| refused())?;
+            if values.get("description").and_then(Value::as_str).is_none() {
+                candidate.problem = Some("Claude Code agent description is missing.".into());
+            }
+            (
+                values,
+                Some(body.to_owned()),
+                &["name", "description", "model", "effort"][..],
+                CLAUDE_SETTINGS,
+                "effort",
+            )
+        }
+        #[cfg(test)]
+        "example" => {
+            let values: BTreeMap<String, Value> =
+                serde_json::from_str(text).map_err(|_| refused())?;
+            let prompt = values
+                .get("instructions")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            (
+                values,
+                prompt,
+                &["name", "model", "effort", "instructions"][..],
+                &[][..],
+                "effort",
+            )
+        }
+        _ => return Err(refused()),
+    };
+    for (key, value) in &values {
+        if crate::redact::check_prompt(key).is_some() || !backup_safe_value(value) {
+            return Err(refused());
+        }
+    }
+    metadata(&mut candidate, &values, core, settings, effort);
+    validate_candidate(adapter.as_ref(), &mut candidate);
+    Ok((candidate, prompt))
+}
+
+fn backup_safe_value(value: &Value) -> bool {
+    match value {
+        Value::String(text) => crate::redact::check_prompt(text).is_none(),
+        Value::Array(values) => values.iter().all(backup_safe_value),
+        Value::Object(values) => values.iter().all(|(key, value)| {
+            crate::redact::check_prompt(key).is_none() && backup_safe_value(value)
+        }),
+        _ => true,
+    }
+}
+
 pub fn read_source(
     root: &Path,
     harness: &str,
@@ -730,6 +840,54 @@ impl Adapter for Example {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn backup_byte_parser_preserves_native_candidates_and_fenced_prompts() {
+        let root =
+            std::env::temp_dir().join(format!("vivac-backup-adapter-parity-{}", crate::id::ulid()));
+        fs::create_dir_all(&root).unwrap();
+        for adapter in all() {
+            let assignment = Assignment {
+                harness: adapter.name().into(),
+                name: "reviewer".into(),
+                model: "inherit".into(),
+                effort: "high".into(),
+                settings: BTreeMap::new(),
+            };
+            for prompt in [
+                None,
+                Some("Inspect the scope.\n```text\nReturn complete evidence.\n```\n"),
+                Some(""),
+            ] {
+                let text = adapter
+                    .render(
+                        "agent-id",
+                        "revision-id",
+                        &definition(),
+                        &assignment,
+                        prompt,
+                    )
+                    .unwrap();
+                let path = format!("{}/reviewer.{}", adapter.directory(), adapter.extension());
+                fs::create_dir_all(root.join(adapter.directory())).unwrap();
+                fs::write(root.join(&path), &text).unwrap();
+                let expected = adapter.inspect(&root, &path).unwrap();
+                fs::write(
+                    root.join(&path),
+                    b"Later filesystem bytes must not be read.",
+                )
+                .unwrap();
+                let actual =
+                    backup_native_from_bytes(adapter.name(), &path, text.as_bytes()).unwrap();
+                assert_eq!(actual.0, expected);
+                if let Some(prompt) = prompt {
+                    assert_eq!(actual.1.as_deref(), Some(prompt));
+                }
+            }
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
     fn definition() -> Definition {
         Definition {
             prompt: None,

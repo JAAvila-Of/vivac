@@ -14,6 +14,7 @@ mod agents;
 mod anchor;
 mod args;
 mod artifacts;
+mod backup;
 mod brief;
 mod changes;
 mod check;
@@ -52,6 +53,15 @@ mod width;
 use args::Args;
 use failure::Failure;
 use output::outln;
+
+pub(crate) const BACKUP_USAGE: &str =
+    "vivac backup create <new-directory> [--lane-root <lane-id>=<directory>] [--json]\n\
+vivac backup verify <backup-directory> [--json]\n\
+vivac backup recover <backup-directory> --to <new-directory> --source-retired [--json]\n\n\
+Create a private local copy of the tree, retained artifacts and managed agent files.\n\
+Additional lane roots are explicit. Missing or changed custody files refuse the copy.\n\
+Verify does not activate a project. Recover needs a new destination and refuses\n\
+known live copies even when --source-retired is given. Local packages are not encrypted.\n";
 
 const USAGE: &str = r#"vivac - provenance of work
 
@@ -250,6 +260,12 @@ const USAGE: &str = r#"vivac - provenance of work
                                               it; on Windows, sets the
                                               running copy aside first
     vivac import <tree.json>                  bring in a tree from the spike
+    vivac backup create <new-directory> [--lane-root <id>=<directory>] [--json]
+                                              make a private local recovery copy
+    vivac backup verify <backup-directory> [--json]
+                                              verify it without activating it
+    vivac backup recover <backup-directory> --to <new-directory>
+          --source-retired [--json]           recover after retiring the source
 
   Exit codes
     0 fine   1 the model refuses   2 usage   3 redaction guard   4 no .vivac
@@ -350,6 +366,7 @@ const COMMANDS: &[&str] = &[
     "relocate",
     "update",
     "import",
+    "backup",
 ];
 
 /// `vivac share [on|off]` (`d916`). Closing needs no terminal and no
@@ -638,6 +655,9 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
     }
     if cmd == "artifacts" {
         return artifacts::run(&cwd, a);
+    }
+    if cmd == "backup" {
+        return backup::run(&cwd, a);
     }
 
     // Valid options per command. One that is not here is an error and not
