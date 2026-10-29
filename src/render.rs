@@ -191,6 +191,7 @@ fn json_node(a: &Tree, ag: &Aggregates, n: &Node) -> serde_json::Value {
         "opened": crate::clock::date_of(n.opened(a)),
         "closed": n.closed(a).map(crate::clock::date_of),
         "false_close": n.state == State::Done && ag.blockers(n.num) > 0,
+        "forced_close": n.forced_close,
         "open_below": r.open_count,
         "total_below": r.total,
     });

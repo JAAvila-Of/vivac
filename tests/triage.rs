@@ -12,6 +12,29 @@ fn section(s: &str, title: &str) -> bool {
     s.lines().any(|l| l.trim_start().starts_with(title))
 }
 
+fn assert_close_flags(c: &Sandbox, false_close: bool, forced_close: bool) {
+    let tree: serde_json::Value =
+        serde_json::from_str(&c.ok(&["tree", "--all", "--json"])).unwrap();
+    let why: serde_json::Value = serde_json::from_str(&c.ok(&["why", "1", "--json"])).unwrap();
+    for node in [&tree[0], &why["node"]] {
+        assert_eq!(node["false_close"], false_close, "{node}");
+        assert_eq!(node["forced_close"], forced_close, "{node}");
+    }
+    for node in tree[0]["children"].as_array().unwrap() {
+        assert_eq!(node["false_close"], false, "{node}");
+        assert_eq!(node["forced_close"], false, "{node}");
+    }
+}
+
+#[test]
+fn active_and_normal_closed_nodes_have_false_close_flags() {
+    let c = Sandbox::new_seeded("close-flags");
+    c.ok(&["push", "Permissions audit", "--why", "it is due for review"]);
+    assert_close_flags(&c, false, false);
+    c.ok(&["pop", "report delivered"]);
+    assert_close_flags(&c, false, false);
+}
+
 /// A healthy tree has nothing to prune, and says so without empty sections.
 #[test]
 fn nothing_to_prune() {
@@ -67,6 +90,23 @@ fn a_false_close_comes_out_with_its_count() {
         s.contains("1 blocker"),
         "it did not say how many are left: {s}"
     );
+    assert_close_flags(&c, true, false);
+    let triage: serde_json::Value = serde_json::from_str(&c.ok(&["triage", "--json"])).unwrap();
+    assert_eq!(triage["false_closes"].as_array().unwrap().len(), 1);
+    assert_eq!(triage["false_closes"][0]["num"], 1);
+    assert_eq!(triage["false_closes"][0]["false_close"], true);
+    assert_eq!(triage["false_closes"][0]["forced_close"], false);
+    let (text, code) = c.run(&["check", "--json"]);
+    assert_eq!(code, 1, "{text}");
+    let check: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(check["project"].as_array().unwrap().len(), 1, "{check}");
+    assert!(
+        check["project"][0]
+            .as_str()
+            .unwrap()
+            .contains("is closed with 1 open condition(s)"),
+        "{check}"
+    );
 }
 
 /// A **forced** close does not come back here. It was a decision, it leaves a
@@ -103,6 +143,18 @@ fn a_forced_close_does_not_come_back_to_triage() {
         t.contains("FALSE CLOSE"),
         "the tree stopped marking it: {t}"
     );
+    assert_close_flags(&c, true, true);
+    let triage: serde_json::Value = serde_json::from_str(&c.ok(&["triage", "--json"])).unwrap();
+    assert!(triage["false_closes"].as_array().unwrap().is_empty());
+    let check: serde_json::Value = serde_json::from_str(&c.ok(&["check", "--json"])).unwrap();
+    assert!(check["project"].as_array().unwrap().is_empty());
+    let stats: serde_json::Value = serde_json::from_str(&c.ok(&["stats", "--json"])).unwrap();
+    assert_eq!(stats["false_closes"].as_array().unwrap().len(), 1);
+
+    c.ok(&["done", "2", "finding resolved"]);
+    assert_close_flags(&c, false, true);
+    let stats: serde_json::Value = serde_json::from_str(&c.ok(&["stats", "--json"])).unwrap();
+    assert!(stats["false_closes"].as_array().unwrap().is_empty());
 }
 
 /// Whatever survives an abandonment stays alive under something discarded on
