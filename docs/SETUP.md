@@ -27,6 +27,60 @@ what costs the second command.
 `setup` refuses now rather than planting half a project. It names the
 `init` to run and writes nothing until you have run it.
 
+## Checking before planting
+
+Before creating a tree, `init` checks for nearby nested trees and projects in
+the local registry. It also follows plain local filesystem paths declared in
+`remote.origin.url` by repositories with an ordinary `.git` directory found
+in this folder. It checks each source and at most two parent directories,
+stopping at the first tree or lane marker. Readable trees' last repository
+declarations supply the root commit comparison. It does not enumerate siblings, rebuild
+the registry, follow chains of origins or execute Git inside a source tree.
+Git parses captured configuration with includes disabled; remote URLs, remote
+helpers, file URLs, UNC paths and device paths are not followed.
+Links in an origin path are not followed and do not establish ownership.
+
+A matching tree stops planting even with `--yes` or `--dry-run`. Use
+`vivac init --join <path to the existing tree>` to retain its history. If that
+tree should live here, move it with `vivac relocate` first. A deliberate fork
+can use `vivac init --new-tree`; that choice does not override the refusal for
+a tree nested inside this folder. Existing linked worktrees keep their normal
+resolution through their main checkout; this check does not read that
+checkout's origin or follow another chain from it.
+
+Both registry and local-origin candidates have their configuration checked
+before their logs. A closed tree (`share off`) or one without configuration
+is excluded from automatic discovery without reading its log. The local walk
+also stops there, so it cannot reach a different tree above that boundary.
+No configuration is regenerated and no sharing setting is changed.
+
+Local-origin discovery inspects at most 64 repositories and 64 source
+candidates. Each Git or tree configuration and the Git parser's decoded
+output are limited to 64 KiB. Readable local-source logs share a 64 MiB budget,
+with the existing 512 KiB line and 1,024 JSON item limits. Registry matches
+only need their first complete event, limited to 512 KiB, after the permission
+check.
+
+Unreadable or invalid registry candidates are omitted. A local tree that
+cannot be checked because of invalid configuration, linked or unreadable
+metadata, an incomplete readable log or an exceeded bound refuses the check
+instead of accepting a partial result. Event and lane metadata behind a
+closed or missing configuration is not inspected. Candidates and the registry
+are not changed, including during `--dry-run`; absolute source paths and
+configuration values are not printed.
+
+A remote URL cannot reveal another clone's local path. With no registry match
+or usable local reference, `init` retains its existing uncertainty warning;
+an empty registry still allows the first product to be created. This check
+does not prove global uniqueness.
+
+Scripts that previously created another tree from a locally referenced source
+may now be refused. Select `--join` or `--new-tree` explicitly before retrying;
+`--yes` confirms the plan's writes and does not select a separate product.
+Because a previously successful scripted `init` can now be refused, this
+change requires a minor release under the [versioning policy](VERSIONING.md).
+It does not change the event format.
+
 ---
 
 ## What it writes, and where

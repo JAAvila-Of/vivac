@@ -1139,6 +1139,7 @@ disclosure
 disconnected
 disconnects
 discovered
+discovery
 discriminant
 disjoint
 disk
@@ -2642,6 +2643,7 @@ oriented
 origin
 original
 originated
+origins
 orphan
 orphaned
 orphaning

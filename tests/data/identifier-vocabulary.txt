@@ -15,6 +15,7 @@ accents
 accept
 acceptance
 accepted
+accepting
 accepts
 access
 accessible
@@ -41,6 +42,7 @@ additions
 addr
 address
 adds
+adirectory
 adler
 adler32
 admission
@@ -202,6 +204,7 @@ authenticated
 author
 authored
 authoritative
+authorities
 authority
 authorization
 authorize
@@ -497,6 +500,7 @@ collections
 collides
 collision
 colon
+colons
 color
 colour
 coloured
@@ -536,6 +540,7 @@ concat
 concurrent
 condition
 config
+configs
 configuration
 configure
 configured
@@ -738,6 +743,7 @@ detach
 detached
 detachment
 detail
+details
 detect
 detected
 detector
@@ -746,6 +752,7 @@ determinism
 deterministic
 dev
 device
+devices
 diacritic
 diacritics
 diagnosable
@@ -782,6 +789,7 @@ disable
 disabled
 disables
 disabling
+disagree
 disagrees
 disappear
 disappears
@@ -989,6 +997,7 @@ explicit
 export
 exports
 exposes
+exposing
 expr
 exrescode
 ext
@@ -1230,6 +1239,7 @@ held
 hello
 help
 helper
+helpers
 here
 heuristic
 hex
@@ -1379,6 +1389,7 @@ interactive
 interlaced
 interlacing
 interleaved
+intermediate
 intern
 international
 interrupted
@@ -1703,6 +1714,7 @@ neither
 nepal
 nested
 net
+network
 never
 new
 newer
@@ -2115,6 +2127,7 @@ quiets
 quote
 quoted
 quotes
+quoting
 racing
 radius
 radix
@@ -2219,6 +2232,7 @@ refusing
 regardless
 regenerated
 regenerates
+regenerating
 regeneration
 regex
 regional
@@ -2621,6 +2635,7 @@ speak
 speaking
 speaks
 spec
+special
 specific
 specification
 spelled
@@ -2829,6 +2844,7 @@ ticks
 tidy
 tie
 tight
+tilde
 time
 timed
 timeout
@@ -3046,6 +3062,7 @@ variables
 variant
 variants
 varied
+vars
 vdbe
 vec
 vector

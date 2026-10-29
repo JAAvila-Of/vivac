@@ -1250,9 +1250,6 @@ pub fn sharing_repos(store_dir: &Path, repos: &[String]) -> Vec<Sharing> {
         .iter()
         .filter_map(|(id, p)| {
             let root = PathBuf::from(&p.path);
-            if crate::store::first_event_id(&root).as_deref() != Some(id.as_str()) {
-                return None;
-            }
             let shared: Vec<String> = p
                 .repos
                 .iter()
@@ -1262,8 +1259,16 @@ pub fn sharing_repos(store_dir: &Path, repos: &[String]) -> Vec<Sharing> {
             if shared.is_empty() {
                 return None;
             }
+            use cap_fs_ext::DirExt;
+            let directory = crate::artifacts::files::open_root(&root).ok()?;
+            let store = directory.open_dir_nofollow(crate::store::DIR).ok()?;
+            let config = crate::store::discovery_config_in(&store).ok().flatten()?;
+            if !config.shares() || discovery_first_event_id(&store).as_deref() != Some(id.as_str())
+            {
+                return None;
+            }
             Some(Sharing {
-                name: effective_name(store_dir, &root),
+                name: saved_name(store_dir, id).or_else(|| folder_name(&root)),
                 root,
                 shared,
             })
@@ -1278,6 +1283,22 @@ pub fn sharing_repos(store_dir: &Path, repos: &[String]) -> Vec<Sharing> {
         })
     });
     found
+}
+
+fn discovery_first_event_id(store: &cap_std::fs::Dir) -> Option<String> {
+    use std::io::{BufRead, Read};
+    const LIMIT: u64 = 512 * 1024;
+    let file = crate::artifacts::files::regular(store, crate::store::LOG).ok()?;
+    crate::artifacts::files::require_single_link(&file).ok()?;
+    let mut line = Vec::new();
+    std::io::BufReader::new(file.take(LIMIT + 1))
+        .read_until(b'\n', &mut line)
+        .ok()?;
+    if line.len() as u64 > LIMIT || line.last() != Some(&b'\n') {
+        return None;
+    }
+    let event: crate::event::Event = serde_json::from_slice(&line).ok()?;
+    Some(event.id)
 }
 
 /// Resolves `--project`'s value against the registry: a bare name -- the
@@ -2991,6 +3012,198 @@ mod tests {
             .join("..")
             .join("b");
         assert_eq!(absolute(&messy), std::env::current_dir().unwrap().join("b"));
+    }
+
+    fn sharing_discovery_fixture() -> (Owned, Owned) {
+        let registry = Owned(temp_dir("sharing-discovery-registry"));
+        let (root, id) = seeded_project("sharing-discovery-tree");
+        let root = Owned(root);
+        note(
+            &registry.0,
+            &id,
+            Sighting {
+                root: &root.0,
+                lane: None,
+                repos: Some(&["r1".to_owned()]),
+            },
+        );
+        set_name(&registry.0, &id, "Private discovery sentinel");
+        (registry, root)
+    }
+
+    fn assert_sharing_discovery_is_closed(registry: &Path, root: &Path) {
+        let config = root.join(store::DIR).join("config");
+        let log = root.join(store::DIR).join(store::LOG);
+        let registry_before = std::fs::read(registry.join(FILE)).unwrap();
+        let config_before = std::fs::read(&config).ok();
+        let log_before = std::fs::read(&log).unwrap();
+        let found = sharing_repos(registry, &["r1".to_owned()]);
+        assert!(found.is_empty(), "A closed tree was exposed by discovery");
+        assert_eq!(std::fs::read(registry.join(FILE)).unwrap(), registry_before);
+        assert_eq!(std::fs::read(&config).ok(), config_before);
+        assert_eq!(std::fs::read(&log).unwrap(), log_before);
+    }
+
+    #[test]
+    fn sharing_repos_discovery_omits_closed_trees_without_writes() {
+        let (registry, root) = sharing_discovery_fixture();
+        let config = root.0.join(store::DIR).join("config");
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&config).unwrap()).unwrap();
+        value["share"] = false.into();
+        std::fs::write(&config, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert_sharing_discovery_is_closed(&registry.0, &root.0);
+    }
+
+    #[test]
+    fn sharing_repos_discovery_omits_missing_config_without_regenerating_it() {
+        let (registry, root) = sharing_discovery_fixture();
+        std::fs::remove_file(root.0.join(store::DIR).join("config")).unwrap();
+        assert_sharing_discovery_is_closed(&registry.0, &root.0);
+    }
+
+    #[test]
+    fn sharing_repos_discovery_keeps_public_trees() {
+        let (registry, root) = sharing_discovery_fixture();
+        let found = sharing_repos(&registry.0, &["r1".to_owned()]);
+        assert_eq!(found.len(), 1);
+        assert!(crate::anchor::same_folder(&found[0].root, &root.0));
+        assert_eq!(found[0].name.as_deref(), Some("Private discovery sentinel"));
+    }
+
+    #[test]
+    fn sharing_repos_discovery_omits_invalid_future_and_oversized_config() {
+        let (registry, root) = sharing_discovery_fixture();
+        let config = root.0.join(store::DIR).join("config");
+        let valid = std::fs::read(&config).unwrap();
+        let mut future: serde_json::Value = serde_json::from_slice(&valid).unwrap();
+        future["version"] = 999.into();
+        let mut oversized = valid;
+        oversized.resize(64 * 1024 + 1, b' ');
+        for bytes in [
+            b"{malformed private sentinel".to_vec(),
+            serde_json::to_vec(&future).unwrap(),
+            oversized,
+        ] {
+            std::fs::write(&config, bytes).unwrap();
+            assert_sharing_discovery_is_closed(&registry.0, &root.0);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sharing_repos_discovery_does_not_open_closed_or_missing_config_logs() {
+        use std::process::{Command, Stdio};
+        const CHILD_REGISTRY: &str = "VIVAC_SHARING_DISCOVERY_FIFO_REGISTRY";
+        if let Some(registry) = std::env::var_os(CHILD_REGISTRY) {
+            assert!(sharing_repos(Path::new(&registry), &["r1".to_owned()]).is_empty());
+            return;
+        }
+        for closed in [true, false] {
+            let (registry, root) = sharing_discovery_fixture();
+            let config = root.0.join(store::DIR).join("config");
+            if closed {
+                let mut value: serde_json::Value =
+                    serde_json::from_slice(&std::fs::read(&config).unwrap()).unwrap();
+                value["share"] = false.into();
+                std::fs::write(&config, serde_json::to_vec(&value).unwrap()).unwrap();
+            } else {
+                std::fs::remove_file(&config).unwrap();
+            }
+            let log = root.0.join(store::DIR).join(store::LOG);
+            std::fs::remove_file(&log).unwrap();
+            assert!(Command::new("mkfifo").arg(log).status().unwrap().success());
+            let mut child = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "registry::tests::sharing_repos_discovery_does_not_open_closed_or_missing_config_logs",
+                ])
+                .env(CHILD_REGISTRY, &registry.0)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            loop {
+                if let Some(status) = child.try_wait().unwrap() {
+                    assert!(
+                        status.success(),
+                        "Discovery must not open a closed tree log"
+                    );
+                    break;
+                }
+                if std::time::Instant::now() >= deadline {
+                    child.kill().unwrap();
+                    child.wait().unwrap();
+                    panic!("Discovery opened a log before checking sharing permission");
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        }
+    }
+
+    #[test]
+    fn sharing_repos_discovery_config_reader_is_bounded_and_hides_details() {
+        use cap_fs_ext::DirExt;
+        let (_registry, root) = sharing_discovery_fixture();
+        let directory = crate::artifacts::files::open_root(&root.0).unwrap();
+        let store = directory.open_dir_nofollow(store::DIR).unwrap();
+        let config = root.0.join(store::DIR).join("config");
+        let mut valid = std::fs::read(&config).unwrap();
+        valid.resize(64 * 1024, b' ');
+        std::fs::write(&config, &valid).unwrap();
+        assert!(store::discovery_config_in(&store)
+            .unwrap()
+            .unwrap()
+            .shares());
+        valid.push(b' ');
+        for bytes in [valid, b"private config sentinel".to_vec()] {
+            std::fs::write(&config, bytes).unwrap();
+            let error = store::discovery_config_in(&store).unwrap_err();
+            assert_eq!(
+                error.message(),
+                "A local repository source could not be checked."
+            );
+        }
+        std::fs::remove_file(&config).unwrap();
+        assert!(store::discovery_config_in(&store).unwrap().is_none());
+    }
+
+    #[test]
+    fn sharing_repos_discovery_first_event_reader_bounds_only_the_first_line() {
+        use cap_fs_ext::DirExt;
+        let (_registry, root) = sharing_discovery_fixture();
+        let directory = crate::artifacts::files::open_root(&root.0).unwrap();
+        let store = directory.open_dir_nofollow(store::DIR).unwrap();
+        let log = root.0.join(store::DIR).join(store::LOG);
+        let first = std::fs::read(&log).unwrap();
+        let identity = discovery_first_event_id(&store).unwrap();
+        let mut long_log = first.clone();
+        long_log.resize(1024 * 1024, b'x');
+        std::fs::write(&log, long_log).unwrap();
+        assert_eq!(discovery_first_event_id(&store), Some(identity));
+        std::fs::write(&log, &first[..first.len() - 1]).unwrap();
+        assert!(discovery_first_event_id(&store).is_none());
+        std::fs::write(&log, vec![b' '; 512 * 1024 + 1]).unwrap();
+        assert!(discovery_first_event_id(&store).is_none());
+    }
+
+    #[test]
+    fn sharing_repos_discovery_readers_refuse_hard_linked_files() {
+        use cap_fs_ext::DirExt;
+        let (_registry, root) = sharing_discovery_fixture();
+        let directory = crate::artifacts::files::open_root(&root.0).unwrap();
+        let store = directory.open_dir_nofollow(store::DIR).unwrap();
+        let config = root.0.join(store::DIR).join("config");
+        std::fs::hard_link(&config, root.0.join("config-alias")).unwrap();
+        assert_eq!(
+            store::discovery_config_in(&store).unwrap_err().message(),
+            "A local repository source could not be checked."
+        );
+        let log = root.0.join(store::DIR).join(store::LOG);
+        std::fs::hard_link(&log, root.0.join("events-alias")).unwrap();
+        assert!(discovery_first_event_id(&store).is_none());
     }
 
     /// `sharing_repos`'s own order, pinned directly: `refuse_second_map`
