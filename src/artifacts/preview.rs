@@ -219,6 +219,8 @@ fn serve(
         match listener.accept() {
             Ok((mut socket, _)) => {
                 if Instant::now() >= deadline {
+                    #[cfg(test)]
+                    eprintln!("preview accept: deadline expired");
                     break;
                 }
                 if socket.set_nonblocking(false).is_err() {
@@ -330,7 +332,9 @@ fn serve(
                     Ok(Action::Close) => {
                         let body =
                             "<!doctype html><title>Preview closed.</title><p>Preview closed.</p>";
-                        let _ = respond(
+                        #[cfg(test)]
+                        let before = deadline.saturating_duration_since(Instant::now());
+                        let result = respond(
                             &mut socket,
                             200,
                             ResponsePolicy::Trusted,
@@ -338,6 +342,14 @@ fn serve(
                             body.len() as u64,
                             response_deadline,
                         );
+                        #[cfg(test)]
+                        eprintln!(
+                            "preview close response: deadline before {:?}, after {:?}, result {:?}",
+                            before,
+                            deadline.saturating_duration_since(Instant::now()),
+                            result.as_ref().map(|_| ()).map_err(io::Error::kind)
+                        );
+                        let _ = result;
                         break;
                     }
                     Err(status) => {
@@ -361,6 +373,10 @@ fn serve(
             }
             Err(_) => break,
         }
+    }
+    #[cfg(test)]
+    if Instant::now() >= deadline {
+        eprintln!("preview worker: deadline expired");
     }
 }
 
@@ -823,17 +839,26 @@ mod tests {
     }
 
     fn read_response(reader: &mut impl Read) -> io::Result<String> {
-        let invalid = || io::Error::new(io::ErrorKind::InvalidData, "invalid response framing");
+        let header_error = |received, kind| {
+            io::Error::new(
+                kind,
+                format!("response: received {received} header bytes before terminator: {kind:?}"),
+            )
+        };
         let mut reader = io::BufReader::new(reader);
         let mut response = Vec::new();
         while !response.ends_with(b"\r\n\r\n") {
             if response.len() == 8192 {
-                return Err(invalid());
+                return Err(header_error(response.len(), io::ErrorKind::InvalidData));
             }
             let mut byte = [0];
-            reader.read_exact(&mut byte)?;
+            reader
+                .read_exact(&mut byte)
+                .map_err(|error| header_error(response.len(), error.kind()))?;
             response.push(byte[0]);
         }
+        let header_length = response.len();
+        let invalid = || header_error(header_length, io::ErrorKind::InvalidData);
         let length = {
             let mut headers = [httparse::EMPTY_HEADER; 32];
             let mut parsed = httparse::Response::new(&mut headers);
@@ -865,10 +890,21 @@ mod tests {
             }
             length.ok_or_else(invalid)?
         };
-        let header_length = response.len();
-        response.resize(header_length + length, 0);
-        reader.read_exact(&mut response[header_length..])?;
-        String::from_utf8(response).map_err(|_| invalid())
+        let body_error = |received, kind| {
+            io::Error::new(
+                kind,
+                format!("response body: received {received} of {length} bytes: {kind:?}"),
+            )
+        };
+        reader
+            .take(length as u64)
+            .read_to_end(&mut response)
+            .map_err(|error| body_error(response.len() - header_length, error.kind()))?;
+        let received = response.len() - header_length;
+        if received != length {
+            return Err(body_error(received, io::ErrorKind::UnexpectedEof));
+        }
+        String::from_utf8(response).map_err(|_| body_error(received, io::ErrorKind::InvalidData))
     }
 
     struct ResetAfter<'a>(Cursor<&'a [u8]>);
@@ -879,7 +915,10 @@ mod tests {
                 return Ok(0);
             }
             match self.0.read(buffer)? {
-                0 => Err(io::Error::from(io::ErrorKind::ConnectionReset)),
+                0 => Err(io::Error::new(
+                    io::ErrorKind::ConnectionReset,
+                    "reader-error-sentinel",
+                )),
                 count => Ok(count),
             }
         }
@@ -899,8 +938,34 @@ mod tests {
     #[test]
     fn preview_response_framing_rejects_truncated_body() {
         let response = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\ndata";
-        assert!(read_response(&mut ResetAfter(Cursor::new(response))).is_err());
-        assert!(read_response(&mut Cursor::new(response)).is_err());
+        let reset = read_response(&mut ResetAfter(Cursor::new(response))).unwrap_err();
+        let eof = read_response(&mut Cursor::new(response)).unwrap_err();
+        assert_eq!(reset.kind(), io::ErrorKind::ConnectionReset);
+        assert_eq!(eof.kind(), io::ErrorKind::UnexpectedEof);
+        for (error, kind) in [(reset, "ConnectionReset"), (eof, "UnexpectedEof")] {
+            assert_eq!(
+                error.to_string(),
+                format!("response body: received 4 of 5 bytes: {kind}")
+            );
+        }
+    }
+
+    #[test]
+    fn preview_response_framing_reports_partial_header_without_content() {
+        let response = b"HTTP/1.1 200 OK\r\nX-Private: header-value-sentinel";
+        let reset = read_response(&mut ResetAfter(Cursor::new(response))).unwrap_err();
+        let eof = read_response(&mut Cursor::new(response)).unwrap_err();
+        assert_eq!(reset.kind(), io::ErrorKind::ConnectionReset);
+        assert_eq!(eof.kind(), io::ErrorKind::UnexpectedEof);
+        for (error, kind) in [(reset, "ConnectionReset"), (eof, "UnexpectedEof")] {
+            assert_eq!(
+                error.to_string(),
+                format!(
+                    "response: received {} header bytes before terminator: {kind}",
+                    response.len()
+                )
+            );
+        }
     }
 
     #[test]
