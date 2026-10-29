@@ -1825,6 +1825,33 @@ fn unreadable_config(failure: Failure) -> Failure {
     }
 }
 
+/// Reads discovery permission from an already opened store without repairing it.
+pub(crate) fn discovery_config_in(directory: &cap_std::fs::Dir) -> Result<Option<Config>, Failure> {
+    use crate::artifacts::files;
+    const LIMIT: u64 = 64 * 1024;
+    let refused = || Failure::Model("A local repository source could not be checked.".into());
+    let read = || -> Result<Option<Config>, Failure> {
+        let file = match files::regular(directory, CONFIG) {
+            Ok(file) => file,
+            Err(Failure::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(None);
+            }
+            Err(error) => return Err(error),
+        };
+        files::require_single_link(&file)?;
+        if file.metadata()?.len() > LIMIT {
+            return Err(refused());
+        }
+        let mut raw = String::new();
+        file.take(LIMIT + 1).read_to_string(&mut raw)?;
+        if raw.len() as u64 > LIMIT {
+            return Err(refused());
+        }
+        read_config(&raw).map(Some)
+    };
+    read().map_err(|_| refused())
+}
+
 /// Parses `config`'s text into a `Config`, refusing the two shapes of
 /// `version` `t411` §27 gives a name to before letting `serde_json` see the
 /// rest: a non-negative integer that is not `1`, or a string that is not
@@ -2382,6 +2409,33 @@ pub(crate) fn read_all_in(
     let mut events = Vec::new();
     let broken = visit_events(reader, false, |event| events.push(event))?;
     Ok((events, broken))
+}
+
+/// Reads repository identity without retaining provenance text or opening files.
+pub(crate) fn repository_identity_in(
+    reader: &mut impl BufRead,
+) -> Result<(String, Vec<String>), Failure> {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    let refused = || Failure::Model("A local repository source could not be checked.".into());
+    let mut identity = None;
+    let mut lanes = BTreeMap::new();
+    let broken = visit_events(reader, true, |event| {
+        if identity.is_none() {
+            identity = Some(event.id);
+        }
+        if let crate::event::Body::LaneDeclared { repos, .. } = event.payload {
+            let roots: Vec<String> = repos.into_iter().filter_map(|repo| repo.root).collect();
+            lanes.insert(event.lane, roots);
+        }
+    })
+    .map_err(|_| refused())?;
+    if broken != 0 {
+        return Err(refused());
+    }
+    let identity = identity.ok_or_else(refused)?;
+    let roots: BTreeSet<String> = lanes.into_values().flatten().collect();
+    Ok((identity, roots.into_iter().collect()))
 }
 
 fn visit_events(
@@ -2991,6 +3045,201 @@ mod tests {
             "line reader allocated {peak} bytes"
         );
         assert!(result.is_err(), "an oversized line was accepted");
+    }
+
+    fn repository_identity_event(seq: u64, payload: crate::event::Body) -> crate::event::Event {
+        crate::event::Event {
+            seq,
+            id: format!("{seq:026}"),
+            ts: "2026-01-01T00:00:00Z".into(),
+            actor: "opaque".into(),
+            lane: crate::lane::MAIN.into(),
+            payload,
+        }
+    }
+
+    fn repository_identity_node(seq: u64, why: &str) -> crate::event::Event {
+        repository_identity_event(
+            seq,
+            crate::event::Body::NodeCreated {
+                node: format!("{seq:026}"),
+                num: seq,
+                kind: crate::event::Kind::Task,
+                title: "Synthetic work".into(),
+                why: why.into(),
+                parent: None,
+                blocks: false,
+                refs: vec![],
+                governs: vec![],
+                arms: vec![],
+                against: None,
+            },
+        )
+    }
+
+    fn repository_identity_lane(seq: u64, lane: &str, roots: &[&str]) -> crate::event::Event {
+        let mut event = repository_identity_event(
+            seq,
+            crate::event::Body::LaneDeclared {
+                lane: lane.into(),
+                name: "Synthetic lane".into(),
+                repos: roots
+                    .iter()
+                    .enumerate()
+                    .map(|(index, root)| crate::event::Repo {
+                        path: format!("repo-{index}"),
+                        root: Some((*root).into()),
+                    })
+                    .collect(),
+            },
+        );
+        event.lane = lane.into();
+        event
+    }
+
+    fn repository_identity_bytes(events: &[crate::event::Event]) -> Vec<u8> {
+        let mut input = Vec::new();
+        for event in events {
+            serde_json::to_writer(&mut input, event).unwrap();
+            input.push(b'\n');
+        }
+        input
+    }
+
+    #[test]
+    fn repository_identity_uses_the_first_event_and_latest_lane_declarations() {
+        let first = "1".repeat(40);
+        let second = "2".repeat(40);
+        let third = "3".repeat(40);
+        let events = [
+            repository_identity_node(1, "Retain only repository metadata"),
+            repository_identity_lane(2, "main", &[&first, &second]),
+            repository_identity_lane(3, "other", &[&third]),
+            repository_identity_lane(4, "main", &[&second, &second]),
+            repository_identity_lane(5, "other", &[]),
+            repository_identity_lane(6, "another", &[&first]),
+        ];
+        let input = repository_identity_bytes(&events);
+        let (identity, roots) = repository_identity_in(&mut std::io::Cursor::new(input)).unwrap();
+        let folded = crate::model::fold(&events, 0);
+        let expected: std::collections::BTreeSet<_> = folded
+            .lanes
+            .values()
+            .flat_map(|lane| lane.repos.iter().filter_map(|repo| repo.root.clone()))
+            .collect();
+        assert_eq!(identity, events[0].id);
+        assert_eq!(roots, vec![first, second]);
+        assert_eq!(roots, expected.into_iter().collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn repository_identity_uses_signed_lanes_when_payload_lanes_disagree() {
+        let first = "1".repeat(40);
+        let second = "2".repeat(40);
+        let mut replacement = repository_identity_lane(3, "other", &[&second]);
+        replacement.lane = "main".into();
+        let events = [
+            repository_identity_node(1, "Retain only repository metadata"),
+            repository_identity_lane(2, "main", &[&first]),
+            replacement,
+        ];
+        let input = repository_identity_bytes(&events);
+        let (_, roots) = repository_identity_in(&mut std::io::Cursor::new(input)).unwrap();
+        let folded = crate::model::fold(&events, 0);
+        let expected: std::collections::BTreeSet<_> = folded
+            .lanes
+            .values()
+            .flat_map(|lane| lane.repos.iter().filter_map(|repo| repo.root.clone()))
+            .collect();
+        assert_eq!(roots, vec![second]);
+        assert_eq!(roots, expected.into_iter().collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn repository_identity_streams_without_retaining_event_prose() {
+        let prose = "x".repeat(4096);
+        let mut input = Vec::new();
+        for seq in 1..=1000 {
+            serde_json::to_writer(&mut input, &repository_identity_node(seq, &prose)).unwrap();
+            input.push(b'\n');
+        }
+        let root = "a".repeat(40);
+        serde_json::to_writer(
+            &mut input,
+            &repository_identity_lane(1001, "main", &[&root]),
+        )
+        .unwrap();
+        input.push(b'\n');
+        let (result, peak) = crate::test_alloc::measure(|| {
+            repository_identity_in(&mut std::io::Cursor::new(&input))
+        });
+        let (identity, roots) = result.unwrap();
+        assert_eq!(identity, format!("{:026}", 1));
+        assert_eq!(roots, vec![root]);
+        assert!(
+            peak <= 2 * 1024 * 1024,
+            "metadata reader allocated {peak} bytes"
+        );
+    }
+
+    #[test]
+    fn repository_identity_refuses_incomplete_or_invalid_logs_without_echoing_input() {
+        let secret = "private-input-sentinel";
+        let valid = repository_identity_bytes(&[repository_identity_node(1, "Ordinary work")]);
+        let mut broken = valid.clone();
+        broken.extend_from_slice(format!("{secret}\n").as_bytes());
+        let mut newer = valid.clone();
+        newer.extend_from_slice(
+            format!(
+                "{{\"seq\":2,\"id\":\"next\",\"ts\":\"now\",\"actor\":\"opaque\",\"lane\":\"main\",\"payload\":{{\"type\":\"{secret}\"}}}}\n"
+            )
+            .as_bytes(),
+        );
+        for input in [
+            Vec::new(),
+            b" \n".to_vec(),
+            valid[..valid.len() - 1].to_vec(),
+            broken,
+            newer,
+        ] {
+            let error = repository_identity_in(&mut std::io::Cursor::new(input)).unwrap_err();
+            assert_eq!(error.code(), 1);
+            assert_eq!(
+                error.message(),
+                "A local repository source could not be checked."
+            );
+            assert!(!error.message().contains(secret));
+        }
+    }
+
+    #[test]
+    fn repository_identity_preserves_line_and_json_work_limits() {
+        let oversized = vec![b'x'; CAPTURE_LINE_LIMIT + 1];
+        let many_values = format!("[{}]\n", vec!["0"; CAPTURE_JSON_ITEMS + 1].join(","));
+        for input in [oversized, many_values.into_bytes()] {
+            let error = repository_identity_in(&mut std::io::Cursor::new(input)).unwrap_err();
+            assert_eq!(error.code(), 1);
+            assert_eq!(
+                error.message(),
+                "A local repository source could not be checked."
+            );
+        }
+    }
+
+    #[test]
+    fn repository_identity_hides_reader_errors() {
+        struct Unreadable;
+        impl std::io::Read for Unreadable {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("private-input-sentinel"))
+            }
+        }
+        let error = repository_identity_in(&mut BufReader::new(Unreadable)).unwrap_err();
+        assert_eq!(error.code(), 1);
+        assert_eq!(
+            error.message(),
+            "A local repository source could not be checked."
+        );
     }
 
     #[test]

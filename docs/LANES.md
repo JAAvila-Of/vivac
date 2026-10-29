@@ -119,11 +119,18 @@ is which files this folder gets, never anything about the tree. Running setup
 first says so and names the `init` to run, rather than writing files that
 would have nothing to read.
 
-`init` knows when two folders are the same product, because it compares the
-repository's root commit against the projects it already knows. When it finds a
-match it stops and asks which you meant, rather than guessing — `--join` to
-make this folder a lane of that product, `--new-tree` to insist that this one
-is genuinely separate.
+`init` compares repository root commits against projects in its local registry.
+It also checks plain local filesystem paths in the repositories' `origin` URLs:
+a tree at that source or within two parent directories can supply the same
+comparison even if its registry entry was lost. A match stops planting and
+offers a choice: `--join` by the existing tree's path, or `--new-tree` for a
+separate product, including a deliberate fork. A root commit does not decide
+which product you intended.
+
+This is bounded discovery, not a search of the disk. Remote URLs do not reveal
+where another local tree lives. Without a registry entry or a usable local
+reference, `init` cannot prove that no other tree exists. See
+[Setting it up](SETUP.md#checking-before-planting) for its scope and limits.
 
 ### Move a tree
 

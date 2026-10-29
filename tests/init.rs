@@ -1124,11 +1124,11 @@ fn planting_beside_a_registered_product_that_shares_nothing_warns_in_the_plan() 
     assert_eq!(code, 0, "{out}");
     assert!(out.contains("This plants a new product."), "{out}");
     assert!(
-        out.contains("Nothing here shares a repository with the projects vivac already tracks"),
+        out.contains("No readable project is known to match these repositories"),
         "{out}"
     );
     assert!(
-        out.contains("If it is, stop and use --join <name> instead."),
+        out.contains("If it is, stop and use --join <name or path> instead."),
         "{out}"
     );
 }
@@ -3288,4 +3288,315 @@ fn planting_says_other_projects_can_find_the_tree_and_a_join_does_not() {
     let dry = Sandbox::new_empty("init-share-dry");
     let out = dry.ok(&["init", "--dry-run"]);
     assert!(!out.contains("Other projects"), "{out}");
+}
+
+fn missing_registry_entry_origin(path: &Path) -> std::path::PathBuf {
+    let canonical = path.canonicalize().unwrap();
+    #[cfg(windows)]
+    if matches!(
+        canonical.components().next(),
+        Some(std::path::Component::Prefix(prefix)) if matches!(prefix.kind(), std::path::Prefix::VerbatimDisk(_))
+    ) {
+        return std::path::PathBuf::from(&canonical.to_str().unwrap()[4..]);
+    }
+    canonical
+}
+
+fn missing_registry_entry_fixture(name: &str) -> (Sandbox, std::path::PathBuf, std::path::PathBuf) {
+    let c = Sandbox::new_empty(name);
+    let first = c.0.join("Existing");
+    real_git_repo(&first.join("app"));
+    let (out, code) = run_in(&first, c.global_home(), &["init", "--new-tree", "--yes"]);
+    assert_eq!(code, 0, "{out}");
+
+    let other = c.0.join("Unrelated");
+    real_git_repo_with_content(&other.join("app"), "independent content");
+    let (out, code) = run_in(&other, c.global_home(), &["init", "--new-tree", "--yes"]);
+    assert_eq!(code, 0, "{out}");
+
+    let second = c.0.join("OtherClone");
+    clone_repo(
+        &missing_registry_entry_origin(&first.join("app")),
+        &second.join("app"),
+    );
+
+    let root_commits = |repository: &Path| {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repository)
+            .args(["rev-list", "--max-parents=0", "HEAD"])
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "the fixture needs a committed repository"
+        );
+        assert!(!out.stdout.is_empty(), "the fixture needs a root commit");
+        out.stdout
+    };
+    let first_roots = root_commits(&first.join("app"));
+    assert_eq!(first_roots, root_commits(&second.join("app")));
+    assert_ne!(first_roots, root_commits(&other.join("app")));
+
+    let first_event: serde_json::Value =
+        serde_json::from_str(read(&first.join(".vivac/events")).lines().next().unwrap()).unwrap();
+    let registry_path = c.global_home().join("projects");
+    let mut registry: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&registry_path).unwrap()).unwrap();
+    let projects = registry["projects"].as_object_mut().unwrap();
+    assert!(projects
+        .remove(first_event["id"].as_str().unwrap())
+        .is_some());
+    assert_eq!(
+        projects.len(),
+        1,
+        "the independent product must stay registered"
+    );
+    std::fs::write(&registry_path, serde_json::to_vec(&registry).unwrap()).unwrap();
+    assert!(already_planted(&first));
+    assert!(!already_planted(&second));
+    (c, first, second)
+}
+
+#[test]
+fn missing_registry_entry_does_not_allow_a_silent_second_map() {
+    let (c, first, second) = missing_registry_entry_fixture("init-missing-entry-refusal");
+    let config_before = std::fs::read(first.join(".vivac/config")).unwrap();
+    let events_before = std::fs::read(first.join(".vivac/events")).unwrap();
+    let registry_before = std::fs::read(c.global_home().join("projects")).unwrap();
+
+    let (out, code) = run_in(&second, c.global_home(), &["init", "--yes"]);
+
+    assert_eq!(
+        code, 1,
+        "init must require an explicit product choice: {out}"
+    );
+    assert!(!second.join(".vivac").exists(), "a second tree was written");
+    assert_eq!(
+        std::fs::read(first.join(".vivac/config")).unwrap(),
+        config_before
+    );
+    assert_eq!(
+        std::fs::read(first.join(".vivac/events")).unwrap(),
+        events_before
+    );
+    assert_eq!(
+        std::fs::read(c.global_home().join("projects")).unwrap(),
+        registry_before
+    );
+}
+
+#[test]
+fn missing_registry_entry_still_allows_an_explicit_separate_tree() {
+    let (c, first, second) = missing_registry_entry_fixture("init-missing-entry-separate");
+    let config_before = std::fs::read(first.join(".vivac/config")).unwrap();
+    let events_before = std::fs::read(first.join(".vivac/events")).unwrap();
+
+    let (out, code) = run_in(&second, c.global_home(), &["init", "--new-tree", "--yes"]);
+
+    assert_eq!(code, 0, "{out}");
+    assert!(already_planted(&second));
+    let second_event: serde_json::Value =
+        serde_json::from_str(read(&second.join(".vivac/events")).lines().next().unwrap()).unwrap();
+    let first_event: serde_json::Value =
+        serde_json::from_slice(events_before.split(|byte| *byte == b'\n').next().unwrap()).unwrap();
+    assert_ne!(first_event["id"], second_event["id"]);
+    assert_eq!(
+        std::fs::read(first.join(".vivac/config")).unwrap(),
+        config_before
+    );
+    assert_eq!(
+        std::fs::read(first.join(".vivac/events")).unwrap(),
+        events_before
+    );
+}
+
+#[test]
+fn missing_registry_entry_still_allows_joining_the_existing_tree_by_path() {
+    let (c, first, second) = missing_registry_entry_fixture("init-missing-entry-join");
+    let config_before = std::fs::read(first.join(".vivac/config")).unwrap();
+    let events_before = std::fs::read(first.join(".vivac/events")).unwrap();
+    let first_event: serde_json::Value =
+        serde_json::from_slice(events_before.split(|byte| *byte == b'\n').next().unwrap()).unwrap();
+
+    let (out, code) = run_in(
+        &second,
+        c.global_home(),
+        &["init", "--join", first.to_str().unwrap(), "--yes"],
+    );
+
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        !second.join(".vivac/events").exists(),
+        "joining planted a new tree"
+    );
+    let lane: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(second.join(".vivac/lane")).unwrap()).unwrap();
+    assert_eq!(lane["project"], first_event["id"]);
+    assert_eq!(
+        std::fs::read(first.join(".vivac/config")).unwrap(),
+        config_before
+    );
+    assert!(std::fs::read(first.join(".vivac/events"))
+        .unwrap()
+        .starts_with(&events_before));
+}
+
+#[test]
+fn missing_registry_entry_does_not_hide_a_tree_directly_below() {
+    let (c, first, _) = missing_registry_entry_fixture("init-missing-entry-below");
+    let config_before = std::fs::read(first.join(".vivac/config")).unwrap();
+    let events_before = std::fs::read(first.join(".vivac/events")).unwrap();
+    let registry_before = std::fs::read(c.global_home().join("projects")).unwrap();
+
+    let (out, code) = c.run(&["init", "--yes"]);
+
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        out.contains("\"Existing\""),
+        "the unregistered local tree was missed: {out}"
+    );
+    assert!(!c.0.join(".vivac").exists());
+    assert_eq!(
+        std::fs::read(first.join(".vivac/config")).unwrap(),
+        config_before
+    );
+    assert_eq!(
+        std::fs::read(first.join(".vivac/events")).unwrap(),
+        events_before
+    );
+    assert_eq!(
+        std::fs::read(c.global_home().join("projects")).unwrap(),
+        registry_before
+    );
+}
+
+#[test]
+fn missing_registry_entry_keeps_a_closed_tree_private_before_reading_its_log() {
+    let (c, first, second) = missing_registry_entry_fixture("init-missing-entry-private");
+    let path = first.join(".vivac/config");
+    let mut config: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    config["share"] = serde_json::json!(false);
+    let config = serde_json::to_vec(&config).unwrap();
+    std::fs::write(&path, &config).unwrap();
+    let events = b"private source text is not an event\n";
+    std::fs::write(first.join(".vivac/events"), events).unwrap();
+
+    let (out, code) = run_in(&second, c.global_home(), &["init", "--yes"]);
+
+    assert_eq!(code, 0, "a closed source is not a discovery input: {out}");
+    assert!(already_planted(&second));
+    assert!(
+        !out.contains("A local repository source points to an existing tree"),
+        "{out}"
+    );
+    assert!(!out.contains("private source text"), "{out}");
+    assert_eq!(std::fs::read(&path).unwrap(), config);
+    assert_eq!(std::fs::read(first.join(".vivac/events")).unwrap(), events);
+}
+
+#[test]
+fn missing_registry_entry_does_not_read_a_tree_with_no_sharing_config() {
+    let (c, first, second) = missing_registry_entry_fixture("init-missing-entry-no-config");
+    let path = first.join(".vivac/config");
+    std::fs::remove_file(&path).unwrap();
+    let events = b"source text with no sharing policy\n";
+    std::fs::write(first.join(".vivac/events"), events).unwrap();
+
+    let (out, code) = run_in(&second, c.global_home(), &["init", "--yes"]);
+
+    assert_eq!(
+        code, 0,
+        "a source with no sharing policy is not readable: {out}"
+    );
+    assert!(already_planted(&second));
+    assert!(
+        !out.contains("A local repository source points to an existing tree"),
+        "{out}"
+    );
+    assert!(!out.contains("source text"), "{out}");
+    assert!(!path.exists(), "discovery regenerated the source config");
+    assert_eq!(std::fs::read(first.join(".vivac/events")).unwrap(), events);
+}
+
+#[test]
+fn missing_registry_entry_refuses_an_invalid_config_without_exposing_it() {
+    let (c, first, second) = missing_registry_entry_fixture("init-missing-entry-invalid-config");
+    let path = first.join(".vivac/config");
+    let config = b"withheld source configuration\n";
+    std::fs::write(&path, config).unwrap();
+    let events = std::fs::read(first.join(".vivac/events")).unwrap();
+    let registry = std::fs::read(c.global_home().join("projects")).unwrap();
+
+    let (out, code) = run_in(&second, c.global_home(), &["init", "--yes"]);
+
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        out.contains("A local repository source could not be checked."),
+        "{out}"
+    );
+    assert!(!out.contains("points to an existing tree"), "{out}");
+    assert!(!out.contains("withheld source configuration"), "{out}");
+    assert!(!second.join(".vivac").exists());
+    assert_eq!(std::fs::read(&path).unwrap(), config);
+    assert_eq!(std::fs::read(first.join(".vivac/events")).unwrap(), events);
+    assert_eq!(
+        std::fs::read(c.global_home().join("projects")).unwrap(),
+        registry
+    );
+}
+
+#[test]
+fn missing_registry_entry_stops_at_a_private_child_before_an_open_parent() {
+    let (c, first, second) = missing_registry_entry_fixture("init-missing-entry-private-child");
+    let parent = c.0.join("Parent");
+    clone_repo(&first.join("app"), &parent.join("app"));
+    let (out, code) = run_in(&parent, c.global_home(), &["init", "--new-tree", "--yes"]);
+    assert_eq!(code, 0, "{out}");
+    let parent_events = std::fs::read(parent.join(".vivac/events")).unwrap();
+    let parent_event: serde_json::Value =
+        serde_json::from_slice(parent_events.split(|byte| *byte == b'\n').next().unwrap()).unwrap();
+    let registry_path = c.global_home().join("projects");
+    let mut registry: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&registry_path).unwrap()).unwrap();
+    assert!(registry["projects"]
+        .as_object_mut()
+        .unwrap()
+        .remove(parent_event["id"].as_str().unwrap())
+        .is_some());
+    std::fs::write(registry_path, serde_json::to_vec(&registry).unwrap()).unwrap();
+    let workspace = c.0.canonicalize().unwrap();
+    assert!(first.canonicalize().unwrap().starts_with(&workspace));
+    assert!(parent.canonicalize().unwrap().starts_with(&workspace));
+    let child = parent.join("Existing");
+    std::fs::rename(&first, &child).unwrap();
+    let mut config: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(child.join(".vivac/config")).unwrap()).unwrap();
+    config["share"] = serde_json::json!(false);
+    let config = serde_json::to_vec(&config).unwrap();
+    std::fs::write(child.join(".vivac/config"), &config).unwrap();
+    let origin = missing_registry_entry_origin(&child.join("app"));
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(second.join("app"))
+        .args(["remote", "set-url", "origin"])
+        .arg(origin)
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let (out, code) = run_in(&second, c.global_home(), &["init", "--yes"]);
+
+    assert_eq!(
+        code, 0,
+        "a private child does not authorize inspecting another product above it: {out}"
+    );
+    assert!(already_planted(&second));
+    assert!(!out.contains("points to an existing tree"), "{out}");
+    assert_eq!(std::fs::read(child.join(".vivac/config")).unwrap(), config);
+    assert_eq!(
+        std::fs::read(parent.join(".vivac/events")).unwrap(),
+        parent_events
+    );
 }

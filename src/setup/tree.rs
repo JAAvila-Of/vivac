@@ -129,9 +129,9 @@ pub(super) fn note_name(plan: &TreePlan) {
 // Recognizing an existing product, before planting a second map of it:
 // `t594` §4.5, case 3 -- reached only when there is no tree above `here`
 // at all. Checked in this order because §4.5.1 describes a state of the
-// disk that has to be fixed before either of the other two questions
-// means anything: a tree below (`trees_below`), then a product this
-// machine's registry already tracks (`sharing_repos`).
+// disk that has to be fixed before the product question means anything:
+// a tree below (`trees_below`), then registry matches, then trees reached
+// through local repository sources.
 // ---------------------------------------------------------------------------
 
 /// The deepest a nested tree can sit beneath the folder being set up, the
@@ -238,12 +238,9 @@ pub(super) fn tree_below_refusal(paths: &[PathBuf]) -> Failure {
     ))
 }
 
-/// `t594` §4.5, case 3's own second refusal: this folder's repositories
-/// already belong to a project the registry tracks. Skipped for
-/// `bypass_registered` -- `--new-tree` (`t594` §4.5's own escape for two
-/// forks that share a root commit) -- and skipped when there is a tree
-/// above `here` at all, since with one this is an ordinary join and the
-/// product question does not arise.
+/// Compares this folder's repositories with known projects and trees reached
+/// through local origins. `--new-tree` skips this product choice, including
+/// for deliberate forks. An already located tree makes this an ordinary join.
 fn refuse_second_map(roots: &super::Roots, bypass_registered: bool) -> Result<(), Failure> {
     if roots.located.is_some() {
         return Ok(());
@@ -256,16 +253,21 @@ fn refuse_second_map(roots: &super::Roots, bypass_registered: bool) -> Result<()
     if root_commits.is_empty() {
         return Ok(());
     }
-    let Some(store_dir) = crate::store::store_dir() else {
-        return Ok(());
-    };
-    let best = crate::registry::sharing_repos(&store_dir, &root_commits)
-        .into_iter()
-        .find(|s| !crate::anchor::same_folder(&s.root, &roots.here));
-    match best {
-        Some(sharing) => Err(product_registered_refusal(&sharing, &here_repos)),
-        None => Ok(()),
+    if let Some(store_dir) = crate::store::store_dir() {
+        let best = crate::registry::sharing_repos(&store_dir, &root_commits)
+            .into_iter()
+            .find(|s| !crate::anchor::same_folder(&s.root, &roots.here));
+        if let Some(sharing) = best {
+            return Err(product_registered_refusal(&sharing, &here_repos));
+        }
     }
+    if let Some(sharing) = super::local_sources::find(&roots.here, &here_repos)? {
+        return Err(Failure::Model(format!(
+            "  A local repository source points to an existing tree.\n\n{}",
+            product_registered_refusal(&sharing, &here_repos).message()
+        )));
+    }
+    Ok(())
 }
 
 /// §6.3: this folder's own repositories already belong to a project the
@@ -357,10 +359,10 @@ fn second_map_hint(here: &Path) -> Option<String> {
         return None;
     }
     Some(format!(
-        "{} Nothing here shares a repository with the projects vivac already tracks, so \
-         it cannot tell whether this is one of them. If it is, stop and use {} instead.",
+        "{} No readable project is known to match these repositories, so vivac cannot \
+         tell whether this is an existing product. If it is, stop and use {} instead.",
         crate::style::warn(crate::style::Stream::Out, "This plants a new product."),
-        crate::style::bold(crate::style::Stream::Out, "--join <name>")
+        crate::style::bold(crate::style::Stream::Out, "--join <name or path>")
     ))
 }
 

@@ -20,6 +20,7 @@ mod codex;
 pub(crate) mod doctor;
 mod init;
 pub mod json;
+mod local_sources;
 // Setup activation is withheld until native opening safety is verified.
 #[allow(dead_code)]
 mod opening_bundle;
