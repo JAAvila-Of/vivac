@@ -948,6 +948,7 @@ ddl
 de
 dead
 deadline
+death
 dearer
 debt
 debts
@@ -3976,6 +3977,7 @@ sync
 synced
 synchronization
 synchronize
+synchronizing
 synchronous
 syncing
 syncs
