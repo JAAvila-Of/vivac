@@ -497,6 +497,7 @@ cache
 cached
 caches
 caching
+calculated
 calendar
 call
 callback
@@ -1099,6 +1100,7 @@ differentiator
 differently
 differs
 diffing
+digests
 digit
 digits
 diluted
@@ -2293,6 +2295,7 @@ main
 maintained
 maintainer
 maintains
+maintenance
 make
 makes
 making
@@ -2899,6 +2902,7 @@ presence
 present
 presentation
 presents
+preserve
 preserved
 preserves
 preserving
@@ -3145,6 +3149,7 @@ recorded
 recording
 records
 recoverable
+recovered
 recovery
 recreate
 recreates
@@ -3645,6 +3650,7 @@ sideways
 sight
 sighted
 sighting
+sightings
 sign
 signal
 signed
