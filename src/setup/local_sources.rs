@@ -401,7 +401,7 @@ fn tree_at(
     file.seek(SeekFrom::Start(length - 1))?;
     let mut tail = [0];
     file.read_exact(&mut tail)?;
-    if tail != [b'\n'] {
+    if tail != *b"\n" {
         return Err(refused());
     }
     file.seek(SeekFrom::Start(0))?;
