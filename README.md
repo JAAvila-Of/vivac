@@ -428,7 +428,8 @@ That is the loop. → [**When each one runs**](docs/SEAMS.md), and what to say
 when your agent skips one · [**Every command**](docs/USAGE.md)
 
 **Check the first handoff before relying on it.** Start a fresh session without
-the previous conversation. Ask it to show what is finished, what comes next,
+the previous conversation. Read `vivac brief` for the focus and saved next step.
+Ask the agent to show what is finished, what comes next,
 why a decision was made and which alternative was rejected, what must not
 change, and what was deferred. Have it cite the tree; if an answer exists only
 in the old conversation, capture it before continuing. Passing application
