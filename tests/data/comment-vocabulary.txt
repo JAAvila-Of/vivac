@@ -948,8 +948,8 @@ ddl
 de
 dead
 deadline
-death
 dearer
+death
 debt
 debts
 debug
