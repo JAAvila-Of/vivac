@@ -219,6 +219,8 @@ fn serve(
         match listener.accept() {
             Ok((mut socket, _)) => {
                 if Instant::now() >= deadline {
+                    #[cfg(test)]
+                    eprintln!("preview accept: deadline expired");
                     break;
                 }
                 if socket.set_nonblocking(false).is_err() {
@@ -330,7 +332,9 @@ fn serve(
                     Ok(Action::Close) => {
                         let body =
                             "<!doctype html><title>Preview closed.</title><p>Preview closed.</p>";
-                        let _ = respond(
+                        #[cfg(test)]
+                        let before = deadline.saturating_duration_since(Instant::now());
+                        let result = respond(
                             &mut socket,
                             200,
                             ResponsePolicy::Trusted,
@@ -338,6 +342,14 @@ fn serve(
                             body.len() as u64,
                             response_deadline,
                         );
+                        #[cfg(test)]
+                        eprintln!(
+                            "preview close response: deadline before {:?}, after {:?}, result {:?}",
+                            before,
+                            deadline.saturating_duration_since(Instant::now()),
+                            result.as_ref().map(|_| ()).map_err(io::Error::kind)
+                        );
+                        let _ = result;
                         break;
                     }
                     Err(status) => {
@@ -361,6 +373,10 @@ fn serve(
             }
             Err(_) => break,
         }
+    }
+    #[cfg(test)]
+    if Instant::now() >= deadline {
+        eprintln!("preview worker: deadline expired");
     }
 }
 
@@ -823,17 +839,26 @@ mod tests {
     }
 
     fn read_response(reader: &mut impl Read) -> io::Result<String> {
-        let invalid = || io::Error::new(io::ErrorKind::InvalidData, "invalid response framing");
+        let header_error = |received, kind| {
+            io::Error::new(
+                kind,
+                format!("response: received {received} header bytes before terminator: {kind:?}"),
+            )
+        };
         let mut reader = io::BufReader::new(reader);
         let mut response = Vec::new();
         while !response.ends_with(b"\r\n\r\n") {
             if response.len() == 8192 {
-                return Err(invalid());
+                return Err(header_error(response.len(), io::ErrorKind::InvalidData));
             }
             let mut byte = [0];
-            reader.read_exact(&mut byte)?;
+            reader
+                .read_exact(&mut byte)
+                .map_err(|error| header_error(response.len(), error.kind()))?;
             response.push(byte[0]);
         }
+        let header_length = response.len();
+        let invalid = || header_error(header_length, io::ErrorKind::InvalidData);
         let length = {
             let mut headers = [httparse::EMPTY_HEADER; 32];
             let mut parsed = httparse::Response::new(&mut headers);
@@ -865,10 +890,21 @@ mod tests {
             }
             length.ok_or_else(invalid)?
         };
-        let header_length = response.len();
-        response.resize(header_length + length, 0);
-        reader.read_exact(&mut response[header_length..])?;
-        String::from_utf8(response).map_err(|_| invalid())
+        let body_error = |received, kind| {
+            io::Error::new(
+                kind,
+                format!("response body: received {received} of {length} bytes: {kind:?}"),
+            )
+        };
+        reader
+            .take(length as u64)
+            .read_to_end(&mut response)
+            .map_err(|error| body_error(response.len() - header_length, error.kind()))?;
+        let received = response.len() - header_length;
+        if received != length {
+            return Err(body_error(received, io::ErrorKind::UnexpectedEof));
+        }
+        String::from_utf8(response).map_err(|_| body_error(received, io::ErrorKind::InvalidData))
     }
 
     struct ResetAfter<'a>(Cursor<&'a [u8]>);
@@ -879,7 +915,10 @@ mod tests {
                 return Ok(0);
             }
             match self.0.read(buffer)? {
-                0 => Err(io::Error::from(io::ErrorKind::ConnectionReset)),
+                0 => Err(io::Error::new(
+                    io::ErrorKind::ConnectionReset,
+                    "reader-error-sentinel",
+                )),
                 count => Ok(count),
             }
         }
@@ -899,8 +938,34 @@ mod tests {
     #[test]
     fn preview_response_framing_rejects_truncated_body() {
         let response = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\ndata";
-        assert!(read_response(&mut ResetAfter(Cursor::new(response))).is_err());
-        assert!(read_response(&mut Cursor::new(response)).is_err());
+        let reset = read_response(&mut ResetAfter(Cursor::new(response))).unwrap_err();
+        let eof = read_response(&mut Cursor::new(response)).unwrap_err();
+        assert_eq!(reset.kind(), io::ErrorKind::ConnectionReset);
+        assert_eq!(eof.kind(), io::ErrorKind::UnexpectedEof);
+        for (error, kind) in [(reset, "ConnectionReset"), (eof, "UnexpectedEof")] {
+            assert_eq!(
+                error.to_string(),
+                format!("response body: received 4 of 5 bytes: {kind}")
+            );
+        }
+    }
+
+    #[test]
+    fn preview_response_framing_reports_partial_header_without_content() {
+        let response = b"HTTP/1.1 200 OK\r\nX-Private: header-value-sentinel";
+        let reset = read_response(&mut ResetAfter(Cursor::new(response))).unwrap_err();
+        let eof = read_response(&mut Cursor::new(response)).unwrap_err();
+        assert_eq!(reset.kind(), io::ErrorKind::ConnectionReset);
+        assert_eq!(eof.kind(), io::ErrorKind::UnexpectedEof);
+        for (error, kind) in [(reset, "ConnectionReset"), (eof, "UnexpectedEof")] {
+            assert_eq!(
+                error.to_string(),
+                format!(
+                    "response: received {} header bytes before terminator: {kind}",
+                    response.len()
+                )
+            );
+        }
     }
 
     #[test]
@@ -1259,57 +1324,99 @@ mod tests {
     #[test]
     fn preview_runner_gates_origin_host_method_path_and_bounded_form() {
         let _guard = SERVERS.lock().unwrap_or_else(|error| error.into_inner());
-        let preview =
-            start_for(selected(b"<html>selected</html>"), Duration::from_secs(2)).unwrap();
-        let started = Instant::now();
-        let (host, token) = parts(preview.url());
-        let path = String::from("/run");
-        let body = format!("token={token}");
-        let valid = format!("Origin: http://{host}\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\n", body.len());
-        let forged = format!(
-            "token={}{}",
-            if token.starts_with('0') { '1' } else { '0' },
-            &token[1..]
-        );
-        assert_eq!(forged.len(), body.len());
-        let refused = request(preview.url(), "POST", &path, &valid, &forged);
-        assert!(refused.starts_with("HTTP/1.1 403"));
-        assert!(!refused.contains("<html>selected</html>"));
-        assert!(!request_host(
-            preview.url(),
-            "127.0.0.1",
-            "GET",
-            &format!("/{token}"),
-            "",
-            ""
-        )
-        .starts_with("HTTP/1.1 200"));
-        for (method, path, headers, body) in [
-            ("GET", path.as_str(), "".into(), "".into()),
-            ("POST", path.as_str(), format!("Origin: http://127.0.0.1\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\n",body.len()), body.clone()),
-            ("POST", path.as_str(), format!("Origin: null\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\n",body.len()), body.clone()),
-            ("POST", path.as_str(), format!("{valid}Origin: http://{host}\r\n"), body.clone()),
-            ("POST", path.as_str(), format!("{valid}Host: {host}\r\n"), body.clone()),
-            ("POST", path.as_str(), format!("Origin: http://{host}\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n",body.len()), body.clone()),
-            ("POST", path.as_str(), format!("{valid}Content-Length: {}\r\n", body.len()), body.clone()),
-            ("POST", path.as_str(), format!("{valid}Transfer-Encoding: chunked\r\n"), body.clone()),
-            ("POST", path.as_str(), format!("{valid}Expect: 100-continue\r\n"), body.clone()),
-            ("POST", path.as_str(), valid.clone(), format!("{body}GET / HTTP/1.1\r\n\r\n")),
-            ("POST", path.as_str(), format!("Origin: http://{host}\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 257\r\n"), "x".repeat(257)),
-            ("GET", "/arbitrary-file", "".into(), "".into()),
-            ("PUT", path.as_str(), valid.clone(), body.clone()),
-        ] {
-            let response = request(preview.url(), method, path, &headers, &body);
-            assert!(!response.starts_with("HTTP/1.1 200"), "{method} {path} {headers}");
-            assert!(!response.contains("<html>selected</html>"));
+        #[derive(Debug)]
+        enum Case {
+            ForgedToken,
+            WrongHost,
+            GetRun,
+            WrongOrigin,
+            NullOrigin,
+            DuplicateOrigin,
+            DuplicateHost,
+            PlainContentType,
+            DuplicateContentLength,
+            TransferEncoding,
+            ExpectContinue,
+            TrailingRequest,
+            OversizedBody,
+            UnknownPath,
+            PutRun,
         }
-        assert!(post(preview.url(), "run").contains("<html>selected</html>"));
-        eprintln!(
-            "preview admission sequence before close: {:?}",
-            started.elapsed()
-        );
-        post(preview.url(), "close");
-        preview.wait();
+        for case in [
+            Case::ForgedToken,
+            Case::WrongHost,
+            Case::GetRun,
+            Case::WrongOrigin,
+            Case::NullOrigin,
+            Case::DuplicateOrigin,
+            Case::DuplicateHost,
+            Case::PlainContentType,
+            Case::DuplicateContentLength,
+            Case::TransferEncoding,
+            Case::ExpectContinue,
+            Case::TrailingRequest,
+            Case::OversizedBody,
+            Case::UnknownPath,
+            Case::PutRun,
+        ] {
+            let preview =
+                start_for(selected(b"<html>selected</html>"), Duration::from_secs(2)).unwrap();
+            let started = Instant::now();
+            let (host, token) = parts(preview.url());
+            let path = String::from("/run");
+            let wrapper_path = format!("/{token}");
+            let body = format!("token={token}");
+            let valid = format!("Origin: http://{host}\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\n", body.len());
+            let forged = format!(
+                "token={}{}",
+                if token.starts_with('0') { '1' } else { '0' },
+                &token[1..]
+            );
+            assert_eq!(forged.len(), body.len());
+            let (method, path, headers, body): (&str, &str, String, String) = match case {
+                Case::ForgedToken => ("POST", path.as_str(), valid.clone(), forged),
+                Case::WrongHost => ("GET", wrapper_path.as_str(), "".into(), "".into()),
+                Case::GetRun => ("GET", path.as_str(), "".into(), "".into()),
+                Case::WrongOrigin => ("POST", path.as_str(), format!("Origin: http://127.0.0.1\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\n",body.len()), body.clone()),
+                Case::NullOrigin => ("POST", path.as_str(), format!("Origin: null\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\n",body.len()), body.clone()),
+                Case::DuplicateOrigin => ("POST", path.as_str(), format!("{valid}Origin: http://{host}\r\n"), body.clone()),
+                Case::DuplicateHost => ("POST", path.as_str(), format!("{valid}Host: {host}\r\n"), body.clone()),
+                Case::PlainContentType => ("POST", path.as_str(), format!("Origin: http://{host}\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n",body.len()), body.clone()),
+                Case::DuplicateContentLength => ("POST", path.as_str(), format!("{valid}Content-Length: {}\r\n", body.len()), body.clone()),
+                Case::TransferEncoding => ("POST", path.as_str(), format!("{valid}Transfer-Encoding: chunked\r\n"), body.clone()),
+                Case::ExpectContinue => ("POST", path.as_str(), format!("{valid}Expect: 100-continue\r\n"), body.clone()),
+                Case::TrailingRequest => ("POST", path.as_str(), valid.clone(), format!("{body}GET / HTTP/1.1\r\n\r\n")),
+                Case::OversizedBody => ("POST", path.as_str(), format!("Origin: http://{host}\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 257\r\n"), "x".repeat(257)),
+                Case::UnknownPath => ("GET", "/arbitrary-file", "".into(), "".into()),
+                Case::PutRun => ("PUT", path.as_str(), valid.clone(), body.clone()),
+            };
+            let host_header = if matches!(case, Case::WrongHost) {
+                "127.0.0.1"
+            } else {
+                host
+            };
+            let response = request_host(preview.url(), host_header, method, path, &headers, &body);
+            if matches!(case, Case::ForgedToken) {
+                assert!(response.starts_with("HTTP/1.1 403"), "{case:?}");
+            }
+            assert!(!response.starts_with("HTTP/1.1 200"), "{case:?}");
+            assert!(!response.contains("<html>selected</html>"), "{case:?}");
+            let run = post(preview.url(), "run");
+            assert!(run.starts_with("HTTP/1.1 200"), "{case:?}");
+            assert_eq!(
+                run.split_once("\r\n\r\n").unwrap().1,
+                "<html>selected</html>",
+                "{case:?}"
+            );
+            eprintln!(
+                "preview admission sequence {case:?} before close: {:?}",
+                started.elapsed()
+            );
+            let close = post(preview.url(), "close");
+            assert!(close.starts_with("HTTP/1.1 200"), "{case:?}");
+            assert!(close.contains("Preview closed."), "{case:?}");
+            preview.wait();
+        }
     }
 
     #[test]
