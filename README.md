@@ -427,6 +427,20 @@ vivac web          the whole tree in a browser, on this machine only
 That is the loop. → [**When each one runs**](docs/SEAMS.md), and what to say
 when your agent skips one · [**Every command**](docs/USAGE.md)
 
+**Check the first handoff before relying on it.** Start a fresh session without
+the previous conversation. Ask it to show what is finished, what comes next,
+why a decision was made and which alternative was rejected, what must not
+change, and what was deferred. Have it cite the tree; if an answer exists only
+in the old conversation, capture it before continuing. Passing application
+tests and generating setup files do not prove that this knowledge was recorded.
+Codex still needs the [trust and hook approvals](docs/SETUP.md#codex) described
+by setup; generated configuration alone does not prove the agent received it.
+
+Try a [backup and recovery drill](docs/BACKUP.md) in a disposable project too.
+Verification can run while the source is healthy; recovery requires retiring
+the original authority and a new destination. Repository contents and harness
+settings need separate recovery; the tree's recovery copy does not include them.
+
 ---
 
 ## Bringing a project in
