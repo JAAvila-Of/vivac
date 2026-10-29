@@ -114,7 +114,7 @@ mod tests {
             assert!(!error.message().contains(&secret));
         }
         assert_eq!(
-            check_json(br#"{"why":"```\nfile body\n```"}"#)
+            check_json(br#"{"why":"```\nfile body\n```"}"#.as_slice())
                 .unwrap_err()
                 .code(),
             3
