@@ -6,14 +6,15 @@
 //! working afterwards -- it is now a lane, not the tree's own folder -- and
 //! nothing about its stack, its focus or its counters changes underfoot.
 //!
-//! **The idea this whole module answers to:** no intermediate state may
-//! look like an empty tree. An empty tree accepts writes -- `Store::open`
+//! **The idea this whole module answers to:** a new destination must not
+//! appear as a partial tree. An empty tree accepts writes -- `Store::open`
 //! seeds one the moment `config` or `events` is missing where the other
 //! is not -- so a failure partway through never loses the history, it
 //! *replaces* it with a different one nobody asked for, in silence. Every
-//! step below is ordered, or made fallible, or both, so that no crash
-//! between any two of them leaves a folder `store::already_planted` would
-//! call a tree that is not the real one.
+//! step below keeps the origin's log intact until the registry records the
+//! move. A destination whose `.vivac/` already exists is still filled in
+//! place, preserving its unrelated files; it does not get the new
+//! directory's whole-publication guarantee.
 //!
 //! Ten steps (`t594` corrects the eight the original task named):
 //!
@@ -30,13 +31,13 @@
 //!    with this same first event, and so the project does not live here.
 //! 5. Refuse a destination that already holds a tree or a lane. Create it
 //!    if it does not exist yet.
-//! 6. Copy `events` and `config` to temporary names, compare each against
-//!    the origin byte for byte, then rename both onto their real names --
-//!    the one point where a truncated write could otherwise land under a
-//!    name `store::already_planted` trusts. `.gitignore` and a fresh
-//!    `lock` go straight to their real names; neither one is what that
-//!    function looks at. Any failure here undoes only what this run
-//!    itself created and leaves the origin untouched.
+//! 6. For a new `.vivac/`, prepare the copy in a unique sibling directory;
+//!    otherwise use the existing directory in place. Copy `events` and
+//!    `config` to temporary names, compare each against the origin byte
+//!    for byte, and synchronize them before assigning their real names.
+//!    Publish a new directory with one rename, updating the rollback
+//!    paths before synchronizing its parent. Any failure here undoes only
+//!    what this run created and leaves the origin untouched.
 //! 7. Point the registry at the destination, through the one entry that
 //!    is told rather than asked to guess (`registry::record_move`) and
 //!    that fails the caller when it cannot land. A failure here undoes
@@ -102,9 +103,11 @@
 //! already removes a stray `.tmp` and a truncated final-named file alike;
 //! only a `SIGKILL` between two writes would show the difference, and
 //! nothing here asks a test to kill itself to prove a point. What the
-//! tests below do pin is the promise that actually matters: in every
-//! failure this code can report, no `events` or `config` ever appears
-//! under its real name before the byte comparison has already passed.
+//! tests pin preparation and publication separately, and exercise rollback
+//! both before and after the new directory takes its final name. A killed
+//! process can leave a temporary sibling behind; cleanup cannot run after
+//! process death. No transaction across origin, destination and registry
+//! is claimed.
 //!
 //! **Step 9's own failure has no black-box trigger either, for a
 //! different reason.** By the time it runs, the move already happened
@@ -240,15 +243,13 @@ pub fn run(
     // exactly what this run created and nothing that was already there
     // (`t594`).
     let destination_vivac = destination_abs.join(crate::store::DIR);
-    let mut written = Written {
-        vivac_dir_created: !destination_vivac.is_dir(),
-        files: Vec::new(),
-    };
+    let mut written = Written::prepare(&destination_vivac)?;
+    let active_dir = written.active_dir.clone();
     let (log_tmp, config_tmp, log_verified, config_verified) =
-        match verify_copy(&origin_vivac, &destination_vivac, &mut written) {
+        match verify_copy(&origin_vivac, &active_dir, &mut written) {
             Ok(v) => v,
             Err(e) => {
-                written.undo(&destination_vivac);
+                written.undo();
                 return Err(e);
             }
         };
@@ -258,11 +259,15 @@ pub fn run(
         &log_tmp,
         &config_tmp,
         &origin_vivac,
-        &destination_vivac,
+        &active_dir,
         &mut written,
     ) {
-        written.undo(&destination_vivac);
+        written.undo();
         return Err(e);
+    }
+    if let Err(e) = written.publish() {
+        written.undo();
+        return Err(Failure::Io(e));
     }
 
     // The lane that stays at the origin: its own id, or `lane::MAIN` for the
@@ -288,7 +293,7 @@ pub fn run(
     // anything.
     let repos = union_repo_roots(&tree);
     let Some(store_dir) = store_dir else {
-        written.undo(&destination_vivac);
+        written.undo();
         return Err(Failure::Io(std::io::Error::other(
             "no VIVAC_HOME to record the move in; the registry would lose the tree",
         )));
@@ -302,7 +307,7 @@ pub fn run(
             repos: Some(&repos),
         },
     ) {
-        written.undo(&destination_vivac);
+        written.undo();
         return Err(Failure::Io(e));
     }
 
@@ -498,25 +503,89 @@ fn destination_holds_a_tree_or_lane(destination: &Path) -> bool {
 /// a destination's own `notes.txt` and an unrelated `events.relocated`
 /// from an earlier move along with it.
 struct Written {
-    /// Whether this run is the one that created `destination`'s own
-    /// `.vivac/` directory. `undo` only ever removes that directory, and
-    /// only when this is `true`.
-    vivac_dir_created: bool,
+    active_dir: PathBuf,
+    final_dir: PathBuf,
+    fresh: bool,
+    published: bool,
     files: Vec<PathBuf>,
 }
 
 impl Written {
+    fn prepare(final_dir: &Path) -> std::io::Result<Self> {
+        let fresh = match std::fs::symlink_metadata(final_dir) {
+            Ok(metadata) if metadata.file_type().is_dir() => false,
+            Ok(_) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    "the destination's .vivac path already exists",
+                ));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
+            Err(e) => return Err(e),
+        };
+        let active_dir = if fresh {
+            let parent = final_dir.parent().ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "destination has no parent",
+                )
+            })?;
+            let staging = parent.join(format!(".vivac.{}.tmp", crate::id::ulid()));
+            std::fs::create_dir(&staging)?;
+            staging
+        } else {
+            final_dir.to_path_buf()
+        };
+        Ok(Self {
+            active_dir,
+            final_dir: final_dir.to_path_buf(),
+            fresh,
+            published: false,
+            files: Vec::new(),
+        })
+    }
+
+    fn publish(&mut self) -> std::io::Result<()> {
+        self.publish_with_sync(crate::store::sync_dir)
+    }
+
+    fn publish_with_sync(
+        &mut self,
+        sync_parent: impl FnOnce(&Path) -> std::io::Result<()>,
+    ) -> std::io::Result<()> {
+        if !self.fresh || self.published {
+            return Ok(());
+        }
+        match std::fs::symlink_metadata(&self.final_dir) {
+            Ok(_) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    "the destination's .vivac path appeared before publication",
+                ));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
+        std::fs::rename(&self.active_dir, &self.final_dir)?;
+        for file in &mut self.files {
+            *file = self.final_dir.join(file.file_name().unwrap());
+        }
+        self.active_dir = self.final_dir.clone();
+        self.published = true;
+        sync_parent(self.final_dir.parent().unwrap())
+    }
+
     /// Removes every file this run wrote, then the `.vivac/` directory
     /// itself -- but only when this run created it, and only
     /// `remove_dir`, never `remove_dir_all`: it refuses on its own the
     /// moment anything besides these files is still inside, which is
     /// exactly the case this must leave alone.
-    fn undo(&self, destination_vivac: &Path) {
+    fn undo(&self) {
         for f in &self.files {
             std::fs::remove_file(f).ok();
         }
-        if self.vivac_dir_created {
-            std::fs::remove_dir(destination_vivac).ok();
+        if self.fresh {
+            std::fs::remove_dir(&self.active_dir).ok();
         }
     }
 }
@@ -563,15 +632,13 @@ fn verify_copy(
     destination_vivac: &Path,
     written: &mut Written,
 ) -> Result<(PathBuf, PathBuf, Verified, Verified), Failure> {
-    std::fs::create_dir_all(destination_vivac)?;
-
     let log_tmp = destination_vivac.join(format!("events.{}.tmp", crate::id::ulid()));
-    std::fs::copy(origin_vivac.join(crate::store::LOG), &log_tmp)?;
     written.files.push(log_tmp.clone());
+    std::fs::copy(origin_vivac.join(crate::store::LOG), &log_tmp)?;
 
     let config_tmp = destination_vivac.join(format!("config.{}.tmp", crate::id::ulid()));
-    std::fs::copy(origin_vivac.join(crate::store::CONFIG), &config_tmp)?;
     written.files.push(config_tmp.clone());
+    std::fs::copy(origin_vivac.join(crate::store::CONFIG), &config_tmp)?;
 
     // The one comparison this whole operation's safety rests on: if the
     // copy did not end up with exactly what the origin has, nothing past
@@ -614,19 +681,29 @@ fn commit_copy(
 ) -> Result<(), Failure> {
     let destination_gitignore = destination_vivac.join(crate::store::GITIGNORE);
     if !destination_gitignore.is_file() {
+        if written.fresh {
+            written.files.push(destination_gitignore.clone());
+        }
         let origin_gitignore = origin_vivac.join(crate::store::GITIGNORE);
         if origin_gitignore.is_file() {
             std::fs::copy(&origin_gitignore, &destination_gitignore)?;
         } else {
             crate::store::write_gitignore(destination_vivac)?;
         }
-        written.files.push(destination_gitignore);
+        if !written.fresh {
+            written.files.push(destination_gitignore);
+        }
     }
 
     let lock_path = destination_vivac.join(crate::store::LOCK);
     if !lock_path.is_file() {
+        if written.fresh {
+            written.files.push(lock_path.clone());
+        }
         std::fs::File::create(&lock_path)?;
-        written.files.push(lock_path);
+        if !written.fresh {
+            written.files.push(lock_path);
+        }
     }
 
     // Both temporaries already hold whole, verified copies, so they are
@@ -864,6 +941,248 @@ mod tests {
             lane: None,
             worktree: None,
         }
+    }
+
+    #[test]
+    fn preparing_a_copy_keeps_the_destination_unpublished_and_its_ancestor_visible() {
+        let ancestor = temp_dir("unpublished-copy");
+        seeded_located(&ancestor);
+        let origin = ancestor.join("origin");
+        seeded_located(&origin);
+        let destination = ancestor.join("destination");
+        std::fs::create_dir_all(&destination).unwrap();
+        let destination_vivac = destination.join(crate::store::DIR);
+        let mut written = Written::prepare(&destination_vivac).unwrap();
+        let active_dir = written.active_dir.clone();
+        let (log_tmp, config_tmp, log_verified, config_verified) =
+            verify_copy(&origin.join(crate::store::DIR), &active_dir, &mut written).unwrap();
+
+        assert!(!destination_vivac.exists());
+        commit_copy(
+            log_verified,
+            config_verified,
+            &log_tmp,
+            &config_tmp,
+            &origin.join(crate::store::DIR),
+            &active_dir,
+            &mut written,
+        )
+        .unwrap();
+
+        let published = destination_vivac.exists();
+        let discovered = crate::store::find_root(&destination);
+        std::fs::remove_dir_all(&ancestor).unwrap();
+
+        assert!(
+            !published,
+            "preparing a copy must not publish the destination's .vivac directory"
+        );
+        assert_eq!(
+            discovered.unwrap(),
+            Some(ancestor),
+            "an unpublished destination must still resolve to the real ancestor tree"
+        );
+    }
+
+    fn committed_copy(origin: &Path, destination: &Path) -> Written {
+        let mut written = Written::prepare(destination).unwrap();
+        let active_dir = written.active_dir.clone();
+        let (log_tmp, config_tmp, log_verified, config_verified) =
+            verify_copy(origin, &active_dir, &mut written).unwrap();
+        commit_copy(
+            log_verified,
+            config_verified,
+            &log_tmp,
+            &config_tmp,
+            origin,
+            &active_dir,
+            &mut written,
+        )
+        .unwrap();
+        written
+    }
+
+    #[test]
+    fn publishing_a_copy_exposes_the_complete_tree_and_undo_preserves_foreign_files() {
+        let ancestor = temp_dir("publish-copy");
+        seeded_located(&ancestor);
+        let origin = ancestor.join("origin");
+        seeded_located(&origin);
+        let origin_vivac = origin.join(crate::store::DIR);
+        let destination = ancestor.join("destination");
+        std::fs::create_dir(&destination).unwrap();
+        let destination_vivac = destination.join(crate::store::DIR);
+        let mut written = committed_copy(&origin_vivac, &destination_vivac);
+        let staging = written.active_dir.clone();
+
+        written.publish().unwrap();
+
+        assert!(!staging.exists());
+        assert_eq!(written.active_dir, destination_vivac);
+        assert_eq!(
+            crate::store::find_root(&destination).unwrap(),
+            Some(destination.clone())
+        );
+        for name in [crate::store::LOG, crate::store::CONFIG] {
+            assert_eq!(
+                std::fs::read(destination_vivac.join(name)).unwrap(),
+                std::fs::read(origin_vivac.join(name)).unwrap()
+            );
+        }
+        let foreign = destination_vivac.join("notes.txt");
+        std::fs::write(&foreign, b"keep").unwrap();
+
+        written.undo();
+
+        assert_eq!(std::fs::read(&foreign).unwrap(), b"keep");
+        assert_eq!(std::fs::read_dir(&destination_vivac).unwrap().count(), 1);
+        assert!(origin_vivac.join(crate::store::LOG).is_file());
+        std::fs::remove_file(foreign).unwrap();
+        written.undo();
+        assert!(!destination_vivac.exists());
+        std::fs::remove_dir_all(ancestor).unwrap();
+    }
+
+    #[test]
+    fn failed_parent_sync_after_publication_cleans_the_final_directory() {
+        let root = temp_dir("parent-sync-failed");
+        seeded_located(&root);
+        let origin_vivac = root.join(crate::store::DIR);
+        let log = std::fs::read(origin_vivac.join(crate::store::LOG)).unwrap();
+        let config = std::fs::read(origin_vivac.join(crate::store::CONFIG)).unwrap();
+        let destination = root.join("destination");
+        std::fs::create_dir(&destination).unwrap();
+        let destination_vivac = destination.join(crate::store::DIR);
+        let mut written = committed_copy(&origin_vivac, &destination_vivac);
+        let staging = written.active_dir.clone();
+        let mut sync_called = false;
+
+        let result = written.publish_with_sync(|parent| {
+            sync_called = true;
+            assert_eq!(parent, destination.as_path());
+            assert!(!staging.exists());
+            assert_eq!(
+                std::fs::read(destination_vivac.join(crate::store::LOG)).unwrap(),
+                log
+            );
+            assert_eq!(
+                std::fs::read(destination_vivac.join(crate::store::CONFIG)).unwrap(),
+                config
+            );
+            Err(std::io::Error::other("parent sync failed"))
+        });
+
+        assert!(sync_called);
+        assert!(result.is_err());
+        assert_eq!(written.active_dir, destination_vivac);
+        written.undo();
+
+        assert!(!destination_vivac.exists());
+        assert!(!staging.exists());
+        assert_eq!(
+            std::fs::read(origin_vivac.join(crate::store::LOG)).unwrap(),
+            log
+        );
+        assert_eq!(
+            std::fs::read(origin_vivac.join(crate::store::CONFIG)).unwrap(),
+            config
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn publication_refuses_a_destination_that_appeared_and_cleans_only_the_staging_copy() {
+        let root = temp_dir("publish-collision");
+        seeded_located(&root);
+        let origin_vivac = root.join(crate::store::DIR);
+        let destination = root.join("destination");
+        std::fs::create_dir(&destination).unwrap();
+        let destination_vivac = destination.join(crate::store::DIR);
+        let mut written = committed_copy(&origin_vivac, &destination_vivac);
+        let staging = written.active_dir.clone();
+        std::fs::create_dir(&destination_vivac).unwrap();
+        let foreign = destination_vivac.join("notes.txt");
+        std::fs::write(&foreign, b"keep").unwrap();
+
+        assert_eq!(
+            written.publish().unwrap_err().kind(),
+            std::io::ErrorKind::AlreadyExists
+        );
+        written.undo();
+
+        assert!(!staging.exists());
+        assert_eq!(std::fs::read(foreign).unwrap(), b"keep");
+        assert_eq!(std::fs::read_dir(&destination_vivac).unwrap().count(), 1);
+        assert!(origin_vivac.join(crate::store::LOG).is_file());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_copy_cleans_the_staging_directory_without_publishing() {
+        let root = temp_dir("copy-failed");
+        seeded_located(&root);
+        let origin_vivac = root.join(crate::store::DIR);
+        std::fs::remove_file(origin_vivac.join(crate::store::CONFIG)).unwrap();
+        let destination = root.join("destination");
+        std::fs::create_dir(&destination).unwrap();
+        let destination_vivac = destination.join(crate::store::DIR);
+        let mut written = Written::prepare(&destination_vivac).unwrap();
+        let staging = written.active_dir.clone();
+
+        assert!(verify_copy(&origin_vivac, &staging, &mut written).is_err());
+        written.undo();
+
+        assert!(!staging.exists());
+        assert!(!destination_vivac.exists());
+        assert!(origin_vivac.join(crate::store::LOG).is_file());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn preparation_refuses_an_existing_file_without_creating_a_staging_directory() {
+        let root = temp_dir("prepare-failed");
+        std::fs::create_dir(&root).unwrap();
+        let destination_vivac = root.join(crate::store::DIR);
+        std::fs::write(&destination_vivac, b"keep").unwrap();
+
+        assert!(Written::prepare(&destination_vivac).is_err());
+
+        assert_eq!(std::fs::read(&destination_vivac).unwrap(), b"keep");
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_commit_cleans_the_staging_directory_without_publishing() {
+        let root = temp_dir("commit-failed");
+        seeded_located(&root);
+        let origin_vivac = root.join(crate::store::DIR);
+        let destination = root.join("destination");
+        std::fs::create_dir(&destination).unwrap();
+        let destination_vivac = destination.join(crate::store::DIR);
+        let mut written = Written::prepare(&destination_vivac).unwrap();
+        let staging = written.active_dir.clone();
+        let (log_tmp, config_tmp, log_verified, config_verified) =
+            verify_copy(&origin_vivac, &staging, &mut written).unwrap();
+        std::fs::remove_file(&log_tmp).unwrap();
+
+        assert!(commit_copy(
+            log_verified,
+            config_verified,
+            &log_tmp,
+            &config_tmp,
+            &origin_vivac,
+            &staging,
+            &mut written,
+        )
+        .is_err());
+        written.undo();
+
+        assert!(!staging.exists());
+        assert!(!destination_vivac.exists());
+        assert!(origin_vivac.join(crate::store::CONFIG).is_file());
+        assert!(origin_vivac.join(crate::store::LOG).is_file());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     /// Gives `store::store_dir()` a private, real answer for as long as

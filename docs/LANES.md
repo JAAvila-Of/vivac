@@ -143,6 +143,19 @@ copies the log, verifies the copy byte for byte before it removes anything, and
 leaves the old folder as a lane of the tree in its new home, so every lane
 keeps working and nothing has to be repointed by hand.
 
+When the destination has no `.vivac/` directory, the copy is prepared and
+verified in a temporary sibling directory. Its final name appears only once
+the log and configuration are complete and synchronized. An error before the
+registry records the move leaves the origin intact and attempts to remove only
+files created by that attempt. A process killed during preparation can leave
+the temporary sibling behind; it is not recognized as a tree at the destination.
+
+An existing hollow `.vivac/` is filled in place, preserving its unrelated files;
+the whole-directory publication guarantee applies only to a new directory.
+After the registry records the move, an error updating the origin reports the
+completed move and directs you to check both folders. This is not a transaction
+across the origin, destination and registry.
+
 ## What you see
 
 Four surfaces, and each one exists because something happened that you would

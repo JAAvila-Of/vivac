@@ -949,6 +949,7 @@ de
 dead
 deadline
 dearer
+death
 debt
 debts
 debug
@@ -3976,6 +3977,7 @@ sync
 synced
 synchronization
 synchronize
+synchronizing
 synchronous
 syncing
 syncs
