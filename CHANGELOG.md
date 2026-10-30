@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.0](https://github.com/JAAvila-Of/vivac/compare/v0.21.0...v0.22.0) - 2026-10-30
+
+### Added
+
+- *(backup)* add verified local recovery packages ([#303](https://github.com/JAAvila-Of/vivac/pull/303))
+- *(json)* expose forced closure metadata ([#301](https://github.com/JAAvila-Of/vivac/pull/301))
+
+### Documentation
+
+- check the first handoff before relying on it ([#306](https://github.com/JAAvila-Of/vivac/pull/306))
+
+### Fixed
+
+- *(relocate)* clean partial gitignore files after write failures ([#307](https://github.com/JAAvila-Of/vivac/pull/307))
+- *(relocate)* publish new destination directories whole ([#305](https://github.com/JAAvila-Of/vivac/pull/305))
+- *(init)* [**breaking**] check local origins before planting a tree ([#304](https://github.com/JAAvila-Of/vivac/pull/304))
+- *(import)* reject unsupported prototype node kinds ([#300](https://github.com/JAAvila-Of/vivac/pull/300))
+- *(session)* prepare consistent opening snapshots ([#298](https://github.com/JAAvila-Of/vivac/pull/298))
+
+### Internal
+
+- *(preview)* isolate admission cases within fixed lifetimes ([#302](https://github.com/JAAvila-Of/vivac/pull/302))
+
 ## [0.21.0](https://github.com/JAAvila-Of/vivac/compare/v0.20.1...v0.21.0) - 2026-10-21
 
 ### Upgrading
