@@ -681,18 +681,18 @@ fn commit_copy(
 ) -> Result<(), Failure> {
     let destination_gitignore = destination_vivac.join(crate::store::GITIGNORE);
     if !destination_gitignore.is_file() {
-        if written.fresh {
-            written.files.push(destination_gitignore.clone());
-        }
-        let origin_gitignore = origin_vivac.join(crate::store::GITIGNORE);
-        if origin_gitignore.is_file() {
-            std::fs::copy(&origin_gitignore, &destination_gitignore)?;
-        } else {
-            crate::store::write_gitignore(destination_vivac)?;
-        }
-        if !written.fresh {
-            written.files.push(destination_gitignore);
-        }
+        write_new_gitignore(&destination_gitignore, written, |destination| {
+            use std::io::Write;
+            let origin_gitignore = origin_vivac.join(crate::store::GITIGNORE);
+            if origin_gitignore.is_file() {
+                let mut source = std::fs::File::open(origin_gitignore)?;
+                std::io::copy(&mut source, destination)?;
+                destination.set_permissions(source.metadata()?.permissions())?;
+            } else {
+                destination.write_all(b"*\n")?;
+            }
+            Ok(())
+        })?;
     }
 
     let lock_path = destination_vivac.join(crate::store::LOCK);
@@ -722,6 +722,20 @@ fn commit_copy(
 
     crate::store::sync_dir(destination_vivac)?;
 
+    Ok(())
+}
+
+fn write_new_gitignore(
+    path: &Path,
+    written: &mut Written,
+    write: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?;
+    written.files.push(path.to_path_buf());
+    write(&mut file)?;
     Ok(())
 }
 
@@ -916,6 +930,135 @@ fn write_claim_and_declaration(
 mod tests {
     use super::*;
     use crate::id;
+
+    #[test]
+    fn failed_gitignore_write_removes_partial_file_and_preserves_existing_files() {
+        use std::io::Write;
+
+        let root = temp_dir("partial-gitignore");
+        seeded_located(&root);
+        let origin_vivac = root.join(crate::store::DIR);
+        let source_files: Vec<_> = [
+            crate::store::LOG,
+            crate::store::CONFIG,
+            crate::store::GITIGNORE,
+        ]
+        .into_iter()
+        .map(|name| (name, std::fs::read(origin_vivac.join(name)).unwrap()))
+        .collect();
+        let destination_vivac = root.join("destination").join(crate::store::DIR);
+        std::fs::create_dir_all(&destination_vivac).unwrap();
+        for name in ["notes.txt", "events.relocated"] {
+            std::fs::write(destination_vivac.join(name), name.as_bytes()).unwrap();
+        }
+        let mut written = Written::prepare(&destination_vivac).unwrap();
+        verify_copy(&origin_vivac, &destination_vivac, &mut written).unwrap();
+        let gitignore = destination_vivac.join(crate::store::GITIGNORE);
+
+        let error = write_new_gitignore(&gitignore, &mut written, |file| {
+            file.write_all(b"partial")?;
+            Err(std::io::Error::other("gitignore write failed"))
+        })
+        .unwrap_err();
+        assert_eq!(error.to_string(), "gitignore write failed");
+        assert_eq!(std::fs::read(&gitignore).unwrap(), b"partial");
+        written.undo();
+
+        assert!(
+            !gitignore.exists(),
+            "rollback must remove a partially written .gitignore"
+        );
+        assert_eq!(std::fs::read_dir(&destination_vivac).unwrap().count(), 2);
+        for name in ["notes.txt", "events.relocated"] {
+            assert_eq!(
+                std::fs::read(destination_vivac.join(name)).unwrap(),
+                name.as_bytes()
+            );
+        }
+        for (name, bytes) in source_files {
+            assert_eq!(std::fs::read(origin_vivac.join(name)).unwrap(), bytes);
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn committed_gitignore_copies_source_bytes_and_permissions_or_uses_fallback() {
+        for copy_source in [true, false] {
+            let root = temp_dir("gitignore-content");
+            seeded_located(&root);
+            let origin_vivac = root.join(crate::store::DIR);
+            let source = origin_vivac.join(crate::store::GITIGNORE);
+            let expected = if copy_source {
+                let bytes = b"*\n!retained\n".as_slice();
+                std::fs::write(&source, bytes).unwrap();
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o640))
+                        .unwrap();
+                }
+                bytes
+            } else {
+                std::fs::remove_file(&source).unwrap();
+                b"*\n".as_slice()
+            };
+            let destination_vivac = root.join("destination").join(crate::store::DIR);
+            std::fs::create_dir_all(&destination_vivac).unwrap();
+
+            let written = committed_copy(&origin_vivac, &destination_vivac);
+            let destination = destination_vivac.join(crate::store::GITIGNORE);
+
+            assert_eq!(std::fs::read(&destination).unwrap(), expected);
+            if copy_source {
+                let source_permissions = std::fs::metadata(&source).unwrap().permissions();
+                let destination_permissions =
+                    std::fs::metadata(&destination).unwrap().permissions();
+                assert_eq!(
+                    source_permissions.readonly(),
+                    destination_permissions.readonly()
+                );
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    assert_eq!(source_permissions.mode(), destination_permissions.mode());
+                }
+            }
+            written.undo();
+            assert!(!destination.exists());
+            if copy_source {
+                assert_eq!(std::fs::read(&source).unwrap(), expected);
+            } else {
+                assert!(!source.exists());
+            }
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn gitignore_reservation_collision_never_tracks_or_changes_the_existing_file() {
+        for fresh in [true, false] {
+            let root = temp_dir("gitignore-collision");
+            std::fs::create_dir(&root).unwrap();
+            let destination_vivac = root.join(crate::store::DIR);
+            if !fresh {
+                std::fs::create_dir(&destination_vivac).unwrap();
+            }
+            let mut written = Written::prepare(&destination_vivac).unwrap();
+            let gitignore = written.active_dir.join(crate::store::GITIGNORE);
+            std::fs::write(&gitignore, b"keep this file\n").unwrap();
+
+            let error = write_new_gitignore(&gitignore, &mut written, |_| {
+                panic!("a failed reservation must not call the writer")
+            })
+            .unwrap_err();
+
+            assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+            assert!(written.files.is_empty());
+            written.undo();
+            assert_eq!(std::fs::read(&gitignore).unwrap(), b"keep this file\n");
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
 
     fn temp_dir(prefix: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!("vivac-relocate-{prefix}-{}", id::ulid()))
