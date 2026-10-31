@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.0](https://github.com/JAAvila-Of/vivac/compare/v0.21.0...v0.22.0) - 2026-10-31
+
+### Upgrading
+
+On Windows, run `vivac update` in a terminal. Update the CLI, MCP servers and
+session hooks that share a project, rerun `vivac setup` for each harness in use,
+and restart existing sessions to load the updated engine and opening module.
+
+`vivac init` now refuses to plant another tree when a checked local Git origin
+leads to an existing one. Scripts that previously succeeded may need
+`--join <path to the existing tree>` to retain its history, or `--new-tree` for
+a deliberate separate product. `--yes` does not make that choice. This is a
+minor release because the refusal changes the command contract; it does not
+change the event format. See [setup](docs/SETUP.md).
+
+The new [backup commands](docs/BACKUP.md) preserve the tree and the artifact and
+agent files in its custody. Repository contents and harness settings need separate
+recovery. Packages are local and unencrypted. Recovery needs an absent destination
+and retirement of the original authority; it is not synchronization between PCs.
+
+The native Claude resume guard was verified with Claude Code 2.1.316. It rejects
+reopening a managed child; it does not refresh that child's old context or repair
+the stale-reference consumer. Start a new child instead. See the
+[measured scope](docs/INSTRUCTION-DELIVERY.md).
+
+### Added
+
+- *(backup)* add verified local recovery packages ([#303](https://github.com/JAAvila-Of/vivac/pull/303))
+- *(json)* expose forced closure metadata ([#301](https://github.com/JAAvila-Of/vivac/pull/301))
+
+### Documentation
+
+- check the first handoff before relying on it ([#306](https://github.com/JAAvila-Of/vivac/pull/306))
+
+### Fixed
+
+- *(claude)* refuse native resumed agent openings ([#308](https://github.com/JAAvila-Of/vivac/pull/308))
+- *(relocate)* clean partial gitignore files after write failures ([#307](https://github.com/JAAvila-Of/vivac/pull/307))
+- *(relocate)* publish new destination directories whole ([#305](https://github.com/JAAvila-Of/vivac/pull/305))
+- *(init)* [**breaking**] check local origins before planting a tree ([#304](https://github.com/JAAvila-Of/vivac/pull/304))
+- *(import)* reject unsupported prototype node kinds ([#300](https://github.com/JAAvila-Of/vivac/pull/300))
+- *(session)* prepare consistent opening snapshots ([#298](https://github.com/JAAvila-Of/vivac/pull/298))
+
+### Internal
+
+- *(preview)* isolate admission cases within fixed lifetimes ([#302](https://github.com/JAAvila-Of/vivac/pull/302))
+
 ## [0.21.0](https://github.com/JAAvila-Of/vivac/compare/v0.20.1...v0.21.0) - 2026-10-21
 
 ### Upgrading
