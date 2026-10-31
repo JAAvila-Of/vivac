@@ -377,6 +377,14 @@ tree, `absent` preserves the native `SendMessage` path. This is a restriction
 on the tool path, not a claim that every plugin transport or engine version
 has a verified execution barrier.
 
+The module also refuses an `agent.spawn` opening that owns the native `resume`
+field unless the principal opening is `absent`. Initial openings pass unchanged.
+This places the same refusal at the engine's continuation boundary when that
+event is available, without inferring a recipient class from names or IDs.
+The `SendMessage` restriction remains in place, including on earlier engines
+that do not expose resumed openings through this event. Neither guard refreshes
+the child's retained context.
+
 `vivac session guard --hook` provides a separate command hook check. It reads
 the `vivac_opening` object supplied by the module through the native
 `UserPromptSubmit` input. The protocol must match, the status must be `ready`
@@ -1498,6 +1506,19 @@ project, model compliance or behavior in other harness versions. The module
 releases its child snapshot after one expansion; the continuity control does
 not prove delivery after arbitrary attachment invalidation. Doctor continues
 to distinguish intact installation from runtime loading and provider reception.
+
+A separate refusal control on Claude Code 2.1.316 on Windows used two synthetic
+plugins and a loopback provider. Both `PreToolUse` and `session.send` passed in
+both phases. With `agent.spawn` passing, the same child made two requests among
+five provider requests. With its resumed opening refused, the SDK returned
+`isDelivered: false` with the refusal's reason, and the child made only its
+initial request among three provider requests. The native `resume.agentId`
+matched the child returned by the SDK. Both phases completed an explicit
+follow-up in the principal session, with response, actor and session identifiers
+correlated. Source pins and temporary-profile cleanup were checked. This
+establishes the tested refusal boundary on 2.1.316; it does not establish fresh
+context, correction of the old-reference consumer, or coverage of every engine
+version and plugin transport.
 
 ## Check a real harness separately
 

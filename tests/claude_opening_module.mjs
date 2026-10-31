@@ -30,6 +30,77 @@ async function assertSendDenied(h, event = { tool: 'SendMessage' }) {
   assert.deepEqual(next.calls, []);
 }
 
+function spawnHook(h) {
+  const hook = h.hooks.get('agent.spawn');
+  assert.ok(hook, 'native continuation guard must be registered');
+  assert.equal(hook.catcher, null, 'downstream failures must not retry next');
+  return hook.handler;
+}
+
+function assertSpawnDenied(h, event) {
+  const next = nextResult({ native: true });
+  const inaccessibleApi = new Proxy({}, { get() { assert.fail('denial must not access the SDK'); } });
+  assert.deepEqual(spawnHook(h)(inaccessibleApi, event, next), { deny: continuationBlockedMessage });
+  assert.deepEqual(next.calls, []);
+}
+
+test('managed native continuation is denied regardless of resume value without reading it', async () => {
+  const h = harness();
+  await h.open('A');
+  const before = await h.receipt();
+  for (const resume of [{ agentId: 'known-child' }, undefined, null]) {
+    assertSpawnDenied(h, { resume });
+  }
+  const event = {};
+  Object.defineProperty(event, 'resume', { get() { assert.fail('resume content must not be read'); } });
+  assertSpawnDenied(h, event);
+  assert.deepEqual(await h.receipt(), before);
+  assert.deepEqual(h.abortCalls, []);
+  assert.deepEqual(h.caught, []);
+});
+
+test('native continuation is denied before SessionStart, during preparation and after blocking', async () => {
+  const pending = deferred();
+  const h = harness(() => pending.promise);
+  const event = { resume: { agentId: 'known-child' } };
+  assertSpawnDenied(h, event);
+  const opening = h.open('A');
+  assertSpawnDenied(h, event);
+  pending.resolve({ exitCode: 1, stdout: '' });
+  await opening;
+  assertSpawnDenied(h, event);
+});
+
+test('managed initial spawn preserves exact event and result including inherited resume', async () => {
+  const h = harness();
+  await h.open('A');
+  const inherited = Object.create({ resume: { agentId: 'inherited-child' } });
+  for (const event of [{ prompt: 'synthetic work' }, inherited]) {
+    const result = { native: true };
+    const calls = [];
+    const next = value => { calls.push(value); return result; };
+    assert.strictEqual(spawnHook(h)(h.$, event, next), result);
+    assert.deepEqual(calls, [event]);
+    assert.strictEqual(calls[0], event);
+  }
+});
+
+test('absent native initial and resumed spawn preserve exact event, promise and result', async () => {
+  const h = harness(async () => ({ exitCode: 0, stdout: JSON.stringify({ protocol, status: 'absent' }) }));
+  await h.open('A');
+  for (const event of [{ prompt: 'synthetic work' }, { resume: { agentId: 'native-child' } }]) {
+    const result = { native: true };
+    const promise = Promise.resolve(result);
+    const calls = [];
+    const next = value => { calls.push(value); return promise; };
+    const returned = spawnHook(h)(h.$, event, next);
+    assert.strictEqual(returned, promise);
+    assert.strictEqual(await returned, result);
+    assert.deepEqual(calls, [event]);
+    assert.strictEqual(calls[0], event);
+  }
+});
+
 test('managed SendMessage rejects every target and forged metadata without reading arguments', async () => {
   let producerCalls = 0;
   const h = harness(async () => { producerCalls++; return ready(contextA); });
@@ -995,7 +1066,7 @@ async function assertBlockedWork(h, diagnostic = 'SYNTHETIC_PRIVATE_DIAGNOSTIC')
 }
 
 test('the reviewed opening bundle has the expected candidate bytes', () => {
-  assert.equal(candidateSha256, '7A3AFC91606D1E756BACABAEFF84B98A3415392865DCB0E6BFBED946B58C84AF');
+  assert.equal(candidateSha256, 'AA0C9DC2BA5C348D65CFEF17F891ABA3B9853B555D0D9E71B56E1100F33C6F07');
 });
 
 test('the historical opening reference preserves the exact native-compatible v1 bytes', async () => {

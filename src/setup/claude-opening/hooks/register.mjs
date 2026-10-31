@@ -162,6 +162,12 @@ export function register(on) {
     return next(event);
   });
 
+  on('agent.spawn', ($, event, next) => {
+    if (root.phase !== 'absent' && Object.prototype.hasOwnProperty.call(event, 'resume'))
+      return { deny: continuationBlockedMessage };
+    return next(event);
+  });
+
   on('prompt.attachment', async ($, event, next) => {
     let result;
     let returned = false;
