@@ -88,7 +88,7 @@ fn opening_bundle_installs_exact_payloads_and_a_current_run_preserves_bytes() {
     );
     let receipt: serde_json::Value = serde_json::from_slice(&read_bytes(&paths[3])).unwrap();
     assert_eq!(receipt["schema"], 1);
-    assert_eq!(receipt["version"], "opening-reference-v3");
+    assert_eq!(receipt["version"], "opening-reference-v4");
     assert_eq!(receipt["files"].as_object().unwrap().len(), 3);
     let before = paths.map(|path| read_bytes(&path));
     let settings = read_bytes(&settings_path(&c));
@@ -100,6 +100,11 @@ fn opening_bundle_installs_exact_payloads_and_a_current_run_preserves_bytes() {
 
 fn restore_previous_opening_bundle(c: &Sandbox, version: &str) {
     use sha2::{Digest, Sha256};
+    let recorded_version = if version == "opening-reference-v3-release" {
+        "opening-reference-v3"
+    } else {
+        version
+    };
     let files: [(&str, &[u8]); 3] = if version == "opening-reference-v1" {
         [
         (
@@ -115,12 +120,25 @@ fn restore_previous_opening_bundle(c: &Sandbox, version: &str) {
             include_bytes!("../src/setup/claude-opening-versions/opening-reference-v1/hooks/register.mjs"),
         ),
     ]
-    } else {
+    } else if version == "opening-reference-v2" {
         assert_eq!(version, "opening-reference-v2");
         [
             (".claude-plugin/plugin.json", include_bytes!("../src/setup/claude-opening-versions/opening-reference-v2/.claude-plugin/plugin.json")),
             ("hooks/hooks.json", include_bytes!("../src/setup/claude-opening-versions/opening-reference-v2/hooks/hooks.json")),
             ("hooks/register.mjs", include_bytes!("../src/setup/claude-opening-versions/opening-reference-v2/hooks/register.mjs")),
+        ]
+    } else if version == "opening-reference-v3-release" {
+        [
+            (".claude-plugin/plugin.json", include_bytes!("../src/setup/claude-opening-versions/opening-reference-v3-release/.claude-plugin/plugin.json")),
+            ("hooks/hooks.json", include_bytes!("../src/setup/claude-opening-versions/opening-reference-v3-release/hooks/hooks.json")),
+            ("hooks/register.mjs", include_bytes!("../src/setup/claude-opening-versions/opening-reference-v3-release/hooks/register.mjs")),
+        ]
+    } else {
+        assert_eq!(version, "opening-reference-v3");
+        [
+            (".claude-plugin/plugin.json", include_bytes!("../src/setup/claude-opening-versions/opening-reference-v3/.claude-plugin/plugin.json")),
+            ("hooks/hooks.json", include_bytes!("../src/setup/claude-opening-versions/opening-reference-v3/hooks/hooks.json")),
+            ("hooks/register.mjs", include_bytes!("../src/setup/claude-opening-versions/opening-reference-v3/hooks/register.mjs")),
         ]
     };
     let root = c.0.join(".claude/skills/vivac-opening");
@@ -132,7 +150,7 @@ fn restore_previous_opening_bundle(c: &Sandbox, version: &str) {
     let receipt = serde_json::json!({
         "files": hashes,
         "schema": 1,
-        "version": version
+        "version": recorded_version
     });
     std::fs::write(
         root.join(".vivac-owned.json"),
@@ -143,7 +161,12 @@ fn restore_previous_opening_bundle(c: &Sandbox, version: &str) {
 
 #[test]
 fn previous_opening_bundle_updates_and_undoes_without_adopting_edits() {
-    for version in ["opening-reference-v1", "opening-reference-v2"] {
+    for version in [
+        "opening-reference-v1",
+        "opening-reference-v2",
+        "opening-reference-v3",
+        "opening-reference-v3-release",
+    ] {
         for action in ["update", "undo", "edited"] {
             let c = Sandbox::new_seeded("setup-opening-previous");
             c.ok(&["setup", "claude-code", "--yes"]);
@@ -177,7 +200,7 @@ fn previous_opening_bundle_updates_and_undoes_without_adopting_edits() {
                 );
                 let receipt: serde_json::Value =
                     serde_json::from_slice(&read_bytes(&paths[3])).unwrap();
-                assert_eq!(receipt["version"], "opening-reference-v3");
+                assert_eq!(receipt["version"], "opening-reference-v4");
                 c.ok(&["setup", "claude-code", "--undo", "--yes"]);
                 assert!(bundle_paths(&c).iter().all(|path| !path.exists()));
             }

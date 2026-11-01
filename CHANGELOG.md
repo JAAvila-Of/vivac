@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Upgrading
+
+Opening context supplements native work without disabling messages, delegation
+or resumed agents. A failed or unverified Vivac opening supplies no invalid or
+partial payload and reports its status; it does not stop native work. This
+does not guarantee updated context in a resumed subagent.
+
+`vivac session guard --hook` and rejected Codex opening responses now return
+`continue: true` with a diagnostic when context is unverified or rejected.
+Callers must not use that flag as proof of a valid opening receipt or delivery.
+
+Update the engine, re-run `vivac setup` for each harness in use, and restart
+existing sessions. On Windows, use `vivac update` in a terminal. Earlier Claude
+opening bundles keep their blocking behavior until setup replaces them with
+the current owned bundle; updating the executable alone does not replace those
+files. Data privacy, recipient isolation and payload limits remain enforced.
+
 ## [0.21.0](https://github.com/JAAvila-Of/vivac/compare/v0.20.1...v0.21.0) - 2026-10-21
 
 ### Upgrading

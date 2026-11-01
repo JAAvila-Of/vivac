@@ -101,7 +101,7 @@ fn opening_guard_checks_receipts_without_opening_the_tree_or_home() {
             let expected = if allowed {
                 serde_json::json!({"continue":true})
             } else {
-                serde_json::json!({"continue":false,"stopReason":"The vivac opening module did not confirm ready context. Check the Claude integration and restart the session."})
+                serde_json::json!({"continue":true,"systemMessage":"Vivac opening context is unverified. Native work can continue; check the integration before relying on project context."})
             };
             assert_eq!(response, expected, "{input}");
             assert_eq!(directory_snapshot(&c.0), before);
@@ -402,7 +402,7 @@ fn bounded_openings_reject_unreadable_context_without_custody_or_receipts() {
                         "{fault}/{warm}"
                     );
                 } else {
-                    assert_eq!(response["continue"], false);
+                    assert_eq!(response["continue"], true);
                     assert!(response.get("hookSpecificOutput").is_none());
                     assert!(response["systemMessage"]
                         .as_str()
@@ -520,13 +520,13 @@ fn unsupported_tree_rejects_the_codex_opening_with_control_json() {
     );
     assert_eq!(code, 0, "{stdout}{stderr}");
     let response: serde_json::Value = serde_json::from_str(&stdout).unwrap();
-    assert_eq!(response["continue"], false);
+    assert_eq!(response["continue"], true);
     let message = response["systemMessage"].as_str().unwrap();
     assert!(
         message.contains("could not prepare the complete opening context"),
         "{message}"
     );
-    assert!(message.contains("must not continue"), "{message}");
+    assert!(message.contains("Native work can continue"), "{message}");
     assert!(!message.contains("node.evolved"), "{message}");
     assert!(!message.contains("60000"), "{message}");
     assert!(stderr.contains("newer vivac"), "{stderr}");
@@ -547,11 +547,11 @@ fn broken_lane_location_rejects_the_codex_opening_with_control_json() {
     );
     assert_eq!(code, 0, "{stdout}{stderr}");
     let response: serde_json::Value = serde_json::from_str(&stdout).unwrap();
-    assert_eq!(response["continue"], false);
+    assert_eq!(response["continue"], true);
     assert!(response["systemMessage"]
         .as_str()
         .unwrap()
-        .contains("must not continue"));
+        .contains("Native work can continue"));
     assert!(!stderr.is_empty());
     assert!(!stdout.contains("not readable lane JSON"));
     assert_eq!(
@@ -647,12 +647,12 @@ fn bounded_opening_imports_automatic_custody_and_records_one_stable_snapshot() {
 fn codex_subagent_assert_rejected(stdout: &str) {
     let response: serde_json::Value =
         serde_json::from_str(stdout).expect("one complete JSON response");
-    assert_eq!(response["continue"], false, "{stdout}");
+    assert_eq!(response["continue"], true, "{stdout}");
     assert!(response.get("hookSpecificOutput").is_none(), "{stdout}");
     let message = response["systemMessage"].as_str().unwrap();
     assert!(message.contains("rejected"), "{message}");
     assert!(message.contains("Codex"), "{message}");
-    assert!(message.contains("may still"), "{message}");
+    assert!(message.contains("Native work can continue"), "{message}");
 }
 
 #[test]
@@ -853,7 +853,7 @@ fn codex_subagent_malformed_json_or_nonobject_input_rejects_without_effects() {
         );
         assert_eq!(code, 0, "{stdout}{stderr}");
         let response: serde_json::Value = serde_json::from_str(&stdout).unwrap();
-        assert_eq!(response["continue"], false);
+        assert_eq!(response["continue"], true);
         assert!(response.get("hookSpecificOutput").is_none());
         assert!(!stdout.contains("DO NOT REFLECT"));
         assert_eq!(c.log(), before);
@@ -881,7 +881,7 @@ fn codex_subagent_explicit_unknown_events_reject_without_effects() {
         );
         assert_eq!(code, 0, "{stdout}{stderr}");
         let response: serde_json::Value = serde_json::from_str(&stdout).unwrap();
-        assert_eq!(response["continue"], false);
+        assert_eq!(response["continue"], true);
         assert!(response.get("hookSpecificOutput").is_none());
         assert_eq!(c.log(), before);
         assert_eq!(std::fs::read(c.0.join(".vivac/config")).unwrap(), config);
@@ -1066,7 +1066,7 @@ fn oversized_codex_opening_rejects_without_a_receipt_or_custody() {
     );
     assert_eq!(code, 0, "{stdout}{stderr}");
     let response: serde_json::Value = serde_json::from_str(&stdout).unwrap();
-    assert_eq!(response["continue"], false);
+    assert_eq!(response["continue"], true);
     assert!(response["systemMessage"]
         .as_str()
         .unwrap()
@@ -1131,7 +1131,7 @@ fn custody_notice_overflow_does_not_record_an_opening() {
     );
     assert_eq!(code, 0, "{stdout}{stderr}");
     let response: serde_json::Value = serde_json::from_str(&stdout).unwrap();
-    assert_eq!(response["continue"], false);
+    assert_eq!(response["continue"], true);
     assert_eq!(c.log(), log, "rejected context left an opening receipt");
 }
 

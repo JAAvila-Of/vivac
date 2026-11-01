@@ -118,7 +118,7 @@ fn native_profile(context: &str, value: &serde_json::Value) -> Result<Profile, (
 pub(super) fn invalid_input(context: &str) {
     match context {
         "claude-module" => outln!("{}", serde_json::json!({"protocol": CLAUDE_PROTOCOL, "status": "rejected", "reason": "invalid-input"})),
-        "codex" => codex_rejection("vivac rejected this Codex opening because its event or recipient is invalid. No partial context was delivered. Codex may still continue; check the hook configuration before continuing."),
+        "codex" => codex_rejection("vivac rejected this Codex opening because its event or recipient is invalid. No partial context was delivered. Native work can continue; check the hook configuration before relying on project context."),
         _ => eprintln!("Unsupported opening context."),
     }
 }
@@ -148,7 +148,7 @@ pub(super) fn claude_absent() {
 fn codex_rejection(message: &str) {
     outln!(
         "{}",
-        serde_json::json!({"continue": false, "systemMessage": message})
+        serde_json::json!({"continue": true, "systemMessage": message})
     );
 }
 
@@ -156,16 +156,16 @@ impl Profile {
     pub fn too_large(self) {
         match self {
             Self::ClaudeSession | Self::ClaudeSubagent => outln!("{}", serde_json::json!({"protocol": CLAUDE_PROTOCOL, "status": "rejected", "reason": "too-large"})),
-            Self::CodexSession => codex_rejection("vivac could not deliver the complete opening context within its 60000-byte transport limit. This opening must not proceed with partial instructions. Review vivac rules and vivac brief before continuing."),
-            Self::CodexSubagent => codex_rejection("vivac rejected this subagent opening because its complete context exceeds the 60000-byte transport limit. No partial context was delivered. Codex may still start this subagent; restore complete project context before continuing."),
+            Self::CodexSession => codex_rejection("vivac could not deliver the complete opening context within its 60000-byte transport limit. No partial context was delivered. Native work can continue; review vivac rules and vivac brief before relying on project context."),
+            Self::CodexSubagent => codex_rejection("vivac rejected this Codex subagent opening because its complete context exceeds the 60000-byte transport limit. No partial context was delivered. Native work can continue; restore complete project context before relying on it."),
         }
     }
 
     fn preparation_failed(self) {
         match self {
             Self::ClaudeSession | Self::ClaudeSubagent => outln!("{}", serde_json::json!({"protocol": CLAUDE_PROTOCOL, "status": "rejected", "reason": "preparation-failed"})),
-            Self::CodexSession => codex_rejection("vivac could not prepare the complete opening context. This opening must not continue with missing instructions. Review the diagnostic and restore readable project context before continuing."),
-            Self::CodexSubagent => codex_rejection("vivac rejected this subagent opening because complete project context could not be prepared. No partial context was delivered. Codex may still start this subagent; restore readable project context before continuing."),
+            Self::CodexSession => codex_rejection("vivac could not prepare the complete opening context. No partial context was delivered. Native work can continue; review the diagnostic and restore readable project context before relying on it."),
+            Self::CodexSubagent => codex_rejection("vivac rejected this Codex subagent opening because complete project context could not be prepared. No partial context was delivered. Native work can continue; restore readable project context before relying on it."),
         }
     }
 
