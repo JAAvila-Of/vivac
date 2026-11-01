@@ -98,7 +98,7 @@ pub fn guard() {
     let response = if allowed {
         serde_json::json!({"continue": true})
     } else {
-        serde_json::json!({"continue": false, "stopReason": "The vivac opening module did not confirm ready context. Check the Claude integration and restart the session."})
+        serde_json::json!({"continue": true, "systemMessage": "Vivac opening context is unverified. Native work can continue; check the integration before relying on project context."})
     };
     outln!("{response}");
 }

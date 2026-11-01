@@ -89,7 +89,7 @@ fn configured_opening(sandbox: &Sandbox, opening_dir: &Path, harness: &str) {
         )
         .unwrap();
         assert_eq!(receipt["schema"], 1);
-        assert_eq!(receipt["version"], "opening-reference-v3");
+        assert_eq!(receipt["version"], "opening-reference-v4");
         assert_eq!(receipt["files"].as_object().unwrap().len(), 3);
         return;
     }
