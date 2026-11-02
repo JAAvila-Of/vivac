@@ -68,6 +68,7 @@ adds
 adjusted
 administrative
 admired
+admissions
 admits
 admitted
 adopt
@@ -523,6 +524,7 @@ canonically
 cap
 capability
 capable
+capacity
 capital
 capitals
 capped
@@ -1405,6 +1407,7 @@ expected
 expects
 experiment
 experimental
+expiration
 expires
 explain
 explained
@@ -4545,6 +4548,7 @@ wording
 words
 work
 worked
+worker
 workflow
 working
 works
