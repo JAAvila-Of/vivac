@@ -108,6 +108,24 @@ mandatory, because that judgement competes with the work and loses under load.
 **Design corollary: operations hang off the seams of the work, never off a
 judgement of relevance.**
 
+### Harness compatibility
+
+Vivac adds provenance and project context while preserving the harness's native
+tools, messaging, delegation and session lifecycle. Uncertainty about context
+preparation, delivery or freshness does not authorize disabling those features
+or cancelling native work.
+
+Vivac rejects invalid writes and withholds its own unsafe, incomplete or
+misattributed context. An opening receipt describes preparation; it does not
+prove that a model received or followed the current instructions. When delivery
+cannot be established, report that limitation without claiming reception or
+freshness or intercepting the harness's work. Native errors and permission
+decisions remain the harness's own.
+
+This narrows the delivery promise rather than weakening data protection. Secret
+refusal, provenance integrity, recipient isolation and payload bounds still
+apply to every operation Vivac controls.
+
 ### Visual rules
 
 - **Meaning is never encoded in colour alone.** `[x]`, `[~]`, `*` and

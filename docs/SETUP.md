@@ -95,7 +95,7 @@ anything is written.
 
 | File | What it gets |
 |---|---|
-| `.claude/settings.json` | `UserPromptSubmit` runs `vivac session guard --hook` to check that the opening module is available, then `vivac session prompt --hook` for custody and capture reminders; `Stop` runs `vivac session end --hook` |
+| `.claude/settings.json` | `UserPromptSubmit` runs `vivac session guard --hook` to report an unverified opening receipt without blocking work, then `vivac session prompt --hook` for custody and capture reminders; `Stop` runs `vivac session end --hook` |
 | `.claude/skills/vivac-opening/` | the experimental opening module: `.claude-plugin/plugin.json`, `hooks/hooks.json`, `hooks/register.mjs`, and an ownership receipt, `.vivac-owned.json` |
 | `.mcp.json` | the server, which runs `vivac mcp` |
 | `.claude/skills/vivac-migrate/` | the skill an agent follows to bring another record into the tree — see [Migrating](MIGRATING.md) |
@@ -159,8 +159,11 @@ The module prepares the complete opening text once for `startup`, `clear`,
 `resume` or `compact`, using `vivac session start --hook --context claude-module`.
 It supplies that snapshot through an owned native attachment, preserving
 foreign hook text. Preparation is limited to 60,000 UTF-8 bytes; oversized or
-failed preparations block model work rather than sending a shortened opening.
-The independent prompt guard also rejects a missing or invalid module status.
+failed preparations supply no Vivac payload rather than a shortened opening.
+The independent prompt check reports a missing or invalid module status and
+allows native work to continue. Messages, delegation and resumed agents retain
+their native behavior; Vivac does not guarantee that the same resumed agent
+receives the latest project context.
 This transport budget does not establish the active model's context capacity.
 
 Re-run setup to upgrade the original plain-text opening hook. It removes only
@@ -168,7 +171,10 @@ exact `vivac session start --hook` command handlers, including those in groups
 with foreign handlers. Custom opening or guard commands require review and
 prevent an automatic upgrade. Bundle contents must match a compiled version
 and its receipt; unknown or edited ownership is not permission to overwrite.
-All planned configuration and bundle changes share one transaction.
+All planned configuration and bundle changes share one transaction. Updating
+the engine alone does not replace an installed opening module: re-run setup
+and restart the session to load the current bundle. Earlier owned bundles are
+recognized for upgrade, including versions that blocked native continuations.
 
 `vivac doctor claude-code` checks bundle integrity and the guard, prompt and
 stop hooks. Configuration and an opening receipt do not prove that the
@@ -238,8 +244,9 @@ It returns one JSON response containing the complete opening text and custody
 notices. Setup makes the handler synchronous and sets `additionalContextLimit`
 to `0`, avoiding Codex's default saved-file preview. The producer enforces a
 separate ceiling of 60,000 UTF-8 bytes for that context. If the complete text
-cannot fit, it returns `continue: false` with an explanation, rather than a
-truncated opening. This ceiling is a vivac transport budget, not a promise
+cannot fit, it returns `continue: true` with an explanation and no context,
+rather than a truncated opening. Native work remains available. This ceiling
+is a vivac transport budget, not a promise
 about the active model's context window or account access.
 
 Run setup again to review an upgrade from the original plain-text opening hook;
@@ -297,7 +304,8 @@ happens.
 The ordinary plain-text start hook, prompt and end commands stay quiet and
 exit 0 where there is no `.vivac/`. Claude's module producer instead returns
 JSON with `status: absent`. Its independent guard checks the module status: a
-valid `absent` status permits continuation, while a missing status is rejected.
+valid `absent` status is silent, while a missing or invalid status adds an
+unverified-context warning. Both permit native continuation.
 
 ---
 

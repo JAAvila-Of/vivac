@@ -513,6 +513,11 @@ four ways to get it wrong.
 
 ## Where this is measured
 
+The integrations preserve native tools, messaging and delegation. Vivac withholds
+its own invalid or incomplete context and reports unverified openings without
+stopping native work. Preparing a snapshot does not guarantee that a resumed
+subagent receives it; see the [delivery contract](docs/INSTRUCTION-DELIVERY.md).
+
 | | |
 |---|---|
 | **Claude Code** | `vivac setup claude-code` writes the opening module, the hooks, the server and the skill. This is the harness used for the measurements on this page; those measurements do not benchmark the new opening module. See [instruction delivery](docs/INSTRUCTION-DELIVERY.md) for its separate native checks. |

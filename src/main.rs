@@ -223,7 +223,7 @@ const USAGE: &str = r#"vivac - provenance of work
     vivac session end   [--hook]              automatic stop at close
           --dry-run  what closing would do, and what the hook last did
     vivac session prompt [--hook]             a nudge when nothing was written
-    vivac session guard --hook               experimental opening check; requires --hook
+    vivac session guard --hook               non-blocking opening check; requires --hook
     vivac mcp                                 serve the tree over MCP
     vivac web [--port N] [--no-open]          the tree in a browser, and
           [--project P]                       nowhere but this machine

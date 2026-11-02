@@ -21,6 +21,25 @@ Doctor reports agent custody and runtime evidence separately: managed files can
 be current while execution remains unverified. Repeating agent synchronization
 does not supply that evidence.
 
+## Native capabilities remain available
+
+Vivac supplies project context without deciding whether native work may run.
+Messages, delegation, resumed agents and session commands remain the harness's
+own operations. Missing, rejected or unverified Vivac context does not disable
+them, discard a prompt or cancel a turn.
+
+The delivery contract covers only context Vivac can validate: a complete bounded
+snapshot for the identified recipient, or no Vivac payload with an explicit
+diagnostic. Invalid data is not made valid by allowing native work to continue.
+A preparation receipt is neither proof of reception nor permission to execute.
+In particular, a resumed subagent may retain older context; permitting the
+native continuation does not establish that the latest snapshot reached it.
+
+The native experiments recorded below retain the behavior of the revisions
+they tested, including earlier blocking policies. Those measurements do not
+establish that the current supplementary integration enforces those policies
+or repairs stale-context reception.
+
 ## What the opening carries
 
 The opening hook emits every active pillar's complete title, the applicable
@@ -88,7 +107,8 @@ to execute work.
 
 Each harness adapter owns its input validation, recipient identity and output
 envelope. It must declare separately whether the consumer can inject context,
-what instruction role receives it, and whether a rejection actually stops work.
+what instruction role receives it, and how a rejected payload is reported
+without requesting a stop of native work.
 Unknown capabilities remain unknown; one harness's behavior is not a fallback
 contract for another. Keep this boundary separate from snapshot preparation
 rather than duplicating renderers or introducing another context store.
@@ -126,13 +146,14 @@ bytes on the complete context instead. This avoids the default hook preview
 without permitting unbounded output or coordinating independent renderers.
 It does not change which rule bodies the brief includes.
 
-If the initial brief exceeds the ceiling, vivac returns `continue: false` and
+If the initial brief exceeds the ceiling, vivac returns `continue: true` and
 an explanation without reconciling custody or recording `session.started`.
 If a custody notice makes the final context exceed the ceiling, the opening is
 likewise rejected and no opening receipt is recorded; already authorized
 custody changes remain applied. A busy-store notice is also subject to the
 final ceiling. Rejection never disguises a shortened payload as a complete
-one. Review the oversized opening rather than retiring its source instructions.
+one. Native work remains available without that payload. Review the oversized
+opening before relying on automatic project context.
 
 This is a transport budget, not a verified allowance in every model's context
 window. Doctor checks the command, synchronous execution and handler limit;
@@ -154,7 +175,7 @@ session callers, an empty payload or an object without `hook_event_name` still
 selects `SessionStart`. Malformed nonempty JSON and explicitly unknown events
 are rejected rather than interpreted as a different opening.
 
-On the tested Codex CLI 0.163.0, this event injects extra developer context but
+Earlier controls on Codex CLI 0.163.0 found that this event injects extra developer context but
 does not stop the child when a handler returns `continue: false`. Vivac rejects
 an incomplete preparation and explains that limitation; it does not offer an
 execution barrier through this event. A `PreToolUse` check is not a replacement:
@@ -165,9 +186,9 @@ run. Configuration diagnostics must keep this consumer limit separate from a
 correctly installed handler and from unverified reception.
 
 If locating, loading or rendering the context fails, the bounded Codex mode
-also returns `continue: false`, with a fixed explanation rather than error
+returns `continue: true` without context, with a fixed explanation rather than error
 details in the context. The diagnostic stays on stderr. The hook exits
-successfully so Codex can process the JSON refusal; malformed commands retain
+successfully so Codex can process the diagnostic; malformed commands retain
 their usage error. Outside a vivac project, the hook remains silent.
 
 The bounded modes also reject a loaded tree containing broken event lines,
@@ -301,10 +322,9 @@ model comprehension or the broader session lifecycle matrix.
 ## Experimental Claude module producer
 
 Claude Code setup installs an experimental opening module and an independent
-prompt guard instead of the original plain-text opening command. Re-run setup
-to review that upgrade. The isolated checks below found that a plain
-`SessionStart` response with `continue: false` did not prevent a provider
-request; the module and guard therefore have their own rejection contract.
+prompt receipt check instead of the original plain-text opening command.
+Re-run setup to review that upgrade. Both components report and withhold
+invalid Vivac context while preserving the harness's native execution.
 
 `vivac session start --hook --context claude-module` prepares a bounded snapshot
 for the experimental module installed by `vivac setup claude-code`.
@@ -322,8 +342,8 @@ invalid commands retain their usage error.
 The producer shares Codex's single preparation, custody reconciliation and
 opening receipt path, including its limits on operational notices. It does
 not make the Codex JSON envelope a Claude hook response. A consuming module
-must validate the protocol and refuse a failed or incomplete preparation
-before any subsequent model send. Native module loading, cancellation,
+must validate the protocol and withhold a failed or incomplete preparation.
+It does not cancel the subsequent native model send. Native module loading,
 handler failures and installation require separate evidence; the isolated
 checks below describe the tested runtime and their limits.
 
@@ -339,8 +359,9 @@ The consumer artifact is in `src/setup/claude-opening/`. It calls the producer
 once per native `SessionStart` or `SubagentStart`. Each subagent invocation
 prepares a fresh snapshot through the same CLI path as the principal.
 With a vivac tree present, the experimental consumer accepts ready context for
-`startup`, `clear`, `resume` and `compact`; unknown sources remain blocked.
-Outside a vivac tree, `absent` permits continuation. The opening handler preserves
+`startup`, `clear`, `resume` and `compact`; unknown sources supply no Vivac context.
+Outside a vivac tree, `absent` supplies no context. Neither case blocks native work.
+The opening handler preserves
 foreign hook context and publishes a small owned reference. Its
 `prompt.attachment` handler expands only that reference in the matching hook
 attachment, checking the current opening after downstream handlers finish.
@@ -350,57 +371,41 @@ For valid text results, it preserves foreign text and result fields. New
 principal openings and session endings invalidate every prior recipient;
 reopening one child invalidates only that child's prior state. A late result
 cannot restore an invalidated state or invalidate a newer opening. Classified
-attachment failures reuse an already returned downstream result without
-calling `next` again, and attempt to abort the captured turn if it is still active.
-That attempt does not establish cancellation of a child's native turn. Late
-attachment checks are not a substitute for the pre-tool refusal below.
+attachment failures omit the known owned reference without replaying an old
+snapshot, retrying downstream work or cancelling a turn. Foreign result fields
+and native errors remain unchanged.
 The module does not prepare context again on each render. An opening receipt
 records preparation, not provider reception.
 
 The module keeps recipient state inside `register`, without assuming a separate
-registration for each child. Each recipient has its own generation, publication
-and active turn. A failed child never borrows the principal's snapshot or
-blocks a prepared sibling. After expanding a child's reference once, the module
-releases that snapshot's text; a duplicate reference cannot replay it. A child
-step with an unknown or invalid native identity is blocked instead of using the
-principal's readiness. The prompt guard remains a check of the principal's
-module-to-command path; it is not an independent guard for every child.
+registration for each child. Each recipient has its own generation and
+publication. A failed child never borrows the principal's snapshot or affects
+a prepared sibling. After expanding a child's reference once, the module
+releases that snapshot's text; a duplicate reference cannot replay it. An
+unknown or invalid native identity receives no substituted Vivac context and
+continues by the harness's own route.
 
-The module's `classic.PreToolUse` handler refuses `SendMessage` unless the
-current principal opening is `absent`. This disables the whole tool in a
-vivac-managed session, including messages to teammates and other sessions;
-it does not infer a recipient class from model-supplied fields, names or IDs.
-The refusal explains that current context cannot be guaranteed for message
-continuations and directs the model to create a new subagent with `Agent`.
-It does not invalidate the principal or change other tools. Outside a vivac
-tree, `absent` preserves the native `SendMessage` path. This is a restriction
-on the tool path, not a claim that every plugin transport or engine version
-has a verified execution barrier.
-
-The module also refuses an `agent.spawn` opening that owns the native `resume`
-field unless the principal opening is `absent`. Initial openings pass unchanged.
-This places the same refusal at the engine's continuation boundary when that
-event is available, without inferring a recipient class from names or IDs.
-The `SendMessage` restriction remains in place, including on earlier engines
-that do not expose resumed openings through this event. Neither guard refreshes
-the child's retained context.
+The current module does not intercept `PreToolUse`, `agent.spawn`,
+`prompt.submit` or `turn.step` to decide whether work may run. `SendMessage`,
+teammates, other sessions and resumed agents retain their native behavior.
+Vivac does not inspect message arguments, infer recipient classes or promise
+fresh context for a continuation. It never substitutes the principal's
+snapshot for an unrecognized child or claims delivery from a successful send.
 
 `vivac session guard --hook` provides a separate command hook check. It reads
 the `vivac_opening` object supplied by the module through the native
 `UserPromptSubmit` input. The protocol must match, the status must be `ready`
-or `absent`, and the generation must be a positive safe integer. Missing or
-invalid input returns `continue: false` with a fixed explanation. Valid input
-returns `continue: true`. Both exit successfully, without locating a tree or
-changing project files. This receipt checks the module-to-command path; it is
-not authentication or evidence of provider reception.
+or `absent`, and the generation must be a positive safe integer. Every input
+returns `continue: true`. Missing or invalid input also supplies a fixed
+`systemMessage` explaining that Vivac context is unverified; it never reflects
+the input or claims the warning reached the model. Both cases exit successfully,
+without locating a tree or changing project files. This receipt checks the
+module-to-command path; it is not authentication or evidence of provider reception.
 
-The module rejects model work while preparation is pending or blocked. Its
-prompt handler permits `/clear` and `/resume` as recovery commands. It also
-requires its own reference to have been published before
-advancing a turn with context. These guards are experimental: configuring the
-command alone does not establish their native ordering, execution or failure
-behavior. Setup installs the compiled bundle and its independent guard;
-doctor checks their configuration and integrity without claiming reception.
+Setup installs `opening-reference-v4` and recognizes intact earlier versions
+for an explicit update. Existing installations retain their earlier behavior
+until the engine and owned bundle are updated. Doctor checks configuration
+and integrity without claiming reception or native execution control.
 
 Its behavioral tests import the real artifact with a simulated event runtime:
 
@@ -409,8 +414,15 @@ node --test tests/claude_opening_module.mjs
 ```
 
 They check complete UTF-8 boundaries, foreign context, stale openings and
-attachments, aborted handlers and blocked fallbacks. They do not prove native
-module loading or reception. The CLI guard is also covered by `tests/session.rs`.
+attachments, failed preparation, and preservation of native events, results
+and errors. They do not prove native module loading or renewed reception on
+resume. The CLI receipt check is also covered by `tests/session.rs`.
+
+### Historical Claude native controls
+
+The following controls describe earlier consumer revisions. Their demonstrated
+blocking and cancellation behavior is retained as evidence, not as a policy
+of `opening-reference-v4`.
 
 An initial native consumer check on Claude 2.1.294 exposed an ordering error:
 `turn.step` ran before `prompt.attachment`, so requiring attachment expansion
@@ -1073,13 +1085,13 @@ neither the receipt nor a matching digest establishes runtime loading or
 provider reception. Edited bundles are not overwritten, and undo preserves
 them with an explicit warning that they may still execute.
 
-An internal Rust ownership module now implements inspection and pure plans for
+An internal Rust ownership module implements inspection and pure plans for
 that boundary. Receipts must match canonical compiled definitions byte for byte;
 payload reads are limited to 1 MiB each and receipt reads to 16 KiB. The compiled
 catalog embeds the experimental manifest, hook definition and consumer with
-`include_str!` as `opening-reference-v3` and retains the exact
-`opening-reference-v1` and `opening-reference-v2` definitions for ownership
-checks. Setup can upgrade an intact previous bundle and undo any recognized
+`include_str!` as `opening-reference-v4` and retains the exact
+`opening-reference-v1`, `opening-reference-v2` and `opening-reference-v3`
+definitions for ownership checks. Setup can upgrade an intact previous bundle and undo any recognized
 version; edited payloads are never
 adopted as owned. Setup uses its update and undo plans;
 doctor inspects the current compiled bundle and the separate command hooks.
@@ -1499,8 +1511,9 @@ Fresh preparation therefore did not establish fresh reception on this resume.
 These observations establish one foreground child opening, its tested
 oversized-preparation rejection and two-request continuity on 2.1.294. The
 tested same-child resume retained stale context. Fresh preparation is not a
-guarantee of renewed reception, so same-child continuation remains unsupported
-in vivac-managed sessions and the pre-tool policy above refuses `SendMessage`.
+guarantee of renewed reception. The earlier policy refused `SendMessage` on
+that basis; the current integration preserves native continuation and declares
+its renewed reception unverified.
 They do not establish general cancellation, automatic bundle discovery in every
 project, model compliance or behavior in other harness versions. The module
 releases its child snapshot after one expansion; the continuity control does
@@ -1519,6 +1532,9 @@ correlated. Source pins and temporary-profile cleanup were checked. This
 establishes the tested refusal boundary on 2.1.316; it does not establish fresh
 context, correction of the old-reference consumer, or coverage of every engine
 version and plugin transport.
+
+The current module does not install that refusal. This control establishes
+what the historical guard prevented, not a current guarantee of fresh context.
 
 ## Check a real harness separately
 

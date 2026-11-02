@@ -1,0 +1,5 @@
+{
+  "name": "vivac-opening",
+  "description": "Experimental complete opening context for vivac.",
+  "defaultEnabled": true
+}
