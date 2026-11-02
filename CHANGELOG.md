@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.22.0](https://github.com/JAAvila-Of/vivac/compare/v0.21.0...v0.22.0) - 2026-11-02
 
+### Upgrading
+
+Update every CLI, MCP server and session hook that shares a project. On Windows,
+run `vivac update` in a terminal. Re-run `vivac setup` for each harness in use
+and restart existing sessions. Earlier Claude modules keep their blocking
+behavior until setup replaces the owned bundle; updating the executable alone
+does not replace those files. If setup changes a Codex hook, approve that change
+before relying on its context delivery. See [setup](docs/SETUP.md).
+
+`vivac init` now refuses another tree when a checked local Git origin leads to
+an existing one. Scripts that previously succeeded may need
+`--join <path to the existing tree>` to retain its history, or `--new-tree` for
+a deliberate separate product. `--yes` does not choose between them, and nested
+tree checks still apply. This changes the command contract, not the event format.
+
+Opening context supplements native work without disabling messages, delegation
+or resumed agents. Failed or unverified Vivac context does not stop native work.
+`vivac session guard --hook` and rejected Codex opening responses now return
+`continue: true`, with a diagnostic when context is unverified or rejected.
+That flag proves neither a valid opening receipt nor delivery of updated context
+to a resumed agent. Invalid or partial payloads remain excluded; data privacy,
+recipient isolation and payload limits remain enforced.
+
+The new [backup commands](docs/BACKUP.md) preserve the tree and files in its
+custody. Packages are local and unencrypted. Use new destinations outside Git
+working trees; recovery requires retiring the original authority. Repository
+contents, credentials and harness settings need separate recovery. This is not
+synchronization between PCs.
+
 ### Added
 
 - *(backup)* add verified local recovery packages ([#303](https://github.com/JAAvila-Of/vivac/pull/303))
@@ -21,7 +50,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - *(context)* [**breaking**] preserve native harness capabilities ([#309](https://github.com/JAAvila-Of/vivac/pull/309))
-- *(claude)* refuse native resumed agent openings ([#308](https://github.com/JAAvila-Of/vivac/pull/308))
 - *(relocate)* clean partial gitignore files after write failures ([#307](https://github.com/JAAvila-Of/vivac/pull/307))
 - *(relocate)* publish new destination directories whole ([#305](https://github.com/JAAvila-Of/vivac/pull/305))
 - *(init)* [**breaking**] check local origins before planting a tree ([#304](https://github.com/JAAvila-Of/vivac/pull/304))
@@ -31,23 +59,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Internal
 
 - *(preview)* isolate admission cases within fixed lifetimes ([#302](https://github.com/JAAvila-Of/vivac/pull/302))
-
-### Upgrading
-
-Opening context supplements native work without disabling messages, delegation
-or resumed agents. A failed or unverified Vivac opening supplies no invalid or
-partial payload and reports its status; it does not stop native work. This
-does not guarantee updated context in a resumed subagent.
-
-`vivac session guard --hook` and rejected Codex opening responses now return
-`continue: true` with a diagnostic when context is unverified or rejected.
-Callers must not use that flag as proof of a valid opening receipt or delivery.
-
-Update the engine, re-run `vivac setup` for each harness in use, and restart
-existing sessions. On Windows, use `vivac update` in a terminal. Earlier Claude
-opening bundles keep their blocking behavior until setup replaces them with
-the current owned bundle; updating the executable alone does not replace those
-files. Data privacy, recipient isolation and payload limits remain enforced.
 
 ## [0.21.0](https://github.com/JAAvila-Of/vivac/compare/v0.20.1...v0.21.0) - 2026-10-21
 
