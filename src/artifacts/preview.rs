@@ -1598,16 +1598,17 @@ mod tests {
     #[test]
     fn preview_runner_limits_four_views_and_releases_capacity_on_close() {
         let _guard = SERVERS.lock().unwrap_or_else(|error| error.into_inner());
-        let previews: Vec<_> = (0..4)
-            .map(|_| start_for(selected(b"<html>retained</html>"), Duration::from_secs(2)).unwrap())
-            .collect();
-        assert!(start_for(selected(b"<html>excess</html>"), Duration::from_secs(2)).is_err());
-        for preview in previews {
-            post(preview.url(), "close");
-            preview.wait();
-        }
-        let next = start_for(selected(b"<html>next</html>"), Duration::from_secs(2)).unwrap();
-        post(next.url(), "close");
-        next.wait();
+        let preview =
+            start_for(selected(b"<html>retained</html>"), Duration::from_secs(2)).unwrap();
+        // Hold the other admissions directly so their expiration cannot change
+        // the capacity precondition while this worker's close path is checked.
+        let _other_slots: Vec<_> = (0..3).map(|_| Slot::reserve().unwrap()).collect();
+        assert!(Slot::reserve().is_err());
+        let response = post(preview.url(), "close");
+        preview.wait();
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        assert!(response.contains("Preview closed."), "{response}");
+        let _replacement = Slot::reserve().unwrap();
+        assert!(Slot::reserve().is_err());
     }
 }
