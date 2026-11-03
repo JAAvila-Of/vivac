@@ -20,6 +20,7 @@ accepts
 access
 accessible
 accessor
+account
 accounted
 ace
 acl
@@ -1183,6 +1184,7 @@ governed
 governing
 governs
 grandchild
+graph
 grapheme
 graphemes
 green
@@ -1256,6 +1258,7 @@ highwater
 hint
 hints
 historical
+histories
 history
 hit
 hits
@@ -1672,6 +1675,7 @@ month
 moov
 more
 most
+mount
 move
 moved
 moves
@@ -2153,6 +2157,7 @@ reached
 reaches
 reaching
 read
+readable
 reader
 readers
 reading

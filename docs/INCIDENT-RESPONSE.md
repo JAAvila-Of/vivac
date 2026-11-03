@@ -10,6 +10,10 @@ Vivac currently has a preventive write guard and verified local backups. It
 does not provide a sanitation command. The maintenance contract below describes
 requirements for a future implementation, not operations available today.
 
+The [implementation design and fixtures](SANITATION-DESIGN.md) describe selection,
+identity, publication boundaries and the limited executable examples used to
+prepare that implementation.
+
 ## Contain an incident with the current release
 
 1. Revoke or rotate an exposed credential at its issuer. Removing a local value
