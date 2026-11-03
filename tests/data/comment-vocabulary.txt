@@ -1280,6 +1280,7 @@ elbow
 elbows
 element
 elements
+elevated
 eleven
 eligible
 ellipses
@@ -1887,6 +1888,7 @@ ignoring
 image
 immediate
 immediately
+immutability
 immutable
 implement
 implementation
@@ -2446,6 +2448,7 @@ module
 modules
 moment
 momentarily
+monitor
 month
 months
 more

@@ -2616,19 +2616,39 @@ mod tests {
     }
 
     #[test]
-    fn recorded_lane_project_allows_root_rename_between_reads() {
+    fn recorded_lane_project_preserves_general_root_rename_behavior() {
         if isolate_lane_read_test(
-            "artifacts::tests::recorded_lane_project_allows_root_rename_between_reads",
+            "artifacts::tests::recorded_lane_project_preserves_general_root_rename_behavior",
         ) {
             return;
         }
         let mut fixture = PreviewFixture::new("mockup.html");
         let moved = fixture.root.with_extension("moved");
-        fs::rename(&fixture.root.0, &moved)
-            .expect("an idle Project must not pin its root against rename");
-        fs::rename(&moved, &fixture.root.0).unwrap();
+        let paths = [".vivac/config", ".vivac/events", ".vivac-artifacts/.site"];
+        let before: Vec<_> = paths
+            .iter()
+            .map(|path| fs::read(fixture.root.join(path)).unwrap())
+            .collect();
+        match fs::rename(&fixture.root.0, &moved) {
+            Ok(()) => fs::rename(&moved, &fixture.root.0).unwrap(),
+            Err(error) => {
+                #[cfg(windows)]
+                assert_eq!(error.raw_os_error(), Some(5));
+                #[cfg(not(windows))]
+                panic!("The root rename fixture failed: {error}");
+            }
+        }
+        assert!(fixture.root.is_dir());
+        assert!(!moved.exists());
+        for (path, expected) in paths.iter().zip(&before) {
+            assert_eq!(&fs::read(fixture.root.join(path)).unwrap(), expected);
+        }
         assert!(fixture.project.current().is_ok());
-        assert!(fixture.preview().is_ok());
+        let mut preview = fixture.preview().unwrap();
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut preview.reader, &mut bytes).unwrap();
+        assert_eq!(bytes, b"<html>Selected delivery</html>");
+        drop(preview);
         for operation in ["check", "restore"] {
             let mut request = json!({"operation":operation, "artifact":fixture.delivery["artifact"], "revision":fixture.delivery["revision"]});
             if operation == "restore" {
@@ -2647,11 +2667,36 @@ mod tests {
         }
         let mut fixture = PreviewFixture::new("mockup.html");
         let moved = PreviewRoot(fixture.root.with_extension("moved"));
-        fs::rename(&fixture.root.0, &moved.0).unwrap();
+        let paths = [".vivac/config", ".vivac/events", ".vivac-artifacts/.site"];
+        let before: Vec<_> = paths
+            .iter()
+            .map(|path| fs::read(fixture.root.join(path)).unwrap())
+            .collect();
+        if let Err(error) = fs::rename(&fixture.root.0, &moved.0) {
+            #[cfg(windows)]
+            {
+                assert_eq!(error.raw_os_error(), Some(5));
+                assert!(fixture.root.is_dir());
+                assert!(!moved.exists());
+                for (path, expected) in paths.iter().zip(&before) {
+                    assert_eq!(&fs::read(fixture.root.join(path)).unwrap(), expected);
+                }
+                let mut preview = fixture.preview().unwrap();
+                let mut bytes = Vec::new();
+                std::io::Read::read_to_end(&mut preview.reader, &mut bytes).unwrap();
+                assert_eq!(bytes, b"<html>Selected delivery</html>");
+                return;
+            }
+            #[cfg(not(windows))]
+            panic!("The root substitution fixture failed: {error}");
+        }
         fs::create_dir_all(fixture.root.join(".vivac")).unwrap();
         fs::create_dir_all(fixture.root.join(".vivac-artifacts/objects")).unwrap();
         for file in [".vivac/config", ".vivac/events", ".vivac-artifacts/.site"] {
             fs::copy(moved.join(file), fixture.root.join(file)).unwrap();
+        }
+        for (path, expected) in paths.iter().zip(&before) {
+            assert_eq!(&fs::read(fixture.root.join(path)).unwrap(), expected);
         }
         let object = format!(
             ".vivac-artifacts/{}",
