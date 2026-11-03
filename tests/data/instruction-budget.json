@@ -1,0 +1,747 @@
+{
+  "measurement": "UTF-8 bytes, Unicode scalar values, and ceil(chars/4) token estimates; schema_json uses compact sorted-key JSON. Argument descriptions also occur inside schema_json; skill complete includes frontmatter and body. These are overlapping views, not additive totals. Hook measurements exclude tree data and include headings and trailing newlines. Installed marker is optional and counted separately.",
+  "baseline_commit": "fb98084",
+  "baseline": {
+    "catalog.vivac-agents.description": {
+      "utf8_bytes": 273,
+      "unicode_chars": 273,
+      "estimated_tokens_chars_div_4": 69
+    },
+    "catalog.vivac-artifacts.description": {
+      "utf8_bytes": 243,
+      "unicode_chars": 243,
+      "estimated_tokens_chars_div_4": 61
+    },
+    "catalog.vivac-migrate.description": {
+      "utf8_bytes": 495,
+      "unicode_chars": 495,
+      "estimated_tokens_chars_div_4": 124
+    },
+    "hook.focus.agent_custody": {
+      "utf8_bytes": 1168,
+      "unicode_chars": 1168,
+      "estimated_tokens_chars_div_4": 292
+    },
+    "hook.focus.artifact_deliveries": {
+      "utf8_bytes": 660,
+      "unicode_chars": 660,
+      "estimated_tokens_chars_div_4": 165
+    },
+    "hook.focus.write_at_these_seams": {
+      "utf8_bytes": 2002,
+      "unicode_chars": 2002,
+      "estimated_tokens_chars_div_4": 501
+    },
+    "hook.no_focus.agent_custody": {
+      "utf8_bytes": 1168,
+      "unicode_chars": 1168,
+      "estimated_tokens_chars_div_4": 292
+    },
+    "hook.no_focus.artifact_deliveries": {
+      "utf8_bytes": 660,
+      "unicode_chars": 660,
+      "estimated_tokens_chars_div_4": 165
+    },
+    "hook.no_focus.write_at_these_seams": {
+      "utf8_bytes": 1904,
+      "unicode_chars": 1904,
+      "estimated_tokens_chars_div_4": 476
+    },
+    "mcp.vivac_add.argument_descriptions": {
+      "utf8_bytes": 1550,
+      "unicode_chars": 1550,
+      "estimated_tokens_chars_div_4": 388
+    },
+    "mcp.vivac_add.description": {
+      "utf8_bytes": 876,
+      "unicode_chars": 876,
+      "estimated_tokens_chars_div_4": 219
+    },
+    "mcp.vivac_add.schema_json": {
+      "utf8_bytes": 2228,
+      "unicode_chars": 2228,
+      "estimated_tokens_chars_div_4": 557
+    },
+    "mcp.vivac_agents.argument_descriptions": {
+      "utf8_bytes": 891,
+      "unicode_chars": 891,
+      "estimated_tokens_chars_div_4": 223
+    },
+    "mcp.vivac_agents.description": {
+      "utf8_bytes": 1546,
+      "unicode_chars": 1546,
+      "estimated_tokens_chars_div_4": 387
+    },
+    "mcp.vivac_agents.schema_json": {
+      "utf8_bytes": 4677,
+      "unicode_chars": 4677,
+      "estimated_tokens_chars_div_4": 1170
+    },
+    "mcp.vivac_arm.argument_descriptions": {
+      "utf8_bytes": 302,
+      "unicode_chars": 302,
+      "estimated_tokens_chars_div_4": 76
+    },
+    "mcp.vivac_arm.description": {
+      "utf8_bytes": 259,
+      "unicode_chars": 259,
+      "estimated_tokens_chars_div_4": 65
+    },
+    "mcp.vivac_arm.schema_json": {
+      "utf8_bytes": 536,
+      "unicode_chars": 536,
+      "estimated_tokens_chars_div_4": 134
+    },
+    "mcp.vivac_artifacts.argument_descriptions": {
+      "utf8_bytes": 1100,
+      "unicode_chars": 1100,
+      "estimated_tokens_chars_div_4": 275
+    },
+    "mcp.vivac_artifacts.description": {
+      "utf8_bytes": 2091,
+      "unicode_chars": 2091,
+      "estimated_tokens_chars_div_4": 523
+    },
+    "mcp.vivac_artifacts.schema_json": {
+      "utf8_bytes": 1981,
+      "unicode_chars": 1981,
+      "estimated_tokens_chars_div_4": 496
+    },
+    "mcp.vivac_brief.argument_descriptions": {
+      "utf8_bytes": 0,
+      "unicode_chars": 0,
+      "estimated_tokens_chars_div_4": 0
+    },
+    "mcp.vivac_brief.description": {
+      "utf8_bytes": 284,
+      "unicode_chars": 284,
+      "estimated_tokens_chars_div_4": 71
+    },
+    "mcp.vivac_brief.schema_json": {
+      "utf8_bytes": 47,
+      "unicode_chars": 47,
+      "estimated_tokens_chars_div_4": 12
+    },
+    "mcp.vivac_decide.argument_descriptions": {
+      "utf8_bytes": 820,
+      "unicode_chars": 820,
+      "estimated_tokens_chars_div_4": 205
+    },
+    "mcp.vivac_decide.description": {
+      "utf8_bytes": 715,
+      "unicode_chars": 715,
+      "estimated_tokens_chars_div_4": 179
+    },
+    "mcp.vivac_decide.schema_json": {
+      "utf8_bytes": 1431,
+      "unicode_chars": 1431,
+      "estimated_tokens_chars_div_4": 358
+    },
+    "mcp.vivac_declare.argument_descriptions": {
+      "utf8_bytes": 180,
+      "unicode_chars": 180,
+      "estimated_tokens_chars_div_4": 45
+    },
+    "mcp.vivac_declare.description": {
+      "utf8_bytes": 554,
+      "unicode_chars": 554,
+      "estimated_tokens_chars_div_4": 139
+    },
+    "mcp.vivac_declare.schema_json": {
+      "utf8_bytes": 352,
+      "unicode_chars": 352,
+      "estimated_tokens_chars_div_4": 88
+    },
+    "mcp.vivac_done.argument_descriptions": {
+      "utf8_bytes": 119,
+      "unicode_chars": 119,
+      "estimated_tokens_chars_div_4": 30
+    },
+    "mcp.vivac_done.description": {
+      "utf8_bytes": 383,
+      "unicode_chars": 383,
+      "estimated_tokens_chars_div_4": 96
+    },
+    "mcp.vivac_done.schema_json": {
+      "utf8_bytes": 254,
+      "unicode_chars": 254,
+      "estimated_tokens_chars_div_4": 64
+    },
+    "mcp.vivac_find.argument_descriptions": {
+      "utf8_bytes": 210,
+      "unicode_chars": 210,
+      "estimated_tokens_chars_div_4": 53
+    },
+    "mcp.vivac_find.description": {
+      "utf8_bytes": 404,
+      "unicode_chars": 404,
+      "estimated_tokens_chars_div_4": 101
+    },
+    "mcp.vivac_find.schema_json": {
+      "utf8_bytes": 355,
+      "unicode_chars": 355,
+      "estimated_tokens_chars_div_4": 89
+    },
+    "mcp.vivac_note.argument_descriptions": {
+      "utf8_bytes": 75,
+      "unicode_chars": 75,
+      "estimated_tokens_chars_div_4": 19
+    },
+    "mcp.vivac_note.description": {
+      "utf8_bytes": 481,
+      "unicode_chars": 481,
+      "estimated_tokens_chars_div_4": 121
+    },
+    "mcp.vivac_note.schema_json": {
+      "utf8_bytes": 209,
+      "unicode_chars": 209,
+      "estimated_tokens_chars_div_4": 53
+    },
+    "mcp.vivac_open.argument_descriptions": {
+      "utf8_bytes": 0,
+      "unicode_chars": 0,
+      "estimated_tokens_chars_div_4": 0
+    },
+    "mcp.vivac_open.description": {
+      "utf8_bytes": 445,
+      "unicode_chars": 445,
+      "estimated_tokens_chars_div_4": 112
+    },
+    "mcp.vivac_open.schema_json": {
+      "utf8_bytes": 47,
+      "unicode_chars": 47,
+      "estimated_tokens_chars_div_4": 12
+    },
+    "mcp.vivac_park.argument_descriptions": {
+      "utf8_bytes": 294,
+      "unicode_chars": 294,
+      "estimated_tokens_chars_div_4": 74
+    },
+    "mcp.vivac_park.description": {
+      "utf8_bytes": 552,
+      "unicode_chars": 552,
+      "estimated_tokens_chars_div_4": 138
+    },
+    "mcp.vivac_park.schema_json": {
+      "utf8_bytes": 467,
+      "unicode_chars": 467,
+      "estimated_tokens_chars_div_4": 117
+    },
+    "mcp.vivac_pop.argument_descriptions": {
+      "utf8_bytes": 317,
+      "unicode_chars": 317,
+      "estimated_tokens_chars_div_4": 80
+    },
+    "mcp.vivac_pop.description": {
+      "utf8_bytes": 478,
+      "unicode_chars": 478,
+      "estimated_tokens_chars_div_4": 120
+    },
+    "mcp.vivac_pop.schema_json": {
+      "utf8_bytes": 494,
+      "unicode_chars": 494,
+      "estimated_tokens_chars_div_4": 124
+    },
+    "mcp.vivac_push.argument_descriptions": {
+      "utf8_bytes": 1905,
+      "unicode_chars": 1905,
+      "estimated_tokens_chars_div_4": 477
+    },
+    "mcp.vivac_push.description": {
+      "utf8_bytes": 775,
+      "unicode_chars": 775,
+      "estimated_tokens_chars_div_4": 194
+    },
+    "mcp.vivac_push.schema_json": {
+      "utf8_bytes": 2589,
+      "unicode_chars": 2589,
+      "estimated_tokens_chars_div_4": 648
+    },
+    "mcp.vivac_rules.argument_descriptions": {
+      "utf8_bytes": 0,
+      "unicode_chars": 0,
+      "estimated_tokens_chars_div_4": 0
+    },
+    "mcp.vivac_rules.description": {
+      "utf8_bytes": 854,
+      "unicode_chars": 854,
+      "estimated_tokens_chars_div_4": 214
+    },
+    "mcp.vivac_rules.schema_json": {
+      "utf8_bytes": 47,
+      "unicode_chars": 47,
+      "estimated_tokens_chars_div_4": 12
+    },
+    "mcp.vivac_save.argument_descriptions": {
+      "utf8_bytes": 150,
+      "unicode_chars": 150,
+      "estimated_tokens_chars_div_4": 38
+    },
+    "mcp.vivac_save.description": {
+      "utf8_bytes": 743,
+      "unicode_chars": 743,
+      "estimated_tokens_chars_div_4": 186
+    },
+    "mcp.vivac_save.schema_json": {
+      "utf8_bytes": 281,
+      "unicode_chars": 281,
+      "estimated_tokens_chars_div_4": 71
+    },
+    "mcp.vivac_why.argument_descriptions": {
+      "utf8_bytes": 534,
+      "unicode_chars": 534,
+      "estimated_tokens_chars_div_4": 134
+    },
+    "mcp.vivac_why.description": {
+      "utf8_bytes": 444,
+      "unicode_chars": 444,
+      "estimated_tokens_chars_div_4": 111
+    },
+    "mcp.vivac_why.schema_json": {
+      "utf8_bytes": 755,
+      "unicode_chars": 755,
+      "estimated_tokens_chars_div_4": 189
+    },
+    "skills.vivac-agents.body": {
+      "utf8_bytes": 6361,
+      "unicode_chars": 6361,
+      "estimated_tokens_chars_div_4": 1591
+    },
+    "skills.vivac-agents.complete": {
+      "utf8_bytes": 6675,
+      "unicode_chars": 6675,
+      "estimated_tokens_chars_div_4": 1669
+    },
+    "skills.vivac-agents.frontmatter": {
+      "utf8_bytes": 314,
+      "unicode_chars": 314,
+      "estimated_tokens_chars_div_4": 79
+    },
+    "skills.vivac-agents.installed_marker": {
+      "utf8_bytes": 120,
+      "unicode_chars": 120,
+      "estimated_tokens_chars_div_4": 30
+    },
+    "skills.vivac-artifacts.body": {
+      "utf8_bytes": 15034,
+      "unicode_chars": 15034,
+      "estimated_tokens_chars_div_4": 3759
+    },
+    "skills.vivac-artifacts.complete": {
+      "utf8_bytes": 15321,
+      "unicode_chars": 15321,
+      "estimated_tokens_chars_div_4": 3831
+    },
+    "skills.vivac-artifacts.frontmatter": {
+      "utf8_bytes": 287,
+      "unicode_chars": 287,
+      "estimated_tokens_chars_div_4": 72
+    },
+    "skills.vivac-artifacts.installed_marker": {
+      "utf8_bytes": 120,
+      "unicode_chars": 120,
+      "estimated_tokens_chars_div_4": 30
+    },
+    "skills.vivac-migrate.body": {
+      "utf8_bytes": 21065,
+      "unicode_chars": 21065,
+      "estimated_tokens_chars_div_4": 5267
+    },
+    "skills.vivac-migrate.complete": {
+      "utf8_bytes": 21602,
+      "unicode_chars": 21602,
+      "estimated_tokens_chars_div_4": 5401
+    },
+    "skills.vivac-migrate.frontmatter": {
+      "utf8_bytes": 537,
+      "unicode_chars": 537,
+      "estimated_tokens_chars_div_4": 135
+    },
+    "skills.vivac-migrate.installed_marker": {
+      "utf8_bytes": 120,
+      "unicode_chars": 120,
+      "estimated_tokens_chars_div_4": 30
+    }
+  },
+  "ceilings": {
+    "catalog.vivac-agents.description": {
+      "estimated_tokens_chars_div_4": 46,
+      "unicode_chars": 181,
+      "utf8_bytes": 181
+    },
+    "catalog.vivac-artifacts.description": {
+      "estimated_tokens_chars_div_4": 45,
+      "unicode_chars": 180,
+      "utf8_bytes": 180
+    },
+    "catalog.vivac-migrate.description": {
+      "estimated_tokens_chars_div_4": 68,
+      "unicode_chars": 271,
+      "utf8_bytes": 271
+    },
+    "hook.focus.agent_custody": {
+      "estimated_tokens_chars_div_4": 213,
+      "unicode_chars": 849,
+      "utf8_bytes": 849
+    },
+    "hook.focus.artifact_deliveries": {
+      "estimated_tokens_chars_div_4": 130,
+      "unicode_chars": 520,
+      "utf8_bytes": 520
+    },
+    "hook.focus.write_at_these_seams": {
+      "estimated_tokens_chars_div_4": 417,
+      "unicode_chars": 1666,
+      "utf8_bytes": 1666
+    },
+    "hook.no_focus.agent_custody": {
+      "estimated_tokens_chars_div_4": 213,
+      "unicode_chars": 849,
+      "utf8_bytes": 849
+    },
+    "hook.no_focus.artifact_deliveries": {
+      "estimated_tokens_chars_div_4": 130,
+      "unicode_chars": 520,
+      "utf8_bytes": 520
+    },
+    "hook.no_focus.write_at_these_seams": {
+      "estimated_tokens_chars_div_4": 394,
+      "unicode_chars": 1573,
+      "utf8_bytes": 1573
+    },
+    "mcp.vivac_add.argument_descriptions": {
+      "estimated_tokens_chars_div_4": 250,
+      "unicode_chars": 998,
+      "utf8_bytes": 998
+    },
+    "mcp.vivac_add.description": {
+      "estimated_tokens_chars_div_4": 104,
+      "unicode_chars": 413,
+      "utf8_bytes": 413
+    },
+    "mcp.vivac_add.schema_json": {
+      "estimated_tokens_chars_div_4": 419,
+      "unicode_chars": 1676,
+      "utf8_bytes": 1676
+    },
+    "mcp.vivac_agents.argument_descriptions": {
+      "estimated_tokens_chars_div_4": 213,
+      "unicode_chars": 851,
+      "utf8_bytes": 851
+    },
+    "mcp.vivac_agents.description": {
+      "estimated_tokens_chars_div_4": 275,
+      "unicode_chars": 1098,
+      "utf8_bytes": 1098
+    },
+    "mcp.vivac_agents.schema_json": {
+      "estimated_tokens_chars_div_4": 1160,
+      "unicode_chars": 4637,
+      "utf8_bytes": 4637
+    },
+    "mcp.vivac_arm.argument_descriptions": {
+      "estimated_tokens_chars_div_4": 44,
+      "unicode_chars": 174,
+      "utf8_bytes": 174
+    },
+    "mcp.vivac_arm.description": {
+      "estimated_tokens_chars_div_4": 54,
+      "unicode_chars": 213,
+      "utf8_bytes": 213
+    },
+    "mcp.vivac_arm.schema_json": {
+      "estimated_tokens_chars_div_4": 102,
+      "unicode_chars": 408,
+      "utf8_bytes": 408
+    },
+    "mcp.vivac_artifacts.argument_descriptions": {
+      "estimated_tokens_chars_div_4": 228,
+      "unicode_chars": 910,
+      "utf8_bytes": 910
+    },
+    "mcp.vivac_artifacts.description": {
+      "estimated_tokens_chars_div_4": 339,
+      "unicode_chars": 1354,
+      "utf8_bytes": 1354
+    },
+    "mcp.vivac_artifacts.schema_json": {
+      "estimated_tokens_chars_div_4": 448,
+      "unicode_chars": 1791,
+      "utf8_bytes": 1791
+    },
+    "mcp.vivac_brief.argument_descriptions": {
+      "estimated_tokens_chars_div_4": 0,
+      "unicode_chars": 0,
+      "utf8_bytes": 0
+    },
+    "mcp.vivac_brief.description": {
+      "estimated_tokens_chars_div_4": 47,
+      "unicode_chars": 188,
+      "utf8_bytes": 188
+    },
+    "mcp.vivac_brief.schema_json": {
+      "estimated_tokens_chars_div_4": 12,
+      "unicode_chars": 47,
+      "utf8_bytes": 47
+    },
+    "mcp.vivac_decide.argument_descriptions": {
+      "estimated_tokens_chars_div_4": 145,
+      "unicode_chars": 577,
+      "utf8_bytes": 577
+    },
+    "mcp.vivac_decide.description": {
+      "estimated_tokens_chars_div_4": 89,
+      "unicode_chars": 355,
+      "utf8_bytes": 355
+    },
+    "mcp.vivac_decide.schema_json": {
+      "estimated_tokens_chars_div_4": 297,
+      "unicode_chars": 1188,
+      "utf8_bytes": 1188
+    },
+    "mcp.vivac_declare.argument_descriptions": {
+      "estimated_tokens_chars_div_4": 35,
+      "unicode_chars": 139,
+      "utf8_bytes": 139
+    },
+    "mcp.vivac_declare.description": {
+      "estimated_tokens_chars_div_4": 32,
+      "unicode_chars": 128,
+      "utf8_bytes": 128
+    },
+    "mcp.vivac_declare.schema_json": {
+      "estimated_tokens_chars_div_4": 78,
+      "unicode_chars": 311,
+      "utf8_bytes": 311
+    },
+    "mcp.vivac_done.argument_descriptions": {
+      "estimated_tokens_chars_div_4": 20,
+      "unicode_chars": 78,
+      "utf8_bytes": 78
+    },
+    "mcp.vivac_done.description": {
+      "estimated_tokens_chars_div_4": 51,
+      "unicode_chars": 204,
+      "utf8_bytes": 204
+    },
+    "mcp.vivac_done.schema_json": {
+      "estimated_tokens_chars_div_4": 54,
+      "unicode_chars": 213,
+      "utf8_bytes": 213
+    },
+    "mcp.vivac_find.argument_descriptions": {
+      "estimated_tokens_chars_div_4": 32,
+      "unicode_chars": 125,
+      "utf8_bytes": 125
+    },
+    "mcp.vivac_find.description": {
+      "estimated_tokens_chars_div_4": 56,
+      "unicode_chars": 224,
+      "utf8_bytes": 224
+    },
+    "mcp.vivac_find.schema_json": {
+      "estimated_tokens_chars_div_4": 68,
+      "unicode_chars": 270,
+      "utf8_bytes": 270
+    },
+    "mcp.vivac_note.argument_descriptions": {
+      "estimated_tokens_chars_div_4": 12,
+      "unicode_chars": 45,
+      "utf8_bytes": 45
+    },
+    "mcp.vivac_note.description": {
+      "estimated_tokens_chars_div_4": 60,
+      "unicode_chars": 240,
+      "utf8_bytes": 240
+    },
+    "mcp.vivac_note.schema_json": {
+      "estimated_tokens_chars_div_4": 45,
+      "unicode_chars": 179,
+      "utf8_bytes": 179
+    },
+    "mcp.vivac_open.argument_descriptions": {
+      "estimated_tokens_chars_div_4": 0,
+      "unicode_chars": 0,
+      "utf8_bytes": 0
+    },
+    "mcp.vivac_open.description": {
+      "estimated_tokens_chars_div_4": 49,
+      "unicode_chars": 195,
+      "utf8_bytes": 195
+    },
+    "mcp.vivac_open.schema_json": {
+      "estimated_tokens_chars_div_4": 12,
+      "unicode_chars": 47,
+      "utf8_bytes": 47
+    },
+    "mcp.vivac_park.argument_descriptions": {
+      "estimated_tokens_chars_div_4": 34,
+      "unicode_chars": 135,
+      "utf8_bytes": 135
+    },
+    "mcp.vivac_park.description": {
+      "estimated_tokens_chars_div_4": 49,
+      "unicode_chars": 193,
+      "utf8_bytes": 193
+    },
+    "mcp.vivac_park.schema_json": {
+      "estimated_tokens_chars_div_4": 77,
+      "unicode_chars": 308,
+      "utf8_bytes": 308
+    },
+    "mcp.vivac_pop.argument_descriptions": {
+      "estimated_tokens_chars_div_4": 42,
+      "unicode_chars": 167,
+      "utf8_bytes": 167
+    },
+    "mcp.vivac_pop.description": {
+      "estimated_tokens_chars_div_4": 47,
+      "unicode_chars": 187,
+      "utf8_bytes": 187
+    },
+    "mcp.vivac_pop.schema_json": {
+      "estimated_tokens_chars_div_4": 86,
+      "unicode_chars": 344,
+      "utf8_bytes": 344
+    },
+    "mcp.vivac_push.argument_descriptions": {
+      "estimated_tokens_chars_div_4": 266,
+      "unicode_chars": 1061,
+      "utf8_bytes": 1061
+    },
+    "mcp.vivac_push.description": {
+      "estimated_tokens_chars_div_4": 81,
+      "unicode_chars": 323,
+      "utf8_bytes": 323
+    },
+    "mcp.vivac_push.schema_json": {
+      "estimated_tokens_chars_div_4": 437,
+      "unicode_chars": 1745,
+      "utf8_bytes": 1745
+    },
+    "mcp.vivac_rules.argument_descriptions": {
+      "estimated_tokens_chars_div_4": 0,
+      "unicode_chars": 0,
+      "utf8_bytes": 0
+    },
+    "mcp.vivac_rules.description": {
+      "estimated_tokens_chars_div_4": 114,
+      "unicode_chars": 453,
+      "utf8_bytes": 453
+    },
+    "mcp.vivac_rules.schema_json": {
+      "estimated_tokens_chars_div_4": 12,
+      "unicode_chars": 47,
+      "utf8_bytes": 47
+    },
+    "mcp.vivac_save.argument_descriptions": {
+      "estimated_tokens_chars_div_4": 27,
+      "unicode_chars": 107,
+      "utf8_bytes": 107
+    },
+    "mcp.vivac_save.description": {
+      "estimated_tokens_chars_div_4": 65,
+      "unicode_chars": 259,
+      "utf8_bytes": 259
+    },
+    "mcp.vivac_save.schema_json": {
+      "estimated_tokens_chars_div_4": 60,
+      "unicode_chars": 238,
+      "utf8_bytes": 238
+    },
+    "mcp.vivac_why.argument_descriptions": {
+      "estimated_tokens_chars_div_4": 58,
+      "unicode_chars": 229,
+      "utf8_bytes": 229
+    },
+    "mcp.vivac_why.description": {
+      "estimated_tokens_chars_div_4": 77,
+      "unicode_chars": 308,
+      "utf8_bytes": 308
+    },
+    "mcp.vivac_why.schema_json": {
+      "estimated_tokens_chars_div_4": 113,
+      "unicode_chars": 450,
+      "utf8_bytes": 450
+    },
+    "skills.vivac-agents.body": {
+      "estimated_tokens_chars_div_4": 958,
+      "unicode_chars": 3831,
+      "utf8_bytes": 3831
+    },
+    "skills.vivac-agents.complete": {
+      "estimated_tokens_chars_div_4": 1014,
+      "unicode_chars": 4053,
+      "utf8_bytes": 4053
+    },
+    "skills.vivac-agents.frontmatter": {
+      "estimated_tokens_chars_div_4": 56,
+      "unicode_chars": 222,
+      "utf8_bytes": 222
+    },
+    "skills.vivac-agents.installed_marker": {
+      "estimated_tokens_chars_div_4": 30,
+      "unicode_chars": 120,
+      "utf8_bytes": 120
+    },
+    "skills.vivac-artifacts.body": {
+      "estimated_tokens_chars_div_4": 1903,
+      "unicode_chars": 7609,
+      "utf8_bytes": 7609
+    },
+    "skills.vivac-artifacts.complete": {
+      "estimated_tokens_chars_div_4": 1959,
+      "unicode_chars": 7833,
+      "utf8_bytes": 7833
+    },
+    "skills.vivac-artifacts.frontmatter": {
+      "estimated_tokens_chars_div_4": 56,
+      "unicode_chars": 224,
+      "utf8_bytes": 224
+    },
+    "skills.vivac-artifacts.installed_marker": {
+      "estimated_tokens_chars_div_4": 30,
+      "unicode_chars": 120,
+      "utf8_bytes": 120
+    },
+    "skills.vivac-migrate.body": {
+      "utf8_bytes": 8017,
+      "unicode_chars": 8011,
+      "estimated_tokens_chars_div_4": 2003
+    },
+    "skills.vivac-migrate.complete": {
+      "utf8_bytes": 8330,
+      "unicode_chars": 8324,
+      "estimated_tokens_chars_div_4": 2081
+    },
+    "skills.vivac-migrate.frontmatter": {
+      "estimated_tokens_chars_div_4": 79,
+      "unicode_chars": 313,
+      "utf8_bytes": 313
+    },
+    "skills.vivac-migrate.installed_marker": {
+      "estimated_tokens_chars_div_4": 30,
+      "unicode_chars": 120,
+      "utf8_bytes": 120
+    }
+  },
+  "mcp_contract_sha256": {
+    "vivac_add": "45d6bfa239809ff76352f7e61e11720d79a9f352298fd1c765a2b8eb5c3d113c",
+    "vivac_agents": "7ed61f91e69aec1da881a499995a91cfe60fab99f7a1254f6575179996dcaca2",
+    "vivac_arm": "0f76b1b907542fde64f202a81169f533d67377ab697618f00c32def15f1e48ed",
+    "vivac_artifacts": "c5b5fdefdb7eb926c686a97b36b32fd6d908b2d3a93771217054231782a61128",
+    "vivac_brief": "d8be9b8bf975a9878c77b8ba4a08416245aa46aa4c1d2633fc1d374f2e881093",
+    "vivac_decide": "ad72dac631948830a55f73cc4298fc2d97c10f82c539de54b7acc69e9bdcf5f9",
+    "vivac_declare": "7f8610dab09f3bf0b132e3d456dce3a95b8268ab72319d6be01321118bc53fcb",
+    "vivac_done": "0a04842459c0980b276edc59b1408c5fc077ee7ab4155b8abf635e2e49266ad8",
+    "vivac_find": "791023488139e5d6143c7ed6794cf5c12f87f5c136e2757c6b274fd53c5d2276",
+    "vivac_note": "67234ddfd919b4b9702c976302b065b4a10f566ec17209609cb27c20611494fb",
+    "vivac_open": "5107d380e27d4f767299cdff41f65440775e2111625b87c574c92c1697e2bc40",
+    "vivac_park": "d2b1ba04137dc4919fd2ae0589eb25a75069712c4f11d237888e12ef21a30899",
+    "vivac_pop": "58d4113dbb2177288d3368262cbfb1f6e844d8246197b203c9863870c0fa4c6e",
+    "vivac_push": "ab56c98dd7a658b2882a8b9ea424dc6f40e24599a8090967176e50646151a619",
+    "vivac_rules": "d098564b88bbea76b01383a21f801f3ebb34cac0dfaffb39b030accb1c5de404",
+    "vivac_save": "9f833f95dd79bf7a091570329ac81b04aaa25525920a3e0c7f3439e28f3d3191",
+    "vivac_why": "31281b973995d50b8ba7c66c64b43becfbb8bd652f23694cc924d7cbf8bf6c59"
+  }
+}

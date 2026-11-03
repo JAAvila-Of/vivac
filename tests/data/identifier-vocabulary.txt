@@ -145,6 +145,7 @@ applied
 applies
 apply
 applying
+approved
 arc
 arch
 archive

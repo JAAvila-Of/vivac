@@ -724,6 +724,7 @@ commonest
 commonmark
 commutative
 compact
+compacts
 comparable
 compare
 compared
@@ -814,6 +815,7 @@ context
 contexts
 contiguous
 continuation
+continue
 continues
 continuing
 continuously
@@ -995,6 +997,7 @@ defend
 defenses
 defensible
 defensive
+deferred
 defined
 defines
 definition
@@ -1737,7 +1740,6 @@ guess
 guessed
 guesses
 guessing
-guided
 gutter
 gutters
 h
@@ -2580,6 +2582,7 @@ object
 objected
 objectives
 objects
+obligations
 observable
 observation
 observe
@@ -3375,6 +3378,7 @@ retaining
 retains
 retirable
 retired
+retirement
 retires
 retiring
 retries
@@ -4523,7 +4527,6 @@ widens
 wider
 widest
 width
-widths
 wildcard
 will
 win

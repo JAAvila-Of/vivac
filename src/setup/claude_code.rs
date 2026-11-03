@@ -1872,9 +1872,9 @@ mod tests {
         // Computed independently with FNV-1a/64 over the exact
         // frontmatter and body this file embeds. It moves whenever the
         // skill's text does, and moving it is meant to be deliberate: the
-        // current change points to inventory and guided sync while keeping
-        // native prompt custody separate from project knowledge migration.
-        assert_eq!(skill_fingerprint(), 0xe4750c86704ac8b8);
+        // current change compacts instructions while retaining migration
+        // approval, coverage and retirement gates.
+        assert_eq!(skill_fingerprint(), 0x0c02962ed300eb76);
     }
 
     #[test]

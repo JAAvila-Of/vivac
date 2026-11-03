@@ -471,7 +471,10 @@ fn session_prompt_hook_is_never_styled_even_when_forced() {
 
     let plain = speak(&Sandbox::new_seeded("guard-prompt-plain"), &[]);
     assert!(!plain.contains('\x1b'), "{plain:?}");
-    assert!(plain.contains("nothing written to the tree"), "{plain}");
+    assert!(
+        plain.contains("min of work without a tree write"),
+        "{plain}"
+    );
 
     let forced = speak(&Sandbox::new_seeded("guard-prompt-forced"), &FORCE_ENV);
     assert!(!forced.contains('\x1b'), "{forced:?}");
