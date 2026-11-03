@@ -6,6 +6,7 @@ use sha2::{Digest, Sha256};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path};
 use std::process::{Command, Stdio};
+use std::sync::Arc;
 
 pub struct Retained {
     pub digest: String,
@@ -15,20 +16,58 @@ pub struct Retained {
 }
 const STORE: &str = ".vivac-artifacts";
 
+pub(super) struct RetainedStore {
+    pub(super) location: crate::project::LaneLocation,
+    pub(super) directory: Dir,
+}
+
+impl RetainedStore {
+    pub(super) fn open(
+        location: crate::project::LaneLocation,
+        expected_site: &str,
+    ) -> Result<Self, Failure> {
+        let directory = store(&location.directory, false).map_err(|_| Failure::usage(
+            "The retained custody location is unavailable. Reconnect its lane or recover this revision.",
+        ))?;
+        let site = site_id_from_store(&directory).map_err(|_| Failure::usage(
+            "The retained custody location is unavailable. Reconnect its lane or recover this revision.",
+        ))?;
+        if site.as_deref() != Some(expected_site) {
+            return Err(Failure::usage(
+                "The retained store does not match this revision's custody site.",
+            ));
+        }
+        Ok(Self {
+            location,
+            directory,
+        })
+    }
+}
+
 pub(crate) struct Download {
     reader: File,
     size: u64,
+    snapshot: Arc<super::native::Preparation>,
 }
 
 impl Download {
-    pub(super) fn from_file(reader: File, size: u64) -> Self {
-        Self { reader, size }
+    pub(super) fn from_file(
+        reader: File,
+        size: u64,
+        snapshot: Arc<super::native::Preparation>,
+    ) -> Self {
+        Self {
+            reader,
+            size,
+            snapshot,
+        }
     }
 
     pub(crate) fn try_clone(&self) -> io::Result<Self> {
         Ok(Self {
             reader: self.reader.try_clone()?,
             size: self.size,
+            snapshot: self.snapshot.clone(),
         })
     }
     pub(crate) fn size(&self) -> u64 {
@@ -69,6 +108,7 @@ pub(crate) fn download_with_policy(
 ) -> Result<Download, Failure> {
     download_prepared(root, object, digest, size, policy, None)
 }
+#[cfg(test)]
 pub(crate) fn download_with_inspection(
     root: &Path,
     object: &str,
@@ -79,6 +119,7 @@ pub(crate) fn download_with_inspection(
     let policy = expected_policy(inspection)?;
     download_prepared(root, object, digest, size, policy, inspection)
 }
+#[cfg(test)]
 fn download_prepared(
     root: &Path,
     object: &str,
@@ -87,30 +128,60 @@ fn download_prepared(
     policy: CapturePolicy,
     inspection: Option<&Inspection>,
 ) -> Result<Download, Failure> {
-    object_path(object)?;
     let root_dir = open_root(root)?;
     let store = store(&root_dir, false)?;
-    let objects = directory(&store, "objects", false)?;
-    let mut saved = regular(&store, object)?;
+    download_prepared_in(root, &store, object, digest, size, policy, inspection)
+}
+
+pub(super) fn download_from_store(
+    custody: &RetainedStore,
+    object: &str,
+    digest: &str,
+    size: u64,
+    inspection: Option<&Inspection>,
+) -> Result<Download, Failure> {
+    download_prepared_in(
+        &custody.location.path,
+        &custody.directory,
+        object,
+        digest,
+        size,
+        expected_policy(inspection)?,
+        inspection,
+    )
+}
+
+fn download_prepared_in(
+    root: &Path,
+    store: &Dir,
+    object: &str,
+    digest: &str,
+    size: u64,
+    policy: CapturePolicy,
+    inspection: Option<&Inspection>,
+) -> Result<Download, Failure> {
+    object_path(object)?;
+    let mut saved = regular(store, object)?;
     let before = saved.metadata()?;
     #[cfg(windows)]
     let before_identity = file_identity(&saved)?;
-    let temporary = format!(".tmp-{}", crate::id::ulid());
-    check_git(root, object, &temporary)?;
+    let snapshot = Arc::new(super::native::Preparation::snapshot()?);
+    let temporary = "snapshot.blob";
+    check_git(root, object, temporary)?;
     let mut options = OpenOptions::new();
     options
         .read(true)
         .write(true)
         .create_new(true)
         .follow(FollowSymlinks::No);
-    let mut staged = objects.open_with(&temporary, &options)?;
-    let result = (|| {
-        check_git(root, object, &temporary)?;
+    let mut staged = snapshot.dir.open_with(temporary, &options)?;
+    (|| {
+        check_git(root, object, temporary)?;
         let (receipt, actual_inspection) = copy_with_policy(&mut saved, &mut staged, policy)?;
         match_inspection(inspection, actual_inspection)?;
         matching(&receipt.digest, receipt.size, digest, size)?;
         unchanged(&before, &saved.metadata()?)?;
-        let current = regular(&store, object)?;
+        let current = regular(store, object)?;
         unchanged(&before, &current.metadata()?)?;
         #[cfg(windows)]
         {
@@ -121,18 +192,14 @@ fn download_prepared(
                 ));
             }
         }
-        check_git(root, object, &temporary)?;
+        check_git(root, object, temporary)?;
         staged.seek(SeekFrom::Start(0))?;
-        objects.remove_file(&temporary)?;
         Ok(Download {
             reader: staged,
             size: receipt.size,
+            snapshot: snapshot.clone(),
         })
-    })();
-    if result.is_err() {
-        let _ = objects.remove_file(&temporary);
-    }
-    result
+    })()
 }
 
 #[cfg(test)]
@@ -279,10 +346,17 @@ pub fn site_id(root: &Path) -> Result<Option<String>, Failure> {
 }
 
 pub(super) fn site_id_in(root: &Dir) -> Result<Option<String>, Failure> {
+    match store(root, false) {
+        Ok(store) => site_id_from_store(&store),
+        Err(Failure::Io(error)) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+fn site_id_from_store(store: &Dir) -> Result<Option<String>, Failure> {
     let result = (|| {
-        let store = store(root, false)?;
         let mut site = String::new();
-        regular(&store, ".site")?
+        regular(store, ".site")?
             .take(27)
             .read_to_string(&mut site)?;
         opaque_id(&site)?;
@@ -328,12 +402,39 @@ fn inspect_retained_with_policy_in(
     expected: &Inspection,
     policy: CapturePolicy,
 ) -> Result<Option<(String, u64)>, Failure> {
+    let store = match store(root, false) {
+        Ok(store) => store,
+        Err(Failure::Io(error)) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    inspect_retained_from_store(&store, object, Some(expected), policy)
+}
+
+pub(super) fn inspect_from_store(
+    custody: &RetainedStore,
+    object: &str,
+    inspection: Option<&Inspection>,
+) -> Result<Option<(String, u64)>, Failure> {
+    object_path(object)?;
+    inspect_retained_from_store(
+        &custody.directory,
+        object,
+        inspection,
+        expected_policy(inspection)?,
+    )
+}
+
+fn inspect_retained_from_store(
+    store: &Dir,
+    object: &str,
+    expected: Option<&Inspection>,
+    policy: CapturePolicy,
+) -> Result<Option<(String, u64)>, Failure> {
     let result = (|| {
-        let store = store(root, false)?;
-        let mut file = regular(&store, object)?;
+        let mut file = regular(store, object)?;
         let before = file.metadata()?;
         let (receipt, actual) = copy_with_policy(&mut file, io::sink(), policy)?;
-        match_inspection(Some(expected), actual)?;
+        match_inspection(expected, actual)?;
         unchanged(&before, &file.metadata()?)?;
         Ok((receipt.digest, receipt.size))
     })();
@@ -405,8 +506,17 @@ pub fn restore_with_policy(
     destination: &str,
     policy: CapturePolicy,
 ) -> Result<(), Failure> {
-    restore_prepared(root, object, digest, size, destination, policy, None)
+    restore_prepared(
+        (root, root),
+        object,
+        digest,
+        size,
+        destination,
+        policy,
+        None,
+    )
 }
+#[cfg(test)]
 pub fn restore_with_inspection(
     root: &Path,
     object: &str,
@@ -415,11 +525,39 @@ pub fn restore_with_inspection(
     destination: &str,
     inspection: Option<&Inspection>,
 ) -> Result<(), Failure> {
+    restore_prepared(
+        (root, root),
+        object,
+        digest,
+        size,
+        destination,
+        expected_policy(inspection)?,
+        inspection,
+    )
+}
+pub(super) fn restore_from_with_inspection(
+    custody: &RetainedStore,
+    destination_root: &Path,
+    object: &str,
+    digest: &str,
+    size: u64,
+    destination: &str,
+    inspection: Option<&Inspection>,
+) -> Result<(), Failure> {
     let policy = expected_policy(inspection)?;
-    restore_prepared(root, object, digest, size, destination, policy, inspection)
+    let destination_dir = open_root(destination_root)?;
+    restore_prepared_in(
+        (&custody.directory, &destination_dir),
+        object,
+        digest,
+        size,
+        destination,
+        policy,
+        inspection,
+    )
 }
 fn restore_prepared(
-    root: &Path,
+    (source_root, destination_root): (&Path, &Path),
     object: &str,
     digest: &str,
     size: u64,
@@ -429,11 +567,34 @@ fn restore_prepared(
 ) -> Result<(), Failure> {
     object_path(object)?;
     source_path(destination)?;
-    let root_dir = open_root(root)?;
-    let store = store(&root_dir, false)?;
-    let mut saved = regular(&store, object)?;
+    let source_dir = open_root(source_root)?;
+    let store = store(&source_dir, false)?;
+    let destination_dir = open_root(destination_root)?;
+    restore_prepared_in(
+        (&store, &destination_dir),
+        object,
+        digest,
+        size,
+        destination,
+        policy,
+        inspection,
+    )
+}
+
+fn restore_prepared_in(
+    (store, destination_dir): (&Dir, &Dir),
+    object: &str,
+    digest: &str,
+    size: u64,
+    destination: &str,
+    policy: CapturePolicy,
+    inspection: Option<&Inspection>,
+) -> Result<(), Failure> {
+    object_path(object)?;
+    source_path(destination)?;
+    let mut saved = regular(store, object)?;
     let before = saved.metadata()?;
-    let (parent, leaf) = parent(&root_dir, destination)?;
+    let (parent, leaf) = parent(destination_dir, destination)?;
     match parent.symlink_metadata(&leaf) {
         Ok(_) => {
             return Err(Failure::usage(
@@ -1374,6 +1535,60 @@ mod tests {
         assert_eq!(bytes, b"selected saved delivery");
         assert!(download(&dir.0, &saved.object, &saved.digest, saved.size).is_err());
         assert_eq!(objects(&dir.0).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn download_snapshot_is_private_and_removed_after_the_last_reader() {
+        let dir = Scratch::new();
+        fs::write(dir.0.join("source.txt"), b"selected saved delivery").unwrap();
+        let saved = capture(&dir.0, "source.txt", REVISION).unwrap();
+        let reader = download(&dir.0, &saved.object, &saved.digest, saved.size).unwrap();
+        let snapshot = std::env::temp_dir().join(&reader.snapshot.name);
+        assert!(snapshot.is_dir());
+        assert!(!snapshot.starts_with(&dir.0));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&snapshot).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+        }
+        let mut clone = reader.try_clone().unwrap();
+        drop(reader);
+        assert!(snapshot.is_dir());
+        let mut bytes = Vec::new();
+        clone.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, b"selected saved delivery");
+        drop(clone);
+        assert!(!snapshot.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn download_reads_a_store_that_cannot_accept_a_probe_write() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = Scratch::new();
+        fs::write(dir.0.join("source.txt"), b"selected saved delivery").unwrap();
+        let saved = capture(&dir.0, "source.txt", REVISION).unwrap();
+        let store = dir.0.join(STORE);
+        let objects = store.join("objects");
+        let permissions = fs::metadata(&objects).unwrap().permissions();
+        fs::set_permissions(&objects, fs::Permissions::from_mode(0o500)).unwrap();
+        let probe = objects.join("write-probe");
+        if fs::write(&probe, b"probe").is_ok() {
+            fs::remove_file(probe).unwrap();
+            fs::set_permissions(&objects, permissions).unwrap();
+            // Elevated processes can bypass these mode bits; the directory
+            // timestamp monitor exercises source immutability in that case.
+            return;
+        }
+        let result = download(&dir.0, &saved.object, &saved.digest, saved.size);
+        fs::set_permissions(&objects, permissions).unwrap();
+        let mut reader = result.unwrap();
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, b"selected saved delivery");
     }
 
     #[test]

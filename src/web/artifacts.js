@@ -134,6 +134,11 @@
     if ($('scope').value === 'from' && $('from').value.trim()) params.set('from', $('from').value.trim());
     history.replaceState(null, '', '#' + params.toString());
   }
+  function openReference() {
+    const match = /^(?:artifact:([a-z0-9]{26})@([a-z0-9]{26})|([a-z0-9]{26})(?:@([a-z0-9]{26}))?)$/.exec($('search').value.trim());
+    if (!match) { note('Enter an artifact ID or artifact:ID@REVISION.'); return; }
+    return openArtifact(match[1] || match[3], match[2] || match[4], null);
+  }
   function inventory() {
     $('rows').replaceChildren();
     const query = $('search').value.toLowerCase();
@@ -183,6 +188,7 @@
         const exact = await request('show', { artifact, revision, limit: 20, offset: 0 });
         if (generation !== detailGeneration) return;
         selected = exact.revisions[0];
+        if (!selected || selected.revision !== revision) throw new Error('The requested revision was not found for this artifact.');
       }
       if (!selected && latest) {
         selected = revisions.find(entry => entry.revision === latest);
@@ -240,6 +246,9 @@
     const entry = selected, box = $('revision-content'); box.replaceChildren();
     selectedLabel = element('p', revisionLabel(entry), 'mono');
     box.append(element('h2', basename(entry.source)), selectedLabel, element('p', descriptionText(entry), 'delivery-description'), element('p', entry.source, 'muted'), element('p', deliveryLabel(entry), 'small muted'));
+    const link = element('a', 'Link to this revision');
+    link.href = config.base + '#' + new URLSearchParams({ artifact: entry.artifact, revision: entry.revision }).toString();
+    box.append(link);
     const facts = element('div', undefined, 'facts');
     facts.append(element('p', entry.size + ' bytes'), element('p', 'Digest: ' + entry.digest, 'mono'), element('p', 'Producer'), producer(entry)); box.append(facts);
     if (entry.inspection) {
@@ -435,6 +444,8 @@
   });
   $('back').addEventListener('click', () => { if (writing) return; ++detailGeneration; selected = null; $('detail').hidden = true; $('inventory').hidden = false; saveFragment(); loadList(offset); });
   $('search').addEventListener('input', inventory);
+  $('search').addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); return openReference(); } });
+  $('open-reference').addEventListener('click', openReference);
   $('scope').addEventListener('change', () => { $('from-label').hidden = $('scope').value !== 'from'; $('from').hidden = $('scope').value !== 'from'; $('from').disabled = $('scope').value !== 'from'; loadList(0); });
   $('from').addEventListener('change', () => { if ($('scope').value === 'from') loadList(0); });
   $('prev-page').addEventListener('click', () => loadList(Math.max(0, offset - 20)));

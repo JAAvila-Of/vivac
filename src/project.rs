@@ -30,12 +30,142 @@ use crate::{ops, store};
 // the one indirect path that guard already expects to survive: through the
 // project layer, not around it.
 pub use crate::store::Located;
+use cap_fs_ext::DirExt;
+use cap_std::fs::Dir;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+pub(crate) struct ReadAuthority {
+    pub(crate) directory: Dir,
+    metadata: Dir,
+    pub(crate) log: Option<File>,
+    pub(crate) project: Option<String>,
+}
+
+fn custody_unavailable() -> Failure {
+    Failure::usage("The retained custody location is unavailable. Reconnect its lane or recover this revision.")
+}
+
+fn custody_mismatch() -> Failure {
+    Failure::usage("The recorded custody location does not belong to this project and lane.")
+}
+
+impl ReadAuthority {
+    pub(crate) fn open(root: &Path) -> Result<Self, Failure> {
+        Self::from_directory(crate::artifacts::files::open_root(root)?)
+    }
+
+    fn from_directory(directory: Dir) -> Result<Self, Failure> {
+        use crate::artifacts::files;
+        files::reject_link(&directory.symlink_metadata(store::DIR)?)?;
+        let metadata = directory.open_dir_nofollow(store::DIR)?;
+        let log = match files::regular(&metadata, store::LOG) {
+            Ok(file) => Some(file.into_std()),
+            Err(Failure::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error),
+        };
+        let project = log
+            .as_ref()
+            .map(store::first_event_id_in)
+            .transpose()?
+            .flatten();
+        Ok(Self {
+            directory,
+            metadata,
+            log,
+            project,
+        })
+    }
+}
+
+pub(crate) struct LaneLocation {
+    pub(crate) path: PathBuf,
+    pub(crate) directory: Dir,
+    _metadata: Dir,
+    _authority: Dir,
+}
+
+pub(crate) fn lane_location(
+    ctx: &ops::Ctx,
+    authority: &ReadAuthority,
+    lane: &str,
+) -> Result<LaneLocation, Failure> {
+    use crate::artifacts::{files, native};
+    use std::io::Read;
+    let project = authority
+        .project
+        .as_deref()
+        .ok_or_else(custody_unavailable)?;
+    let active = ctx.lane.as_deref() == Some(lane);
+    let founding = lane == crate::lane::MAIN;
+    let registry = if !founding { store::store_dir() } else { None };
+    let path = if active {
+        ctx.lane_dir.clone()
+    } else if founding {
+        ctx.store.root.clone()
+    } else {
+        crate::registry::lane_folder(
+            registry.as_deref().ok_or_else(custody_unavailable)?,
+            project,
+            lane,
+        )
+        .ok_or_else(custody_unavailable)?
+    };
+    let directory = files::open_root(&path).map_err(|_| custody_unavailable())?;
+    files::reject_link(&directory.symlink_metadata(store::DIR)?).map_err(|_| custody_mismatch())?;
+    let metadata = directory
+        .open_dir_nofollow(store::DIR)
+        .map_err(|_| custody_mismatch())?;
+    let marker = match files::regular(&metadata, store::LANE) {
+        Ok(marker) => Some(marker),
+        Err(Failure::Io(error)) if error.kind() == std::io::ErrorKind::NotFound && founding => None,
+        Err(Failure::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(custody_unavailable())
+        }
+        Err(_) => return Err(custody_mismatch()),
+    };
+    if let Some(marker) = marker {
+        let mut raw = String::new();
+        marker
+            .take(4097)
+            .read_to_string(&mut raw)
+            .map_err(|_| custody_mismatch())?;
+        if raw.len() > 4096 {
+            return Err(custody_mismatch());
+        }
+        let located = store::resolve_lane_marker(&path, &raw, registry.as_deref())
+            .map_err(|_| custody_mismatch())?;
+        if located
+            .lane
+            .as_ref()
+            .is_none_or(|found| found.id != lane || found.project != project)
+        {
+            return Err(custody_mismatch());
+        }
+        let resolved = ReadAuthority::open(&located.root).map_err(|_| custody_mismatch())?;
+        native::same_directory(&authority.directory, &resolved.directory)
+            .map_err(|_| custody_mismatch())?;
+        native::same_directory(&authority.metadata, &resolved.metadata)
+            .map_err(|_| custody_mismatch())?;
+        if resolved.project.as_deref() != Some(project) {
+            return Err(custody_mismatch());
+        }
+    } else {
+        native::same_directory(&authority.directory, &directory).map_err(|_| custody_mismatch())?;
+        native::same_directory(&authority.metadata, &metadata).map_err(|_| custody_mismatch())?;
+    }
+    Ok(LaneLocation {
+        path,
+        directory,
+        _metadata: metadata,
+        _authority: authority.directory.try_clone()?,
+    })
+}
+
 /// One root, folded, with enough of a fingerprint to know when it moved.
 pub struct Project {
+    authority: Option<crate::artifacts::native::DirectoryIdentity>,
     pub root: PathBuf,
     /// The readable half of a URL: this project's name with every run of
     /// characters outside `A-Za-z0-9._-` collapsed to a single `-`. **Not
@@ -96,25 +226,30 @@ impl Project {
         whose: ops::Whose<'_>,
     ) -> Result<Project, Failure> {
         let store = store::Store::open(root.clone())?;
-        let seen = store::fingerprint(&store.log());
+        let authority = Dir::open_ambient_dir(&root, cap_std::ambient_authority())
+            .ok()
+            .and_then(|directory| crate::artifacts::native::DirectoryIdentity::of(&directory).ok());
         let log_file = File::open(store.log()).ok();
+        let seen = log_file
+            .as_ref()
+            .map(store::fingerprint_in)
+            .unwrap_or_else(|| store::fingerprint(&store.log()));
         #[cfg(windows)]
         let mut store = store;
-        #[cfg(windows)]
         let read = match &log_file {
             Some(file) => {
                 let read = crate::index::read_tracked_in(file, &store.log(), 0)?;
+                #[cfg(windows)]
                 store.retain_log_reader(file);
                 read
             }
             None => crate::index::read_tracked(&store.log(), 0)?,
         };
-        #[cfg(not(windows))]
-        let read = crate::index::read_tracked(&store.log(), 0)?;
         let committed_broken = read.broken;
         let mut ctx = ops::Ctx::from_events(store, &read.events, committed_broken, seen, whose);
         ctx.tree.broken_lines = committed_broken + usize::from(read.unterminated);
         Ok(Project {
+            authority,
             root,
             slug,
             name,
@@ -160,6 +295,26 @@ impl Project {
     pub fn current_with_log(&mut self) -> Result<(&ops::Ctx, &[Event]), Failure> {
         self.refresh_if_stale()?;
         Ok((&self.ctx, &self.log))
+    }
+
+    pub(crate) fn artifact_context(&mut self) -> Result<(&ops::Ctx, ReadAuthority), Failure> {
+        use crate::artifacts::{files, native};
+        let visible = files::open_root(&self.root).map_err(|_| custody_unavailable())?;
+        let original = self.authority.ok_or_else(custody_unavailable)?;
+        if native::DirectoryIdentity::of(&visible).map_err(|_| custody_unavailable())? != original {
+            return Err(custody_mismatch());
+        }
+        self.refresh_if_stale()?;
+        let authority = ReadAuthority::from_directory(visible)?;
+        if authority.project.as_deref() != self.ulid() {
+            return Err(custody_mismatch());
+        }
+        match (&authority.log, &self.log_file) {
+            (Some(current), Some(folded)) if store::same_log(current, folded)? => {}
+            (None, None) => {}
+            _ => return Err(custody_mismatch()),
+        }
+        Ok((&self.ctx, authority))
     }
 
     /// Brings the resident tree up to the log (`f599`). A log that only

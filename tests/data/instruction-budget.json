@@ -385,9 +385,9 @@
       "utf8_bytes": 849
     },
     "hook.focus.artifact_deliveries": {
-      "estimated_tokens_chars_div_4": 130,
-      "unicode_chars": 520,
-      "utf8_bytes": 520
+      "estimated_tokens_chars_div_4": 135,
+      "unicode_chars": 539,
+      "utf8_bytes": 539
     },
     "hook.focus.write_at_these_seams": {
       "estimated_tokens_chars_div_4": 417,
@@ -400,9 +400,9 @@
       "utf8_bytes": 849
     },
     "hook.no_focus.artifact_deliveries": {
-      "estimated_tokens_chars_div_4": 130,
-      "unicode_chars": 520,
-      "utf8_bytes": 520
+      "estimated_tokens_chars_div_4": 135,
+      "unicode_chars": 539,
+      "utf8_bytes": 539
     },
     "hook.no_focus.write_at_these_seams": {
       "estimated_tokens_chars_div_4": 394,
@@ -685,14 +685,14 @@
       "utf8_bytes": 120
     },
     "skills.vivac-artifacts.body": {
-      "estimated_tokens_chars_div_4": 1903,
-      "unicode_chars": 7609,
-      "utf8_bytes": 7609
+      "utf8_bytes": 7688,
+      "unicode_chars": 7686,
+      "estimated_tokens_chars_div_4": 1922
     },
     "skills.vivac-artifacts.complete": {
-      "estimated_tokens_chars_div_4": 1959,
-      "unicode_chars": 7833,
-      "utf8_bytes": 7833
+      "utf8_bytes": 7912,
+      "unicode_chars": 7910,
+      "estimated_tokens_chars_div_4": 1978
     },
     "skills.vivac-artifacts.frontmatter": {
       "estimated_tokens_chars_div_4": 56,

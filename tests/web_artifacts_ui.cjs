@@ -21,7 +21,7 @@ class Element {
   reportValidity() { return !!this.value; }
 }
 const document = { elements: {}, createElement(tag) { return new Element(tag, this); }, getElementById(id) { return this.elements[id]; } };
-for (const id of ['bootstrap', 'inventory', 'detail', 'rows', 'revision-content', 'revisions', 'message', 'scope', 'from-label', 'from', 'search', 'next-page', 'prev-page', 'capture', 'capabilities', 'back', 'dialog', 'dialog-content']) {
+for (const id of ['bootstrap', 'inventory', 'detail', 'rows', 'revision-content', 'revisions', 'message', 'scope', 'from-label', 'from', 'search', 'open-reference', 'next-page', 'prev-page', 'capture', 'capabilities', 'back', 'dialog', 'dialog-content']) {
   const element = document.createElement('div'); element.id = id;
 }
 document.elements.bootstrap.textContent = JSON.stringify({ token: 'abc', base: '/p/project/artifacts', project_base: '/p/project' });
@@ -116,10 +116,57 @@ const button = text => all(document.elements['revision-content']).find(e => e.ta
     copy.elements.scope.value = 'all';
     vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/web/artifacts.js'), 'utf8'), {
       ...context, document: copy, sessionStorage: overrides.storage || sessionStorage,
-      fetch: overrides.fetch || fetch, location: { hash: '#artifact=' + (overrides.artifact || 'artifact') + '&revision=' + (overrides.revision || 'r1') }
+      fetch: overrides.fetch || fetch, location: { hash: overrides.hash ?? '#artifact=' + (overrides.artifact || 'artifact') + '&revision=' + (overrides.revision || 'r1') }
     });
     await settle(); return copy;
   }
+  const targetArtifact = '0123456789abcdefghijklmnop';
+  const targetRevision = 'abcdefghijklmnopqrstuvwxyz';
+  const targetLatest = 'zyxwvutsrqponmlkjihgfedcba';
+  const missingRevision = '00000000000000000000000000';
+  const referenceRequests = [];
+  const referenceView = await reload({ hash: '', fetch: async (url, options) => {
+    const body = JSON.parse(options.body); referenceRequests.push(body);
+    if (body.operation !== 'show') return fetch(url, options);
+    const entries = body.revision === missingRevision ? [] : [{ ...revision(body.revision || targetLatest), artifact: targetArtifact }];
+    return { ok: true, json: async () => ({ result: { revisions: entries, latest_revision: targetLatest, total: 1, next_offset: null } }) };
+  } });
+  const referenceSearch = referenceView.elements.search;
+  referenceSearch.value = 'by month'; referenceSearch.listeners.input();
+  assert(referenceView.elements.rows.textContent.includes(latest.description));
+  referenceSearch.value = 'no matching description'; referenceSearch.listeners.input();
+  assert.match(referenceView.elements.rows.textContent, /No deliveries match this page search/);
+  referenceSearch.value = ' artifact:' + targetArtifact + '@' + targetRevision + ' ';
+  referenceSearch.listeners.input();
+  assert(!referenceRequests.some(body => body.operation === 'show'), 'Typing a reference must remain local page search');
+  await referenceView.elements['open-reference'].click(); await settle();
+  assert(referenceRequests.some(body => body.operation === 'show' && body.artifact === targetArtifact && body.revision === targetRevision), 'Explicit reference opening must resolve an exact revision outside the page');
+  assert.match(referenceView.elements['revision-content'].textContent, /stuvwxyz.*Selected/);
+  const revisionLink = all(referenceView.elements['revision-content']).find(e => e.tagName === 'A' && e.textContent === 'Link to this revision');
+  assert(revisionLink, 'The selected revision must offer a native link');
+  assert.equal(revisionLink.href, '/p/project/artifacts#' + new URLSearchParams({ artifact: targetArtifact, revision: targetRevision }));
+  assert(!revisionLink.href.includes('?') && !revisionLink.href.includes('token') && !revisionLink.href.includes('preview'));
+  assert.equal(revisionLink.listeners.click, undefined, 'Revision links must use native browser navigation');
+  for (const value of [targetArtifact + '@' + targetRevision, targetArtifact]) {
+    referenceSearch.value = value;
+    let prevented = false;
+    await referenceSearch.listeners.keydown({ key: 'Enter', preventDefault() { prevented = true; } }); await settle();
+    assert(prevented);
+    const expected = value.includes('@') ? targetRevision : targetLatest;
+    assert.match(referenceView.elements['revision-content'].textContent, new RegExp(expected.slice(-8) + '.*Selected'));
+  }
+  const beforeInvalid = referenceRequests.length;
+  for (const invalid of ['', 'ordinary text', 'prefix artifact:' + targetArtifact + '@' + targetRevision, targetArtifact + '@' + targetRevision + ' trailing', 'artifact:' + targetArtifact, targetArtifact.toUpperCase(), targetArtifact + '@', targetArtifact.slice(1), targetArtifact + '@' + targetRevision.toUpperCase()]) {
+    referenceSearch.value = invalid;
+    await referenceView.elements['open-reference'].click(); await settle();
+    assert.equal(referenceRequests.length, beforeInvalid, 'Malformed references must never request metadata');
+    assert.equal(referenceView.elements.message.textContent, 'Enter an artifact ID or artifact:ID@REVISION.');
+  }
+  referenceSearch.value = targetArtifact + '@' + missingRevision;
+  await referenceView.elements['open-reference'].click(); await settle();
+  assert.equal(referenceView.elements['revision-content'].textContent, 'The requested revision was not found for this artifact.');
+  assert(!referenceView.elements['revision-content'].textContent.includes(targetLatest.slice(-8)), 'An unavailable exact revision must never fall back to latest');
+  assert(!referenceRequests.some(body => ['preview', 'download', 'check', 'restore'].includes(body.operation)), 'Opening references must request metadata only');
   for (const [sensitivity, coverage, expected] of [
     ['detected', 'complete', /Sensitive content detected/],
     ['unknown', 'partial', /Sensitivity unknown.*Partial; some content was not inspected/],

@@ -1739,11 +1739,21 @@ fn open_object(root: &Path, object: &str) -> Result<(Dir, Dir, Dir), Failure> {
 fn open_object_in(root: &Dir, revision: &str) -> Result<(Dir, Dir, Dir), Failure> {
     let root_dir = root.try_clone()?;
     let store = files::store(&root_dir, false)?;
-    let objects = files::directory(&store, "objects", false)?;
+    let (objects, bundle) = open_store_object(&store, revision)?;
+    Ok((root_dir, objects, bundle))
+}
+
+fn open_store_object(store: &Dir, revision: &str) -> Result<(Dir, Dir), Failure> {
+    let objects = files::directory(store, "objects", false)?;
     let name = format!("{revision}.bundle");
     files::reject_link(&objects.symlink_metadata(&name)?)?;
     let bundle = objects.open_dir_nofollow(&name)?;
-    Ok((root_dir, objects, bundle))
+    Ok((objects, bundle))
+}
+
+fn custody_object(custody: &files::RetainedStore, object: &str) -> Result<Dir, Failure> {
+    require_supported()?;
+    Ok(open_store_object(&custody.directory, object_path(object)?)?.1)
 }
 fn require_supported() -> Result<(), Failure> {
     if !SUPPORTED {
@@ -1783,6 +1793,21 @@ pub(crate) fn check_in(
     let (_, _, bundle) = open_object_in(root, revision)?;
     verify_directory(&bundle, Some((digest, total)), None)
 }
+
+pub(super) fn manifest_from_store(
+    custody: &files::RetainedStore,
+    object: &str,
+    digest: &str,
+    total: u64,
+    full: bool,
+) -> Result<Manifest, Failure> {
+    let bundle = custody_object(custody, object)?;
+    if full {
+        verify_directory(&bundle, Some((digest, total)), None)
+    } else {
+        Ok(load_manifest(&bundle, Some((digest, total)))?.0)
+    }
+}
 pub(crate) fn inspect_retained(
     root: &Path,
     object: &str,
@@ -1814,8 +1839,31 @@ pub(crate) fn restore(
     total: u64,
     to: &str,
 ) -> Result<(), Failure> {
+    let (_, _, bundle) = open_object(root, object)?;
+    restore_bundle(&bundle, root, digest, total, to)
+}
+
+pub(super) fn restore_from(
+    custody: &files::RetainedStore,
+    destination_root: &Path,
+    object: &str,
+    digest: &str,
+    total: u64,
+    to: &str,
+) -> Result<(), Failure> {
+    let bundle = custody_object(custody, object)?;
+    restore_bundle(&bundle, destination_root, digest, total, to)
+}
+
+fn restore_bundle(
+    bundle: &Dir,
+    destination_root: &Path,
+    digest: &str,
+    total: u64,
+    to: &str,
+) -> Result<(), Failure> {
     files::source_path(to)?;
-    let (root_dir, _, bundle) = open_object(root, object)?;
+    let root_dir = files::open_root(destination_root)?;
     let (parent, leaf) = controlled_destination(&root_dir, to)?;
     match parent.symlink_metadata(&leaf) {
         Ok(_) => {
@@ -1827,7 +1875,7 @@ pub(crate) fn restore(
         Err(error) => return Err(error.into()),
     }
     let mut preparation = Preparation::new(&parent)?;
-    verify_directory(&bundle, Some((digest, total)), Some(&preparation.dir))?;
+    verify_directory(bundle, Some((digest, total)), Some(&preparation.dir))?;
     verify_directory(&preparation.dir, Some((digest, total)), None)?;
     sync_tree(&preparation.dir)?;
     recheck_visible_destination(&root_dir, to, &parent)?;
@@ -1857,16 +1905,37 @@ fn controlled_destination(root: &Dir, path: &str) -> Result<(Dir, String), Failu
     }
     Err(Failure::usage("Invalid bundle destination."))
 }
+#[cfg(test)]
 pub(crate) fn preview(
     root: &Path,
     object: &str,
     digest: &str,
     total: u64,
 ) -> Result<(files::Download, PreviewResources), Failure> {
-    let (_, objects, bundle) = open_object(root, object)?;
-    let preparation = Preparation::new(&objects)?;
+    let (_, _, bundle) = open_object(root, object)?;
+    preview_bundle(root, &bundle, object, digest, total)
+}
+
+pub(super) fn preview_from_store(
+    custody: &files::RetainedStore,
+    object: &str,
+    digest: &str,
+    total: u64,
+) -> Result<(files::Download, PreviewResources), Failure> {
+    let bundle = custody_object(custody, object)?;
+    preview_bundle(&custody.location.path, &bundle, object, digest, total)
+}
+
+fn preview_bundle(
+    root: &Path,
+    bundle: &Dir,
+    object: &str,
+    digest: &str,
+    total: u64,
+) -> Result<(files::Download, PreviewResources), Failure> {
+    let preparation = std::sync::Arc::new(Preparation::snapshot()?);
     files::check_git(root, object, &preparation.name)?;
-    let manifest = verify_directory(&bundle, Some((digest, total)), Some(&preparation.dir))?;
+    let manifest = verify_directory(bundle, Some((digest, total)), Some(&preparation.dir))?;
     verify_directory(&preparation.dir, Some((digest, total)), None)?;
     let mut members = BTreeMap::new();
     for member in &manifest.members {
@@ -1875,7 +1944,7 @@ pub(crate) fn preview(
             member.path.clone(),
             PreviewMember {
                 media_type: member.media_type.clone(),
-                reader: files::Download::from_file(file, member.bytes),
+                reader: files::Download::from_file(file, member.bytes, preparation.clone()),
             },
         );
     }
@@ -1884,9 +1953,7 @@ pub(crate) fn preview(
         .ok_or_else(|| Failure::usage("Missing bundle entrypoint."))?
         .reader
         .try_clone()?;
-    // Every member handle is retained before private preparation cleanup.
-    // Store deletion or corruption cannot expand preview authority afterwards.
-    drop(preparation);
+    // Every reader keeps the private snapshot alive, including cloned entries.
     Ok((
         entry,
         PreviewResources {
