@@ -93,10 +93,14 @@ pub fn read(vivac_dir: &Path) -> Result<Option<Lane>, Failure> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(unreadable_lane(e)),
     };
-    let v: serde_json::Value = serde_json::from_str(&raw).map_err(unreadable_lane)?;
+    parse(&raw).map(Some)
+}
+
+pub(crate) fn parse(raw: &str) -> Result<Lane, Failure> {
+    let v: serde_json::Value = serde_json::from_str(raw).map_err(unreadable_lane)?;
     check_lane_version(v.get("version"))?;
     let lane: Lane = serde_json::from_value(v).map_err(unreadable_lane)?;
-    Ok(Some(lane))
+    Ok(lane)
 }
 
 /// What a `lane` file that cannot be read says it is (`f941`): which file,

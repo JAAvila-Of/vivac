@@ -17,6 +17,7 @@ use crate::event::Body;
 use crate::failure::Failure;
 use crate::model::Tree;
 use crate::ops::{Ctx, Whose};
+use crate::project::ReadAuthority;
 use crate::store::{self, Store};
 use policy::{CapturePolicy, Inspection};
 use serde::Serialize;
@@ -771,6 +772,43 @@ fn context(cwd: &Path, diagnose: bool, capture: bool) -> Result<Ctx, Failure> {
     Ok(ctx)
 }
 
+fn read_context(cwd: &Path, diagnose: bool) -> Result<(Ctx, ReadAuthority), Failure> {
+    let located = store::locate(cwd)?.ok_or(Failure::NoStore)?;
+    let authority = ReadAuthority::open(&located.root)?;
+    if located
+        .lane
+        .as_ref()
+        .is_some_and(|lane| Some(lane.project.as_str()) != authority.project.as_deref())
+    {
+        return Err(Failure::usage(
+            "The recorded custody location does not belong to this project and lane.",
+        ));
+    }
+    let store = Store::open_strict(located.root.clone())?;
+    let file = authority.log.as_ref().ok_or(Failure::NoStore)?;
+    let seen = store::fingerprint_in(file);
+    let read = crate::index::read_tracked_in(file, &store.log(), 0)?;
+    if read.events.first().map(|event| event.id.as_str()) != authority.project.as_deref() {
+        return Err(Failure::usage(
+            "The recorded custody location does not belong to this project and lane.",
+        ));
+    }
+    let mut ctx = Ctx::from_events(
+        store,
+        &read.events,
+        read.broken,
+        seen,
+        Whose::Resolved(&located),
+    );
+    ctx.tree.broken_lines = read.broken + usize::from(read.unterminated);
+    if ctx.tree.broken_lines != 0 && !diagnose {
+        return Err(Failure::Model(
+            "Artifact custody refuses an unreadable event log.".into(),
+        ));
+    }
+    Ok((ctx, authority))
+}
+
 fn required<'a>(args: &'a Args, key: &str) -> Result<&'a str, Failure> {
     args.opt(key)
         .filter(|value| !value.is_empty())
@@ -1491,7 +1529,61 @@ fn retained_check(root: &Path, revision: &Revision) -> Value {
     }
 }
 
+fn retained_root(
+    ctx: &Ctx,
+    authority: &ReadAuthority,
+    revision: &Revision,
+) -> Result<files::RetainedStore, Failure> {
+    files::RetainedStore::open(
+        crate::project::lane_location(ctx, authority, revision.lane)?,
+        revision.site,
+    )
+}
+
+fn revision_manifest(
+    ctx: &Ctx,
+    authority: &ReadAuthority,
+    revision: &Revision,
+    full: bool,
+) -> Result<bundle::Manifest, Failure> {
+    retained_manifest(&retained_root(ctx, authority, revision)?, revision, full)
+}
+
+fn retained_manifest(
+    custody: &files::RetainedStore,
+    revision: &Revision,
+    full: bool,
+) -> Result<bundle::Manifest, Failure> {
+    let manifest = bundle::manifest_from_store(
+        custody,
+        revision.object,
+        revision.digest,
+        revision.size,
+        full,
+    )?;
+    match_bundle_manifest(revision, &manifest)?;
+    Ok(manifest)
+}
+
+#[cfg(test)]
 fn check(ctx: &Ctx, ledger: &Ledger, args: &Args) -> Result<(Value, i32), Failure> {
+    if args.has("store") {
+        return check_in(ctx, ledger, args, None);
+    }
+    check_in(
+        ctx,
+        ledger,
+        args,
+        Some(&ReadAuthority::open(&ctx.store.root)?),
+    )
+}
+
+fn check_in(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    args: &Args,
+    authority: Option<&ReadAuthority>,
+) -> Result<(Value, i32), Failure> {
     if args.has("store") {
         let number = |key: &str, default: usize| -> Result<usize, Failure> {
             args.opt(key).map_or(Ok(default), |value| {
@@ -1596,8 +1688,9 @@ fn check(ctx: &Ctx, ledger: &Ledger, args: &Args) -> Result<(Value, i32), Failur
         return Ok((value, i32::from(failed)));
     }
     let revision = revision(ledger, args)?;
+    let authority = authority.ok_or_else(|| Failure::usage("The retained custody location is unavailable. Reconnect its lane or recover this revision."))?;
     if revision.is_bundle() {
-        let result = bundle_manifest(&ctx.lane_dir, &revision, true);
+        let result = revision_manifest(ctx, authority, &revision, true);
         let retained = match &result {
             Ok(_) => json!({"status":"matches"}),
             Err(error) => json!({"status":"read_failed","exit_code":error.code()}),
@@ -1613,7 +1706,13 @@ fn check(ctx: &Ctx, ledger: &Ledger, args: &Args) -> Result<(Value, i32), Failur
         let value = json!({"operation":"check","artifact":revision.artifact,"revision":revision.revision,"source":source,"retained":retained,"checked_at":crate::clock::now_rfc3339(),"approval":"not_inferred","inspection":revision.inspection});
         return Ok((value, code));
     }
-    let retained = retained_check(&ctx.lane_dir, &revision);
+    let retained = match retained_root(ctx, authority, &revision) {
+        Ok(root) => checked(
+            files::inspect_from_store(&root, revision.object, revision.inspection),
+            &revision,
+        ),
+        Err(error) => checked(Err(error), &revision),
+    };
     let source = if files::site_id(&ctx.lane_dir)?.as_deref() == Some(revision.site) {
         checked(files::inspect(&ctx.lane_dir, revision.source), &revision)
     } else {
@@ -1626,7 +1725,25 @@ fn check(ctx: &Ctx, ledger: &Ledger, args: &Args) -> Result<(Value, i32), Failur
     ))
 }
 
+#[cfg(test)]
 fn restore(ctx: &Ctx, ledger: &Ledger, args: &Args) -> Result<Value, Failure> {
+    if args.has("orphan") {
+        return restore_in(ctx, ledger, args, None);
+    }
+    restore_in(
+        ctx,
+        ledger,
+        args,
+        Some(&ReadAuthority::open(&ctx.store.root)?),
+    )
+}
+
+fn restore_in(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    args: &Args,
+    authority: Option<&ReadAuthority>,
+) -> Result<Value, Failure> {
     let to = required(args, "to")?;
     if let Some(orphan) = args.opt("orphan") {
         if !valid_id(orphan) {
@@ -1664,10 +1781,13 @@ fn restore(ctx: &Ctx, ledger: &Ledger, args: &Args) -> Result<Value, Failure> {
         );
     }
     let revision = revision(ledger, args)?;
+    let authority = authority.ok_or_else(|| Failure::usage("The retained custody location is unavailable. Reconnect its lane or recover this revision."))?;
+    let source_root = retained_root(ctx, authority, &revision)?;
     if revision.is_bundle() {
         required(args, "revision")?;
-        bundle_manifest(&ctx.lane_dir, &revision, false)?;
-        bundle::restore(
+        retained_manifest(&source_root, &revision, false)?;
+        bundle::restore_from(
+            &source_root,
             &ctx.lane_dir,
             revision.object,
             revision.digest,
@@ -1675,7 +1795,8 @@ fn restore(ctx: &Ctx, ledger: &Ledger, args: &Args) -> Result<Value, Failure> {
             to,
         )?;
     } else {
-        files::restore_with_inspection(
+        files::restore_from_with_inspection(
+            &source_root,
             &ctx.lane_dir,
             revision.object,
             revision.digest,
@@ -1701,17 +1822,44 @@ fn execute(cwd: &Path, args: &Args) -> Result<(Value, i32), Failure> {
     }
     let diagnose = (operation == "check" && args.has("store"))
         || (operation == "restore" && args.has("orphan"));
-    let mut ctx = context(cwd, diagnose, operation == "capture")?;
-    if operation == "policy" {
-        return artifact_policy(&ctx, args).map(|value| (value, 0));
+    if matches!(operation, "policy" | "capture") {
+        let mut ctx = context(cwd, diagnose, operation == "capture")?;
+        return if operation == "policy" {
+            artifact_policy(&ctx, args)
+        } else {
+            capture(&mut ctx, args)
+        }
+        .map(|value| (value, 0));
     }
-    if operation == "capture" {
-        return capture(&mut ctx, args).map(|value| (value, 0));
+    if diagnose {
+        let ctx = context(cwd, true, false)?;
+        let ledger = diagnostic_ledger(&ctx.tree);
+        return if operation == "check" {
+            check_in(&ctx, &ledger, args, None)
+        } else {
+            restore_in(&ctx, &ledger, args, None).map(|value| (value, 0))
+        };
     }
-    execute_read(&ctx, args)
+    if operation == "list" {
+        return execute_read_in(&context(cwd, false, false)?, args, None);
+    }
+    match read_context(cwd, diagnose) {
+        Ok((ctx, authority)) => execute_read_in(&ctx, args, Some(&authority)),
+        Err(_) if operation == "show" => execute_read_in(&context(cwd, false, false)?, args, None),
+        Err(error) => Err(error),
+    }
 }
 
+#[cfg(test)]
 fn execute_read(ctx: &Ctx, args: &Args) -> Result<(Value, i32), Failure> {
+    execute_read_in(ctx, args, Some(&ReadAuthority::open(&ctx.store.root)?))
+}
+
+fn execute_read_in(
+    ctx: &Ctx,
+    args: &Args,
+    authority: Option<&ReadAuthority>,
+) -> Result<(Value, i32), Failure> {
     let operation = validate(args)?;
     if operation == "preview" {
         return Err(Failure::usage(
@@ -1768,7 +1916,9 @@ fn execute_read(ctx: &Ctx, args: &Args) -> Result<(Value, i32), Failure> {
             let mut value = json!({"operation":"show","artifact":selected.artifact,"latest_revision":ledger.latest(selected.artifact).map(|revision| revision.revision),"revisions":entries,"bytes_checked":false,"total":total,"next_offset":if next<total {Some(next)} else {None}});
             if selected.is_bundle() {
                 value["members_revision"] = json!(selected.revision);
-                match bundle_manifest(&ctx.lane_dir, &selected, false) {
+                let manifest = authority.ok_or_else(|| Failure::usage("The retained custody location is unavailable. Reconnect its lane or recover this revision."))
+                    .and_then(|authority| revision_manifest(ctx, authority, &selected, false));
+                match manifest {
                     Ok(manifest) => {
                         let members: Vec<_> =
                             manifest.members.iter().skip(offset).take(limit).collect();
@@ -1796,8 +1946,8 @@ fn execute_read(ctx: &Ctx, args: &Args) -> Result<(Value, i32), Failure> {
             }
             Ok((value, 0))
         }
-        "check" => check(ctx, &ledger, args),
-        "restore" => restore(ctx, &ledger, args).map(|value| (value, 0)),
+        "check" => check_in(ctx, &ledger, args, authority),
+        "restore" => restore_in(ctx, &ledger, args, authority).map(|value| (value, 0)),
         _ => unreachable!(),
     }
 }
@@ -1852,8 +2002,24 @@ pub(crate) fn run_project_value(
                     .write(|ctx| commit_capture(ctx, *body))
                     .map(|value| (value, 0)),
             }
+        } else if (operation == "check" && args.has("store"))
+            || (operation == "restore" && args.has("orphan"))
+        {
+            let ctx = project.current()?;
+            let ledger = diagnostic_ledger(&ctx.tree);
+            if operation == "check" {
+                check_in(ctx, &ledger, args, None)
+            } else {
+                restore_in(ctx, &ledger, args, None).map(|value| (value, 0))
+            }
+        } else if operation == "list" {
+            execute_read_in(project.current()?, args, None)
         } else {
-            execute_read(project.current()?, args)
+            match project.artifact_context() {
+                Ok((ctx, authority)) => execute_read_in(ctx, args, Some(&authority)),
+                Err(_) if operation == "show" => execute_read_in(project.current()?, args, None),
+                Err(error) => Err(error),
+            }
         }
     })();
     envelope(result)
@@ -1879,19 +2045,20 @@ pub(crate) fn project_preview(
     artifact: &str,
     revision: &str,
 ) -> Result<PreviewRevision, Failure> {
-    let (ctx, selected) = project_revision(project, artifact, revision)?;
-    preview_revision(ctx, selected)
+    let (ctx, selected, authority) = project_revision(project, artifact, revision)?;
+    preview_revision(ctx, selected, &authority)
 }
 
-fn preview_revision(ctx: &Ctx, selected: Revision<'_>) -> Result<PreviewRevision, Failure> {
+fn preview_revision(
+    ctx: &Ctx,
+    selected: Revision<'_>,
+    authority: &ReadAuthority,
+) -> Result<PreviewRevision, Failure> {
     if selected.is_bundle() {
-        bundle_manifest(&ctx.lane_dir, &selected, false)?;
-        let (reader, bundle) = bundle::preview(
-            &ctx.lane_dir,
-            selected.object,
-            selected.digest,
-            selected.size,
-        )?;
+        let root = retained_root(ctx, authority, &selected)?;
+        retained_manifest(&root, &selected, false)?;
+        let (reader, bundle) =
+            bundle::preview_from_store(&root, selected.object, selected.digest, selected.size)?;
         return Ok(PreviewRevision {
             inspection: selected.inspection.copied(),
             reader,
@@ -1920,8 +2087,8 @@ fn preview_revision(ctx: &Ctx, selected: Revision<'_>) -> Result<PreviewRevision
     {
         return Err(Failure::usage("Only retained HTML files can be previewed."));
     }
-    let reader = files::download_with_inspection(
-        &ctx.lane_dir,
+    let reader = files::download_from_store(
+        &retained_root(ctx, authority, &selected)?,
         selected.object,
         selected.digest,
         selected.size,
@@ -1945,11 +2112,11 @@ fn project_revision<'a>(
     project: &'a mut crate::project::Project,
     artifact: &str,
     revision: &str,
-) -> Result<(&'a Ctx, Revision<'a>), Failure> {
+) -> Result<(&'a Ctx, Revision<'a>, ReadAuthority), Failure> {
     if !valid_id(artifact) || !valid_id(revision) {
         return Err(Failure::usage("Invalid artifact or revision identifier."));
     }
-    let ctx = project.current()?;
+    let (ctx, authority) = project.artifact_context()?;
     if ctx.tree.broken_lines != 0 {
         return Err(Failure::Model(
             "Artifact custody refuses an unreadable event log.".into(),
@@ -1960,7 +2127,7 @@ fn project_revision<'a>(
         .get(revision)
         .filter(|selected| selected.artifact == artifact)
         .ok_or_else(|| Failure::usage("This revision does not belong to the selected artifact."))?;
-    Ok((ctx, selected))
+    Ok((ctx, selected, authority))
 }
 
 pub(crate) fn project_download(
@@ -1968,7 +2135,7 @@ pub(crate) fn project_download(
     artifact: &str,
     revision: &str,
 ) -> Result<(Download, String), Failure> {
-    let (ctx, selected) = project_revision(project, artifact, revision)?;
+    let (ctx, selected, authority) = project_revision(project, artifact, revision)?;
     if selected.is_bundle() {
         return Err(Failure::usage("Bundle download is not supported. Restore the complete revision with artifacts restore."));
     }
@@ -1987,8 +2154,8 @@ pub(crate) fn project_download(
         })
         .map(str::to_owned)
         .unwrap_or_else(|| format!("{revision}.bin"));
-    let reader = files::download_with_inspection(
-        &ctx.lane_dir,
+    let reader = files::download_from_store(
+        &retained_root(ctx, &authority, &selected)?,
         selected.object,
         selected.digest,
         selected.size,
@@ -2000,9 +2167,9 @@ pub(crate) fn project_download(
 fn start_preview(cwd: &Path, args: &Args) -> Result<(preview::Preview, Value), Failure> {
     validate(args)?;
     let selected = {
-        let ctx = context(cwd, false, false)?;
+        let (ctx, authority) = read_context(cwd, false)?;
         let ledger = replay(&ctx.tree)?;
-        preview_revision(&ctx, revision(&ledger, args)?)?
+        preview_revision(&ctx, revision(&ledger, args)?, &authority)?
     };
     let mut value = json!({
             "operation": "preview",
@@ -2418,6 +2585,642 @@ mod tests {
         project: crate::project::Project,
         root: PreviewRoot,
         delivery: Value,
+    }
+
+    fn isolate_lane_read_test(name: &str) -> bool {
+        if std::env::var("VIVAC_LANE_READ_TEST").as_deref() == Ok(name) {
+            return false;
+        }
+        let home = PreviewRoot(standalone_root("artifact-lane-home"));
+        fs::create_dir(&home.0).unwrap();
+        let temporary = home.join("temporary");
+        fs::create_dir(&temporary).unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", name, "--test-threads=1"])
+            .env("VIVAC_LANE_READ_TEST", name)
+            .env("VIVAC_HOME", &home.0)
+            .env("TEMP", &temporary)
+            .env("TMP", &temporary)
+            .env("TMPDIR", &temporary)
+            .env("NO_COLOR", "1")
+            .env("TERM", "dumb")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        true
+    }
+
+    #[test]
+    fn recorded_lane_project_preserves_general_root_rename_behavior() {
+        if isolate_lane_read_test(
+            "artifacts::tests::recorded_lane_project_preserves_general_root_rename_behavior",
+        ) {
+            return;
+        }
+        let mut fixture = PreviewFixture::new("mockup.html");
+        let moved = fixture.root.with_extension("moved");
+        let paths = [".vivac/config", ".vivac/events", ".vivac-artifacts/.site"];
+        let before: Vec<_> = paths
+            .iter()
+            .map(|path| fs::read(fixture.root.join(path)).unwrap())
+            .collect();
+        match fs::rename(&fixture.root.0, &moved) {
+            Ok(()) => fs::rename(&moved, &fixture.root.0).unwrap(),
+            Err(error) => {
+                #[cfg(windows)]
+                assert_eq!(error.raw_os_error(), Some(5));
+                #[cfg(not(windows))]
+                panic!("The root rename fixture failed: {error}");
+            }
+        }
+        assert!(fixture.root.is_dir());
+        assert!(!moved.exists());
+        for (path, expected) in paths.iter().zip(&before) {
+            assert_eq!(&fs::read(fixture.root.join(path)).unwrap(), expected);
+        }
+        assert!(fixture.project.current().is_ok());
+        let mut preview = fixture.preview().unwrap();
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut preview.reader, &mut bytes).unwrap();
+        assert_eq!(bytes, b"<html>Selected delivery</html>");
+        drop(preview);
+        for operation in ["check", "restore"] {
+            let mut request = json!({"operation":operation, "artifact":fixture.delivery["artifact"], "revision":fixture.delivery["revision"]});
+            if operation == "restore" {
+                request["to"] = json!("refused.html");
+            }
+            let args = request_args(&request).unwrap();
+            assert!(execute_read_in(fixture.project.current().unwrap(), &args, None).is_err());
+        }
+        assert!(!fixture.root.join("refused.html").exists());
+    }
+
+    #[test]
+    fn recorded_lane_project_rejects_a_replaced_root_with_identical_receipts() {
+        if isolate_lane_read_test("artifacts::tests::recorded_lane_project_rejects_a_replaced_root_with_identical_receipts") {
+            return;
+        }
+        let mut fixture = PreviewFixture::new("mockup.html");
+        let moved = PreviewRoot(fixture.root.with_extension("moved"));
+        let paths = [".vivac/config", ".vivac/events", ".vivac-artifacts/.site"];
+        let before: Vec<_> = paths
+            .iter()
+            .map(|path| fs::read(fixture.root.join(path)).unwrap())
+            .collect();
+        if let Err(error) = fs::rename(&fixture.root.0, &moved.0) {
+            #[cfg(windows)]
+            {
+                assert_eq!(error.raw_os_error(), Some(5));
+                assert!(fixture.root.is_dir());
+                assert!(!moved.exists());
+                for (path, expected) in paths.iter().zip(&before) {
+                    assert_eq!(&fs::read(fixture.root.join(path)).unwrap(), expected);
+                }
+                let mut preview = fixture.preview().unwrap();
+                let mut bytes = Vec::new();
+                std::io::Read::read_to_end(&mut preview.reader, &mut bytes).unwrap();
+                assert_eq!(bytes, b"<html>Selected delivery</html>");
+                return;
+            }
+            #[cfg(not(windows))]
+            panic!("The root substitution fixture failed: {error}");
+        }
+        fs::create_dir_all(fixture.root.join(".vivac")).unwrap();
+        fs::create_dir_all(fixture.root.join(".vivac-artifacts/objects")).unwrap();
+        for file in [".vivac/config", ".vivac/events", ".vivac-artifacts/.site"] {
+            fs::copy(moved.join(file), fixture.root.join(file)).unwrap();
+        }
+        for (path, expected) in paths.iter().zip(&before) {
+            assert_eq!(&fs::read(fixture.root.join(path)).unwrap(), expected);
+        }
+        let object = format!(
+            ".vivac-artifacts/{}",
+            fixture.delivery["object"].as_str().unwrap()
+        );
+        fs::copy(moved.join(&object), fixture.root.join(&object)).unwrap();
+        assert!(
+            fixture.preview().is_err(),
+            "a replacement root must not inherit resident custody authority"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recorded_lane_project_metadata_opens_a_symlink_root_without_extending_custody() {
+        if isolate_lane_read_test("artifacts::tests::recorded_lane_project_metadata_opens_a_symlink_root_without_extending_custody") {
+            return;
+        }
+        let (root, mut ctx, producer) = bundle_commit_fixture();
+        let root = PreviewRoot(root);
+        let capture_args = request_args(&json!({"operation":"capture", "bundle":"selection.json", "from":producer,"description":"Selected alias fixture"})).unwrap();
+        let delivery = capture(&mut ctx, &capture_args).unwrap()["delivery"].clone();
+        ctx.unlock();
+        drop(ctx);
+        let alias = root.with_extension("alias");
+        std::os::unix::fs::symlink(&root.0, &alias).unwrap();
+        let mut project = crate::project::Project::open(
+            alias.clone(),
+            "Alias".into(),
+            "alias".into(),
+            Whose::Founding,
+        )
+        .unwrap();
+        assert!(project
+            .current()
+            .unwrap()
+            .tree
+            .node(delivery["producer"].as_str().unwrap())
+            .is_some());
+        let list_args = request_args(&json!({"operation":"list", "all":true})).unwrap();
+        let show_args = request_args(&json!({"operation":"show", "artifact":delivery["artifact"],"revision":delivery["revision"]})).unwrap();
+        for (listed, code) in [
+            run_project_value(&mut project, &list_args),
+            run_value(&alias, &list_args),
+        ] {
+            assert_eq!(code, 0, "{listed}");
+            assert_eq!(listed["artifacts"][0]["artifact"], delivery["artifact"]);
+            assert_eq!(listed["bytes_checked"], false);
+        }
+        for (shown, code) in [
+            run_project_value(&mut project, &show_args),
+            run_value(&alias, &show_args),
+        ] {
+            assert_eq!(code, 0, "{shown}");
+            assert_eq!(shown["revisions"][0]["revision"], delivery["revision"]);
+            assert_eq!(shown["manifest_status"]["status"], "unavailable");
+            assert_eq!(shown["manifest_status"]["exit_code"], 2);
+            assert_eq!(shown["bytes_checked"], false);
+        }
+        assert!(project_preview(
+            &mut project,
+            delivery["artifact"].as_str().unwrap(),
+            delivery["revision"].as_str().unwrap()
+        )
+        .is_err());
+        drop(project);
+        fs::remove_file(alias).unwrap();
+    }
+
+    #[test]
+    fn recorded_lane_resident_project_rejects_a_changed_founding_marker() {
+        if isolate_lane_read_test(
+            "artifacts::tests::recorded_lane_resident_project_rejects_a_changed_founding_marker",
+        ) {
+            return;
+        }
+        let mut fixture = PreviewFixture::new("mockup.html");
+        let project = store::first_event_id(&fixture.root).unwrap();
+        crate::lane::write(
+            &fixture.root.join(".vivac"),
+            &crate::lane::Lane {
+                version: 1,
+                id: crate::lane::new_id(),
+                project,
+            },
+        )
+        .unwrap();
+        assert!(
+            fixture.preview().is_err(),
+            "a resident project must revalidate its founding marker"
+        );
+    }
+
+    fn watch_origin_directory(path: &Path) -> std::time::SystemTime {
+        let mut options = fs::OpenOptions::new();
+        options.read(true);
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            options.access_mode(0x180).custom_flags(0x0200_0000);
+        }
+        let directory = options.open(path).unwrap();
+        directory
+            .set_times(
+                fs::FileTimes::new()
+                    .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(10000)),
+            )
+            .unwrap();
+        directory.metadata().unwrap().modified().unwrap()
+    }
+
+    fn remaining_snapshots() -> Vec<std::ffi::OsString> {
+        fs::read_dir(std::env::temp_dir())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .filter(|name| name.to_string_lossy().starts_with(".tmp-bundle-"))
+            .collect()
+    }
+
+    #[test]
+    fn recorded_lane_snapshots_leave_the_source_untouched_and_outlive_clones() {
+        if isolate_lane_read_test("artifacts::tests::recorded_lane_snapshots_leave_the_source_untouched_and_outlive_clones") {
+            return;
+        }
+        use std::io::Read;
+        let mut fixture = PreviewFixture::new("mockup.html");
+        let objects = fixture.root.join(".vivac-artifacts/objects");
+        let before = watch_origin_directory(&objects);
+        let preview = fixture.preview().unwrap();
+        let mut clone = preview.reader.try_clone().unwrap();
+        let (download, _) = project_download(
+            &mut fixture.project,
+            fixture.delivery["artifact"].as_str().unwrap(),
+            fixture.delivery["revision"].as_str().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(fs::metadata(&objects).unwrap().modified().unwrap(), before);
+        assert!(fs::read_dir(&objects).unwrap().all(|entry| !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".tmp-")));
+        drop(preview);
+        drop(download);
+        fs::remove_file(objects.join(format!(
+            "{}.blob",
+            fixture.delivery["revision"].as_str().unwrap()
+        )))
+        .unwrap();
+        let mut bytes = Vec::new();
+        clone.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, b"<html>Selected delivery</html>");
+        drop(clone);
+        assert!(remaining_snapshots().is_empty());
+        fs::write(
+            objects.join(format!(
+                "{}.blob",
+                fixture.delivery["revision"].as_str().unwrap()
+            )),
+            b"corrupt",
+        )
+        .unwrap();
+        let before_error = watch_origin_directory(&objects);
+        assert!(fixture.preview().is_err());
+        assert_eq!(
+            fs::metadata(&objects).unwrap().modified().unwrap(),
+            before_error
+        );
+        assert!(remaining_snapshots().is_empty());
+    }
+
+    #[test]
+    fn recorded_lane_store_substitution_cannot_replace_the_validated_site() {
+        if isolate_lane_read_test(
+            "artifacts::tests::recorded_lane_store_substitution_cannot_replace_the_validated_site",
+        ) {
+            return;
+        }
+        let mut fixture = PreviewFixture::new("mockup.html");
+        let (ctx, selected, authority) = project_revision(
+            &mut fixture.project,
+            fixture.delivery["artifact"].as_str().unwrap(),
+            fixture.delivery["revision"].as_str().unwrap(),
+        )
+        .unwrap();
+        let custody = retained_root(ctx, &authority, &selected).unwrap();
+        let original = fixture.root.join(".vivac-artifacts");
+        let moved = fixture.root.join("saved-artifacts");
+        if let Err(error) = fs::rename(&original, &moved) {
+            #[cfg(windows)]
+            {
+                use std::io::Read;
+                assert_eq!(error.raw_os_error(), Some(32));
+                assert!(original.is_dir());
+                assert!(!moved.exists());
+                assert_eq!(
+                    files::site_id(&fixture.root).unwrap().as_deref(),
+                    Some(selected.site)
+                );
+                let mut download = files::download_from_store(
+                    &custody,
+                    selected.object,
+                    selected.digest,
+                    selected.size,
+                    selected.inspection,
+                )
+                .unwrap();
+                let mut bytes = Vec::new();
+                download.read_to_end(&mut bytes).unwrap();
+                assert_eq!(bytes, b"<html>Selected delivery</html>");
+                return;
+            }
+            #[cfg(not(windows))]
+            panic!("The substitution fixture could not rename its store: {error}");
+        }
+        fs::create_dir_all(original.join("objects")).unwrap();
+        fs::write(original.join(".gitignore"), b"*\n").unwrap();
+        fs::write(original.join(".site"), crate::id::ulid()).unwrap();
+        fs::copy(moved.join(selected.object), original.join(selected.object)).unwrap();
+        fs::write(moved.join(selected.object), b"corrupt original store").unwrap();
+        assert!(
+            files::download_from_store(
+                &custody,
+                selected.object,
+                selected.digest,
+                selected.size,
+                selected.inspection
+            )
+            .is_err(),
+            "a replacement store with matching bytes cannot replace the validated site"
+        );
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+    #[test]
+    fn recorded_lane_bundle_and_sqlite_reads_keep_the_active_restore_destination() {
+        if isolate_lane_read_test("artifacts::tests::recorded_lane_bundle_and_sqlite_reads_keep_the_active_restore_destination") {
+            return;
+        }
+        use std::io::Read;
+        for sqlite in [false, true] {
+            let (root, ctx, producer) = if sqlite {
+                sqlite_commit_fixture()
+            } else {
+                bundle_commit_fixture()
+            };
+            drop(ctx);
+            let root = PreviewRoot(root);
+            let lane = crate::lane::new_id();
+            let lane_dir = root.join("capture-lane");
+            fs::create_dir_all(lane_dir.join(store::DIR)).unwrap();
+            fs::rename(root.join("app"), lane_dir.join("app")).unwrap();
+            fs::rename(root.join("selection.json"), lane_dir.join("selection.json")).unwrap();
+            let project_id = store::first_event_id(&root).unwrap();
+            crate::lane::write(
+                &lane_dir.join(store::DIR),
+                &crate::lane::Lane {
+                    version: 1,
+                    id: lane.clone(),
+                    project: project_id.clone(),
+                },
+            )
+            .unwrap();
+            crate::registry::note(
+                &store::store_dir().unwrap(),
+                &project_id,
+                crate::registry::Sighting {
+                    root: &root,
+                    lane: Some((&lane, &lane_dir)),
+                    repos: None,
+                },
+            );
+            let mut ctx = Ctx::load_for_write(
+                Store::open(root.0.clone()).unwrap(),
+                Whose::Declared(lane, lane_dir.clone()),
+            )
+            .unwrap();
+            let args = request_args(&json!({"operation":"capture", "bundle":"selection.json", "from":producer,"description":"Capture lane bundle fixture"})).unwrap();
+            let captured = capture(&mut ctx, &args).unwrap()["delivery"].clone();
+            ctx.unlock();
+            drop(ctx);
+            fs::remove_dir_all(lane_dir.join("app")).unwrap();
+            let mut project = crate::project::Project::open(
+                root.0.clone(),
+                "Fixture".into(),
+                "fixture".into(),
+                Whose::Founding,
+            )
+            .unwrap();
+            let artifact = captured["artifact"].as_str().unwrap();
+            let revision = captured["revision"].as_str().unwrap();
+            let objects = lane_dir.join(".vivac-artifacts/objects");
+            let before_objects = watch_origin_directory(&objects);
+            let mut preview = project_preview(&mut project, artifact, revision).unwrap();
+            let mut actual = Vec::new();
+            preview.reader.read_to_end(&mut actual).unwrap();
+            assert_eq!(actual, BUNDLE_HTML);
+            assert_eq!(
+                fs::metadata(&objects).unwrap().modified().unwrap(),
+                before_objects
+            );
+            let show =
+                request_args(&json!({"operation":"show","artifact":artifact,"revision":revision}))
+                    .unwrap();
+            let (shown, code) = run_project_value(&mut project, &show);
+            assert_eq!(code, 0, "{shown}");
+            assert_eq!(shown["manifest_status"]["status"], "readable");
+            let (metadata, code) =
+                execute_read_in(project.current().unwrap(), &show, None).unwrap();
+            assert_eq!(code, 0);
+            assert_eq!(metadata["revisions"][0]["revision"], captured["revision"]);
+            assert_eq!(metadata["manifest_status"]["status"], "unavailable");
+            assert_eq!(metadata["manifest_status"]["exit_code"], 2);
+            assert_eq!(metadata["bytes_checked"], false);
+            let check =
+                request_args(&json!({"operation":"check","artifact":artifact,"revision":revision}))
+                    .unwrap();
+            let (checked, _) = run_project_value(&mut project, &check);
+            assert_eq!(checked["retained"]["status"], "matches");
+            assert_eq!(checked["source"]["status"], "foreign_site");
+            let restore = request_args(&json!({"operation":"restore","artifact":artifact,"revision":revision,"to":"restored"})).unwrap();
+            let (restored, code) = run_project_value(&mut project, &restore);
+            assert_eq!(code, 0, "{restored}");
+            assert_eq!(
+                fs::read(root.join("restored/index.html")).unwrap(),
+                BUNDLE_HTML
+            );
+            assert!(!lane_dir.join("restored").exists());
+            assert_ne!(run_project_value(&mut project, &restore).1, 0);
+            if sqlite {
+                assert!(root.join("restored/data.sqlite").is_file());
+            }
+            assert!(fs::read_dir(lane_dir.join(".vivac-artifacts/objects"))
+                .unwrap()
+                .all(|entry| !entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".tmp-")));
+        }
+    }
+
+    #[test]
+    fn recorded_lane_reads_use_the_capture_location() {
+        if isolate_lane_read_test("artifacts::tests::recorded_lane_reads_use_the_capture_location")
+        {
+            return;
+        }
+        use std::io::Read;
+        let mut fixture = PreviewFixture::new("mockup.html");
+        let lane = crate::lane::new_id();
+        let lane_dir = fixture.root.join("capture-lane");
+        fs::create_dir_all(lane_dir.join(store::DIR)).unwrap();
+        let project_id = store::first_event_id(&fixture.root).unwrap();
+        crate::lane::write(
+            &lane_dir.join(store::DIR),
+            &crate::lane::Lane {
+                version: 1,
+                id: lane.clone(),
+                project: project_id.clone(),
+            },
+        )
+        .unwrap();
+        crate::registry::note(
+            &store::store_dir().unwrap(),
+            &project_id,
+            crate::registry::Sighting {
+                root: &fixture.root,
+                lane: Some((&lane, &lane_dir)),
+                repos: None,
+            },
+        );
+        let bytes = b"<html>Captured in another lane</html>";
+        fs::write(lane_dir.join("mockup.html"), bytes).unwrap();
+        let mut ctx = Ctx::load_for_write(
+            Store::open(fixture.root.0.clone()).unwrap(),
+            Whose::Declared(lane.clone(), lane_dir.clone()),
+        )
+        .unwrap();
+        let args = request_args(&json!({
+            "operation":"capture", "path":"mockup.html",
+            "from":fixture.delivery["producer"], "description":"Capture lane fixture",
+            "artifact":fixture.delivery["artifact"], "previous":fixture.delivery["revision"]
+        }))
+        .unwrap();
+        let captured = capture(&mut ctx, &args).unwrap()["delivery"].clone();
+        ctx.unlock();
+        drop(ctx);
+        let artifact = captured["artifact"].as_str().unwrap();
+        let revision = captured["revision"].as_str().unwrap();
+        let object = captured["object"].as_str().unwrap();
+        assert!(!fixture.root.join(".vivac-artifacts").join(object).exists());
+        fs::remove_file(lane_dir.join("mockup.html")).unwrap();
+        let tracked = [
+            fixture.root.join(".vivac/events"),
+            fixture.root.join(".vivac/config"),
+            lane_dir.join(".vivac/lane"),
+            store::store_dir().unwrap().join("projects"),
+        ];
+        let before: Vec<_> = tracked.iter().map(|path| fs::read(path).unwrap()).collect();
+        let mut preview = project_preview(&mut fixture.project, artifact, revision).unwrap();
+        let mut actual = Vec::new();
+        preview.reader.read_to_end(&mut actual).unwrap();
+        assert_eq!(actual, bytes);
+        let (mut download, _) = project_download(&mut fixture.project, artifact, revision).unwrap();
+        actual.clear();
+        download.read_to_end(&mut actual).unwrap();
+        assert_eq!(actual, bytes);
+        let check_args =
+            request_args(&json!({"operation":"check", "artifact":artifact,"revision":revision}))
+                .unwrap();
+        let (checked, _) = run_project_value(&mut fixture.project, &check_args);
+        assert_eq!(checked["retained"]["status"], "matches");
+        assert_eq!(checked["source"]["status"], "foreign_site");
+        for (path, bytes) in tracked.iter().zip(&before) {
+            assert_eq!(&fs::read(path).unwrap(), bytes);
+        }
+        let restore_args = request_args(&json!({"operation":"restore", "artifact":artifact,"revision":revision,"to":"restored.html"})).unwrap();
+        let (restored, code) = run_project_value(&mut fixture.project, &restore_args);
+        assert_eq!(code, 0, "{restored}");
+        assert_eq!(fs::read(fixture.root.join("restored.html")).unwrap(), bytes);
+        assert!(!lane_dir.join("restored.html").exists());
+        assert_ne!(run_project_value(&mut fixture.project, &restore_args).1, 0);
+        assert!(fixture.preview().is_ok());
+        drop(preview);
+        drop(download);
+        fs::copy(
+            lane_dir.join(".vivac-artifacts").join(object),
+            fixture.root.join(".vivac-artifacts").join(object),
+        )
+        .unwrap();
+        let marker = lane_dir.join(".vivac/lane");
+        let marker_bytes = fs::read(&marker).unwrap();
+        let mut active_project = crate::project::Project::open(
+            fixture.root.0.clone(),
+            "Active fixture".into(),
+            "active-fixture".into(),
+            Whose::Declared(lane.clone(), lane_dir.clone()),
+        )
+        .unwrap();
+        let mut founding = project_preview(
+            &mut active_project,
+            artifact,
+            fixture.delivery["revision"].as_str().unwrap(),
+        )
+        .unwrap();
+        let mut founding_bytes = Vec::new();
+        founding.reader.read_to_end(&mut founding_bytes).unwrap();
+        assert_eq!(founding_bytes, b"<html>Selected delivery</html>");
+        drop(founding);
+        let mut wrong: Value = serde_json::from_slice(&marker_bytes).unwrap();
+        wrong["id"] = json!(crate::lane::new_id());
+        fs::write(&marker, serde_json::to_vec(&wrong).unwrap()).unwrap();
+        assert!(project_preview(&mut active_project, artifact, revision).is_err());
+        assert_eq!(
+            project_preview(&mut fixture.project, artifact, revision)
+                .err()
+                .unwrap()
+                .message(),
+            "The recorded custody location does not belong to this project and lane."
+        );
+        fs::write(&marker, &marker_bytes).unwrap();
+        fs::remove_file(&marker).unwrap();
+        assert!(project_preview(&mut active_project, artifact, revision).is_err());
+        assert!(project_preview(&mut fixture.project, artifact, revision).is_err());
+        fs::write(&marker, &marker_bytes).unwrap();
+        wrong = serde_json::from_slice(&marker_bytes).unwrap();
+        wrong["project"] = json!(crate::id::ulid());
+        fs::write(&marker, serde_json::to_vec(&wrong).unwrap()).unwrap();
+        assert!(project_preview(&mut fixture.project, artifact, revision).is_err());
+        fs::write(&marker, &marker_bytes).unwrap();
+        #[cfg(unix)]
+        {
+            let target = lane_dir.join("saved-marker");
+            fs::rename(&marker, &target).unwrap();
+            std::os::unix::fs::symlink(&target, &marker).unwrap();
+            assert!(project_preview(&mut fixture.project, artifact, revision).is_err());
+            assert_eq!(fs::read(&target).unwrap(), marker_bytes);
+            fs::remove_file(&marker).unwrap();
+            fs::rename(target, &marker).unwrap();
+        }
+        let registry = store::store_dir().unwrap().join("projects");
+        let registry_bytes = fs::read(&registry).unwrap();
+        let clone = fixture.root.join("other-authority");
+        let clone_lane = clone.join("capture-lane");
+        fs::create_dir_all(clone.join(".vivac")).unwrap();
+        fs::create_dir_all(clone_lane.join(".vivac")).unwrap();
+        for file in ["events", "config"] {
+            fs::copy(
+                fixture.root.join(".vivac").join(file),
+                clone.join(".vivac").join(file),
+            )
+            .unwrap();
+        }
+        fs::write(clone_lane.join(".vivac/lane"), &marker_bytes).unwrap();
+        let mut mapping: Value = serde_json::from_slice(&registry_bytes).unwrap();
+        mapping["projects"][&project_id]["path"] = json!(clone);
+        mapping["projects"][&project_id]["lanes"][&lane] = json!(clone_lane);
+        fs::write(&registry, serde_json::to_vec(&mapping).unwrap()).unwrap();
+        assert_eq!(
+            project_preview(&mut fixture.project, artifact, revision)
+                .err()
+                .unwrap()
+                .message(),
+            "The recorded custody location does not belong to this project and lane."
+        );
+        fs::write(&registry, registry_bytes).unwrap();
+        let site = lane_dir.join(".vivac-artifacts/.site");
+        let site_bytes = fs::read(&site).unwrap();
+        fs::write(&site, crate::id::ulid()).unwrap();
+        assert_eq!(
+            project_preview(&mut fixture.project, artifact, revision)
+                .err()
+                .unwrap()
+                .message(),
+            "The retained store does not match this revision's custody site."
+        );
+        fs::write(&site, site_bytes).unwrap();
+        fs::write(lane_dir.join(".vivac-artifacts").join(object), b"corrupt").unwrap();
+        assert!(project_preview(&mut fixture.project, artifact, revision).is_err());
+        let hidden = fixture.root.join("disconnected-lane");
+        fs::rename(&lane_dir, &hidden).unwrap();
+        assert_eq!(project_preview(&mut fixture.project, artifact, revision).err().unwrap().message(),
+            "The retained custody location is unavailable. Reconnect its lane or recover this revision.");
     }
 
     #[test]

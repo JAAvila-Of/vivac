@@ -29,14 +29,32 @@ pub(crate) struct Preparation {
 }
 
 impl Preparation {
+    pub(crate) fn snapshot() -> Result<Self, Failure> {
+        let path = std::env::temp_dir();
+        if super::files::check_tracking(&path)? {
+            return Err(Failure::usage(
+                "Artifact snapshots require a temporary directory outside Git.",
+            ));
+        }
+        let parent = super::files::open_root(&path)?;
+        Self::new_in(&parent, true)
+    }
     pub(crate) fn new(parent: &Dir) -> Result<Self, Failure> {
+        Self::new_in(parent, false)
+    }
+
+    fn new_in(parent: &Dir, snapshot: bool) -> Result<Self, Failure> {
         if !SUPPORTED {
             return Err(Failure::usage(
                 "Exclusive native bundle publication is unavailable on this platform.",
             ));
         }
         let name = format!(".tmp-bundle-{}", crate::id::ulid());
-        let dir = create_private(parent, &name)?;
+        let dir = if snapshot {
+            create_snapshot_private(parent, &name)?
+        } else {
+            create_private(parent, &name)?
+        };
         Ok(Self {
             parent: parent.try_clone()?,
             name,
@@ -78,12 +96,17 @@ impl Drop for Preparation {
     }
 }
 
-#[cfg(unix)]
-pub(super) fn same_directory(first: &Dir, second: &Dir) -> Result<(), Failure> {
-    use cap_std::fs::MetadataExt;
-    let first = first.dir_metadata()?;
-    let second = second.dir_metadata()?;
-    if first.dev() != second.dev() || first.ino() != second.ino() {
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) struct DirectoryIdentity(u64, [u8; 16]);
+
+impl DirectoryIdentity {
+    pub(crate) fn of(directory: &Dir) -> Result<Self, Failure> {
+        directory_identity(directory)
+    }
+}
+
+pub(crate) fn same_directory(first: &Dir, second: &Dir) -> Result<(), Failure> {
+    if DirectoryIdentity::of(first)? != DirectoryIdentity::of(second)? {
         return Err(Failure::usage(
             "The bundle directory identity changed during the operation.",
         ));
@@ -91,8 +114,17 @@ pub(super) fn same_directory(first: &Dir, second: &Dir) -> Result<(), Failure> {
     Ok(())
 }
 
+#[cfg(unix)]
+fn directory_identity(directory: &Dir) -> Result<DirectoryIdentity, Failure> {
+    use cap_std::fs::MetadataExt;
+    let metadata = directory.dir_metadata()?;
+    let mut identifier = [0u8; 16];
+    identifier[..8].copy_from_slice(&metadata.ino().to_le_bytes());
+    Ok(DirectoryIdentity(metadata.dev(), identifier))
+}
+
 #[cfg(not(any(unix, windows)))]
-pub(super) fn same_directory(_: &Dir, _: &Dir) -> Result<(), Failure> {
+fn directory_identity(_: &Dir) -> Result<DirectoryIdentity, Failure> {
     Err(Failure::usage(
         "Exclusive native bundle publication is unavailable on this platform.",
     ))
@@ -106,34 +138,29 @@ fn create_private(_: &Dir, _: &str) -> Result<Dir, Failure> {
 }
 
 #[cfg(windows)]
-pub(super) fn same_directory(first: &Dir, second: &Dir) -> Result<(), Failure> {
+fn directory_identity(directory: &Dir) -> Result<DirectoryIdentity, Failure> {
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Storage::FileSystem::{
         FileIdInfo, GetFileInformationByHandleEx, FILE_ID_INFO,
     };
-    let identity = |dir: &Dir| -> Result<(u64, [u8; 16]), Failure> {
-        let mut info = FILE_ID_INFO::default();
-        // SAFETY: Dir keeps the handle alive and the maintained structure
-        // matches the exact output buffer length passed to Windows.
-        if unsafe {
-            GetFileInformationByHandleEx(
-                dir.as_raw_handle(),
-                FileIdInfo,
-                (&mut info as *mut FILE_ID_INFO).cast(),
-                std::mem::size_of::<FILE_ID_INFO>() as u32,
-            )
-        } == 0
-        {
-            return Err(io::Error::last_os_error().into());
-        }
-        Ok((info.VolumeSerialNumber, info.FileId.Identifier))
-    };
-    if identity(first)? != identity(second)? {
-        return Err(Failure::usage(
-            "The bundle directory identity changed during the operation.",
-        ));
+    let mut info = FILE_ID_INFO::default();
+    // SAFETY: Dir keeps the handle alive and the maintained structure
+    // matches the exact output buffer length passed to Windows.
+    if unsafe {
+        GetFileInformationByHandleEx(
+            directory.as_raw_handle(),
+            FileIdInfo,
+            (&mut info as *mut FILE_ID_INFO).cast(),
+            std::mem::size_of::<FILE_ID_INFO>() as u32,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error().into());
     }
-    Ok(())
+    Ok(DirectoryIdentity(
+        info.VolumeSerialNumber,
+        info.FileId.Identifier,
+    ))
 }
 
 #[cfg(unix)]
@@ -156,8 +183,32 @@ pub(super) fn require_controlled_parent(_: &Dir) -> Result<(), Failure> {
 
 #[cfg(unix)]
 fn create_private(parent: &Dir, name: &str) -> Result<Dir, Failure> {
-    use cap_std::fs::{DirBuilder, DirBuilderExt, MetadataExt};
     require_controlled_parent(parent)?;
+    create_owned_directory(parent, name)
+}
+
+#[cfg(unix)]
+fn create_snapshot_private(parent: &Dir, name: &str) -> Result<Dir, Failure> {
+    use cap_std::fs::MetadataExt;
+    let metadata = parent.dir_metadata()?;
+    // SAFETY: `geteuid` has no arguments or borrowed buffers.
+    let user = unsafe { libc::geteuid() };
+    let controlled = metadata.uid() == user && metadata.mode() & 0o022 == 0;
+    let sticky = metadata.mode() & 0o1000 != 0 && (metadata.uid() == 0 || metadata.uid() == user);
+    if !controlled && !sticky {
+        return Err(Failure::usage("Private artifact snapshots require a controlled or trusted sticky temporary directory."));
+    }
+    create_owned_directory(parent, name)
+}
+
+#[cfg(not(unix))]
+fn create_snapshot_private(parent: &Dir, name: &str) -> Result<Dir, Failure> {
+    create_private(parent, name)
+}
+
+#[cfg(unix)]
+fn create_owned_directory(parent: &Dir, name: &str) -> Result<Dir, Failure> {
+    use cap_std::fs::{DirBuilder, DirBuilderExt, MetadataExt};
     let mut builder = DirBuilder::new();
     builder.mode(0o700);
     parent.create_dir_with(name, &builder)?;
@@ -628,6 +679,36 @@ mod tests {
         drop(parent);
         std::fs::remove_dir_all(path).unwrap();
     }
+    #[cfg(unix)]
+    #[test]
+    fn snapshots_accept_default_temporary_and_sticky_parents_without_relaxing_publication() {
+        use cap_std::fs::MetadataExt;
+        use std::os::unix::fs::PermissionsExt;
+        let default = Preparation::snapshot().unwrap();
+        let default_path = std::env::temp_dir().join(&default.name);
+        let metadata = default.dir.dir_metadata().unwrap();
+        // SAFETY: `geteuid` has no arguments or borrowed buffers.
+        assert_eq!(metadata.uid(), unsafe { libc::geteuid() });
+        assert_eq!(metadata.mode() & 0o777, 0o700);
+        drop(default);
+        assert!(!default_path.exists());
+        let path = std::env::temp_dir().join(format!("vivac-sticky-{}", crate::id::ulid()));
+        std::fs::create_dir(&path).unwrap();
+        let parent = Dir::open_ambient_dir(&path, cap_std::ambient_authority()).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o1777)).unwrap();
+        assert!(Preparation::new(&parent).is_err());
+        let snapshot = Preparation::new_in(&parent, true).unwrap();
+        let name = snapshot.name.clone();
+        assert_eq!(snapshot.dir.dir_metadata().unwrap().mode() & 0o777, 0o700);
+        drop(snapshot);
+        assert!(!path.join(name).exists());
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(Preparation::new_in(&parent, true).is_err());
+        assert_eq!(parent.entries().unwrap().count(), 0);
+        drop(parent);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
     #[cfg(unix)]
     #[test]
     fn preparation_rejects_shared_parents_and_cleanup_never_follows_links() {

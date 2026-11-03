@@ -1671,7 +1671,7 @@ pub fn to_text(
                 "Prefer self-contained HTML/CSS/JS without a backend; query installed",
                 "support, including SQLite.",
                 "Retain complete revisions with what they do and their producer. Continue",
-                "known identities and return the exact revision reference.",
+                "known identities. Return filename, description and exact revision reference.",
                 "Reports, docs, JSON, SQL, code and config need explicit delivery",
                 "selection. Skip drafts/unselected files; report unsupported or refused",
                 "custody.",

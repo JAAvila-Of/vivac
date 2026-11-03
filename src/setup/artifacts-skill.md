@@ -129,8 +129,9 @@ past privacy, review, format, resource or concurrency guards. Refresh a conflict
 only for a new reviewed selection. A newly authorized policy change permits
 work only within that scope; all remaining guards still apply.
 
-Return exact artifact/revision reference, producer, description and local status,
-plus installed ways to inspect or restore it. Metadata listings are not complete
+Return **filename — description** first, exact artifact/revision reference,
+producer, local status and installed inspect/restore commands. Link only to a
+known live web address; never expose session keys. Metadata listings are not complete
 revision checks. Custody/digests prove neither approval nor runtime use; human
 review or a decision must name the exact revision. Never claim unsupported or
 refused custody succeeded.

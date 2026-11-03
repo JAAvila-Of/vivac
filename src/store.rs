@@ -1008,6 +1008,14 @@ fn resolve_lane(
     Err(Failure::tree_not_found())
 }
 
+pub(crate) fn resolve_lane_marker(
+    lane_dir: &Path,
+    raw: &str,
+    registry_dir: Option<&Path>,
+) -> Result<Located, Failure> {
+    resolve_lane(lane_dir, crate::lane::parse(raw)?, registry_dir)
+}
+
 /// Whether `root/.vivac/` already holds a tree worth opening rather than
 /// creating: a config or a log. `f566`: an empty `.vivac/` -- one that exists
 /// as a directory but holds neither -- is planted like a new one, and `init`
@@ -1327,6 +1335,33 @@ pub fn first_event_id(root: &Path) -> Option<String> {
     }
     let e: crate::event::Event = serde_json::from_str(line.trim_end()).ok()?;
     Some(e.id)
+}
+
+pub(crate) fn first_event_id_in(file: &File) -> Result<Option<String>, Failure> {
+    let mut reader = file.try_clone()?;
+    let position = reader.stream_position()?;
+    reader.seek(SeekFrom::Start(0))?;
+    let result = (|| {
+        let mut line = String::new();
+        BufReader::new((&mut reader).take((CAPTURE_LINE_LIMIT + 1) as u64)).read_line(&mut line)?;
+        if line.is_empty() {
+            return Ok(None);
+        }
+        if line.len() > CAPTURE_LINE_LIMIT {
+            return Err(Failure::usage(
+                "The event log's first record exceeds the supported limit.",
+            ));
+        }
+        let event: crate::event::Event = serde_json::from_str(line.trim_end())
+            .map_err(|_| Failure::usage("The event log's first record is unreadable."))?;
+        Ok(Some(event.id))
+    })();
+    reader.seek(SeekFrom::Start(position))?;
+    result
+}
+
+pub(crate) fn same_log(first: &File, second: &File) -> std::io::Result<bool> {
+    Ok(log_identity(first)? == log_identity(second)?)
 }
 
 impl Store {
