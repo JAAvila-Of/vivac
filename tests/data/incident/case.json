@@ -1,0 +1,16 @@
+{
+  "source_project_id": "01J00000000000000000000041",
+  "successor_project_id": "01J00000000000000000000042",
+  "selected_node": "01J00000000000000000000032",
+  "selected_fields": ["title", "notes", "outcome"],
+  "marker": "[Removed after a sensitive-data incident]",
+  "changes": [
+    {"seq": 4, "pointer": "/payload/title"},
+    {"seq": 6, "pointer": "/payload/note"},
+    {"seq": 7, "pointer": "/payload/outcome"},
+    {"seq": 8, "pointer": "/payload/note"},
+    {"seq": 9, "pointer": "/payload/stack/1/1"},
+    {"seq": 11, "pointer": "/payload/stack/0/1"},
+    {"seq": 12, "pointer": "/payload/outcome"}
+  ]
+}
