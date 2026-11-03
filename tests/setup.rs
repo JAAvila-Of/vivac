@@ -752,10 +752,7 @@ fn a_skill_an_earlier_vivac_wrote_is_replaced() {
         "{out}"
     );
     let after = read(&skill_path(&c));
-    assert!(
-        after.contains("# Bringing what a project knows into vivac"),
-        "{after}"
-    );
+    assert!(after.contains("# Migrate project knowledge"), "{after}");
     assert!(!after.contains("An older vivac-migrate"), "{after}");
 }
 
@@ -1822,7 +1819,10 @@ fn mcp_tool_names(c: &Sandbox) -> std::collections::BTreeSet<String> {
 fn command_words_in(text: &str) -> Vec<String> {
     let mut found = Vec::new();
     for paragraph in text.split("\n\n") {
-        let words: Vec<&str> = paragraph.split_whitespace().collect();
+        let words: Vec<&str> = paragraph
+            .split_whitespace()
+            .map(|word| word.trim_start_matches('`'))
+            .collect();
         for (i, word) in words.iter().enumerate() {
             if let Some(name) = word.strip_prefix("vivac_") {
                 let clean: String = name
@@ -1844,6 +1844,25 @@ fn command_words_in(text: &str) -> Vec<String> {
         }
     }
     found
+}
+
+#[test]
+fn command_words_include_inline_code_without_crossing_paragraphs() {
+    let text = "vivac find and vivac_add. `vivac rules` and `vivac_done`. \
+                `vivac unknown` and `vivac_unknown`.\n\n\
+                vivac\n\nfind\n\n\
+                vivac, skip and vivac's owner. `vivac,` skip and `vivac's` owner.";
+    assert_eq!(
+        command_words_in(text),
+        [
+            "find",
+            "vivac_add",
+            "rules",
+            "vivac_done",
+            "unknown",
+            "vivac_unknown"
+        ]
+    );
 }
 
 #[test]

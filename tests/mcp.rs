@@ -166,7 +166,7 @@ fn the_tool_list_has_only_the_declared_tools() {
 /// `d422`: an agent that finds no pillar and no rule needs telling what to
 /// do about it, not just told the tree is empty.
 #[test]
-fn vivac_rules_description_points_at_claude_md_when_nothing_governs() {
+fn vivac_rules_description_requires_approved_mapping_when_nothing_governs() {
     let c = seeded("rules-desc");
     let mut s = hello(&c);
     let r = s.ask(r#"{"jsonrpc":"2.0","id":19,"method":"tools/list"}"#);
@@ -178,9 +178,7 @@ fn vivac_rules_description_points_at_claude_md_when_nothing_governs() {
     let description = rules_tool["description"].as_str().unwrap();
     assert!(
         description.contains(
-            "If it comes back with no pillar and no rule while the project keeps its \
-             rules in files such as CLAUDE.md or AGENTS.md, propose which are pillars \
-             and which are rules, let the person decide, and write them with vivac_add."
+            "If the tree lacks governance but project instructions define it, propose the pillar/rule mapping, obtain approval, then record it."
         ),
         "{description}"
     );
@@ -201,13 +199,25 @@ fn vivac_add_description_points_a_record_at_vivac_done() {
         .expect("vivac_add is in the tool list");
     let description = add_tool["description"].as_str().unwrap();
     assert!(
-        description.ends_with(
-            "One that asks nothing of anyone -- a lesson, a measurement -- is a \
-             record: close it right away with vivac_done, its outcome starting \
-             with Record:. The title is words, never an id: the node it hangs \
-             from goes in `parent`."
-        ),
+        description.contains("close records immediately with vivac_done and a Record: outcome"),
         "{description}"
+    );
+    let properties = &add_tool["inputSchema"]["properties"];
+    assert_eq!(properties["title"]["type"], "string", "{add_tool}");
+    assert_eq!(properties["parent"]["type"], "string", "{add_tool}");
+    assert!(
+        properties["title"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("words"),
+        "{add_tool}"
+    );
+    assert!(
+        properties["parent"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("Parent node"),
+        "{add_tool}"
     );
 }
 
@@ -636,16 +646,12 @@ fn tools_list_announces_full_for_vivac_why() {
     assert_eq!(full_property["type"], "boolean", "{why_tool}");
     assert_eq!(
         full_property["description"],
-        "Every sibling and every child still open, not only the eight the answer \
-         keeps, plus each step's anchor, standing decisions and what was open at \
-         the time: what vivac why --full prints. Refused together with project.",
+        "All open branches and historical anchors/governance; conflicts with project.",
         "{why_tool}"
     );
     assert!(
         why_tool["description"].as_str().unwrap().contains(
-            "Open siblings and children are capped at eight each, every \
-                 blocking one kept, and the node's newest three notes come whole \
-                 with the rest counted; full brings them all."
+            "Default caps open children/siblings at eight each, retaining blockers; newest three notes are whole, earlier notes counted. full includes all"
         ),
         "{why_tool}"
     );
@@ -2637,7 +2643,7 @@ fn the_everywhere_description_names_the_projects_that_keep_to_themselves() {
     let find = tools.iter().find(|t| t["name"] == "vivac_find").unwrap();
     assert_eq!(
         find["inputSchema"]["properties"]["everywhere"]["description"],
-        "Searches every project on the machine rather than this one, except those that keep what they know to themselves. Say which project anything you use comes from."
+        "Search other projects except private ones; name/show the source before applying its information."
     );
 }
 
@@ -2691,13 +2697,13 @@ fn the_save_tool_says_what_its_label_and_answer_hold() {
     let save = tools.iter().find(|t| t["name"] == "vivac_save").unwrap();
     assert_eq!(
         save["inputSchema"]["properties"]["label"]["description"],
-        "A short name for this stop. Left out, vivac writes one from what was opened and closed since the last stop made by hand."
+        "Optional label; generated from work opened/closed since the last manual stop."
     );
     assert!(
         save["description"]
             .as_str()
             .unwrap()
-            .contains("instead of guessing from the log. The answer also says what the stop found unfinished, when there is any: files not committed, commits not pushed, and files changed that no node claims."),
+            .contains("Reports uncommitted, unpushed and unclaimed changes."),
         "{save}"
     );
 }

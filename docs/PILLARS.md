@@ -178,6 +178,14 @@ security checks, input or expansion bounds, work counters, size limits or
 memory ceilings. Those remain hard guards. A repeated latency rejection also
 does not permit shortened inspection, partial context or reduced correctness.
 
+### Model-facing instructions
+
+Use the shortest clear product-owned instructions that preserve their purpose,
+authorization and safety. Budget startup protocols, tool metadata and loaded
+skills separately; label token estimates and distinguish them from actual
+harness usage. Do not shorten stored project knowledge or native prompts to meet
+those budgets. Regression checks must preserve the operation contracts.
+
 ### Retention profiles
 
 Local file and static-bundle retention accepts at most 100 MiB per complete

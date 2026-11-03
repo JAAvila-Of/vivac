@@ -813,9 +813,9 @@ fn cooled_down(last_nudge_secs: i64, now_secs: i64) -> bool {
 /// the minutes a person spent answering left out (`d787`, `f786`).
 fn prompt_text(n: i64) -> String {
     format!(
-        "vivac: nothing written to the tree in {n} min of work in this session. If a seam\n\
-         passed since (a new line of work, a choice, a finding you told, a \"not now\", \
-         work done, a change outside the repo), write it now, before you answer.\n"
+        "vivac: {n} min of work without a tree write. If a capture seam passed \
+         (new work, choice, finding, deferral, completion or external change), \
+         record it before answering.\n"
     )
 }
 
@@ -851,7 +851,7 @@ fn reconciliation_text(cwd: &std::path::Path) -> String {
 fn custody_text(cwd: &std::path::Path, report: &serde_json::Value, code: i32) -> String {
     if report.get("policy").is_none() {
         if code > 1 && crate::store::locate(cwd).ok().flatten().is_some() {
-            return "  Agent custody could not complete; inspect vivac agents reconcile. Use vivac agents to inspect configuration errors.\n".to_string();
+            return "  Agent custody incomplete. Inspect: vivac agents reconcile, or vivac agents for configuration errors.\n".to_string();
         }
         return String::new();
     }
@@ -861,7 +861,7 @@ fn custody_text(cwd: &std::path::Path, report: &serde_json::Value, code: i32) ->
         || pending + blocked > 0
         || report["applied"].as_bool().unwrap_or(false)
     {
-        return format!("  Agent custody: mode {}; changes applied {}; needs review {}; blocked {}. Inspect vivac agents reconcile; review configuration changes with vivac agents sync.\n",
+        return format!("  Agent custody: mode {}; changes applied {}; needs review {}; blocked {}. Inspect: vivac agents reconcile. Review: vivac agents sync.\n",
             report["policy"]["mode"].as_str().unwrap_or("manual"), report["applied"], pending, blocked);
     }
     String::new()

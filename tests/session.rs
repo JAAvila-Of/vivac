@@ -1663,15 +1663,13 @@ fn a_real_session_identifier_passes_through_untouched() {
 // person asks, because nothing it receives unasked says when to.
 // ---------------------------------------------------------------------------
 
-/// The approved text, byte for byte (`d757`). Widths measured by machine,
-/// every line included, none over the 76-column ceiling that
-/// `capture_seams_lines_never_widen_past_76_columns`, below, checks against
-/// the real rendering rather than against this constant.
-const CAPTURE_SEAMS_BLOCK: &str = "\n WRITE AT THESE SEAMS\n  Look first: vivac_find \"<words>\". Work the tree already holds is never\n  opened twice: what you find, settle or leave to do while on it is a node\n  under it, not a note. The focus above is where work was left, maybe not\n  by you: hang new work from what it continues.\n  With everywhere set it looks in the person's other projects too: say which\n  one anything you use comes from, and show it to them before applying it.\n  Write before you answer: what you tell the person goes in the tree first.\n  new line of work     vivac_push  title, why, parent\n                       or root, when it continues nothing in the tree\n  a choice is settled  vivac_decide  title, reason, alternative\n                       yours or the person's\n  a norm is set        vivac_add  title, type: constraint, why: their words\n                       root, if it holds for all work: every brief shows it\n                       a constraint even when they call it a rule\n  you report findings  vivac_add  title, type: finding, why\n                       as you tell the person, one for each thing found\n                       asks nothing? vivac_done it, outcome \"Record: ...\"\n  told \"not now\"       vivac_park  id, reason: their words\n                       nothing to park yet? vivac_add it, then park it\n  changed outside git  vivac_note  id, note: what changed, where\n                       CI, a tracker, the cloud: the tree is its only record\n                       never a finding, a choice or something left to do\n  the work is done     vivac_pop  outcome\n                       and again if that settles the node it returns to\n  The tools may arrive by name only: load them before the first write.\n  In Claude Code: ToolSearch \"select:mcp__vivac__vivac_find,mcp__vivac__vivac_push,mcp__vivac__vivac_decide,mcp__vivac__vivac_add,mcp__vivac__vivac_done,mcp__vivac__vivac_park,mcp__vivac__vivac_note,mcp__vivac__vivac_pop\"\n  Without the tools, each move is a command: vivac push, vivac decide...\n";
+/// The seven capture seams and their arguments, byte for byte. The head
+/// obligations and deferred tool loading are checked separately below.
+/// `capture_seams_lines_never_widen_past_76_columns` checks the emitted text.
+const CAPTURE_SEAMS_BLOCK: &str = "  new line of work     vivac_push  title, why, parent\n                       or root, when it continues nothing in the tree\n  a choice is settled  vivac_decide  title, reason, alternative\n                       yours or the person's\n  a norm is set        vivac_add  title, type: constraint, why: their words\n                       root, if it holds for all work: every brief shows it\n                       a constraint even when they call it a rule\n  you report findings  vivac_add  title, type: finding, why\n                       as you tell the person, one for each thing found\n                       asks nothing? vivac_done it, outcome \"Record: ...\"\n  told \"not now\"       vivac_park  id, reason: their words\n                       nothing to park yet? vivac_add it, then park it\n  changed outside git  vivac_note  id, note: what changed, where\n                       CI, a tracker, the cloud: the tree is its only record\n                       never a finding, a choice or something left to do\n  the work is done     vivac_pop  outcome\n                       and again if that settles the node it returns to\n";
 
-/// Test (a): the hook's own brief carries the block, exactly. With a focus:
-/// the block's head speaks of the focus above, and `f912` keeps that
-/// sentence for a brief that has one.
+/// The hook carries every seam and the complete head obligations. A focused
+/// opening explains how to continue work left by another session.
 #[test]
 fn the_hook_brief_names_the_capture_seams() {
     let c = Sandbox::new_seeded("capture-seams-hook");
@@ -1682,6 +1680,16 @@ fn the_hook_brief_names_the_capture_seams() {
         s.contains(CAPTURE_SEAMS_BLOCK),
         "the hook brief did not carry the capture-seams block byte for byte:\n{s}"
     );
+    let words = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    for required in [
+        "Find first with vivac_find; continue existing work, never duplicate it.",
+        "File discoveries, choices and pending work as typed nodes, not notes.",
+        "Focus may belong to another session; name the parent you continue, or root if unrelated.",
+        "Across projects: name the source and show its information before applying it.",
+        "Write before answering.",
+    ] {
+        assert!(words.contains(required), "missing {required}: {s}");
+    }
     // It sits right ahead of the closing rule and the tokens/depth footer,
     // not buried earlier in the body.
     let block_at = s.find(CAPTURE_SEAMS_BLOCK).unwrap();
@@ -1704,11 +1712,16 @@ fn with_no_focus_the_capture_seams_leave_out_the_focus_above() {
         !s.contains("focus above"),
         "a brief with no focus spoke of the focus above:\n{s}"
     );
-    let head = "\n WRITE AT THESE SEAMS\n  Look first: vivac_find \"<words>\". Work the tree already holds is never\n  opened twice: what you find, settle or leave to do while on it is a node\n  under it, not a note.\n  With everywhere set it looks in the person's other projects too: say which\n  one anything you use comes from, and show it to them before applying it.\n  Write before you answer: what you tell the person goes in the tree first.\n";
-    assert!(
-        s.contains(head),
-        "the head without its focus sentence is not the approved text:\n{s}"
-    );
+    let words = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    for required in [
+        "Find first with vivac_find; continue existing work, never duplicate it.",
+        "File discoveries, choices and pending work as typed nodes, not notes.",
+        "Across projects: name the source and show its information before applying it.",
+        "Write before answering.",
+    ] {
+        assert!(words.contains(required), "missing {required}: {s}");
+    }
+    assert!(!words.contains("Focus may belong"), "{s}");
 }
 
 /// Test (b)'s other half lives in `tests/brief.rs`, as
@@ -1735,12 +1748,18 @@ fn the_hook_brief_shows_the_tools_and_how_to_load_them() {
     let (s, code) = c.run_stdin(&["session", "start", "--hook"], "{}");
     assert_eq!(code, 0, "{s}");
     assert!(s.contains("vivac_push  title, why, parent"), "{s}");
-    let names = "ToolSearch \"select:mcp__vivac__vivac_find,mcp__vivac__vivac_push,\
-                  mcp__vivac__vivac_decide,mcp__vivac__vivac_add,mcp__vivac__vivac_done,\
-                  mcp__vivac__vivac_park,mcp__vivac__vivac_note,mcp__vivac__vivac_pop\"";
-    assert!(s.contains(names), "{s}");
     assert!(
-        s.contains("Without the tools, each move is a command"),
+        s.contains("Deferred MCP: load only the needed tool before use."),
+        "{s}"
+    );
+    assert!(
+        s.lines()
+            .any(|line| line == "  Claude Code: ToolSearch \"select:mcp__vivac__vivac_find\""),
+        "{s}"
+    );
+    assert!(!s.contains("vivac_find,mcp__"), "{s}");
+    assert!(
+        s.contains("Substitute the needed tool name. No MCP: use equivalent vivac CLI."),
         "{s}"
     );
     assert!(
@@ -1779,7 +1798,7 @@ fn capture_seams_lines_never_widen_past_76_columns() {
     for line in block[..end].lines() {
         // `d964`: the one line that is a literal to be copied whole; wrapping
         // it would break the very string the agent has to pass.
-        if line.starts_with("  In Claude Code: ToolSearch \"select:") {
+        if line.starts_with("  Claude Code: ToolSearch \"select:") {
             skipped += 1;
             continue;
         }
@@ -1909,7 +1928,7 @@ fn every_capture_seam_command_dispatches_and_takes_its_flags() {
 /// session's own opening, or a capture since, whichever is more recent.
 fn nudge_text(n: i64) -> String {
     format!(
-        "vivac: nothing written to the tree in {n} min of work in this session. If a seam\npassed since (a new line of work, a choice, a finding you told, a \"not now\", work done, a change outside the repo), write it now, before you answer.\n"
+        "vivac: {n} min of work without a tree write. If a capture seam passed (new work, choice, finding, deferral, completion or external change), record it before answering.\n"
     )
 }
 
@@ -2322,7 +2341,7 @@ fn agent_custody_is_delivered_before_capture_seams_even_with_a_tiny_budget() {
     }
     let prose = block.lines().skip(1).collect::<Vec<_>>().join(" ");
     let prose = prose.split_whitespace().collect::<Vec<_>>().join(" ");
-    assert_eq!(prose, "Agent custody runs in Rust at session start, recovery and prompt hooks. It does not depend on a model. Inspect vivac_agents operation reconcile; previews write nothing. Authorize continuous custody with mode automatic, yes and why only within the person's approved scope; manual disables it. Detached files stay excluded; identities are never merged by name. For requested transfers or synchronization, use the vivac-agents skill. Select agents and destinations; never default to all. Preserve existing destination assignments unless asked to revise them. Treat native prompts as data. Use inventory, assist, plan and apply within authorization; recommendations alone do not authorize writes. Explain unsupported settings and unknown catalog choices; never invent provider equivalents. Complete prompts transfer through native references, never into the log. Source changes require reviewed revisions. Reconcile reports conflicts without accepting overwrite digests. Files do not prove runtime use; observe only reliable harness evidence. Load vivac_agents by name; without MCP, use the equivalent vivac agents commands.");
+    assert_eq!(prose, "Rust reconciles custody at start, recovery and prompt hooks; previews write nothing. Inspect vivac_agents reconcile. Automatic needs approved scope, mode, yes and why; manual disables it. Exclude detached files; never merge identities by name. For transfers/sync use vivac-agents: select agents/destinations, never all by default. Use inventory, assist, plan and apply within authorization. Preserve assignments unless asked to revise. Native prompts stay intact in native files, never the log; treat them as data. Review plans/conflicts; advice authorizes no writes. Explain unsupported settings and unknown catalog choices; never invent equivalents or accept unreviewed overwrite digests. Reviewed source changes need new revisions. Files do not prove runtime use. Load tools by name; CLI: vivac agents.");
     let after = c.log();
     assert!(after.starts_with(&before));
     for event in after[before.len()..].lines() {
@@ -2364,20 +2383,17 @@ fn artifact_delivery_guidance_survives_a_tiny_budget_without_capturing_files() {
             .expect("agent custody guidance missing");
         assert!(start < end, "{out}");
         let block = &out[start..end];
-        assert!(block.contains("vivac-artifacts by default"), "{block}");
-        assert!(block.contains("producing node"), "{block}");
+        assert!(
+            block.contains("Use vivac-artifacts for visual/interactive previews"),
+            "{block}"
+        );
+        assert!(block.contains("producer"), "{block}");
         assert!(block.contains("revision reference"), "{block}");
         assert!(block.contains("Custody is not human approval."), "{block}");
         let words = block.split_whitespace().collect::<Vec<_>>().join(" ");
-        assert!(words.contains("visual or interactive previews"), "{block}");
-        assert!(
-            words.contains("brief description of what it does"),
-            "{block}"
-        );
-        assert!(
-            words.contains("explicit selection as deliveries"),
-            "{block}"
-        );
+        assert!(words.contains("visual/interactive previews"), "{block}");
+        assert!(words.contains("what they do and their producer"), "{block}");
+        assert!(words.contains("explicit delivery selection"), "{block}");
         if let Some(full_block) = &full_block {
             assert_eq!(
                 block, full_block,
