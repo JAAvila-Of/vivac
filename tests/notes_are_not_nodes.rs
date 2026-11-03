@@ -312,21 +312,24 @@ fn a_title_that_is_the_id_of_a_node_is_refused_over_mcp() {
 fn the_seams_block_carries_the_new_head_and_hints() {
     let c = Sandbox::new_seeded("nn-seams");
     let (plain, _) = c.run_stdin(&["session", "start", "--hook"], "{}");
-    let head = "  Look first: vivac_find \"<words>\". Work the tree already holds is never\n  opened twice: what you find, settle or leave to do while on it is a node\n  under it, not a note.";
-    assert!(plain.contains(head), "{plain}");
+    for head in [
+        "Find first with vivac_find; continue existing work, never duplicate it.",
+        "File discoveries, choices and pending work as typed nodes, not notes.",
+    ] {
+        assert!(plain.contains(head), "{plain}");
+    }
     assert!(!plain.contains("focus above"), "{plain}");
+    assert!(!plain.contains("Focus may belong"), "{plain}");
     c.ok(&["push", "A goal", "--why", "it is needed"]);
     let (focused, _) = c.run_stdin(&["session", "start", "--hook"], "{}");
-    assert!(
-        focused.contains(
-            "  Look first: vivac_find \"<words>\". Work the tree already holds is never
-  opened twice: what you find, settle or leave to do while on it is a node
-  under it, not a note. The focus above is where work was left, maybe not
-  by you: hang new work from what it continues.
-"
-        ),
-        "{focused}"
-    );
+    let words = focused.split_whitespace().collect::<Vec<_>>().join(" ");
+    for head in [
+        "Find first with vivac_find; continue existing work, never duplicate it.",
+        "File discoveries, choices and pending work as typed nodes, not notes.",
+        "Focus may belong to another session; name the parent you continue, or root if unrelated.",
+    ] {
+        assert!(words.contains(head), "{focused}");
+    }
     assert!(
         focused.contains(
             "  a choice is settled  vivac_decide  title, reason, alternative\n                       yours or the person's\n"
@@ -362,23 +365,36 @@ fn the_tool_texts_carry_the_new_sentences() {
     };
     let note = description("vivac_note");
     for want in [
-        "how the work on it went, or something that changed outside git -- CI, a tracker, the cloud -- that the tree is the only record of.",
-        "A note never carries a finding, a choice (yours or the person's) or something left to do: each of those is a node under this one, filed with `vivac_add` or `vivac_decide`, so it shows up as what it is.",
-        "When a node keeps collecting notes with nothing filed under it, the answer says so.",
+        "Attach progress or changes outside Git without changing focus.",
+        "Findings, choices and pending work need typed nodes, never notes.",
+        "CI/tracker/cloud facts belong here because Git does not retain them.",
+        "Excess notes without children are flagged.",
     ] {
         assert!(note.contains(want), "{note}");
     }
     let add = description("vivac_add");
     for want in [
-        "this is for what was just noticed. Something left to do that turns up while working on a node is a task filed under it, never a note on it.",
-        "its outcome starting with Record:. The title is words, never an id: the node it hangs from goes in `parent`.",
+        "File a typed node without changing focus: findings, pending work or a branch of existing work.",
+        "close records immediately with vivac_done and a Record: outcome.",
     ] {
         assert!(add.contains(want), "{add}");
     }
+    let add = tools.iter().find(|t| t["name"] == "vivac_add").unwrap();
+    assert_eq!(
+        add["inputSchema"]["properties"]["title"]["description"],
+        "Title words, never an ID; parent ID goes in parent."
+    );
+    assert!(
+        add["inputSchema"]["properties"]["parent"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("Parent node ID/alias"),
+        "{add}"
+    );
     let decide = description("vivac_decide");
     assert!(
         decide.contains(
-            "Record a decision, with the reason it was made and every alternative that lost. The choice can be yours or the person's; either way it is a decision, never a note."
+            "Record a settled choice (yours or the person's), its reason and every rejected alternative now."
         ),
         "{decide}"
     );
@@ -401,11 +417,22 @@ fn a_norm_the_person_sets_is_taught_as_a_constraint() {
         ),
         "{plain}"
     );
-    assert_eq!(
-        plain.matches("mcp__vivac__vivac_add,").count(),
-        1,
-        "a second row for vivac_add put it in the load list twice:\n{plain}"
+    assert!(
+        plain.contains("Deferred MCP: load only the needed tool before use."),
+        "{plain}"
     );
+    assert!(
+        plain
+            .lines()
+            .any(|line| line == "  Claude Code: ToolSearch \"select:mcp__vivac__vivac_find\""),
+        "{plain}"
+    );
+    assert!(
+        plain.contains("Substitute the needed tool name. No MCP: use equivalent vivac CLI."),
+        "{plain}"
+    );
+    assert!(!plain.contains("mcp__vivac__vivac_find,"), "{plain}");
+    assert!(!plain.contains("mcp__vivac__vivac_add,"), "{plain}");
     let mut s = Server::start(&c);
     let r = s.ask(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#);
     let tools = r["result"]["tools"].as_array().unwrap();
@@ -422,9 +449,7 @@ fn a_norm_the_person_sets_is_taught_as_a_constraint() {
         .to_string();
     assert!(!decide.contains("a limit they set"), "{decide}");
     assert!(
-        decide.contains(
-            "A norm the person sets for the work from now on is not a choice: file it with vivac_add as a constraint, even when they call it a rule."
-        ),
+        decide.contains("Norms: use vivac_add constraint (root if global), even if called rules."),
         "{decide}"
     );
     for name in ["vivac_add", "vivac_push"] {
@@ -433,7 +458,7 @@ fn a_norm_the_person_sets_is_taught_as_a_constraint() {
             .unwrap_or_else(|| panic!("{name} has no type"))
             .to_string();
         assert!(
-            text.contains("A norm the person sets for the work from now on is a constraint, with root when it holds for all work, so every brief shows it. A rule is a line a pillar draws, read with vivac_rules when work is checked."),
+            text.contains("User norms: constraint (root if global); rule: pillar criterion, read via vivac_rules; pillar: name and what it rejects."),
             "{name}: {text}"
         );
     }

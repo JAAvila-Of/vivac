@@ -348,7 +348,7 @@ const TOOLS: &[Tool] = &[
                 name: "title",
                 kind: ArgKind::Str,
                 required: true,
-                description: "What this node is, in a few words.",
+                description: "Title words, never an ID; parent ID goes in parent.",
             },
             Arg {
                 name: "why",
@@ -360,7 +360,7 @@ const TOOLS: &[Tool] = &[
                 name: "type",
                 kind: ArgKind::Str,
                 required: false,
-                description: "goal, task, decision, question, constraint, finding, assumption, pillar or rule. Default task under focus, goal at root.",
+                description: "goal, task, decision, question, constraint, finding, assumption, pillar or rule. Default task under focus, goal at root. User norms: constraint (root if global); rule: pillar criterion, read via vivac_rules; pillar: name and what it rejects.",
             },
             Arg {
                 name: "blocks",
@@ -474,7 +474,7 @@ const TOOLS: &[Tool] = &[
                 name: "title",
                 kind: ArgKind::Str,
                 required: true,
-                description: "What this node is, in a few words.",
+                description: "Title words, never an ID; parent ID goes in parent.",
             },
             Arg {
                 name: "parent",
@@ -492,7 +492,7 @@ const TOOLS: &[Tool] = &[
                 name: "type",
                 kind: ArgKind::Str,
                 required: false,
-                description: "goal, task, decision, question, constraint, finding, assumption, pillar or rule. Default task under focus, goal at root.",
+                description: "goal, task, decision, question, constraint, finding, assumption, pillar or rule. Default task under focus, goal at root. User norms: constraint (root if global); rule: pillar criterion, read via vivac_rules; pillar: name and what it rejects.",
             },
             Arg {
                 name: "blocks",
@@ -548,7 +548,7 @@ const TOOLS: &[Tool] = &[
         name: "vivac_decide",
         title: "Record a decision",
         read_only: false,
-        description: "Record a settled choice, its reason and every rejected alternative now. Alternatives are semantically required even though optional in the schema. Norms are constraints, not choices. Use against for each applicable pillar/rule plus its compliance sentence; silent judgement is not a declaration.",
+        description: "Record a settled choice (yours or the person's), its reason and every rejected alternative now. Alternatives are semantically required even though optional in the schema. Norms: use vivac_add constraint (root if global), even if called rules. Use against for each applicable pillar/rule plus its compliance sentence; silent judgement is not a declaration.",
         args: &[
             Arg {
                 name: "title",

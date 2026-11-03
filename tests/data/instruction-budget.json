@@ -410,9 +410,9 @@
       "utf8_bytes": 1573
     },
     "mcp.vivac_add.argument_descriptions": {
-      "estimated_tokens_chars_div_4": 215,
-      "unicode_chars": 860,
-      "utf8_bytes": 860
+      "estimated_tokens_chars_div_4": 250,
+      "unicode_chars": 998,
+      "utf8_bytes": 998
     },
     "mcp.vivac_add.description": {
       "estimated_tokens_chars_div_4": 104,
@@ -420,9 +420,9 @@
       "utf8_bytes": 413
     },
     "mcp.vivac_add.schema_json": {
-      "estimated_tokens_chars_div_4": 385,
-      "unicode_chars": 1538,
-      "utf8_bytes": 1538
+      "estimated_tokens_chars_div_4": 419,
+      "unicode_chars": 1676,
+      "utf8_bytes": 1676
     },
     "mcp.vivac_agents.argument_descriptions": {
       "estimated_tokens_chars_div_4": 213,
@@ -490,9 +490,9 @@
       "utf8_bytes": 577
     },
     "mcp.vivac_decide.description": {
-      "estimated_tokens_chars_div_4": 74,
-      "unicode_chars": 295,
-      "utf8_bytes": 295
+      "estimated_tokens_chars_div_4": 89,
+      "unicode_chars": 355,
+      "utf8_bytes": 355
     },
     "mcp.vivac_decide.schema_json": {
       "estimated_tokens_chars_div_4": 297,
@@ -605,9 +605,9 @@
       "utf8_bytes": 344
     },
     "mcp.vivac_push.argument_descriptions": {
-      "estimated_tokens_chars_div_4": 231,
-      "unicode_chars": 923,
-      "utf8_bytes": 923
+      "estimated_tokens_chars_div_4": 266,
+      "unicode_chars": 1061,
+      "utf8_bytes": 1061
     },
     "mcp.vivac_push.description": {
       "estimated_tokens_chars_div_4": 81,
@@ -615,9 +615,9 @@
       "utf8_bytes": 323
     },
     "mcp.vivac_push.schema_json": {
-      "estimated_tokens_chars_div_4": 402,
-      "unicode_chars": 1607,
-      "utf8_bytes": 1607
+      "estimated_tokens_chars_div_4": 437,
+      "unicode_chars": 1745,
+      "utf8_bytes": 1745
     },
     "mcp.vivac_rules.argument_descriptions": {
       "estimated_tokens_chars_div_4": 0,

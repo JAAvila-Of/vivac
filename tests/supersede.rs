@@ -531,7 +531,7 @@ fn the_add_and_push_tools_declare_supersedes() {
     let mut s = Server::start(&c);
     let r = s.ask(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#);
     let tools = r["result"]["tools"].as_array().unwrap().clone();
-    let described = "An earlier decision, constraint, rule or pillar this one replaces, while it is still in force: it becomes superseded and keeps its history. For a node filed with the wrong type, write the one it should have been and name the old one here. This node has to be one of those four types too.";
+    let described = "Retire an in-force decision/constraint/rule/pillar, preserving history. New node must be one of those kinds; use the correct kind for a misclassified norm.";
     for name in ["vivac_add", "vivac_push"] {
         let tool = tools.iter().find(|t| t["name"] == name).unwrap();
         let p = &tool["inputSchema"]["properties"]["supersedes"];
