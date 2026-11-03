@@ -473,6 +473,7 @@ clips
 clock
 clone
 cloned
+clones
 cloning
 close
 closed
@@ -1005,6 +1006,7 @@ exrescode
 ext
 extend
 extended
+extending
 extends
 extension
 extensions
@@ -1418,6 +1420,7 @@ iquorum
 is
 ish
 isig
+isolate
 isolated
 it
 item
@@ -1857,6 +1860,7 @@ out2
 out3
 outcome
 outer
+outlive
 outlives
 outln
 output
@@ -2744,6 +2748,7 @@ subsec
 subsequence
 substituted
 substitutes
+substitution
 subtree
 success
 successful
@@ -3128,6 +3133,7 @@ warn
 warning
 warns
 was
+watch
 way
 wdk
 weak
