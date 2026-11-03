@@ -1,4 +1,4 @@
 ---
 name: vivac-migrate
-description: Bring everything a project already knows into the vivac tree, from another memory system, the harness's own memory, instruction files for any agent, decision records and internal documents; check it, and retire the other maps with the person's yes. Use when asked to migrate, import or move memories, notes, rules, decisions or documentation into vivac, to bring what a project knows into it, or to turn another memory system off for a project that uses vivac, even one with nothing to bring in.
+description: Migrate project knowledge, memories, decisions and instructions into vivac; verify coverage and retire other memory maps only with approval. Use for imports or turning another memory system off, even with nothing to import. Agent configuration transfer uses vivac-agents.
 ---
