@@ -1,5 +1,16 @@
 # Security
 
+## Data already persisted or exposed
+
+If sensitive information has reached a tree or escaped its intended custody,
+start with [Sensitive-data incidents](docs/INCIDENT-RESPONSE.md). Revoke exposed
+credentials at their issuer, stop further distribution and restrict affected
+stores and copies. Closing a node, deleting an index or recovering a backup
+does not sanitize its history. The guide separates actions available now from
+the acceptance contract for a future sanitation operation.
+
+## Reporting a vulnerability
+
 A security flaw is the one report that does not go in an issue. It goes
 privately:
 

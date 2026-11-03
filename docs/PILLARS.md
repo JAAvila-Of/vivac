@@ -414,6 +414,22 @@ tree is a map of where a system is weak and not yet fixed.**
   `cargo`, or `curl` and `tar` -- so the binary carries no network code of its
   own. With no terminal there is no yes to give, and it installs nothing.
 
+### Sensitive-data incidents
+
+Prevention does not establish that historical data is safe. If prohibited data
+has persisted, revoking an exposed credential and stopping further disclosure
+take priority over continuing to use that tree. Closing or abandoning a node
+does not remove its events. A backup is not a sanitized history.
+
+Ordinary writes remain append-only. Any future sanitation operation must be
+explicit maintenance: preserve the restricted source, prepare a separately
+identified successor in a new private destination, record the transformation
+without the removed values, and publish only a complete verified result. It
+must not silently rewrite the authority in place or claim to erase earlier
+copies. Authorized sensitive artifact custody is a separate policy, not by
+itself a provenance incident. See the current response guidance and future
+acceptance contract in [Sensitive-data incidents](INCIDENT-RESPONSE.md).
+
 ### Local recovery copies
 
 An explicitly requested local backup may copy the authoritative tree and the
