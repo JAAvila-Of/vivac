@@ -1635,6 +1635,7 @@ me
 means
 measure
 measured
+measurements
 measures
 media
 mem
@@ -1667,6 +1668,7 @@ milliseconds
 mime
 min
 mine
+minimum
 mint
 minted
 minus
@@ -1724,6 +1726,7 @@ narrow
 native
 nd
 ne
+near
 nearest
 need
 needed
@@ -1885,6 +1888,7 @@ over
 overall
 overdue
 overflow
+overhead
 overlap
 overlapped
 overlong
@@ -2046,6 +2050,7 @@ precedence
 precedes
 precision
 precomposed
+predicted
 prefers
 prefix
 prefixes
@@ -2099,6 +2104,7 @@ program
 progress
 proj
 project
+projected
 projection
 projects
 promise
@@ -2562,6 +2568,7 @@ serialize
 serialized
 serializer
 serializing
+series
 serve
 served
 server
@@ -2709,6 +2716,7 @@ startup
 stat
 state
 statement
+states
 static
 station
 stats
@@ -2811,6 +2819,7 @@ symlinks
 sync
 synchronize
 synchronous
+synthetic
 sys
 syscall
 system

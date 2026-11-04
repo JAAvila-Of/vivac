@@ -1081,3 +1081,116 @@ authoritative fallback latency, other platforms or native model reception.
 Reproduce with the same `prepare` and `run` commands and aging controls above;
 identify the actual source and executable instead of relying on their shared
 `0.21.0` version string.
+
+## Private sanitation planner: measurement scope
+
+The opt-in release tests in `src/sanitation/measurements.rs` measure the real
+private planning core. They do not expose a sanitation command. Each case
+uses two series of three independently prepared synthetic fixtures. Capture
+and `verify_unchanged` are timed separately; fixture generation, source
+snapshots, envelope inspection and cleanup are outside those timers. Source
+snapshots also warm filesystem reads, and verification follows capture. These
+are neither cold-cache nor contended-writer measurements.
+
+Each sample emits JSON with its case, series, phase, input and expanded-plan
+counts, elapsed time and peak additional Rust heap measured on the calling
+thread. That heap counter is not process RSS, total resident memory or a
+measurement of stack and operating-system allocations. A rejected capture has
+no plan: its verification is reported as `not_run`, with null measurements.
+Envelope boundary cases distinguish predicted serialized size from the size
+of a successfully captured plan and check that the two agree on acceptance.
+
+The cases separate 10,000 distinct nodes, a 256 MiB log with selected notes,
+the same volume of unselected notes, encoded event lines at and above 1 MiB,
+and serialized plans near and above 512 KiB. A separate oversized-log case
+checks the size refusal. Three samples per series do not establish p99;
+retain the raw observations and report medians and maxima instead.
+
+These measurements do not establish a sanitation-specific latency or memory
+budget. Artifact-retention targets concern another operation. Custody member
+counts and bytes, dense selections, deep histories, simultaneous limits and
+other platforms remain outside this initial matrix. The complete exposure
+requirements in [Sanitation design](SANITATION-DESIGN.md) still apply.
+
+Run an individual case with its full test name, replacing the suffix for
+another case:
+
+```text
+cargo test --locked --release --bin vivac sanitation::measurements::event_line_at_limit -- --ignored --exact --nocapture --test-threads=1
+```
+
+The other suffixes are `distinct_nodes_10000`, `selected_notes_log_limit`,
+`retained_notes_log_limit`, `log_limit_plus_one`, `event_line_limit_plus_one`,
+`envelope_near_limit` and `envelope_over_limit`. Preserve the emitted JSON for
+both series, including refusals; fixture-generation time is not operation
+latency. A 64 KiB copy buffer does not bound the complete history fold's heap.
+
+### Windows observations, 4 November 2026
+
+All eight opt-in cases completed successfully. The [96 phase observations](measurements/sanitation-planner-windows-2026-11-04.jsonl)
+retain both series: 60 accepted phases, 18 refused captures and 18 `not_run`
+verification records. Console line wrapping in the first case was rejoined to
+recover its JSON objects; their field values were preserved. This completes
+the initial matrix, not the exposure requirements or a performance budget.
+
+The instrument was compiled from commit `500850a` with Rust 1.94.1 and the
+repository's release profile: optimization level 3, LTO and one codegen unit.
+The host ran Windows 11 Enterprise 10.0.26200 on a Ryzen 5 5600G with six cores,
+twelve logical processors and approximately 31.9 GiB visible RAM. Fixtures
+used the fixed NTFS system volume. Managed Rust work was serialized; no
+idle-host or cold-cache control was imposed. Queueing and compilation are
+outside the measured operations.
+
+For the accepted 1 MiB event-line case, series A capture took 8.532 ms median
+and 9.519 ms maximum; series B took 8.185 / 8.250 ms. Verification took
+4.522 / 4.615 ms in A and 4.417 / 4.688 ms in B. Peak additional Rust heap
+was 4,270,853 bytes for capture and 4,261,982 bytes for verification in both
+series. Each fixture contained three events and three required source files.
+This single shape does not characterize complete-history or custody costs.
+
+Adding one byte to that encoded event line caused all six captures to refuse.
+Refusal took 3.370 / 3.404 ms median / maximum in A and 3.200 / 4.504 ms in B,
+with 2,162,736 bytes peak additional Rust heap. Verification was not run and
+has no measured cost in this case.
+
+The remaining cases produced the following median / maximum times in
+milliseconds. Each row contains three samples; A and B remain separate.
+
+| Case | Series | Capture median / maximum (ms) | Verify median / maximum (ms) |
+|---|---|---:|---:|
+| 10,000 nodes | A | 376.793 / 630.157 | 193.665 / 194.962 |
+| 10,000 nodes | B | 389.976 / 396.205 | 175.558 / 183.823 |
+| 256 MiB, selected notes | A | 1,172.484 / 1,707.519 | 584.741 / 666.643 |
+| 256 MiB, selected notes | B | 1,140.528 / 1,160.840 | 579.560 / 584.087 |
+| 256 MiB, retained notes | A | 16,344.784 / 17,550.164 | 8,507.977 / 8,531.821 |
+| 256 MiB, retained notes | B | 16,727.899 / 17,813.754 | 8,352.091 / 8,542.619 |
+| Envelope near limit | A | 145.934 / 146.482 | 75.071 / 76.378 |
+| Envelope near limit | B | 147.563 / 151.219 | 79.046 / 79.607 |
+| Envelope over limit: refused | A | 144.753 / 906.775 | Not run |
+| Envelope over limit: refused | B | 145.269 / 146.063 | Not run |
+| Log over limit: refused | A | 0.868 / 57.332 | Not run |
+| Log over limit: refused | B | 1.093 / 1.319 | Not run |
+
+Both volume cases contain exactly 268,435,456 log bytes, 258 events and one
+node. Selecting all 256 notes yielded 4,403,636 bytes peak additional Rust heap
+for capture and 4,338,244 for verification. Selecting only the title, leaving
+those notes in the fold, yielded 544,258,430 and 275,837,926 bytes respectively.
+The latter capture exceeds 519 MiB of additional Rust heap; its median takes
+over 16 seconds in both series. These results warrant investigation before
+exposure, rather than a claim that the 64 KiB buffer bounds planning memory.
+They do not identify the cause of every allocation or establish a budget miss.
+
+The 10,000-node fixture has 10,001 events and a 2,497,998-byte log. Its capture
+and verification peaks were 17,214,854 and 10,592,782 additional Rust heap bytes.
+The near-limit envelope contains 5,819 locations and measures 524,266 bytes,
+22 bytes below 512 KiB; predicted and actual sizes agree in all six captures.
+One more selected occurrence projects to 524,356 bytes and is refused; there
+is no captured envelope to measure for that case. A log file of 268,435,457
+bytes is also refused. The envelope-over and log-over peaks were 3,512,142 and
+392 bytes respectively. All maxima, including the 906.775 ms and 57.3315 ms
+refusal outliers, remain in the raw observations; they were not discarded.
+
+Every accepted fixture in this matrix has only the log, configuration and lock
+as its three required files. No custody workload is represented. Completing
+these eight cases does not complete the pending custody and dense-selection
+measurements, validate other platforms or authorize a user-facing command.

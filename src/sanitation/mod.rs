@@ -1,6 +1,7 @@
 mod capture;
 mod history;
 mod json;
+mod measurements;
 mod schema;
 #[cfg(test)]
 mod tests;
