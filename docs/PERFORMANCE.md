@@ -1244,3 +1244,84 @@ then passed on the after observations, with all twelve required phases accepted.
 This removes the overlapping-fold peak; a single fold still retains substantial
 memory. Capture still takes roughly 16–17 seconds median for this fixture;
 these samples do not establish a latency improvement or a process-RSS reduction.
+
+### Custody and selection density
+
+These opt-in cases separate selected-field density from retained-file costs.
+They use the same two-series, three-sample method, phase timers and additional
+Rust heap counter as the initial matrix. Fixture generation and source snapshots
+remain outside the timers; snapshots warm filesystem reads. Every capture must
+succeed, verification must accept the unchanged source, the source snapshot must
+remain identical and the destination must remain absent.
+
+| Case suffix | Controlled input | Expected expansion |
+|---|---|---|
+| `dense_notes_selectors_1` | 1 selected node among 1,024 nodes, four notes each | 1 selector, 4 locations |
+| `dense_notes_selectors_128` | Same history, 128 selected nodes | 128 selectors, 512 locations |
+| `dense_notes_selectors_512` | Same history, 512 selected nodes | 512 selectors, 2,048 locations |
+| `dense_notes_selectors_1024` | Same history, all nodes selected | 1,024 selectors, 4,096 locations |
+| `custody_objects_1` | One retained object, 1 MiB payload | 5 required files |
+| `custody_objects_64` | 64 retained objects, 1 MiB total payload | 68 required files |
+| `custody_objects_512` | 512 retained objects, 1 MiB total payload | 516 required files |
+| `custody_object_hundred_mib` | One retained object, 100 MiB payload | 5 required files |
+
+The dense cases keep the same 1,024 nodes and 4,096 small notes while varying
+the selected set. Each selector covers every note on its node. Custody cases
+retain actual simple artifact revisions under strict inspection in the main
+lane. Required files include the objects, their site marker and the three
+source files. `custody_object_count` counts retained objects;
+`custody_payload_bytes` sums their bytes and excludes the site marker and source
+files. `custody_site_bytes` records the marker separately: 26 bytes in these
+custody fixtures and zero in cases without custody. Payloads are generated in
+bounded chunks from safe synthetic text.
+
+These cases do not establish a general selector limit or a sanitation budget.
+They do not cover native agent custody, bundles, multiple lanes, deep ancestry,
+simultaneous limits, cold caches or other platforms. The 100 MiB case uses the
+artifact per-file limit; it does not characterize the separate 256 MiB backup
+member limit. Raw observations, source attribution and measured results are
+required before drawing conclusions from this matrix.
+
+The [Windows phase observations](measurements/sanitation-custody-density-b5212d9.jsonl)
+are measured from source commit `b5212d9`, with Rust 1.94.1 and the repository's
+unchanged release profile on the host described above. Each reported case must
+retain all twelve accepted observations; source and destination assertions are
+also required for a successful measurement test.
+
+All eight cases completed with exit 0: 96 accepted phase observations, with
+the expected counts, unchanged sources and absent destinations. The dense
+fixtures all contain exactly 1,257,515 log bytes and 5,121 events. Times below
+are median / maximum milliseconds within each three-sample series; heap peaks
+are additional Rust heap bytes measured separately for capture / verification.
+
+| Case | Series | Capture median / maximum (ms) | Verify median / maximum (ms) | Capture / verify heap peaks (bytes) |
+|---|---|---:|---:|---:|
+| 1 selector, 4 locations | A | 146.665 / 280.028 | 88.223 / 113.632 | 1,924,162 / 1,920,303 |
+| 1 selector, 4 locations | B | 137.900 / 141.060 | 76.085 / 88.544 | 1,924,066 / 1,920,399 |
+| 128 selectors, 512 locations | A | 142.688 / 148.032 | 72.567 / 77.737 | 2,063,750 / 2,007,463 |
+| 128 selectors, 512 locations | B | 136.334 / 147.420 | 70.764 / 80.393 | 2,063,750 / 2,007,463 |
+| 512 selectors, 2,048 locations | A | 144.154 / 148.617 | 71.200 / 76.547 | 2,536,022 / 2,321,527 |
+| 512 selectors, 2,048 locations | B | 140.535 / 141.721 | 68.395 / 69.626 | 2,536,022 / 2,321,527 |
+| 1,024 selectors, 4,096 locations | A | 171.077 / 174.853 | 85.525 / 147.650 | 3,166,646 / 2,741,207 |
+| 1,024 selectors, 4,096 locations | B | 187.864 / 191.030 | 90.336 / 114.338 | 3,166,646 / 2,741,207 |
+| 1 object, 1 MiB total payload | A | 71.535 / 72.014 | 36.460 / 37.931 | 147,162 / 142,149 |
+| 1 object, 1 MiB total payload | B | 70.936 / 71.227 | 36.073 / 36.124 | 147,162 / 142,149 |
+| 64 objects, 1 MiB total payload | A | 165.584 / 170.424 | 89.413 / 89.558 | 258,063 / 227,262 |
+| 64 objects, 1 MiB total payload | B | 216.254 / 229.435 | 118.308 / 119.906 | 258,063 / 227,262 |
+| 512 objects, 1 MiB total payload | A | 1,055.331 / 1,134.443 | 534.034 / 673.833 | 1,072,111 / 855,550 |
+| 512 objects, 1 MiB total payload | B | 947.259 / 1,030.581 | 545.587 / 679.283 | 1,072,111 / 855,550 |
+| 1 object, 100 MiB payload | A | 7,092.298 / 7,375.111 | 3,808.197 / 4,712.812 | 147,162 / 142,149 |
+| 1 object, 100 MiB payload | B | 9,474.469 / 9,514.750 | 3,966.794 / 4,006.374 | 147,162 / 142,149 |
+
+The largest dense case produces a 424,518-byte envelope, within 512 KiB.
+These samples do not establish the worst-case cost of checking each location
+against the selection with a linear search. At fixed custody payload, increasing object count also
+adds receipts, file identities and open handles; the times include those costs.
+The 512-object fixture has a 311,652-byte log and 516 required files, compared
+with 1,069 log bytes and five required files for one object.
+
+The 100 MiB object and the 1 MiB object have the same observed heap peaks in
+both phases. The larger file still costs seconds to capture and verify; these
+observations do not identify the share spent hashing, inspecting or opening
+files. They neither bound process RSS nor justify a general constant-memory
+claim. Both series and all outliers remain in the raw data.
