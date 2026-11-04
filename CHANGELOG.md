@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.1](https://github.com/JAAvila-Of/vivac/compare/v0.22.0...v0.22.1) - 2026-11-03
+
+### Documentation
+
+- *(security)* define sensitive-data incident response
+
+### Fixed
+
+- *(artifacts)* resolve retained revisions across lanes ([#315](https://github.com/JAAvila-Of/vivac/pull/315))
+
+### Internal
+
+- *(security)* pin sanitation history fixtures and design ([#313](https://github.com/JAAvila-Of/vivac/pull/313))
+
+### Performance
+
+- *(context)* compact model instructions with delivery budgets ([#314](https://github.com/JAAvila-Of/vivac/pull/314))
+
 ## [0.22.0](https://github.com/JAAvila-Of/vivac/compare/v0.21.0...v0.22.0) - 2026-11-02
 
 ### Upgrading
