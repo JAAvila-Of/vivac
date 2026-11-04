@@ -1124,3 +1124,32 @@ The other suffixes are `distinct_nodes_10000`, `selected_notes_log_limit`,
 `envelope_near_limit` and `envelope_over_limit`. Preserve the emitted JSON for
 both series, including refusals; fixture-generation time is not operation
 latency. A 64 KiB copy buffer does not bound the complete history fold's heap.
+
+### Windows observations, 4 November 2026
+
+Only the two event-line cases have been measured so far. The other six cases
+remain unmeasured; the initial data below do not establish their outcomes or
+costs. The [24 initial observations](measurements/sanitation-planner-windows-2026-11-04-partial.jsonl)
+retain both series, including the `not_run` verification records. Console line
+wrapping in the first case was rejoined to recover its JSON objects; their
+field values were preserved. This is a partial dataset, not the complete matrix.
+
+The instrument was compiled from commit `500850a` with Rust 1.94.1 and the
+repository's release profile: optimization level 3, LTO and one codegen unit.
+The host ran Windows 11 Enterprise 10.0.26200 on a Ryzen 5 5600G with six cores,
+twelve logical processors and approximately 31.9 GiB visible RAM. Fixtures
+used the fixed NTFS system volume. Managed Rust work was serialized; no
+idle-host or cold-cache control was imposed. Queueing and compilation are
+outside the measured operations.
+
+For the accepted 1 MiB event-line case, series A capture took 8.532 ms median
+and 9.519 ms maximum; series B took 8.185 / 8.250 ms. Verification took
+4.522 / 4.615 ms in A and 4.417 / 4.688 ms in B. Peak additional Rust heap
+was 4,270,853 bytes for capture and 4,261,982 bytes for verification in both
+series. Each fixture contained three events and three required source files.
+This single shape does not characterize complete-history or custody costs.
+
+Adding one byte to that encoded event line caused all six captures to refuse.
+Refusal took 3.370 / 3.404 ms median / maximum in A and 3.200 / 4.504 ms in B,
+with 2,162,736 bytes peak additional Rust heap. Verification was not run and
+has no measured cost in this case.
