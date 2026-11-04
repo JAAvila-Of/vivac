@@ -199,8 +199,31 @@ history is written independently; tests do not generate it with a substitute
 sanitizer. The fixture prefix deliberately excludes the future transformation
 record until that record's schema and compatibility guard exist.
 
-These tests establish representable historical-prefix oracles. They do not
+These fixture tests establish representable historical-prefix oracles. They do not
 test selection parsing, sanitation, copying, crash recovery, old-engine refusal,
 initial sharing policy, custody transfer, MCP/web delivery or absence in
 external copies. Those remain implementation requirements from the incident
 contract, not covered claims.
+
+## Private planning core
+
+`src/sanitation/` implements a planning core compiled only for tests. It captures
+explicit source and lane roots under an existing shared writer lock, checks raw
+event schemas before typed decoding, and locates selected fields throughout
+history, including frozen aliases and earlier outcomes. The fixed fixture
+independently checks the seven expected historical locations.
+
+The private versioned envelope binds source identities, complete required file
+membership, sizes and SHA-256 commitments, selection, destination and fixed new
+identities. Its canonical digest binds confirmation to that plan. Rechecking
+reads both pinned handles and current paths. A separate summary contains
+structural references and counts without selected values, paths or file hashes.
+Custodied files retain their recorded policies; legacy strict artifact bytes
+receive content inspection as well as digest verification.
+
+This increment serializes the envelope only in memory. It exposes no CLI, MCP
+or web operation and neither transforms nor publishes a successor. Boundary
+performance measurements, private plan persistence and delivery, transformation
+compatibility, durable receipts and interrupted-publication tests remain
+required before their respective operations can ship. The core's tests do not
+establish removal from external copies or retirement of other writers.

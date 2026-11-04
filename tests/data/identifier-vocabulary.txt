@@ -29,6 +29,7 @@ acquire
 acquisition
 across
 action
+actions
 active
 actor
 actual
@@ -210,6 +211,7 @@ authorities
 authority
 authorization
 authorize
+authorized
 authorizer
 authorizing
 auto
@@ -231,6 +233,7 @@ backend
 backslash
 backtick
 backup
+backups
 backwards
 bad
 badge
@@ -565,6 +568,7 @@ constraint
 constraints
 constructor
 consts
+consume
 consumed
 consuming
 cont
@@ -795,6 +799,7 @@ disabling
 disagree
 disagrees
 disappear
+disappearing
 disappears
 discard
 discarding
@@ -931,6 +936,7 @@ eprint
 eprintln
 eq
 equal
+equality
 equals
 equiv
 equivalence
@@ -987,6 +993,7 @@ exit
 exits
 expand
 expanded
+expands
 expansion
 expect
 expected
@@ -1151,6 +1158,7 @@ gain
 gains
 gamma
 gap
+gaps
 garbage
 gate
 gates
@@ -1377,6 +1385,7 @@ inside
 inspect
 inspected
 inspection
+inspections
 inspects
 install
 installed
@@ -1545,6 +1554,7 @@ localtime
 locate
 located
 location
+locations
 lock
 locked
 lockfile
@@ -1593,6 +1603,7 @@ map
 mapped
 mapping
 mappings
+maps
 margin
 mark
 marked
@@ -1794,6 +1805,7 @@ observations
 observe
 observed
 occupied
+occurrences
 of
 off
 offenders
@@ -1833,6 +1845,7 @@ optional
 options
 opts
 or
+oracle
 ord
 order
 ordered
@@ -1984,6 +1997,7 @@ pillar
 pillars
 pin
 pinned
+pins
 pipe
 piped
 pipelined
@@ -2187,6 +2201,7 @@ received
 receiver
 reception
 recheck
+rechecked
 rechecks
 recipient
 recognise
@@ -2285,6 +2300,7 @@ remains
 remedy
 remembered
 remembers
+remote
 removable
 removal
 removals
@@ -2372,6 +2388,7 @@ restoration
 restore
 restored
 restores
+restrict
 result
 results
 retain
@@ -2379,6 +2396,7 @@ retained
 retaining
 retains
 retention
+retire
 retired
 retirement
 retried
@@ -2417,6 +2435,7 @@ right
 ring
 risk
 rns
+role
 rollback
 rolls
 room
@@ -2455,6 +2474,7 @@ sample
 samples
 sandbox
 sandboxes
+sanitation
 sanitize
 saturating
 save
@@ -2863,6 +2883,7 @@ timed
 timeout
 times
 timescale
+timestamp
 timing
 tiny
 tiocgwinsz

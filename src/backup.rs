@@ -1,6 +1,6 @@
 //! Complete, private local recovery packages.
-mod assets;
-mod privacy;
+pub(crate) mod assets;
+pub(crate) mod privacy;
 
 use crate::args::Args;
 use crate::artifacts::{files, native};
@@ -15,13 +15,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
-const MAX_MANIFEST: u64 = 512 * 1024;
-const MAX_CONFIG: u64 = 64 * 1024;
-const MAX_MARKER: u64 = 8 * 1024;
-const MAX_FILES: usize = 4096;
+pub(crate) const MAX_MANIFEST: u64 = 512 * 1024;
+pub(crate) const MAX_CONFIG: u64 = 64 * 1024;
+pub(crate) const MAX_MARKER: u64 = 8 * 1024;
+pub(crate) const MAX_FILES: usize = 4096;
 pub(crate) const MAX_FILE: u64 = 256 * 1024 * 1024;
-const MAX_TOTAL: u64 = 64 * 1024 * 1024 * 1024;
-const BUFFER: usize = 64 * 1024;
+pub(crate) const MAX_TOTAL: u64 = 64 * 1024 * 1024 * 1024;
+pub(crate) const BUFFER: usize = 64 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -153,7 +153,7 @@ fn absolute(cwd: &Path, path: &Path) -> Result<PathBuf, Failure> {
     Ok(parent.canonicalize()?.join(leaf))
 }
 
-fn destination(path: &Path) -> Result<(Dir, String), Failure> {
+pub(crate) fn destination(path: &Path) -> Result<(Dir, String), Failure> {
     let parent = path
         .parent()
         .ok_or_else(|| refused("a parent directory is required."))?;
@@ -240,7 +240,7 @@ pub(crate) fn lane_id(lane: &str) -> Result<(), Failure> {
     Ok(())
 }
 
-fn opened(root: &Dir, path: &str) -> Result<File, Failure> {
+pub(crate) fn opened(root: &Dir, path: &str) -> Result<File, Failure> {
     let file = files::regular(root, path)?;
     files::require_single_link(&file)?;
     if file.metadata()?.len() > MAX_FILE {
@@ -257,7 +257,7 @@ fn marker(root: &Dir, identity: &str) -> Result<Option<String>, Failure> {
     marker_file(&mut file, identity).map(Some)
 }
 
-fn marker_file(file: &mut File, identity: &str) -> Result<String, Failure> {
+pub(crate) fn marker_file(file: &mut File, identity: &str) -> Result<String, Failure> {
     file.seek(SeekFrom::Start(0))?;
     let bytes = metadata_bytes(file, MAX_MARKER, "lane marker exceeds 8 KiB.")?;
     privacy::check_json(bytes.as_slice())?;
@@ -280,7 +280,7 @@ fn captured_marker(input: &mut Option<Input>, identity: &str) -> Result<Option<S
         .transpose()
 }
 
-fn configuration(file: &mut File) -> Result<(), Failure> {
+pub(crate) fn configuration(file: &mut File) -> Result<(), Failure> {
     file.seek(SeekFrom::Start(0))?;
     let bytes = metadata_bytes(file, MAX_CONFIG, "tree configuration exceeds 64 KiB.")?;
     privacy::check_json(bytes.as_slice())?;
@@ -303,7 +303,11 @@ fn configuration(file: &mut File) -> Result<(), Failure> {
     Ok(())
 }
 
-fn metadata_bytes(file: &mut File, limit: u64, message: &str) -> Result<Vec<u8>, Failure> {
+pub(crate) fn metadata_bytes(
+    file: &mut File,
+    limit: u64,
+    message: &str,
+) -> Result<Vec<u8>, Failure> {
     if file.metadata()?.len() > limit {
         return Err(refused(message));
     }
@@ -356,7 +360,7 @@ fn fold(file: &mut File, length: u64) -> Result<(String, Tree), Failure> {
     Ok((identity, tree))
 }
 
-fn validate_lineage(tree: &Tree) -> Result<(), Failure> {
+pub(crate) fn validate_lineage(tree: &Tree) -> Result<(), Failure> {
     let mut validated = BTreeSet::new();
     for node in tree.nodes_iter() {
         if validated.contains(&node.num) {

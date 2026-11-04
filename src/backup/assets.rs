@@ -4,13 +4,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum AssetKind {
+pub(crate) enum AssetKind {
     Artifact,
     Agent,
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct AssetFile {
+pub(crate) struct AssetFile {
     pub lane: String,
     pub path: String,
     pub digest: String,
@@ -18,7 +18,7 @@ pub(super) struct AssetFile {
     pub harness: Option<String>,
 }
 
-pub(super) fn required_lanes(tree: &Tree) -> Result<BTreeSet<String>, Failure> {
+pub(crate) fn required_lanes(tree: &Tree) -> Result<BTreeSet<String>, Failure> {
     let mut lanes = crate::artifacts::backup_lanes(tree)?;
     lanes.extend(crate::agents::backup_lanes(tree)?);
     Ok(lanes)
@@ -39,7 +39,7 @@ pub(super) fn collect(
     collect_with_directories(tree, roots, &directories)
 }
 
-pub(super) fn collect_with_directories(
+pub(crate) fn collect_with_directories(
     tree: &Tree,
     roots: &BTreeMap<String, PathBuf>,
     directories: &BTreeMap<String, cap_std::fs::Dir>,
