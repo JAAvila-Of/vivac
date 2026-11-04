@@ -1127,12 +1127,11 @@ latency. A 64 KiB copy buffer does not bound the complete history fold's heap.
 
 ### Windows observations, 4 November 2026
 
-Only the two event-line cases have been measured so far. The other six cases
-remain unmeasured; the initial data below do not establish their outcomes or
-costs. The [24 initial observations](measurements/sanitation-planner-windows-2026-11-04-partial.jsonl)
-retain both series, including the `not_run` verification records. Console line
-wrapping in the first case was rejoined to recover its JSON objects; their
-field values were preserved. This is a partial dataset, not the complete matrix.
+All eight opt-in cases completed successfully. The [96 phase observations](measurements/sanitation-planner-windows-2026-11-04.jsonl)
+retain both series: 60 accepted phases, 18 refused captures and 18 `not_run`
+verification records. Console line wrapping in the first case was rejoined to
+recover its JSON objects; their field values were preserved. This completes
+the initial matrix, not the exposure requirements or a performance budget.
 
 The instrument was compiled from commit `500850a` with Rust 1.94.1 and the
 repository's release profile: optimization level 3, LTO and one codegen unit.
@@ -1153,3 +1152,45 @@ Adding one byte to that encoded event line caused all six captures to refuse.
 Refusal took 3.370 / 3.404 ms median / maximum in A and 3.200 / 4.504 ms in B,
 with 2,162,736 bytes peak additional Rust heap. Verification was not run and
 has no measured cost in this case.
+
+The remaining cases produced the following median / maximum times in
+milliseconds. Each row contains three samples; A and B remain separate.
+
+| Case | Series | Capture median / maximum (ms) | Verify median / maximum (ms) |
+|---|---|---:|---:|
+| 10,000 nodes | A | 376.793 / 630.157 | 193.665 / 194.962 |
+| 10,000 nodes | B | 389.976 / 396.205 | 175.558 / 183.823 |
+| 256 MiB, selected notes | A | 1,172.484 / 1,707.519 | 584.741 / 666.643 |
+| 256 MiB, selected notes | B | 1,140.528 / 1,160.840 | 579.560 / 584.087 |
+| 256 MiB, retained notes | A | 16,344.784 / 17,550.164 | 8,507.977 / 8,531.821 |
+| 256 MiB, retained notes | B | 16,727.899 / 17,813.754 | 8,352.091 / 8,542.619 |
+| Envelope near limit | A | 145.934 / 146.482 | 75.071 / 76.378 |
+| Envelope near limit | B | 147.563 / 151.219 | 79.046 / 79.607 |
+| Envelope over limit: refused | A | 144.753 / 906.775 | Not run |
+| Envelope over limit: refused | B | 145.269 / 146.063 | Not run |
+| Log over limit: refused | A | 0.868 / 57.332 | Not run |
+| Log over limit: refused | B | 1.093 / 1.319 | Not run |
+
+Both volume cases contain exactly 268,435,456 log bytes, 258 events and one
+node. Selecting all 256 notes yielded 4,403,636 bytes peak additional Rust heap
+for capture and 4,338,244 for verification. Selecting only the title, leaving
+those notes in the fold, yielded 544,258,430 and 275,837,926 bytes respectively.
+The latter capture exceeds 519 MiB of additional Rust heap; its median takes
+over 16 seconds in both series. These results warrant investigation before
+exposure, rather than a claim that the 64 KiB buffer bounds planning memory.
+They do not identify the cause of every allocation or establish a budget miss.
+
+The 10,000-node fixture has 10,001 events and a 2,497,998-byte log. Its capture
+and verification peaks were 17,214,854 and 10,592,782 additional Rust heap bytes.
+The near-limit envelope contains 5,819 locations and measures 524,266 bytes,
+22 bytes below 512 KiB; predicted and actual sizes agree in all six captures.
+One more selected occurrence projects to 524,356 bytes and is refused; there
+is no captured envelope to measure for that case. A log file of 268,435,457
+bytes is also refused. The envelope-over and log-over peaks were 3,512,142 and
+392 bytes respectively. All maxima, including the 906.775 ms and 57.3315 ms
+refusal outliers, remain in the raw observations; they were not discarded.
+
+Every accepted fixture in this matrix has only the log, configuration and lock
+as its three required files. No custody workload is represented. Completing
+these eight cases does not complete the pending custody and dense-selection
+measurements, validate other platforms or authorize a user-facing command.
