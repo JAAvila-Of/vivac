@@ -1194,3 +1194,53 @@ Every accepted fixture in this matrix has only the log, configuration and lock
 as its three required files. No custody workload is represented. Completing
 these eight cases does not complete the pending custody and dense-selection
 measurements, validate other platforms or authorize a user-facing command.
+
+### Sanitation fold lifetime comparison
+
+The fold-lifetime experiment uses the same release instrument and synthetic
+fixtures as the initial matrix. The change releases the first folded tree
+after its final custody use, before source verification builds another tree.
+Both full history folds, the source lock, privacy inspection, file commitments and
+source rechecks remain in place.
+
+For the retained-note fixture of exactly 256 MiB, 258 events, one node and
+three files, the experiment targets at most 384 MiB of additional Rust heap
+during capture. This leaves 128 MiB above the input size for parsing and model
+overhead while rejecting the observed overlapping-fold peak. This is a
+regression goal for this fixture, not a global input limit, runtime refusal
+or planning budget for other histories. The measurement excludes process
+RSS, stack and operating-system allocations.
+
+The experimental checker first requires all twelve observations for that
+fixture, with accepted capture and verification in both three-sample series.
+Only then does it compare the six capture peaks with the fixed target.
+Refusing the input or returning incomplete observations cannot satisfy the
+memory check. Timing samples remain observations; this comparison does not
+add a latency deadline or establish p99.
+
+The [fresh before controls](measurements/sanitation-fold-before-500850a-partial.jsonl)
+contain 24 observations for the selected-note and retained-note volume cases.
+They use the preserved release binary from `500850a`; its Rust inputs are
+unchanged in `66ae940`. The [after matrix](measurements/sanitation-fold-after-8a5b5db.jsonl)
+uses `8a5b5db` and contains all eight cases. Both binaries use Rust 1.94.1,
+the same release profile, instrument and host described above. The before
+controls are a two-case comparison, not another complete eight-case matrix.
+All 96 after observations preserve the expected outcomes: 60 accepted phases,
+18 refused captures and 18 verification phases not run. Near-limit envelope
+predictions equal actual sizes; over-limit envelopes, event lines and logs
+remain refused. These boundary fixtures still contain no custody workload.
+
+| 256 MiB case | Phase | Before peak additional Rust heap (bytes) | After peak additional Rust heap (bytes) |
+|---|---|---:|---:|
+| Selected notes | Capture | 4,403,636 | 4,368,163 |
+| Selected notes | Verify | 4,338,244 | 4,338,244 |
+| Retained notes | Capture | 544,258,430 | 275,841,773 |
+| Retained notes | Verify | 275,837,926 | 275,837,926 |
+
+Each peak is the maximum of six observations across the two series. Retained-note
+capture uses 49.3% less peak additional Rust heap, from 519.05 to 263.06 MiB.
+The fixed experimental checker first failed on the fresh before controls and
+then passed on the after observations, with all twelve required phases accepted.
+This removes the overlapping-fold peak; a single fold still retains substantial
+memory. Capture still takes roughly 16–17 seconds median for this fixture;
+these samples do not establish a latency improvement or a process-RSS reduction.

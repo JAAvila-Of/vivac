@@ -284,6 +284,7 @@ pub(super) fn capture(mut request: Request) -> Result<CapturedPlan> {
         members.push(member);
         handles.push(file);
     }
+    drop(tree);
     let (destination, destination_parent) = target(&request.destination)?;
     no_overlap(&destination, &roots)?;
     request.selection.sort();
