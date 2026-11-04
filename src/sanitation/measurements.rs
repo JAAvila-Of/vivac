@@ -21,6 +21,9 @@ enum Case {
     LineOver,
     EnvelopeAt,
     EnvelopeOver,
+    DenseNotes(usize),
+    CustodyObjects(u64),
+    CustodyLarge,
 }
 
 impl Case {
@@ -34,6 +37,17 @@ impl Case {
             Self::LineOver => "event_line_limit_plus_one",
             Self::EnvelopeAt => "envelope_near_limit",
             Self::EnvelopeOver => "envelope_over_limit",
+            Self::DenseNotes(1) => "dense_notes_selectors_1",
+            Self::DenseNotes(128) => "dense_notes_selectors_128",
+            Self::DenseNotes(512) => "dense_notes_selectors_512",
+            Self::DenseNotes(1024) => "dense_notes_selectors_1024",
+            Self::CustodyObjects(1) => "custody_objects_1",
+            Self::CustodyObjects(64) => "custody_objects_64",
+            Self::CustodyObjects(512) => "custody_objects_512",
+            Self::CustodyLarge => "custody_object_hundred_mib",
+            Self::DenseNotes(_) | Self::CustodyObjects(_) => {
+                unreachable!("Unsupported measurement case.")
+            }
         }
     }
 
@@ -49,6 +63,11 @@ struct Fixture {
     nodes: u64,
     notes: u64,
     role: Role,
+    selected_nodes: Vec<String>,
+    notes_per_node: Option<u64>,
+    custody_object_count: u64,
+    custody_payload_bytes: u64,
+    custody_site_bytes: u64,
     predicted_envelope_bytes: Option<usize>,
 }
 
@@ -96,6 +115,26 @@ fn prefix(writer: &mut impl Write, nodes: u64) -> u64 {
     bytes
 }
 
+fn custody_payload(path: &Path, number: u64, size: u64) -> String {
+    let marker = format!("Synthetic custody object {number:09}. ");
+    assert!(size >= marker.len() as u64);
+    let mut writer = BufWriter::new(File::create(path).unwrap());
+    let mut hasher = Sha256::new();
+    writer.write_all(marker.as_bytes()).unwrap();
+    hasher.update(marker.as_bytes());
+    let buffer = PROSE.repeat((64 * 1024) / PROSE.len());
+    let mut remaining = size - marker.len() as u64;
+    while remaining > 0 {
+        let count = remaining.min(buffer.len() as u64) as usize;
+        writer.write_all(&buffer.as_bytes()[..count]).unwrap();
+        hasher.update(&buffer.as_bytes()[..count]);
+        remaining -= count as u64;
+    }
+    writer.flush().unwrap();
+    assert_eq!(fs::metadata(path).unwrap().len(), size);
+    format!("{:x}", hasher.finalize())
+}
+
 impl Fixture {
     fn new() -> Self {
         let directory = std::env::temp_dir().join(format!(
@@ -118,6 +157,11 @@ impl Fixture {
             nodes: 0,
             notes: 0,
             role: Role::Title,
+            selected_nodes: vec![NODE.into()],
+            notes_per_node: None,
+            custody_object_count: 0,
+            custody_payload_bytes: 0,
+            custody_site_bytes: 0,
             predicted_envelope_bytes: None,
         }
     }
@@ -130,10 +174,14 @@ impl Fixture {
         Request {
             source_root: self.source(),
             lane_roots: BTreeMap::new(),
-            selection: vec![Selector {
-                node: NODE.into(),
-                role: self.role,
-            }],
+            selection: self
+                .selected_nodes
+                .iter()
+                .map(|node| Selector {
+                    node: node.clone(),
+                    role: self.role,
+                })
+                .collect(),
             destination: self.directory.join("successor"),
         }
     }
@@ -197,6 +245,124 @@ impl Fixture {
         self.write(1, notes as u64, None);
     }
 
+    fn dense(&mut self, nodes: u64, notes_per_node: u64, selectors: usize) {
+        assert!(selectors > 0 && selectors as u64 <= nodes);
+        self.role = Role::Notes;
+        self.selected_nodes = (1..=selectors)
+            .map(|number| format!("measurement-node-{number:09}"))
+            .collect();
+        self.notes_per_node = Some(notes_per_node);
+        let file = File::create(self.source().join(".vivac/events")).unwrap();
+        let mut writer = BufWriter::new(file);
+        let mut bytes = prefix(&mut writer, nodes);
+        let mut seq = nodes + 2;
+        for number in 1..=nodes {
+            for _ in 0..notes_per_node {
+                let line = event(
+                    seq,
+                    json!({"type":"node.noted", "node":format!("measurement-node-{number:09}"), "note":PROSE}),
+                );
+                writer.write_all(&line).unwrap();
+                bytes += line.len() as u64;
+                seq += 1;
+            }
+        }
+        writer.flush().unwrap();
+        self.log_bytes = bytes;
+        self.events = seq - 1;
+        self.nodes = nodes;
+        self.notes = nodes * notes_per_node;
+    }
+
+    fn custody(&mut self, objects: u64, object_bytes: u64) {
+        let producer = "01j00000000000000000000001";
+        let site = "01j00000000000000000000002";
+        self.selected_nodes = vec![producer.into()];
+        let store = self.source().join(".vivac-artifacts");
+        fs::create_dir_all(store.join("objects")).unwrap();
+        fs::write(store.join(".site"), site).unwrap();
+        let file = File::create(self.source().join(".vivac/events")).unwrap();
+        let mut writer = BufWriter::new(file);
+        let mut bytes = prefix(&mut writer, 0);
+        let creation = event(
+            2,
+            json!({"type":"node.created", "node":producer, "num":1, "kind":"task", "title":"Retain synthetic measurement objects"}),
+        );
+        writer.write_all(&creation).unwrap();
+        bytes += creation.len() as u64;
+        let mut digests = std::collections::BTreeSet::new();
+        for number in 1..=objects {
+            let artifact = format!("01j1{number:022}");
+            let revision = format!("01j2{number:022}");
+            let operation = format!("01j3{number:022}");
+            let object = format!("objects/{revision}.blob");
+            let digest = custody_payload(&store.join(&object), number, object_bytes);
+            assert!(
+                digests.insert(digest.clone()),
+                "Synthetic custody objects must have distinct bytes."
+            );
+            let line = event(
+                number + 2,
+                json!({"type":"artifact.captured_v2", "artifact":artifact, "revision":revision, "operation":operation, "producer":producer, "previous":null, "source":format!("measurement-object-{number:09}.txt"), "description":"Synthetic strict custody measurement", "site":site, "size":object_bytes, "digest":digest, "object":object}),
+            );
+            writer.write_all(&line).unwrap();
+            bytes += line.len() as u64;
+        }
+        writer.flush().unwrap();
+        self.log_bytes = bytes;
+        self.events = objects + 2;
+        self.nodes = 1;
+        self.notes = 0;
+        self.custody_object_count = objects;
+        self.custody_payload_bytes = objects * object_bytes;
+        self.custody_site_bytes = site.len() as u64;
+    }
+
+    fn check_counts(&self, plan: &CapturedPlan, selection: &[Selector]) {
+        assert!(
+            plan.envelope.selection == selection,
+            "Captured selection changed."
+        );
+        let expected_locations = self.notes_per_node.map_or_else(
+            || {
+                if self.role == Role::Notes {
+                    self.notes
+                } else {
+                    1
+                }
+            },
+            |notes| notes * selection.len() as u64,
+        );
+        assert_eq!(plan.envelope.selection.len(), selection.len());
+        assert_eq!(plan.envelope.locations.len(), expected_locations as usize);
+        let expected_members =
+            3 + self.custody_object_count + u64::from(self.custody_site_bytes > 0);
+        assert_eq!(plan.envelope.files.len(), expected_members as usize);
+        if self.custody_object_count > 0 {
+            let custody: Vec<_> = plan
+                .envelope
+                .files
+                .iter()
+                .filter(|member| member.path.starts_with(".vivac-artifacts/objects/"))
+                .collect();
+            assert_eq!(custody.len(), self.custody_object_count as usize);
+            assert_eq!(
+                custody.iter().map(|member| member.size).sum::<u64>(),
+                self.custody_payload_bytes
+            );
+            let site = plan
+                .envelope
+                .files
+                .iter()
+                .find(|member| member.path == ".vivac-artifacts/.site")
+                .unwrap();
+            assert_eq!(site.size, self.custody_site_bytes);
+            let digests: std::collections::BTreeSet<_> =
+                custody.iter().map(|member| &member.sha256).collect();
+            assert_eq!(digests.len(), custody.len());
+        }
+    }
+
     fn prepare(case: Case) -> Self {
         let mut fixture = Self::new();
         match case {
@@ -220,6 +386,9 @@ impl Fixture {
             }
             Case::EnvelopeAt => fixture.envelope(false),
             Case::EnvelopeOver => fixture.envelope(true),
+            Case::DenseNotes(selectors) => fixture.dense(1024, 4, selectors),
+            Case::CustodyObjects(objects) => fixture.custody(objects, 1024 * 1024 / objects),
+            Case::CustodyLarge => fixture.custody(1, 100 * 1024 * 1024),
         }
         fixture
     }
@@ -313,6 +482,7 @@ struct Observation<'a> {
     envelope_bytes: Option<usize>,
     locations: Option<usize>,
     members: Option<usize>,
+    selections: usize,
 }
 
 fn emit(fixture: &Fixture, observation: Observation<'_>) {
@@ -324,8 +494,11 @@ fn emit(fixture: &Fixture, observation: Observation<'_>) {
             "log_bytes":fixture.log_bytes,
             "log_limit_gap_bytes":i128::from(crate::backup::MAX_FILE) - i128::from(fixture.log_bytes),
             "event_count":fixture.events, "node_count":fixture.nodes,
-            "selection_count":1, "location_count":observation.locations,
+            "selection_count":observation.selections, "location_count":observation.locations,
             "member_count":observation.members, "envelope_bytes":observation.envelope_bytes,
+            "custody_object_count":fixture.custody_object_count,
+            "custody_payload_bytes":fixture.custody_payload_bytes,
+            "custody_site_bytes":fixture.custody_site_bytes,
             "predicted_envelope_bytes":fixture.predicted_envelope_bytes,
             "outcome":observation.outcome,
             "elapsed_ms":observation.elapsed.map(|duration| duration.as_secs_f64() * 1000.0),
@@ -345,6 +518,8 @@ fn run(case: Case) {
             let fixture = Fixture::prepare(case);
             let before = snapshot(&fixture.source());
             let request = fixture.request();
+            let expected_selection = request.selection.clone();
+            let selections = request.selection.len();
             let ((result, elapsed), peak) = crate::test_alloc::measure(|| {
                 let start = Instant::now();
                 let result = CapturedPlan::capture(request);
@@ -358,14 +533,7 @@ fn run(case: Case) {
                 envelope_bytes = Some(plan.encode_private().unwrap().len());
                 locations = Some(plan.envelope.locations.len());
                 members = Some(plan.envelope.files.len());
-                assert_eq!(plan.envelope.selection.len(), 1);
-                let expected_locations = if fixture.role == Role::Notes {
-                    fixture.notes
-                } else {
-                    1
-                };
-                assert_eq!(locations, Some(expected_locations as usize));
-                assert_eq!(members, Some(3));
+                fixture.check_counts(plan, &expected_selection);
                 if let Some(predicted) = fixture.predicted_envelope_bytes {
                     assert_eq!(envelope_bytes, Some(predicted));
                 }
@@ -383,6 +551,7 @@ fn run(case: Case) {
                     envelope_bytes,
                     locations,
                     members,
+                    selections,
                 },
             );
             if let Ok(plan) = &result {
@@ -408,6 +577,7 @@ fn run(case: Case) {
                         envelope_bytes,
                         locations,
                         members,
+                        selections,
                     },
                 );
                 assert!(
@@ -428,6 +598,7 @@ fn run(case: Case) {
                         envelope_bytes: None,
                         locations: None,
                         members: None,
+                        selections,
                     },
                 );
             }
@@ -493,6 +664,54 @@ fn envelope_over_limit() {
 }
 
 #[test]
+#[ignore = "Opt-in release measurement; run this case separately."]
+fn dense_notes_selectors_1() {
+    run(Case::DenseNotes(1));
+}
+
+#[test]
+#[ignore = "Opt-in release measurement; run this case separately."]
+fn dense_notes_selectors_128() {
+    run(Case::DenseNotes(128));
+}
+
+#[test]
+#[ignore = "Opt-in release measurement; run this case separately."]
+fn dense_notes_selectors_512() {
+    run(Case::DenseNotes(512));
+}
+
+#[test]
+#[ignore = "Opt-in release measurement; run this case separately."]
+fn dense_notes_selectors_1024() {
+    run(Case::DenseNotes(1024));
+}
+
+#[test]
+#[ignore = "Opt-in release measurement; run this case separately."]
+fn custody_objects_1() {
+    run(Case::CustodyObjects(1));
+}
+
+#[test]
+#[ignore = "Opt-in release measurement; run this case separately."]
+fn custody_objects_64() {
+    run(Case::CustodyObjects(64));
+}
+
+#[test]
+#[ignore = "Opt-in release measurement; run this case separately."]
+fn custody_objects_512() {
+    run(Case::CustodyObjects(512));
+}
+
+#[test]
+#[ignore = "Opt-in release measurement; run this case separately."]
+fn custody_object_hundred_mib() {
+    run(Case::CustodyLarge);
+}
+
+#[test]
 fn synthetic_note_framing_counts_newline_and_preserves_json() {
     let minimum = note(3, Some(note(3, None).len() - PROSE.len())).len();
     for requested in [minimum, minimum + 1, 1024] {
@@ -520,4 +739,62 @@ fn envelope_projection_matches_small_real_capture() {
     let captured = CapturedPlan::capture(fixture.request()).unwrap();
     assert_eq!(captured.encode_private().unwrap().len(), predicted);
     captured.verify_unchanged().unwrap();
+}
+
+#[test]
+fn dense_fixture_captures_all_selected_notes_without_writes() {
+    let mut fixture = Fixture::new();
+    fixture.dense(2, 2, 2);
+    let before = snapshot(&fixture.source());
+    let request = fixture.request();
+    let selection = request.selection.clone();
+    let plan = CapturedPlan::capture(request).unwrap();
+    fixture.check_counts(&plan, &selection);
+    assert_eq!(plan.envelope.selection.len(), 2);
+    assert_eq!(plan.envelope.locations.len(), 4);
+    plan.verify_unchanged().unwrap();
+    assert!(
+        before == snapshot(&fixture.source()),
+        "Measurement source changed."
+    );
+    assert!(
+        matches!(fs::symlink_metadata(fixture.request().destination), Err(error) if error.kind() == std::io::ErrorKind::NotFound),
+        "Measurement destination was created."
+    );
+}
+
+#[test]
+fn custody_fixture_captures_distinct_strict_objects_without_writes() {
+    let mut fixture = Fixture::new();
+    fixture.custody(2, 256);
+    let before = snapshot(&fixture.source());
+    let request = fixture.request();
+    let selection = request.selection.clone();
+    let plan = CapturedPlan::capture(request).unwrap();
+    fixture.check_counts(&plan, &selection);
+    assert_eq!(plan.envelope.files.len(), 6);
+    assert_eq!(fixture.custody_payload_bytes, 512);
+    assert_eq!(fixture.custody_site_bytes, 26);
+    let log = fs::read_to_string(fixture.source().join(".vivac/events")).unwrap();
+    let receipts: Vec<Value> = log
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .filter(|record: &Value| record["payload"]["type"] == "artifact.captured_v2")
+        .collect();
+    assert_eq!(receipts.len(), 2);
+    assert!(receipts
+        .iter()
+        .all(|record| record["payload"].get("inspection").is_none()));
+    let config: Value =
+        serde_json::from_slice(&fs::read(fixture.source().join(".vivac/config")).unwrap()).unwrap();
+    assert!(config.get("allow_insecure_artifacts").is_none());
+    plan.verify_unchanged().unwrap();
+    assert!(
+        before == snapshot(&fixture.source()),
+        "Measurement source changed."
+    );
+    assert!(
+        matches!(fs::symlink_metadata(fixture.request().destination), Err(error) if error.kind() == std::io::ErrorKind::NotFound),
+        "Measurement destination was created."
+    );
 }
