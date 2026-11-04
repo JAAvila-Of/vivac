@@ -1081,3 +1081,46 @@ authoritative fallback latency, other platforms or native model reception.
 Reproduce with the same `prepare` and `run` commands and aging controls above;
 identify the actual source and executable instead of relying on their shared
 `0.21.0` version string.
+
+## Private sanitation planner: measurement scope
+
+The opt-in release tests in `src/sanitation/measurements.rs` measure the real
+private planning core. They do not expose a sanitation command. Each case
+uses two series of three independently prepared synthetic fixtures. Capture
+and `verify_unchanged` are timed separately; fixture generation, source
+snapshots, envelope inspection and cleanup are outside those timers. Source
+snapshots also warm filesystem reads, and verification follows capture. These
+are neither cold-cache nor contended-writer measurements.
+
+Each sample emits JSON with its case, series, phase, input and expanded-plan
+counts, elapsed time and peak additional Rust heap measured on the calling
+thread. That heap counter is not process RSS, total resident memory or a
+measurement of stack and operating-system allocations. A rejected capture has
+no plan: its verification is reported as `not_run`, with null measurements.
+Envelope boundary cases distinguish predicted serialized size from the size
+of a successfully captured plan and check that the two agree on acceptance.
+
+The cases separate 10,000 distinct nodes, a 256 MiB log with selected notes,
+the same volume of unselected notes, encoded event lines at and above 1 MiB,
+and serialized plans near and above 512 KiB. A separate oversized-log case
+checks the size refusal. Three samples per series do not establish p99;
+retain the raw observations and report medians and maxima instead.
+
+These measurements do not establish a sanitation-specific latency or memory
+budget. Artifact-retention targets concern another operation. Custody member
+counts and bytes, dense selections, deep histories, simultaneous limits and
+other platforms remain outside this initial matrix. The complete exposure
+requirements in [Sanitation design](SANITATION-DESIGN.md) still apply.
+
+Run an individual case with its full test name, replacing the suffix for
+another case:
+
+```text
+cargo test --locked --release --bin vivac sanitation::measurements::event_line_at_limit -- --ignored --exact --nocapture --test-threads=1
+```
+
+The other suffixes are `distinct_nodes_10000`, `selected_notes_log_limit`,
+`retained_notes_log_limit`, `log_limit_plus_one`, `event_line_limit_plus_one`,
+`envelope_near_limit` and `envelope_over_limit`. Preserve the emitted JSON for
+both series, including refusals; fixture-generation time is not operation
+latency. A 64 KiB copy buffer does not bound the complete history fold's heap.
