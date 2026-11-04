@@ -40,6 +40,8 @@ mod registry;
 mod relocate;
 mod render;
 mod repos;
+#[cfg(test)]
+mod sanitation;
 mod session;
 mod setup;
 mod store;

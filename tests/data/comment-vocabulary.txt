@@ -1318,6 +1318,7 @@ enter
 entered
 entering
 enters
+entire
 entirely
 entity
 entries

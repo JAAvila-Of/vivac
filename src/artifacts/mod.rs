@@ -1,7 +1,7 @@
 //! Selected local deliveries retain bytes outside the provenance tree.
 pub(crate) mod bundle;
 pub(crate) mod files;
-mod guard;
+pub(crate) mod guard;
 mod media;
 pub(crate) mod native;
 pub(crate) mod policy;

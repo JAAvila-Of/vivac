@@ -67,7 +67,7 @@ impl<'de> Visitor<'de> for Values {
 }
 
 /// Input framing and schema are checked separately by the caller.
-pub(super) fn check_json(reader: impl Read) -> Result<(), Failure> {
+pub(crate) fn check_json(reader: impl Read) -> Result<(), Failure> {
     let mut seen = false;
     for value in serde_json::Deserializer::from_reader(reader).into_iter::<Checked>() {
         seen = true;
