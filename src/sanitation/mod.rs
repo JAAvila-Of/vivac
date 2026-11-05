@@ -3,6 +3,7 @@ mod history;
 mod json;
 mod measurements;
 mod schema;
+mod storage;
 #[cfg(test)]
 mod tests;
 
@@ -10,7 +11,7 @@ use cap_std::fs::{Dir, File};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 type Result<T> = std::result::Result<T, crate::failure::Failure>;
 
@@ -138,6 +139,14 @@ fn digest(bytes: &[u8]) -> String {
 }
 
 impl CapturedPlan {
+    pub(crate) fn save_private(&self, path: &Path) -> Result<()> {
+        storage::save(self, path).map_err(|_| refused())
+    }
+
+    pub(crate) fn load_private(path: &Path, expected_digest: &str) -> Result<Self> {
+        storage::load(path, expected_digest).map_err(|_| refused())
+    }
+
     pub(crate) fn capture(request: Request) -> Result<Self> {
         capture::capture(request).map_err(|_| refused())
     }

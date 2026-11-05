@@ -77,6 +77,371 @@ fn snapshot(root: &Path) -> BTreeMap<PathBuf, (Vec<u8>, std::time::SystemTime)> 
     files
 }
 
+fn private_package(fixture: &Fixture) -> PathBuf {
+    let parent = fixture.directory.join("reviewed-plans");
+    fs::create_dir(&parent).unwrap();
+    parent.join("reviewed")
+}
+
+#[test]
+fn private_plan_roundtrip_preserves_review_and_source() {
+    let fixture = Fixture::new();
+    fs::write(fixture.source().join(".vivac/index"), b"Unchanged index").unwrap();
+    let before = snapshot(&fixture.source());
+    let path = private_package(&fixture);
+    let plan = fixture.capture().unwrap();
+    let bytes = plan.encode_private().unwrap();
+    let expected = plan.plan_digest().unwrap();
+    let summary = serde_json::to_vec(&plan.summary().unwrap()).unwrap();
+    let operation = plan.envelope.operation_id.clone();
+    plan.save_private(&path).unwrap();
+    drop(plan);
+    assert_eq!(fs::read(path.join("plan.json")).unwrap(), bytes);
+    assert_eq!(fs::read_dir(&path).unwrap().count(), 1);
+    let loaded = CapturedPlan::load_private(&path, &expected).unwrap();
+    assert_eq!(loaded.encode_private().unwrap(), bytes);
+    assert_eq!(
+        serde_json::to_vec(&loaded.summary().unwrap()).unwrap(),
+        summary
+    );
+    loaded.confirm(&expected).unwrap();
+    assert!(loaded.confirm(&operation).is_err());
+    loaded.verify_unchanged().unwrap();
+    assert_eq!(before, snapshot(&fixture.source()));
+    assert!(!fixture.request().destination.exists());
+}
+
+#[test]
+fn private_plan_refuses_changed_source_and_occupied_package() {
+    let fixture = Fixture::new();
+    let path = private_package(&fixture);
+    let plan = fixture.capture().unwrap();
+    let expected = plan.plan_digest().unwrap();
+    plan.save_private(&path).unwrap();
+    let before = snapshot(&path);
+    assert!(plan.save_private(&path).is_err());
+    assert_eq!(before, snapshot(&path));
+    let occupied = path.with_file_name("occupied");
+    fs::write(&occupied, b"Keep occupied destination").unwrap();
+    assert!(plan.save_private(&occupied).is_err());
+    assert_eq!(fs::read(&occupied).unwrap(), b"Keep occupied destination");
+    fs::write(fixture.source().join(".vivac/config"), b"{}").unwrap();
+    assert!(plan.save_private(&path.with_file_name("changed")).is_err());
+    assert!(!path.with_file_name("changed").exists());
+    assert!(CapturedPlan::load_private(&path, &expected).is_err());
+    assert!(!fixture.request().destination.exists());
+}
+
+#[test]
+fn private_plan_refuses_unsafe_endpoints_before_preparation() {
+    let fixture = Fixture::new();
+    let plan = fixture.capture().unwrap();
+    let source_child = fixture.source().join("child");
+    fs::create_dir(&source_child).unwrap();
+    let path = private_package(&fixture);
+    fs::create_dir(path.parent().unwrap().join(".git")).unwrap();
+    for path in [
+        PathBuf::from("relative-plan"),
+        fixture.directory.join("sibling"),
+        fixture.source().join("reviewed"),
+        source_child.join("reviewed"),
+        path,
+    ] {
+        assert!(plan.save_private(&path).is_err());
+        assert!(!path.exists());
+    }
+    assert_eq!(fs::read_dir(&source_child).unwrap().count(), 0);
+    assert!(!fixture.request().destination.exists());
+}
+
+#[test]
+fn private_plan_refuses_wrong_digest_corruption_limits_and_extra_members() {
+    let fixture = Fixture::new();
+    let path = private_package(&fixture);
+    let plan = fixture.capture().unwrap();
+    let expected = plan.plan_digest().unwrap();
+    plan.save_private(&path).unwrap();
+    assert!(CapturedPlan::load_private(&path, &plan.envelope.operation_id).is_err());
+    fs::create_dir(path.parent().unwrap().join(".git")).unwrap();
+    assert!(CapturedPlan::load_private(&path, &expected).is_err());
+    fs::remove_dir(path.parent().unwrap().join(".git")).unwrap();
+    fs::write(path.join("extra"), b"Extra member").unwrap();
+    assert!(CapturedPlan::load_private(&path, &expected).is_err());
+    fs::remove_file(path.join("extra")).unwrap();
+    let canonical = fs::read(path.join("plan.json")).unwrap();
+    let mut noncanonical = canonical.clone();
+    noncanonical.push(b'\n');
+    fs::write(path.join("plan.json"), &noncanonical).unwrap();
+    assert!(CapturedPlan::load_private(&path, &digest(&noncanonical)).is_err());
+    fs::write(path.join("plan.json"), b"{}").unwrap();
+    assert!(CapturedPlan::load_private(&path, &expected).is_err());
+    assert!(CapturedPlan::load_private(&path, &digest(b"{}")).is_err());
+    let oversized = vec![b' '; crate::backup::MAX_MANIFEST as usize + 1];
+    fs::write(path.join("plan.json"), &oversized).unwrap();
+    assert!(CapturedPlan::load_private(&path, &digest(&oversized)).is_err());
+    fs::remove_file(path.join("plan.json")).unwrap();
+    fs::create_dir(path.join("plan.json")).unwrap();
+    assert!(CapturedPlan::load_private(&path, &expected).is_err());
+}
+
+#[test]
+fn private_plan_roundtrip_rechecks_retained_custody() {
+    let fixture = Fixture::new();
+    let producer = crate::id::ulid();
+    let revision = crate::id::ulid();
+    let site = crate::id::ulid();
+    let object = format!("objects/{revision}.blob");
+    let payload = b"A retained synthetic delivery.\n";
+    fs::create_dir_all(fixture.source().join(".vivac-artifacts/objects")).unwrap();
+    fs::write(fixture.source().join(".vivac-artifacts/.site"), &site).unwrap();
+    let custody = fixture.source().join(format!(".vivac-artifacts/{object}"));
+    fs::write(&custody, payload).unwrap();
+    append(
+        &fixture,
+        vec![
+            serde_json::json!({"type":"node.created","node":producer,"num":3,"kind":"task","title":"Retain synthetic delivery"}),
+            serde_json::json!({"type":"artifact.captured_v2","artifact":crate::id::ulid(),"revision":revision,"operation":crate::id::ulid(),"producer":producer,"previous":null,"source":"delivery.txt","description":"Synthetic delivery","site":site,"size":payload.len(),"digest":digest(payload),"object":object}),
+        ],
+    );
+    let before = snapshot(&fixture.source());
+    let path = private_package(&fixture);
+    let plan = fixture.capture().unwrap();
+    let expected = plan.plan_digest().unwrap();
+    plan.save_private(&path).unwrap();
+    drop(plan);
+    let loaded = CapturedPlan::load_private(&path, &expected).unwrap();
+    assert_eq!(before, snapshot(&fixture.source()));
+    fs::write(custody, b"A modified synthetic delivery.\n").unwrap();
+    assert!(loaded
+        .save_private(&path.with_file_name("changed"))
+        .is_err());
+    assert!(CapturedPlan::load_private(&path, &expected).is_err());
+    assert!(!path.with_file_name("changed").exists());
+    assert!(!fixture.request().destination.exists());
+}
+
+#[cfg(windows)]
+fn broaden_private_acl(path: &Path) {
+    use std::os::windows::ffi::OsStrExt;
+    use std::ptr;
+    use windows_sys::Win32::Foundation::LocalFree;
+    use windows_sys::Win32::Security::Authorization::{
+        ConvertStringSecurityDescriptorToSecurityDescriptorW, SetNamedSecurityInfoW,
+        SDDL_REVISION_1, SE_FILE_OBJECT,
+    };
+    use windows_sys::Win32::Security::{
+        GetSecurityDescriptorDacl, DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION,
+    };
+    let text: Vec<u16> = "D:P(A;OICI;FA;;;WD)"
+        .encode_utf16()
+        .chain(Some(0))
+        .collect();
+    let mut name: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let mut descriptor = ptr::null_mut();
+    let mut acl = ptr::null_mut();
+    let mut present = 0;
+    let mut defaulted = 0;
+    // SAFETY: all strings are terminated, output buffers are live, and the
+    // Windows-allocated descriptor remains owned through the ACL update.
+    unsafe {
+        assert_ne!(
+            ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                text.as_ptr(),
+                SDDL_REVISION_1,
+                &mut descriptor,
+                ptr::null_mut()
+            ),
+            0
+        );
+        assert_ne!(
+            GetSecurityDescriptorDacl(descriptor, &mut present, &mut acl, &mut defaulted),
+            0
+        );
+        let result = SetNamedSecurityInfoW(
+            name.as_mut_ptr(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            ptr::null_mut(),
+            ptr::null_mut(),
+            acl,
+            ptr::null_mut(),
+        );
+        LocalFree(descriptor);
+        assert_eq!(result, 0);
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn private_plan_refuses_broad_directory_and_file_acls() {
+    for file in [false, true] {
+        let fixture = Fixture::new();
+        let path = private_package(&fixture);
+        let plan = fixture.capture().unwrap();
+        let expected = plan.plan_digest().unwrap();
+        plan.save_private(&path).unwrap();
+        broaden_private_acl(&if file {
+            path.join("plan.json")
+        } else {
+            path.clone()
+        });
+        assert!(CapturedPlan::load_private(&path, &expected).is_err());
+        if file {
+            let directory = crate::artifacts::files::open_root(&path).unwrap();
+            crate::artifacts::native::verify_private_directory(&directory).unwrap();
+        }
+    }
+}
+
+#[test]
+fn private_plan_refuses_linked_members() {
+    let fixture = Fixture::new();
+    let path = private_package(&fixture);
+    let plan = fixture.capture().unwrap();
+    let expected = plan.plan_digest().unwrap();
+    plan.save_private(&path).unwrap();
+    fs::hard_link(
+        path.join("plan.json"),
+        path.parent().unwrap().join("linked"),
+    )
+    .unwrap();
+    assert!(CapturedPlan::load_private(&path, &expected).is_err());
+}
+
+#[cfg(any(unix, windows))]
+fn private_directory_alias(alias: &Path, target: &Path) {
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(target, alias).unwrap();
+    #[cfg(windows)]
+    assert!(std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(alias)
+        .arg(target)
+        .output()
+        .unwrap()
+        .status
+        .success());
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn private_plan_refuses_directory_aliases_by_identity() {
+    let fixture = Fixture::new();
+    let plan = fixture.capture().unwrap();
+    let alias = fixture.directory.join("source-alias");
+    private_directory_alias(&alias, &fixture.source());
+    assert!(plan.save_private(&alias.join("reviewed")).is_err());
+    #[cfg(windows)]
+    fs::remove_dir(&alias).unwrap();
+    #[cfg(unix)]
+    fs::remove_file(&alias).unwrap();
+    let path = private_package(&fixture);
+    plan.save_private(&path).unwrap();
+    let expected = plan.plan_digest().unwrap();
+    private_directory_alias(&alias, &path);
+    assert!(CapturedPlan::load_private(&alias, &expected).is_err());
+    assert!(plan.save_private(&alias).is_err());
+    #[cfg(windows)]
+    fs::remove_dir(&alias).unwrap();
+    #[cfg(unix)]
+    fs::remove_file(&alias).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn private_plan_refuses_symlinks_and_broad_permissions() {
+    use std::os::unix::fs::{symlink, PermissionsExt};
+    let fixture = Fixture::new();
+    let path = private_package(&fixture);
+    let plan = fixture.capture().unwrap();
+    let expected = plan.plan_digest().unwrap();
+    plan.save_private(&path).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(CapturedPlan::load_private(&path, &expected).is_err());
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::set_permissions(path.join("plan.json"), fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(CapturedPlan::load_private(&path, &expected).is_err());
+    fs::set_permissions(path.join("plan.json"), fs::Permissions::from_mode(0o600)).unwrap();
+    let linked = path.with_file_name("linked");
+    symlink(&path, &linked).unwrap();
+    assert!(CapturedPlan::load_private(&linked, &expected).is_err());
+    assert!(plan.save_private(&linked).is_err());
+    fs::rename(path.join("plan.json"), path.parent().unwrap().join("kept")).unwrap();
+    symlink(path.parent().unwrap().join("kept"), path.join("plan.json")).unwrap();
+    assert!(CapturedPlan::load_private(&path, &expected).is_err());
+}
+
+#[test]
+fn verified_callback_holds_source_writer_lock() {
+    let fixture = Fixture::new();
+    let plan = fixture.capture().unwrap();
+    let writer = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(fixture.source().join(".vivac/lock"))
+        .unwrap();
+    capture::with_verified_source(&plan, || {
+        assert!(writer.try_lock().is_err());
+        Ok(())
+    })
+    .unwrap();
+    writer.try_lock().unwrap();
+}
+
+#[cfg(target_os = "macos")]
+fn add_private_acl(path: &Path, entry: &str) {
+    assert!(std::process::Command::new("/bin/chmod")
+        .args(["+a", entry])
+        .arg(path)
+        .output()
+        .unwrap()
+        .status
+        .success());
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn private_plan_refuses_inherited_acls_before_saving() {
+    let fixture = Fixture::new();
+    let path = private_package(&fixture);
+    let plan = fixture.capture().unwrap();
+    let before = snapshot(&fixture.source());
+    add_private_acl(
+        path.parent().unwrap(),
+        "everyone allow read,file_inherit,directory_inherit",
+    );
+    assert!(plan.save_private(&path).is_err());
+    assert_eq!(fs::read_dir(path.parent().unwrap()).unwrap().count(), 0);
+    assert_eq!(before, snapshot(&fixture.source()));
+    assert!(!fixture.request().destination.exists());
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn private_plan_refuses_broad_directory_and_file_acls() {
+    for file in [false, true] {
+        let fixture = Fixture::new();
+        let path = private_package(&fixture);
+        let plan = fixture.capture().unwrap();
+        let expected = plan.plan_digest().unwrap();
+        let before = snapshot(&fixture.source());
+        plan.save_private(&path).unwrap();
+        let target = if file {
+            path.join("plan.json")
+        } else {
+            path.clone()
+        };
+        add_private_acl(&target, "everyone allow read");
+        assert!(CapturedPlan::load_private(&path, &expected).is_err());
+        if file {
+            let directory = crate::artifacts::files::open_root(&path).unwrap();
+            crate::artifacts::native::verify_private_directory(&directory).unwrap();
+        }
+        assert_eq!(before, snapshot(&fixture.source()));
+        assert!(!fixture.request().destination.exists());
+    }
+}
+
 #[test]
 fn fixed_oracle_selects_exact_history_without_writes() {
     let fixture = Fixture::new();

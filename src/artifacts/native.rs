@@ -6,6 +6,13 @@ use std::io;
 
 pub(crate) const SUPPORTED: bool = cfg!(any(target_os = "linux", target_os = "macos", windows));
 
+#[cfg(all(
+    test,
+    target_os = "macos",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+mod private_macos;
+
 pub(crate) fn sync_preparation(dir: &Dir) -> Result<(), Failure> {
     #[cfg(windows)]
     {
@@ -208,19 +215,102 @@ fn create_snapshot_private(parent: &Dir, name: &str) -> Result<Dir, Failure> {
 
 #[cfg(unix)]
 fn create_owned_directory(parent: &Dir, name: &str) -> Result<Dir, Failure> {
-    use cap_std::fs::{DirBuilder, DirBuilderExt, MetadataExt};
+    use cap_std::fs::{DirBuilder, DirBuilderExt};
     let mut builder = DirBuilder::new();
     builder.mode(0o700);
     parent.create_dir_with(name, &builder)?;
     let directory = parent.open_dir_nofollow(name)?;
-    let metadata = directory.dir_metadata()?;
+    require_private_metadata(&directory.dir_metadata()?)?;
+    Ok(directory)
+}
+
+#[cfg(unix)]
+fn require_private_metadata(metadata: &cap_std::fs::Metadata) -> Result<(), Failure> {
+    use cap_std::fs::MetadataExt;
     // SAFETY: `geteuid` has no arguments or borrowed buffers.
     if metadata.uid() != unsafe { libc::geteuid() } || metadata.mode() & 0o077 != 0 {
         return Err(Failure::usage(
             "Private bundle preparation permissions are unavailable.",
         ));
     }
-    Ok(directory)
+    Ok(())
+}
+
+#[cfg(test)]
+pub(crate) fn verify_private_directory(directory: &Dir) -> Result<(), Failure> {
+    #[cfg(any(
+        target_os = "linux",
+        all(
+            target_os = "macos",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        )
+    ))]
+    {
+        require_private_metadata(&directory.dir_metadata()?)?;
+        #[cfg(target_os = "macos")]
+        {
+            use std::os::fd::AsRawFd;
+            private_macos::verify(directory.as_raw_fd())?;
+        }
+        Ok(())
+    }
+    #[cfg(windows)]
+    {
+        windows::verify_private(directory, true)
+    }
+    #[cfg(not(any(
+        target_os = "linux",
+        windows,
+        all(
+            target_os = "macos",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        )
+    )))]
+    {
+        let _ = directory;
+        Err(Failure::usage("Private storage is unavailable."))
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn verify_private_file(file: &cap_std::fs::File) -> Result<(), Failure> {
+    #[cfg(any(
+        target_os = "linux",
+        all(
+            target_os = "macos",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        )
+    ))]
+    {
+        require_private_metadata(&file.metadata()?)?;
+        #[cfg(target_os = "macos")]
+        {
+            use std::os::fd::AsRawFd;
+            private_macos::verify(file.as_raw_fd())?;
+        }
+        Ok(())
+    }
+    #[cfg(windows)]
+    {
+        windows::verify_private(file, false)
+    }
+    #[cfg(not(any(
+        target_os = "linux",
+        windows,
+        all(
+            target_os = "macos",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        )
+    )))]
+    {
+        let _ = file;
+        Err(Failure::usage("Private storage is unavailable."))
+    }
+}
+
+#[cfg(all(test, windows))]
+pub(crate) fn create_private_file(parent: &Dir, name: &str) -> Result<cap_std::fs::File, Failure> {
+    windows::create_file(parent, name)
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -424,13 +514,25 @@ mod windows {
         }
         Ok(Allocation(descriptor))
     }
-    fn verify_security(dir: &Dir, expected: &Allocation) -> Result<(), Failure> {
+    #[cfg(test)]
+    pub(super) fn verify_private(
+        object: &impl AsRawHandle,
+        protected: bool,
+    ) -> Result<(), Failure> {
+        verify_security(object, &user_descriptor()?, protected)
+    }
+
+    fn verify_security(
+        object: &impl AsRawHandle,
+        expected: &Allocation,
+        protected: bool,
+    ) -> Result<(), Failure> {
         let mut actual = ptr::null_mut();
-        // SAFETY: the directory handle remains live and Windows allocates a
-        // self-contained descriptor. No inherited permissions are accepted.
+        // SAFETY: the object handle remains live and Windows allocates a
+        // self-contained descriptor. Directory permissions must be protected.
         let result = unsafe {
             GetSecurityInfo(
-                dir.as_raw_handle(),
+                object.as_raw_handle(),
                 SE_FILE_OBJECT,
                 OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
                 ptr::null_mut(),
@@ -454,7 +556,7 @@ mod windows {
         // SAFETY: both descriptors are allocated by Windows and retained.
         let valid = unsafe {
             GetSecurityDescriptorControl(actual.0, &mut control, &mut revision) != 0
-                && control & SE_DACL_PROTECTED != 0
+                && (!protected || control & SE_DACL_PROTECTED != 0)
                 && GetSecurityDescriptorOwner(actual.0, &mut owner, &mut defaulted) != 0
                 && GetSecurityDescriptorOwner(expected.0, &mut expected_owner, &mut defaulted) != 0
                 && EqualSid(owner, expected_owner) != 0
@@ -489,6 +591,27 @@ mod windows {
         Ok(())
     }
     pub(super) fn create(parent: &Dir, name: &str) -> Result<Dir, Failure> {
+        let (file, descriptor) = create_handle(parent, name, FILE_DIRECTORY_FILE)?;
+        let dir = Dir::from_std_file(file);
+        super::super::files::reject_link(&dir.dir_metadata()?)?;
+        verify_security(&dir, &descriptor, true)?;
+        Ok(dir)
+    }
+
+    #[cfg(test)]
+    pub(super) fn create_file(parent: &Dir, name: &str) -> Result<cap_std::fs::File, Failure> {
+        let (file, descriptor) = create_handle(parent, name, FILE_NON_DIRECTORY_FILE)?;
+        let file = cap_std::fs::File::from_std(file);
+        super::super::files::reject_link(&file.metadata()?)?;
+        verify_security(&file, &descriptor, false)?;
+        Ok(file)
+    }
+
+    fn create_handle(
+        parent: &Dir,
+        name: &str,
+        kind: u32,
+    ) -> Result<(std::fs::File, Allocation), Failure> {
         let mut flags = 0;
         // SAFETY: the live parent directory determines the volume; optional
         // string outputs are null and the flags output has valid storage.
@@ -542,16 +665,14 @@ mod windows {
                 FILE_ATTRIBUTE_NORMAL,
                 FILE_SHARE_READ | FILE_SHARE_WRITE,
                 FILE_CREATE,
-                FILE_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT | FILE_SYNCHRONOUS_IO_NONALERT,
+                kind | FILE_OPEN_REPARSE_POINT | FILE_SYNCHRONOUS_IO_NONALERT,
                 ptr::null(),
                 0,
             )
         })?;
         // SAFETY: a successful `NtCreateFile` transfers a new owned handle.
-        let dir = Dir::from_std_file(unsafe { std::fs::File::from_raw_handle(handle) });
-        super::super::files::reject_link(&dir.dir_metadata()?)?;
-        verify_security(&dir, &descriptor)?;
-        Ok(dir)
+        let file = unsafe { std::fs::File::from_raw_handle(handle) };
+        Ok((file, descriptor))
     }
     pub(super) fn publish(prepared: &Dir, destination: &Dir, name: &str) -> Result<(), Failure> {
         let name: Vec<u16> = name.encode_utf16().collect();

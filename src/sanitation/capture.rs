@@ -466,6 +466,13 @@ pub(super) fn decode(envelope: Envelope) -> Result<CapturedPlan> {
 }
 
 pub(super) fn verify(plan: &CapturedPlan) -> Result<()> {
+    with_verified_source(plan, || Ok(()))
+}
+
+pub(super) fn with_verified_source<T>(
+    plan: &CapturedPlan,
+    callback: impl FnOnce() -> Result<T>,
+) -> Result<T> {
     let owner = plan
         .pins
         .roots
@@ -475,7 +482,7 @@ pub(super) fn verify(plan: &CapturedPlan) -> Result<()> {
     if file_identity(&backup::opened(owner, ".vivac/lock")?)? != lock.identity {
         return Err(refused());
     }
-    let result = verify_locked(plan);
+    let result = verify_locked(plan).and_then(|()| callback());
     if file_identity(&backup::opened(owner, ".vivac/lock")?)? != lock.identity {
         return Err(refused());
     }
