@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare Cargo and nextest only after proving their default test coverage."""
+"""Compare `cargo test` and `cargo nextest run` with equal test coverage."""
 
 import argparse
 import copy
@@ -45,7 +45,7 @@ def parse_native(value):
 
 
 def compare_inventory(native, listed):
-    # Schema: nextest-metadata/src/test_list.rs at cargo-nextest-0.9.114.
+    # The inventory uses the pinned runner's metadata schema.
     suites = {}
     count = 0
     for suite in listed['rust-suites'].values():
