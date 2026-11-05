@@ -113,9 +113,15 @@ property or a query error refuses the operation; it never triggers a mode-only
 fallback. See Apple's [filesystem permission evaluation](https://developer.apple.com/library/archive/documentation/FileManagement/Conceptual/FileSystemProgrammingGuide/FileSystemDetails/FileSystemDetails.html).
 The initial macOS profile requires a local APFS or HFS volume with ownership
 enabled and extended-security capability reported as `1`. A successful
-descriptor query must supply both security UUID properties and report no ACL.
-An incomplete descriptor is refused. This uses public `filesec` APIs and their
-[documented implementation](https://github.com/apple-oss-distributions/Libc/blob/71bbe350ab79eef58113991d817ccc6165061a64/sys/statx_np.c),
+`fstatx_np` call must populate a fresh security descriptor, and a successful
+`FILESEC_ACL` presence query must return zero. Any nonzero presence result
+refuses; the API returns a validity bit, not necessarily the integer `1`.
+Optional owner and group security UUID properties do not establish privacy
+and need not be present. The current-user ownership and private mode checks
+remain required independently for both directories and files. This uses
+public `filesec` APIs and their implementations of
+[descriptor loading](https://github.com/apple-oss-distributions/Libc/blob/71bbe350ab79eef58113991d817ccc6165061a64/sys/statx_np.c)
+and [property queries](https://github.com/apple-oss-distributions/Libc/blob/71bbe350ab79eef58113991d817ccc6165061a64/gen/filesec.c),
 without parsing private ACL buffers or treating query errors as absence.
 
 Saving holds the existing shared source writer lock through source verification,

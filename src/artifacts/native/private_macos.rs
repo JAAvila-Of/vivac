@@ -56,15 +56,11 @@ pub(super) fn verify(fd: c_int) -> Result<(), Failure> {
     if unsafe { fstatx_np(fd, stat.as_mut_ptr(), descriptor.0) } != 0 {
         return Err(refused());
     }
-    for (property, required) in [(3, 1), (6, 1), (5, 0)] {
-        let mut present = -1;
-        // SAFETY: these public filesec property identifiers only query
-        // presence through an initialized integer output buffer.
-        if unsafe { filesec_query_property(descriptor.0, property, &mut present) } != 0
-            || present != required
-        {
-            return Err(refused());
-        }
+    let mut present = -1;
+    // SAFETY: the public ACL property only queries presence through an
+    // initialized integer output buffer on the retained descriptor.
+    if unsafe { filesec_query_property(descriptor.0, 5, &mut present) } != 0 || present != 0 {
+        return Err(refused());
     }
     Ok(())
 }
@@ -152,12 +148,15 @@ fn empty_snapshot_private_profile_interoperates() {
         .map(|output| output.status.success())
         .unwrap_or(false);
     let (after, after_acl) = observe(fd);
+    let rejected = verify(fd).is_err();
     assert!(
-        injected && before_acl == Some((0, 0)) && after_acl == Some((0, 1)),
+        injected
+            && before_acl == Some((0, 0))
+            && matches!(after_acl, Some((0, present)) if present != 0),
         "Private profile ACL transition: injected={injected}; before=[{before}]; after=[{after}]"
     );
     assert!(
-        verified,
+        verified && rejected,
         "Private profile probe: before=[{before}]; after=[{after}]"
     );
 }
