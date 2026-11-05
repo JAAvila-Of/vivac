@@ -42,10 +42,15 @@ must be specified and reviewed before implementation. No individual secret
 fingerprint or personal identity is added to the work log for this purpose.
 
 Only one transition can succeed against a predecessor. A concurrent proposal
-based on that predecessor remains a conflict requiring review. Retrying the
-same operation and envelope returns its existing result; reusing the operation
-identity with different bytes refuses. A lost response is reconciled before
-resubmission. Admitted authority must be durable before acknowledgement; a
+based on that predecessor remains a conflict requiring review. An authorized
+requester retrying the same operation and envelope receives its existing
+result; reusing the operation identity with different bytes refuses.
+A lost response is reconciled before
+resubmission when the requester still has authority to read its result.
+Revocation can remove that access; reconciliation is not a revoked credential's
+exception to current authorization. A separately authorized auditor or recovery
+flow may inspect retained evidence without impersonating the revoked actor.
+Admitted authority must be durable before acknowledgement; a
 restart cannot silently restore an earlier authorization state.
 An idempotent replay returns historical evidence, never a renewed permission.
 Using that result for another publication or delivery still requires current
@@ -220,6 +225,36 @@ mechanism so that corporate identity providers can be added later without
 rewriting provenance. Local credentials and their lifecycle still require a
 reviewed implementation; a VPN is not application authentication.
 
+## Executable policy model
+
+`src/team_authority/` is an in-memory policy model compiled only for tests.
+It models organization bootstrap, opaque principals, separate organization
+capabilities and project permissions, revision conflicts, revocation and
+idempotent operation results. A bootstrap administrator does not implicitly
+receive content access. Revoked identities cannot be silently enrolled again.
+An active author can reconcile its own exact operation as historical evidence;
+an inactive author is refused before receipt lookup.
+Capability and permission changes here are direct organization-policy
+assignments. They do not model delegated credentials or establish revocation
+propagation through a credential chain. Project-access assignment authority
+is explicit; managing members alone does not provide it.
+
+Its inputs are scenario identities and typed operations, not authenticated
+requests. Exact operation equality in this model does not define a signed wire
+encoding. It has no credentials, human-verification flags, invitations carrying
+secrets, key recovery, durable storage, network or public command. Ratification
+is not enabled. A future authentication and admission layer must bind the
+actual principal and reviewed request before using policy eligibility.
+
+The model bounds principals, including revoked identities, at 128, projects
+at 64 and admitted operations at 1,024. Hitting a limit refuses the next
+transition without dropping history or partially changing authority. These
+are model bounds, not measured production capacity or latency claims.
+
+Its tests establish policy semantics and in-memory transition behavior only.
+They do not establish secure enrollment, authentication, durable admission,
+encrypted sharing or readiness for a team deployment.
+
 ## Acceptance cases
 
 These are requirements for future integration tests, not executed security
@@ -232,6 +267,7 @@ including derived data and artifact delivery; a role-table test alone is insuffi
 | Two proposals use the same authority predecessor | At most one activates; the other requires conflict review. |
 | Retry after acknowledgement was lost | Reconcile the existing exact result; do not repeat a different transition. |
 | Replay an old successful receipt after revocation | Historical result only; no renewed publication or delivery permission. |
+| A revoked actor requests reconciliation | Ordinary receipt access is refused; the retained result is not erased. |
 | Restore an old authority cache or backup | Do not revive revoked permissions or active norms without a current verified checkpoint. |
 | Infrastructure or member administrator attempts privilege escalation | No implicit content, governance or recovery access. |
 | Agent uses a privileged person's delegated credential to ratify | Refused without the separate interactive confirmation. |
