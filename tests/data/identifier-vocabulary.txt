@@ -385,6 +385,7 @@ capped
 caps
 capture
 captured
+captures
 capturing
 card
 cargo
@@ -725,6 +726,7 @@ delivery
 delta
 denial
 denied
+dense
 deny
 dependencies
 depth
@@ -2537,6 +2539,7 @@ sei
 select
 selected
 selection
+selections
 selector
 selectors
 selects
