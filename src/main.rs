@@ -47,6 +47,8 @@ mod setup;
 mod store;
 mod style;
 #[cfg(test)]
+mod team_authority;
+#[cfg(test)]
 mod test_alloc;
 mod update;
 mod web;
