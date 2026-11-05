@@ -98,7 +98,9 @@ primitives. Permissions must be private from creation, with owner-only access
 on Unix and a protected owner-only DACL on Windows; unsupported guarantees
 refuse storage. Reopening checks privacy again, rather than trusting the path.
 The plan file itself must also be private: create it with owner-only mode on
-Unix and inherit only owner access from the protected directory on Windows.
+Unix and an explicit owner-only security descriptor on Windows. Inheriting a
+DACL does not establish the file owner, which otherwise comes from the token's
+default owner and may be a group; see Microsoft's [object owner rules](https://learn.microsoft.com/en-us/windows/win32/secauthz/owner-of-a-new-object).
 Check its owner and permissions before writing and again before reading.
 Windows traversal privileges make directory privacy alone insufficient when
 a child's ACL grants broader access. An inherited file DACL is acceptable only

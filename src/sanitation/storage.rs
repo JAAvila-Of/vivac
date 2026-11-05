@@ -1,7 +1,11 @@
 use super::{capture, digest, refused, CapturedPlan, Result};
 use crate::artifacts::{files, native};
-use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
-use cap_std::fs::{Dir, OpenOptions};
+use cap_fs_ext::DirExt;
+#[cfg(not(windows))]
+use cap_fs_ext::{FollowSymlinks, OpenOptionsFollowExt};
+use cap_std::fs::Dir;
+#[cfg(not(windows))]
+use cap_std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
@@ -52,17 +56,22 @@ pub(super) fn save(plan: &CapturedPlan, path: &Path) -> Result<()> {
         dedicated_parent(plan, &path, &parent)?;
         same_parent(&named_parent, &parent)?;
         let mut preparation = native::Preparation::new(&parent)?;
-        let mut options = OpenOptions::new();
-        options
-            .write(true)
-            .create_new(true)
-            .follow(FollowSymlinks::No);
-        #[cfg(unix)]
-        {
-            use cap_std::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        let mut file = preparation.dir.open_with("plan.json", &options)?;
+        #[cfg(windows)]
+        let mut file = native::create_private_file(&preparation.dir, "plan.json")?;
+        #[cfg(not(windows))]
+        let mut file = {
+            let mut options = OpenOptions::new();
+            options
+                .write(true)
+                .create_new(true)
+                .follow(FollowSymlinks::No);
+            #[cfg(unix)]
+            {
+                use cap_std::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            preparation.dir.open_with("plan.json", &options)?
+        };
         native::verify_private_directory(&preparation.dir)?;
         native::verify_private_file(&file)?;
         file.write_all(&bytes)?;

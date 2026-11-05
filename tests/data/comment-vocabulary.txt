@@ -1471,6 +1471,7 @@ fate
 fault
 favored
 fcntl
+fd
 fear
 feature
 features
@@ -1499,6 +1500,7 @@ file
 filed
 filename
 files
+filesec
 filesystem
 filing
 fill
@@ -1609,6 +1611,7 @@ founding
 four
 fourteen
 fourth
+fpathconf
 fraction
 fractional
 fragment
@@ -1632,6 +1635,7 @@ fronts
 froze
 frozen
 fstatat
+fstatfs
 full
 fully
 function
@@ -2890,6 +2894,7 @@ precede
 preceded
 precedent
 precedes
+preceding
 precise
 precisely
 precision
@@ -3065,6 +3070,7 @@ raced
 races
 racing
 radius
+raii
 rail
 rails
 raise
