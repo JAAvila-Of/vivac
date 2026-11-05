@@ -86,52 +86,78 @@ fn empty_snapshot_private_profile_interoperates() {
         }
     }
 
+    fn observe(fd: c_int) -> (String, Option<(c_int, c_int)>) {
+        let mut filesystem = MaybeUninit::<libc::statfs>::uninit();
+        // SAFETY: the retained empty snapshot FD and maintained output are live.
+        let fs_result = unsafe { libc::fstatfs(fd, filesystem.as_mut_ptr()) };
+        let fs_errno = errno(fs_result != 0);
+        let (fs_type, local, ignores_ownership) = if fs_result == 0 {
+            // SAFETY: successful fstatfs initialized the maintained structure.
+            let filesystem = unsafe { filesystem.assume_init() };
+            let name = filesystem.f_fstypename.map(|byte| byte as u8);
+            let name = std::ffi::CStr::from_bytes_until_nul(&name)
+                .map(|name| name.to_string_lossy().into_owned())
+                .ok();
+            (
+                name,
+                Some(filesystem.f_flags as u64 & libc::MNT_LOCAL as u64 != 0),
+                Some(filesystem.f_flags as u64 & libc::MNT_IGNORE_OWNERSHIP as u64 != 0),
+            )
+        } else {
+            (None, None, None)
+        };
+        // SAFETY: this capability query uses the same retained empty snapshot FD.
+        let pathconf = unsafe { libc::fpathconf(fd, libc::_PC_EXTENDED_SECURITY_NP) };
+        let pathconf_errno = errno(pathconf == -1);
+        // SAFETY: filesec_init returns an owned descriptor or null.
+        let descriptor = unsafe { filesec_init() };
+        let initialized = !descriptor.is_null();
+        let mut statx = None;
+        let mut statx_errno = None;
+        let mut queries = Vec::new();
+        if initialized {
+            let descriptor = FileSecurity(descriptor);
+            let mut stat = MaybeUninit::<libc::stat>::uninit();
+            // SAFETY: both output objects remain owned and the FD stays live.
+            let result = unsafe { fstatx_np(fd, stat.as_mut_ptr(), descriptor.0) };
+            statx_errno = Some(errno(result != 0));
+            statx = Some(result);
+            for property in [3, 6, 5] {
+                let mut present = -1;
+                // SAFETY: public presence queries use a valid descriptor and
+                // integer output even when preceding filesystem filters failed.
+                let result =
+                    unsafe { filesec_query_property(descriptor.0, property, &mut present) };
+                let error = errno(result != 0);
+                queries.push((property, result, error, present));
+            }
+        }
+        let acl = queries
+            .iter()
+            .find(|query| query.0 == 5)
+            .map(|query| (query.1, query.3));
+        let diagnostic = format!(
+        "fs_result={fs_result}, fs_errno={fs_errno}, fs_type={fs_type:?}, local={local:?}, ignores_ownership={ignores_ownership:?}, pathconf={pathconf}, pathconf_errno={pathconf_errno}, initialized={initialized}, statx={statx:?}, statx_errno={statx_errno:?}, queries(property,return,errno,presence)={queries:?}");
+        (diagnostic, acl)
+    }
+
     let preparation = super::Preparation::snapshot().unwrap();
     let fd = preparation.dir.as_raw_fd();
-    let mut filesystem = MaybeUninit::<libc::statfs>::uninit();
-    // SAFETY: the retained empty snapshot FD and maintained output are live.
-    let fs_result = unsafe { libc::fstatfs(fd, filesystem.as_mut_ptr()) };
-    let fs_errno = errno(fs_result != 0);
-    let (fs_type, local, ignores_ownership) = if fs_result == 0 {
-        // SAFETY: successful fstatfs initialized the maintained structure.
-        let filesystem = unsafe { filesystem.assume_init() };
-        let name = filesystem.f_fstypename.map(|byte| byte as u8);
-        let name = std::ffi::CStr::from_bytes_until_nul(&name)
-            .map(|name| name.to_string_lossy().into_owned())
-            .ok();
-        (
-            name,
-            Some(filesystem.f_flags as u64 & libc::MNT_LOCAL as u64 != 0),
-            Some(filesystem.f_flags as u64 & libc::MNT_IGNORE_OWNERSHIP as u64 != 0),
-        )
-    } else {
-        (None, None, None)
-    };
-    // SAFETY: this capability query uses the same retained empty snapshot FD.
-    let pathconf = unsafe { libc::fpathconf(fd, libc::_PC_EXTENDED_SECURITY_NP) };
-    let pathconf_errno = errno(pathconf == -1);
-    // SAFETY: filesec_init returns an owned descriptor or null.
-    let descriptor = unsafe { filesec_init() };
-    let initialized = !descriptor.is_null();
-    let mut statx = None;
-    let mut statx_errno = None;
-    let mut queries = Vec::new();
-    if initialized {
-        let descriptor = FileSecurity(descriptor);
-        let mut stat = MaybeUninit::<libc::stat>::uninit();
-        // SAFETY: both output objects remain owned and the FD stays live.
-        let result = unsafe { fstatx_np(fd, stat.as_mut_ptr(), descriptor.0) };
-        statx_errno = Some(errno(result != 0));
-        statx = Some(result);
-        for property in [3, 6, 5] {
-            let mut present = -1;
-            // SAFETY: public presence queries use a valid descriptor and
-            // integer output even when preceding filesystem filters failed.
-            let result = unsafe { filesec_query_property(descriptor.0, property, &mut present) };
-            let error = errno(result != 0);
-            queries.push((property, result, error, present));
-        }
-    }
-    assert!(verify(fd).is_ok(),
-        "Private profile probe: fs_result={fs_result}, fs_errno={fs_errno}, fs_type={fs_type:?}, local={local:?}, ignores_ownership={ignores_ownership:?}, pathconf={pathconf}, pathconf_errno={pathconf_errno}, initialized={initialized}, statx={statx:?}, statx_errno={statx_errno:?}, queries(property,return,errno,presence)={queries:?}");
+    let (before, before_acl) = observe(fd);
+    let verified = verify(fd).is_ok();
+    let injected = std::process::Command::new("/bin/chmod")
+        .args(["+a", "everyone allow read"])
+        .arg(std::env::temp_dir().join(&preparation.name))
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false);
+    let (after, after_acl) = observe(fd);
+    assert!(
+        injected && before_acl == Some((0, 0)) && after_acl == Some((0, 1)),
+        "Private profile ACL transition: injected={injected}; before=[{before}]; after=[{after}]"
+    );
+    assert!(
+        verified,
+        "Private profile probe: before=[{before}]; after=[{after}]"
+    );
 }
