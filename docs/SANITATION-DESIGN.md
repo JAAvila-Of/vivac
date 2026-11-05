@@ -83,6 +83,59 @@ captured identities and bytes before transforming anything. A modified source,
 changed selection or destination invalidates a new transformation. It must not
 refresh a stale plan and then apply the new scope under an earlier confirmation.
 
+## Private reviewed-plan storage
+
+The test-gated planning core may persist the canonical envelope as the sole
+`plan.json` member of a new owner-private directory outside Git working trees.
+The package must not overlap any source root or the proposed successor path.
+Its existing storage parent must differ by directory identity from the captured
+successor parent. This first internal API requires a dedicated storage location,
+rather than assuming portable equivalence rules for absent sibling names.
+No ancestor of that storage parent may be a captured source root. Named parent
+identity is checked again around publication.
+It uses the existing private directory preparation and exclusive publication
+primitives. Permissions must be private from creation, with owner-only access
+on Unix and a protected owner-only DACL on Windows; unsupported guarantees
+refuse storage. Reopening checks privacy again, rather than trusting the path.
+The plan file itself must also be private: create it with owner-only mode on
+Unix and inherit only owner access from the protected directory on Windows.
+Check its owner and permissions before writing and again before reading.
+Windows traversal privileges make directory privacy alone insufficient when
+a child's ACL grants broader access. An inherited file DACL is acceptable only
+while its effective entries still grant access exclusively to the owner; see
+Microsoft's [bypass-traverse policy](https://learn.microsoft.com/en-us/windows/security/threat-protection/security-policy-settings/bypass-traverse-checking).
+On macOS, mode bits alone do not establish privacy because extended ACLs can
+grant access first. This initial storage profile requires a successful query
+through the held descriptor that proves no extended ACL is present. An ACL
+property or a query error refuses the operation; it never triggers a mode-only
+fallback. See Apple's [filesystem permission evaluation](https://developer.apple.com/library/archive/documentation/FileManagement/Conceptual/FileSystemProgrammingGuide/FileSystemDetails/FileSystemDetails.html).
+The initial macOS profile requires a local APFS or HFS volume with ownership
+enabled and extended-security capability reported as `1`. A successful
+descriptor query must supply both security UUID properties and report no ACL.
+An incomplete descriptor is refused. This uses public `filesec` APIs and their
+[documented implementation](https://github.com/apple-oss-distributions/Libc/blob/71bbe350ab79eef58113991d817ccc6165061a64/sys/statx_np.c),
+without parsing private ACL buffers or treating query errors as absence.
+
+Saving holds the existing shared source writer lock through source verification,
+file synchronization and exclusive publication. The source, custody, registry
+and proposed successor remain untouched. An occupied package path is refused,
+including an existing plan for the same operation. Failure after publication
+may leave a complete package: retry must not overwrite it.
+
+Recovery requires the canonical digest retained from review. Before interpreting
+envelope paths, read at most 512 KiB plus one refusal byte and check the digest
+of the stored canonical bytes. Refuse extra members, links, permissive directory
+access, oversized or altered data. Then run the existing strict decoder and
+source/custody rechecks. Recovery preserves the original operation and successor
+identities; it never refreshes the plan or grants transformation consent. A
+complete package left after acknowledgement loss can be recovered through the
+same digest and checks. All errors remain generic and exclude private values,
+paths and file commitments.
+
+This package is an explicitly requested local private file operation. It is
+separate from tree history, public summaries and the future operation receipt.
+It adds no CLI, MCP, web, context delivery, successor publication or cloud API.
+
 ## Successor representation
 
 For the supported prose transformation, preserve canonical node IDs, node
@@ -221,9 +274,10 @@ structural references and counts without selected values, paths or file hashes.
 Custodied files retain their recorded policies; legacy strict artifact bytes
 receive content inspection as well as digest verification.
 
-This increment serializes the envelope only in memory. It exposes no CLI, MCP
-or web operation and neither transforms nor publishes a successor. Boundary
-performance measurements, private plan persistence and delivery, transformation
+The core serializes the envelope in memory and can save and recover the same
+reviewed envelope through the private package described above. It exposes no
+CLI, MCP or web operation and neither transforms nor publishes a successor. Boundary
+performance accreditation, plan delivery, transformation
 compatibility, durable receipts and interrupted-publication tests remain
 required before their respective operations can ship. The core's tests do not
 establish removal from external copies or retirement of other writers.

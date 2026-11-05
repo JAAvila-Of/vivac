@@ -24,6 +24,7 @@ account
 accounted
 ace
 acl
+acls
 acq
 acquire
 acquisition
@@ -326,6 +327,8 @@ break
 breaks
 brief
 brings
+broad
+broaden
 broken
 browser
 browsing
@@ -703,6 +706,7 @@ decodes
 decoding
 decomposed
 decompress
+dedicated
 dedup
 deep
 deepest
@@ -912,6 +916,8 @@ ended
 ending
 endings
 endless
+endpoint
+endpoints
 ends
 enforce
 enforces
@@ -1059,6 +1065,7 @@ file
 filename
 fileno
 files
+filesec
 filesystem
 fill
 filled
@@ -1135,6 +1142,7 @@ founding
 four
 fourth
 fp
+fpathconf
 fractional
 fragment
 fragments
@@ -1150,6 +1158,9 @@ fronts
 fs
 fstat
 fstatat
+fstatfs
+fstatx
+fstypename
 fsync
 ftyp
 full
@@ -1368,6 +1379,7 @@ infer
 info
 information
 inherit
+inherited
 inherits
 init
 initial
@@ -1682,6 +1694,7 @@ mismatching
 missing
 mixed
 mm
+mnt
 mod
 mode
 model
@@ -1965,6 +1978,7 @@ paths
 pattern
 payload
 payloads
+pc
 peak
 peek
 peekable
@@ -2488,6 +2502,7 @@ saturating
 save
 saved
 saves
+saving
 say
 says
 sb
@@ -2720,6 +2735,7 @@ stat
 state
 statement
 states
+statfs
 static
 station
 stats
