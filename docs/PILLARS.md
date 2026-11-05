@@ -470,6 +470,19 @@ No inspection or member is silently omitted to fit a limit.
   server holds it, that is not privacy, it is a promise.
 - Identity for team mode: an opaque identifier, never an email or a name.
 
+### Shared authority
+
+Future team collaboration must distinguish local capture from shared admission.
+Saving work or a proposal remains local and never waits for the network.
+It does not grant access, activate a shared rule or claim that another client
+received the work. Membership and governance transitions require explicit
+authority, an exact reviewed revision and a current shared admission check.
+The remote may coordinate those transitions without becoming the source of
+the local work history or receiving content decryption keys. Offline clients
+report the authority revision they know; they cannot assert global freshness.
+See the [shared authority contract](TEAM-AUTHORITY.md) for the future protocol
+boundaries and acceptance cases. This does not expose a team or cloud command.
+
 ---
 
 ## Pillar 4 — UX
