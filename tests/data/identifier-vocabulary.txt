@@ -48,6 +48,7 @@ adds
 adirectory
 adler
 adler32
+administrative
 admission
 admit
 admits
@@ -204,6 +205,7 @@ attr
 attribute
 attributes
 attributing
+audit
 authenticated
 author
 authored
@@ -969,6 +971,8 @@ ever
 every
 everything
 everywhere
+evict
+eviction
 evidence
 evs
 ex
@@ -1209,6 +1213,9 @@ governed
 governing
 governs
 grandchild
+grant
+granted
+grants
 graph
 grapheme
 graphemes
@@ -1610,7 +1617,10 @@ make
 makes
 malformed
 malloc64
+manage
 managed
+management
+manager
 managing
 mandatory
 manifest
@@ -1658,6 +1668,7 @@ media
 mem
 member
 members
+membership
 memory
 memstatus
 mentioned
@@ -1758,9 +1769,11 @@ net
 network
 never
 new
+newcomer
 newer
 newest
 newline
+newly
 next
 nfd
 nlink
@@ -1874,6 +1887,7 @@ ordering
 orders
 ordinal
 ordinary
+organization
 orientation
 orig
 origin
@@ -2095,6 +2109,8 @@ previously
 primary
 prime
 primitive
+principal
+principals
 print
 printed
 println
@@ -2139,6 +2155,7 @@ propagates
 properties
 property
 proposal
+propose
 proposing
 prose
 protected
@@ -2169,12 +2186,14 @@ put
 px
 py
 python
+queried
 queries
 query
 question
 questions
 quiet
 quiets
+quota
 quote
 quoted
 quotes
@@ -2445,7 +2464,9 @@ revision
 revisions
 revived
 revocation
+revoke
 revoked
+revoking
 rewind
 rewinds
 rewrite
@@ -2799,6 +2820,7 @@ subfolder
 submodule
 subsec
 subsequence
+subset
 substituted
 substitutes
 substitution
@@ -2870,6 +2892,7 @@ tcgetattr
 tcp
 tcsanow
 tcsetattr
+team
 teb
 technical
 tell
