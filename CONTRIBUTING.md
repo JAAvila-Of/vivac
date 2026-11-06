@@ -44,6 +44,25 @@ This will change. When the model settles, this file will say so.
 [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) says what is expected in the issues,
 and what I do when it is not.
 
+## Local verification
+
+The [CI workflow](.github/workflows/ci.yml) defines the verification matrix.
+Its Rust test jobs use the pinned runner in
+[the installer action](.github/actions/install-nextest/action.yml). With a
+compatible [prebuilt nextest](https://nexte.st/docs/installation/pre-built-binaries/)
+installed, run the same test targets locally:
+
+```sh
+cargo nextest run --locked --all-targets
+```
+
+The [repository configuration](.config/nextest.toml) disables retries, finishes
+the suite after a failure and uses CPU-based test concurrency. Existing ignored
+cases stay ignored. Use your workspace's Rust command coordinator when one is
+configured; its environment may impose a lower concurrency limit. Cargo remains
+available for focused diagnosis, for example
+`cargo test --locked --test comments`.
+
 ## Security
 
 A security flaw does not go in an issue: [`SECURITY.md`](SECURITY.md) says

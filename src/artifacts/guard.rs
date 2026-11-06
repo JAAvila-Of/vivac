@@ -141,6 +141,9 @@ fn flush_token(
     output: &mut CheckedOutput<'_>,
     inspection: &mut Inspection,
 ) -> Result<(), Failure> {
+    if token.is_empty() {
+        return Ok(());
+    }
     inspect_token(token, inspection)?;
     output.append(token.as_bytes())?;
     token.clear();
@@ -235,6 +238,80 @@ mod tests {
         result
             .err()
             .map(|error| (error.code(), format!("{error:?}")))
+    }
+
+    #[test]
+    fn consecutive_separators_preserve_bytes_hash_and_sensitive_refusal() {
+        use super::super::policy::{CapturePolicy, Coverage, Sensitivity};
+        let separators = " \t\r\n,;\"'()[]{}<>`\u{a0}\u{2003}\u{2028}\u{3000}";
+        let prefix = separators.repeat(CHUNK_SIZE / separators.len() + 1);
+        for (input, sensitive) in [
+            (String::new(), None),
+            (prefix.clone(), None),
+            (format!("{prefix}safe{separators}"), None),
+            (
+                format!("{prefix}person@example.com{separators}"),
+                Some("person@example.com"),
+            ),
+            (
+                format!("{prefix}-----BEGIN PRIVATE KEY-----{separators}"),
+                Some("-----BEGIN"),
+            ),
+        ] {
+            let expected_digest = format!("{:x}", Sha256::digest(input.as_bytes()));
+            assert_eq!(
+                check_text(&input).err().map(|error| error.code()),
+                sensitive.map(|_| 3)
+            );
+            let expected_inspection = check_text_observed(&input).unwrap();
+            for width in [1, 2, 7, CHUNK_SIZE] {
+                let mut output = Vec::new();
+                let result = copy_checked(
+                    TinyReader {
+                        remaining: input.as_bytes(),
+                        width,
+                    },
+                    &mut output,
+                );
+                if let Some(sensitive) = sensitive {
+                    let error = result.unwrap_err();
+                    assert_eq!(error.code(), 3);
+                    assert!(!error.message().contains(sensitive));
+                    assert!(prefix.as_bytes().starts_with(&output));
+                } else {
+                    let receipt = result.unwrap();
+                    assert_eq!(output, input.as_bytes());
+                    assert_eq!(receipt.size, input.len() as u64);
+                    assert_eq!(receipt.digest, expected_digest);
+                }
+                output.clear();
+                let observed = copy_observed(
+                    TinyReader {
+                        remaining: input.as_bytes(),
+                        width,
+                    },
+                    &mut output,
+                    input.len() as u64,
+                )
+                .unwrap();
+                assert_eq!(output, input.as_bytes());
+                assert_eq!(observed.receipt.size, input.len() as u64);
+                assert_eq!(observed.receipt.digest, expected_digest);
+                assert_eq!(observed.inspection, expected_inspection);
+                assert_eq!(observed.inspection.policy, CapturePolicy::AllowInsecure);
+                assert_eq!(observed.inspection.coverage, Coverage::Complete);
+                assert_eq!(
+                    observed.inspection.sensitivity,
+                    if sensitive.is_some() {
+                        Sensitivity::Detected
+                    } else {
+                        Sensitivity::NotDetected
+                    }
+                );
+                assert!(observed.inspection.review_required);
+                observed.inspection.validate().unwrap();
+            }
+        }
     }
 
     #[test]
