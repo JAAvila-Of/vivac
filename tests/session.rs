@@ -128,6 +128,34 @@ fn opening_guard_requires_only_hook_mode() {
 }
 
 #[test]
+fn closed_stdin_preserves_the_child_error_and_output() {
+    let c = Sandbox::new_seeded("closed-stdin");
+    let before = directory_snapshot(&c.0);
+    let home_before = directory_snapshot(c.global_home());
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_vivac"))
+        .current_dir(&c.0)
+        .env("VIVAC_HOME", c.global_home())
+        .env("TZ", "UTC")
+        .args(["session", "guard"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let pipe = child.stdin.take().unwrap();
+    let status = child.wait().unwrap();
+    let expected_code = status.code().unwrap();
+    assert_ne!(expected_code, 0);
+    child.stdin = Some(pipe);
+    let (stdout, stderr, code) = finish_stdin_split(child, "{}");
+    assert_eq!(code, expected_code);
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(!stderr.is_empty());
+    assert_eq!(directory_snapshot(&c.0), before);
+    assert_eq!(directory_snapshot(c.global_home()), home_before);
+}
+
+#[test]
 fn claude_module_opening_is_complete_and_byte_bounded() {
     let c = Sandbox::new_seeded("claude-module-ready");
     let title = "Unicode mandate: acci\u{f3}n \u{1f9ed} remains complete";
@@ -1144,8 +1172,7 @@ fn how_many(vivacs: &str, kind: &str) -> usize {
 /// two streams told apart, the same reason `tests/registry.rs`'s own
 /// `run_split` exists.
 fn run_stdin_split(c: &Sandbox, args: &[&str], stdin: &str) -> (String, String, i32) {
-    use std::io::Write;
-    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_vivac"))
+    let child = std::process::Command::new(env!("CARGO_BIN_EXE_vivac"))
         .current_dir(&c.0)
         .env("VIVAC_HOME", c.global_home())
         .env("TZ", "UTC")
@@ -1155,12 +1182,16 @@ fn run_stdin_split(c: &Sandbox, args: &[&str], stdin: &str) -> (String, String, 
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(stdin.as_bytes())
-        .unwrap();
+    finish_stdin_split(child, stdin)
+}
+
+fn finish_stdin_split(mut child: std::process::Child, stdin: &str) -> (String, String, i32) {
+    use std::io::Write;
+    match child.stdin.take().unwrap().write_all(stdin.as_bytes()) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {}
+        Err(e) => panic!("writing the payload to the child: {e}"),
+    }
     let o = child.wait_with_output().unwrap();
     (
         String::from_utf8_lossy(&o.stdout).into_owned(),

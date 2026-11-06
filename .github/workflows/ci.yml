@@ -26,7 +26,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo test --locked --all-targets
+      - uses: ./.github/actions/install-nextest
+      - run: cargo nextest run --locked --all-targets --no-fail-fast --retries 0
 
   msrv:
     runs-on: ubuntu-latest

@@ -1,0 +1,45 @@
+name: Install nextest
+description: Install the pinned nextest release on GitHub-hosted runners
+runs:
+  using: composite
+  steps:
+    - name: Install the pinned nextest release
+      shell: python {0}
+      run: |
+        import hashlib
+        import io
+        import os
+        from pathlib import Path
+        import tarfile
+        import urllib.request
+
+        if os.environ.get('GITHUB_ACTIONS') != 'true' or os.environ.get('RUNNER_ENVIRONMENT') != 'github-hosted':
+            raise SystemExit('Nextest installation requires a GitHub-hosted Actions runner')
+        releases = {
+            'Linux': ('x86_64-unknown-linux-gnu', '897cedb3b4e7c6e0d0960216a45a4635c1bca8c6f65930eaaf452ceb1a3d7f5c'),
+            'Windows': ('x86_64-pc-windows-msvc', '28120583d1ba1a0ce474b9c5e7110247abf1b53f0aeb5bf6882f1f12fc31bdca'),
+            'macOS': ('universal-apple-darwin', '3c09e7eb2790ccbca37812e895ee273dde718a97163b1be242da1bbbe4d971da'),
+        }
+        runner_os = os.environ.get('RUNNER_OS')
+        if runner_os not in releases:
+            raise SystemExit('Unsupported nextest runner OS')
+        target, digest = releases[runner_os]
+        version = '0.9.114'
+        archive = f"cargo-nextest-{version}-{target}.tar.gz"
+        url = f"https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-{version}/{archive}"
+        with urllib.request.urlopen(url, timeout=120) as response:
+            payload = response.read()
+        if hashlib.sha256(payload).hexdigest() != digest:
+            raise SystemExit('Nextest archive digest mismatch')
+        name = 'cargo-nextest.exe' if runner_os == 'Windows' else 'cargo-nextest'
+        destination = Path(os.environ['RUNNER_TEMP']) / 'nextest-tools'
+        destination.mkdir()
+        with tarfile.open(fileobj=io.BytesIO(payload), mode='r:gz') as archive_file:
+            members = [member for member in archive_file.getmembers() if member.name == name]
+            if len(members) != 1 or not members[0].isfile():
+                raise SystemExit('Nextest archive has no unique regular executable')
+            executable = destination / name
+            executable.write_bytes(archive_file.extractfile(members[0]).read())
+            executable.chmod(0o755)
+        with open(os.environ['GITHUB_PATH'], 'a', encoding='utf-8') as path_file:
+            path_file.write(str(destination) + '\n')
