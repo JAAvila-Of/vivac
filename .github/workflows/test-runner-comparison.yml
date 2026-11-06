@@ -1,0 +1,83 @@
+name: test-runner-comparison
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/test-runner-comparison.yml'
+      - 'tools/compare-test-runners.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-runner-comparison-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compare:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            digest: 897cedb3b4e7c6e0d0960216a45a4635c1bca8c6f65930eaaf452ceb1a3d7f5c
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            digest: 28120583d1ba1a0ce474b9c5e7110247abf1b53f0aeb5bf6882f1f12fc31bdca
+          - os: macos-latest
+            target: universal-apple-darwin
+            digest: 3c09e7eb2790ccbca37812e895ee273dde718a97163b1be242da1bbbe4d971da
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    env:
+      NEXTEST_VERSION: '0.9.114'
+      NEXTEST_TARGET: ${{ matrix.target }}
+      NEXTEST_SHA256: ${{ matrix.digest }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install the pinned nextest release
+        shell: python {0}
+        run: |
+          import hashlib
+          import io
+          import os
+          from pathlib import Path
+          import tarfile
+          import urllib.request
+
+          version = os.environ['NEXTEST_VERSION']
+          archive = f"cargo-nextest-{version}-{os.environ['NEXTEST_TARGET']}.tar.gz"
+          url = f"https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-{version}/{archive}"
+          with urllib.request.urlopen(url, timeout=120) as response:
+              payload = response.read()
+          if hashlib.sha256(payload).hexdigest() != os.environ['NEXTEST_SHA256']:
+              raise SystemExit('Nextest archive digest mismatch')
+          name = 'cargo-nextest.exe' if os.name == 'nt' else 'cargo-nextest'
+          destination = Path(os.environ['RUNNER_TEMP']) / 'comparison-tools'
+          destination.mkdir()
+          with tarfile.open(fileobj=io.BytesIO(payload), mode='r:gz') as archive_file:
+              members = [member for member in archive_file.getmembers() if member.name == name]
+              if len(members) != 1 or not members[0].isfile():
+                  raise SystemExit('Nextest archive has no unique regular executable')
+              executable = destination / name
+              executable.write_bytes(archive_file.extractfile(members[0]).read())
+              executable.chmod(0o755)
+          with open(os.environ['GITHUB_PATH'], 'a', encoding='utf-8') as path_file:
+              path_file.write(str(destination) + '\n')
+      - name: Check the comparison helper
+        run: python tools/compare-test-runners.py --self-test
+      - name: Clean the package before measurement
+        run: cargo clean -p vivac
+      - name: Compare identical test inventories and execution
+        run: python tools/compare-test-runners.py --output runner-comparison
+      - name: Retain every sample and failure
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: runner-comparison-${{ matrix.os }}
+          path: runner-comparison/
+          if-no-files-found: error
+          retention-days: 14
