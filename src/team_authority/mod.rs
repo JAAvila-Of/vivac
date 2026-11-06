@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+mod signed;
 #[cfg(test)]
 mod tests;
 
@@ -38,6 +39,8 @@ identifier!(OrganizationId);
 identifier!(PrincipalId);
 identifier!(ProjectId);
 identifier!(OperationId);
+identifier!(DeviceId);
+identifier!(CredentialId);
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum OrganizationCapability {

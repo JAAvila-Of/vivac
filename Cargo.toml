@@ -66,6 +66,8 @@ unicode-width = "0.2"
 # protocol is how a suite ends up green over malformed output.
 [dev-dependencies]
 serde_json = "1"
+# Verify device signatures while the authority boundary remains test-only.
+ed25519-dalek = { version = "=3.0.0", default-features = false, features = ["fast", "zeroize"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.189"
