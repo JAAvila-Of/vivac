@@ -1,12 +1,6 @@
 name: test-runner-comparison
 
 on:
-  pull_request:
-    paths:
-      - '.github/workflows/test-runner-comparison.yml'
-      - '.github/actions/install-nextest/action.yml'
-      - '.config/nextest.toml'
-      - 'tools/compare-test-runners.py'
   workflow_dispatch:
 
 permissions:
