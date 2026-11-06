@@ -622,6 +622,7 @@ counting
 counts
 cover
 coverage
+covered
 covers
 cow
 crash
@@ -665,6 +666,7 @@ cycle
 cycles
 d200
 dacl
+dalek
 damage
 damaged
 dangling
@@ -879,6 +881,7 @@ eats
 echo
 echoes
 echoing
+ed25519
 edge
 edged
 edges
@@ -972,6 +975,7 @@ every
 everything
 everywhere
 evict
+evicting
 eviction
 evidence
 evs
@@ -1639,6 +1643,7 @@ markers
 marks
 markup
 mask
+masks
 match
 matched
 matcher
@@ -2657,7 +2662,10 @@ side
 sig
 sighting
 sign
+signature
+signatures
 signed
+signer
 signing
 signs
 silence
@@ -2817,10 +2825,12 @@ subagent
 subdirectory
 subdirs
 subfolder
+submit
 submodule
 subsec
 subsequence
 subset
+substitute
 substituted
 substitutes
 substitution
@@ -3042,6 +3052,7 @@ ulong
 unaccounted
 unambiguous
 unattributed
+unauthorized
 unavailable
 unblocks
 unbound
@@ -3167,6 +3178,7 @@ verification
 verified
 verifies
 verify
+verifying
 version
 versioned
 versions

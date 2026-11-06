@@ -239,12 +239,13 @@ assignments. They do not model delegated credentials or establish revocation
 propagation through a credential chain. Project-access assignment authority
 is explicit; managing members alone does not provide it.
 
-Its inputs are scenario identities and typed operations, not authenticated
-requests. Exact operation equality in this model does not define a signed wire
-encoding. It has no credentials, human-verification flags, invitations carrying
-secrets, key recovery, durable storage, network or public command. Ratification
-is not enabled. A future authentication and admission layer must bind the
-actual principal and reviewed request before using policy eligibility.
+The policy core's inputs are scenario identities and typed operations, not
+authenticated requests. Its change equality alone does not define a signed
+wire encoding. The model has no real credentials, human-verification flags,
+invitations carrying secrets, key recovery, durable storage, network or public
+command. Ratification is not enabled. A future authentication and admission
+layer must bind the actual principal and reviewed request before using policy
+eligibility.
 
 The model bounds principals, including revoked identities, at 128, projects
 at 64 and admitted operations at 1,024. Hitting a limit refuses the next
@@ -254,6 +255,12 @@ are model bounds, not measured production capacity or latency claims.
 Its tests establish policy semantics and in-memory transition behavior only.
 They do not establish secure enrollment, authentication, durable admission,
 encrypted sharing or readiness for a team deployment.
+
+The [device-signature boundary](TEAM-IDENTITY-PROTOCOL.md) specifies canonical
+signing bytes and verifies possession of a known device key before policy
+admission. It also remains test-only: its trusted bindings are fixtures, not
+an implemented account or device-enrollment system. Human verification,
+credential lifecycle and durable admission remain separate prerequisites.
 
 ## Acceptance cases
 
