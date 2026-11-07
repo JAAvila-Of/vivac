@@ -113,6 +113,7 @@ an
 ancestor
 ancestors
 ancestral
+ancestry
 anchor
 anchoring
 anchors
@@ -285,6 +286,7 @@ bk
 black
 blank
 blessed
+blob
 blobs
 block
 blocked
@@ -409,6 +411,7 @@ catch
 categories
 category
 cause
+cb
 cc
 ceil
 ceiling
@@ -449,6 +452,7 @@ chunk
 chunked
 chunks
 cid
+ciphertext
 civil
 claim
 claimant
@@ -644,6 +648,9 @@ cross
 crosses
 crossing
 crumb
+crypt
+cryptography
+cryptprotect
 csp
 css
 cst
@@ -849,6 +856,7 @@ download
 downloaded
 downwards
 doy
+dpapi
 drags
 drain
 drains
@@ -916,6 +924,7 @@ encode
 encoded
 encoder
 encoding
+encrypt
 end
 ended
 ending
@@ -1128,6 +1137,7 @@ following
 follows
 footer
 for
+forbidden
 force
 forced
 foreign
@@ -1952,6 +1962,7 @@ p8
 p99
 pa
 package
+packages
 packed
 pad
 padded
@@ -2001,6 +2012,7 @@ paths
 pattern
 payload
 payloads
+pb
 pc
 peak
 peek
@@ -2131,6 +2143,7 @@ proceed
 proceeds
 process
 processed
+processes
 processing
 produce
 produced
@@ -2163,7 +2176,9 @@ proposal
 propose
 proposing
 prose
+protect
 protected
+protection
 protocol
 prove
 provenance
@@ -2797,6 +2812,7 @@ stopped
 stops
 storage
 store
+stored
 stores
 str
 stream
@@ -3044,6 +3060,7 @@ u32
 u64
 u8
 ue
+ui
 uid
 uk
 ulid
@@ -3088,6 +3105,7 @@ unmanaged
 unmap
 unmarked
 unnamed
+unprotect
 unpublished
 unreachable
 unreadable
@@ -3314,6 +3332,8 @@ you
 your
 zero
 zeroed
+zeroize
+zeroizing
 zip
 zlib
 zone

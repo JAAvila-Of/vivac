@@ -73,8 +73,10 @@ ed25519-dalek = { version = "=3.0.0", default-features = false, features = ["fas
 libc = "0.2.189"
 
 [target.'cfg(windows)'.dependencies]
+ed25519-dalek = { version = "=3.0.0", default-features = false, features = ["fast", "zeroize"] }
+zeroize = "=1.9.1"
 # Compare volume and 128-bit file identities through the maintained OS binding.
-windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Wdk_Foundation", "Wdk_Storage_FileSystem", "Win32_System_IO", "Win32_Security", "Win32_Security_Authorization"] }
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Wdk_Foundation", "Wdk_Storage_FileSystem", "Win32_System_IO", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Cryptography"] }
 
 [profile.release]
 opt-level = 3

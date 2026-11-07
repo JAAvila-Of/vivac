@@ -470,6 +470,13 @@ No inspection or member is silently omitted to fit a limit.
   server holds it, that is not privacy, it is a promise.
 - Identity for team mode: an opaque identifier, never an email or a name.
 
+Device signing credentials stay outside the provenance log, artifact custody
+and ordinary recovery packages. Explicit creation uses a new private store and
+a supported operating-system protection backend; unsupported protection
+refuses instead of writing a plaintext key. These credentials establish neither
+membership nor human approval. Their recovery and revocation are distinct from
+the lifecycle of content decryption keys.
+
 ### Shared authority
 
 Future team collaboration must distinguish local capture from shared admission.

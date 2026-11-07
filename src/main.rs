@@ -19,6 +19,7 @@ mod brief;
 mod changes;
 mod check;
 mod clock;
+mod device_keys;
 mod event;
 mod failure;
 mod glob;
@@ -270,6 +271,10 @@ const USAGE: &str = r#"vivac - provenance of work
                                               verify it without activating it
     vivac backup recover <backup-directory> --to <new-directory>
           --source-retired [--json]           recover after retiring the source
+    vivac device-key create <absolute-new-directory> [--json]
+                                              create a protected Windows device key
+    vivac device-key show <absolute-directory> [--json]
+                                              read its local public identity
 
   Exit codes
     0 fine   1 the model refuses   2 usage   3 redaction guard   4 no .vivac
@@ -371,6 +376,7 @@ const COMMANDS: &[&str] = &[
     "update",
     "import",
     "backup",
+    "device-key",
 ];
 
 /// `vivac share [on|off]` (`d916`). Closing needs no terminal and no
@@ -662,6 +668,9 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
     }
     if cmd == "backup" {
         return backup::run(&cwd, a);
+    }
+    if cmd == "device-key" {
+        return device_keys::run(a);
     }
 
     // Valid options per command. One that is not here is an error and not
