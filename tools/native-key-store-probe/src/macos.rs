@@ -8,11 +8,11 @@ use security_framework::{
         SearchResult,
     },
     os::macos::{
-        keychain::{CreateOptions, KeychainSettings, SecKeychain},
+        keychain::{CreateOptions, SecKeychain},
         keychain_item::SecKeychainItem,
     },
 };
-use security_framework_sys::base::{errSecDuplicateItem, errSecItemNotFound};
+use security_framework_sys::base::{errSecAuthFailed, errSecDuplicateItem, errSecItemNotFound};
 use zeroize::Zeroizing;
 
 use crate::PASSWORD;
@@ -138,6 +138,64 @@ fn expect_missing(keychain: &SecKeychain, account: &str) -> Result<(), crate::Bo
     }
 }
 
+// This probe deliberately exercises a temporary classic file keychain, whose
+// explicit lock and status APIs are deprecated by Apple but remain SDK-bound.
+#[allow(deprecated)]
+fn probe_locked(root: &Path) -> Result<(), crate::BoxError> {
+    let mut keychain = open(root)?;
+    verify(root, &read(&keychain)?)?;
+    // SAFETY: both wrappers represent Apple's same SecKeychain CF object. The
+    // security-framework owner retains it throughout this function; the borrowed
+    // SDK view never escapes or takes ownership. Reject null rather than using
+    // None, which would select the user's default keychain.
+    let native = unsafe {
+        keychain
+            .as_concrete_TypeRef()
+            .cast::<objc2_security::SecKeychain>()
+            .as_ref()
+    }
+    .ok_or("fixture keychain reference is null")?;
+    let get_status = || -> Result<u32, crate::BoxError> {
+        let mut status: objc2_security::SecKeychainStatus = 0;
+        eprintln!("probe step: get-status-before");
+        // SAFETY: native is the retained fixture above; the output points to a
+        // live, initialized status value for the complete synchronous call.
+        let result = unsafe {
+            objc2_security::SecKeychain::status(Some(native), std::ptr::NonNull::from(&mut status))
+        };
+        if result != 0 {
+            return Err(Error::from_code(result).into());
+        }
+        eprintln!("probe step: get-status-after");
+        Ok(status)
+    };
+    if get_status()? & objc2_security::kSecUnlockStateStatus == 0 {
+        return Err("fixture keychain was not initially unlocked".into());
+    }
+    eprintln!("probe step: lock-before");
+    // SAFETY: native borrows only the retained, non-null fixture keychain.
+    let result = unsafe { objc2_security::SecKeychain::lock(Some(native)) };
+    if result != 0 {
+        return Err(Error::from_code(result).into());
+    }
+    eprintln!("probe step: lock-after");
+    if get_status()? & objc2_security::kSecUnlockStateStatus != 0 {
+        return Err("fixture keychain remained unlocked after native lock".into());
+    }
+    match search_data(&keychain).search() {
+        Err(error) if matches!(error.code(), INTERACTION_NOT_ALLOWED | errSecAuthFailed) => {}
+        Err(error) => return Err(error.into()),
+        Ok(_) => return Err("locked keychain returned fixture data".into()),
+    }
+    eprintln!("probe step: unlock-before");
+    keychain.unlock(Some(PASSWORD))?;
+    eprintln!("probe step: unlock-after");
+    if get_status()? & objc2_security::kSecUnlockStateStatus == 0 {
+        return Err("fixture keychain remained locked after unlock".into());
+    }
+    verify(root, &read(&keychain)?)
+}
+
 pub fn run(root: &Path, stage: &str) -> Result<(), crate::BoxError> {
     // HOME does not isolate Keychain Services. Only disposable hosted runners qualify.
     if std::env::var("GITHUB_ACTIONS").as_deref() != Ok("true")
@@ -226,25 +284,7 @@ pub fn run(root: &Path, stage: &str) -> Result<(), crate::BoxError> {
             expect_missing(&other, ACCOUNT)?;
             crate::verify_payload(root, &read(&keychain)?)?;
         }
-        "locked" => {
-            let mut keychain = open(root)?;
-            crate::verify_payload(root, &read(&keychain)?)?;
-            let mut settings = KeychainSettings::new();
-            settings.set_lock_interval(Some(1));
-            keychain.set_settings(&settings)?;
-            // Exercise the native inactivity lock through maintained wrappers.
-            // No secret lookup occurs while the one-second interval elapses.
-            std::thread::sleep(std::time::Duration::from_secs(2));
-            match search_data(&keychain).search() {
-                Err(error) if error.code() == INTERACTION_NOT_ALLOWED => {}
-                Err(error) => return Err(error.into()),
-                Ok(_) => return Err("inactivity-locked keychain returned fixture data".into()),
-            }
-            keychain.unlock(Some(PASSWORD))?;
-            settings.set_lock_interval(None);
-            keychain.set_settings(&settings)?;
-            crate::verify_payload(root, &read(&keychain)?)?;
-        }
+        "locked" => probe_locked(root)?,
         "corrupt" => {
             let keychain = open(root)?;
             crate::verify_payload(root, &read(&keychain)?)?;

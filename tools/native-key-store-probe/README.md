@@ -35,7 +35,7 @@ accredit MIME preservation by the provider.
 macOS uses `security-framework` 3.7.0 and explicitly selected temporary
 file-based keychains. Reads never search the default/login keychain. It
 checks process-to-process persistence, duplicate-add refusal, account and
-keychain isolation, native inactivity locking and malformed data. Interactive
+keychain isolation, explicit native locking and malformed data. Interactive
 Keychain UI is disabled for the probe process. The runner and executable
 refuse outside a disposable GitHub-hosted macOS runner; changing `HOME` does
 not isolate Keychain Services. The CI guard prevents accidental local use;
@@ -45,6 +45,12 @@ macOS enumerates references to require exactly one matching item, retrieves
 one data result, then rechecks cardinality and reference identity. Apple's
 password API does not support combining all-results matching with data
 retrieval; using a one-result data query alone would hide ambiguity.
+Minimal `objc2-security` 0.3.2 SDK bindings cover lock and status operations
+missing from the other wrapper. Only the retained temporary keychain object is
+borrowed across those bindings; null/default and lock-all operations are never
+used. The probe verifies the native unlock-state flag before locking, after
+locking and after password-based recovery. Changing lock settings is not
+treated as evidence that a secret read was refused while locked.
 
 The fixture password is public test material. None of these credentials are
 suitable for production use. Native framework, provider and allocation

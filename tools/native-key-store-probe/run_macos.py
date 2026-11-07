@@ -13,7 +13,7 @@ import tempfile
 
 MARKER = b"vivac.native-key-store-probe.v1\n"
 SAFE_DIAGNOSTIC = re.compile(
-    rb"(?:probe step: (?:create-keychain|unlock|add|save-public|read|verify|open-missing|unlock-missing)-(?:before|after)"
+    rb"(?:probe step: (?:create-keychain|unlock|add|save-public|read|verify|open-missing|unlock-missing|get-status|lock)-(?:before|after)"
     rb"|probe step: (?:validating isolated root|root validated)"
     rb"|macOS status: -?[0-9]{1,11}|probe I/O kind: [A-Za-z]+)"
 )
