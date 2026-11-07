@@ -117,14 +117,26 @@ pub fn run(root: &Path, stage: &str) -> Result<(), crate::BoxError> {
     let _interaction = SecKeychain::disable_user_interaction()?;
     match stage {
         "missing" => {
-            let result = match SecKeychain::open(root.join("missing.keychain")) {
-                Ok(keychain) => search(&keychain, ACCOUNT).search().map(|_| ()),
-                Err(error) => Err(error),
-            };
+            let path = root.join("missing.keychain");
+            for candidate in [path.clone(), path.with_extension("keychain-db")] {
+                match candidate.symlink_metadata() {
+                    Ok(_) => return Err("missing keychain fixture already exists".into()),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            eprintln!("probe step: open-missing-before");
+            let result = SecKeychain::open(path).and_then(|mut keychain| {
+                eprintln!("probe step: open-missing-after");
+                eprintln!("probe step: unlock-missing-before");
+                keychain.unlock(Some(PASSWORD))?;
+                eprintln!("probe step: unlock-missing-after");
+                Ok(())
+            });
             match result {
                 Err(error) if error.code() == NO_SUCH_KEYCHAIN => {}
                 Err(error) => return Err(error.into()),
-                Ok(()) => return Err("missing keychain lookup unexpectedly succeeded".into()),
+                Ok(()) => return Err("missing keychain unlock unexpectedly succeeded".into()),
             }
         }
         "create" => {

@@ -12,6 +12,7 @@ fn attributes(account: &str) -> HashMap<&str, &str> {
     HashMap::from([
         ("application", "vivac-native-key-store-probe"),
         ("account", account),
+        ("xdg:schema", "org.vivac.NativeKeyStoreProbe"),
     ])
 }
 
