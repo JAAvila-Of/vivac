@@ -7,6 +7,8 @@ use zeroize::Zeroizing;
 
 const ACCOUNT: &str = "fixture-device";
 const CONTENT_TYPE: &str = "application/octet-stream";
+// GNOME's gkd-secret-secret.c GetSecret reply always uses text/plain.
+const EXPECTED_REPLY_TYPE: &str = "text/plain";
 
 fn attributes(account: &str) -> HashMap<&str, &str> {
     HashMap::from([
@@ -36,16 +38,44 @@ fn exact_item<'a>(collection: &'a Collection<'_>, account: &str) -> Result<Item<
     Ok(item)
 }
 
+fn diagnostic_error(error: secret_service::Error) -> secret_service::Error {
+    let label = match &error {
+        secret_service::Error::Crypto(_) => "probe step: provider error crypto",
+        secret_service::Error::Zbus(_) => "probe step: provider error zbus",
+        secret_service::Error::ZbusFdo(_) => "probe step: provider error fdo",
+        secret_service::Error::Locked => "probe step: provider error locked",
+        secret_service::Error::NoResult => "probe step: provider error no result",
+        secret_service::Error::Prompt => "probe step: provider error prompt",
+        secret_service::Error::PromptDisconnected => {
+            "probe step: provider error prompt disconnected"
+        }
+        secret_service::Error::Unavailable => "probe step: provider error unavailable",
+        _ => "probe step: provider error unknown",
+    };
+    eprintln!("{label}");
+    error
+}
+
 fn read(root: &Path, collection: &Collection<'_>) -> Result<(), BoxError> {
     eprintln!("probe step: starting read");
     if collection.is_locked()? {
         return Err("fixture collection is locked".into());
     }
     let item = exact_item(collection, ACCOUNT)?;
-    eprintln!("probe step: checking item lock and content type");
-    if item.is_locked()? || item.get_secret_content_type()? != CONTENT_TYPE {
-        return Err("fixture item is locked or has an invalid content type".into());
+    eprintln!("probe step: checking item lock");
+    if item.is_locked().map_err(diagnostic_error)? {
+        eprintln!("probe step: item state locked");
+        return Err("fixture item is locked".into());
     }
+    eprintln!("probe step: item state unlocked");
+    eprintln!("probe step: reading content type");
+    let content_type = item.get_secret_content_type().map_err(diagnostic_error)?;
+    eprintln!("probe step: content type received");
+    if content_type != EXPECTED_REPLY_TYPE {
+        eprintln!("probe step: content type different");
+        return Err("fixture item has an invalid content type".into());
+    }
+    eprintln!("probe step: content type expected");
     eprintln!("probe step: reading secret");
     let payload = Zeroizing::new(item.get_secret()?);
     eprintln!("probe step: secret received");

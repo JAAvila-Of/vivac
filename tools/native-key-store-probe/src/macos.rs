@@ -1,12 +1,16 @@
 use std::path::Path;
 
-use core_foundation::data::CFData;
+use core_foundation::{base::TCFType, data::CFData};
 use security_framework::{
     base::Error,
     item::{
-        ItemAddOptions, ItemAddValue, ItemClass, ItemSearchOptions, Limit, Location, SearchResult,
+        ItemAddOptions, ItemAddValue, ItemClass, ItemSearchOptions, Limit, Location, Reference,
+        SearchResult,
     },
-    os::macos::keychain::{CreateOptions, KeychainSettings, SecKeychain},
+    os::macos::{
+        keychain::{CreateOptions, KeychainSettings, SecKeychain},
+        keychain_item::SecKeychainItem,
+    },
 };
 use security_framework_sys::base::{errSecDuplicateItem, errSecItemNotFound};
 use zeroize::Zeroizing;
@@ -57,25 +61,52 @@ fn search(keychain: &SecKeychain, account: &str) -> ItemSearchOptions {
         .keychains(std::slice::from_ref(keychain))
         .class(ItemClass::generic_password())
         .service(SERVICE)
-        .account(account)
-        .load_data(true)
-        .limit(Limit::All);
+        .account(account);
     query
+}
+
+fn search_refs(keychain: &SecKeychain, account: &str) -> ItemSearchOptions {
+    let mut query = search(keychain, account);
+    query.load_refs(true).limit(Limit::All);
+    query
+}
+
+fn search_data(keychain: &SecKeychain) -> ItemSearchOptions {
+    let mut query = search(keychain, ACCOUNT);
+    // Password data cannot be requested with kSecMatchLimitAll on macOS.
+    query.load_data(true).limit(1);
+    query
+}
+
+fn unique_reference(keychain: &SecKeychain) -> Result<SecKeychainItem, crate::BoxError> {
+    let mut results = search_refs(keychain, ACCOUNT).search()?;
+    if results.len() != 1 {
+        return Err("expected exactly one fixture reference".into());
+    }
+    match results.pop() {
+        Some(SearchResult::Ref(Reference::KeychainItem(item))) => Ok(item),
+        _ => Err("expected a native fixture item reference".into()),
+    }
 }
 
 fn read(keychain: &SecKeychain) -> Result<Zeroizing<Vec<u8>>, crate::BoxError> {
     eprintln!("probe step: read-before");
-    let mut results = search(keychain, ACCOUNT).search()?;
+    let before = unique_reference(keychain)?;
+    let mut results = search_data(keychain).search()?;
     if results.len() != 1 {
         return Err("expected exactly one fixture item".into());
     }
-    match results.pop() {
-        Some(SearchResult::Data(data)) => {
-            eprintln!("probe step: read-after");
-            Ok(Zeroizing::new(data))
-        }
-        _ => Err("expected fixture data".into()),
+    let data = match results.pop() {
+        Some(SearchResult::Data(data)) => Zeroizing::new(data),
+        _ => return Err("expected fixture data".into()),
+    };
+    let after = unique_reference(keychain)?;
+    // CFType's maintained PartialEq delegates to CFEqual, not pointer equality.
+    if before.as_CFType() != after.as_CFType() {
+        return Err("fixture item identity changed during lookup".into());
     }
+    eprintln!("probe step: read-after");
+    Ok(data)
 }
 
 fn add(keychain: &SecKeychain, data: &[u8]) -> Result<(), Error> {
@@ -100,7 +131,7 @@ fn verify(root: &Path, data: &[u8]) -> Result<(), crate::BoxError> {
 }
 
 fn expect_missing(keychain: &SecKeychain, account: &str) -> Result<(), crate::BoxError> {
-    match search(keychain, account).search() {
+    match search_refs(keychain, account).search() {
         Err(error) if error.code() == errSecItemNotFound => Ok(()),
         Err(error) => Err(error.into()),
         Ok(_) => Err("unexpected fixture lookup success".into()),
@@ -204,7 +235,7 @@ pub fn run(root: &Path, stage: &str) -> Result<(), crate::BoxError> {
             // Exercise the native inactivity lock through maintained wrappers.
             // No secret lookup occurs while the one-second interval elapses.
             std::thread::sleep(std::time::Duration::from_secs(2));
-            match search(&keychain, ACCOUNT).search() {
+            match search_data(&keychain).search() {
                 Err(error) if error.code() == INTERACTION_NOT_ALLOWED => {}
                 Err(error) => return Err(error.into()),
                 Ok(_) => return Err("inactivity-locked keychain returned fixture data".into()),

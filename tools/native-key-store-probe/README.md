@@ -25,6 +25,13 @@ GNOME file header, a wrong account, a locked collection, malformed data and
 ambiguous matching items. Each native operation has an external deadline;
 a timeout is a failure, never an expected refusal.
 
+The GNOME fixture has an explicit schema and an exact attribute set. GNOME
+discards the supplied MIME type and returns `text/plain` from `GetSecret`;
+the probe expects that documented reply while still sending binary data.
+It never decodes the signing payload as text. Its exact binary header, length,
+public-key binding and signature remain the content checks. This does not
+accredit MIME preservation by the provider.
+
 macOS uses `security-framework` 3.7.0 and explicitly selected temporary
 file-based keychains. Reads never search the default/login keychain. It
 checks process-to-process persistence, duplicate-add refusal, account and
@@ -33,6 +40,11 @@ Keychain UI is disabled for the probe process. The runner and executable
 refuse outside a disposable GitHub-hosted macOS runner; changing `HOME` does
 not isolate Keychain Services. The CI guard prevents accidental local use;
 environment variables are not a security boundary against a malicious user.
+
+macOS enumerates references to require exactly one matching item, retrieves
+one data result, then rechecks cardinality and reference identity. Apple's
+password API does not support combining all-results matching with data
+retrieval; using a one-result data query alone would hide ambiguity.
 
 The fixture password is public test material. None of these credentials are
 suitable for production use. Native framework, provider and allocation
@@ -95,4 +107,6 @@ durable admission and fresh human verification remain separate requirements.
 - [GNOME encrypted file format](https://github.com/GNOME/gnome-keyring/blob/main/pkcs11/secret-store/gkm-secret-binary.c)
 - [security-framework 3.7.0](https://docs.rs/security-framework/3.7.0/security_framework/)
 - [Apple keychain implementations](https://developer.apple.com/documentation/technotes/tn3137-on-mac-keychains)
+- [Apple password lookup constraints](https://developer.apple.com/documentation/security/secitemcopymatching(_:_:))
+- [GNOME secret reply format](https://github.com/GNOME/gnome-keyring/blob/main/daemon/dbus/gkd-secret-secret.c)
 - [Product device-key contract](../../docs/DEVICE-KEYS.md)
