@@ -12,7 +12,10 @@ impl Fixture {
     fn new(name: &str) -> Self {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let next = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let root = std::env::temp_dir().join(format!(
+        let temporary = std::env::temp_dir();
+        #[cfg(unix)]
+        let temporary = temporary.canonicalize().unwrap();
+        let root = temporary.join(format!(
             "vivac-device-proof-{name}-{}-{next}-{}",
             std::process::id(),
             SystemTime::now()

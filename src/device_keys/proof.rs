@@ -151,7 +151,7 @@ fn decode_hex<const N: usize>(value: &str) -> Result<[u8; N], Failure> {
         }
     };
     let mut decoded = [0; N];
-    for (target, pair) in decoded.iter_mut().zip(value.as_bytes().chunks_exact(2)) {
+    for (target, pair) in decoded.iter_mut().zip(value.as_bytes().as_chunks::<2>().0) {
         *target = (digit(pair[0]) << 4) | digit(pair[1]);
     }
     Ok(decoded)
