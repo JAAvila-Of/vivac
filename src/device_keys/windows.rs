@@ -75,6 +75,13 @@ fn create_with_entropy(
 }
 
 pub(super) fn show(path: &Path) -> Result<PublicDeviceKey, Failure> {
+    load(path, |receipt, _seed| Ok(receipt.clone()))
+}
+
+fn load<R>(
+    path: &Path,
+    use_key: impl FnOnce(&PublicDeviceKey, &[u8; 32]) -> Result<R, Failure>,
+) -> Result<R, Failure> {
     validate_location(path)?;
     check_ancestry(&path.canonicalize()?)?;
     let parent_path = path
@@ -104,6 +111,8 @@ pub(super) fn show(path: &Path) -> Result<PublicDeviceKey, Failure> {
     let protected = unwrap(&bytes)?;
     let payload = unprotect(protected, WRAPPER)?;
     let receipt = public_identity(&payload)?;
+    let seed: &[u8; 32] = payload[PAYLOAD_SIZE - 32..].try_into().unwrap();
+    let result = use_key(&receipt, seed)?;
     verify_file(&file, identity, size)?;
     let current = open_key(&directory)?;
     verify_file(&current, identity, size)?;
@@ -111,7 +120,24 @@ pub(super) fn show(path: &Path) -> Result<PublicDeviceKey, Failure> {
     native::verify_private_directory(&directory)?;
     recheck_parent(parent_path, &parent)?;
     native::same_directory(&directory, &parent.open_dir_nofollow(name)?)?;
-    Ok(receipt)
+    Ok(result)
+}
+
+pub(super) fn prove(
+    path: &Path,
+    challenge: &super::proof::Challenge,
+    now: u64,
+) -> Result<super::proof::Proof, Failure> {
+    challenge.validate(now)?;
+    load(path, |receipt, seed| {
+        if challenge.device_id != receipt.device_id
+            || challenge.credential_id != receipt.credential_id
+            || challenge.public_key != receipt.public_key
+        {
+            return Err(refused("the challenge does not match the protected key."));
+        }
+        super::proof::Proof::signed(challenge.clone(), &SigningKey::from_bytes(seed), now)
+    })
 }
 
 fn validate_location(path: &Path) -> Result<(), Failure> {
@@ -447,6 +473,23 @@ mod tests {
         let target = parent.canonicalize().unwrap();
         assert!(target.starts_with(&temporary) && target != temporary);
         std::fs::remove_dir_all(target).unwrap();
+    }
+
+    #[test]
+    fn package_changes_during_key_use_refuse_the_result() {
+        let parent = std::env::temp_dir().join(format!("vivac-device-key-{}", crate::id::ulid()));
+        std::fs::create_dir(&parent).unwrap();
+        let path = parent.join("key");
+        create(&path).unwrap();
+        let result = load(&path, |receipt, _seed| {
+            std::fs::write(path.join("unexpected"), b"synthetic test member")?;
+            Ok(receipt.clone())
+        });
+        let temporary = std::env::temp_dir().canonicalize().unwrap();
+        let target = parent.canonicalize().unwrap();
+        assert!(target.starts_with(&temporary) && target != temporary);
+        std::fs::remove_dir_all(target).unwrap();
+        assert!(result.is_err());
     }
 
     #[test]

@@ -904,6 +904,7 @@ crossing
 crowds
 crumb
 cryptographic
+cryptographically
 csp
 csrf
 css
@@ -2550,6 +2551,7 @@ node
 nodes
 noise
 non
+nonce
 none
 noon
 nor
@@ -4430,6 +4432,7 @@ variables
 variant
 varied
 vars
+vary
 vcs
 vector
 vectors

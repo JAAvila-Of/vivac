@@ -422,6 +422,8 @@ cfg
 ch
 chain
 chains
+challenge
+challenges
 change
 changed
 changes
@@ -581,6 +583,7 @@ consts
 consume
 consumed
 consuming
+consumption
 cont
 contained
 container
@@ -1469,6 +1472,7 @@ ish
 isig
 isolate
 isolated
+issued
 it
 item
 items
@@ -1722,6 +1726,7 @@ mismatch
 mismatching
 missing
 mixed
+mkfifo
 mm
 mnt
 mod
@@ -2168,6 +2173,7 @@ promoting
 prompt
 prompts
 pronoun
+proof
 prop
 propagates
 properties
@@ -2183,6 +2189,7 @@ protocol
 prove
 provenance
 provider
+proving
 prune
 pruned
 ps
@@ -2413,6 +2420,7 @@ repos
 repositories
 repository
 repr
+representations
 representative
 request
 requested
@@ -2471,6 +2479,7 @@ retry
 return
 returning
 returns
+reusable
 reuse
 rev
 revalidate
@@ -2494,6 +2503,7 @@ rewrites
 rewriting
 rewritten
 rfc3339
+rfc8032
 rfind
 rgb
 rgba

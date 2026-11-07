@@ -33,6 +33,12 @@ Creating another package creates another credential; it does not enroll a
 second device or create another user. Enrollment must later bind an exact
 public key and these identifiers to a principal under current authority.
 
+The [enrollment-proof commands](DEVICE-ENROLLMENT-PROOFS.md) sign a bounded
+challenge with this protected key on Windows and verify the public result on
+Linux, macOS or Windows. Proof verification is common; it does not supply the
+missing native custody/signing backends for Linux and macOS. Those backends
+remain prerequisites for a complete multiplatform team flow.
+
 ## Protection and bounds
 
 The signing seed and identifiers use the operating system's cryptographic
