@@ -16,12 +16,15 @@ fn attributes(account: &str) -> HashMap<&str, &str> {
 }
 
 fn exact_item<'a>(collection: &'a Collection<'_>, account: &str) -> Result<Item<'a>, BoxError> {
+    eprintln!("probe step: searching exact item");
     let mut items = collection.search_items(attributes(account))?;
     if items.len() != 1 {
         return Err("expected exactly one fixture item".into());
     }
     let item = items.remove(0);
+    eprintln!("probe step: reading attributes");
     let actual = item.get_attributes()?;
+    eprintln!("probe step: attributes received");
     let expected: HashMap<String, String> = attributes(account)
         .into_iter()
         .map(|(key, value)| (key.to_owned(), value.to_owned()))
@@ -33,18 +36,25 @@ fn exact_item<'a>(collection: &'a Collection<'_>, account: &str) -> Result<Item<
 }
 
 fn read(root: &Path, collection: &Collection<'_>) -> Result<(), BoxError> {
+    eprintln!("probe step: starting read");
     if collection.is_locked()? {
         return Err("fixture collection is locked".into());
     }
     let item = exact_item(collection, ACCOUNT)?;
+    eprintln!("probe step: checking item lock and content type");
     if item.is_locked()? || item.get_secret_content_type()? != CONTENT_TYPE {
         return Err("fixture item is locked or has an invalid content type".into());
     }
+    eprintln!("probe step: reading secret");
     let payload = Zeroizing::new(item.get_secret()?);
+    eprintln!("probe step: secret received");
     if payload.len() > 4096 {
         return Err("fixture payload exceeds its size limit".into());
     }
-    crate::verify_payload(root, &payload)
+    eprintln!("probe step: verifying payload");
+    crate::verify_payload(root, &payload)?;
+    eprintln!("probe step: read verified");
+    Ok(())
 }
 
 fn missing_provider(error: &secret_service::Error) -> bool {
@@ -79,7 +89,9 @@ pub fn run(root: &Path, stage: &str) -> Result<(), BoxError> {
             if !collection.search_items(attributes(ACCOUNT))?.is_empty() {
                 return Err("fixture already exists".into());
             }
+            eprintln!("probe step: preparing fixture payload");
             let payload = crate::payload()?;
+            eprintln!("probe step: creating item");
             collection.create_item(
                 "Vivac native key store fixture",
                 attributes(ACCOUNT),
@@ -87,7 +99,11 @@ pub fn run(root: &Path, stage: &str) -> Result<(), BoxError> {
                 false,
                 CONTENT_TYPE,
             )?;
+            eprintln!("probe step: item created");
+            eprintln!("probe step: saving public receipt");
             crate::save_public(root, &payload)?;
+            eprintln!("probe step: public receipt saved");
+            eprintln!("probe step: checking created item");
             read(root, &collection)
         }
         "read" => read(root, &collection),

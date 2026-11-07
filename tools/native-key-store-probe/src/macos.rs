@@ -16,25 +16,38 @@ const SERVICE: &str = "vivac.native-key-store-probe.fixture.v1";
 const ACCOUNT: &str = "synthetic-signing-seed";
 // Apple's errSecInteractionNotAllowed is not exported by security-framework-sys.
 const INTERACTION_NOT_ALLOWED: i32 = -25308;
+// Apple's errSecNoSuchKeychain is not exported by security-framework-sys.
+const NO_SUCH_KEYCHAIN: i32 = -25294;
 
 fn create(path: &Path) -> Result<SecKeychain, crate::BoxError> {
+    eprintln!("probe step: create-keychain-before");
     // macOS can append -db to the supplied keychain path.
     for candidate in [path.to_path_buf(), path.with_extension("keychain-db")] {
         match candidate.symlink_metadata() {
-            Ok(_) => return Err("refusing to replace an existing keychain".into()),
+            Ok(_) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    "refusing to replace an existing keychain",
+                )
+                .into());
+            }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error.into()),
         }
     }
-    Ok(CreateOptions::new()
+    let keychain = CreateOptions::new()
         .password(PASSWORD)
         .prompt_user(false)
-        .create(path)?)
+        .create(path)?;
+    eprintln!("probe step: create-keychain-after");
+    Ok(keychain)
 }
 
 fn open(root: &Path) -> Result<SecKeychain, crate::BoxError> {
     let mut keychain = SecKeychain::open(root.join("probe.keychain"))?;
+    eprintln!("probe step: unlock-before");
     keychain.unlock(Some(PASSWORD))?;
+    eprintln!("probe step: unlock-after");
     Ok(keychain)
 }
 
@@ -51,17 +64,22 @@ fn search(keychain: &SecKeychain, account: &str) -> ItemSearchOptions {
 }
 
 fn read(keychain: &SecKeychain) -> Result<Zeroizing<Vec<u8>>, crate::BoxError> {
+    eprintln!("probe step: read-before");
     let mut results = search(keychain, ACCOUNT).search()?;
     if results.len() != 1 {
         return Err("expected exactly one fixture item".into());
     }
     match results.pop() {
-        Some(SearchResult::Data(data)) => Ok(Zeroizing::new(data)),
+        Some(SearchResult::Data(data)) => {
+            eprintln!("probe step: read-after");
+            Ok(Zeroizing::new(data))
+        }
         _ => Err("expected fixture data".into()),
     }
 }
 
 fn add(keychain: &SecKeychain, data: &[u8]) -> Result<(), Error> {
+    eprintln!("probe step: add-before");
     ItemAddOptions::new(ItemAddValue::Data {
         class: ItemClass::generic_password(),
         data: CFData::from_buffer(data),
@@ -69,7 +87,16 @@ fn add(keychain: &SecKeychain, data: &[u8]) -> Result<(), Error> {
     .set_location(Location::FileKeychain(keychain.clone()))
     .set_service(SERVICE)
     .set_account_name(ACCOUNT)
-    .add()
+    .add()?;
+    eprintln!("probe step: add-after");
+    Ok(())
+}
+
+fn verify(root: &Path, data: &[u8]) -> Result<(), crate::BoxError> {
+    eprintln!("probe step: verify-before");
+    crate::verify_payload(root, data)?;
+    eprintln!("probe step: verify-after");
+    Ok(())
 }
 
 fn expect_missing(keychain: &SecKeychain, account: &str) -> Result<(), crate::BoxError> {
@@ -89,15 +116,48 @@ pub fn run(root: &Path, stage: &str) -> Result<(), crate::BoxError> {
     }
     let _interaction = SecKeychain::disable_user_interaction()?;
     match stage {
+        "missing" => {
+            let result = match SecKeychain::open(root.join("missing.keychain")) {
+                Ok(keychain) => search(&keychain, ACCOUNT).search().map(|_| ()),
+                Err(error) => Err(error),
+            };
+            match result {
+                Err(error) if error.code() == NO_SUCH_KEYCHAIN => {}
+                Err(error) => return Err(error.into()),
+                Ok(()) => return Err("missing keychain lookup unexpectedly succeeded".into()),
+            }
+        }
         "create" => {
             let mut keychain = create(&root.join("probe.keychain"))?;
+            eprintln!("probe step: unlock-before");
             keychain.unlock(Some(PASSWORD))?;
+            eprintln!("probe step: unlock-after");
             let payload = crate::payload()?;
             add(&keychain, &payload)?;
+            eprintln!("probe step: save-public-before");
             crate::save_public(root, &payload)?;
-            crate::verify_payload(root, &read(&keychain)?)?;
+            eprintln!("probe step: save-public-after");
+            verify(root, &read(&keychain)?)?;
         }
-        "read" => crate::verify_payload(root, &read(&open(root)?)?)?,
+        "read" => verify(root, &read(&open(root)?)?)?,
+        "existing" => {
+            let original = read(&open(root)?)?;
+            verify(root, &original)?;
+            match create(&root.join("probe.keychain")) {
+                Err(error)
+                    if error
+                        .downcast_ref::<std::io::Error>()
+                        .is_some_and(|error| error.kind() == std::io::ErrorKind::AlreadyExists) => {
+                }
+                Err(error) => return Err(error),
+                Ok(_) => return Err("existing fixture keychain was replaced".into()),
+            }
+            let after = read(&open(root)?)?;
+            if *original != *after {
+                return Err("existing fixture keychain changed".into());
+            }
+            verify(root, &after)?;
+        }
         "duplicate" => {
             let keychain = open(root)?;
             let original = read(&keychain)?;

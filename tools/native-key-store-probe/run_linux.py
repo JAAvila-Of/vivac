@@ -2,6 +2,7 @@
 import argparse
 import os
 from pathlib import Path
+import re
 import shutil
 import stat
 import subprocess
@@ -52,22 +53,32 @@ def stage(binary, root, env, name, timeout=TIMEOUT):
     print(name, flush=True)
     result = subprocess.run(
         [str(binary), str(root), name], env=env, stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=timeout,
+        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=timeout,
         check=False,
     )
     if result.returncode != 0:
+        for line in result.stderr[:4096].splitlines():
+            if re.fullmatch(rb"(?:probe step: [a-z][a-z ]{0,79}|probe I/O kind: [A-Za-z]{1,40})", line):
+                print(line.decode("ascii"), file=sys.stderr, flush=True)
         raise RuntimeError("probe stage failed: " + name)
 
 
 def validate_persistent_keyring(root):
+    print("checking encrypted persistent file", flush=True)
     path = root / "data" / "keyrings" / "login.keyring"
     expected = path.lstat()
 
     def validate_metadata(info):
-        if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
-                or info.st_uid != os.geteuid() or info.st_mode & 0o077
-                or not 16 <= info.st_size <= 1024 * 1024):
-            raise RuntimeError("persistent keyring metadata was refused")
+        if not stat.S_ISREG(info.st_mode):
+            raise RuntimeError("persistent keyring is not a regular file")
+        if info.st_nlink != 1:
+            raise RuntimeError("persistent keyring link count was refused")
+        if info.st_uid != os.geteuid():
+            raise RuntimeError("persistent keyring owner was refused")
+        if info.st_mode & 0o077:
+            raise RuntimeError("persistent keyring permissions were refused")
+        if not 16 <= info.st_size <= 1024 * 1024:
+            raise RuntimeError("persistent keyring size was refused")
 
     validate_metadata(expected)
     descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
@@ -178,8 +189,27 @@ def main():
     binary = args.binary.resolve(strict=True)
     try:
         probe(binary)
-    except (OSError, RuntimeError, subprocess.TimeoutExpired):
-        print("Linux native key store probe failed", file=sys.stderr)
+    except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
+        messages = {
+            "persistent keyring is not a regular file",
+            "persistent keyring link count was refused",
+            "persistent keyring owner was refused",
+            "persistent keyring permissions were refused",
+            "persistent keyring size was refused",
+            "persistent keyring changed during validation",
+            "persistent keyring has an unexpected binary header",
+        }
+        if isinstance(error, FileNotFoundError):
+            message = "required file is absent"
+        elif isinstance(error, PermissionError):
+            message = "required file access was denied"
+        elif isinstance(error, subprocess.TimeoutExpired):
+            message = "child process deadline exceeded"
+        elif type(error) is RuntimeError and error.args and error.args[0] in messages:
+            message = error.args[0]
+        else:
+            message = "probe operation failed"
+        print("Linux native key store probe failed: " + message, file=sys.stderr)
         return 1
     return 0
 

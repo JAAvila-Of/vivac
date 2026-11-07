@@ -19,7 +19,14 @@ const HEADER: &[u8] = b"vivac.native-store.probe.v1\0";
 const MESSAGE: &[u8] = b"vivac.native-store.signature-fixture.v1\0";
 
 fn main() {
-    if run().is_err() {
+    if let Err(error) = run() {
+        if let Some(error) = error.downcast_ref::<std::io::Error>() {
+            eprintln!("probe I/O kind: {:?}", error.kind());
+        }
+        #[cfg(target_os = "macos")]
+        if let Some(error) = error.downcast_ref::<security_framework::base::Error>() {
+            eprintln!("macOS status: {}", error.code());
+        }
         eprintln!("Native key-store probe refused or failed; no result is accredited.");
         std::process::exit(1);
     }
@@ -37,7 +44,9 @@ fn run() -> Result<(), BoxError> {
         return Err("expected an isolated root and one probe stage".into());
     }
     let root = Path::new(&args[0]);
+    eprintln!("probe step: validating isolated root");
     validate_root(root)?;
+    eprintln!("probe step: root validated");
     let stage = args[1].to_str().ok_or("invalid stage")?;
     if !matches!(
         stage,
@@ -50,6 +59,7 @@ fn run() -> Result<(), BoxError> {
             | "corrupt"
             | "ambiguous"
             | "duplicate"
+            | "existing"
     ) {
         return Err("unsupported stage".into());
     }

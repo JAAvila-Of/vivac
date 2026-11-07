@@ -4,6 +4,7 @@
 import argparse
 import os
 from pathlib import Path
+import re
 import stat
 import subprocess
 import sys
@@ -11,6 +12,11 @@ import tempfile
 
 
 MARKER = b"vivac.native-key-store-probe.v1\n"
+SAFE_DIAGNOSTIC = re.compile(
+    rb"(?:probe step: (?:create-keychain|unlock|add|save-public|read|verify)-(?:before|after)"
+    rb"|probe step: (?:validating isolated root|root validated)"
+    rb"|macOS status: -?[0-9]{1,11}|probe I/O kind: [A-Za-z]+)"
+)
 
 
 def require_hosted_macos(explicit):
@@ -47,6 +53,11 @@ def run_stage(binary, root, stage, expected_success=True):
     )
     expected_code = 0 if expected_success else 1
     if result.returncode != expected_code:
+        remaining = 4096
+        for line in (result.stderr or b"").splitlines():
+            if SAFE_DIAGNOSTIC.fullmatch(line) and len(line) + 1 <= remaining:
+                print(line.decode("ascii"), file=sys.stderr, flush=True)
+                remaining -= len(line) + 1
         raise RuntimeError(f"unexpected result for macOS probe stage: {stage}")
     print(f"macos {stage}: passed", flush=True)
 
@@ -69,10 +80,10 @@ def main():
     (root / ".probe-owned").write_bytes(MARKER)
     try:
         # HOME stays unchanged: the disposable OS account provides isolation.
-        run_stage(binary, root, "read", expected_success=False)
+        run_stage(binary, root, "missing")
         run_stage(binary, root, "create")
         run_stage(binary, root, "read")
-        run_stage(binary, root, "create", expected_success=False)
+        run_stage(binary, root, "existing")
         run_stage(binary, root, "read")
         for stage in ("duplicate", "wrong", "locked", "read", "corrupt"):
             run_stage(binary, root, stage)

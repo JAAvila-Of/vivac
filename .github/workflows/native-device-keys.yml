@@ -70,4 +70,4 @@ jobs:
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           manifest-path: tools/native-key-store-probe/Cargo.toml
-          command-arguments: --config deny.toml
+          arguments: --all-features --locked --config deny.toml
