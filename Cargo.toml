@@ -10,7 +10,8 @@ keywords = ["provenance", "agentic", "cli", "context"]
 categories = ["command-line-utilities", "development-tools"]
 # The web's screenshots are for the README on GitHub, and crates.io reads them
 # from the repository; nobody who installs the crate needs them downloaded.
-exclude = ["docs/img/*.png"]
+# The native key-store probe keeps its experimental graph outside the product.
+exclude = ["docs/img/*.png", "tools/native-key-store-probe/**"]
 
 [dependencies]
 # Verify bounded enrollment proofs with the maintained signature implementation.
