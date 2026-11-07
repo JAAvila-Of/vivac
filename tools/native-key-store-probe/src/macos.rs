@@ -12,7 +12,9 @@ use security_framework::{
         keychain_item::SecKeychainItem,
     },
 };
-use security_framework_sys::base::{errSecAuthFailed, errSecDuplicateItem, errSecItemNotFound};
+use security_framework_sys::base::{
+    errSecAuthFailed as AUTH_FAILED, errSecDuplicateItem, errSecItemNotFound,
+};
 use zeroize::Zeroizing;
 
 use crate::PASSWORD;
@@ -183,7 +185,7 @@ fn probe_locked(root: &Path) -> Result<(), crate::BoxError> {
         return Err("fixture keychain remained unlocked after native lock".into());
     }
     match search_data(&keychain).search() {
-        Err(error) if matches!(error.code(), INTERACTION_NOT_ALLOWED | errSecAuthFailed) => {}
+        Err(error) if matches!(error.code(), INTERACTION_NOT_ALLOWED | AUTH_FAILED) => {}
         Err(error) => return Err(error.into()),
         Ok(_) => return Err("locked keychain returned fixture data".into()),
     }
