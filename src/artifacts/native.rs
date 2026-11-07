@@ -121,6 +121,15 @@ pub(crate) fn same_directory(first: &Dir, second: &Dir) -> Result<(), Failure> {
     Ok(())
 }
 
+#[cfg(windows)]
+pub(crate) fn verify_named_directory(
+    parent: &Dir,
+    name: &str,
+    retained: &Dir,
+) -> Result<(), Failure> {
+    same_directory(retained, &windows::open_existing(parent, name)?)
+}
+
 #[cfg(unix)]
 fn directory_identity(directory: &Dir) -> Result<DirectoryIdentity, Failure> {
     use cap_std::fs::MetadataExt;
@@ -236,7 +245,7 @@ fn require_private_metadata(metadata: &cap_std::fs::Metadata) -> Result<(), Fail
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(any(test, windows))]
 pub(crate) fn verify_private_directory(directory: &Dir) -> Result<(), Failure> {
     #[cfg(any(
         target_os = "linux",
@@ -272,7 +281,7 @@ pub(crate) fn verify_private_directory(directory: &Dir) -> Result<(), Failure> {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, windows))]
 pub(crate) fn verify_private_file(file: &cap_std::fs::File) -> Result<(), Failure> {
     #[cfg(any(
         target_os = "linux",
@@ -308,7 +317,7 @@ pub(crate) fn verify_private_file(file: &cap_std::fs::File) -> Result<(), Failur
     }
 }
 
-#[cfg(all(test, windows))]
+#[cfg(windows)]
 pub(crate) fn create_private_file(parent: &Dir, name: &str) -> Result<cap_std::fs::File, Failure> {
     windows::create_file(parent, name)
 }
@@ -514,7 +523,6 @@ mod windows {
         }
         Ok(Allocation(descriptor))
     }
-    #[cfg(test)]
     pub(super) fn verify_private(
         object: &impl AsRawHandle,
         protected: bool,
@@ -598,7 +606,6 @@ mod windows {
         Ok(dir)
     }
 
-    #[cfg(test)]
     pub(super) fn create_file(parent: &Dir, name: &str) -> Result<cap_std::fs::File, Failure> {
         let (file, descriptor) = create_handle(parent, name, FILE_NON_DIRECTORY_FILE)?;
         let file = cap_std::fs::File::from_std(file);

@@ -117,9 +117,11 @@ establish the following through the real client and admission paths:
   authority to manufacture participant approval.
 
 Signing-key fixtures do not establish these properties. No private key or
-credential is written to the provenance log, and this increment generates or
-stores no real credentials. Ordinary capture and model-facing instructions
-are unchanged.
+credential is written to the provenance log, and the signature model generates
+or stores no real credentials. The separate [Windows device-key
+store](DEVICE-KEYS.md) provides explicit local credential custody, not enrollment
+or shared authorization. Ordinary capture and model-facing instructions are
+unchanged.
 
 The verification choice follows the library's [strict-verification
 documentation](https://docs.rs/ed25519-dalek/3.0.0/ed25519_dalek/struct.VerifyingKey.html#method.verify_strict).

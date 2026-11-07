@@ -1205,6 +1205,7 @@ download
 downloaded
 downloads
 downstream
+dpapi
 drafting
 drag
 drags
@@ -1797,6 +1798,7 @@ headless
 heads
 heals
 healthy
+heap
 heard
 hearing
 heartbeat
@@ -2982,6 +2984,7 @@ promises
 promoted
 promoting
 prompt
+prompts
 proof
 propagates
 proper
@@ -3716,6 +3719,7 @@ sleeping
 sleeps
 slice
 sliced
+slices
 sliding
 slip
 slipped

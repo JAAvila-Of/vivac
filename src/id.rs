@@ -28,7 +28,7 @@ pub fn ulid() -> String {
     encode(v)
 }
 
-fn encode(mut v: u128) -> String {
+pub(crate) fn encode(mut v: u128) -> String {
     let mut out = [0u8; 26];
     for i in (0..26).rev() {
         out[i] = CROCKFORD[(v & 0x1F) as usize];
