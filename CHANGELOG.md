@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.2](https://github.com/JAAvila-Of/vivac/compare/v0.22.1...v0.22.2) - 2026-11-07
+
+### Added
+
+- *(device-keys)* add bounded enrollment possession proofs ([#328](https://github.com/JAAvila-Of/vivac/pull/328))
+- *(device-keys)* add protected Windows credential custody ([#327](https://github.com/JAAvila-Of/vivac/pull/327))
+
+### Changed
+
+- *(security)* release sanitation tree before verification ([#319](https://github.com/JAAvila-Of/vivac/pull/319))
+
+### Documentation
+
+- *(team)* define shared authority and revocation boundaries ([#322](https://github.com/JAAvila-Of/vivac/pull/322))
+
+### Internal
+
+- *(teams)* verify signed authority requests from known devices ([#326](https://github.com/JAAvila-Of/vivac/pull/326))
+- compare Cargo and nextest with matching test coverage ([#324](https://github.com/JAAvila-Of/vivac/pull/324))
+- *(team)* model scoped membership and authority revisions ([#323](https://github.com/JAAvila-Of/vivac/pull/323))
+- *(security)* persist reviewed sanitation plan envelopes ([#321](https://github.com/JAAvila-Of/vivac/pull/321))
+- *(security)* measure sanitation custody and selection density ([#320](https://github.com/JAAvila-Of/vivac/pull/320))
+- *(security)* measure private sanitation planning boundaries ([#318](https://github.com/JAAvila-Of/vivac/pull/318))
+- *(security)* build private sanitation planning core ([#316](https://github.com/JAAvila-Of/vivac/pull/316))
+
+### Performance
+
+- streamline artifact inspection and CI verification ([#325](https://github.com/JAAvila-Of/vivac/pull/325))
+
 ## [0.22.1](https://github.com/JAAvila-Of/vivac/compare/v0.22.0...v0.22.1) - 2026-11-03
 
 ### Documentation
