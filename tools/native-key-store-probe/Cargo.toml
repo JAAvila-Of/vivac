@@ -1,0 +1,27 @@
+[package]
+name = "native-key-store-probe"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+publish = false
+license = "MIT OR Apache-2.0"
+
+[workspace]
+resolver = "3"
+
+[dependencies]
+ed25519-dalek = { version = "=3.0.0", default-features = false, features = ["fast", "zeroize"] }
+getrandom = "0.2"
+zeroize = "=1.9.1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "=0.2.189"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+secret-service = { version = "=6.0.0-rc.1", default-features = false, features = ["rt-default", "crypto-rust"] }
+zbus = { version = "=6.2.1", default-features = false }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = { version = "=3.7.0", default-features = false }
+security-framework-sys = { version = "=2.17.0", default-features = false }
+core-foundation = "=0.10.1"

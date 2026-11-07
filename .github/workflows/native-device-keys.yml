@@ -1,0 +1,73 @@
+name: native-device-keys
+
+on:
+  pull_request:
+    paths:
+      - tools/native-key-store-probe/**
+      - .github/workflows/native-device-keys.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-device-keys-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: tools/native-key-store-probe
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install the isolated Linux provider
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y dbus gnome-keyring
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked
+      - run: cargo build --locked --release
+      - name: Probe Linux on a private session bus
+        if: runner.os == 'Linux'
+        run: python3 run_linux.py target/release/native-key-store-probe
+      - name: Probe macOS on a disposable hosted runner
+        if: runner.os == 'macOS'
+        run: python3 run_macos.py --allow-hosted-keychain-probe target/release/native-key-store-probe
+
+  msrv:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: tools/native-key-store-probe
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.89.0
+      - run: cargo check --locked --all-targets
+
+  dependencies:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: tools/native-key-store-probe/Cargo.toml
+          command-arguments: --config deny.toml
