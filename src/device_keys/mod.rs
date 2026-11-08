@@ -1,3 +1,5 @@
+#[cfg(any(windows, test))]
+mod credential;
 mod proof;
 #[cfg(windows)]
 mod windows;
@@ -8,7 +10,7 @@ use crate::failure::Failure;
 use cap_fs_ext::DirExt;
 use cap_std::fs::Dir;
 use serde::de::DeserializeOwned;
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 use serde::Serialize;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
@@ -24,7 +26,7 @@ Creation requires a new directory outside Git and .vivac.\n\
 Prove requires Windows; proof verification works on every supported platform.\n\
 Public receipts grant no membership or access and do not check challenge use.\n";
 
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub(crate) struct PublicDeviceKey {
     pub device_id: String,

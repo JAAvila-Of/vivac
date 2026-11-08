@@ -278,6 +278,7 @@ binary
 bind
 binding
 bindings
+binds
 birth
 births
 bit
@@ -2098,6 +2099,7 @@ position
 positional
 positionals
 positive
+possession
 post
 power
 pps

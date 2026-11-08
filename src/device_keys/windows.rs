@@ -1,9 +1,9 @@
+use super::credential::{Credential, PAYLOAD, PAYLOAD_SIZE};
 use super::{refused, PublicDeviceKey};
 use crate::artifacts::{files, native};
 use crate::failure::Failure;
 use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
 use cap_std::fs::{Dir, File, OpenOptions, OpenOptionsExt};
-use ed25519_dalek::SigningKey;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, Prefix};
 use std::ptr;
@@ -14,8 +14,6 @@ use windows_sys::Win32::Security::Cryptography::{
 use zeroize::{Zeroize, Zeroizing};
 
 const WRAPPER: &[u8] = b"vivac.dpapi-key.v1\0";
-const PAYLOAD: &[u8] = b"vivac.device-key.v1\0";
-const PAYLOAD_SIZE: usize = 84;
 const MAX_FILE_SIZE: usize = 16 * 1024;
 const FILE_NAME: &str = "device-key.bin";
 
@@ -75,12 +73,14 @@ fn create_with_entropy(
 }
 
 pub(super) fn show(path: &Path) -> Result<PublicDeviceKey, Failure> {
-    load(path, |receipt, _seed| Ok(receipt.clone()))
+    load(path, |credential| {
+        Ok(credential.receipt("windows_current_user_dpapi"))
+    })
 }
 
 fn load<R>(
     path: &Path,
-    use_key: impl FnOnce(&PublicDeviceKey, &[u8; 32]) -> Result<R, Failure>,
+    use_key: impl FnOnce(&Credential<'_>) -> Result<R, Failure>,
 ) -> Result<R, Failure> {
     validate_location(path)?;
     check_ancestry(&path.canonicalize()?)?;
@@ -110,9 +110,8 @@ fn load<R>(
     }
     let protected = unwrap(&bytes)?;
     let payload = unprotect(protected, WRAPPER)?;
-    let receipt = public_identity(&payload)?;
-    let seed: &[u8; 32] = payload[PAYLOAD_SIZE - 32..].try_into().unwrap();
-    let result = use_key(&receipt, seed)?;
+    let credential = Credential::parse(&payload)?;
+    let result = use_key(&credential)?;
     verify_file(&file, identity, size)?;
     let current = open_key(&directory)?;
     verify_file(&current, identity, size)?;
@@ -129,15 +128,7 @@ pub(super) fn prove(
     now: u64,
 ) -> Result<super::proof::Proof, Failure> {
     challenge.validate(now)?;
-    load(path, |receipt, seed| {
-        if challenge.device_id != receipt.device_id
-            || challenge.credential_id != receipt.credential_id
-            || challenge.public_key != receipt.public_key
-        {
-            return Err(refused("the challenge does not match the protected key."));
-        }
-        super::proof::Proof::signed(challenge.clone(), &SigningKey::from_bytes(seed), now)
-    })
+    load(path, |credential| credential.prove(challenge, now))
 }
 
 fn validate_location(path: &Path) -> Result<(), Failure> {
@@ -313,29 +304,7 @@ fn file_identity(file: &File) -> Result<(u64, [u8; 16]), Failure> {
 }
 
 fn public_identity(payload: &[u8]) -> Result<PublicDeviceKey, Failure> {
-    if payload.len() != PAYLOAD_SIZE || !payload.starts_with(PAYLOAD) {
-        return Err(refused(
-            "the protected key payload has an unsupported size or version.",
-        ));
-    }
-    let offset = PAYLOAD.len();
-    let device = u128::from_be_bytes(payload[offset..offset + 16].try_into().unwrap());
-    let credential = u128::from_be_bytes(payload[offset + 16..offset + 32].try_into().unwrap());
-    let seed: &[u8; 32] = payload[offset + 32..].try_into().unwrap();
-    let signing = SigningKey::from_bytes(seed);
-    let public_key = signing
-        .verifying_key()
-        .as_bytes()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
-    Ok(PublicDeviceKey {
-        device_id: crate::id::encode(device),
-        credential_id: crate::id::encode(credential),
-        public_key,
-        protection: "windows_current_user_dpapi",
-        status: "local_key_only",
-    })
+    Ok(Credential::parse(payload)?.receipt("windows_current_user_dpapi"))
 }
 
 fn wrap(protected: &[u8]) -> Result<Zeroizing<Vec<u8>>, Failure> {
@@ -481,9 +450,9 @@ mod tests {
         std::fs::create_dir(&parent).unwrap();
         let path = parent.join("key");
         create(&path).unwrap();
-        let result = load(&path, |receipt, _seed| {
+        let result = load(&path, |credential| {
             std::fs::write(path.join("unexpected"), b"synthetic test member")?;
-            Ok(receipt.clone())
+            Ok(credential.receipt("windows_current_user_dpapi"))
         });
         let temporary = std::env::temp_dir().canonicalize().unwrap();
         let target = parent.canonicalize().unwrap();
