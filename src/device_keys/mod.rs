@@ -1,5 +1,9 @@
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "macos", test))]
 mod credential;
+#[cfg(any(target_os = "macos", test))]
+mod macos;
+#[cfg(any(target_os = "macos", test))]
+mod macos_password;
 mod proof;
 #[cfg(windows)]
 mod windows;
@@ -10,7 +14,7 @@ use crate::failure::Failure;
 use cap_fs_ext::DirExt;
 use cap_std::fs::Dir;
 use serde::de::DeserializeOwned;
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "macos", test))]
 use serde::Serialize;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
@@ -20,13 +24,17 @@ const MAX_PUBLIC_INPUT: u64 = 8 * 1024;
 pub(crate) const USAGE: &str = "vivac device-key create <absolute-new-directory> [--json]\n\
 vivac device-key show <absolute-directory> [--json]\n\
 vivac device-key prove <absolute-key-directory> --challenge <absolute-file> [--json]\n\
-vivac device-key verify-proof <absolute-file> [--json]\n\n\
-Create or read a private Windows current-user protected device key.\n\
+vivac device-key verify-proof <absolute-file> [--json]\n\
+vivac device-key lock <absolute-directory> [--json]\n\
+vivac device-key unlock <absolute-directory> [--json]\n\n\
+Create or read a protected device key on Windows or macOS.\n\
 Creation requires a new directory outside Git and .vivac.\n\
-Prove requires Windows; proof verification works on every supported platform.\n\
+macOS requires a private parent and a terminal passphrase for creation or unlock.\n\
+Lock and unlock require macOS; show and prove never prompt or unlock.\n\
+Proof verification works on every supported platform.\n\
 Public receipts grant no membership or access and do not check challenge use.\n";
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "macos", test))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub(crate) struct PublicDeviceKey {
     pub device_id: String,
@@ -53,9 +61,13 @@ pub(crate) fn run(args: &Args) -> Result<i32, Failure> {
     }
     let command = args.positional(0).unwrap_or_default();
     let allowed: &[&str] = match command {
-        "create" | "show" | "verify-proof" => &["json"],
+        "create" | "show" | "verify-proof" | "lock" | "unlock" => &["json"],
         "prove" => &["json", "challenge"],
-        _ => return Err(refused("expected create, show, prove or verify-proof.")),
+        _ => {
+            return Err(refused(
+                "expected create, show, prove, verify-proof, lock or unlock.",
+            ))
+        }
     };
     if !args.unknown(allowed).is_empty() || !args.extra(2).is_empty() {
         return Err(refused("unexpected arguments or options."));
@@ -67,6 +79,31 @@ pub(crate) fn run(args: &Args) -> Result<i32, Failure> {
         print_proof(&document, "verified", args.has("json"));
         return Ok(0);
     }
+    if matches!(command, "lock" | "unlock") {
+        #[cfg(not(target_os = "macos"))]
+        {
+            return Err(refused("explicit keychain locking requires macOS."));
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let status = if command == "lock" {
+                macos::lock(path)?;
+                "locked"
+            } else {
+                macos::unlock(path)?;
+                "unlocked"
+            };
+            if args.has("json") {
+                crate::output::outln!(
+                    "{}",
+                    serde_json::json!({"status": status, "protection": macos::PROTECTION})
+                );
+            } else {
+                crate::output::outln!("Device key store {status}.");
+            }
+            return Ok(0);
+        }
+    }
     let challenge_path = if command == "prove" {
         let values = args.list("challenge");
         if values.len() != 1 {
@@ -76,25 +113,31 @@ pub(crate) fn run(args: &Args) -> Result<i32, Failure> {
     } else {
         None
     };
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = (path, challenge_path);
-        Err(refused("protected device-key storage requires Windows."))
+        Err(refused(
+            "protected device-key storage requires Windows or macOS.",
+        ))
     }
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     {
+        #[cfg(target_os = "macos")]
+        use macos as backend;
+        #[cfg(windows)]
+        use windows as backend;
         if let Some(challenge_path) = challenge_path {
             let challenge: proof::Challenge = read_public_json(&challenge_path)?;
             let now = proof::current_time()?;
             challenge.validate(now)?;
-            let document = windows::prove(path, &challenge, now)?;
+            let document = backend::prove(path, &challenge, now)?;
             document.verify(proof::current_time()?)?;
             print_proof(&document, "created", args.has("json"));
             return Ok(0);
         }
         let receipt = match command {
-            "create" => windows::create(path)?,
-            "show" => windows::show(path)?,
+            "create" => backend::create(path)?,
+            "show" => backend::show(path)?,
             _ => unreachable!(),
         };
         if args.has("json") {
@@ -103,7 +146,12 @@ pub(crate) fn run(args: &Args) -> Result<i32, Failure> {
             crate::output::outln!("Device {}", receipt.device_id);
             crate::output::outln!("Credential {}", receipt.credential_id);
             crate::output::outln!("Public key {}", receipt.public_key);
-            crate::output::outln!("Protection: Windows current user");
+            let protection = match receipt.protection {
+                "windows_current_user_dpapi" => "Windows current user",
+                "macos_classic_keychain_passphrase" => "macOS classic keychain passphrase",
+                _ => unreachable!(),
+            };
+            crate::output::outln!("Protection: {protection}");
             crate::output::outln!("Status: local key only");
         }
         Ok(0)

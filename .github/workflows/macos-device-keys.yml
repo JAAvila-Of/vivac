@@ -1,0 +1,52 @@
+name: macos-device-keys
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/macos-device-keys.yml
+      - src/device_keys/**
+      - src/artifacts/native.rs
+      - src/artifacts/native/private_macos.rs
+      - src/artifacts/files.rs
+      - src/args.rs
+      - src/main.rs
+      - tools/test-macos-device-keys.py
+      - Cargo.toml
+      - Cargo.lock
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-device-keys-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo clippy --locked --release -- -D warnings
+      - run: cargo build --locked --release
+      - run: python3 tools/test-macos-device-keys.py --allow-hosted-keychain-test target/release/vivac
+
+  msrv:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.89.0
+      - run: cargo check --locked --all-targets

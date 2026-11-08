@@ -1,7 +1,7 @@
 use super::refused;
 use crate::failure::Failure;
 use ed25519_dalek::{Signature, VerifyingKey};
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "macos", test))]
 use ed25519_dalek::{Signer, SigningKey};
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -66,12 +66,7 @@ impl Challenge {
             &self.operation_id,
         ];
         for identifier in identifiers {
-            if identifier.len() != 26
-                || !matches!(identifier.as_bytes()[0], b'0'..=b'7')
-                || !identifier
-                    .bytes()
-                    .all(|byte| b"0123456789abcdefghjkmnpqrstvwxyz".contains(&byte))
-            {
+            if !canonical_identifier(identifier) {
                 return Err(refused("a challenge identifier is not canonical."));
             }
         }
@@ -114,7 +109,7 @@ impl Proof {
             .map_err(|_| refused("the possession proof signature is invalid."))
     }
 
-    #[cfg(any(windows, test))]
+    #[cfg(any(windows, target_os = "macos", test))]
     pub(super) fn signed(
         challenge: Challenge,
         signing: &SigningKey,
@@ -135,7 +130,15 @@ impl Proof {
     }
 }
 
-fn decode_hex<const N: usize>(value: &str) -> Result<[u8; N], Failure> {
+pub(super) fn canonical_identifier(value: &str) -> bool {
+    value.len() == 26
+        && matches!(value.as_bytes()[0], b'0'..=b'7')
+        && value
+            .bytes()
+            .all(|byte| b"0123456789abcdefghjkmnpqrstvwxyz".contains(&byte))
+}
+
+pub(super) fn decode_hex<const N: usize>(value: &str) -> Result<[u8; N], Failure> {
     if value.len() != N * 2
         || !value
             .bytes()
@@ -157,7 +160,7 @@ fn decode_hex<const N: usize>(value: &str) -> Result<[u8; N], Failure> {
     Ok(decoded)
 }
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "macos", test))]
 fn encode_hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }

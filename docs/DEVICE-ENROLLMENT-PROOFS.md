@@ -7,7 +7,7 @@ membership, current permissions or that the challenge is still unused.
 
 ## Commands and inputs
 
-On Windows, `vivac device-key prove <absolute-key-directory> --challenge
+On Windows and macOS, `vivac device-key prove <absolute-key-directory> --challenge
 <absolute-challenge-file> [--json]` loads the protected key and signs a valid,
 matching challenge. It does not change the key package or register a device.
 

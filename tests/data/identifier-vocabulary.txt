@@ -100,6 +100,7 @@ alphabetic
 alphanumeric
 already
 also
+altered
 alternate
 alternatives
 always
@@ -343,6 +344,7 @@ budget
 budgets
 buf
 buffer
+buffers
 build
 builder
 built
@@ -419,7 +421,9 @@ ceiling
 cell
 cells
 centres
+cfdata
 cfg
+cftype
 ch
 chain
 chains
@@ -556,6 +560,7 @@ compound
 compressed
 compute
 concat
+concrete
 concurrent
 condition
 config
@@ -564,6 +569,7 @@ configuration
 configure
 configured
 confirm
+confirmation
 confirmed
 confirms
 conflict
@@ -1169,6 +1175,7 @@ fpathconf
 fractional
 fragment
 fragments
+framework
 framing
 free
 frees
@@ -1203,6 +1210,7 @@ generated
 generates
 generation
 generations
+generic
 get
 geteuid
 getlk
@@ -1442,6 +1450,7 @@ intact
 integer
 integrity
 intent
+interaction
 interactive
 interlaced
 interlacing
@@ -1501,6 +1510,8 @@ keeps
 kept
 key
 keyboard
+keychain
+keychains
 keys
 keyword
 kgd
@@ -1643,6 +1654,7 @@ manager
 managing
 mandatory
 manifest
+manifests
 manual
 many
 map
@@ -1847,6 +1859,7 @@ nth
 nudge
 nul
 null
+nuls
 num
 number
 numbers
@@ -1980,6 +1993,7 @@ pages
 pagination
 paint
 pair
+paired
 pairs
 panic
 panicking
@@ -2010,6 +2024,7 @@ parts
 pass
 passed
 passes
+password
 past
 path
 pathconf
@@ -2112,6 +2127,7 @@ predicted
 prefers
 prefix
 prefixes
+preflight
 preparation
 preparations
 prepare
@@ -2257,6 +2273,7 @@ readers
 reading
 readme
 readonly
+readpassphrase
 reads
 readwrite
 ready
@@ -2386,6 +2403,7 @@ removing
 rename
 renameat2
 renameatx
+renamed
 renames
 render
 rendered
@@ -2526,6 +2544,7 @@ rotate
 round
 rounds
 roundtrip
+roundtrips
 route
 routes
 row
@@ -2533,6 +2552,7 @@ rowid
 rows
 rpc
 rposition
+rpp
 rs
 rsplit
 rtl
@@ -2650,6 +2670,7 @@ served
 server
 servers
 serves
+service
 serving
 session
 sessions
@@ -2926,6 +2947,7 @@ target
 targets
 task
 taught
+tcftype
 tcgetattr
 tcp
 tcsanow
@@ -2972,6 +2994,7 @@ ticks
 tidy
 tie
 tight
+tightening
 tilde
 time
 timed
@@ -3110,6 +3133,7 @@ unix
 unjoined
 unknown
 unlck
+unlinked
 unlock
 unlocked
 unlocks
