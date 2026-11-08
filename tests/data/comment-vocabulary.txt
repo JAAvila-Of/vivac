@@ -918,6 +918,7 @@ cure
 curl
 current
 currently
+curve
 custody
 custom
 cut
@@ -1098,6 +1099,7 @@ diacritical
 diacritics
 diagnose
 diagnosis
+diagnostic
 diagramas
 did
 die
@@ -1276,6 +1278,7 @@ edit
 edited
 editor
 edits
+edwards
 effect
 effective
 effort
@@ -1970,6 +1973,7 @@ inherited
 inheriting
 inherits
 init
+initial
 initialization
 initialize
 initialized
@@ -2119,6 +2123,7 @@ key
 keyboard
 keyboards
 keychain
+keychains
 keyed
 keyframes
 keys
@@ -3592,6 +3597,7 @@ selected
 selecting
 selection
 selections
+selects
 self
 semantics
 semicolon
@@ -4145,6 +4151,7 @@ tied
 tier
 ties
 tight
+tighten
 tightest
 tilde
 tildes
@@ -4222,6 +4229,7 @@ travel
 travelling
 travels
 traversal
+traverse
 treat
 treated
 treating
@@ -4365,6 +4373,7 @@ unnoticed
 unobservable
 unpacks
 unproven
+unpublished
 unquoted
 unreachable
 unread
@@ -4638,6 +4647,7 @@ your
 yourself
 zero
 zeroed
+zeroizing
 zeros
 zlib
 zombie

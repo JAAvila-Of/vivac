@@ -508,9 +508,9 @@ fn proof_inputs_refuse_directories_multiple_links_and_oversized_files() {
     fixture.verify_refused(&proof);
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 #[test]
-fn proving_requires_windows_before_credential_access() {
+fn unsupported_platform_refuses_proving_before_credential_access() {
     let fixture = Fixture::new("unsupported");
     let request = fixture.write("challenge.json", &challenge());
     let invalid = fixture.0.join("invalid-key");
@@ -524,7 +524,7 @@ fn proving_requires_windows_before_credential_access() {
             request.to_str().unwrap(),
             "--json",
         ]);
-        assert!(String::from_utf8_lossy(&output.stderr).contains("requires Windows"));
+        assert!(String::from_utf8_lossy(&output.stderr).contains("requires Windows or macOS"));
     }
 }
 

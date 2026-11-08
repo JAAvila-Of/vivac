@@ -7,7 +7,6 @@ use std::io;
 pub(crate) const SUPPORTED: bool = cfg!(any(target_os = "linux", target_os = "macos", windows));
 
 #[cfg(all(
-    test,
     target_os = "macos",
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
@@ -245,7 +244,14 @@ fn require_private_metadata(metadata: &cap_std::fs::Metadata) -> Result<(), Fail
     Ok(())
 }
 
-#[cfg(any(test, windows))]
+#[cfg(any(
+    test,
+    windows,
+    all(
+        target_os = "macos",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )
+))]
 pub(crate) fn verify_private_directory(directory: &Dir) -> Result<(), Failure> {
     #[cfg(any(
         target_os = "linux",
@@ -281,7 +287,14 @@ pub(crate) fn verify_private_directory(directory: &Dir) -> Result<(), Failure> {
     }
 }
 
-#[cfg(any(test, windows))]
+#[cfg(any(
+    test,
+    windows,
+    all(
+        target_os = "macos",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )
+))]
 pub(crate) fn verify_private_file(file: &cap_std::fs::File) -> Result<(), Failure> {
     #[cfg(any(
         target_os = "linux",

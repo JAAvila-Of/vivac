@@ -272,13 +272,17 @@ const USAGE: &str = r#"vivac - provenance of work
     vivac backup recover <backup-directory> --to <new-directory>
           --source-retired [--json]           recover after retiring the source
     vivac device-key create <absolute-new-directory> [--json]
-                                              create a protected Windows device key
+                                              create a protected Windows or macOS device key
     vivac device-key show <absolute-directory> [--json]
                                               read its local public identity
     vivac device-key prove <absolute-key-directory> --challenge <absolute-file> [--json]
                                               prove possession for device enrollment
     vivac device-key verify-proof <absolute-file> [--json]
                                               verify a public proof without enrollment
+    vivac device-key lock <absolute-directory> [--json]
+                                              lock a macOS device key store
+    vivac device-key unlock <absolute-directory> [--json]
+                                              unlock it with a terminal passphrase
 
   Exit codes
     0 fine   1 the model refuses   2 usage   3 redaction guard   4 no .vivac

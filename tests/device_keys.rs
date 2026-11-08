@@ -128,7 +128,7 @@ fn malformed_requests_and_help_never_write() {
     assert_eq!(snapshot(sandbox.global_home()), home);
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 #[test]
 fn unsupported_platform_refuses_before_credential_access() {
     let sandbox = fixture("device-key-unsupported");
@@ -145,11 +145,30 @@ fn unsupported_platform_refuses_before_credential_access() {
                     "--json",
                 ],
             );
-            assert!(String::from_utf8_lossy(&output.stderr).contains("requires Windows"));
+            assert!(String::from_utf8_lossy(&output.stderr).contains("requires Windows or macOS"));
         }
     }
     let output = run(&sandbox, &["--help"]);
     assert!(output.status.success());
+}
+
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn keychain_state_commands_refuse_before_credential_access() {
+    let sandbox = fixture("device-key-keychain-state");
+    let path = sandbox.0.join("invalid");
+    fs::write(&path, b"synthetic invalid package").unwrap();
+    let before = snapshot(&sandbox.0);
+    let home = snapshot(sandbox.global_home());
+    for command in ["lock", "unlock"] {
+        let output = refused(
+            &sandbox,
+            &["device-key", command, path.to_str().unwrap(), "--json"],
+        );
+        assert!(String::from_utf8_lossy(&output.stderr).contains("requires macOS"));
+    }
+    assert_eq!(snapshot(&sandbox.0), before);
+    assert_eq!(snapshot(sandbox.global_home()), home);
 }
 
 #[cfg(windows)]
