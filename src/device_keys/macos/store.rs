@@ -1,9 +1,9 @@
-use super::{MAX_MANIFEST_SIZE, Manifest, PROTECTION};
+use super::{Manifest, MAX_MANIFEST_SIZE, PROTECTION};
 use crate::artifacts::{files, native};
 use crate::device_keys::credential::{Credential, PAYLOAD, PAYLOAD_SIZE};
 use crate::device_keys::macos_password;
 use crate::device_keys::proof::{Challenge, Proof};
-use crate::device_keys::{PublicDeviceKey, refused};
+use crate::device_keys::{refused, PublicDeviceKey};
 use crate::failure::Failure;
 use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
 use cap_std::fs::{Dir, DirBuilder, DirBuilderExt, File, MetadataExt, OpenOptions, OpenOptionsExt};
