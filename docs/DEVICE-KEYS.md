@@ -133,7 +133,11 @@ and checks native item identity before and after retrieving its data.
 
 Creation prepares the final private directory at a stable path. The manifest
 is published atomically and exclusively only after the encrypted native store
-has been created, flushed and verified. Until that commit, other commands
+has been created, flushed and verified. Adding the native item can atomically
+replace the newly created database. Only that expected write, before publication,
+may establish a new retained database identity; the old file must be unlinked,
+and the directory, lock marker and new private database must pass their checks.
+Subsequent operations do not accept another replacement. Until the commit, other commands
 refuse the incomplete directory before accessing Keychain Services. Failed
 creation cleans only an uncommitted directory that still has the identity
 created by that operation; a crash may leave such a private preparation.

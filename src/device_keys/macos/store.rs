@@ -96,7 +96,7 @@ pub(in crate::device_keys) fn create(path: &Path) -> Result<PublicDeviceKey, Fai
     database_file.set_permissions(cap_std::fs::Permissions::from_std(
         std::fs::Permissions::from_mode(0o600),
     ))?;
-    let database = HeldFile::from_file(
+    let mut database = HeldFile::from_file(
         &guard.dir,
         database_name,
         database_file,
@@ -120,6 +120,7 @@ pub(in crate::device_keys) fn create(path: &Path) -> Result<PublicDeviceKey, Fai
     add.add()
         .map_err(|error| native_status("item creation", error.code()))?;
     drop(add);
+    database = refresh_created_database(&guard, &database)?;
     database.file.sync_all()?;
     guard.verify()?;
     database.verify(&guard.dir)?;
@@ -497,6 +498,39 @@ impl HeldFile {
         }
         Ok(hasher.finalize().into())
     }
+}
+
+fn refresh_created_database(guard: &Creation, previous: &HeldFile) -> Result<HeldFile, Failure> {
+    guard.verify()?;
+    if guard.committed
+        || guard.marker.is_none()
+        || database_member(&guard.dir, &[])? != previous.name
+    {
+        return Err(native_failure());
+    }
+    let current = HeldFile::open(&guard.dir, previous.name, MAX_DATABASE_SIZE, false)?;
+    if current.identity == previous.identity {
+        previous.verify(&guard.dir)?;
+    } else {
+        // Native item creation commits by replacing the database. Only this
+        // creation seam may advance the held identity after the old file lost
+        // its last link; ordinary readers retain their original identity.
+        native::verify_private_file(&previous.file)?;
+        let metadata = previous.file.metadata()?;
+        if metadata.nlink() != 0
+            || (metadata.dev(), metadata.ino()) != previous.identity
+            || metadata.len() == 0
+            || metadata.len() > MAX_DATABASE_SIZE
+        {
+            return Err(native_failure());
+        }
+    }
+    guard.verify()?;
+    if database_member(&guard.dir, &[])? != previous.name {
+        return Err(native_failure());
+    }
+    current.verify(&guard.dir)?;
+    Ok(current)
 }
 
 struct Package {
@@ -1006,6 +1040,87 @@ mod tests {
         stage.dir.remove_file(DATABASE_MARKER).unwrap();
         stage.dir.open_with(DATABASE_MARKER, &options).unwrap();
         assert!(stage.verify().is_err());
+    }
+
+    fn retained_creation_database(fixture: &Fixture) -> (Creation, HeldFile) {
+        let mut stage = fixture.creation("store");
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true).mode(0o600);
+        let mut file = stage.dir.open_with(DATABASE, &options).unwrap();
+        file.write_all(b"original encrypted bytes").unwrap();
+        let database =
+            HeldFile::from_file(&stage.dir, DATABASE, file, MAX_DATABASE_SIZE, false).unwrap();
+        stage.dir.open_with(DATABASE_MARKER, &options).unwrap();
+        stage.marker = Some(prepare_marker(&stage.dir, DATABASE).unwrap());
+        (stage, database)
+    }
+
+    fn replace_creation_database(stage: &Creation, bytes: &[u8], mode: u32) {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true).mode(mode);
+        let mut file = stage.dir.open_with("replacement", &options).unwrap();
+        file.set_permissions(cap_std::fs::Permissions::from_std(
+            std::fs::Permissions::from_mode(mode),
+        ))
+        .unwrap();
+        file.write_all(bytes).unwrap();
+        file.sync_all().unwrap();
+        stage
+            .dir
+            .rename("replacement", &stage.dir, DATABASE)
+            .unwrap();
+    }
+
+    #[test]
+    fn creation_accepts_atomic_commit_only_after_original_database_is_unlinked() {
+        let fixture = Fixture::new();
+        let (mut stage, previous) = retained_creation_database(&fixture);
+        let unchanged = refresh_created_database(&stage, &previous).unwrap();
+        assert_eq!(unchanged.identity, previous.identity);
+        replace_creation_database(&stage, b"updated encrypted bytes", 0o600);
+        assert_eq!(previous.file.metadata().unwrap().nlink(), 0);
+        assert!(previous.verify(&stage.dir).is_err());
+        let current = refresh_created_database(&stage, &previous).unwrap();
+        assert_ne!(current.identity, previous.identity);
+        current.verify(&stage.dir).unwrap();
+        stage.committed = true;
+        assert!(refresh_created_database(&stage, &current).is_err());
+    }
+
+    #[test]
+    fn creation_refuses_database_replacement_while_original_keeps_a_link() {
+        let fixture = Fixture::new();
+        let (stage, previous) = retained_creation_database(&fixture);
+        std::fs::rename(
+            fixture.0.join("store").join(DATABASE),
+            fixture.0.join("original"),
+        )
+        .unwrap();
+        replace_creation_database(&stage, b"updated encrypted bytes", 0o600);
+        assert_eq!(previous.file.metadata().unwrap().nlink(), 1);
+        assert!(refresh_created_database(&stage, &previous).is_err());
+    }
+
+    #[test]
+    fn creation_refuses_replacement_with_shared_mode_empty_bytes_or_extra_links() {
+        for (mode, bytes, linked) in [
+            (0o644, b"updated encrypted bytes".as_slice(), false),
+            (0o600, b"".as_slice(), false),
+            (0o600, b"updated encrypted bytes".as_slice(), true),
+        ] {
+            let fixture = Fixture::new();
+            let (stage, previous) = retained_creation_database(&fixture);
+            replace_creation_database(&stage, bytes, mode);
+            if linked {
+                std::fs::hard_link(
+                    fixture.0.join("store").join(DATABASE),
+                    fixture.0.join("extra"),
+                )
+                .unwrap();
+            }
+            assert_eq!(previous.file.metadata().unwrap().nlink(), 0);
+            assert!(refresh_created_database(&stage, &previous).is_err());
+        }
     }
 
     #[test]
