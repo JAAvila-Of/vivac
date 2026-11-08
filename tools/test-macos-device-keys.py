@@ -217,6 +217,19 @@ class Runner:
                 "Private storage permissions are unavailable.": "private filesystem profile",
                 "Device key refused: the protected key package changed or has an invalid size.": "package identity or size",
                 "Device key refused: the new keychain accepted an empty passphrase.": "empty passphrase accepted",
+                "Device key refused: the protected key package has unexpected members.": "unexpected package members",
+                "Device key refused: the device key store is locked; unlock it explicitly.": "locked store",
+                "Device key refused: the protected key item is missing or ambiguous.": "ambiguous item",
+                "Device key refused: the protected key item changed during the operation.": "item identity changed",
+                "Device key refused: the protected key does not match its generated identity.": "generated identity mismatch",
+                "Device key refused: the protected key payload has an unsupported size or version.": "payload format",
+                "Device key refused: the device key manifest identity is invalid.": "manifest identity",
+                "Device key refused: the device key manifest is invalid.": "manifest format",
+                "Device key refused: the protected key database does not match its manifest digest.": "database digest",
+                "Private bundle preparation permissions are unavailable.": "private ownership or mode",
+                "Artifacts must be regular files.": "regular file requirement",
+                "SQLite source files must have exactly one hard link.": "single link requirement",
+                "Artifacts must not cross symbolic links or reparse points.": "symbolic link requirement",
             }
             for line in error[:4096].decode("ascii", errors="ignore").splitlines():
                 if line.strip() in diagnostics:
