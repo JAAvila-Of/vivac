@@ -211,7 +211,16 @@ class Runner:
                 "create", "show", "prove", "verify-proof", "lock", "unlock"
             } else "unknown"
             print(f"failed: {verb} command (exit {code})", file=sys.stderr)
+            diagnostics = {
+                "Device key refused: the macOS protected key operation failed.": "protected operation",
+                "Device key refused: the device key passphrase is invalid or unavailable.": "terminal passphrase",
+                "Private storage permissions are unavailable.": "private filesystem profile",
+                "Device key refused: the protected key package changed or has an invalid size.": "package identity or size",
+                "Device key refused: the new keychain accepted an empty passphrase.": "empty passphrase accepted",
+            }
             for line in error[:4096].decode("ascii", errors="ignore").splitlines():
+                if line.strip() in diagnostics:
+                    print(f"failure category: {diagnostics[line.strip()]}", file=sys.stderr)
                 match = re.fullmatch(
                     r"\s*Device key refused: the macOS keychain "
                     r"(creation|unlock|open|item creation|lookup|status query|lock|"
