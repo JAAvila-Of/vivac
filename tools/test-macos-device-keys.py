@@ -249,11 +249,12 @@ class Runner:
 
     def reject(self, arguments, answers=(), stdin=None, interrupt=False):
         before = snapshot(self.root)
-        code, output, _, terminal = self.command(arguments, answers, interrupt, stdin)
+        code, output, error, terminal = self.command(arguments, answers, interrupt, stdin)
         require(code != 0 and not output)
         if not answers and not interrupt:
             require(not terminal)
         require(snapshot(self.root) == before)
+        return error
 
     def create(self, name):
         path = self.root / name
@@ -359,7 +360,12 @@ class Runner:
 
         print("stage: damaged profiles", flush=True)
         for kind in ("malformed", "unknown", "identity", "database", "missing"):
-            damaged = self.copied(path, "damage-" + kind)
+            print(f"case: damaged {kind}", flush=True)
+            if kind == "identity":
+                damaged, _ = self.create("damage-identity")
+                self.success(["lock", damaged])
+            else:
+                damaged = self.copied(path, "damage-" + kind)
             manifest = damaged / "device-key.json"
             if kind == "malformed":
                 manifest.write_bytes(b"{")
@@ -373,10 +379,15 @@ class Runner:
                 if kind == "unknown":
                     value["unexpected"] = True
                 else:
-                    value["device_id"] = "00000000000000000000000007"
+                    original = value["device_id"]
+                    value["device_id"] = ("1" if original[0] == "0" else "0") + original[1:]
                 manifest.write_text(json.dumps(value), encoding="utf-8")
             self.reject(["show", damaged])
-            self.reject(["unlock", damaged])
+            answers = [(UNLOCK, PASSWORD)] if kind == "identity" else ()
+            self.reject(["unlock", damaged], answers)
+            if kind == "identity":
+                error = self.reject(["show", damaged], stdin=b"")
+                require(error.strip() == b"Device key refused: the device key store is locked; unlock it explicitly.")
 
         print("stage: filesystem boundaries", flush=True)
         login_name = self.root / "login.keychain-private"
