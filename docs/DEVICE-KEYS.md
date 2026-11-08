@@ -118,8 +118,12 @@ and extended security enabled. Every path component is opened without
 following links. Links, multiple hardlinks, unexpected members and changes
 to retained file/directory identities are refused.
 
-The directory contains `device.keychain` (or its native `-db` form, never both)
-and `device-key.json`. The native database is limited to 1 MiB. The JSON
+The directory contains `device.keychain` (or its native `-db` form, never both),
+its exact native `.fl` lock marker and `device-key.json`. The marker must be
+empty, private, regular and singly linked; its file identity is retained and
+checked around native operations. Other marker names are refused. Only creation
+of a new store may tighten the native files' initial permissions. The native
+database is limited to 1 MiB. The JSON
 manifest is limited to 2 KiB and contains its format version, device and
 credential identifiers, public key and SHA256 of the committed encrypted
 database. It contains no seed or passphrase. The protected native item contains

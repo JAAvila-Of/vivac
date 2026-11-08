@@ -1,9 +1,9 @@
-use super::{Manifest, MAX_MANIFEST_SIZE, PROTECTION};
+use super::{MAX_MANIFEST_SIZE, Manifest, PROTECTION};
 use crate::artifacts::{files, native};
 use crate::device_keys::credential::{Credential, PAYLOAD, PAYLOAD_SIZE};
 use crate::device_keys::macos_password;
 use crate::device_keys::proof::{Challenge, Proof};
-use crate::device_keys::{refused, PublicDeviceKey};
+use crate::device_keys::{PublicDeviceKey, refused};
 use crate::failure::Failure;
 use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
 use cap_std::fs::{Dir, DirBuilder, DirBuilderExt, File, MetadataExt, OpenOptions, OpenOptionsExt};
@@ -27,6 +27,9 @@ use zeroize::{Zeroize, Zeroizing};
 
 const KEYCHAIN: &str = "device.keychain";
 const DATABASE: &str = "device.keychain-db";
+// Apple derives these `.fl` names from the first four `SHA-1` bytes.
+const KEYCHAIN_MARKER: &str = ".fl4895E04B";
+const DATABASE_MARKER: &str = ".flCB3D0700";
 const MANIFEST: &str = "device-key.json";
 const PENDING: &str = ".device-key.pending";
 const SERVICE: &str = "org.vivac.device-key.v1";
@@ -65,6 +68,7 @@ pub(in crate::device_keys) fn create(path: &Path) -> Result<PublicDeviceKey, Fai
         location,
         dir,
         committed: false,
+        marker: None,
     };
     guard.verify()?;
     let mut payload = Zeroizing::new([0u8; PAYLOAD_SIZE]);
@@ -76,6 +80,8 @@ pub(in crate::device_keys) fn create(path: &Path) -> Result<PublicDeviceKey, Fai
     let mut keychain = create_keychain(&native_path, password.as_str())?;
     guard.verify()?;
     let database_name = database_member(&guard.dir, &[])?;
+    guard.marker = Some(prepare_marker(&guard.dir, database_name)?);
+    guard.verify()?;
     // Only a new, unpublished store may tighten the native file's initial mode.
     let database_file = files::regular(&guard.dir, database_name)?;
     files::require_single_link(&database_file)?;
@@ -355,11 +361,16 @@ struct Creation {
     location: StoreLocation,
     dir: Dir,
     committed: bool,
+    marker: Option<HeldFile>,
 }
 
 impl Creation {
     fn verify(&self) -> Result<(), Failure> {
-        self.location.verify(&self.dir)
+        self.location.verify(&self.dir)?;
+        if let Some(marker) = &self.marker {
+            marker.verify(&self.dir)?;
+        }
+        Ok(())
     }
 }
 
@@ -429,7 +440,7 @@ impl HeldFile {
             files::require_single_link(file)?;
             let metadata = file.metadata()?;
             if (metadata.dev(), metadata.ino()) != self.identity
-                || metadata.len() == 0
+                || (metadata.len() == 0 && self.maximum != 0)
                 || metadata.len() > self.maximum
                 || (self.fixed_size && metadata.len() != self.size)
             {
@@ -495,6 +506,7 @@ struct Package {
     manifest_file: HeldFile,
     manifest_bytes: Vec<u8>,
     database: HeldFile,
+    marker: HeldFile,
 }
 
 impl Package {
@@ -508,6 +520,7 @@ impl Package {
         let manifest = Manifest::parse(&manifest_bytes)?;
         let database_name = database_member(&dir, &[MANIFEST])?;
         let database = HeldFile::open(&dir, database_name, MAX_DATABASE_SIZE, false)?;
+        let marker = HeldFile::open(&dir, marker_name(database_name)?, 0, true)?;
         let package = Self {
             location,
             dir,
@@ -515,6 +528,7 @@ impl Package {
             manifest_file,
             manifest_bytes,
             database,
+            marker,
         };
         package.verify()?;
         Ok(package)
@@ -524,6 +538,7 @@ impl Package {
         self.location.verify(&self.dir)?;
         self.manifest_file.verify(&self.dir)?;
         self.database.verify(&self.dir)?;
+        self.marker.verify(&self.dir)?;
         if database_member(&self.dir, &[MANIFEST])? != self.database.name
             || self.manifest_file.read()? != self.manifest_bytes
         {
@@ -545,6 +560,7 @@ impl Package {
 
 fn database_member(directory: &Dir, others: &[&str]) -> Result<&'static str, Failure> {
     let mut database = None;
+    let mut marker = None;
     let mut seen = 0;
     for entry in directory.entries()? {
         let entry = entry?;
@@ -554,6 +570,13 @@ fn database_member(directory: &Dir, others: &[&str]) -> Result<&'static str, Fai
             KEYCHAIN | DATABASE if database.is_none() => {
                 database = Some(if name == KEYCHAIN { KEYCHAIN } else { DATABASE });
             }
+            KEYCHAIN_MARKER | DATABASE_MARKER if marker.is_none() => {
+                marker = Some(if name == KEYCHAIN_MARKER {
+                    KEYCHAIN_MARKER
+                } else {
+                    DATABASE_MARKER
+                });
+            }
             _ if others.contains(&name) => seen += 1,
             _ => return Err(refused("the protected key package has unexpected members.")),
         }
@@ -561,7 +584,38 @@ fn database_member(directory: &Dir, others: &[&str]) -> Result<&'static str, Fai
     if seen != others.len() {
         return Err(native_failure());
     }
-    database.ok_or_else(native_failure)
+    let database = database.ok_or_else(native_failure)?;
+    if marker != Some(marker_name(database)?) {
+        return Err(refused(
+            "the protected key package is missing its matching lock marker.",
+        ));
+    }
+    Ok(database)
+}
+
+fn marker_name(database: &str) -> Result<&'static str, Failure> {
+    match database {
+        KEYCHAIN => Ok(KEYCHAIN_MARKER),
+        DATABASE => Ok(DATABASE_MARKER),
+        _ => Err(native_failure()),
+    }
+}
+
+fn prepare_marker(directory: &Dir, database: &str) -> Result<HeldFile, Failure> {
+    let name = marker_name(database)?;
+    let file = files::regular(directory, name)?;
+    files::require_single_link(&file)?;
+    let metadata = file.metadata()?;
+    // SAFETY: geteuid has no arguments or borrowed storage.
+    if metadata.uid() != unsafe { libc::geteuid() } || metadata.len() != 0 {
+        return Err(native_failure());
+    }
+    // Only a fresh store may remove the native marker's group/other access.
+    file.set_permissions(cap_std::fs::Permissions::from_std(
+        std::fs::Permissions::from_mode(0o400),
+    ))?;
+    file.sync_all()?;
+    HeldFile::from_file(directory, name, file, 0, true)
 }
 
 fn keychain_path(path: &Path) -> Result<CString, Failure> {
@@ -751,6 +805,7 @@ mod tests {
                 location,
                 dir,
                 committed: false,
+                marker: None,
             }
         }
     }
@@ -863,6 +918,97 @@ mod tests {
     }
 
     #[test]
+    fn database_members_require_the_exact_paired_atomic_marker() {
+        assert_eq!(marker_name(KEYCHAIN).unwrap(), ".fl4895E04B");
+        assert_eq!(marker_name(DATABASE).unwrap(), ".flCB3D0700");
+        for database in [KEYCHAIN, DATABASE] {
+            let fixture = Fixture::new();
+            let stage = fixture.creation("store");
+            let mut options = OpenOptions::new();
+            options.write(true).create_new(true).mode(0o600);
+            let mut file = stage.dir.open_with(database, &options).unwrap();
+            file.write_all(b"synthetic encrypted database").unwrap();
+            assert!(database_member(&stage.dir, &[]).is_err());
+            let marker = marker_name(database).unwrap();
+            stage.dir.open_with(marker, &options).unwrap();
+            assert_eq!(database_member(&stage.dir, &[]).unwrap(), database);
+            let other_database = if database == KEYCHAIN {
+                DATABASE
+            } else {
+                KEYCHAIN
+            };
+            let other_marker = marker_name(other_database).unwrap();
+            stage.dir.remove_file(marker).unwrap();
+            stage.dir.open_with(other_marker, &options).unwrap();
+            assert!(database_member(&stage.dir, &[]).is_err());
+            stage.dir.open_with(marker, &options).unwrap();
+            assert!(database_member(&stage.dir, &[]).is_err());
+            stage.dir.remove_file(other_marker).unwrap();
+            stage.dir.open_with(".fl00000000", &options).unwrap();
+            assert!(database_member(&stage.dir, &[]).is_err());
+            stage.dir.remove_file(".fl00000000").unwrap();
+            stage.dir.open_with(other_database, &options).unwrap();
+            assert!(database_member(&stage.dir, &[]).is_err());
+        }
+    }
+
+    #[test]
+    fn empty_marker_profile_does_not_allow_empty_databases_or_manifests() {
+        let fixture = Fixture::new();
+        let stage = fixture.creation("store");
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true).mode(0o600);
+        for (name, maximum) in [
+            (DATABASE, MAX_DATABASE_SIZE),
+            (MANIFEST, MAX_MANIFEST_SIZE as u64),
+        ] {
+            stage.dir.open_with(name, &options).unwrap();
+            assert!(HeldFile::open(&stage.dir, name, maximum, true).is_err());
+        }
+        let marker = marker_name(DATABASE).unwrap();
+        let mut file = stage.dir.open_with(marker, &options).unwrap();
+        let held = HeldFile::open(&stage.dir, marker, 0, true).unwrap();
+        held.verify(&stage.dir).unwrap();
+        file.write_all(b"x").unwrap();
+        assert!(held.verify(&stage.dir).is_err());
+        assert!(HeldFile::open(&stage.dir, marker, 0, true).is_err());
+        file.set_len(0).unwrap();
+        held.verify(&stage.dir).unwrap();
+        stage.dir.remove_file(marker).unwrap();
+        stage.dir.open_with(marker, &options).unwrap();
+        assert!(held.verify(&stage.dir).is_err());
+    }
+
+    #[test]
+    fn fresh_marker_tightening_requires_empty_single_link_and_retains_identity() {
+        let fixture = Fixture::new();
+        let mut stage = fixture.creation("store");
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true).mode(0o444);
+        let mut file = stage.dir.open_with(DATABASE_MARKER, &options).unwrap();
+        file.set_permissions(cap_std::fs::Permissions::from_std(
+            std::fs::Permissions::from_mode(0o444),
+        ))
+        .unwrap();
+        file.write_all(b"unexpected marker content").unwrap();
+        assert!(prepare_marker(&stage.dir, DATABASE).is_err());
+        assert_eq!(file.metadata().unwrap().mode() & 0o777, 0o444);
+        file.set_len(0).unwrap();
+        let extra = fixture.0.join("extra");
+        std::fs::hard_link(fixture.0.join("store").join(DATABASE_MARKER), &extra).unwrap();
+        assert!(prepare_marker(&stage.dir, DATABASE).is_err());
+        assert_eq!(file.metadata().unwrap().mode() & 0o777, 0o444);
+        std::fs::remove_file(extra).unwrap();
+        let marker = prepare_marker(&stage.dir, DATABASE).unwrap();
+        assert_eq!(marker.file.metadata().unwrap().mode() & 0o777, 0o400);
+        stage.marker = Some(marker);
+        stage.verify().unwrap();
+        stage.dir.remove_file(DATABASE_MARKER).unwrap();
+        stage.dir.open_with(DATABASE_MARKER, &options).unwrap();
+        assert!(stage.verify().is_err());
+    }
+
+    #[test]
     fn opened_package_rejects_same_size_database_corruption() {
         let fixture = Fixture::new();
         let stage = fixture.creation("store");
@@ -871,6 +1017,7 @@ mod tests {
         let mut database = stage.dir.open_with(DATABASE, &options).unwrap();
         database.write_all(b"abc").unwrap();
         database.sync_all().unwrap();
+        stage.dir.open_with(DATABASE_MARKER, &options).unwrap();
         let manifest = serde_json::json!({
             "version": 1,
             "device_id": "00000000000000000000000003",
@@ -889,6 +1036,6 @@ mod tests {
         database.sync_all().unwrap();
         assert!(package.verify().is_err());
         assert!(Package::open(&fixture.0.join("store")).is_err());
-        assert_eq!(stage.dir.entries().unwrap().count(), 2);
+        assert_eq!(stage.dir.entries().unwrap().count(), 3);
     }
 }

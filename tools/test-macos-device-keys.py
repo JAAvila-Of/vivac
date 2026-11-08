@@ -264,7 +264,13 @@ class Runner:
         names = {item.name for item in path.iterdir()}
         require("device-key.json" in names)
         require(len(names & {"device.keychain", "device.keychain-db"}) == 1)
-        require(len(names) == 2)
+        database = next(name for name in names if name.startswith("device.keychain"))
+        marker = ".fl" + hashlib.sha1(database.encode("ascii"), usedforsecurity=False).hexdigest()[:8].upper()
+        require(names == {database, marker, "device-key.json"})
+        metadata = (path / marker).lstat()
+        require(stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1)
+        require(metadata.st_uid == os.geteuid() and metadata.st_size == 0)
+        require(stat.S_IMODE(metadata.st_mode) == 0o400)
         return path, receipt
 
     def prove(self, path, receipt):
@@ -381,7 +387,21 @@ class Runner:
         self.reject(["show", alias])
         self.reject(["create", alias / "child"])
         database = next(item.name for item in path.iterdir() if item.name.startswith("device.keychain"))
-        for filename in ("device-key.json", database):
+        marker = next(item.name for item in path.iterdir() if item.name.startswith(".fl"))
+        for kind in ("missing", "nonempty", "wrong-name"):
+            damaged = self.copied(path, "marker-" + kind)
+            target = damaged / marker
+            if kind == "missing":
+                target.unlink()
+            elif kind == "nonempty":
+                target.chmod(0o600)
+                target.write_bytes(b"synthetic-lock-data")
+                target.chmod(0o400)
+            else:
+                target.rename(damaged / ".fl00000000")
+            self.reject(["show", damaged])
+            self.reject(["unlock", damaged])
+        for filename in ("device-key.json", database, marker):
             for kind in ("symlink", "fifo", "hardlink", "mode", "acl"):
                 damaged = self.copied(path, "boundary-" + filename + "-" + kind)
                 target = damaged / filename

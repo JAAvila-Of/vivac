@@ -1654,6 +1654,7 @@ manager
 managing
 mandatory
 manifest
+manifests
 manual
 many
 map
@@ -1992,6 +1993,7 @@ pages
 pagination
 paint
 pair
+paired
 pairs
 panic
 panicking
@@ -2992,6 +2994,7 @@ ticks
 tidy
 tie
 tight
+tightening
 tilde
 time
 timed
