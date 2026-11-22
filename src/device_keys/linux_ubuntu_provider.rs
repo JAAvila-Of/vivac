@@ -627,6 +627,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "needs root: the fixture must sit under a root-owned chain; CI runs it with sudo"]
     fn retained_metadata_reads_and_hashes_the_owned_object() {
         let fixture = Fixture::new();
         let path = fixture.file("metadata", b"abc", 0o644);
@@ -646,6 +647,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "needs root: the fixture must sit under a root-owned chain; CI runs it with sudo"]
     fn retained_executable_streams_beyond_one_buffer_and_checks_elf() {
         let fixture = Fixture::new();
         let mut bytes = vec![b'x'; 2 * 65536 + 17];
@@ -660,6 +662,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "needs root: the fixture must sit under a root-owned chain; CI runs it with sudo"]
     fn retained_file_refuses_unsafe_permissions_and_privilege_bits() {
         let fixture = Fixture::new();
         for (index, mode) in [0o777, 0o775, 0o4755, 0o2755, 0o644]
@@ -677,6 +680,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "needs root: the fixture must sit under a root-owned chain; CI runs it with sudo"]
     fn retained_file_refuses_wrong_owner_and_size_profiles() {
         let mut identity = Identity {
             device: 1,
@@ -706,6 +710,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "needs root: the fixture must sit under a root-owned chain; CI runs it with sudo"]
     fn retained_file_detects_content_and_object_replacement() {
         let fixture = Fixture::new();
         let path = fixture.file("metadata", b"abc", 0o644);
@@ -721,6 +726,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "needs root: the fixture must sit under a root-owned chain; CI runs it with sudo"]
     fn retained_file_accepts_root_alias_and_refuses_retarget_and_unsafe_chain() {
         let fixture = Fixture::new();
         let first = fixture.file("first", b"abc", 0o644);
