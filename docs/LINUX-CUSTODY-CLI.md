@@ -51,6 +51,24 @@ possession at the time of the exchange. The command grants no reusable
 capability. The proof exchange has no operation for changing custody or
 signing an enrollment challenge.
 
+A listener that replaces the discoverable endpoint is refused. The supervisor
+ends the session once its endpoint location changes, so the opener reports
+`interrupted` and publishes no permit.
+
+## Loss of the supervisor
+
+If the supervisor ends without a clean close, the keeper reports
+`opening_uncertain` or `interrupted` as described in the results table, and
+the opening permit is not recreated. Native children start with a parent-death
+`SIGKILL`, so the agent ends with the supervisor. The keeper observes the exits
+of its own children but holds no exit evidence for the agent, so it removes
+nothing the supervisor created. The
+discoverable endpoint socket under the state directory, the session home with
+its agent socket, and the startup endpoint directory under `/tmp` can remain.
+`verify-linux-possession` refuses each of them. Retiring them and admitting the
+credential again belong to the recovery procedure, which also requires a fresh
+unlock.
+
 ## Results
 
 For a valid invocation, `--json` writes one final newline-terminated object
