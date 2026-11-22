@@ -167,13 +167,14 @@ for (const name of nativeEvents) {
 }
 
 test('the reviewed opening bundle has the expected candidate bytes', () => {
-  assert.equal(candidateSha256, '7D064161DBB079F1584013186F7A9F6DBEAF8815E22CF5A026950D29B77E0E4A');
+  assert.equal(candidateSha256, '7AEB69086FEC67F58714DED736B05B210E06374B0C51FCEF21E22981729FA8DF');
 });
 
 for (const [version, digest] of [
   ['v1', 'B4BB19565116606AFD310765AC16FF46A336294AD38BD905915D91035068E376'],
   ['v3', 'AA0C9DC2BA5C348D65CFEF17F891ABA3B9853B555D0D9E71B56E1100F33C6F07'],
   ['v3-release', '7A3AFC91606D1E756BACABAEFF84B98A3415392865DCB0E6BFBED946B58C84AF'],
+  ['v4', '7D064161DBB079F1584013186F7A9F6DBEAF8815E22CF5A026950D29B77E0E4A'],
 ]) {
   test(`the historical opening reference preserves the exact ${version} bytes`, async () => {
     const path = new URL(`../src/setup/claude-opening-versions/opening-reference-${version}/hooks/register.mjs`, import.meta.url);
@@ -552,4 +553,17 @@ test('receipts describe preparation, replace forged metadata and never claim pro
   controller.abort();
   assert.equal((await h.receipt(event, controller.signal)).vivac_opening.status, 'blocked');
   assertNativeFlow(h);
+});
+
+// Mirrors the rule `claude plugin validate` enforces on Claude Code 2.1.330; it does not prove native loading.
+test('every function the module hands $ to is declared at the top level', async () => {
+  const source = await readFile(candidatePath, 'utf8');
+  const topLevel = new Set(
+    [...source.matchAll(/^(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(/gm)].map((match) => match[1]),
+  );
+  const handed = [...source.matchAll(/(?<!function\s)(?<![\w$.])([A-Za-z_$][\w$]*)\(\$\s*[,)]/g)].map((match) => match[1]);
+  assert.ok(handed.length > 0);
+  for (const name of handed) {
+    assert.ok(topLevel.has(name), `${name} receives $ but is not declared at the top level`);
+  }
 });

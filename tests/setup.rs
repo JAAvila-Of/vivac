@@ -88,7 +88,7 @@ fn opening_bundle_installs_exact_payloads_and_a_current_run_preserves_bytes() {
     );
     let receipt: serde_json::Value = serde_json::from_slice(&read_bytes(&paths[3])).unwrap();
     assert_eq!(receipt["schema"], 1);
-    assert_eq!(receipt["version"], "opening-reference-v4");
+    assert_eq!(receipt["version"], "opening-reference-v5");
     assert_eq!(receipt["files"].as_object().unwrap().len(), 3);
     let before = paths.map(|path| read_bytes(&path));
     let settings = read_bytes(&settings_path(&c));
@@ -133,6 +133,12 @@ fn restore_previous_opening_bundle(c: &Sandbox, version: &str) {
             ("hooks/hooks.json", include_bytes!("../src/setup/claude-opening-versions/opening-reference-v3-release/hooks/hooks.json")),
             ("hooks/register.mjs", include_bytes!("../src/setup/claude-opening-versions/opening-reference-v3-release/hooks/register.mjs")),
         ]
+    } else if version == "opening-reference-v4" {
+        [
+            (".claude-plugin/plugin.json", include_bytes!("../src/setup/claude-opening-versions/opening-reference-v4/.claude-plugin/plugin.json")),
+            ("hooks/hooks.json", include_bytes!("../src/setup/claude-opening-versions/opening-reference-v4/hooks/hooks.json")),
+            ("hooks/register.mjs", include_bytes!("../src/setup/claude-opening-versions/opening-reference-v4/hooks/register.mjs")),
+        ]
     } else {
         assert_eq!(version, "opening-reference-v3");
         [
@@ -166,6 +172,7 @@ fn previous_opening_bundle_updates_and_undoes_without_adopting_edits() {
         "opening-reference-v2",
         "opening-reference-v3",
         "opening-reference-v3-release",
+        "opening-reference-v4",
     ] {
         for action in ["update", "undo", "edited"] {
             let c = Sandbox::new_seeded("setup-opening-previous");
@@ -200,7 +207,7 @@ fn previous_opening_bundle_updates_and_undoes_without_adopting_edits() {
                 );
                 let receipt: serde_json::Value =
                     serde_json::from_slice(&read_bytes(&paths[3])).unwrap();
-                assert_eq!(receipt["version"], "opening-reference-v4");
+                assert_eq!(receipt["version"], "opening-reference-v5");
                 c.ok(&["setup", "claude-code", "--undo", "--yes"]);
                 assert!(bundle_paths(&c).iter().all(|path| !path.exists()));
             }

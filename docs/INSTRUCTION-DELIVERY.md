@@ -402,10 +402,19 @@ the input or claims the warning reached the model. Both cases exit successfully,
 without locating a tree or changing project files. This receipt checks the
 module-to-command path; it is not authentication or evidence of provider reception.
 
-Setup installs `opening-reference-v4` and recognizes intact earlier versions
+Setup installs `opening-reference-v5` and recognizes intact earlier versions
 for an explicit update. Existing installations retain their earlier behavior
 until the engine and owned bundle are updated. Doctor checks configuration
 and integrity without claiming reception or native execution control.
+
+`opening-reference-v5` changes only where the opening handler is declared.
+Claude Code 2.1.330 refuses a hooks module that passes `$` to a function that
+is not declared at the top level of its file, and `opening-reference-v4`
+declared that handler inside `register`. The engine then ran none of the
+module: the session opened without Vivac context and the guard reported it
+unverified on every prompt, while doctor still reported the bundle intact.
+`claude plugin validate .claude/skills/vivac-opening` shows the refusal that
+doctor cannot see; run it after updating Claude Code.
 
 Its behavioral tests import the real artifact with a simulated event runtime:
 
@@ -415,14 +424,16 @@ node --test tests/claude_opening_module.mjs
 
 They check complete UTF-8 boundaries, foreign context, stale openings and
 attachments, failed preparation, and preservation of native events, results
-and errors. They do not prove native module loading or renewed reception on
-resume. The CLI receipt check is also covered by `tests/session.rs`.
+and errors. One test checks the source against the top-level rule above as
+2.1.330 states it; a later engine may add rules it does not know. They do not
+prove native module loading or renewed reception on resume. The CLI receipt
+check is also covered by `tests/session.rs`.
 
 ### Historical Claude native controls
 
 The following controls describe earlier consumer revisions. Their demonstrated
 blocking and cancellation behavior is retained as evidence, not as a policy
-of `opening-reference-v4`.
+of the current bundle.
 
 An initial native consumer check on Claude 2.1.294 exposed an ordering error:
 `turn.step` ran before `prompt.attachment`, so requiring attachment expansion
@@ -1089,9 +1100,9 @@ An internal Rust ownership module implements inspection and pure plans for
 that boundary. Receipts must match canonical compiled definitions byte for byte;
 payload reads are limited to 1 MiB each and receipt reads to 16 KiB. The compiled
 catalog embeds the experimental manifest, hook definition and consumer with
-`include_str!` as `opening-reference-v4` and retains the exact
-`opening-reference-v1`, `opening-reference-v2` and `opening-reference-v3`
-definitions for ownership checks. Setup can upgrade an intact previous bundle and undo any recognized
+`include_str!` as `opening-reference-v5` and retains the exact
+`opening-reference-v1` through `opening-reference-v4` definitions for
+ownership checks. Setup can upgrade an intact previous bundle and undo any recognized
 version; edited payloads are never
 adopted as owned. Setup uses its update and undo plans;
 doctor inspects the current compiled bundle and the separate command hooks.
