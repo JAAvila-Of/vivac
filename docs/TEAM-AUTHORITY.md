@@ -275,14 +275,23 @@ place to handle keys. The local loopback reading surface may use the installed
 client; remote administration only receives explicitly authorized information.
 
 An operator that also controls endpoints or trusted client updates is inside
-that trust boundary. Recovery custodians, if enabled, are also trusted for
-their granted scope. The product must not claim privacy from such an authority.
+that trust boundary. Recovery custodians are also trusted for their granted
+scope. The product must not claim privacy from such an authority.
 
 Account recovery and content-key recovery are different operations. Neither
 a password reset nor a future corporate identity-provider login grants
-decryption keys by itself. The recovery policy, custodian powers, bootstrap,
-lost-device procedure and key lifecycle remain prerequisites for implementation.
-No default recovery authority is inferred by this contract.
+decryption keys by itself. The first team release adopts organizational
+recovery by custodians that the organization designates. Recovering is a
+permission of its own, separate from administering the server. It runs through
+an explicit procedure that states its scope and leaves an audit record, and an
+operator cannot grant it to themselves in the database. This policy designates
+no people, assigns no keys and selects no algorithm. Custodian powers,
+bootstrap, the procedure itself and the key lifecycle remain prerequisites for
+implementation.
+
+A device credential is never recovered. When its custody is lost, including a
+local opening that ends without a clean close, the holder creates a new
+credential and the team revokes the old one.
 
 ## Deployment boundary
 
