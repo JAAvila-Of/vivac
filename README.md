@@ -361,7 +361,9 @@ budgets, UX proves a surface is worth reading, DX judges.**
 Every [release](https://github.com/JAAvila-Of/vivac/releases) carries a
 precompiled binary — Linux and macOS on `x86_64` and `aarch64`, Windows on
 `x86_64` — listed in `SHA256SUMS` and carrying signed build provenance.
-Unpack one and put `vivac` on your `PATH`.
+Use the [client provenance verification contract](docs/CLIENT-RELEASE-PROVENANCE.md)
+to check its signed publisher identity and independently approved source commit
+before unpacking it and putting `vivac` on your `PATH`.
 
 With a Rust toolchain, 1.89 or newer, and a C compiler for bundled SQLite:
 
