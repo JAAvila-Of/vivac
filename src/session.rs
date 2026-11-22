@@ -76,32 +76,72 @@ impl HookInput {
     }
 }
 
+/// Where one per-session mark of the Claude opening fallback lives: a file
+/// under the temp directory named from a hash, like [`cooldown_path`], so the
+/// session or agent identifier never reaches a filename. `kind` keeps the
+/// marks apart from each other.
+fn opening_mark(kind: &str, key: &str) -> std::path::PathBuf {
+    let hash = crate::setup::fnv1a64(format!("{kind}:{key}").as_bytes());
+    std::env::temp_dir()
+        .join("vivac")
+        .join(format!("opening-{hash:016x}"))
+}
+
+fn write_mark(path: &std::path::Path) {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).ok();
+    }
+    std::fs::write(path, "v1").ok();
+}
+
+/// Takes the mark at `path` and says whether this call is the first to do so.
+/// Best effort: a mark that cannot be written only repeats a warning.
+fn claim_mark(path: &std::path::Path) -> bool {
+    if path.exists() {
+        return false;
+    }
+    write_mark(path);
+    true
+}
+
+/// `session guard --hook` on every prompt. Without a valid receipt it tells
+/// the person, and the model only when the fallback did not put the opening
+/// in, once per session and variant. It reads no tree, writes nothing but its
+/// marks in the temp directory, never echoes its input and always lets the
+/// prompt go on.
 pub fn guard() {
     let input: serde_json::Value =
         serde_json::from_str(hook_stdin()).unwrap_or(serde_json::Value::Null);
-    let allowed = input
-        .as_object()
-        .and_then(|input| input.get("vivac_opening"))
-        .and_then(serde_json::Value::as_object)
-        .is_some_and(|receipt| {
-            receipt.get("protocol").and_then(serde_json::Value::as_str)
-                == Some(opening::CLAUDE_PROTOCOL)
-                && matches!(
-                    receipt.get("status").and_then(serde_json::Value::as_str),
-                    Some("ready" | "absent")
-                )
-                && receipt
-                    .get("generation")
-                    .and_then(serde_json::Value::as_u64)
-                    .is_some_and(|generation| (1..=9_007_199_254_740_991).contains(&generation))
-        });
-    let response = if allowed {
-        serde_json::json!({"continue": true})
-    } else {
-        serde_json::json!({"continue": true, "systemMessage": "Vivac opening context is unverified. Native work can continue; check the integration before relying on project context."})
-    };
+    let mut response = serde_json::json!({"continue": true});
+    if !opening::valid_receipt(&input) {
+        let session = input.get("session_id").and_then(serde_json::Value::as_str);
+        let key = session.map(opening::session_key);
+        let delivered = key
+            .as_deref()
+            .is_some_and(|key| opening_mark(FALLBACK_DELIVERED, key).exists());
+        let variant = if delivered {
+            GUARD_DELIVERED
+        } else {
+            GUARD_UNVERIFIED
+        };
+        let first = key
+            .as_deref()
+            .is_none_or(|key| claim_mark(&opening_mark(variant, key)));
+        if first {
+            if delivered {
+                response["systemMessage"] = "The vivac opening module is not running; the opening arrived through the command fallback. Run claude plugin validate .claude/skills/vivac-opening to check it.".into();
+            } else {
+                response["systemMessage"] = "Vivac opening context is unverified. Native work can continue; check the integration before relying on project context.".into();
+                response["hookSpecificOutput"] = serde_json::json!({"hookEventName": "UserPromptSubmit", "additionalContext": opening::FALLBACK_NOTICE});
+            }
+        }
+    }
     outln!("{response}");
 }
+
+const FALLBACK_DELIVERED: &str = "fallback-delivered";
+const GUARD_DELIVERED: &str = "guard-delivered";
+const GUARD_UNVERIFIED: &str = "guard-unverified";
 
 pub fn start(ctx: &mut crate::ops::Ctx, a: &Args, project: &str) -> R {
     if !a.has("hook") {
@@ -165,6 +205,12 @@ pub fn supports_opening_context(context: &str) -> bool {
     opening::supports_context(context)
 }
 
+/// A `claude-fallback` run whose input already carries the module's receipt:
+/// the opening arrived, so there is nothing to do and nothing to read.
+pub fn fallback_covered(context: &str) -> bool {
+    opening::fallback_covered(context)
+}
+
 pub fn opening_absent(context: &str) {
     opening::absent(context);
 }
@@ -181,6 +227,7 @@ fn bounded_start(ctx: &mut crate::ops::Ctx, a: &Args, project: &str) -> R {
             return Ok(());
         }
     };
+    let fallback = request.profile.is_fallback();
     let Some(PreparedOpening {
         mut text,
         shown_focus,
@@ -190,6 +237,10 @@ fn bounded_start(ctx: &mut crate::ops::Ctx, a: &Args, project: &str) -> R {
         request.profile.too_large();
         return Ok(());
     };
+    if fallback && utf16_units(&text) > opening::FALLBACK_UNITS {
+        request.profile.too_large();
+        return Ok(());
+    }
     let (source, session) = request.receipt();
     match record_opening(ctx, source, session, shown_focus, shown_vivac) {
         Ok(()) => {}
@@ -198,7 +249,9 @@ fn bounded_start(ctx: &mut crate::ops::Ctx, a: &Args, project: &str) -> R {
                 "  Session not recorded: another vivac process held the tree for {} seconds.\n",
                 crate::store::LOCK_DEADLINE.as_secs()
             ));
-            if text.len() > opening::CONTEXT_BYTES {
+            if text.len() > opening::CONTEXT_BYTES
+                || (fallback && utf16_units(&text) > opening::FALLBACK_UNITS)
+            {
                 request.profile.too_large();
                 return Ok(());
             }
@@ -206,7 +259,16 @@ fn bounded_start(ctx: &mut crate::ops::Ctx, a: &Args, project: &str) -> R {
         Err(_) => {}
     }
     request.profile.ready(text);
+    if fallback {
+        if let Some(key) = request.delivery_key() {
+            write_mark(&opening_mark(FALLBACK_DELIVERED, &key));
+        }
+    }
     Ok(())
+}
+
+fn utf16_units(text: &str) -> usize {
+    text.encode_utf16().count()
 }
 
 struct PreparedOpening {

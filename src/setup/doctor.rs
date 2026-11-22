@@ -127,8 +127,7 @@ fn hooks(root: &Value, harness: &str, report: &mut Report) {
         ("UserPromptSubmit", "prompt"),
         ("Stop", "end"),
     ] {
-        if (harness == "claude-code" && word == "start") || (harness == "codex" && word == "guard")
-        {
+        if harness == "codex" && word == "guard" {
             continue;
         }
         let name = if word == "guard" {
@@ -152,6 +151,8 @@ fn hooks(root: &Value, harness: &str, report: &mut Report) {
         }
         let expected = if harness == "codex" && event == "SessionStart" {
             "vivac session start --hook --context codex".to_string()
+        } else if harness == "claude-code" && word == "start" {
+            "vivac session start --hook --context claude-fallback".to_string()
         } else {
             format!("vivac session {word} --hook")
         };
@@ -290,7 +291,10 @@ fn hooks(root: &Value, harness: &str, report: &mut Report) {
                 handler
                     .get("command")
                     .and_then(Value::as_str)
-                    .is_some_and(|command| super::claude_code::is_session_command(command, "start"))
+                    .is_some_and(|command| {
+                        super::claude_code::is_session_command(command, "start")
+                            && command != "vivac session start --hook --context claude-fallback"
+                    })
             });
         if legacy {
             report.add("claude-code SessionStart", "warning", "a legacy or custom opening command remains and may still execute; reception is not verified", Some(&fix));
