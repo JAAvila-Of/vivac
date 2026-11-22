@@ -2180,7 +2180,9 @@ fn parse_control_credentials(
             && (header.cmsg_type == libc::SCM_RIGHTS || header.cmsg_type == SCM_PIDFD)
         {
             rights += usize::from(header.cmsg_type == libc::SCM_RIGHTS);
-            if header.cmsg_type == SCM_PIDFD || (size - data_offset) % size_of::<i32>() != 0 {
+            if header.cmsg_type == SCM_PIDFD
+                || !(size - data_offset).is_multiple_of(size_of::<i32>())
+            {
                 rejected = true;
             }
             let mut position = data_offset;
