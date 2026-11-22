@@ -95,7 +95,7 @@ anything is written.
 
 | File | What it gets |
 |---|---|
-| `.claude/settings.json` | `UserPromptSubmit` runs `vivac session guard --hook` to report an unverified opening receipt without blocking work, then `vivac session prompt --hook` for custody and capture reminders; `Stop` runs `vivac session end --hook` |
+| `.claude/settings.json` | `SessionStart` and `SubagentStart` run `vivac session start --hook --context claude-fallback`, which delivers the opening only when the module did not; `UserPromptSubmit` runs `vivac session guard --hook` to report an unverified opening receipt without blocking work, then `vivac session prompt --hook` for custody and capture reminders; `Stop` runs `vivac session end --hook` |
 | `.claude/skills/vivac-opening/` | the experimental opening module: `.claude-plugin/plugin.json`, `hooks/hooks.json`, `hooks/register.mjs`, and an ownership receipt, `.vivac-owned.json` |
 | `.mcp.json` | the server, which runs `vivac mcp` |
 | `.claude/skills/vivac-migrate/` | the skill an agent follows to bring another record into the tree — see [Migrating](MIGRATING.md) |
@@ -160,8 +160,15 @@ The module prepares the complete opening text once for `startup`, `clear`,
 It supplies that snapshot through an owned native attachment, preserving
 foreign hook text. Preparation is limited to 60,000 UTF-8 bytes; oversized or
 failed preparations supply no Vivac payload rather than a shortened opening.
-The independent prompt check reports a missing or invalid module status and
-allows native work to continue. Messages, delegation and resumed agents retain
+If the module does not report an opening, because it did not load, was refused
+or failed, a command fallback takes its place: it delivers the complete opening
+when it fits in the 10,000 characters Claude Code accepts from one command hook,
+and otherwise tells the agent that the opening was not delivered and to call
+`vivac_brief`. It never shortens the opening, and it stays silent when the
+module delivered. The independent prompt check tells the person once per
+session that the module is not running, and tells the model as well when no
+opening reached it. Native work continues in every case. Messages, delegation
+and resumed agents retain
 their native behavior; Vivac does not guarantee that the same resumed agent
 receives the latest project context.
 This transport budget does not establish the active model's context capacity.
@@ -176,11 +183,11 @@ the engine alone does not replace an installed opening module: re-run setup
 and restart the session to load the current bundle. Earlier owned bundles are
 recognized for upgrade, including versions that blocked native continuations.
 
-`vivac doctor claude-code` checks bundle integrity and the guard, prompt and
-stop hooks. Configuration and an opening receipt do not prove that the
-harness loaded the module or delivered its output. An intact bundle can still
-be refused by a newer Claude Code: if the guard reports an unverified opening
-on every prompt, run `claude plugin validate .claude/skills/vivac-opening`,
+`vivac doctor claude-code` checks bundle integrity and the fallback, guard,
+prompt and stop hooks. Configuration and an opening receipt do not prove that
+the harness loaded the module or delivered its output. An intact bundle can
+still be refused by a newer Claude Code: if the guard says the module is not
+running, run `claude plugin validate .claude/skills/vivac-opening`,
 which reports what the engine refuses to load. The native checks and their
 limits are recorded in [Checking instruction delivery](INSTRUCTION-DELIVERY.md).
 
@@ -306,9 +313,10 @@ happens.
 
 The ordinary plain-text start hook, prompt and end commands stay quiet and
 exit 0 where there is no `.vivac/`. Claude's module producer instead returns
-JSON with `status: absent`. Its independent guard checks the module status: a
-valid `absent` status is silent, while a missing or invalid status adds an
-unverified-context warning. Both permit native continuation.
+JSON with `status: absent`, and the command fallback prints nothing. Its
+independent guard checks the module status: a valid `absent` status is silent,
+while a missing or invalid status adds an unverified-context warning, once per
+session. All of them permit native continuation.
 
 ---
 

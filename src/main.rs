@@ -996,7 +996,7 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
                 .is_some_and(session::supports_opening_context))
     {
         return Err(Failure::usage(
-            "--context codex or claude-module requires session start --hook.",
+            "--context codex, claude-module or claude-fallback requires session start --hook.",
         ));
     }
     // `d935`: a rehearsal is a person looking at what the close hook
@@ -1015,6 +1015,13 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
             return Err(Failure::usage("session guard requires --hook."));
         }
         session::guard();
+        return Ok(0);
+    }
+    if cmd == "session"
+        && a.positional(0) == Some("start")
+        && a.has("hook")
+        && a.opt("context").is_some_and(session::fallback_covered)
+    {
         return Ok(0);
     }
 

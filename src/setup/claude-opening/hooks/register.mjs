@@ -95,7 +95,8 @@ async function open($, event, next, state, input, allowed) {
   }
   let result;
   try {
-    result = await next(event);
+    const status = token === state.generation && !next.signal.aborted ? prepared.phase : 'blocked';
+    result = await next({ ...event, vivac_opening: { protocol, status, generation: state.generation } });
   } catch (error) {
     if (token === state.generation) invalidate(state);
     throw error;
@@ -130,6 +131,7 @@ export function register(on) {
     const previous = children.get(event.agent_id);
     if (previous) invalidate(previous);
     const state = recipient('@@VIVAC_OPENING_CHILD_REFERENCE_' + crypto.randomUUID() + '@@');
+    invalidate(state);
     children.set(event.agent_id, state);
     return open($, event, next, state,
       { hook_event_name: 'SubagentStart', agent_id: event.agent_id }, true);

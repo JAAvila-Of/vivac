@@ -101,7 +101,7 @@ fn opening_guard_checks_receipts_without_opening_the_tree_or_home() {
             let expected = if allowed {
                 serde_json::json!({"continue":true})
             } else {
-                serde_json::json!({"continue":true,"systemMessage":"Vivac opening context is unverified. Native work can continue; check the integration before relying on project context."})
+                serde_json::json!({"continue":true,"systemMessage":"Vivac opening context is unverified. Native work can continue; check the integration before relying on project context.","hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"The vivac opening context was not delivered. Before relying on project context, call vivac_brief (MCP) or run vivac brief."}})
             };
             assert_eq!(response, expected, "{input}");
             assert_eq!(directory_snapshot(&c.0), before);
@@ -2456,4 +2456,300 @@ fn artifact_delivery_guidance_is_absent_from_person_facing_reads() {
         assert_eq!(c.log(), before);
     }
     assert!(!c.0.join(".vivac-artifacts").exists());
+}
+
+const CLAUDE_FALLBACK_START: &[&str] =
+    &["session", "start", "--hook", "--context", "claude-fallback"];
+const GUARD: &[&str] = &["session", "guard", "--hook"];
+const FALLBACK_NOTICE: &str = "The vivac opening context was not delivered. Before relying on project context, call vivac_brief (MCP) or run vivac brief.";
+const UNVERIFIED: &str = "Vivac opening context is unverified. Native work can continue; check the integration before relying on project context.";
+const NOT_RUNNING: &str = "The vivac opening module is not running; the opening arrived through the command fallback. Run claude plugin validate .claude/skills/vivac-opening to check it.";
+
+/// A session identifier no other run of the suite shares: the marks the
+/// fallback leaves live in the machine's temp directory.
+fn unique_session(name: &str) -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    format!("{name}-{}-{nanos}", std::process::id())
+}
+
+fn start_input(session: &str) -> String {
+    serde_json::json!({"hook_event_name":"SessionStart","source":"startup","session_id":session})
+        .to_string()
+}
+
+fn run_json(c: &Sandbox, args: &[&str], input: &str) -> serde_json::Value {
+    let (stdout, stderr, code) = run_stdin_split(c, args, input);
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    serde_json::from_str(&stdout).unwrap_or_else(|_| panic!("not JSON: {stdout:?}"))
+}
+
+fn guard_input(session: Option<&str>) -> String {
+    match session {
+        Some(id) => serde_json::json!({"hook_event_name":"UserPromptSubmit","session_id":id,"prompt":"DO NOT REFLECT"}).to_string(),
+        None => serde_json::json!({"hook_event_name":"UserPromptSubmit"}).to_string(),
+    }
+}
+
+fn notice_output(event: &str) -> serde_json::Value {
+    serde_json::json!({"hookSpecificOutput":{"hookEventName":event,"additionalContext":FALLBACK_NOTICE}})
+}
+
+#[test]
+fn claude_fallback_stays_silent_when_the_module_receipt_is_valid() {
+    let c = Sandbox::new_seeded("claude-fallback-receipt");
+    let before_log = c.log();
+    let before = directory_snapshot(&c.0);
+    let home_before = directory_snapshot(c.global_home());
+    for input in [
+        r#"{"hook_event_name":"SessionStart","source":"startup","session_id":"S","vivac_opening":{"protocol":"vivac.claude.opening.v1","status":"ready","generation":1}}"#,
+        r#"{"hook_event_name":"SessionStart","source":"resume","session_id":"S","vivac_opening":{"protocol":"vivac.claude.opening.v1","status":"absent","generation":9007199254740991}}"#,
+        r#"{"hook_event_name":"SubagentStart","agent_id":"native-child","vivac_opening":{"protocol":"vivac.claude.opening.v1","status":"ready","generation":1}}"#,
+    ] {
+        let (stdout, stderr, code) = run_stdin_split(&c, CLAUDE_FALLBACK_START, input);
+        assert_eq!(code, 0, "{stdout}{stderr}");
+        assert!(stdout.is_empty() && stderr.is_empty(), "{stdout}{stderr}");
+        assert_eq!(c.log(), before_log);
+        assert_eq!(directory_snapshot(&c.0), before);
+        assert_eq!(directory_snapshot(c.global_home()), home_before);
+    }
+}
+
+#[test]
+fn claude_fallback_opens_a_session_without_a_valid_receipt_and_marks_it_delivered() {
+    let c = Sandbox::new_seeded("claude-fallback-session");
+    let (expected, _) = c.run_stdin(&["session", "start", "--hook"], "{}");
+    for (index, receipt) in [
+        "null",
+        r#"{"protocol":"vivac.claude.opening.v1","status":"blocked","generation":1}"#,
+        r#"{"protocol":"vivac.claude.opening.v1","status":"ready","generation":0}"#,
+        r#"{"protocol":"vivac.claude.opening.v2","status":"ready","generation":1}"#,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let session = unique_session(&format!("fallback-session-{index}"));
+        let input = format!(
+            r#"{{"hook_event_name":"SessionStart","source":"resume","session_id":"{session}","vivac_opening":{receipt}}}"#
+        );
+        let before = c.log().matches("session.started").count();
+        let (stdout, stderr, code) = run_stdin_split(&c, CLAUDE_FALLBACK_START, &input);
+        assert_eq!(code, 0, "{stdout}{stderr}");
+        assert!(stderr.is_empty(), "{stderr}");
+        let response: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(
+            response["hookSpecificOutput"]["hookEventName"],
+            "SessionStart"
+        );
+        assert_eq!(
+            response["hookSpecificOutput"]["additionalContext"],
+            expected
+        );
+        assert_eq!(response.as_object().unwrap().len(), 1);
+        assert!(!stdout.contains(&session));
+        assert_eq!(c.log().matches("session.started").count(), before + 1);
+        assert!(c.log().contains(&session));
+        // The module is not running, but the opening arrived: the person is
+        // told once and the model is not asked to call the brief.
+        let (project, home) = (
+            directory_snapshot(&c.0),
+            directory_snapshot(c.global_home()),
+        );
+        let first = run_json(&c, GUARD, &guard_input(Some(&session)));
+        assert_eq!(
+            first,
+            serde_json::json!({"continue":true,"systemMessage":NOT_RUNNING})
+        );
+        let second = run_json(&c, GUARD, &guard_input(Some(&session)));
+        assert_eq!(second, serde_json::json!({"continue":true}));
+        assert_eq!(directory_snapshot(&c.0), project);
+        assert_eq!(directory_snapshot(c.global_home()), home);
+    }
+}
+
+#[test]
+fn claude_fallback_opens_a_subagent_and_records_only_the_child() {
+    let c = Sandbox::new_seeded("claude-fallback-child");
+    let (expected, _) = c.run_stdin(&["session", "start", "--hook"], "{}");
+    let agent = unique_session("fallback-child");
+    let input = serde_json::json!({"hook_event_name":"SubagentStart","agent_id":agent,"session_id":"DO NOT REFLECT PARENT"}).to_string();
+    let before = c.log().matches("session.started").count();
+    let response = run_json(&c, CLAUDE_FALLBACK_START, &input);
+    assert_eq!(
+        response["hookSpecificOutput"]["hookEventName"],
+        "SubagentStart"
+    );
+    assert_eq!(
+        response["hookSpecificOutput"]["additionalContext"],
+        expected
+    );
+    assert_eq!(c.log().matches("session.started").count(), before + 1);
+    assert!(c.log().contains("subagent"));
+    assert!(c.log().contains(&agent));
+    assert!(!c.log().contains("DO NOT REFLECT PARENT"));
+}
+
+#[test]
+fn claude_fallback_prints_nothing_outside_a_tree() {
+    let c = Sandbox::new_empty("claude-fallback-absent");
+    let before = directory_snapshot(&c.0);
+    for input in [
+        start_input("S"),
+        r#"{"hook_event_name":"SubagentStart","agent_id":"native-child"}"#.to_string(),
+        "{}".to_string(),
+    ] {
+        let (stdout, stderr, code) = run_stdin_split(&c, CLAUDE_FALLBACK_START, &input);
+        assert_eq!(code, 0, "{stdout}{stderr}");
+        assert!(stdout.is_empty() && stderr.is_empty(), "{stdout}{stderr}");
+        assert_eq!(directory_snapshot(&c.0), before);
+    }
+}
+
+#[test]
+fn claude_fallback_rejects_invalid_input_in_silence_without_effects() {
+    let c = Sandbox::new_seeded("claude-fallback-invalid");
+    let before_log = c.log();
+    let before = directory_snapshot(&c.0);
+    for input in [
+        "not JSON",
+        "[]",
+        "null",
+        r#"{"hook_event_name":"Stop"}"#,
+        r#"{"hook_event_name":7}"#,
+        r#"{"hook_event_name":"SubagentStart"}"#,
+        r#"{"hook_event_name":"SubagentStart","agent_id":"has space"}"#,
+        r#"{"hook_event_name":"SubagentStart","agent_id":null}"#,
+        r#"{"hook_event_name":"Stop","vivac_opening":{"protocol":"vivac.claude.opening.v1","status":"ready","generation":1}}"#,
+    ] {
+        let (stdout, stderr, code) = run_stdin_split(&c, CLAUDE_FALLBACK_START, input);
+        assert_eq!(code, 0, "{input}: {stdout}{stderr}");
+        assert!(stdout.is_empty(), "{input}: {stdout}");
+        assert_eq!(c.log(), before_log);
+        assert_eq!(directory_snapshot(&c.0), before);
+    }
+}
+
+#[test]
+fn claude_fallback_that_does_not_fit_gives_the_notice_and_records_nothing() {
+    let c = Sandbox::new_seeded("claude-fallback-large");
+    c.ok(&[
+        "add",
+        "Large mandate",
+        "--root",
+        "--type",
+        "constraint",
+        "--why",
+        "Exercise the fallback ceiling",
+    ]);
+    let log = c
+        .log()
+        .lines()
+        .map(|line| {
+            let mut event: serde_json::Value = serde_json::from_str(line).unwrap();
+            if event["payload"]["title"] == "Large mandate" {
+                // 12 000 UTF-16 units in 24 000 bytes: inside the module's
+                // byte limit and past the fallback's unit limit.
+                event["payload"]["title"] = "\u{1f9ed}".repeat(6_000).into();
+            }
+            event.to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    std::fs::write(c.0.join(".vivac/events"), &log).unwrap();
+    let module = run_json(&c, CLAUDE_MODULE_START, "{}");
+    assert_eq!(module["status"], "ready");
+    let log = c.log();
+    for (event, input) in [
+        (
+            "SessionStart",
+            start_input(&unique_session("fallback-large")),
+        ),
+        (
+            "SubagentStart",
+            r#"{"hook_event_name":"SubagentStart","agent_id":"native-child"}"#.to_string(),
+        ),
+    ] {
+        let response = run_json(&c, CLAUDE_FALLBACK_START, &input);
+        assert_eq!(response, notice_output(event));
+        assert_eq!(c.log(), log);
+    }
+    // Nothing was delivered, so the guard keeps asking the model to read it.
+    let session = unique_session("fallback-large-guard");
+    run_json(&c, CLAUDE_FALLBACK_START, &start_input(&session));
+    let guard = run_json(&c, GUARD, &guard_input(Some(&session)));
+    assert_eq!(guard["systemMessage"], UNVERIFIED);
+    assert_eq!(
+        guard["hookSpecificOutput"]["additionalContext"],
+        FALLBACK_NOTICE
+    );
+}
+
+#[test]
+fn claude_fallback_preparation_failure_gives_the_notice_and_records_nothing() {
+    let c = Sandbox::new_seeded("claude-fallback-broken");
+    c.append_unknown_event_type();
+    let before = c.log();
+    for (event, input) in [
+        (
+            "SessionStart",
+            start_input(&unique_session("fallback-broken")),
+        ),
+        (
+            "SubagentStart",
+            r#"{"hook_event_name":"SubagentStart","agent_id":"native-child"}"#.to_string(),
+        ),
+    ] {
+        let (stdout, _, code) = run_stdin_split(&c, CLAUDE_FALLBACK_START, &input);
+        assert_eq!(code, 0, "{stdout}");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&stdout).unwrap(),
+            notice_output(event)
+        );
+        assert_eq!(c.log(), before);
+    }
+}
+
+#[test]
+fn opening_guard_warns_once_per_session_and_always_when_it_has_no_session() {
+    let c = Sandbox::new_seeded("opening-guard-once");
+    let before = directory_snapshot(&c.0);
+    let warning = serde_json::json!({
+        "continue": true,
+        "systemMessage": UNVERIFIED,
+        "hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": FALLBACK_NOTICE},
+    });
+    let silent = serde_json::json!({"continue": true});
+    let (one, two) = (unique_session("guard-one"), unique_session("guard-two"));
+    assert_eq!(run_json(&c, GUARD, &guard_input(Some(&one))), warning);
+    assert_eq!(run_json(&c, GUARD, &guard_input(Some(&one))), silent);
+    assert_eq!(run_json(&c, GUARD, &guard_input(Some(&two))), warning);
+    assert_eq!(run_json(&c, GUARD, &guard_input(Some(&one))), silent);
+    for _ in 0..2 {
+        assert_eq!(run_json(&c, GUARD, &guard_input(None)), warning);
+    }
+    assert_eq!(directory_snapshot(&c.0), before);
+}
+
+#[test]
+fn claude_fallback_context_requires_a_start_hook() {
+    let c = Sandbox::new_seeded("claude-fallback-usage");
+    for args in [
+        vec!["session", "start", "--context", "claude-fallback"],
+        vec!["session", "end", "--hook", "--context", "claude-fallback"],
+        vec![
+            "session",
+            "prompt",
+            "--hook",
+            "--context",
+            "claude-fallback",
+        ],
+    ] {
+        let (stdout, _, code) = run_stdin_split(&c, &args, &start_input("S"));
+        assert_ne!(code, 0, "accepted {args:?}");
+        assert!(stdout.is_empty(), "{stdout}");
+    }
+    assert!(!c.log().contains("session.started"));
 }

@@ -392,22 +392,53 @@ Vivac does not inspect message arguments, infer recipient classes or promise
 fresh context for a continuation. It never substitutes the principal's
 snapshot for an unrecognized child or claims delivery from a successful send.
 
+The module passes the same `vivac_opening` receipt to the hooks beneath it on
+`SessionStart`, `SubagentStart` and `UserPromptSubmit`. Its status is the
+prepared phase, `ready`, `absent` or `blocked`, and `blocked` whenever that
+opening was superseded before the hooks below it ran. Claude Code runs hooks
+modules before the command hooks of project settings, so those commands can
+tell whether the module delivered.
+
+`vivac session start --hook --context claude-fallback` is that command for
+`SessionStart` and `SubagentStart`. A valid receipt means the module covered
+the opening: the fallback prints nothing, reads no tree and writes nothing.
+Without one, because the module did not load, was refused or failed, it
+prepares the opening through the same path as the module producer. Claude Code
+delivers at most 10,000 characters from one command hook, so the fallback
+delivers the complete text as native `additionalContext` only up to 9,900
+UTF-16 code units, records the opening and leaves a per-session delivery mark
+in the temporary directory. A longer or failed opening is never shortened: the
+model receives a fixed notice that the opening was not delivered and that it
+should call `vivac_brief` or run `vivac brief` before relying on project
+context. Outside a tree, or for an invalid event, it prints nothing.
+
 `vivac session guard --hook` provides a separate command hook check. It reads
-the `vivac_opening` object supplied by the module through the native
-`UserPromptSubmit` input. The protocol must match, the status must be `ready`
-or `absent`, and the generation must be a positive safe integer. Every input
-returns `continue: true`. Missing or invalid input also supplies a fixed
-`systemMessage` explaining that Vivac context is unverified; it never reflects
-the input or claims the warning reached the model. Both cases exit successfully,
-without locating a tree or changing project files. This receipt checks the
-module-to-command path; it is not authentication or evidence of provider reception.
+the receipt from the native `UserPromptSubmit` input. The protocol must match,
+the status must be `ready` or `absent`, and the generation must be a positive
+safe integer; the fallback uses the same validation. Every input returns
+`continue: true`. Without a valid receipt, the guard tells the person once per
+session. When the fallback delivered the opening, it says that the module is
+not running and how to check it. Otherwise it also gives the model the
+fallback's notice, so an agent without an opening knows that it lacks one.
+Without a session identifier it warns on every prompt. It never reflects the
+input, never locates a tree, and changes no project files; its only writes are
+its marks in the temporary directory, named from a hash rather than the
+identifier. This receipt checks the module-to-command path; it is not
+authentication or evidence of provider reception.
 
-Setup installs `opening-reference-v5` and recognizes intact earlier versions
-for an explicit update. Existing installations retain their earlier behavior
-until the engine and owned bundle are updated. Doctor checks configuration
-and integrity without claiming reception or native execution control.
+Setup installs `opening-reference-v6` and the two fallback handlers in one
+transaction, and recognizes intact earlier versions for an explicit update.
+It never installs the fallback beside an earlier bundle: a module that does
+not pass the receipt down would make the fallback deliver a second copy.
+Existing installations retain their earlier behavior until the engine and
+owned bundle are updated. Doctor checks configuration and integrity without
+claiming reception or native execution control.
 
-`opening-reference-v5` changes only where the opening handler is declared.
+`opening-reference-v6` adds the receipt to the module's own openings. Each new
+child recipient is invalidated once before its opening, as the principal is,
+so every receipt carries a generation of at least 1.
+
+`opening-reference-v5` changed only where the opening handler is declared.
 Claude Code 2.1.330 refuses a hooks module that passes `$` to a function that
 is not declared at the top level of its file, and `opening-reference-v4`
 declared that handler inside `register`. The engine then ran none of the
@@ -1100,8 +1131,8 @@ An internal Rust ownership module implements inspection and pure plans for
 that boundary. Receipts must match canonical compiled definitions byte for byte;
 payload reads are limited to 1 MiB each and receipt reads to 16 KiB. The compiled
 catalog embeds the experimental manifest, hook definition and consumer with
-`include_str!` as `opening-reference-v5` and retains the exact
-`opening-reference-v1` through `opening-reference-v4` definitions for
+`include_str!` as `opening-reference-v6` and retains the exact
+`opening-reference-v1` through `opening-reference-v5` definitions for
 ownership checks. Setup can upgrade an intact previous bundle and undo any recognized
 version; edited payloads are never
 adopted as owned. Setup uses its update and undo plans;
