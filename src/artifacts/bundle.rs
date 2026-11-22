@@ -1674,28 +1674,26 @@ fn verify_directory_inner(
             };
             output.sync_all()?;
             receipt
+        } else if binary {
+            copy_binary_limit(&source.file, io::sink(), member.bytes)?
+        } else if is_media(&member.media_type) {
+            copy_media_with_policy(
+                &mut source.file,
+                io::sink(),
+                &member.media_type,
+                member.bytes,
+                &mut media_budget,
+                policy,
+                &mut inspection,
+            )?
         } else {
-            if binary {
-                copy_binary_limit(&source.file, io::sink(), member.bytes)?
-            } else if is_media(&member.media_type) {
-                copy_media_with_policy(
-                    &mut source.file,
-                    io::sink(),
-                    &member.media_type,
-                    member.bytes,
-                    &mut media_budget,
-                    policy,
-                    &mut inspection,
-                )?
-            } else {
-                copy_text_with_policy(
-                    &mut source.file,
-                    io::sink(),
-                    member.bytes,
-                    policy,
-                    &mut inspection,
-                )?
-            }
+            copy_text_with_policy(
+                &mut source.file,
+                io::sink(),
+                member.bytes,
+                policy,
+                &mut inspection,
+            )?
         };
         files::matching(&receipt.digest, receipt.size, &member.sha256, member.bytes)?;
         if is_media(&member.media_type) {
