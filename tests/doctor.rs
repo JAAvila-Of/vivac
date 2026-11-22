@@ -692,3 +692,45 @@ fn codex_subagent_doctor_reports_duplicates_without_disclosing_custom_commands()
         assert!(!r.to_string().contains("private-sentinel"));
     }
 }
+
+#[test]
+fn both_claude_opening_fallback_handlers_are_checked_without_claiming_reception() {
+    let c = Sandbox::new_seeded("doctor-opening-fallback");
+    c.ok(&["setup", "claude-code", "--yes"]);
+    let r = report(&c, Some("claude-code"), 0);
+    for name in ["claude-code SessionStart", "claude-code SubagentStart"] {
+        let entry = check(&r, name);
+        assert_eq!(entry["status"], "ok", "{name}");
+        let detail = entry["detail"].as_str().unwrap();
+        assert!(
+            detail.contains("execution is checked separately"),
+            "{detail}"
+        );
+        assert!(
+            !detail.contains("received") && !detail.contains("loaded"),
+            "{detail}"
+        );
+    }
+    let path = c.0.join(".claude/settings.json");
+    let original: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    for event in ["SessionStart", "SubagentStart"] {
+        let mut settings = original.clone();
+        settings["hooks"].as_object_mut().unwrap().remove(event);
+        std::fs::write(&path, settings.to_string()).unwrap();
+        let r = report(&c, Some("claude-code"), 1);
+        assert_eq!(
+            check(&r, &format!("claude-code {event}"))["status"],
+            "error"
+        );
+        let mut settings = original.clone();
+        settings["hooks"][event][0]["hooks"][0]["command"] =
+            "vivac session start --hook --context claude-fallback --private-variant".into();
+        std::fs::write(&path, settings.to_string()).unwrap();
+        let r = report(&c, Some("claude-code"), 0);
+        assert_eq!(
+            check(&r, &format!("claude-code {event}"))["status"],
+            "warning"
+        );
+        assert!(!r.to_string().contains("private-variant"));
+    }
+}

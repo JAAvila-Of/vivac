@@ -51,10 +51,13 @@ fn configured_opening(sandbox: &Sandbox, opening_dir: &Path, harness: &str) {
     let settings: Value =
         serde_json::from_str(&std::fs::read_to_string(opening_dir.join(file)).unwrap()).unwrap();
     if harness == "claude-code" {
-        assert!(
-            settings["hooks"].get("SessionStart").is_none(),
-            "{settings}"
-        );
+        for event in ["SessionStart", "SubagentStart"] {
+            assert_eq!(
+                settings["hooks"][event],
+                json!([{"hooks":[{"type":"command","command":"vivac session start --hook --context claude-fallback"}]}]),
+                "{settings}"
+            );
+        }
         let guards: Vec<_> = settings["hooks"]["UserPromptSubmit"]
             .as_array()
             .unwrap()
@@ -89,7 +92,7 @@ fn configured_opening(sandbox: &Sandbox, opening_dir: &Path, harness: &str) {
         )
         .unwrap();
         assert_eq!(receipt["schema"], 1);
-        assert_eq!(receipt["version"], "opening-reference-v4");
+        assert_eq!(receipt["version"], "opening-reference-v6");
         assert_eq!(receipt["files"].as_object().unwrap().len(), 3);
         return;
     }

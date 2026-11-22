@@ -24,6 +24,11 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
+function withoutReceipt(event) {
+  const { vivac_opening: _receipt, ...rest } = event;
+  return rest;
+}
+
 function ready(context) {
   return { exitCode: 0, stdout: JSON.stringify({ protocol, status: 'ready', context }) };
 }
@@ -167,13 +172,15 @@ for (const name of nativeEvents) {
 }
 
 test('the reviewed opening bundle has the expected candidate bytes', () => {
-  assert.equal(candidateSha256, '7D064161DBB079F1584013186F7A9F6DBEAF8815E22CF5A026950D29B77E0E4A');
+  assert.equal(candidateSha256, '411ED20E3D543DAB247F16071D2C6428BCF1C9075C6D9C399E0BDC0F7FE2676E');
 });
 
 for (const [version, digest] of [
   ['v1', 'B4BB19565116606AFD310765AC16FF46A336294AD38BD905915D91035068E376'],
   ['v3', 'AA0C9DC2BA5C348D65CFEF17F891ABA3B9853B555D0D9E71B56E1100F33C6F07'],
   ['v3-release', '7A3AFC91606D1E756BACABAEFF84B98A3415392865DCB0E6BFBED946B58C84AF'],
+  ['v4', '7D064161DBB079F1584013186F7A9F6DBEAF8815E22CF5A026950D29B77E0E4A'],
+  ['v5', '7AEB69086FEC67F58714DED736B05B210E06374B0C51FCEF21E22981729FA8DF'],
 ]) {
   test(`the historical opening reference preserves the exact ${version} bytes`, async () => {
     const path = new URL(`../src/setup/claude-opening-versions/opening-reference-${version}/hooks/register.mjs`, import.meta.url);
@@ -285,7 +292,9 @@ for (const recipient of ['root', 'child']) {
     const real = { additionalContext: [foreignA], retained: {} };
     const next = nextResult(real);
     assert.strictEqual(await h.invoke(recipient === 'root' ? 'classic.SessionStart' : 'classic.SubagentStart', event, next), real);
-    assert.deepEqual(next.calls, [event]);
+    assert.equal(next.calls.length, 1);
+    assert.deepEqual(withoutReceipt(next.calls[0]), event);
+    assert.equal(next.calls[0].vivac_opening.status, 'blocked');
     assert.equal(JSON.stringify(real).includes(producerDiagnostic), false);
     assertNativeFlow(h);
   });
@@ -411,7 +420,8 @@ for (const name of ['classic.SessionStart', 'classic.SubagentStart', 'prompt.att
       const next = nextResult(() => { if (kind === 'throw') throw error; return Promise.reject(error); });
       await assert.rejects(async () => h.invoke(name, event, next), value => value === error);
       assert.equal(next.calls.length, 1);
-      if (name !== 'classic.UserPromptSubmit') assert.strictEqual(next.calls[0], event);
+      if (name === 'classic.SessionStart' || name === 'classic.SubagentStart') assert.deepEqual(withoutReceipt(next.calls[0]), event);
+      else if (name !== 'classic.UserPromptSubmit') assert.strictEqual(next.calls[0], event);
       assertNativeFlow(h);
     });
   }
@@ -490,7 +500,8 @@ for (const stage of ['producer', 'opening downstream', 'attachment before', 'att
     const real = { additionalContext: [foreignA], retained: true };
     const next = nextResult(() => { if (stage === 'opening downstream') controller.abort(); return real; }, controller.signal);
     const opened = await h.invoke('classic.SessionStart', event, next);
-    assert.deepEqual(next.calls, [event]);
+    assert.equal(next.calls.length, 1);
+    assert.deepEqual(withoutReceipt(next.calls[0]), event);
     if (stage.startsWith('attachment')) {
       assert.deepEqual(opened.additionalContext, [foreignA, marker]);
       if (stage === 'attachment before') controller.abort();
@@ -552,4 +563,64 @@ test('receipts describe preparation, replace forged metadata and never claim pro
   controller.abort();
   assert.equal((await h.receipt(event, controller.signal)).vivac_opening.status, 'blocked');
   assertNativeFlow(h);
+});
+
+// Mirrors the rule `claude plugin validate` enforces on Claude Code 2.1.330; it does not prove native loading.
+test('every function the module hands $ to is declared at the top level', async () => {
+  const source = await readFile(candidatePath, 'utf8');
+  const topLevel = new Set(
+    [...source.matchAll(/^(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(/gm)].map((match) => match[1]),
+  );
+  const handed = [...source.matchAll(/(?<!function\s)(?<![\w$.])([A-Za-z_$][\w$]*)\(\$\s*[,)]/g)].map((match) => match[1]);
+  assert.ok(handed.length > 0);
+  for (const name of handed) {
+    assert.ok(topLevel.has(name), `${name} receives $ but is not declared at the top level`);
+  }
+});
+
+function openingNext(value = { additionalContext: [foreignA] }) {
+  return nextResult(value);
+}
+
+for (const [state, produced, status] of [
+  ['ready', () => ready(contextA), 'ready'],
+  ['absent', () => ({ exitCode: 0, stdout: JSON.stringify({ protocol, status: 'absent' }) }), 'absent'],
+  ['blocked', () => ({ exitCode: 1, stdout: producerDiagnostic }), 'blocked'],
+]) {
+  test(`SessionStart hands next a ${state} receipt for the opening it prepared`, async () => {
+    const h = harness(async () => produced());
+    const event = { session_id: 'A', source: 'startup', cwd: 'synthetic-fixture', retained: {} };
+    const next = openingNext();
+    await h.invoke('classic.SessionStart', event, next);
+    assert.equal(next.calls.length, 1);
+    assert.notStrictEqual(next.calls[0], event);
+    assert.strictEqual(next.calls[0].retained, event.retained);
+    assert.equal(Object.hasOwn(event, 'vivac_opening'), false);
+    assert.deepEqual(next.calls[0].vivac_opening, { protocol, status, generation: 1 });
+  });
+
+  test(`SubagentStart hands next a ${state} receipt with a positive generation`, async () => {
+    const h = harness(async () => produced());
+    const event = { agent_id: 'child-1', cwd: 'child-fixture' };
+    const next = openingNext();
+    await h.invoke('classic.SubagentStart', event, next);
+    assert.equal(next.calls.length, 1);
+    assert.deepEqual(next.calls[0].vivac_opening, { protocol, status, generation: 1 });
+    assert.equal(Object.hasOwn(event, 'vivac_opening'), false);
+  });
+}
+
+test('a forged receipt on a start event is replaced and a stale opening reports blocked', async () => {
+  const h = harness();
+  const next = openingNext();
+  await h.invoke('classic.SessionStart', { session_id: 'A', source: 'startup', vivac_opening: { status: 'forged' } }, next);
+  assert.deepEqual(next.calls[0].vivac_opening, { protocol, status: 'ready', generation: 1 });
+  const pending = deferred();
+  const stale = harness(async () => { await pending.promise; return ready(contextA); });
+  const staleNext = openingNext();
+  const first = stale.invoke('classic.SessionStart', { session_id: 'A', source: 'startup' }, staleNext);
+  stale.invoke('session.end', {}, openingNext());
+  pending.resolve();
+  await first;
+  assert.deepEqual(staleNext.calls[0].vivac_opening, { protocol, status: 'blocked', generation: 2 });
 });

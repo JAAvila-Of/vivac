@@ -88,7 +88,7 @@ fn opening_bundle_installs_exact_payloads_and_a_current_run_preserves_bytes() {
     );
     let receipt: serde_json::Value = serde_json::from_slice(&read_bytes(&paths[3])).unwrap();
     assert_eq!(receipt["schema"], 1);
-    assert_eq!(receipt["version"], "opening-reference-v4");
+    assert_eq!(receipt["version"], "opening-reference-v6");
     assert_eq!(receipt["files"].as_object().unwrap().len(), 3);
     let before = paths.map(|path| read_bytes(&path));
     let settings = read_bytes(&settings_path(&c));
@@ -133,6 +133,18 @@ fn restore_previous_opening_bundle(c: &Sandbox, version: &str) {
             ("hooks/hooks.json", include_bytes!("../src/setup/claude-opening-versions/opening-reference-v3-release/hooks/hooks.json")),
             ("hooks/register.mjs", include_bytes!("../src/setup/claude-opening-versions/opening-reference-v3-release/hooks/register.mjs")),
         ]
+    } else if version == "opening-reference-v4" {
+        [
+            (".claude-plugin/plugin.json", include_bytes!("../src/setup/claude-opening-versions/opening-reference-v4/.claude-plugin/plugin.json")),
+            ("hooks/hooks.json", include_bytes!("../src/setup/claude-opening-versions/opening-reference-v4/hooks/hooks.json")),
+            ("hooks/register.mjs", include_bytes!("../src/setup/claude-opening-versions/opening-reference-v4/hooks/register.mjs")),
+        ]
+    } else if version == "opening-reference-v5" {
+        [
+            (".claude-plugin/plugin.json", include_bytes!("../src/setup/claude-opening-versions/opening-reference-v5/.claude-plugin/plugin.json")),
+            ("hooks/hooks.json", include_bytes!("../src/setup/claude-opening-versions/opening-reference-v5/hooks/hooks.json")),
+            ("hooks/register.mjs", include_bytes!("../src/setup/claude-opening-versions/opening-reference-v5/hooks/register.mjs")),
+        ]
     } else {
         assert_eq!(version, "opening-reference-v3");
         [
@@ -166,6 +178,8 @@ fn previous_opening_bundle_updates_and_undoes_without_adopting_edits() {
         "opening-reference-v2",
         "opening-reference-v3",
         "opening-reference-v3-release",
+        "opening-reference-v4",
+        "opening-reference-v5",
     ] {
         for action in ["update", "undo", "edited"] {
             let c = Sandbox::new_seeded("setup-opening-previous");
@@ -200,7 +214,7 @@ fn previous_opening_bundle_updates_and_undoes_without_adopting_edits() {
                 );
                 let receipt: serde_json::Value =
                     serde_json::from_slice(&read_bytes(&paths[3])).unwrap();
-                assert_eq!(receipt["version"], "opening-reference-v4");
+                assert_eq!(receipt["version"], "opening-reference-v6");
                 c.ok(&["setup", "claude-code", "--undo", "--yes"]);
                 assert!(bundle_paths(&c).iter().all(|path| !path.exists()));
             }
@@ -226,11 +240,15 @@ fn legacy_migration_preserves_mixed_group_metadata_foreign_handlers_and_order() 
     let after: serde_json::Value = serde_json::from_str(&read(&settings_path(&c))).unwrap();
     assert_eq!(after["other"], true);
     let groups = after["hooks"]["SessionStart"].as_array().unwrap();
-    assert_eq!(groups.len(), 2);
+    assert_eq!(groups.len(), 3);
     assert_eq!(groups[0]["matcher"], "startup");
     assert_eq!(groups[0]["groupField"], "preserved");
     assert_eq!(groups[0]["hooks"], serde_json::json!([first, second]));
     assert_eq!(groups[1], settings["hooks"]["SessionStart"][2]);
+    assert_eq!(
+        groups[2],
+        serde_json::json!({"hooks":[{"type":"command","command":OPENING_FALLBACK}]})
+    );
     let mut with_typed_foreign = after.clone();
     with_typed_foreign["hooks"]["SessionStart"][0]["hooks"]
         .as_array_mut()
@@ -635,7 +653,11 @@ fn a_project_with_legacy_hooks_migrates_start_and_keeps_stop() {
     assert!(!out.contains("already has all three hooks"), "{out}");
 
     let after: serde_json::Value = serde_json::from_str(&read(&settings_path(&c))).unwrap();
-    assert!(after["hooks"].get("SessionStart").is_none(), "{after}");
+    assert_eq!(
+        after["hooks"]["SessionStart"],
+        serde_json::json!([{"hooks":[{"type":"command","command":OPENING_FALLBACK}]}]),
+        "{after}"
+    );
     assert_eq!(
         after["hooks"]["Stop"].as_array().unwrap().len(),
         1,
@@ -2277,4 +2299,231 @@ fn agents_added_after_setup_are_discovered_without_repeating_setup() {
     assert!(!out.contains("Return evidence."), "{out}");
     assert_eq!(read(&path), native);
     assert_eq!(c.log(), before);
+}
+
+// ---------------------------------------------------------------------------
+// The command fallback for the opening: one handler on each start event.
+// ---------------------------------------------------------------------------
+
+const OPENING_FALLBACK: &str = "vivac session start --hook --context claude-fallback";
+
+fn fallback_handlers(settings: &serde_json::Value, event: &str) -> Vec<serde_json::Value> {
+    settings["hooks"][event]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|group| group["hooks"].as_array().into_iter().flatten().cloned())
+        .filter(|handler| handler["command"] == OPENING_FALLBACK)
+        .collect()
+}
+
+fn the_exact_handler() -> serde_json::Value {
+    serde_json::json!({"type":"command","command":OPENING_FALLBACK})
+}
+
+#[test]
+fn a_fresh_install_lists_and_writes_the_opening_fallback_with_the_current_bundle() {
+    let c = Sandbox::new_seeded("setup-fallback-fresh");
+    let (preview, code) = c.run(&["setup", "claude-code", "--dry-run"]);
+    assert_eq!(code, 0, "{preview}");
+    assert!(preview.contains("SessionStart"), "{preview}");
+    assert!(preview.contains("SubagentStart"), "{preview}");
+    assert_eq!(preview.matches(OPENING_FALLBACK).count(), 2, "{preview}");
+    assert!(!settings_path(&c).exists());
+
+    c.ok(&["setup", "claude-code", "--yes"]);
+    let settings: serde_json::Value = serde_json::from_str(&read(&settings_path(&c))).unwrap();
+    for event in ["SessionStart", "SubagentStart"] {
+        assert_eq!(
+            fallback_handlers(&settings, event),
+            vec![the_exact_handler()],
+            "{event}"
+        );
+        assert_eq!(
+            settings["hooks"][event].as_array().unwrap().len(),
+            1,
+            "{event}"
+        );
+    }
+    let receipt: serde_json::Value =
+        serde_json::from_slice(&read_bytes(&bundle_paths(&c)[3])).unwrap();
+    assert_eq!(receipt["version"], "opening-reference-v6");
+    let before = read_bytes(&settings_path(&c));
+    let out = c.ok(&["setup", "claude-code", "--yes"]);
+    assert!(out.contains("Nothing to write"), "{out}");
+    assert_eq!(read_bytes(&settings_path(&c)), before);
+}
+
+#[test]
+fn an_older_bundle_is_upgraded_together_with_the_opening_fallback() {
+    for version in ["opening-reference-v4", "opening-reference-v5"] {
+        let c = Sandbox::new_seeded("setup-fallback-upgrade");
+        c.ok(&["setup", "claude-code", "--yes"]);
+        restore_previous_opening_bundle(&c, version);
+        // What an earlier setup left: the other three hooks, no fallback.
+        let mut settings: serde_json::Value =
+            serde_json::from_str(&read(&settings_path(&c))).unwrap();
+        settings["hooks"]
+            .as_object_mut()
+            .unwrap()
+            .remove("SessionStart");
+        settings["hooks"]
+            .as_object_mut()
+            .unwrap()
+            .remove("SubagentStart");
+        std::fs::write(settings_path(&c), settings.to_string()).unwrap();
+        let (preview, code) = c.run(&["setup", "claude-code", "--dry-run"]);
+        assert_eq!(code, 0, "{preview}");
+        assert_eq!(preview.matches(OPENING_FALLBACK).count(), 2, "{preview}");
+        assert_eq!(read(&settings_path(&c)), settings.to_string());
+        c.ok(&["setup", "claude-code", "--yes"]);
+        let after: serde_json::Value = serde_json::from_str(&read(&settings_path(&c))).unwrap();
+        for event in ["SessionStart", "SubagentStart"] {
+            assert_eq!(
+                fallback_handlers(&after, event),
+                vec![the_exact_handler()],
+                "{version} {event}"
+            );
+        }
+        let receipt: serde_json::Value =
+            serde_json::from_slice(&read_bytes(&bundle_paths(&c)[3])).unwrap();
+        assert_eq!(receipt["version"], "opening-reference-v6");
+    }
+}
+
+#[test]
+fn the_fallback_never_lands_next_to_an_older_edited_bundle() {
+    let c = Sandbox::new_seeded("setup-fallback-edited");
+    c.ok(&["setup", "claude-code", "--yes"]);
+    restore_previous_opening_bundle(&c, "opening-reference-v5");
+    std::fs::write(&bundle_paths(&c)[2], "export const edited = true;\n").unwrap();
+    let mut settings: serde_json::Value = serde_json::from_str(&read(&settings_path(&c))).unwrap();
+    settings["hooks"]
+        .as_object_mut()
+        .unwrap()
+        .remove("SessionStart");
+    settings["hooks"]
+        .as_object_mut()
+        .unwrap()
+        .remove("SubagentStart");
+    std::fs::write(settings_path(&c), settings.to_string()).unwrap();
+    let (out, code) = c.run(&["setup", "claude-code", "--yes"]);
+    assert_ne!(code, 0, "{out}");
+    assert_eq!(read(&settings_path(&c)), settings.to_string());
+}
+
+#[test]
+fn undo_removes_the_opening_fallback_and_keeps_foreign_handlers() {
+    let c = Sandbox::new_seeded("setup-fallback-undo");
+    c.ok(&["setup", "claude-code", "--yes"]);
+    let mut settings: serde_json::Value = serde_json::from_str(&read(&settings_path(&c))).unwrap();
+    let foreign = serde_json::json!({"type":"command","command":"foreign-tool"});
+    for event in ["SessionStart", "SubagentStart"] {
+        settings["hooks"][event][0]["hooks"]
+            .as_array_mut()
+            .unwrap()
+            .push(foreign.clone());
+    }
+    std::fs::write(settings_path(&c), settings.to_string()).unwrap();
+    let (preview, code) = c.run(&["setup", "claude-code", "--undo", "--dry-run"]);
+    assert_eq!(code, 0, "{preview}");
+    assert_eq!(preview.matches(OPENING_FALLBACK).count(), 0, "{preview}");
+    assert!(preview.contains("SubagentStart"), "{preview}");
+    c.ok(&["setup", "claude-code", "--undo", "--yes"]);
+    let after: serde_json::Value = serde_json::from_str(&read(&settings_path(&c))).unwrap();
+    for event in ["SessionStart", "SubagentStart"] {
+        assert_eq!(
+            after["hooks"][event][0]["hooks"],
+            serde_json::json!([foreign]),
+            "{event}"
+        );
+    }
+    assert!(!read(&settings_path(&c)).contains("claude-fallback"));
+    assert!(bundle_paths(&c).iter().all(|path| !path.exists()));
+}
+
+#[test]
+fn undo_of_a_fresh_install_leaves_no_settings_file() {
+    let c = Sandbox::new_seeded("setup-fallback-undo-empty");
+    c.ok(&["setup", "claude-code", "--yes"]);
+    c.ok(&["setup", "claude-code", "--undo", "--yes"]);
+    assert!(!settings_path(&c).exists());
+}
+
+#[test]
+fn another_start_command_is_custom_and_blocks_setup_without_a_write_or_disclosure() {
+    for (event, command) in [
+        (
+            "SessionStart",
+            "vivac session start --hook --context claude-fallback --private-sentinel",
+        ),
+        (
+            "SessionStart",
+            "vivac session start --hook --context codex --private-sentinel",
+        ),
+        (
+            "SubagentStart",
+            "vivac session start --hook --private-sentinel",
+        ),
+        ("SubagentStart", SESSION_START),
+        (
+            "SubagentStart",
+            "C:/tools/vivac.exe session start --hook --context claude-fallback",
+        ),
+    ] {
+        let c = Sandbox::new_seeded("setup-fallback-custom");
+        std::fs::create_dir_all(c.0.join(".claude")).unwrap();
+        let mut settings = serde_json::json!({"hooks":{}});
+        settings["hooks"][event] =
+            serde_json::json!([{"hooks":[{"type":"command","command":command}]}]);
+        let original = settings.to_string();
+        std::fs::write(settings_path(&c), &original).unwrap();
+        let (out, code) = c.run(&["setup", "claude-code", "--yes"]);
+        assert_ne!(code, 0, "{event} {command}: {out}");
+        assert!(!out.contains("private-sentinel"), "{out}");
+        assert_eq!(read(&settings_path(&c)), original);
+        assert!(!mcp_path(&c).exists());
+        assert!(!c.0.join(".claude/skills").exists());
+    }
+}
+
+#[test]
+fn undo_keeps_custom_start_commands_and_warns_that_they_may_still_run() {
+    let c = Sandbox::new_seeded("setup-fallback-custom-undo");
+    c.ok(&["setup", "claude-code", "--yes"]);
+    let mut settings: serde_json::Value = serde_json::from_str(&read(&settings_path(&c))).unwrap();
+    let custom = serde_json::json!({"type":"command","command":"vivac session start --hook --context claude-fallback --private-custom"});
+    settings["hooks"]["SubagentStart"][0]["hooks"]
+        .as_array_mut()
+        .unwrap()
+        .insert(0, custom.clone());
+    std::fs::write(settings_path(&c), settings.to_string()).unwrap();
+    let out = c.ok(&["setup", "claude-code", "--undo", "--yes"]);
+    assert!(out.contains("may still execute"), "{out}");
+    assert!(!out.contains("private-custom"), "{out}");
+    let after: serde_json::Value = serde_json::from_str(&read(&settings_path(&c))).unwrap();
+    assert_eq!(
+        after["hooks"]["SubagentStart"][0]["hooks"],
+        serde_json::json!([custom])
+    );
+    assert!(after["hooks"].get("SessionStart").is_none(), "{after}");
+}
+
+#[test]
+fn the_legacy_start_command_is_replaced_by_the_fallback_on_session_start() {
+    let c = Sandbox::new_seeded("setup-fallback-legacy");
+    std::fs::create_dir_all(c.0.join(".claude")).unwrap();
+    let settings = serde_json::json!({"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":SESSION_START}]}]}});
+    std::fs::write(settings_path(&c), settings.to_string()).unwrap();
+    c.ok(&["setup", "claude-code", "--yes"]);
+    let after: serde_json::Value = serde_json::from_str(&read(&settings_path(&c))).unwrap();
+    assert!(!read(&settings_path(&c)).contains(&format!("\"{SESSION_START}\"")));
+    assert_eq!(
+        fallback_handlers(&after, "SessionStart"),
+        vec![the_exact_handler()]
+    );
+    assert_eq!(
+        fallback_handlers(&after, "SubagentStart"),
+        vec![the_exact_handler()]
+    );
 }

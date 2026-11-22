@@ -31,6 +31,7 @@ const MCP_LABEL: &str = ".mcp.json";
 const SKILL_LABEL: &str = ".claude/skills/vivac-migrate/SKILL.md";
 
 const SESSION_START_COMMAND: &str = "vivac session start --hook";
+const SESSION_FALLBACK_COMMAND: &str = "vivac session start --hook --context claude-fallback";
 const SESSION_GUARD_COMMAND: &str = "vivac session guard --hook";
 const SESSION_END_COMMAND: &str = "vivac session end --hook";
 const SESSION_PROMPT_COMMAND: &str = "vivac session prompt --hook";
@@ -238,6 +239,56 @@ fn managed_hook_state(
     } else {
         HookState::Missing
     })
+}
+
+/// What the vivac `session start` hooks under one start event are: the
+/// legacy command (only `SessionStart` ever carried it) and the opening
+/// fallback. Any other `vivac session start ...` is custom and refuses the
+/// run, so nothing is rewritten around a command a person has to review.
+struct StartHandlers {
+    legacy: bool,
+    fallback: bool,
+}
+
+fn managed_start_handlers(
+    root: &Value,
+    event: &str,
+    legacy_allowed: bool,
+) -> Result<StartHandlers, Failure> {
+    let mut found = StartHandlers {
+        legacy: false,
+        fallback: false,
+    };
+    for handler in root
+        .get("hooks")
+        .and_then(|hooks| hooks.get(event))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .flat_map(|group| {
+            group
+                .get("hooks")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+        })
+    {
+        let Some(command) = handler.get("command").and_then(Value::as_str) else {
+            continue;
+        };
+        if !is_session_command(command, "start") {
+            continue;
+        }
+        let command_type = handler.get("type").and_then(Value::as_str) == Some("command");
+        if command_type && command == SESSION_FALLBACK_COMMAND {
+            found.fallback = true;
+        } else if command_type && legacy_allowed && command == SESSION_START_COMMAND {
+            found.legacy = true;
+        } else {
+            return Err(Failure::Model("Conflicting Claude Code opening or guard command. Review project hooks before setup.\n\n  Nothing written.".into()));
+        }
+    }
+    Ok(found)
 }
 
 fn remove_managed_hook(root: &mut Value, event: &str, command: &str) -> bool {
@@ -836,19 +887,17 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     }
 
     let settings_root = settings.value.clone().unwrap();
-    let legacy_hook_state = managed_hook_state(
-        &settings_root,
-        "SessionStart",
-        "start",
-        SESSION_START_COMMAND,
-    )?;
+    let session_start_handlers = managed_start_handlers(&settings_root, "SessionStart", true)?;
+    let subagent_start_handlers = managed_start_handlers(&settings_root, "SubagentStart", false)?;
     let guard_hook_state = managed_hook_state(
         &settings_root,
         "UserPromptSubmit",
         "guard",
         SESSION_GUARD_COMMAND,
     )?;
-    let legacy_present = matches!(legacy_hook_state, HookState::Exact);
+    let legacy_present = session_start_handlers.legacy;
+    let session_fallback_missing = !session_start_handlers.fallback;
+    let subagent_fallback_missing = !subagent_start_handlers.fallback;
     let stop_hook_state = hook_state(&settings_root, "Stop", "end", SESSION_END_COMMAND);
     let prompt_hook_state = hook_state(
         &settings_root,
@@ -867,6 +916,8 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     );
 
     let nothing_to_write = !guard_missing
+        && !session_fallback_missing
+        && !subagent_fallback_missing
         && !stop_missing
         && !prompt_missing
         && !mcp_missing
@@ -892,6 +943,8 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
             guard_missing,
             stop_missing,
             prompt_missing,
+            session_fallback_missing,
+            subagent_fallback_missing,
             &mcp_server_state,
             &skill_file_state,
             &agents_skill,
@@ -962,7 +1015,13 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
     // planting, the lane, the version lock and `.gitignore` are `init`'s
     // alone now, and this run never reaches any of them.
     let mut writes = Vec::new();
-    if guard_missing || stop_missing || prompt_missing || legacy_present {
+    if guard_missing
+        || stop_missing
+        || prompt_missing
+        || legacy_present
+        || session_fallback_missing
+        || subagent_fallback_missing
+    {
         let mut new_settings = settings_root.clone();
         remove_managed_hook(&mut new_settings, "SessionStart", SESSION_START_COMMAND);
         if guard_missing {
@@ -981,6 +1040,22 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
                 &mut new_settings,
                 "UserPromptSubmit",
                 SESSION_PROMPT_COMMAND,
+                None,
+            );
+        }
+        if session_fallback_missing {
+            append_hook(
+                &mut new_settings,
+                "SessionStart",
+                SESSION_FALLBACK_COMMAND,
+                None,
+            );
+        }
+        if subagent_fallback_missing {
+            append_hook(
+                &mut new_settings,
+                "SubagentStart",
+                SESSION_FALLBACK_COMMAND,
                 None,
             );
         }
@@ -1043,6 +1118,8 @@ fn apply(roots: &super::Roots, a: &Args) -> Result<i32, Failure> {
         connection: guard_missing
             || stop_missing
             || prompt_missing
+            || session_fallback_missing
+            || subagent_fallback_missing
             || mcp_missing
             || legacy_present
             || bundle_changed,
@@ -1102,6 +1179,8 @@ fn plan_items(
     guard_missing: bool,
     stop_missing: bool,
     prompt_missing: bool,
+    session_fallback_missing: bool,
+    subagent_fallback_missing: bool,
     mcp_server_state: &McpState,
     skill_file_state: &SkillState,
     agents_skill: &super::agents_skill::Skill,
@@ -1111,6 +1190,9 @@ fn plan_items(
 
     let (settings_verb, settings_what) =
         match (settings_exists, guard_missing, stop_missing, prompt_missing) {
+            (_, false, false, false) if session_fallback_missing || subagent_fallback_missing => {
+                ("add", "the opening fallback handlers")
+            }
             (_, false, false, false) => ("keep", "already has all three hooks"),
             (_, true, false, false) => ("add", "the UserPromptSubmit guard"),
             (_, false, true, false) => ("add", "the Stop hook"),
@@ -1148,6 +1230,12 @@ fn plan_items(
                 settings_item.with_sub("UserPromptSubmit", format!("already runs  {cmd}"))
         }
         HookState::Exact => {}
+    }
+    if session_fallback_missing {
+        settings_item = settings_item.with_sub("SessionStart", SESSION_FALLBACK_COMMAND);
+    }
+    if subagent_fallback_missing {
+        settings_item = settings_item.with_sub("SubagentStart", SESSION_FALLBACK_COMMAND);
     }
     items.push(settings_item);
 
@@ -1553,12 +1641,6 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
     }
 
     let settings_root = settings.value.clone().unwrap();
-    let start_hook_state = hook_state(
-        &settings_root,
-        "SessionStart",
-        "start",
-        SESSION_START_COMMAND,
-    );
     let stop_hook_state = hook_state(&settings_root, "Stop", "end", SESSION_END_COMMAND);
     let prompt_hook_state = hook_state(
         &settings_root,
@@ -1572,19 +1654,24 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
 
     let mut opening_preview = settings_root.clone();
     let start_ours =
-        remove_managed_hook(&mut opening_preview, "SessionStart", SESSION_START_COMMAND);
+        remove_managed_hook(&mut opening_preview, "SessionStart", SESSION_START_COMMAND)
+            | remove_managed_hook(
+                &mut opening_preview,
+                "SessionStart",
+                SESSION_FALLBACK_COMMAND,
+            );
+    let subagent_ours = remove_managed_hook(
+        &mut opening_preview,
+        "SubagentStart",
+        SESSION_FALLBACK_COMMAND,
+    );
     let guard_ours = remove_managed_hook(
         &mut opening_preview,
         "UserPromptSubmit",
         SESSION_GUARD_COMMAND,
     );
-    let other_start = managed_hook_state(
-        &settings_root,
-        "SessionStart",
-        "start",
-        SESSION_START_COMMAND,
-    )
-    .is_err();
+    let other_start = managed_start_handlers(&settings_root, "SessionStart", true).is_err();
+    let other_subagent = managed_start_handlers(&settings_root, "SubagentStart", false).is_err();
     let other_guard = managed_hook_state(
         &settings_root,
         "UserPromptSubmit",
@@ -1597,6 +1684,7 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
     let mcp_ours = matches!(mcp_server_state, McpState::Ours);
 
     let nothing_to_undo = !start_ours
+        && !subagent_ours
         && !stop_ours
         && !prompt_ours
         && !mcp_ours
@@ -1607,7 +1695,7 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
         && bundle.writes.is_empty()
         && !bundle_kept;
     if nothing_to_undo {
-        if other_start || other_guard {
+        if other_start || other_subagent || other_guard {
             outln!("Warning: custom opening or guard commands are kept and may still execute.");
         }
         outln!("Nothing to undo: none of what setup writes is here.");
@@ -1616,9 +1704,6 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
 
     // Preview the settings.json result to know whether it empties out.
     let mut preview = opening_preview;
-    if start_ours {
-        remove_managed_hook(&mut preview, "SessionStart", SESSION_START_COMMAND);
-    }
     if stop_ours {
         remove_hook(&mut preview, "Stop", SESSION_END_COMMAND);
     }
@@ -1634,26 +1719,39 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
             .as_object()
             .is_some_and(|s: &[(String, Value)]| s.is_empty());
 
-    let (settings_verb, settings_what): (&'static str, &'static str) =
-        match (start_ours || guard_ours, stop_ours, prompt_ours) {
-            (true, true, true) if settings_becomes_empty => (
-                "remove",
-                "the three hooks setup wrote; nothing else is left, so it goes",
-            ),
-            (true, true, true) => ("remove", "the three hooks setup wrote"),
-            (true, true, false) | (true, false, true) | (false, true, true) => {
-                ("remove", "the two hooks setup wrote")
-            }
-            (true, false, false) if guard_ours => ("remove", "the UserPromptSubmit guard"),
-            (true, false, false) => ("remove", "the SessionStart hook"),
-            (false, true, false) => ("remove", "the Stop hook"),
-            (false, false, true) => ("remove", "the UserPromptSubmit hook"),
-            (false, false, false) => ("keep", "left as it is"),
-        };
+    let (settings_verb, settings_what): (&'static str, &'static str) = match (
+        start_ours || subagent_ours || guard_ours,
+        stop_ours,
+        prompt_ours,
+    ) {
+        (true, true, true) if settings_becomes_empty => (
+            "remove",
+            "the three hooks setup wrote; nothing else is left, so it goes",
+        ),
+        (true, true, true) => ("remove", "the three hooks setup wrote"),
+        (true, true, false) | (true, false, true) | (false, true, true) => {
+            ("remove", "the two hooks setup wrote")
+        }
+        (true, false, false) if guard_ours => ("remove", "the UserPromptSubmit guard"),
+        (true, false, false) => ("remove", "the SessionStart hook"),
+        (false, true, false) => ("remove", "the Stop hook"),
+        (false, false, true) => ("remove", "the UserPromptSubmit hook"),
+        (false, false, false) => ("keep", "left as it is"),
+    };
     let mut settings_item = PlanItem::new(settings_verb, SETTINGS_LABEL, settings_what);
-    if let HookState::Different(_) = &start_hook_state {
+    if start_ours {
+        settings_item = settings_item.with_sub("SessionStart", "the opening fallback handler");
+    }
+    if subagent_ours {
+        settings_item = settings_item.with_sub("SubagentStart", "the opening fallback handler");
+    }
+    if other_start {
         settings_item =
             settings_item.with_sub("SessionStart", "runs vivac another way; left as it is");
+    }
+    if other_subagent {
+        settings_item =
+            settings_item.with_sub("SubagentStart", "runs vivac another way; left as it is");
     }
     if let HookState::Different(_) = &stop_hook_state {
         settings_item = settings_item.with_sub("Stop", "runs vivac another way; left as it is");
@@ -1700,7 +1798,7 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
     }
     let mut s = heading(Stream::Out, "vivac setup claude-code --undo", here);
     s.push_str(&render_items(Stream::Out, &items));
-    if other_start || other_guard {
+    if other_start || other_subagent || other_guard {
         s.push_str("\nWarning: custom opening or guard commands are kept and may still execute.\n");
     }
 
@@ -1730,7 +1828,7 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
     // Every change -- a rewrite or a removal -- is one commit, the same
     // all-or-nothing guarantee `apply` gives (`t565` §7.6).
     let mut writes = Vec::new();
-    if start_ours || stop_ours || prompt_ours || guard_ours {
+    if start_ours || subagent_ours || stop_ours || prompt_ours || guard_ours {
         let original = settings.raw.clone().into_bytes();
         if settings_becomes_empty {
             writes.push(super::PlannedWrite::delete(
@@ -1741,6 +1839,10 @@ fn undo(here: &Path, a: &Args) -> Result<i32, Failure> {
             let mut new_settings = settings_root.clone();
             if start_ours {
                 remove_managed_hook(&mut new_settings, "SessionStart", SESSION_START_COMMAND);
+                remove_managed_hook(&mut new_settings, "SessionStart", SESSION_FALLBACK_COMMAND);
+            }
+            if subagent_ours {
+                remove_managed_hook(&mut new_settings, "SubagentStart", SESSION_FALLBACK_COMMAND);
             }
             if guard_ours {
                 remove_managed_hook(&mut new_settings, "UserPromptSubmit", SESSION_GUARD_COMMAND);
