@@ -81,6 +81,33 @@ function normalizeOwned(result, reference) {
   return result;
 }
 
+async function open($, event, next, state, input, allowed) {
+  const token = state.generation;
+  state.phase = 'pending';
+  let prepared = { phase: 'blocked', snapshot: null };
+  try {
+    const options = { stdin: JSON.stringify(input), timeoutMs: 5000 };
+    if (typeof event.cwd === 'string') options.cwd = event.cwd;
+    const produced = await $.process.run(['vivac', 'session', 'start', '--hook', '--context', 'claude-module'], options);
+    if (current(state, token, next)) prepared = preparation(produced, allowed);
+  } catch {
+    if (token === state.generation) invalidate(state);
+  }
+  let result;
+  try {
+    result = await next(event);
+  } catch (error) {
+    if (token === state.generation) invalidate(state);
+    throw error;
+  }
+  try {
+    return publish(state, token, next, result, prepared);
+  } catch {
+    if (token === state.generation) invalidate(state);
+    return result;
+  }
+}
+
 export function register(on) {
   const root = recipient(marker);
   const children = new Map();
@@ -89,33 +116,6 @@ export function register(on) {
     invalidate(root);
     for (const child of children.values()) invalidate(child);
     children.clear();
-  }
-
-  async function open($, event, next, state, input, allowed) {
-    const token = state.generation;
-    state.phase = 'pending';
-    let prepared = { phase: 'blocked', snapshot: null };
-    try {
-      const options = { stdin: JSON.stringify(input), timeoutMs: 5000 };
-      if (typeof event.cwd === 'string') options.cwd = event.cwd;
-      const produced = await $.process.run(['vivac', 'session', 'start', '--hook', '--context', 'claude-module'], options);
-      if (current(state, token, next)) prepared = preparation(produced, allowed);
-    } catch {
-      if (token === state.generation) invalidate(state);
-    }
-    let result;
-    try {
-      result = await next(event);
-    } catch (error) {
-      if (token === state.generation) invalidate(state);
-      throw error;
-    }
-    try {
-      return publish(state, token, next, result, prepared);
-    } catch {
-      if (token === state.generation) invalidate(state);
-      return result;
-    }
   }
 
   on('classic.SessionStart', ($, event, next) => {

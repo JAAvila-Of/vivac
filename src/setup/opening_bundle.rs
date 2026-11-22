@@ -20,7 +20,7 @@ pub(super) struct BundleVersion {
 }
 
 pub(super) static CURRENT: BundleVersion = BundleVersion {
-    version: "opening-reference-v4",
+    version: "opening-reference-v5",
     files: [
         include_str!("claude-opening/.claude-plugin/plugin.json"),
         include_str!("claude-opening/hooks/hooks.json"),
@@ -61,11 +61,20 @@ static PREVIOUS_V3_RELEASE: BundleVersion = BundleVersion {
         include_str!("claude-opening-versions/opening-reference-v3-release/hooks/register.mjs"),
     ],
 };
-pub(super) static CATALOG: [BundleVersion; 5] = [
+static PREVIOUS_V4: BundleVersion = BundleVersion {
+    version: "opening-reference-v4",
+    files: [
+        include_str!("claude-opening-versions/opening-reference-v4/.claude-plugin/plugin.json"),
+        include_str!("claude-opening-versions/opening-reference-v4/hooks/hooks.json"),
+        include_str!("claude-opening-versions/opening-reference-v4/hooks/register.mjs"),
+    ],
+};
+pub(super) static CATALOG: [BundleVersion; 6] = [
     PREVIOUS,
     PREVIOUS_V2,
     PREVIOUS_V3_RELEASE,
     PREVIOUS_V3,
+    PREVIOUS_V4,
     CURRENT,
 ];
 
@@ -698,7 +707,7 @@ mod tests {
                 update.commit().unwrap();
                 assert!(matches!(
                     inspect(&project.0, &super::CATALOG).unwrap(),
-                    Inspection::Intact { version, .. } if version.version == "opening-reference-v4"
+                    Inspection::Intact { version, .. } if version.version == "opening-reference-v5"
                 ));
                 for (path, expected) in owned_paths(&project)[..3].iter().zip(super::CURRENT.files)
                 {
@@ -715,8 +724,8 @@ mod tests {
     #[test]
     fn compiled_current_catalog_installs_the_exact_embedded_payloads() {
         let project = Project::new();
-        assert_eq!(super::CURRENT.version, "opening-reference-v4");
-        assert_eq!(super::CATALOG.len(), 5);
+        assert_eq!(super::CURRENT.version, "opening-reference-v5");
+        assert_eq!(super::CATALOG.len(), 6);
         let plan = plan_update(&project.0, &super::CATALOG, &super::CURRENT).unwrap();
         assert_eq!(plan.writes.len(), 4);
         plan.commit().unwrap();

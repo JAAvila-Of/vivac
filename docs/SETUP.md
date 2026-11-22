@@ -178,7 +178,10 @@ recognized for upgrade, including versions that blocked native continuations.
 
 `vivac doctor claude-code` checks bundle integrity and the guard, prompt and
 stop hooks. Configuration and an opening receipt do not prove that the
-harness loaded the module or delivered its output. The native checks and their
+harness loaded the module or delivered its output. An intact bundle can still
+be refused by a newer Claude Code: if the guard reports an unverified opening
+on every prompt, run `claude plugin validate .claude/skills/vivac-opening`,
+which reports what the engine refuses to load. The native checks and their
 limits are recorded in [Checking instruction delivery](INSTRUCTION-DELIVERY.md).
 
 ## Codex
