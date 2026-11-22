@@ -52,6 +52,7 @@ pub(crate) const SWITCHES: &[&str] = &[
 pub struct Args {
     pub positionals: Vec<String>,
     opts: HashMap<String, Vec<String>>,
+    missing_values: Vec<String>,
     /// A flag that wanted a value and got none because the next word
     /// started with `--`, paired with that word as typed (`d919`). The
     /// word is still read as a flag -- taking it as the value would turn a
@@ -86,6 +87,7 @@ impl Args {
                         })
                     });
                     if val.is_none() {
+                        a.missing_values.push(k.to_string());
                         if let Some(next) = v.get(i + 1) {
                             a.emptied.push((k.to_string(), next.clone()));
                         }
@@ -102,6 +104,10 @@ impl Args {
 
     pub fn has(&self, k: &str) -> bool {
         self.opts.contains_key(k)
+    }
+
+    pub(crate) fn has_missing_value(&self, k: &str) -> bool {
+        self.missing_values.iter().any(|missing| missing == k)
     }
 
     pub fn opt(&self, k: &str) -> Option<&str> {
@@ -169,6 +175,29 @@ mod tests {
 
     fn p(s: &str) -> Args {
         Args::parse(s.split_whitespace().map(String::from)).unwrap()
+    }
+
+    #[test]
+    fn missing_values_preserve_empty_occurrences_alongside_valid_values() {
+        let key = "expected-candidate-sha256";
+        for input in [
+            "--expected-candidate-sha256",
+            "--expected-candidate-sha256 --expected-candidate-sha256 valid",
+            "--expected-candidate-sha256 valid --expected-candidate-sha256",
+        ] {
+            assert!(p(input).has_missing_value(key), "{input}");
+        }
+        for input in [
+            "--expected-candidate-sha256=",
+            "--expected-candidate-sha256=valid",
+            "--expected-candidate-sha256 valid",
+        ] {
+            assert!(!p(input).has_missing_value(key), "{input}");
+        }
+        assert_eq!(p("--expected-candidate-sha256=").list(key), [""]);
+        assert_eq!(p("--expected-candidate-sha256=valid").list(key), ["valid"]);
+        assert_eq!(p("--expected-candidate-sha256 valid").list(key), ["valid"]);
+        assert!(!p("--other").has_missing_value(key));
     }
 
     #[test]

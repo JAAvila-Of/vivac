@@ -14,11 +14,24 @@ mod agents;
 mod anchor;
 mod args;
 mod artifacts;
+#[cfg(target_os = "linux")]
+#[path = "device_keys/linux_attended_terminal.rs"]
+#[allow(
+    dead_code,
+    reason = "The shared custody module also serves the native probes."
+)]
+mod attended_terminal;
 mod backup;
 mod brief;
 mod changes;
 mod check;
 mod clock;
+#[cfg(target_os = "linux")]
+#[path = "device_keys/linux_creation_ciphertext.rs"]
+mod creation_ciphertext;
+#[cfg(target_os = "linux")]
+#[path = "device_keys/linux_attended_creation_input.rs"]
+mod creation_input;
 mod device_keys;
 mod event;
 mod failure;
@@ -27,11 +40,129 @@ mod id;
 mod import;
 mod index;
 mod lane;
+#[cfg(target_os = "linux")]
+#[path = "device_keys/linux_admission_storage.rs"]
+#[allow(
+    dead_code,
+    reason = "The shared custody module also serves the native probes."
+)]
+mod linux_admission_storage;
+#[cfg(target_os = "linux")]
+#[path = "device_keys/linux_creation_binding.rs"]
+mod linux_creation_binding;
+#[cfg(target_os = "linux")]
+#[path = "device_keys/linux_creation_producer.rs"]
+#[allow(
+    dead_code,
+    reason = "The shared custody module also serves the native probes."
+)]
+mod linux_creation_producer;
+#[cfg(target_os = "linux")]
+#[path = "device_keys/linux_creation_record.rs"]
+mod linux_creation_record;
+#[cfg(target_os = "linux")]
+#[path = "device_keys/linux_creation_storage.rs"]
+#[allow(
+    dead_code,
+    reason = "The shared custody module also serves the native probes."
+)]
+mod linux_creation_storage;
+#[cfg(target_os = "linux")]
+#[path = "device_keys/linux_current_admission.rs"]
+#[allow(
+    dead_code,
+    reason = "The shared custody module also serves the native probes."
+)]
+pub mod linux_current_admission;
+#[cfg(target_os = "linux")]
+#[path = "device_keys/linux_custody_anchor.rs"]
+mod linux_custody_anchor;
+#[cfg(target_os = "linux")]
+#[path = "device_keys/linux_custody_provision.rs"]
+mod linux_custody_provision;
+#[cfg(target_os = "linux")]
+#[path = "device_keys/linux_custody_root.rs"]
+mod linux_custody_root;
+#[cfg(target_os = "linux")]
+#[path = "device_keys/linux_endpoint_codec.rs"]
+#[allow(
+    dead_code,
+    reason = "The shared custody module also serves the native probes."
+)]
+mod linux_endpoint_codec;
+#[cfg(target_os = "linux")]
+#[path = "device_keys/linux_endpoint_runtime.rs"]
+mod linux_endpoint_runtime;
+#[cfg(target_os = "linux")]
+#[path = "device_keys/linux_gate.rs"]
+#[allow(
+    dead_code,
+    reason = "The shared custody module also serves the native probes."
+)]
+mod linux_gate;
+#[cfg(target_os = "linux")]
+#[path = "device_keys/linux_ipc.rs"]
+#[allow(
+    dead_code,
+    reason = "The shared custody module also serves the native probes."
+)]
+mod linux_ipc;
+#[cfg(target_os = "linux")]
+#[path = "device_keys/linux_loader.rs"]
+#[allow(
+    dead_code,
+    reason = "The shared custody module also serves the native probes."
+)]
+mod linux_loader;
+#[cfg(target_os = "linux")]
+#[path = "device_keys/linux_openssh_package.rs"]
+mod linux_openssh_package;
+#[cfg(target_os = "linux")]
+#[path = "device_keys/linux_reservation.rs"]
+#[allow(
+    dead_code,
+    reason = "The shared custody module also serves the native probes."
+)]
+mod linux_reservation;
+#[cfg(target_os = "linux")]
+#[path = "device_keys/linux_resident_reader.rs"]
+#[allow(
+    dead_code,
+    reason = "The shared custody module also serves the native probes."
+)]
+mod linux_resident_reader;
+#[cfg(target_os = "linux")]
+#[path = "device_keys/linux_session.rs"]
+#[allow(
+    dead_code,
+    reason = "The shared custody module also serves the native probes."
+)]
+pub mod linux_session;
+#[cfg(target_os = "linux")]
+#[path = "device_keys/linux_spawn.rs"]
+#[allow(
+    dead_code,
+    reason = "The shared custody module also serves the native probes."
+)]
+pub mod linux_spawn;
+#[cfg(target_os = "linux")]
+#[path = "device_keys/linux_supervisor_start.rs"]
+mod linux_supervisor_start;
 mod mcp;
 mod model;
+#[cfg(target_os = "linux")]
+#[path = "device_keys/linux_opening_publication.rs"]
+mod opening_publication;
 mod ops;
 mod outcome;
 mod output;
+#[cfg(target_os = "linux")]
+#[path = "device_keys/linux_package_storage.rs"]
+#[allow(
+    dead_code,
+    reason = "The shared custody module also serves the native probes."
+)]
+mod package;
 mod params;
 mod plan;
 mod project;
@@ -51,6 +182,9 @@ mod style;
 mod team_authority;
 #[cfg(test)]
 mod test_alloc;
+#[cfg(target_os = "linux")]
+#[path = "device_keys/linux_ubuntu_provider.rs"]
+mod ubuntu_provider;
 mod update;
 mod web;
 mod width;
@@ -273,6 +407,7 @@ const USAGE: &str = r#"vivac - provenance of work
           --source-retired [--json]           recover after retiring the source
     vivac device-key create <absolute-new-directory> [--json]
                                               create a protected Windows or macOS device key
+    vivac device-key create-linux [--json]    create a local key in the provisioned Linux store
     vivac device-key show <absolute-directory> [--json]
                                               read its local public identity
     vivac device-key prove <absolute-key-directory> --challenge <absolute-file> [--json]
@@ -555,6 +690,14 @@ static LATE_SIGHTING: std::sync::OnceLock<(
 )> = std::sync::OnceLock::new();
 
 fn main() {
+    #[cfg(target_os = "linux")]
+    if let Some(code) = linux_supervisor_start::dispatch() {
+        std::process::exit(code);
+    }
+    #[cfg(target_os = "linux")]
+    if let Some(code) = device_keys::dispatch_linux_custody() {
+        std::process::exit(code);
+    }
     let code = run();
     // `std::process::exit` skips `Drop`, so a line still sitting in
     // `output`'s buffer would be lost rather than reach the reader.

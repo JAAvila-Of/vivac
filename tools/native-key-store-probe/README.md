@@ -96,6 +96,63 @@ Attributes are metadata, not secret storage. SSH does not imply that a usable
 login-session provider exists. A product backend still needs an explicit
 provider/protection contract and refusal when that contract cannot be verified.
 
+The [Linux signing-store review](../../docs/LINUX-DEVICE-KEYS-REVIEW.md) rejects
+the legacy GNOME persistent format for new product signing credentials after
+reviewing its derivation and integrity checks. This probe remains experimental
+evidence of native behavior; it does not approve that format or a replacement
+provider for production.
+
+Separate [OpenSSH format and signature observations](review/OPENSSH.md) and
+[Linux terminal-input checks](review/TERMINAL.md) investigate a common native
+alternative. Their isolated helpers and graphs are excluded from the product;
+passing an experiment does not enable a Linux custody backend.
+The [parent-lifetime experiment](review/LIFECYCLE.md) separately checks native
+agent exit and loss of signing access after supervisor death; it does not
+accredit the complete signing-session lifecycle.
+The [candidate Rust spawn owner](review/RUST-LAUNCHER.md) and
+[private loader/cancellation fixture](review/RUST-LOADER.md) test shared Rust
+sources under allocator pressure. They remain separate from operational
+credential custody and the complete session integration.
+The [Rust SSH extension](review/RUST-SSH-LOADER.md) separately observes actual
+transport termination in the Rust helper, with and without a remote terminal.
+The [candidate Rust signing gate](review/RUST-CONCURRENT.md) separately tests
+worker ownership, local publication and concurrent lock against the native agent.
+The [shared native session adapter](review/RUST-SESSION.md) moves lease validation,
+signing and native closure into source shared with the product's Linux tests.
+The [SSH signing-session composition](review/RUST-SSH-CONCURRENT.md) observes
+transport loss with active work, withheld publication and acknowledged closure.
+The [bounded native abandonment contract](review/RUST-ABANDON.md) separately
+addresses missing pidfds and unconfirmed ownership without an indefinite
+destructor wait or a recovery claim.
+The [Rust process-boundary fixture](review/RUST-ISOLATION.md) separately checks
+that an uncertain worker does not poison a persistent host or another process.
+It does not accredit same-store replacement or operational MCP custody.
+The [inherited IPC fixture](review/RUST-IPC.md) checks kernel sender credentials,
+store/generation binding, sequences, descriptor rejection and deadlines for
+already known processes. It does not implement endpoint discovery or signing.
+The [cooperative reservation fixture](review/RUST-RESERVATION.md) tests exclusion
+for one anchored physical directory and explicitly distinguishes lock release
+from native-process exit. It does not authorize session replacement.
+The [connected-peer fixture](review/RUST-CONNECTED.md) separately tests kernel
+identity on listen/connect sockets between sibling processes and historical
+listener or forwarded-sender refusal. It does not authorize a custody endpoint.
+The [candidate metadata-storage fixture](review/RUST-ADMISSION-STORAGE.md)
+checks exclusive publication, anchored snapshots and partial-publication
+classification. Stored fixture metadata supplies no creation admission.
+The [candidate root-reader fixture](review/RUST-ROOT-READER.md) checks the binding
+codec and synthetic administrative/private hierarchy with actual OS owners.
+It does not provision or authenticate the operational installation root.
+The [candidate administrative provisioning fixture](review/RUST-PROVISION.md)
+tests new-slot publication and a separate unprivileged reader. It does not
+install an operational root or authorize a credential.
+The [fixed-namespace selection fixture](review/RUST-FIXED-ROOT.md) separately
+tests the literal namespace root, valid environment decoys, administrative
+binding changes and actual mount boundaries, without enabling custody.
+The [candidate resident snapshot fixture](review/RUST-RESIDENT-READER.md)
+composes the fixed root, version 2 public record and resident encrypted package,
+with joint revalidation and additional mount/mutation cases. Its synthetic
+records do not establish attended creation or operational admission.
+
 The library may run a provider prompt internally. The isolated Linux fixture
 has no GUI or service activation and credits no timeout as success; this does
 not establish a prompt-free product path. The macOS file-based keychain is a

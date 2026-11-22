@@ -81,12 +81,9 @@ impl Fixture {
     }
 
     fn verify_refused(&self, path: &Path) {
-        self.refused(&[
-            "device-key",
-            "verify-proof",
-            path.to_str().unwrap(),
-            "--json",
-        ]);
+        for command in ["verify-proof", "inspect-proof"] {
+            self.refused(&["device-key", command, path.to_str().unwrap(), "--json"]);
+        }
     }
 }
 
@@ -215,6 +212,182 @@ fn document(output: Output) -> Value {
         .bytes()
         .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)));
     value
+}
+
+#[test]
+fn inspect_proof_reports_the_complete_candidate_without_other_writes() {
+    let fixture = Fixture::new("inspect");
+    let candidate = challenge();
+    let proof = fixture.write("proof.json", &signed(candidate.clone()));
+    let before = snapshot(&fixture.0);
+    let output = fixture.run(&[
+        "device-key",
+        "inspect-proof",
+        proof.to_str().unwrap(),
+        "--json",
+    ]);
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stderr.is_empty());
+    let receipt: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let fields: Vec<_> = receipt
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        fields,
+        [
+            "approval",
+            "authority",
+            "candidate",
+            "candidate_sha256",
+            "challenge_use",
+            "expected_reference",
+            "status",
+            "version",
+        ]
+    );
+    assert_eq!(receipt["version"], 1);
+    assert_eq!(receipt["candidate"], candidate);
+    assert_eq!(receipt["expected_reference"], "not_supplied");
+    assert_eq!(receipt["status"], "possession_only");
+    for field in ["authority", "approval", "challenge_use"] {
+        assert_eq!(receipt[field], "not_checked");
+    }
+    let reference = receipt["candidate_sha256"].as_str().unwrap();
+    assert_eq!(reference.len(), 64);
+    assert!(reference
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)));
+    assert_eq!(snapshot(&fixture.0), before);
+    let output = fixture.run(&["device-key", "inspect-proof", proof.to_str().unwrap()]);
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stderr.is_empty());
+    let text = String::from_utf8(output.stdout).unwrap();
+    for value in candidate.as_object().unwrap().values() {
+        let value = value
+            .as_str()
+            .map(str::to_owned)
+            .unwrap_or_else(|| value.to_string());
+        assert!(text.contains(&value), "missing candidate value {value}");
+    }
+    assert!(text.contains(reference));
+    assert!(text.contains("not_supplied"));
+    assert!(text.contains("possession"));
+    assert!(text.contains("Authority, approval and challenge use were not checked."));
+    assert_eq!(snapshot(&fixture.0), before);
+}
+
+#[test]
+fn inspect_reference_matches_normalized_candidate_and_rejects_other_references() {
+    let fixture = Fixture::new("reference");
+    let original = signed(challenge());
+    let proof = fixture.write("proof.json", &original);
+    let inspect = |path: &Path| {
+        let output = fixture.run(&[
+            "device-key",
+            "inspect-proof",
+            path.to_str().unwrap(),
+            "--json",
+        ]);
+        assert!(output.status.success(), "{output:?}");
+        assert!(output.stderr.is_empty());
+        serde_json::from_slice::<Value>(&output.stdout).unwrap()
+    };
+    let before = snapshot(&fixture.0);
+    let receipt = inspect(&proof);
+    let reference = receipt["candidate_sha256"].as_str().unwrap();
+    let output = fixture.run(&[
+        "device-key",
+        "inspect-proof",
+        proof.to_str().unwrap(),
+        "--expected-candidate-sha256",
+        reference,
+        "--json",
+    ]);
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stderr.is_empty());
+    let matched: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let mut expected = receipt.clone();
+    expected["expected_reference"] = json!("matched");
+    assert_eq!(matched, expected);
+    assert_eq!(snapshot(&fixture.0), before);
+    let pretty = fixture.0.join("pretty.json");
+    fs::write(&pretty, serde_json::to_string_pretty(&original).unwrap()).unwrap();
+    let before = snapshot(&fixture.0);
+    assert_eq!(inspect(&pretty), receipt);
+    assert_eq!(snapshot(&fixture.0), before);
+    let mut changed = original["challenge"].clone();
+    changed["base_revision"] = json!(8);
+    let changed = fixture.write("changed.json", &signed(changed));
+    let before = snapshot(&fixture.0);
+    assert_ne!(inspect(&changed)["candidate_sha256"], reference);
+    fixture.refused(&[
+        "device-key",
+        "inspect-proof",
+        changed.to_str().unwrap(),
+        "--expected-candidate-sha256",
+        reference,
+        "--json",
+    ]);
+    assert_eq!(snapshot(&fixture.0), before);
+}
+
+#[test]
+fn inspect_expected_reference_arguments_are_strict_and_do_not_echo() {
+    let fixture = Fixture::new("inspect-arguments");
+    let proof = fixture.write("proof.json", &signed(challenge()));
+    let proof = proof.to_str().unwrap();
+    let output = fixture.run(&["device-key", "inspect-proof", proof, "--json"]);
+    assert!(output.status.success(), "{output:?}");
+    let receipt: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let canonical = receipt["candidate_sha256"].as_str().unwrap();
+    for invalid in [
+        String::new(),
+        "AB".repeat(32),
+        "ab".repeat(31),
+        "ab".repeat(33),
+        "gg".repeat(32),
+        "fakeSensitiveSentinel".into(),
+    ] {
+        fixture.refused(&[
+            "device-key",
+            "inspect-proof",
+            proof,
+            "--expected-candidate-sha256",
+            &invalid,
+            "--json",
+        ]);
+    }
+    for suffix in [
+        vec!["--expected-candidate-sha256"],
+        vec!["--expected-candidate-sha256", "--json"],
+        vec![
+            "--expected-candidate-sha256",
+            canonical,
+            "--expected-candidate-sha256",
+            canonical,
+        ],
+        vec![
+            "--expected-candidate-sha256",
+            canonical,
+            "--expected-candidate-sha256",
+        ],
+        vec![
+            "--expected-candidate-sha256",
+            "--expected-candidate-sha256",
+            canonical,
+        ],
+        vec!["--unknown"],
+        vec!["extra"],
+    ] {
+        let mut args = vec!["device-key", "inspect-proof", proof];
+        args.extend(suffix);
+        fixture.refused(&args);
+    }
+    fixture.refused(&["device-key", "inspect-proof"]);
+    fixture.refused(&["device-key", "inspect-proof", "relative", "--json"]);
 }
 
 #[test]
@@ -502,6 +675,14 @@ fn proof_inputs_refuse_directories_multiple_links_and_oversized_files() {
         proof.to_str().unwrap(),
         "--json",
     ]));
+    let output = fixture.run(&[
+        "device-key",
+        "inspect-proof",
+        proof.to_str().unwrap(),
+        "--json",
+    ]);
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stderr.is_empty());
     assert_eq!(snapshot(&fixture.0), before);
     bytes.push(b' ');
     fs::write(&proof, bytes).unwrap();

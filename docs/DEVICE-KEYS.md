@@ -1,9 +1,9 @@
 # Local device signing keys
 
 Windows uses current-user DPAPI. macOS uses a new private, passphrase-protected
-file-based keychain. Both create an Ed25519 credential for future device
-enrollment. Neither creates
-a person, organization, membership, permission or content decryption key.
+file-based keychain. Linux uses a provisioned account store with an attended
+OpenSSH creation flow. Each creates an Ed25519 credential for future device
+enrollment. Enrollment, membership and content keys are separate operations.
 
 ## Commands
 
@@ -15,6 +15,23 @@ without a project tree. There is no default store, global registration or
 harness setup. Destinations inside Git working trees or with a `.git` or
 `.vivac` path component are refused, including a new final component. Existing
 destinations are never replaced.
+
+On Linux, `vivac device-key create-linux [--json]` selects the current account's
+[provisioned custody store](LINUX-CUSTODY-PROVISIONING.md). It generates the
+device and credential IDs and asks the operator to confirm a generated unlock
+secret in a trusted foreground terminal. After verifying possession and
+closing the native session, it publishes the encrypted package, initial
+opening permit and admission record. A durable result returns the local key
+receipt. A refused attempt returns exit 1. A partial or indeterminate publication
+returns exit 5 with the credential ID and publication outcome.
+
+`vivac device-key open-linux <credential-id> [--json]` reopens custody in a
+trusted foreground terminal. Enter `CLOSE` there to end the session. A
+successful exit confirms that the session ended and a new opening permit was
+published durably. `vivac device-key verify-linux-possession <credential-id>
+[--json]` checks fresh local possession in a separate process without needing
+a terminal. See the [Linux custody CLI](LINUX-CUSTODY-CLI.md) for exit codes
+and the receipt statuses that distinguish interruption and uncertain storage.
 
 On macOS, creation requires an existing private parent directory and a
 controlling terminal. It asks for a new passphrase and confirmation, with
@@ -41,7 +58,7 @@ credential files. Windows volume classification is part of this validation.
 The JSON receipt contains only `device_id`, `credential_id`, `public_key`,
 `protection` and `status`. The public key is 32 bytes encoded as 64 lowercase
 hexadecimal characters. Protection is `windows_current_user_dpapi` or
-`macos_classic_keychain_passphrase`; status is
+`macos_classic_keychain_passphrase` or `linux_openssh`. Status is
 `local_key_only`: these commands do not check enrollment with any authority.
 It is not a global claim that the key has never been registered. Device and
 credential identifiers are independent opaque
@@ -54,9 +71,8 @@ public key and these identifiers to a principal under current authority.
 
 The [enrollment-proof commands](DEVICE-ENROLLMENT-PROOFS.md) sign a bounded
 challenge with a protected key on Windows or macOS and verify the public
-result on Linux, macOS or Windows. Proof verification is common; it does not
-supply the missing Linux custody/signing backend. That backend remains a
-prerequisite for a complete multiplatform team flow.
+result on Linux, macOS or Windows. The Linux enrollment signing entry point
+remains a prerequisite for a complete multiplatform team flow.
 
 ## Protection and bounds
 
@@ -161,10 +177,14 @@ encrypted revisions are not silently accepted or repaired by these commands.
 Keep the creating executable and passphrase available until a supported
 credential rotation/recovery procedure is in place.
 
-Linux refuses custody and signing before credential filesystem access.
-Its ordinary local vivac functionality remains available. Future client
-backends must establish their own protected-custody contract before activation.
+Linux creation uses the fixed account store. The legacy path-based creation and
+enrollment signing commands continue to require Windows or macOS.
 The Linux coordinator does not need a participant's signing seed.
+The [Linux custody design](LINUX-DEVICE-KEYS-DESIGN.md) defines the target private
+profile, foreground unlock lifetime, SSH behavior and native acceptance cases.
+The [Linux mechanism comparison](LINUX-KEY-PROTECTION-OPTIONS.md) separates
+package availability from protection and recommends the next accreditation
+candidate; it does not make a dedicated secrets daemon mandatory.
 
 ## Development isolation
 
@@ -179,9 +199,32 @@ token and provider. They do not create Credential Manager entries or change
 login settings; they do not claim that the provider's internal profile or cache
 handling is sandboxed.
 
-Native macOS integration runs only through the explicitly enabled hosted-runner
-test script, with its own temporary profiles and pseudo-terminal. Ordinary unit
-tests do not create Keychain credentials. Redirecting `HOME` does not isolate
-Keychain Services or the operating-system account. Native framework and terminal
-behavior are tested on disposable runners, never against a maintainer's real
-keychains. No credential files are uploaded as CI artifacts.
+Native macOS integration uses `tools/test-macos-device-keys.py` with explicit
+authorization, temporary profiles and a pseudo-terminal. Its hosted mode requires
+GitHub-hosted macOS and `--allow-hosted-keychain-test`. Its separate local mode
+requires `--allow-disposable-user-keychain-test` and a dedicated standard account
+named `vivac-test`. The caller supplies `--test-uid`, `--test-guid`,
+`--account-marker` and `--operator-uid` from the authenticated account-provisioning
+record, independently of the process being checked. Do not discover these values
+from the target account and immediately use them as approval.
+
+The local guard checks the real and effective user, directory-service identity,
+account marker, private home, protected parent directories and non-administrator
+membership before creating fixtures or accessing Keychain Services. It accepts
+only an absent home ACL or the standard sole denial of directory deletion.
+Conflicting modes, CI labels in local mode and local pins in hosted mode fail
+closed. `--check-context` checks authorization without an executable, temporary
+fixtures or Keychain access; success does not accredit the native backend.
+For a newly provisioned local account, an empty search list and the exact
+missing-default-keychain response are recorded as an inventory state and must
+remain identical after the test. Other query errors fail. The runner does not
+create a login keychain to satisfy its preflight; hosted mode still requires
+successful inventory queries.
+
+Ordinary unit tests do not create Keychain credentials. Redirecting `HOME` does
+not isolate Keychain Services or the operating-system account. The local guard
+prevents accidental execution under another account; it is not a virtual-machine
+boundary or organizational authorization. Native framework and terminal behavior
+must run on disposable runners or the separately provisioned disposable account,
+never against a maintainer's real keychains. No credential files are uploaded as
+CI artifacts. The standalone native-key-store probe retains its hosted-only gate.

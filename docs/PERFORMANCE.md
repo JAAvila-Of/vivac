@@ -1325,3 +1325,1198 @@ both phases. The larger file still costs seconds to capture and verify; these
 observations do not identify the share spent hashing, inspecting or opening
 files. They neither bound process RSS nor justify a general constant-memory
 claim. Both series and all outliers remain in the raw data.
+
+## Experimental OpenSSH bcrypt work on Ubuntu 24.04 — 2026-11-12
+
+Two prepared-fixture series reproduced package-creation latency above the declared
+2,000 ms target and its 2,200 ms tolerance band. All fourteen creation samples
+exceeded the band. The other measured operations stayed within their nominal
+targets. After reviewing the results, the maintainer accepted this observed
+creation latency for pilot progression under practical tolerance. That explicit
+acceptance preserves the original target, band, samples and `above-band`
+classification; it does not lower the KDF work or compound tolerance bands.
+
+The [fixture contract](../tools/native-key-store-probe/review/KDF.md) defines the
+windows, input mutations and reproduction commands. Each series used a fresh
+container and private persistent package store, one CPU, 512 MiB RAM, no extra
+swap, 128 PIDs, 128 MiB tmpfs and an independent 240-second deadline. Provider
+admission and baseline preparation preceded timing and could warm caches. All
+initial timed samples are included. These seven-sample series describe observed
+maxima and medians; they do not estimate p99 or cold-start latency.
+
+The provider was Ubuntu 24.04 amd64, `openssh-client 1:9.6p1-3ubuntu13.20`.
+Both series used the same image, provider objects and recorded helper/source
+hashes. Helpers came from `/build/writer189/debug/ssh-writer-graph-audit` and
+`/build/writer189/debug/openssh-proof-verifier-probe`. The figures characterize
+these debug helpers. The later integrated release measurements use separate
+intervals. No Rust source or compiled helper was changed for this run.
+
+| Operation | Nominal / band (ms) | A median / max (ms) | B median / max (ms) |
+|---|---:|---:|---:|
+| `package-create` | 2000 / 2200 | 2290.297 / 2432.523 | 2284.221 / 2300.433 |
+| `activation-proof` | 2000 / 2200 | 526.569 / 569.163 | 529.544 / 537.132 |
+| `unlocked-sign-proof` | 50 / 55 | 16.275 / 16.873 | 18.372 / 19.196 |
+| `reject-rounds-0` | 50 / 55 | 2.942 / 3.421 | 3.475 / 5.368 |
+| `reject-rounds-1` | 50 / 55 | 2.688 / 2.923 | 3.092 / 3.346 |
+| `reject-rounds-16` | 50 / 55 | 2.820 / 3.074 | 3.149 / 3.733 |
+| `reject-rounds-63` | 50 / 55 | 2.879 / 3.188 | 2.924 / 3.344 |
+| `reject-rounds-65` | 50 / 55 | 3.169 / 3.638 | 3.072 / 3.513 |
+| `reject-rounds-4294967295` | 50 / 55 | 3.134 / 3.919 | 3.114 / 3.663 |
+| `reject-large-field` | 50 / 55 | 3.146 / 3.321 | 3.127 / 3.232 |
+
+Each of the 98 malformed-input checks returned exit code 1 with zero native-load
+dispatches. Inputs had recomputed manifest size/digest and an accepted baseline;
+they covered rounds 0, 1, 16, 63, 65 and 4,294,967,295 plus the large-field prefix.
+All measured activation and unlocked proofs were verified; each sentinel still
+signed afterward. Both runs completed with exit 0 and no container OOM. That
+completion records measurement controls, including the repeated latency miss.
+
+Child-process RSS high-water marks were 25,108 KiB for A and 25,204 KiB for B.
+These values include child process/mapping overhead and do not measure auxiliary
+parser heap or simultaneous aggregate memory. The separate 2 MiB parser heap
+ceiling, password/KDF policy and production Rust launcher were open gates at the
+time of this work measurement. The following requested-heap measurement addresses
+the heap component separately.
+The KDF reports keep `performance_admitted=false`, `kdf_policy_adopted=false`,
+`parser_auxiliary_heap_measured=false` and `p99_estimated=false`.
+
+Raw milliseconds below retain all 140 completed samples in their original order.
+The retained reports additionally reconcile 70 ordered attempts per series.
+
+| Case | Series | Ordered samples (ms) |
+|---|---|---|
+| `package-create` | A | 2288.765656, 2279.866375, 2432.522969, 2290.297106, 2287.011857, 2371.130490, 2378.019411 |
+| `activation-proof` | A | 533.045766, 515.356842, 526.569334, 527.460505, 524.350419, 569.163369, 525.826575 |
+| `unlocked-sign-proof` | A | 16.872773, 16.329008, 16.217510, 16.275261, 15.926839, 16.068620, 16.355859 |
+| `reject-rounds-0` | A | 3.004210, 3.030342, 2.941533, 3.421098, 2.884361, 2.798230, 2.676328 |
+| `reject-rounds-1` | A | 2.923323, 2.566300, 2.685736, 2.770348, 2.794847, 2.688213, 2.662800 |
+| `reject-rounds-16` | A | 3.073952, 2.820495, 2.730604, 2.743818, 3.041968, 2.760167, 2.996621 |
+| `reject-rounds-63` | A | 3.147387, 3.069252, 3.188254, 2.742935, 2.878735, 2.756359, 2.770386 |
+| `reject-rounds-65` | A | 3.102845, 3.637634, 3.144596, 2.972630, 3.169008, 3.548669, 3.571213 |
+| `reject-rounds-4294967295` | A | 3.134146, 2.984739, 3.163877, 3.918743, 3.530306, 3.094079, 2.981761 |
+| `reject-large-field` | A | 3.146207, 2.954055, 2.778092, 2.729528, 3.276969, 3.175646, 3.321381 |
+| `package-create` | B | 2272.883455, 2289.742978, 2284.221488, 2253.867432, 2300.432548, 2266.530556, 2294.815762 |
+| `activation-proof` | B | 529.543630, 516.753030, 514.737555, 530.809592, 536.255257, 516.333943, 537.132459 |
+| `unlocked-sign-proof` | B | 17.660988, 19.196371, 18.920534, 18.371760, 17.907471, 18.499325, 16.679989 |
+| `reject-rounds-0` | B | 3.475158, 3.297637, 5.368190, 3.736355, 4.651685, 3.122141, 3.287270 |
+| `reject-rounds-1` | B | 3.346460, 3.085600, 3.092427, 3.048979, 2.974249, 3.151213, 3.266041 |
+| `reject-rounds-16` | B | 3.732634, 2.930273, 2.828553, 3.446086, 3.233865, 3.149008, 3.016302 |
+| `reject-rounds-63` | B | 3.343763, 2.891744, 2.923736, 2.740161, 3.161637, 2.992441, 2.864071 |
+| `reject-rounds-65` | B | 3.512686, 3.010052, 3.057384, 3.251107, 3.071583, 3.060151, 3.209418 |
+| `reject-rounds-4294967295` | B | 3.403123, 3.662650, 3.114087, 2.997000, 3.284502, 2.774027, 2.650678 |
+| `reject-large-field` | B | 3.186015, 3.127030, 2.713975, 3.129557, 3.231927, 2.522518, 2.633655 |
+
+Recorded identities (identical between A and B):
+
+| Object | SHA-256 |
+|---|---|
+| Container image | `806ce46ffb8f4775988f53d68d65182c8b53b540e56c19e581313303c48d33d4` |
+| Helper `verifier` | `26cc96f01ad84315e6548698bdab06e914d649401dfaf71f39ec9220a9943c55` |
+| Helper `writer` | `3c8c671cb2be8b7ea07a2b55fbcf4c83c31f764b9884f3671f211f9e4b0e3774` |
+| Source `kdf_probe` | `d564e51c038ee35e9187bc701dd9d5737e2b09e91ed5228712e6c2fb1117a55a` |
+| Source `package_probe` | `3f4a8f63c66fc39f783a3eb0206837d0aaf37c2b1875377eed4bfabae06e05cf` |
+| Source `provider_probe` | `3c405eea3d4eba34743feea18b61b68744da52d8993c9afdfa931f9f5d1e9ae8` |
+
+## Requested Rust heap of the package checker — 2026-11-12
+
+The complete instrumented run observed a maximum of **1,114,816 additional
+requested Rust bytes** (about 1.063 MiB), within the 2,097,152-byte budget for
+these cases. This is the requested-byte counter defined by the
+[heap fixture](../tools/native-key-store-probe/review/HEAP.md). It includes the
+complete package check's reads and buffers and conservatively counts possible
+old/new allocation coexistence during realloc. Stack, native allocator overhead,
+reserved arenas and process mappings remain outside this measure.
+
+The standalone helper was compiled offline with Rust 1.89.0 in a separate build
+volume, using the optional `heap-probe` feature and the existing locked graph.
+Default tests (7) and feature tests (14, including the same default cases), fmt,
+and Clippy default/feature debug and release passed in the bounded Linux builder.
+The builder image was `rust:1.95-bookworm` with the installed 1.89 toolchain
+selected explicitly; the measurement runtime was the separate Ubuntu 24.04 image.
+Cargo-deny was unavailable in the offline cache and was not run. These checks
+concern the experimental helper, rather than the complete product CI matrix.
+
+The runtime used one CPU, 512 MiB RAM, no extra swap, 128 PIDs, 128 MiB tmpfs,
+a read-only root and separate read-only original/instrumented helper mounts.
+It observed the same Ubuntu 24.04 amd64 OpenSSH package and runtime image as the
+work measurement above. No native key loading or KDF was performed by the
+instrumented checks. A separate original helper created the synthetic control
+package before measurement.
+
+| Case | Checker accepts | Three additional requested peaks (bytes) |
+|---|---|---|
+| `valid-package` | yes | 3738, 3738, 3738 |
+| `rounds-u32max` | no | 2642, 2642, 2642 |
+| `key-count-u32max` | no | 2645, 2645, 2645 |
+| `declared-body-1048575` | no | 1049893, 1049893, 1049893 |
+| `declared-body-1048576` | no | 2650, 2650, 2650 |
+| `declared-body-4294967295` | no | 2653, 2653, 2653 |
+| `declared-salt-1048575` | no | 1050157, 1050157, 1050157 |
+| `near-cap-large-field` | no | 1114816, 1114816, 1114816 |
+| `file-65536-malformed` | no | 66293, 66293, 66293 |
+| `file-65537-oversize` | no | 2648, 2648, 2648 |
+
+The valid input was 565 bytes. Each observation reported valid accounting and a
+conservative realloc policy, with live bytes after the check equal to its retained
+baseline. The final valid-package control was accepted and recorded another
+3,738-byte peak. Summary maxima reconcile with all 30 case observations.
+
+The 1,048,575-byte field exercises the decoder's permitted length boundary and
+allocates close to one MiB before refusing missing bytes. The next value is
+refused with a much smaller peak. The near-file-limit case combines input near
+64 KiB with the large declared field; this produced the measured maximum.
+These cases do not exhaust every possible input or establish physical RSS.
+
+Earlier attempts A and B each retained 27 observations from the first nine
+cases, with the same requested peaks shown above. They stopped during publication
+of the intentionally oversized 65,537-byte fixture. That preparation incorrectly
+used normal semantic admission checks and a key-readback bound that were
+unsuitable for a deliberately malformed input. The corrected
+publication path checks bytes and object identity while preserving the normal
+admission limits; a real POSIX integration check covered that separation.
+Those two attempts remain incomplete. Complete run C then observed all ten
+cases, the three fresh processes per case and the final retained control, with
+exit 0 and no container OOM.
+
+The original writer and verifier hashes remained unchanged from the work
+measurement above. The instrumented helper SHA-256 was
+`2be4750789b4f43ffbf87bbda1c953c43a308d9fd5573c91e271725ac6c7aeda`. Recorded source identities were:
+
+| Source | SHA-256 |
+|---|---|
+| `openssh-writer/Cargo.toml` | `7ddc4327a59e2eff536ddfdd18cd6bcce8d6b033444c472aa9a6b5d42c485c69` |
+| `openssh-writer/Cargo.lock` | `5f59ccdfa48aadc74cc5c49d7d5ef671e7da71c6860008291b326aa8f469b140` |
+| `openssh-writer/src/main.rs` | `b3a556bc2b9121128fdadf889f658f858fd76030e7e344d8f344fa026e36cfbc` |
+| `openssh-writer/src/package.rs` | `60213831ef8f35c4da66339b02abe9a8680ebf7268e83d2249a7da8d01016911` |
+| `openssh-writer/src/heap_probe.rs` | `df07d4b825457a5a297597f64836fcbe24349321a7b1edfeaa8af82893014705` |
+| Driver `heap_probe` | `9e9bbcdadd1a257b88477baa250dbc18f6008c804b1acc8a31aa66a1c2f15ca2` |
+| Driver `package_probe` | `3f4a8f63c66fc39f783a3eb0206837d0aaf37c2b1875377eed4bfabae06e05cf` |
+| Driver `provider_probe` | `3c405eea3d4eba34743feea18b61b68744da52d8993c9afdfa931f9f5d1e9ae8` |
+
+This result measures the locked checker and adversarial fixtures described here.
+It does not adopt a passphrase/KDF policy or accredit the production Rust process
+launcher; Linux custody remains disabled.
+
+## Generated-secret delivery and real deadlines — 2026-11-12
+
+The [generated-secret fixture](../tools/native-key-store-probe/review/GENERATED.md)
+exercised the standalone writer's new attended creation mode on Ubuntu 24.04
+amd64 with administrator-trusted local OpenSSH package metadata for
+`1:9.6p1-3ubuntu13.20`. Two complete ten-case runs observed the positive creation
+and nine refusals. Both retained a structurally accepted positive package after
+the negative cases. Native `ssh-keygen -y` decrypted that package using the
+transiently observed secret over its private PTY and returned the expected public
+key. This is decryption/public extraction, not agent loading or signing.
+
+Separate runs each repeated the positive control and withheld input at one
+interaction seam. The reader's real deadlines were unchanged:
+
+| Withheld input | Configured deadline | Observed interval from prompt visibility to exit | Result |
+|---|---|---|---|
+| Initial acknowledgement | 60 s | 60,085.828 ms | Refused; no disclosure or publication; terminal restored |
+| Generated-secret confirmation | 180 s | 180,087.367 ms | Refused; one intended disclosure, no publication; terminal restored |
+
+These are functional deadline observations, not percentiles or creation-latency
+benchmarks. The new complete production flow has not been measured. The older
+2.3-second creation observations above belong to their historical password-input
+fixture and must not be relabeled as this flow's performance.
+
+All four runs completed with exit 0 at the experiment level, without container
+OOM or selected RDP error events. The observer retained metadata, never the
+secret, its hash or the terminal transcript. Foreground and echo checks were
+observed where a PTY existed; unavailable terminal states remain null. Cleanup
+followed observed process exit. This does not establish remote click
+responsiveness or protection from a recorded/compromised terminal.
+
+The helper used Rust 1.89.0 offline in a fresh build volume, with the same Debian
+builder and Ubuntu runtime distinction described above. Its default tests (11),
+heap-feature tests (18, including the default cases), fmt and default/feature
+Clippy debug/release passed. Python unit checks passed with 228 tests and one
+POSIX-only case skipped on Windows; that case passed separately on Linux using
+real metadata. A prior Windows fixture-adapter ctime mismatch was corrected in
+the test alone; explicit ctime-change refusal tests cover each readback seam.
+The Linux identity guard was not modified. Cargo-deny and the complete product
+CI matrix were not run for this increment.
+
+The writer SHA-256 was
+`afff4caaf78956fb981ffc40b41014fac6b5300c9740028c7248613e1e6827fa`.
+The final driver revision was
+`63e55193ebf75508bc5732dc9b5111bb07b4467da4fbe2b3c65530010c9a4e80`;
+the first ten-case run retained the earlier driver revision before the deadline
+mode was added. Original measurement builds and the public verifier were
+unchanged. Selected writer source identities were:
+
+| Source | SHA-256 |
+|---|---|
+| `src/main.rs` | `a696db9e5b9fc99c09541713f56f4fca211a13b38d5fd69199d74ccd31f7ab91` |
+| `src/terminal.rs` | `8cb94c0376f694e7e87b4a3a3226da31311c13cf506a2d6dcd25a96b1d5d90d9` |
+| `src/generated_secret.rs` | `74d2fe2ad955453fa41f15648d381dde510d96e9b168c809cee6e881a3c3791c` |
+
+This evidence does not admit Linux custody. Safe launching from the production
+multithreaded Rust runtime, complete native activation/signing, remaining failure
+seams and complete-flow measurement still gate adoption of the selected policy.
+
+## Generated-secret terminal drift and publication interruptions — 2026-11-12
+
+The separate [failure matrix](../tools/native-key-store-probe/review/GENERATED.md)
+completed seven cases on the same Ubuntu 24.04 runtime and unchanged generated
+writer identified above. The experiment exited 0, without container OOM or
+selected RDP errors. Its outcomes were:
+
+| Case | Writer exit | Published package | Remaining preparations | Terminal restored |
+|---|---|---|---|---|
+| Valid generated package | 0 | Accepted and decrypted | Not measured | Yes |
+| Input-attribute drift before acknowledgement | 1 | Absent | Not measured | Yes |
+| Input-attribute drift before confirmation | 1 | Absent | Not measured | Yes |
+| Interrupted after key sync | 77 | Absent | 1 | Yes |
+| Interrupted after manifest sync | 77 | Absent | 1 | Yes |
+| Interrupted before publish | 77 | Absent | 1 | Yes |
+| Interrupted after publish | 77 | Accepted and decrypted | 0 | Yes |
+
+The drift fixture toggled `ICRNL` on its own PTY while keeping echo disabled.
+The acknowledgement drift case disclosed no secret. Each later case observed
+one intended disclosure, with no echoed confirmation or standard-stream leak.
+Bounded inspection of each interrupted case's own files found no literal unlock
+secret; it retained no inspected bytes or secret hashes. After the successful
+exclusive rename, the expected package remained present and passed both the
+checker and native public extraction. This is the commit boundary, not a failed
+creation that permits overwriting the destination.
+
+These were the existing abrupt exit hooks, not real filesystem errors or the
+writer's error-return cleanup path. The report explicitly kept
+`fsync_failure_tested=false` and `terminal_replacement_tested=false`. It does not
+accredit terminal reassociation, multithreaded Rust launching, native agent
+activation/signing or the complete product backend.
+
+The driver SHA-256 for this run was
+`b62d556c4140cabad7ee7f98eb9244e0402690a1918e3cc547eb2247c4da2640`.
+The writer and verifier hashes remained unchanged. Python unit verification for
+this increment passed 236 tests, with the unchanged POSIX-only integration case
+skipped on Windows. No Rust compilation or complete product CI run was performed
+for these Python fixture changes.
+
+## Generated-secret publication error returns — 2026-11-12
+
+The [publication-error matrix](../tools/native-key-store-probe/review/GENERATED.md)
+exercised the standalone writer's ordinary return paths on the same Ubuntu 24.04
+runtime. Its positive control created and decrypted a valid package. The four
+controlled error returns had these outcomes:
+
+| Error seam | Writer exit | Published package | Remaining preparations | Exact uncertainty diagnostic |
+|---|---|---|---|---|
+| After key sync | 1 | Absent | 0 | No |
+| After manifest sync | 1 | Absent | 0 | No |
+| Before rename | 1 | Absent | 0 | No |
+| After rename | 2 | Accepted and decrypted | 0 | Yes |
+
+The precommit returns ran the owned preparation's normal cleanup. The postcommit
+return preserved the package, passed the checker and native public extraction,
+and emitted the constant indeterminate-durability diagnostic with empty stdout.
+Bounded inspection of the cases' own files found no literal unlock secret;
+neither inspected bytes nor a secret hash entered reports. These seams occur
+after the preparation guard is established. An earlier failure to obtain or
+validate the newly created directory handle can leave a preparation for
+inspection; no universal precommit cleanup claim follows from these cases.
+
+The exclusive rename remains the commit point. Every error in the subsequent
+sync/name/integrity checks now maps to the typed `CommittedIndeterminate` result
+in the generated mode. Historical modes retain their generic exit-1 behavior.
+Empty fault-channel values still mean no selection; two nonempty selections
+refuse. This fixture injects returned errors, not a real failed sync syscall, and
+keeps `fsync_failure_tested=false`.
+
+The five-case experiment completed with exit 0. The new binary also passed the
+existing ten-case generated interaction and seven-case abrupt-interruption/drift
+matrix. All three runtime reports observed no container OOM or selected RDP
+errors. They establish no creation-latency percentile or production admission.
+
+The helper was rebuilt offline with Rust 1.89.0 in another fresh volume, preserving
+earlier measurement binaries. Default tests (15), heap-feature tests (22,
+including the default cases), fmt and default/feature Clippy debug/release passed.
+Python verification passed 243 tests with one unchanged POSIX-only case skipped
+on Windows. Cargo-deny and the complete product CI matrix were not run.
+
+The writer SHA-256 was
+`6d4b954401eb1396db3622eb0326d8aa5372c93ab80efb0341cece6689406a03`;
+the driver revision was
+`d6778bf98423f898a32f16b6df39a79c80e905d63c8758fec64bb561b710f729`.
+The verifier, dependency manifest and lockfile were unchanged. Updated writer
+source identities were:
+
+| Source | SHA-256 |
+|---|---|
+| `src/main.rs` | `08a3e122d1249fb8c30e2fcaab5968692b42b0f133c6a9ede482311a2a07a10a` |
+| `src/package.rs` | `2d6dfeb2af440062891ee96b8cd8a5f8423e4cd79bb4ccb3ceafaaa3834b4098` |
+
+These results do not accredit the production multithreaded Rust launcher, native
+agent activation/signing or complete-flow performance. Linux custody remains
+disabled.
+
+## Candidate Rust spawn boundary — 2026-11-12
+
+The [Rust launcher fixture](../tools/native-key-store-probe/review/RUST-LAUNCHER.md)
+compiled the candidate `src/device_keys/linux_spawn.rs` source into a disposable
+Rust helper. The product declaration is Linux-test-only; this is not integration
+of the operational credential backend. Rust 1.89.0 and libc 0.2.189 match the
+product's declared MSRV and locked binding. The helper's other external versions
+were already present in the reviewed writer graph. The missing Linux-cache copy
+of the public libc crate came from the local host cache and matched the product
+lock checksum; no dependency download was required.
+
+The final seven-case run completed on Ubuntu 24.04 amd64 using the same retained
+OpenSSH package gate and bounded runtime image as above:
+
+| Case | Observed result |
+|---|---|
+| Stable creator thread | Four native children, four returned caller threads, four allocator/mutex pressure threads; clean environment/mask and exact inherited FD allowlist; non-CLOEXEC canary at FD >=4096 excluded |
+| Malformed executable ELF | ENOEXEC propagated to spawn after both barriers; no receipt program ran; owner remained reusable |
+| Creator-thread exit control | Child SIGKILL with parent process/control channel still alive; deliberately forgotten test owner did not run Drop |
+| Parent death before arming | B reached; changed-parent receipt P from the same child PID after release; no exec; observed SIGABRT |
+| Parent death after arming | A reached; child SIGKILL while observer retained the gate |
+| Native empty agent | Credentials/empty identities checked after exec; SIGKILL shutdown observed; retained/new connections refused |
+| Native agent parent death | Owner SIGKILL followed by actual agent SIGKILL; retained/new connections refused |
+
+The two pressure counters recorded 87,953 and 37,327 iterations, respectively.
+These are work-presence observations, not a throughput benchmark or latency
+percentile. The container inherited NNP=1; post-exec NNP was observed without
+claiming a transition from NNP=0. The first native run preserved its prearm
+SIGABRT observation without the P receipt; only the later source/run supports
+the explicit changed-parent cause. All observed cases and source revisions were
+retained rather than relabeling the first run.
+
+The final helper passed seven unit tests, fmt, Clippy debug/release and build in
+the bounded offline builder. An earlier compile overlapped the harness's final
+edit and was retained without attributing it to the frozen source; package clean
+and verification were repeated afterward. A further clean/test/Clippy/build
+followed the P-receipt change. Python unit verification passed 250 tests with one
+unchanged POSIX-only case skipped on Windows. The complete product crate/CI
+matrix and Cargo-deny were not executed for this increment.
+
+The final native run exited 0 without container OOM or selected RDP error events.
+Its helper SHA-256 was
+`8cc008b4ade5b003fbdace3f50bac19ee45aad39acf5200f099d73b00d14b062`;
+the Python observer revision was
+`8232684d6e8be7108dfd73c506b6f5515e292e79ed541ffbd7d7723d2e8ae8a7`.
+Selected source identities were:
+
+| Source | SHA-256 |
+|---|---|
+| `src/device_keys/linux_spawn.rs` | `098794696000eed3c25ea9dba3c266a7cedbbbf8e775daa357a6483c94d1c033` |
+| `rust-launcher/src/main.rs` | `bb6b8b2b915b8a6be52ef96abf4ea0d03f619ab2c7d9246ca357ad8b87c84d74` |
+| `rust-launcher/Cargo.lock` | `a8fe3455ab816f902bbed92f84827d098c68e4ecc841f6a138cddf3a19f1ab1f` |
+
+Loader PTY/secret delivery, cancellation across loading/readiness/signing, package
+leases, full-flow performance and operational product integration remain open.
+Failure to acquire a pidfd after spawn preserves ownership but can leave Drop
+waiting indefinitely; this matrix does not exercise or accredit automatic
+recovery from that case. Linux custody remains unavailable in normal commands.
+
+## Candidate Rust loader lifecycle — 2026-11-12
+
+The [Rust loader fixture](../tools/native-key-store-probe/review/RUST-LOADER.md)
+extended the shared candidate with a private PTY, sealed ciphertext descriptor,
+stopped secret handoff, native loader completion and independently verified
+proof before test READY. Eight cases passed: normal completion, cancellation at
+prompt/stopped handoff/before READY, supervisor SIGKILL at those three points,
+and loader SIGKILL at prompt. In every case the external observer retained its
+master and package lease through observed native exit, checked slave mode `0600`
+and UID, and rejected retained/new connections after closure. An independent loaded sentinel
+signed successfully after every case. No runtime or memory percentile was
+measured by this matrix.
+
+The same helper passed the preceding seven-case spawn matrix. Rust 1.89 offline
+verification passed 17 unit tests, fmt, Clippy debug/release and build after clean.
+Python verification passed 260 tests with one POSIX-only Windows skip. The full
+product CI matrix and Cargo-deny were not run. The Debian builder and Ubuntu
+24.04 native runtime stayed separate; the native runs used the same bounded,
+offline, unprivileged image and OpenSSH package as above. Both exited 0 without
+OOM or selected RDP error events.
+
+The helper SHA-256 was
+`117ae80a36505358ec391db824060d8078f6eb2b7e42729f2b2a55a773a52900`;
+the loader observer was
+`31daca061592fb21d7ffdccb6a05b7939e09ca9ee4acf2c7c7569f32b5b64e37`.
+Selected source identities were:
+
+| Source | SHA-256 |
+|---|---|
+| `src/device_keys/linux_spawn.rs` | `b76d33f0e4a03dae3169d5f3c160a8e70f32df342f06c46f4fca3a021a1c8502` |
+| `src/device_keys/linux_loader.rs` | `942286bd81e324acd163b30bcafbd3b296c20119f0ec8f4c5505e3111e56d3f8` |
+| `rust-launcher/src/main.rs` | `67353369317fd95f629886510df01a42ba46274f8825e3593386c8bb07c52f56` |
+| `rust-launcher/src/loader_probe.rs` | `1696baf13e59dc247390d7981a9f1159463e8798b34d8191e3c6297048ad1366` |
+| `rust-launcher/Cargo.lock` | `d690e6ef209c234cf18da1b171f9703e33433236c2c3f4f86845290d114f7e96` |
+
+Terminal chmod does not revoke an already opened descriptor; this observation
+does not establish atomic private permissions at terminal creation or privileged
+concurrent isolation. Real SSH disconnect, complete shared-session integration,
+full-flow performance and operational product custody remain unaccredited.
+
+## Candidate Rust loader over SSH — 2026-11-12
+
+The [Rust SSH loader extension](../tools/native-key-store-probe/review/RUST-SSH-LOADER.md)
+ran ten cases through an actual isolated SSH connection: normal close and
+disconnect at prompt, stopped handoff, before READY and after READY, each with
+and without a remote PTY. A bootstrap transferred retained capabilities and
+execed Rust in the same PID; the observer checked start identity, executable
+inode, SSH ancestry and actual stdin kind. Only the owned SSH client was killed.
+The Rust helper observed SIGHUP in all four PTY disconnects and EOF in all four
+pipe disconnects. EIO handling passed a unit classification check, without a
+native EIO observation in this run.
+
+All ten cases observed native closure before its acknowledgement, then
+supervisor exit and refusal of retained/new connections. The external observer
+kept its master and package lease through native exit. Loaded cases required an
+independent proof before test READY; the pre-READY disconnect withheld READY.
+An independent loaded sentinel signed after every case. The updated helper also
+passed the preceding eight-case local loader matrix, including supervisor death.
+Both native runs exited 0 without OOM or selected RDP error events. Neither
+matrix measures a latency percentile, heap bound or silent network partition.
+
+The helper passed 18 Rust unit tests, fmt, Clippy development/release and build
+offline using Rust 1.89 after clean. Python verification passed 270 tests with
+one POSIX-only case skipped on Windows. No dependency versions changed in this
+increment. The full product CI matrix and Cargo-deny were not run. The native
+SSH image was Ubuntu 24.04 amd64 with OpenSSH `1:9.6p1-3ubuntu13.20`, retaining
+CPU1, RAM512 MiB without extra swap, PID128, NNP, unprivileged execution, bounded
+tmpfs, read-only helpers and no external network. The Debian builder remained
+separate from the Ubuntu runtime.
+
+The updated helper SHA-256 was
+`c39240a51d4ce63ef00b0ea930909c4d072e2b7f8cb5567a3fbdf4e664ca6409`;
+the SSH observer was
+`0ff4b46076d6ce947e821801212e302e1003cfb958dfe4ad0cc4a70a5d283124`.
+The changed `rust-launcher/src/loader_probe.rs` source SHA-256 was
+`8d0dc374f88effdbe9fc6c8653eba5055cd8e7a4e307f214fa9922005a67a14c`.
+The shared `linux_spawn.rs`, `linux_loader.rs`, auxiliary `main.rs` and lockfile
+identities remained those recorded in the preceding loader section.
+
+This credits the selected real transport disconnect seams in the disposable
+Rust fixture. It does not make SSH detection atomic against every signal
+interleaving, accredit silent partitions, establish complete shared-session
+integration or enable operational credential custody. Earlier pidfd-failure and
+PTY permission-transition limitations remain applicable.
+
+## Candidate Rust signing gate — 2026-11-12
+
+The [Rust signing gate fixture](../tools/native-key-store-probe/review/RUST-CONCURRENT.md)
+compiled `src/device_keys/linux_gate.rs` with the previously observed native
+owner and loader. Seven cases completed with the expected causal counters:
+published-before-lock control; lock before send, after complete send/before
+reply consumption, after reply, and before publication; two lock callers; and
+encrypted-package lease mutation after verification. Only the completed control
+published. The lease-negative control independently detected its mutation and
+reported lease invalidation at the selected seam. Each case observed one joined
+worker, native agent SIGKILL and loader exit 0 before close acknowledgement,
+retained/new connection refusal, and a sentinel signature after closure.
+
+The runtime exited 0 on Ubuntu 24.04 amd64, OpenSSH `1:9.6p1-3ubuntu13.20`,
+without OOM or selected RDP error events. It retained CPU1, RAM512 MiB without
+additional swap, PID128, bounded tmpfs, NNP, unprivileged execution, read-only
+helpers and no network. This is an ordering/ownership observation, not a latency
+percentile, memory measurement or proof of the instant OpenSSH executed signing.
+
+The offline Debian builder used Rust 1.89 and unchanged auxiliary dependency
+versions. After clean, 36 unit tests, fmt, Clippy development/release and build
+passed. The initial Clippy attempt failed on coordinator argument count; grouping
+native identity into a struct removed that failure without suppressing the lint,
+and verification was repeated after another clean. Python checks passed 277
+tests with one POSIX-only Windows skip. An additional Windows product nextest
+attempt was stopped during compilation after exceeding the read-only review
+scope. Its exec exited 1, its recorded launcher processes and Windows Job were
+subsequently absent, and it supplies no product-CI verdict. The complete product
+CI matrix was not completed; Cargo-deny was not run. Earlier SSH/cancellation
+runtime matrices were not repeated in this increment.
+
+The helper SHA-256 was
+`e84065616f0cf7f6193532550ddc280f0e0d87b4ff5d008b3195db376b593a3b`;
+the Python observer was
+`a0e44cbcacc43151735910a5f4f02bb238e1cbbab1263f1ccf3d82450699f236`.
+Selected source identities were:
+
+| Source | SHA-256 |
+|---|---|
+| `src/device_keys/linux_gate.rs` | `0beb5b90ff50cbdf51e4d340302a862ef87013e0c32b074d66be4ea32fbd7520` |
+| `rust-launcher/src/concurrent_probe.rs` | `ffbd8e84768f6b78b26a989905e7f2cb6e859bd2c648b2866234690957179671` |
+| `rust-launcher/src/main.rs` | `44b0b60504311b5374657cbcfaec7998075d02b714b951b443a43e28df226cac` |
+| `rust-launcher/src/loader_probe.rs` | `937637a110b859cb17b47fadc8fe58d10564768949a3ffd4420cdeb70e3457ef` |
+
+The gate retains custody from creation until explicit joined closure; abandoning
+it or reaching permanent uncertainty can retain resources until process exit.
+The fixture does not accredit recovery or permit accumulating abandoned product
+sessions. Deadlines prevent late acknowledgement, but callbacks must cooperate
+and joining is not preemptive thread cancellation. Complete product integration,
+client authorization/freshness, every interleaving, full-flow performance and
+operational Linux custody remain unaccredited.
+
+## Shared candidate Rust session adapter — 2026-11-12
+
+The [shared session adapter](../tools/native-key-store-probe/review/RUST-SESSION.md)
+moved package leases, signing work and the native stop/release bridge from the
+fixture to `src/device_keys/linux_session.rs`, included only for Linux product
+tests and imported by the auxiliary helper. The fixture keeps orchestration;
+its duplicate implementations were removed. The adapter fixes the socket to
+the owned agent and checks SO_PEERCRED at construction and on each signing
+connection. Release is linked to gate Closing, observed join, a unique lease
+owner and matching native exit receipts.
+
+The same seven native cases completed on Ubuntu 24.04 amd64 with OpenSSH
+`1:9.6p1-3ubuntu13.20`. Comparing the case objects with the earlier gate run
+matched all causal fields, excluding only PID/TID and the pressure counter.
+Only the completed control published. Cancellation and lease invalidation
+withheld publication; every case observed one joined worker, expected native
+exits and connection refusal, and an unaffected sentinel signature. The runtime
+exited 0 without OOM or selected RDP error events, retaining the earlier CPU1,
+RAM512 MiB/no-extra-swap, PID128, tmpfs, NNP, unprivileged, read-only and external
+network-isolation controls. These are ownership/order observations, not latency
+or memory-budget measurements.
+
+After another clean, the final offline Rust 1.89 auxiliary build passed 44 unit
+tests, fmt, Clippy development/release and build. The earlier 43-test intermediate
+revision was retained before adding a guard-rejection test. That unit test uses
+the real gate and lease with the same authorization function called by release;
+it refuses cleanup/ACK with an extra loan and permits closure with a unique
+owner. It is not an additional native case. Python checks passed 277 tests with
+one POSIX-only Windows skip. Auxiliary dependency versions were unchanged.
+The complete product CI matrix, Cargo-deny, earlier SSH/cancellation runtime
+matrices and full-flow performance were not executed in this increment.
+
+The helper SHA-256 was
+`d26191fb5d7d4829f00afdcef53e7a1fa047886431e25ac718a6de4b17087ffd`;
+the unchanged observer was
+`a0e44cbcacc43151735910a5f4f02bb238e1cbbab1263f1ccf3d82450699f236`.
+Selected source identities were:
+
+| Source | SHA-256 |
+|---|---|
+| `src/device_keys/linux_session.rs` | `c77e7733f4257376ca542f2b9e18a3c58b5b46431d8498c62846a7f62ca7afed` |
+| `src/device_keys/linux_spawn.rs` | `30021286cacc7a471cb04e1a3aa243130e87f7bd1be68fe0c21755f281cb95c5` |
+| `rust-launcher/src/concurrent_probe.rs` | `d639b0148f4f8a69a2b2e157e86eafa945e128143285fc8cb98cceb3cf2b5abd` |
+| `rust-launcher/src/main.rs` | `ed154b529dde71295e722ba22267688ba923fde08d5e2be8306051d00406d0ec` |
+
+Dropping an unreleased adapter attempts only owned-token signals and retains
+the bundle without an exit acknowledgement; abandonment can retain resources
+until process termination. This does not establish recovery, complete product
+admission, client authorization/freshness or every race. Native provider/profile
+and exact loaded-identity admission remain caller obligations. Operational Linux
+custody remains unavailable.
+
+## Shared signing session over SSH — 2026-11-12
+
+The [SSH/signing session composition](../tools/native-key-store-probe/review/RUST-SSH-CONCURRENT.md)
+combined actual transport loss with the shared Rust gate and native adapter.
+The lifetime detector moved to `src/device_keys/linux_ssh_lifetime.rs`, also
+used by the existing loader fixture. It owns a CLOEXEC stdin duplicate, records
+EOF/EIO/SIGHUP without clearing a cause, and restores the prior signal
+disposition on Drop. Its irreversible singleton permits one SSH lifetime per
+supervisor process; it is not a multi-client daemon implementation.
+
+Twelve cases passed: normal close, disconnect before native send, with reply
+pending, after reply, before publication and after publication, each with PTY
+and pipe. All eight uncommitted requests were cancelled without publication.
+The observer held the signing barrier until Closing with active work and no
+ACK was observed, then released it on a private control channel. The four
+published controls retained publication. The ten disconnects produced one
+observed SIGHUP and nine EOF causes; EIO remained unit-only in this run. Each
+case observed one joined worker, one close acknowledgement, expected native
+exits and connection refusal, supervisor exit, and an unaffected sentinel.
+
+The same helper passed the ten existing loader-over-SSH cases and seven local
+concurrency cases after the shared control/parser changes. All three runtime
+runs exited 0 on Ubuntu 24.04 amd64, OpenSSH `1:9.6p1-3ubuntu13.20`, without OOM
+or selected RDP error events. CPU1, RAM512 MiB without additional swap, PID128,
+bounded tmpfs, NNP, unprivileged execution, read-only helpers and external
+network isolation were preserved. SSH used container loopback only. These
+observations establish selected lifecycle/order behavior, not a latency
+percentile, heap bound or instantaneous network-loss detection.
+
+The offline Rust 1.89 auxiliary build passed clean, fmt, 52 unit tests, Clippy
+development/release and build. Python checks passed 286 tests with one
+POSIX-only Windows skip. No dependency version changed. The complete product
+CI matrix, Cargo-deny and full-flow performance measurements were not run.
+
+The helper SHA-256 was
+`3bd2c80765b099b97205601026542b09b3e93da0f14e7df1ea871e0959e8addf`;
+the new Python observer was
+`aa1045e5deb82b69672a33fc89d63f98bfef01c8e5ff9af1cb50914b94932b52`.
+Selected source identities were:
+
+| Source | SHA-256 |
+|---|---|
+| `src/device_keys/linux_ssh_lifetime.rs` | `9631e20aff9574bdf2cb25d9f801642e5da60cbdf0d9e4fa2d3f776bf42f98e5` |
+| `rust-launcher/src/loader_probe.rs` | `b85f5c82dcd1bf70dc82a4e0801f77151f6f095357032b3fe3fae444acc6c29c` |
+| `rust-launcher/src/concurrent_probe.rs` | `35938bfd8ddad5a45d22cfc85118d1de2d81462d375ba6c3d9b474708c4c011f` |
+| `rust-launcher/src/main.rs` | `7a8e494b4373f844c75ab904a15026ab062bce7e5c8e8d3c521ff47f0ff5b471` |
+
+This remains candidate evidence for the self-hosted team service. It does not
+enable Linux custody, establish authenticated/durable shared admission, prove
+every interleaving or silent partition, or accredit recovery from uncertain
+pidfd acquisition/abandoned custody. Previous terminal and cooperative-deadline
+limits remain applicable before adoption into an operational backend.
+
+### Bounded native abandonment, 2026-11-12
+
+The [candidate abandonment contract](../tools/native-key-store-probe/review/RUST-ABANDON.md)
+replaces the spawn owner's indefinite destructor wait with one stop/poll pass,
+retention of uncertain ownership and irreversible process-wide custody refusal.
+Four reserved owners, each with at most four children, bound retained entries;
+this is not a process-memory budget or automatic recovery. NativeSession marks
+uncertainty before retaining its complete bundle and permit. Explicit lock and
+its publication boundary remain separate.
+
+A fresh auxiliary target, after package cleaning, passed 56 Rust tests, format
+checking and Clippy with warnings denied in debug and release, offline on Rust
+1.89. The final Python run passed 297 tests with one POSIX-only test skipped on
+Windows. The public product package was cleaned before verification. No new
+dependency version was introduced. Full product CI, Cargo-deny and full-flow
+performance were not run.
+
+Six isolated Ubuntu 24.04 amd64 runs observed 48 native cases with exit 0:
+
+| Experiment | Cases | Result |
+|---|---:|---|
+| Abandonment | 3 | Four-owner admission limit and clean reuse; injected post-spawn EMFILE with responsive live child and retained marker; valid-pidfd abandonment |
+| Local signing session | 8 | Seven previous lock/lease controls plus loaded-session abandonment with a paused signer, five retained descriptor identities, actual worker join and callback uncertainty without ACK |
+| SSH signing session | 12 | Previous PTY/pipe normal-close and disconnect boundaries |
+| Spawn primitive | 7 | Previous stable-creator, exec-failure and parent-death controls |
+| Private loader | 8 | Previous startup, cancellation, lease and owner-death controls |
+| SSH loader | 10 | Previous PTY/pipe transport and startup boundaries |
+
+The injected error tests the actual post-spawn failure branch, not descriptor
+table exhaustion. In that case shutdown returned ETIMEDOUT, Drop returned while
+the child still answered its own channel and a second helper command confirmed
+responsiveness. The observer checked the unique helper-side marker capability
+before requesting normal helper exit, then collected the child's SIGKILL status.
+The loaded-session case likewise required a response after Drop, retained all
+five checked descriptors through worker join and refused new owners three times.
+Its selected before-send request failed without publication; subsequent lock
+returned uncertainty with no accredited release. This does not prove that Drop
+generally revokes unpublished work.
+
+Single observed Drop durations were 4,509 ns for missing pidfd, 4,068 ns for
+explicit owner abandonment and 22,664 ns for loaded-session abandonment. These
+are individual observations under fixture limits, not latency distributions,
+budgets or hard real-time syscall guarantees.
+
+All successful runners checked CPU1, 512 MiB RAM, no extra swap, 128 PIDs,
+bounded tmpfs, no network, unprivileged credentials and NNP. They reported no
+OOM kill or selected RDP error events; independent loaded sentinels survived
+the loader/signing experiments. All fourteen owned build/runtime containers
+and seven temporary stores were absent after verification. Report volumes and
+the auxiliary build volume remain retained as evidence. RDP event selection
+does not diagnose or exclude every possible remote-desktop failure.
+
+Local evidence directories under the workspace `.scratch/`:
+
+- `rust-abandon-build-20261112-a`: seven build phases, final Python output,
+  nine-source manifest and the checked evidence index.
+- `rust-abandon-native-20261112-b`: three successful abandonment cases.
+- `rust-abandon-session-native-20261112-a`: eight local session cases.
+- `rust-abandon-ssh-concurrent-20261112-a`: twelve SSH signing-session cases.
+- `rust-abandon-launcher-regression-20261112-a`: seven spawn controls.
+- `rust-abandon-loader-regression-20261112-a`: eight loader controls.
+- `rust-abandon-ssh-loader-regression-20261112-a`: ten SSH-loader controls.
+
+The separate `rust-abandon-native-20261112-a` report preserves an initial
+fixture refusal before any cases: the new observer was missing from the exact
+script allowlist. Adding its name left executable/deadline/credential/cgroup
+validation intact. That attempt exited 1, with no OOM or selected RDP errors;
+it is not counted as a successful native observation.
+
+All six successful runs used helper SHA-256
+`eb740afa072b93d80de11b0c51e656e4b299bd6b979ae00dfe79b82985d45a0b`.
+The nine Rust source hashes remained unchanged after build/runtime verification.
+Selected changed source/observer identities relative to the preceding SSH composition:
+
+| Source | SHA-256 |
+|---|---|
+| `src/device_keys/linux_spawn.rs` | `2bb4475052ef16bd38a3f3f6adfa3c8872990192ad8599aaf6f3af9409d47fad` |
+| `src/device_keys/linux_session.rs` | `fe0ea3fa44bc43679e94319212b72983be5518de25c77a6cc62b4b65606c3a8a` |
+| `rust-launcher/src/abandon_probe.rs` | `b7e85083416683a1f4e554b78347059e48362be09d2735d8a7f4dd85ab555bee` |
+| `rust-launcher/src/concurrent_probe.rs` | `a577cc93e074f89b50313be5b9fcf34858fe08afa995354ab2ce6fc776cd1f4c` |
+| `rust_abandon_probe.py` | `c296b8481dc532ec630a8dc2bf1bb7f4a39c3d3e0bf75015bbbe258415245f18` |
+| `rust_concurrent_probe.py` | `81e2cfb887ab6722fe9d47e6ed58bacabda834ea494b68d5ac5fa14ac75e121f` |
+
+This candidate remains unavailable to normal Linux device-key commands. Service
+isolation, recovery and product integration require separate design and proof;
+these results do not make the self-hosted central server operational.
+
+### Candidate custody process boundary, 2026-11-12
+
+The [isolation contract](LINUX-CUSTODY-ISOLATION.md) places each explicit Linux
+custody session in its own foreground process, separate from the resident
+client and central synchronization service. The new
+[Rust process-boundary fixture](../tools/native-key-store-probe/review/RUST-ISOLATION.md)
+tests containment of process-wide custody refusal. It does not implement MCP,
+authenticated IPC, same-store replacement or operational recovery.
+
+On Ubuntu 24.04 amd64, a persistent Rust host ran four allocator/mutex pressure
+threads and launched two disposable executors through the shared spawn source.
+Worker A injected a missing pidfd after its public self-exec child was stored,
+returned from Drop, retained its marker and refused three new owners. While A
+and that child remained live and independently observable, B reserved four
+owners, refused a fifth, released them, readmitted and exited 0. The host
+answered two health requests and actually admitted an empty owner. It observed
+both worker pidfds and exact exit token/PID pairs before resource release. The
+outer observer checked A/C lineage, credentials, NNP, capabilities, executable
+identity and stable start times through retained live pidfds. It collected the
+child's SIGKILL status before requesting final host cleanup; host exit was 0.
+No loaded key, passphrase or OpenSSH agent participates in this new case.
+
+The final clean auxiliary build passed 59 Rust tests, formatting and Clippy with
+warnings denied in debug and release, offline on Rust 1.89. Final Python source
+checks passed 306 tests with one POSIX-only test skipped on Windows. The Python
+checks were retained with build revision A; only the Rust fixture's exit-identity
+assertions changed for revision B. Its ten-source manifest matched current Rust
+sources after verification. Shared spawn, gate, loader, session and SSH-lifetime
+sources were unchanged from the preceding abandonment increment. No dependency
+or MSRV change was introduced.
+
+Three final native runs shared one helper and observed 12 cases with exit 0:
+
+| Experiment | Cases | Scope |
+|---|---:|---|
+| Process isolation | 1 | Host and B keep working while A remains uncertain and its child remains responsive |
+| Abandonment regression | 3 | Admission limit, missing-pidfd containment and valid-pidfd abandonment |
+| Local signing-session regression | 8 | Existing loaded-session lock/lease/abandonment controls, including the independent loaded sentinel |
+
+These runs preserved CPU1, 512 MiB RAM, no extra swap, 128 PIDs, bounded tmpfs,
+no network, unprivileged credentials and NNP. No runner reported an OOM kill or
+selected RDP error event. A final selected-log query from 21:08:53 through
+21:48:47 UTC returned no events. That observation does not diagnose or exclude
+all RDP failure modes. All ten owned containers from the final seven build
+phases and three runtime runs, and their three temporary stores, were absent
+after verification. Report volumes and the final build volume remain retained.
+
+Final local evidence under workspace `.scratch/`:
+
+- `rust-isolation-build-20261112-b`: seven build phases, ten-source manifest,
+  evidence index and final RDP query.
+- `rust-isolation-native-20261112-b`: process-boundary observation.
+- `rust-isolation-abandon-regression-20261112-b`: three abandonment controls.
+- `rust-isolation-session-regression-20261112-b`: eight loaded-session controls.
+- `rust-isolation-build-20261112-a/python-tests-final.log`: unchanged final
+  Python source checks.
+
+Revision A reports/build remain separate. Review strengthened independent
+process-lineage checks before its runtime, then added explicit token/PID and
+pidfd exit assertions for both workers in revision B. The final build and all
+three selected native matrices were rerun for that new artifact; only revision
+B contributes to the final 12-case count above.
+
+| Identity | SHA-256 |
+|---|---|
+| Final helper | `a2f0d4b4b76e0e95678bf0c8c5e32589471f7a0dd384efcc549f675f842bddb9` |
+| `rust-launcher/src/main.rs` | `dd5e11b26b96b5842ff47c717da913b58e1d2eb889cf44fd33b4f2526650cb97` |
+| `rust-launcher/src/isolation_probe.rs` | `ba31e6540f242a63df9ee1607d9ab071e2c0fecf3f018c1cd747571b0f3a6a48` |
+| `rust_isolation_probe.py` | `fa693964a85b486068cfa3fdde516cf540b596c6a681019ed9231e29eb662569` |
+
+Product CI, Cargo-deny, silent-partition behavior and full-flow performance were
+not run. This experiment does not establish an organization-wide process count,
+latency budget, hostile same-UID isolation, authenticated client transport,
+same-store exclusion, fresh unlock after failure or central server availability.
+Normal Linux custody remains unavailable. Authenticated IPC, one-session-per-store
+enforcement and explicit same-store recovery evidence remain integration gates;
+the profile continues to trust the endpoint administrator and OS account.
+
+### Inherited custody control channel, 2026-11-12
+
+The [candidate IPC contract](LINUX-CUSTODY-IPC.md) defines a private inherited
+SEQPACKET channel between already known processes. It matches each message's
+kernel credentials and a retained live peer pidfd, a validated local object
+selection, a fresh bootstrap generation and strict sequences in a fixed
+112-byte control frame. It does not discover sessions or expose credential
+signing, unlock, descriptor transfer or same-store replacement.
+
+The [native IPC fixture](../tools/native-key-store-probe/review/RUST-IPC.md)
+observed ten cases on Ubuntu 24.04 amd64. Roundtrip accepted two probes and
+replay accepted its first probe before refusing the repeated sequence. Wrong
+generation/store, a forwarded descriptor's different sender, received rights,
+dead peer, live-peer timeout, short frame and oversized frame accepted no probes.
+The responder's FD count stayed 11 before and after rejecting SCM_RIGHTS. Owned
+host/responder/injector exits were observed before final cleanup. Raw injection
+tests require responder refusal; they do not attribute an error to a client
+Channel object bypassed by the injector.
+
+The new Linux-test-only source and validated PackageLease identity getter passed
+66 auxiliary Rust tests, formatting and Clippy with warnings denied in debug and
+release, offline on Rust 1.89. Final Python checks passed 312 tests with one
+POSIX-only test skipped on Windows. No dependency or MSRV change was introduced.
+The getter does not retain another Arc loan or replace native signing/lease
+validation. Full product CI, Cargo-deny and full-flow performance were not run.
+
+Three native runs shared one helper and observed 19 cases with exit 0:
+
+| Experiment | Cases | Scope |
+|---|---:|---|
+| Inherited IPC | 10 | Known-process control handshake, message identity/binding, sequence and refusal cases |
+| Loaded-session regression | 8 | Previous lock, lease and abandonment cases; independent loaded sentinel survives |
+| Process-boundary regression | 1 | Uncertain executor remains isolated from its host and independent executor |
+
+Each runner checked CPU1, 512 MiB RAM, no extra swap, 128 PIDs, bounded tmpfs,
+no network, unprivileged execution and NNP. None reported OOM or selected RDP
+error events. A final selected-log query from 21:48:47 through 22:37:54 UTC
+returned no events; this does not diagnose or exclude all RDP failures. Fourteen
+owned containers, including the expected red-test phases, and three temporary
+stores were absent after verification. Report volumes and the build volumes
+remain retained.
+
+Two expected test-first failures remain separate: a valid frame rejected by the
+initial stub, and an installed pidfd not closed by the initial ancillary parser.
+They exited 101 and are not counted as successful validation. The final parser
+closes and rejects both visible SCM_RIGHTS and SCM_PIDFD records. SCM_PIDFD and
+truncated ancillary cleanup are synthetic parser tests with real descriptors;
+the native descriptor-receive case is SCM_RIGHTS. The factory does not enable
+SO_PASSPIDFD, and no native SCM_PIDFD receive is claimed. Review also removed an
+unbounded EINTR retry in the zero-time peer-liveness query before final testing.
+
+Local evidence under workspace `.scratch/`:
+
+- `rust-ipc-build-20261112-a`: seven final build phases, Python output,
+  twelve-source manifest, checked evidence index and final RDP query.
+- `rust-ipc-native-20261112-a`: ten native IPC observations.
+- `rust-ipc-session-regression-20261112-a`: eight loaded-session controls.
+- `rust-ipc-isolation-regression-20261112-a`: one process-boundary control.
+- `rust-ipc-red-20261112-a` and `rust-ipc-pidfd-red-20261112-a`: expected failures
+  retained independently of the final green build.
+
+All twelve selected shared/fixture Rust source hashes matched after runtime
+verification. Selected identities for this increment:
+
+| Identity | SHA-256 |
+|---|---|
+| Helper | `a2f5892bc947b2f45e4e79c9ce611e0846c43d1a3f27f3623af8e2b4cd190a4c` |
+| `src/device_keys/linux_ipc.rs` | `c2f2c6f9b609a9b33f91fcee1b14a81e36d9db2c5768c748e0c31d1bb6c11596` |
+| `src/device_keys/linux_session.rs` | `1e5b651ceb200b629c53495711ac8355af1c2c729f36445ad595d5d34b124ae9` |
+| `rust-launcher/src/ipc_probe.rs` | `966ae5e3e3c7d0c5a573ef405d361bc87826e4fba841afba5a46d65334cda744` |
+| `rust_ipc_probe.py` | `2acf159dfb1caa0479f4711961231dd6e9a6cfe2a37270a3200cf269c7652158` |
+
+Kernel identity within a trusted endpoint is not organizational authorization
+or fresh human approval. Pathname-based discovery, per-store cross-process
+exclusion, preserved exit evidence and explicit same-store recovery remain
+integration gates. Normal Linux custody and the central server are not enabled
+by these results.
+
+## Cooperative Linux directory reservation observation (2026-11-13)
+
+The [reservation candidate](LINUX-CUSTODY-RESERVATION.md) was exercised with
+public disposable markers on Ubuntu 24.04 amd64. It uses one nonblocking flock
+on a fresh directory open file description, limited to the ext filesystem
+family. A retained independent PackageLease snapshot binds the reservation to
+the selected objects. SpawnOwner validates it before admission and before each
+native spawn, retains it through uncertain abandonment and releases it after
+observed native exits on successful shutdown.
+
+The six new cases observed same-directory contention despite shared original
+descriptors, independence of another directory, normal release with a live
+owner, reservation retention after uncertain abandonment, anchored pathname
+replacement and in-place invalidation. The explicit death control observed
+successful readmission after the owner died while its unlinked public child
+remained alive and answered a probe. The observer then independently killed
+and reaped that exact child using its retained pidfd. This proves why lock
+release cannot authorize session replacement or stand in for native exit
+evidence. It is not a production unlinked-child option.
+
+| Experiment | Cases |
+|---|---:|
+| Directory reservation | 6 |
+| Loaded signing-session regression | 8 |
+| SSH signing-session regression | 12 |
+| Native launcher regression | 7 |
+| Loader regression | 8 |
+| SSH loader regression | 10 |
+| Bounded abandonment regression | 3 |
+| Inherited IPC regression | 10 |
+| Process-boundary regression | 1 |
+
+All 65 native cases completed with observed exit conditions and runner exit 0.
+The auxiliary crate, rebuilt after cleaning, passed 71 Rust tests, formatting
+and Clippy in debug and release offline with Rust 1.89. Python checks passed
+325 tests with one POSIX-only test skipped on Windows. These checks do not
+constitute the product's complete CI matrix: full cross-platform nextest,
+product MSRV/lints, Cargo-deny and full-flow performance were not run for this
+increment. The changed candidate remains Linux-test-only in the product.
+
+Each runtime retained CPU1, 512 MiB RAM with no extra swap, 128 PIDs, bounded
+tmpfs, no network, unprivileged execution and NNP. No runner reported OOM or
+selected RDP errors. The final selected-log query from 04:53:00 through 05:13:47
+UTC returned no events; this does not diagnose the earlier RDP failure or
+exclude failures outside those logs. All twenty owned containers and nine
+temporary store volumes were absent after verification. Nine report volumes
+and the separate build volumes remain retained.
+
+Local evidence under workspace `.scratch/`:
+
+- `rust-reservation-build-20261113-b`: seven final build phases, fourteen-source
+  manifest, checked evidence index and final selected RDP query.
+- `reservation-python-20261113-a.log`: Python verification output.
+- `rust-reservation-native-20261113-a`: six reservation observations.
+- `rust-reservation-session-regression-20261113-a` and
+  `rust-reservation-ssh-session-regression-20261113-a`: loaded session controls.
+- `rust-reservation-rust-EXPERIMENT-regression-20261113-a`, where EXPERIMENT is
+  `launcher`, `loader`, `ssh-loader`, `abandon`, `ipc` or `isolation`: remaining
+  native controls.
+- `rust-reservation-red-20261112-a`: initial stub failure, exit 101. After an
+  interrupted host turn, the exact exited container's state and output were
+  recovered into `recovery.json`; no normal phase report was fabricated.
+- `rust-reservation-build-20261113-a`: a subsequent helper type error, exit 101,
+  retained separately from the corrected clean build.
+
+All fourteen selected shared/fixture Rust hashes matched after verification.
+Every native report used helper SHA-256
+`bb73bbbf7c1844fd712f630dc1ee70c611133633ddb1ba93a92c9eec166d1768`.
+The reservation observer SHA-256 was
+`e81edaf56663349a35e4e42b130dd76e1685b55f72708be5f7a30210f2c1f466`.
+
+Cooperative physical-directory exclusion does not establish organizational
+permission, uniqueness of copied credentials, endpoint discovery or preserved
+exit evidence. Operational replacement, fresh unlock and central-server
+integration remain separate gates. Normal Linux custody stays disabled.
+
+## Connected-peer identity: incomplete native observation (2026-11-13)
+
+The [connected-peer candidate](LINUX-CUSTODY-CONNECTED-PEER.md) adds a kernel
+identity acquisition path for a connected AF_UNIX SOCK_SEQPACKET socket. It
+uses SO_PEERCRED and SO_PEERPIDFD from the socket without selecting a process
+from an advertised PID. It retains existing per-message credential and peer
+liveness checks and does not grant endpoint authority.
+
+The clean auxiliary build passed 74 Rust tests, formatting and Clippy in debug
+and release offline with Rust 1.89. Python checks passed 342 tests with one
+existing POSIX-only test skipped on Windows. All ten inherited IPC regression
+cases were observed with runner exit 0. Full product CI, cross-platform tests,
+product MSRV/lints, Cargo-deny and full-flow performance were not run.
+
+**The seven new native cases remain unaccredited.** Both attempts exited 1,
+with zero completed cases, no OOM and all authority/custody/recovery/server/ACK
+flags false. The Ubuntu 24.04 image shares kernel
+`5.15.167.4-microsoft-standard-WSL2`; changing the container image did not change
+that kernel. The explicit preflight returned errno 92 (ENOPROTOOPT) for
+SO_PEERPIDFD. Unsupported capability is an incomplete failure, never a skip,
+fallback or credited refusal case. A supported kernel is required to test
+normal exchanges, bindings, forwarded senders, peer exit and historical
+listener behavior. This observation establishes no such runtime success.
+
+Local evidence under workspace `.scratch/`:
+
+- `rust-connected-build-20261113-a`: seven successful auxiliary build phases,
+  fifteen-source manifest, checked evidence index and selected RDP query.
+- `connected-python-20261113-b.log`: final Python checks.
+- `rust-connected-ipc-regression-20261113-a`: ten observed legacy control cases.
+- `rust-connected-native-20261113-a`: incomplete first attempt, generic
+  ValueError before the observer received its expected readiness report.
+- `rust-connected-native-20261113-b`: incomplete explicit capability diagnostic,
+  original errno preserved as KernelCapabilityUnavailable.
+
+All fifteen selected shared/fixture Rust hashes matched after verification.
+All reports used helper SHA-256
+`1675891688728a1c12228ac8bd6a9b1a4c93ac7b58440207add9a10ed748afe0`.
+The final connected observer SHA-256 was
+`02d93b215db7957698ca6111867713a856bbcc46b41533554598b34896d6cad5`.
+
+The isolated runs retained CPU1, 512 MiB RAM with no extra swap, 128 PIDs,
+bounded tmpfs, no network, unprivileged execution and NNP. The selected RDP
+query from 11:00:00 through 11:21:01 UTC returned no events; it does not diagnose
+the earlier RDP failure. Ten owned containers and three temporary store volumes
+were absent after verification. Three report volumes and the build volume
+remain retained. No global WSL/RDP configuration or installed product changed.
+
+Identity of a socket peer is still distinct from selecting an authorized
+custodian. Endpoint bootstrap, seven-case native accreditation, preserved exit
+evidence and operational replacement remain integration gates. Linux custody
+and central-server operation are not enabled by this increment.
+
+## Connected-peer identity on a separate guest kernel (2026-11-13)
+
+The subsequent [connected-peer experiment](../tools/native-key-store-probe/review/RUST-CONNECTED.md)
+observed all seven native cases on Ubuntu kernel 6.8.0-149-generic, using the
+same Rust helper as the earlier WSL2 attempt. Two normal control probes were
+accepted; wrong generation/store/roles, forwarded senders, independently
+observed peer exit and historical listener identity produced their required
+refusals. A timeout was not credited as a valid rejection. Endpoint authority,
+custody, recovery, MCP/server and lock acknowledgements remained false.
+
+QEMU TCG ran in an unprivileged, capability-free, NNP, read-only-root container
+with no network, CPU1, 512 MiB RAM with no extra swap and 128 PIDs. Its explicitly
+configured writable temporary mount was a 128 MiB tmpfs at `/var/tmp` for the disposable disk
+snapshot. The guest used 256 MiB RAM, one vCPU, no NIC and a 16 MiB TCG translation
+cache. The unchanged observer required its original private PID-1 deadline,
+UID/GID 65534, NNP, no effective capabilities, read-only root, loopback-only
+network, finite cgroups and dedicated ext-family store. The observed inner
+cgroup limits were CPU1, 128 MiB RAM, no extra swap and 128 PIDs; `/tmp` was a
+128 MiB tmpfs. The ext4 store was a fresh 32 MiB snapshot.
+
+The final attempt exited 0 in both guest and outer container, without OOM.
+Six outer memory samples ranged from 167.9 to 261.3 MiB under a preventive
+448 MiB sample threshold. This does not establish an absolute peak or a product
+latency budget. The initial TCG configuration had reached a 511.8 MiB sample
+and recorded OOM/exit 137; that attempt is retained as a failure. It is not
+attributed to the earlier RDP incident. After bounding the translation cache,
+the same guest payload completed within the original deadlines.
+
+Preparation initially encountered APT-directory permissions, absent `ldd` and
+minimal-image path assumptions. Those failures were resolved in auxiliary
+scripts without adding host capabilities or bypassing package verification.
+An initial boot reported PermissionError; the bootstrap stopped running mdev
+over devtmpfs nodes, and the final boot observed `/dev/null` mode 0666. Python
+failure diagnostics were extended with errno, checkpoint and bounded code-frame
+identifiers, without messages, full paths or changed acceptance conditions.
+
+The earlier clean Rust 1.89 auxiliary build still supplies the exact helper:
+74 tests, formatting and Clippy in debug/release. All fifteen selected shared
+and fixture Rust source hashes still matched. Final Python checks passed 344
+tests with one existing POSIX-only omission on Windows; two auxiliary asset
+integrity tests passed separately. The ten earlier inherited-IPC regressions
+used the same Rust artifact on the WSL2 kernel; they are separate from these
+seven guest-kernel cases. Full product CI and full-flow performance were not run.
+
+Local evidence under workspace `.scratch/`:
+
+- `kernel-probe-20261113-h`: final seven-case report, outer configuration,
+  memory samples, source/cleanup evidence and final selected RDP query.
+- `kernel-prepare-20261113-b`: successful bounded package preparation and
+  local image identity; `kernel-prepare-20261113-a` retains its initial failure.
+- `kernel-assemble-20261113-e`: selected guest manifest. The prior successful
+  bundle remains byte-exact in the retained asset volume, alongside failed
+  assembly stages and retention receipts.
+- `kernel-probe-20261113-a` through `g`: incomplete auxiliary attempts,
+  including the PermissionError boot and the OOM attempt. None accredits cases.
+- `kernel-python-20261113-a.log`: final Python suite output.
+- `kernel_driver_20261113.py`, `kernel_exec_20261113.py`,
+  `kernel-prepare-20261113.sh`, `kernel-assemble-20261113.py` and
+  `kernel-guest-init-20261113.sh`: retained local preparation/runtime sources.
+  `test_kernel_exec_20261113.py` contains the separate integrity controls.
+
+| Selected identity | SHA-256 |
+|---|---|
+| Helper | `1675891688728a1c12228ac8bd6a9b1a4c93ac7b58440207add9a10ed748afe0` |
+| Observer | `0c6395d782a434334668841421dffb115d2692650029a43b41f0669ef6ca14e8` |
+| Guest manifest | `5f89bce28229759c4cb120a8c71e013e475946e85b36a2aefae2db579db89add` |
+| Ubuntu kernel | `9e9bb539fbf5e25c3fa737180e3586dacd0922257cdffe319daf8e5ceecaeaf0` |
+
+The selected prepared image was
+`sha256:348f601bf71a5cd855cd4afd19eae631d6b3b5def45b8d26c0a876e8da493d32`.
+The dedicated retained asset volume is
+`vivac-kernel-review-bf76cb957fd043ec986090b6203c8ea3`. Kernel and module
+identities are indexed in its package manifest, copied into the final evidence.
+Before execution the driver bound the selected preparation and assembly
+receipts to that image/volume and checked the explicit manifest digest; an
+in-container checker verified the three guest artifacts before starting QEMU.
+This assumes a trusted host and no concurrent writer to the selected volume.
+It is neither remote attestation nor a hostile-host confidentiality claim.
+
+Sixteen owned containers, including the never-started metadata-export
+container, were absent after verification. The asset volume and auxiliary
+image remain retained. The selected RDP query from 12:00:00 through 12:45:06 UTC
+returned no events; this does not exclude every RDP failure or diagnose the
+previous incident. Global WSL/RDP settings and the installed product were
+unchanged. Connected identity is now observed under the stated guest profile;
+trusted endpoint bootstrap, native-exit evidence across supervisor failure and
+operational replacement remain separate gates. Normal Linux custody remains
+disabled.
+
+## Generated creation and resident reopening in the Ubuntu guest — 2026-11-19
+
+Two runs used separate disposable stores in Ubuntu 24.04 with kernel
+`6.8.0-149-generic`, OpenSSH 9.6p1, QEMU TCG and one virtual CPU. Both runs
+used the same selected writer and reader binaries. The observer measured
+monotonic elapsed time around its existing checks. It sent synthetic
+confirmation and unlock input through the corresponding terminals.
+
+| Observed interval | A (s) | B (s) |
+|---|---:|---:|
+| Producer spawn to acknowledgment prompt | 2.345 | 1.924 |
+| Acknowledgment prompt to synthetic confirmation sent | 0.065 | 0.060 |
+| Confirmation sent to verified publication and producer exit | 28.678 | 27.265 |
+| Verified publication to independent admission read | 11.461 | 11.242 |
+| SSH transport setup to first verified channel | 15.448 | 14.642 |
+| First channel to unlock prompt | 9.371 | 8.765 |
+| First unlock prompt to synthetic input sent | 0.162 | 0.132 |
+| First input sent to proof endpoint available | 4.964 | 4.530 |
+| First endpoint available to independently verified signature | 6.670 | 6.750 |
+| First release command to verified close permit | 4.232 | 4.060 |
+| Verified close permit to first SSH client and keeper exit | 0.261 | 0.218 |
+| Second SSH connection to verified channel | 10.293 | 10.837 |
+| Second channel to unlock prompt | 5.025 | 5.001 |
+| Second unlock prompt to synthetic input sent | 0.053 | 0.055 |
+| Second input sent to proof endpoint available | 3.971 | 4.094 |
+| Second endpoint available to independently verified signature | 5.853 | 6.016 |
+| Second release command to SSH client and keeper exit | 0.279 | 0.278 |
+| Third SSH connection to verified channel | 10.444 | 11.058 |
+| Third channel to refused opening and exit | 1.731 | 1.733 |
+
+Publication includes native loading, proof and closure checks as well as
+storage checks. Independent admission includes reading the initial permit and
+the durable record. SSH transport setup includes generating synthetic keys and
+configuring the loopback server. Each proof interval includes a separate verifier process.
+The third connection was refused before an unlock prompt in both runs.
+
+The guest fixture cgroup reported memory peaks of 68,325,376 and 68,263,936
+bytes against a 134,217,728-byte limit, with zero OOM events. Its CPU usage was
+155.334 and 148.977 CPU-seconds. Those counters cover setup and the full
+observer process group. The enclosing containers were removed.
+
+These timings characterize the emulated fixture, including its observer
+checks. Performance admission requires measurements of the integrated flow
+on the pilot runtime. The raw nanosecond intervals, resource counters and
+validation receipts are retained in the workspace under
+`.scratch/keeper_ssh_probe_measure_20261119` and
+`.scratch/keeper_ssh_probe_measure_retry1_20261119`. The isolated runner
+selects this case with `keeper_ssh_probe.ps1 -Trial measure` and a fresh run
+suffix for each additional repetition.
+
+## Integrated Linux binary in the Ubuntu guest — 2026-11-21
+
+One complete local run validated a monotonic-clock observer against the Vivac
+release binary in an isolated Ubuntu 24.04 guest with kernel
+`6.8.0-149-generic`, QEMU TCG and one virtual CPU. The binary orchestrated
+attended creation, a new unlock through SSH loopback, independent endpoint
+verification and clean close. The observer checked the opening permit and
+admission before and after the test. An earlier attempt ended before the
+unlock prompt and yielded no complete sample.
+
+| Observed interval | Elapsed (s) |
+|---|---:|
+| Confirmation sent to creation process exit | 22.594 |
+| SSH client spawn to authenticated channel marker | 3.516 |
+| Channel marker to unlock prompt | 8.296 |
+| Unlock sent to active prompt | 9.280 |
+| Independent proof process | 6.795 |
+| Close sent to SSH client exit | 2.830 |
+
+The fixture cgroup used 57.864 CPU-seconds between the recorded snapshots.
+Its memory peak was 49,344,512 bytes (47.1 MiB) against a 128 MiB limit, with
+zero OOM events. These counters include the observer and loopback SSH. The
+complete record contains 12 intervals, binary identity and before/after
+counters. Synthetic input writes are timed separately and do not measure
+human response time. The run validates the measuring fixture under TCG.
+
+## Integrated Linux binary with hardware acceleration — 2026-11-21
+
+Two fresh runs used the same Vivac ELF and Ubuntu 24.04 amd64 guest image with
+kernel `6.8.0-149-generic`. QEMU 11.1.0 used WHPX exclusively with one guest
+vCPU. The host runner observed Windows debug events for its own QEMU child
+inside a bounded Job and validated the final-exception path with a synthetic
+process before launching the guest. The guest waited for kernel random
+readiness before provisioning, outside the measured intervals.
+
+| Observed interval | A (s) | B (s) |
+|---|---:|---:|
+| Confirmation sent to creation process exit | 2.818 | 2.413 |
+| SSH client spawn to authenticated channel marker | 0.188 | 0.198 |
+| Channel marker to unlock prompt | 0.330 | 0.336 |
+| Unlock sent to active prompt | 0.595 | 0.645 |
+| Independent proof process | 0.135 | 0.150 |
+| Close sent to SSH client exit | 0.207 | 0.251 |
+
+The fixture group used 3.574 and 3.345 CPU-seconds between snapshots. Its
+memory peaked at 42,733,568 and 42,741,760 bytes against a 128 MiB limit, with
+zero OOM or OOM-kill events. Both runs independently verified the endpoint,
+preserved the admission and restored the clean opening permit. The complete
+receipts are in `.scratch/t4056-whpx/series-{6,7}/receipt.json`.
+
+These are local measurements of the integrated Ubuntu profile. The proof
+interval includes process launch and reading the retained admission. The
+creation interval includes loading, verification, closure and publication.
+Each interval has one observation per run. The results describe this
+workstation and guest profile. Deployment on the pilot server still requires
+validation in its own environment.

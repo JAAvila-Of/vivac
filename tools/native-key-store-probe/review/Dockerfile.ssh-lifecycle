@@ -1,0 +1,3 @@
+FROM vivac-terminal-review:ubuntu2404
+
+RUN usermod --shell /bin/sh --password x nobody
