@@ -152,6 +152,30 @@ fn unsupported_platform_refuses_before_credential_access() {
     assert!(output.status.success());
 }
 
+// The Linux custody commands exist only on Linux. Elsewhere they are unknown
+// device-key commands: refused with a usage error before any credential or file
+// is touched, and absent from the help that advertises the platform's forms.
+#[cfg(not(target_os = "linux"))]
+#[test]
+fn linux_custody_commands_are_refused_and_unadvertised_elsewhere() {
+    let sandbox = fixture("device-key-linux-elsewhere");
+    let credential = "0123456789abcdefghjkmnpqrs";
+    for command in ["open-linux", "verify-linux-possession"] {
+        for args in [
+            vec!["device-key", command, credential],
+            vec!["device-key", command, credential, "--json"],
+        ] {
+            let output = refused(&sandbox, &args);
+            assert_eq!(output.status.code(), Some(2), "{args:?}");
+        }
+    }
+    let output = run(&sandbox, &["device-key", "--help"]);
+    assert!(output.status.success(), "{output:?}");
+    let help = String::from_utf8(output.stdout).unwrap();
+    assert!(help.contains("create <absolute-new-directory>"));
+    assert!(!help.contains("open-linux") && !help.contains("verify-linux-possession"));
+}
+
 #[cfg(not(target_os = "macos"))]
 #[test]
 fn keychain_state_commands_refuse_before_credential_access() {
