@@ -198,7 +198,7 @@ mod probe {
         let mut control = unsafe { File::from_raw_fd(control_fd) };
         let mut command = [0u8; 1];
         control.read_exact(&mut command)?;
-        require(command == [b'X'])
+        require(command == *b"X")
     }
 
     fn read_receipt(reader: &mut UnixStream) -> io::Result<Value> {
@@ -208,7 +208,7 @@ mod probe {
             let mut byte = [0];
             reader.read_exact(&mut byte)?;
             require(bytes.len() < 8192)?;
-            if byte == [b'\n'] {
+            if byte == *b"\n" {
                 break;
             }
             bytes.push(byte[0]);
@@ -505,7 +505,7 @@ mod probe {
         };
         let monitor = thread::Builder::new().spawn(move || -> io::Result<()> {
             let mut expected_pid = None;
-            for phase in [b'B', b'A'] {
+            for phase in *b"BA" {
                 let mut packet = [0; 8];
                 observer.read_exact(&mut packet)?;
                 let pid = seam_packet(&packet, phase)?;

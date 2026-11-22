@@ -438,9 +438,12 @@ fn coordinate_ssh(
         "loader_pid":loader_pid,"creator_tid":creator_tid,"active":true}),
     )?;
     let published = matches!(case.as_str(), "normal-close" | "disconnect-published");
-    let final_seam;
-    let outcome;
-    if published {
+    let outcome = if published {
+        "published"
+    } else {
+        "cancelled_by_ssh"
+    };
+    let final_seam = if published {
         baseline::require(control.command()? == b'G')?;
         baseline::require(matches!(gate.start(|_| Ok([0; 64])), Err(Error::Busy)))?;
         pause.release()?;
@@ -461,8 +464,7 @@ fn coordinate_ssh(
             baseline::require(control.command()? == b'D' && control.disconnect_cause().is_some())?;
         }
         gate_io(gate.lock(TIMEOUT))?;
-        final_seam = "published";
-        outcome = "published";
+        "published"
     } else {
         baseline::require(control.command()? == b'D')?;
         let cause = control.disconnect_cause().ok_or_else(baseline::refused)?;
@@ -492,9 +494,8 @@ fn coordinate_ssh(
         pause.release()?;
         baseline::require(gate_io(gate.wait_request(id, TIMEOUT))? == RequestOutcome::Cancelled)?;
         gate_io(locker.join().map_err(|_| baseline::refused())?)?;
-        final_seam = selected;
-        outcome = "cancelled_by_ssh";
-    }
+        selected
+    };
     closed_request(&gate)?;
     let snapshot = gate_io(gate.snapshot())?;
     baseline::require(

@@ -106,7 +106,7 @@ pub(super) fn wait_release() -> io::Result<()> {
     )?;
     let mut command = [0; 1];
     io::stdin().read_exact(&mut command)?;
-    baseline::require(command == [b'G'])
+    baseline::require(command == *b"G")
 }
 
 fn report(role: &str, generation: [u8; 32], closed: bool) -> io::Result<()> {

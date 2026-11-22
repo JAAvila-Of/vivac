@@ -55,7 +55,9 @@ fn unhex(value: &OsString, size: usize) -> io::Result<Vec<u8>> {
     let text = value.to_str().ok_or_else(baseline::refused)?;
     baseline::require(text.len() == size * 2)?;
     text.as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| {
             let digit = |value| match value {
                 b'0'..=b'9' => Ok(value - b'0'),

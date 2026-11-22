@@ -175,10 +175,12 @@ pub(super) struct Fixture {
 }
 
 fn hex_decode(value: &str) -> io::Result<Vec<u8>> {
-    require(value.len() <= LIMIT && value.len() % 2 == 0)?;
+    require(value.len() <= LIMIT && value.len().is_multiple_of(2))?;
     value
         .as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| {
             let digit = |value| match value {
                 b'0'..=b'9' => Ok(value - b'0'),
@@ -414,7 +416,7 @@ impl Control {
     }
 
     pub(super) fn send_master(&self, descriptor: &OwnedFd) -> io::Result<()> {
-        let mut marker = [b'F'];
+        let mut marker = *b"F";
         let mut vector = libc::iovec {
             iov_base: marker.as_mut_ptr().cast(),
             iov_len: marker.len(),
