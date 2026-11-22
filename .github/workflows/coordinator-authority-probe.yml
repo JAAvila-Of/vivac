@@ -22,7 +22,6 @@ jobs:
     timeout-minutes: 15
     env:
       CARGO_BUILD_JOBS: '1'
-      TMPDIR: ${{ runner.temp }}/vivac-authority-fixtures
     defaults:
       run:
         working-directory: tools/team-coordinator-probe
@@ -33,9 +32,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.89.0
         with:
           components: rustfmt,clippy
-      - run: install -d -m 0700 "$TMPDIR"
+      # The runner context is not available to job-level env, so the private
+      # fixture directory is named inside the steps that use it.
+      - run: install -d -m 0700 "$RUNNER_TEMP/vivac-authority-fixtures"
       - run: cargo fmt --check
-      - run: cargo test --locked --all-targets -- --test-threads=1
+      - run: TMPDIR="$RUNNER_TEMP/vivac-authority-fixtures" cargo test --locked --all-targets -- --test-threads=1
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo clippy --locked --all-targets --release -- -D warnings
       - run: cargo build --locked
