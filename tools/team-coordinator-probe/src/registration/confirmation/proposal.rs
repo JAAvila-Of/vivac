@@ -95,6 +95,7 @@ pub(crate) struct Draft {
 }
 
 impl Draft {
+    #[cfg(all(test, feature = "browser-lab", target_os = "linux"))]
     pub(crate) fn parse(raw: &[u8]) -> RegistrationResult<Self> {
         Self::parse_using(raw, Runtime::default())
     }
@@ -258,6 +259,7 @@ impl ConfirmedProposal {
 }
 
 impl RegistrationVerifier {
+    #[cfg(all(test, feature = "browser-lab", target_os = "linux"))]
     pub(crate) fn prepare_proposal(
         &self,
         draft: Draft,
@@ -304,6 +306,7 @@ impl RegistrationVerifier {
         })
     }
 
+    #[cfg(all(test, feature = "browser-lab", target_os = "linux"))]
     pub(crate) fn start_proposal(
         &self,
         ready: ReadyProposal,
@@ -342,6 +345,7 @@ impl RegistrationVerifier {
         ))
     }
 
+    #[cfg(all(test, feature = "browser-lab", target_os = "linux"))]
     pub(crate) fn finish_proposal(
         &self,
         pending: PendingProposal,

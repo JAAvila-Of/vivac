@@ -329,6 +329,7 @@ impl RegistrationVerifier {
         self.check_fixture_scope(view, runtime)
     }
 
+    #[cfg(all(test, feature = "browser-lab", target_os = "linux"))]
     pub(crate) fn begin_fixture_acceptances(
         &self,
         ready: ReadyProposal,
@@ -366,6 +367,7 @@ impl RegistrationVerifier {
         Ok((request, pending))
     }
 
+    #[cfg(all(test, feature = "browser-lab", target_os = "linux"))]
     pub(crate) fn finish_fixture_acceptances(
         &self,
         pending: PendingFixtureAcceptances,
@@ -411,6 +413,7 @@ impl RegistrationVerifier {
         })
     }
 
+    #[cfg(all(test, feature = "browser-lab", target_os = "linux"))]
     pub(crate) fn start_fixture_proposal(
         &self,
         verified: FixtureVerifiedReadyProposal,
@@ -435,6 +438,7 @@ impl RegistrationVerifier {
         ))
     }
 
+    #[cfg(all(test, feature = "browser-lab", target_os = "linux"))]
     pub(crate) fn finish_fixture_proposal(
         &self,
         pending: PendingFixtureProposal,
