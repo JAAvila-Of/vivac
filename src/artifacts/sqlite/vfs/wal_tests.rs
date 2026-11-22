@@ -47,6 +47,7 @@ impl Writer {
                 "--exact",
                 "artifacts::sqlite::vfs::wal_tests::wal_writer_child",
                 "--nocapture",
+                "--quiet",
             ])
             .env("VIVAC_WAL_WRITER_ROOT", &root)
             .env("VIVAC_WAL_FIXTURE_SQL", sql)
@@ -445,6 +446,7 @@ fn native_recovery_reader(path: &std::path::Path) -> io::Result<std::process::Ou
             "--exact",
             "artifacts::sqlite::vfs::wal_tests::native_recovery_reader_child",
             "--nocapture",
+            "--quiet",
         ])
         .env("VIVAC_WAL_RECOVERY_PATH", path)
         .output()

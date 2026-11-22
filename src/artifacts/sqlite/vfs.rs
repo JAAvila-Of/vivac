@@ -23,7 +23,7 @@ pub(super) fn engine_guard() -> Result<MutexGuard<'static, ()>, Failure> {
     // All fixture builders and application connections share this guard. These
     // options must precede even SQLite's implicit initialization.
     let configured = CONFIGURED.get_or_init(|| unsafe {
-        ffi::sqlite3_libversion_number() >= 3_053_002
+        ffi::sqlite3_libversion_number() >= 3_054_001
             && ffi::sqlite3_config(ffi::SQLITE_CONFIG_MEMSTATUS, 1) == ffi::SQLITE_OK
             && ffi::sqlite3_config(
                 ffi::SQLITE_CONFIG_PAGECACHE,
@@ -745,7 +745,7 @@ unsafe extern "C" fn current_time(_: *mut ffi::sqlite3_vfs, out: *mut f64) -> c_
     }
 }
 
-// SQLite 3.53.2 uses SHM lock bytes 120..127 and dead-man-switch byte 128.
+// SQLite 3.54.1 uses SHM lock bytes 120..127 and dead-man-switch byte 128.
 fn hold_wal(file: &File) -> io::Result<()> {
     wal_range(file, 128, 1, false)?;
     if let Err(error) = wal_range(file, 120, 8, false) {
