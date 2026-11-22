@@ -82,6 +82,44 @@ fn refused(authority: &mut SignedAuthority, request: &SignedRequest, device: &Kn
 }
 
 #[test]
+fn member_administration_query_tracks_scope_capability_and_revocation() {
+    let organization = OrganizationId::parse(ORGANIZATION).unwrap();
+    let principal = PrincipalId::parse(PRINCIPAL).unwrap();
+    let other_organization = OrganizationId::parse(OTHER).unwrap();
+    let unknown = PrincipalId::parse(TARGET).unwrap();
+    let mut current = authority();
+    assert!(current.can_manage_members(&organization, &principal));
+    assert!(!current.can_manage_members(&other_organization, &principal));
+    assert!(!current.can_manage_members(&organization, &unknown));
+    assert!(current.is_active_principal(&organization, &principal));
+    assert!(!current.is_active_principal(&other_organization, &principal));
+    assert!(!current.is_active_principal(&organization, &unknown));
+    let key = key();
+    for action in [
+        Action::SetOrganizationCapabilities {
+            principal: principal.clone(),
+            capabilities: Default::default(),
+        },
+        Action::RevokePrincipal {
+            principal: principal.clone(),
+        },
+    ] {
+        current = authority();
+        let remains_active = matches!(&action, Action::SetOrganizationCapabilities { .. });
+        let request = request(action);
+        let device = known(&request, &key);
+        current
+            .apply_signed(&signed(request, &key), &device)
+            .unwrap();
+        assert!(!current.can_manage_members(&organization, &principal));
+        assert_eq!(
+            current.is_active_principal(&organization, &principal),
+            remains_active
+        );
+    }
+}
+
+#[test]
 fn published_signature_vector_matches_and_verifies_strictly() {
     let key = key();
     assert_eq!(
@@ -188,6 +226,10 @@ fn every_action_has_a_fixed_independent_encoding() {
         request.change.base_revision = 0x0102_0304_0506_0708;
         let bytes = request.canonical_bytes();
         assert_eq!(bytes, [header.as_slice(), expected].concat());
+        assert_eq!(
+            DeviceRequest::parse_canonical(&[header.as_slice(), expected].concat()),
+            Ok(request)
+        );
         assert!(bytes.len() <= MAX_ENVELOPE_BYTES);
     }
 }
@@ -239,6 +281,141 @@ fn permission_masks_preserve_each_bit_and_empty_sets() {
     ] {
         assert_eq!(request(action).canonical_bytes().last(), Some(&0));
     }
+}
+
+fn canonical_fixture(payload: &[u8]) -> Vec<u8> {
+    let header = b"vivac.team.change.v1\0\
+        00000000000000000000000001\
+        00000000000000000000000002\
+        00000000000000000000000003\
+        00000000000000000000000004\
+        00000000000000000000000005\
+        \0\0\0\0\0\0\0\0";
+    [header.as_slice(), payload].concat()
+}
+
+#[test]
+fn canonical_decoder_accepts_every_defined_mask_including_empty_sets() {
+    let capabilities = [
+        OrganizationCapability::ManageMembers,
+        OrganizationCapability::ManageProjects,
+        OrganizationCapability::GrantProjectAccess,
+        OrganizationCapability::ManageOrganizationCapabilities,
+    ];
+    for mask in 0..=0x0f {
+        let mut bytes = canonical_fixture(b"\x0200000000000000000000000006");
+        bytes.push(mask);
+        let expected = request(Action::SetOrganizationCapabilities {
+            principal: PrincipalId::parse(TARGET).unwrap(),
+            capabilities: capabilities
+                .iter()
+                .enumerate()
+                .filter(|(bit, _)| mask & (1 << bit) != 0)
+                .map(|(_, capability)| *capability)
+                .collect(),
+        });
+        assert_eq!(DeviceRequest::parse_canonical(&bytes), Ok(expected));
+    }
+    let permissions = [
+        ProjectPermission::ReadContent,
+        ProjectPermission::WriteWork,
+        ProjectPermission::ProposeNorm,
+        ProjectPermission::ReadReports,
+        ProjectPermission::ReadAudit,
+    ];
+    for mask in 0..=0x1f {
+        let mut bytes =
+            canonical_fixture(b"\x040000000000000000000000000600000000000000000000000007");
+        bytes.push(mask);
+        let expected = request(Action::SetProjectPermissions {
+            principal: PrincipalId::parse(TARGET).unwrap(),
+            project: ProjectId::parse(PROJECT).unwrap(),
+            permissions: permissions
+                .iter()
+                .enumerate()
+                .filter(|(bit, _)| mask & (1 << bit) != 0)
+                .map(|(_, permission)| *permission)
+                .collect(),
+        });
+        assert_eq!(bytes.len(), MAX_ENVELOPE_BYTES);
+        assert_eq!(DeviceRequest::parse_canonical(&bytes), Ok(expected));
+    }
+}
+
+#[test]
+fn canonical_decoder_refuses_every_truncated_prefix_and_trailing_data() {
+    let payloads: [&[u8]; 5] = [
+        b"\x0100000000000000000000000006",
+        b"\x0200000000000000000000000006\x0f",
+        b"\x0300000000000000000000000007",
+        b"\x040000000000000000000000000600000000000000000000000007\x1f",
+        b"\x0500000000000000000000000006",
+    ];
+    for payload in payloads {
+        let bytes = canonical_fixture(payload);
+        assert!(DeviceRequest::parse_canonical(&bytes).is_ok());
+        for length in 0..bytes.len() {
+            assert_eq!(
+                DeviceRequest::parse_canonical(&bytes[..length]),
+                Err(Refused)
+            );
+        }
+        for suffix in [b"\0".as_slice(), b"\xff", b"\0\0\0\0\0\0\0\0"] {
+            let extended = [bytes.as_slice(), suffix].concat();
+            assert_eq!(DeviceRequest::parse_canonical(&extended), Err(Refused));
+        }
+    }
+    assert_eq!(
+        DeviceRequest::parse_canonical(&[0; MAX_ENVELOPE_BYTES + 1]),
+        Err(Refused)
+    );
+}
+
+#[test]
+fn canonical_decoder_refuses_unknown_domain_tags_masks_and_noncanonical_identifiers() {
+    let bytes = canonical_fixture(b"\x040000000000000000000000000600000000000000000000000007\x1f");
+    for index in 0..21 {
+        let mut changed = bytes.clone();
+        changed[index] ^= 1;
+        assert_eq!(DeviceRequest::parse_canonical(&changed), Err(Refused));
+    }
+    for tag in [0, 6, 127, 255] {
+        let mut changed = bytes.clone();
+        changed[159] = tag;
+        assert_eq!(DeviceRequest::parse_canonical(&changed), Err(Refused));
+    }
+    for offset in [21, 47, 73, 99, 125, 160, 186] {
+        for (relative, replacement) in [(0, b'8'), (1, b'A'), (1, b'i'), (1, 0xff), (1, 0)] {
+            let mut changed = bytes.clone();
+            changed[offset + relative] = replacement;
+            assert_eq!(DeviceRequest::parse_canonical(&changed), Err(Refused));
+        }
+    }
+    for (payload, first_invalid) in [
+        (b"\x0200000000000000000000000006".as_slice(), 0x10),
+        (
+            b"\x040000000000000000000000000600000000000000000000000007".as_slice(),
+            0x20,
+        ),
+    ] {
+        for mask in first_invalid..=u8::MAX {
+            let mut changed = canonical_fixture(payload);
+            changed.push(mask);
+            assert_eq!(DeviceRequest::parse_canonical(&changed), Err(Refused));
+        }
+    }
+}
+
+#[test]
+fn canonical_decoder_accepts_maximum_revision_without_wrapping_or_extra_bytes() {
+    let mut bytes = canonical_fixture(b"\x0300000000000000000000000007");
+    bytes[151..159].fill(0xff);
+    let mut expected = request(create_project());
+    expected.change.base_revision = u64::MAX;
+    assert_eq!(DeviceRequest::parse_canonical(&bytes), Ok(expected.clone()));
+    assert_eq!(expected.canonical_bytes(), bytes);
+    bytes.insert(151, 1);
+    assert_eq!(DeviceRequest::parse_canonical(&bytes), Err(Refused));
 }
 
 #[test]

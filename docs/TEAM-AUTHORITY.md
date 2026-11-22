@@ -5,6 +5,12 @@ work history from shared permissions and governance so that recording work
 never waits for the network. It defines acceptance requirements, not an
 implemented server, transport, authentication system or command.
 
+The [server platform contract](SERVER-PLATFORMS.md) targets native Linux,
+Windows and macOS servers independently of client platforms. Ubuntu 24.04 is
+the first pilot deployment, not an exclusive server platform. Platform support
+requires native persistence and lifecycle evidence as well as shared protocol
+conformance; the isolated Linux coordinator does not establish that support.
+
 ## Identities and resources
 
 A person, automation agent, device, session, project and lane have distinct
@@ -61,7 +67,10 @@ A lower or conflicting revision is not silently accepted. A fresh device or
 restored installation needs an authenticated bootstrap and a current trusted
 checkpoint; a backup is not evidence that its old permissions still apply.
 The organization establishes its initial trust checkpoint during reviewed
-bootstrap. Subsequent device enrollment requires an existing trusted client
+bootstrap. The [initial-trust contract](TEAM-BOOTSTRAP.md) separates organizational
+acceptance, first-device possession and passkey verification; it does not provide
+an implemented bootstrap ceremony. Subsequent device enrollment requires an
+existing trusted client
 with explicit enrollment authority, bound to the new device and a current
 coordinator checkpoint. A restored backup or a successful login alone cannot
 establish that trust or release content keys. Loss of all trusted clients is
@@ -72,6 +81,49 @@ fork presented to a new client. This design does not promise Byzantine
 consensus or availability against a malicious coordinator. Detected rollback,
 conflicts or unverifiable authority prevent new shared admission, while local
 capture remains usable.
+
+## Additional devices and owner consent
+
+Adding a device to an existing identity requires that identity's own consent
+from an already trusted client, fresh user verification and explicit permission
+for the `OwnAdditionalDevice` scope. The approver and target principal must be
+the same active principal in the same organization. Membership, a successful
+login, `ManageMembers` or governance capabilities do not imply this permission.
+
+A member administrator cannot substitute for the owner, including when the
+owner has more privileged capabilities. Linking a key can enable impersonation
+without changing a role; treating it as ordinary membership administration
+would bypass the separation of privileged delegation. The permission adds only
+a new credential for the same identity and cannot grant roles or act for another
+principal. Organizational control belongs in the explicit enrollment policy,
+not in an administrative override of the owner's confirmation.
+
+A registered client record alone is insufficient. A previously known signing
+credential of that owner must endorse the exact candidate, current checkpoint
+and applicable policy. The verification key comes from the trusted registry,
+not from the candidate or an accompanying key assertion. This endorsement is
+separate from fresh human verification; it proves control of a registered key,
+not physical presence or that a restored installation is trustworthy.
+
+The additional device must use new device and credential identifiers and a new
+signing key. It cannot silently replace or reuse a known signing binding.
+Replacement and individual credential revocation need their own admitted
+transitions.
+
+This flow cannot establish a first trusted client. First-device admission needs
+a reviewed bootstrap or invitation procedure; loss of all trusted clients uses
+the separately authorized recovery procedure. A login, copied backup, candidate
+possession proof or recovery hint cannot select a shortcut through this flow.
+
+`OwnAdditionalDevice` describes an authorization scope, not an implemented CLI
+permission or a new bit in the version-one authority protocol. Its production
+grant must come from admitted authority and currently trusted credentials. The
+isolated probe's fixture policy does not establish either.
+
+The separate [signed enrollment-policy model](TEAM-ENROLLMENT-POLICY.md)
+evaluates explicit grants and revocations under a version-two signing domain.
+It does not replace the coordinator's current fixture catalogue or establish
+an admitted credential registry or production permission.
 
 ## Local and shared states
 
@@ -99,6 +151,23 @@ scope, delegation, reviewed revision and audience again. A stale review is
 not refreshed and applied under the old confirmation. Work produced under an
 older rule keeps that historical fact; whether it may now be shared needs a
 new assessment against the current applicable authority.
+
+## Shared artifact retention
+
+Server mode retains complete, verified encrypted copies of authorized shared
+artifact revisions. A shared revision must remain available independently of
+the creating workstation being online. Clients retain local custody for creation
+and disconnected work; synchronization is a separate operation and never blocks
+ordinary capture.
+
+Local retention does not authorize publication. Sharing still binds the exact
+revision and its reviewed audience. The client distinguishes a locally retained
+revision, one pending synchronization, and one whose complete durable retention
+has been verified by the server. Uploading bytes or admitting an authority change
+alone cannot establish the last state. Content keys remain with authorized
+trusted clients or explicitly designated recovery custodians, not with the
+synchronization operator. These are integration requirements, not an implemented
+artifact synchronization service.
 
 ## Governance and delegation
 
@@ -261,6 +330,10 @@ signing bytes and verifies possession of a known device key before policy
 admission. It also remains test-only: its trusted bindings are fixtures, not
 an implemented account or device-enrollment system. Human verification,
 credential lifecycle and durable admission remain separate prerequisites.
+
+The separate [candidate storage experiment](TEAM-AUTHORITY-STORAGE.md) defines
+durable replay and checkpoint requirements using public fixture trust. It runs
+outside the product and does not establish real enrollment or shared admission.
 
 ## Acceptance cases
 

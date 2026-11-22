@@ -55,6 +55,39 @@ them and independently verifies the signature and local time window.
 Both commands return this complete document with `--json`, so the output of
 `prove` can be saved directly and passed to `verify-proof`.
 
+## Local candidate inspection
+
+`vivac device-key inspect-proof <absolute-proof-file>
+[--expected-candidate-sha256 <64-lowercase-hex-digits>] [--json]` verifies the
+proof and local time window using the same bounded, link-refusing public-file
+reader. It then shows the complete candidate: organization, intended principal,
+device, credential, public key, operation, base revision, nonce and times.
+It neither opens a key store nor writes a project, registry or trust record.
+
+The candidate reference is SHA-256 over ASCII
+`vivac.device.candidate-reference.v1`, one zero byte, and the complete 251-byte
+canonical challenge defined below. The full 64 lowercase hexadecimal digits
+must be retained. JSON ordering, whitespace and equivalent string escapes do
+not change this reference. A change to any candidate field changes the input;
+the proof signature and output labels are outside the reference. Signature,
+labels and expiry are still verified before reporting it.
+
+An expected reference is optional. When supplied, exactly one canonical value
+is required and a mismatch refuses without public output. A reference obtained
+from the same untrusted server as the proof does not establish independent
+intent. A person must obtain and compare it through a separately trusted path
+from the installed client controlling the new device. This command does not
+authenticate that path or establish trusted client distribution.
+
+The version-one JSON inspection receipt has `version: 1`, `candidate`,
+`candidate_sha256`, `expected_reference` (`matched` or `not_supplied`),
+`status: "possession_only"`, and `authority`, `approval` and `challenge_use`,
+each `"not_checked"`. It is a review receipt, not an interchangeable proof file.
+The existing `prove` and `verify-proof` JSON documents remain unchanged.
+Matching a reference establishes candidate equality only: it grants no
+membership, enrollment permission or human approval, and checks neither current
+shared authority nor durable challenge consumption.
+
 ## Exact signed bytes
 
 Version 1 signs this concatenation directly with Ed25519:
@@ -76,6 +109,10 @@ or weak public keys. The separate domain prevents this proof from being used
 as a signature over a shared-authority change or an arbitrary caller message.
 
 ## Admission remains separate
+
+The separate [approval requirements](DEVICE-ENROLLMENT-ASSERTIONS.md) remain
+integration gates. Virtual user verification is not human approval and does not
+enable admission.
 
 A valid proof may be generated or verified more than once during its window.
 These commands deliberately keep no challenge-consumption database and cannot

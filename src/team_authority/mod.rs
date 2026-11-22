@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-mod signed;
+pub(crate) mod signed;
 #[cfg(test)]
 mod tests;
 
@@ -11,7 +11,7 @@ type Result<T> = std::result::Result<T, Refused>;
 
 const MAX_PRINCIPALS: usize = 128;
 const MAX_PROJECTS: usize = 64;
-const MAX_OPERATIONS: usize = 1024;
+pub(crate) const MAX_OPERATIONS: usize = 1024;
 
 macro_rules! identifier {
     ($name:ident) => {
@@ -19,6 +19,10 @@ macro_rules! identifier {
         pub(crate) struct $name(String);
 
         impl $name {
+            pub(crate) fn as_str(&self) -> &str {
+                &self.0
+            }
+
             pub(crate) fn parse(value: &str) -> Result<Self> {
                 let bytes = value.as_bytes();
                 if bytes.len() != 26
@@ -125,17 +129,14 @@ pub(crate) struct Authority {
 }
 
 impl Authority {
-    pub(crate) fn bootstrap(organization: OrganizationId, initial: PrincipalId) -> Self {
+    pub(crate) fn bootstrap(
+        organization: OrganizationId,
+        initial: PrincipalId,
+        capabilities: BTreeSet<OrganizationCapability>,
+    ) -> Self {
         let principal = Principal {
             active: true,
-            capabilities: [
-                OrganizationCapability::ManageMembers,
-                OrganizationCapability::ManageProjects,
-                OrganizationCapability::GrantProjectAccess,
-                OrganizationCapability::ManageOrganizationCapabilities,
-            ]
-            .into_iter()
-            .collect(),
+            capabilities,
             grants: BTreeMap::new(),
         };
         Self {
