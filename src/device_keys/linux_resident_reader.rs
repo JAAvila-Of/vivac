@@ -755,7 +755,7 @@ impl CandidateResident {
             self.manifest_file.fd.as_raw_fd(),
         ]
         .into_iter()
-        .zip(identity.chunks_exact_mut(2))
+        .zip(identity.as_chunks_mut::<2>().0)
         {
             let mut value = std::mem::MaybeUninit::<libc::stat>::uninit();
             // SAFETY: fstat queries the retained descriptor and initializes value.

@@ -121,8 +121,8 @@ impl TranscriptData {
         bytes[..30].copy_from_slice(DOMAIN);
         bytes[30..32].copy_from_slice(&[1, 2]);
         bytes[38..70].copy_from_slice(&self.record_digest);
-        for (word, output) in self.store.iter().zip(bytes[70..118].chunks_exact_mut(8)) {
-            output.copy_from_slice(&word.to_be_bytes());
+        for (word, output) in self.store.iter().zip(bytes[70..118].as_chunks_mut::<8>().0) {
+            *output = word.to_be_bytes();
         }
         bytes[118..150].copy_from_slice(&self.generation);
         bytes[150..182].copy_from_slice(&self.challenge);
@@ -135,8 +135,8 @@ impl TranscriptData {
             self.custodian.1,
             self.custodian.2,
         ];
-        for (word, output) in words.iter().zip(bytes[214..].chunks_exact_mut(4)) {
-            output.copy_from_slice(&word.to_be_bytes());
+        for (word, output) in words.iter().zip(bytes[214..].as_chunks_mut::<4>().0) {
+            *output = word.to_be_bytes();
         }
         Ok(bytes)
     }

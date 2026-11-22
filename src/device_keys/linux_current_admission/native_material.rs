@@ -263,8 +263,13 @@ impl LaunchBinding {
         wire[..16].copy_from_slice(KEEPER_BOOTSTRAP_HEADER);
         wire[9] = kind as u8;
         wire[16..48].copy_from_slice(&self.generation);
-        for (slot, value) in wire[48..96].chunks_exact_mut(8).zip(self.identity) {
-            slot.copy_from_slice(&value.to_be_bytes());
+        for (slot, value) in wire[48..96]
+            .as_chunks_mut::<8>()
+            .0
+            .iter_mut()
+            .zip(self.identity)
+        {
+            *slot = value.to_be_bytes();
         }
         wire[96..].copy_from_slice(&self.record_digest);
         wire
@@ -285,8 +290,8 @@ impl LaunchBinding {
         let generation = wire[16..48].try_into().map_err(|_| invalid())?;
         require(generation != [0; 32])?;
         let mut identity = [0; 6];
-        for (output, slot) in identity.iter_mut().zip(wire[48..96].chunks_exact(8)) {
-            *output = u64::from_be_bytes(slot.try_into().map_err(|_| invalid())?);
+        for (output, slot) in identity.iter_mut().zip(wire[48..96].as_chunks::<8>().0) {
+            *output = u64::from_be_bytes(*slot);
         }
         Ok((
             Self {

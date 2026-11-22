@@ -76,7 +76,7 @@ fn decode_public_key(encoded: &str) -> io::Result<[u8; 32]> {
         _ => Err(invalid()),
     };
     let mut public = [0; 32];
-    for (output, pair) in public.iter_mut().zip(encoded.as_bytes().chunks_exact(2)) {
+    for (output, pair) in public.iter_mut().zip(encoded.as_bytes().as_chunks::<2>().0) {
         *output = digit(pair[0])? * 16 + digit(pair[1])?;
     }
     Ok(public)

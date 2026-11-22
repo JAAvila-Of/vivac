@@ -10,7 +10,7 @@ fn generate_with(mut fill: impl FnMut(&mut [u8]) -> Result<()>) -> Result<Zeroiz
     fill(&mut *source)?;
     let mut encoded = Zeroizing::new(vec![0u8; ENCODED_LENGTH]);
     const HEX: &[u8; 16] = b"0123456789abcdef";
-    for (byte, pair) in source.iter().zip(encoded.chunks_exact_mut(2)) {
+    for (byte, pair) in source.iter().zip(encoded.as_chunks_mut::<2>().0) {
         pair[0] = HEX[usize::from(byte >> 4)];
         pair[1] = HEX[usize::from(byte & 0x0f)];
     }
