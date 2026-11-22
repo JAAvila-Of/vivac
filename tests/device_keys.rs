@@ -157,7 +157,7 @@ fn unsupported_platform_refuses_before_credential_access() {
 // is touched, and absent from the help that advertises the platform's forms.
 #[cfg(not(target_os = "linux"))]
 #[test]
-fn linux_custody_commands_are_refused_and_unadvertised_elsewhere() {
+fn linux_custody_commands_are_refused_and_hidden_elsewhere() {
     let sandbox = fixture("device-key-linux-elsewhere");
     let credential = "0123456789abcdefghjkmnpqrs";
     for command in ["open-linux", "verify-linux-possession"] {
