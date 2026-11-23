@@ -29,6 +29,11 @@ use super::super::linux_spawn::{
 
 #[path = "pidfd_identity.rs"]
 mod pidfd_identity;
+#[allow(
+    unused_imports,
+    reason = "Only the session control protocol reads a pid from a process reference."
+)]
+pub use pidfd_identity::live_pid;
 use pidfd_identity::validate_process_reference;
 pub use pidfd_identity::{verify_live_process, verify_live_process_pair};
 

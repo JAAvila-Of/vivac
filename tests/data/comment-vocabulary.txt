@@ -344,6 +344,7 @@ backdate
 backend
 background
 backing
+backlog
 backs
 backslash
 backtick
@@ -1028,6 +1029,7 @@ dashed
 dashes
 data
 database
+datagram
 date
 dated
 dateless
@@ -1354,6 +1356,7 @@ dx
 dying
 e
 each
+eagain
 earlier
 early
 earn
@@ -1766,6 +1769,7 @@ fractional
 fragment
 fragments
 frame
+frames
 framework
 framing
 free
@@ -1841,6 +1845,7 @@ getsockname
 getsockopt
 gettid
 getting
+getuid
 gh
 git
 gitdir
@@ -2023,6 +2028,7 @@ hoping
 hops
 host
 hosted
+hostile
 hot
 hour
 hours
@@ -2399,6 +2405,7 @@ lexically
 lib
 libc
 library
+libtest
 licence
 licences
 license
@@ -2467,6 +2474,7 @@ log
 logged
 logging
 logic
+login
 logo
 logs
 lone
@@ -2636,6 +2644,7 @@ mirroring
 mirrors
 misclassify
 misdate
+misdirection
 mislabel
 mismatch
 mismatched
@@ -2674,6 +2683,7 @@ motivated
 motivating
 mount
 mounted
+mounts
 mouse
 mouth
 move
@@ -3023,6 +3033,7 @@ pdeathsig
 peak
 peer
 peerpidfd
+peers
 penalizes
 pending
 people
@@ -4647,6 +4658,7 @@ u
 uapi
 ubuntu
 ucred
+uid
 ulid
 ulids
 un
@@ -5032,5 +5044,6 @@ zeroizing
 zeros
 zlib
 zombie
+zombies
 zone
 zwj

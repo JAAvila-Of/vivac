@@ -28,6 +28,12 @@ pub fn verify_live_process(expected: &OwnedFd, offered: &OwnedFd) -> io::Result<
     Ok(())
 }
 
+/// The pid of one live process reference, read while the reference stays live.
+pub fn live_pid(reference: &OwnedFd) -> io::Result<libc::pid_t> {
+    let [pid] = read_live_processes([reference])?;
+    Ok(pid)
+}
+
 fn read_live_processes<const N: usize>(references: [&OwnedFd; N]) -> io::Result<[libc::pid_t; N]> {
     let directory = OpenOptions::new()
         .read(true)

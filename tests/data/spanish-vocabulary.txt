@@ -35,7 +35,6 @@ ancla
 anclado
 anotadas
 anotado
-antes
 aparca
 aparcado
 aparcados
@@ -47,7 +46,6 @@ aplicarpoliticadevisibilidadporreunionhandler
 apretado
 apunta
 aqui
-arbol
 arrastra
 arreglar
 arreglarla
@@ -67,7 +65,6 @@ bajo
 bandera
 banderas
 barras
-base
 bastante
 bien
 bloquea
@@ -95,7 +92,6 @@ casi
 cayo
 cerrado
 cerrados
-cerrar
 cerrarlo
 cesta
 ciclo
@@ -112,7 +108,6 @@ colgado
 comando
 comio
 como
-con
 conciencia
 concreta
 condicion
@@ -147,7 +142,6 @@ decisiones
 deja
 dejar
 dejo
-del
 dentro
 dependencias
 desaparecio
@@ -168,7 +162,6 @@ direccion
 directorio
 distribuido
 donde
-dos
 duplicaria
 editando
 elegir
@@ -189,7 +182,6 @@ entrada
 entrar
 entregado
 entropia
-era
 esa
 escribe
 escribi
@@ -298,7 +290,6 @@ marcarlo
 mas
 medir
 mes
-meta
 miente
 migrar
 mirar
@@ -348,7 +339,6 @@ pegar
 pend
 pendiente
 perdio
-permisos
 permisoserviceadapter
 persona
 pidio
@@ -370,7 +360,6 @@ propia
 proponer
 proposito
 proveedor
-proyecto
 proyectos
 publico
 puede
@@ -445,7 +434,6 @@ seguras
 semanas
 sembrado
 sembrar
-ser
 serializacion
 sesion
 sesiones
@@ -453,7 +441,6 @@ siembra
 siendo
 sigue
 siguen
-simple
 sin
 sinarbol
 sincascada
@@ -464,7 +451,6 @@ sobre
 sobrevivieron
 sobrevivir
 sola
-solo
 son
 sospechoso
 suele
@@ -488,7 +474,6 @@ tocan
 tocar
 todas
 todavia
-todo
 todos
 tomo
 trabajo

@@ -278,6 +278,7 @@ back
 backdate
 backed
 backend
+backlog
 backslash
 backtick
 backup
@@ -803,6 +804,7 @@ data
 database
 databases
 datagram
+datagrams
 dataonly
 date
 dateless
@@ -1099,6 +1101,7 @@ empty
 enable
 enabled
 enables
+enametoolong
 encode
 encoded
 encoder
@@ -1127,6 +1130,7 @@ enodev
 enoent
 enoexec
 enomem
+enoprotoopt
 enotconn
 enotempty
 enotsup
@@ -1293,6 +1297,7 @@ fault
 faults
 favicon
 fchmod
+fchmodat
 fchown
 fcntl
 fd
@@ -1590,6 +1595,7 @@ home
 homonym
 homonyms
 honor
+honours
 hook
 hooks
 host
@@ -2753,6 +2759,7 @@ receipts
 receive
 received
 receiver
+receiving
 reception
 recheck
 rechecked
@@ -3330,6 +3337,7 @@ sol
 solid
 some
 something
+soon
 sort
 sorted
 sorts
@@ -3952,6 +3960,7 @@ watched
 watcher
 water
 way
+ways
 wdk
 weak
 weaken

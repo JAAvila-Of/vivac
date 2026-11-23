@@ -357,7 +357,7 @@ fn require_cloexec(fd: i32) -> io::Result<()> {
     Ok(())
 }
 
-fn connected_credentials(socket: i32) -> io::Result<libc::ucred> {
+pub(crate) fn connected_credentials(socket: i32) -> io::Result<libc::ucred> {
     // SAFETY: zero initializes all fields of the credentials storage.
     let mut credentials: libc::ucred = unsafe { zeroed() };
     let mut length = size_of_val(&credentials) as libc::socklen_t;
@@ -380,7 +380,7 @@ fn connected_credentials(socket: i32) -> io::Result<libc::ucred> {
     Ok(credentials)
 }
 
-fn connected_pidfd(socket: i32) -> io::Result<OwnedFd> {
+pub(crate) fn connected_pidfd(socket: i32) -> io::Result<OwnedFd> {
     let mut raw: i32 = -1;
     let mut length = size_of_val(&raw) as libc::socklen_t;
     // SAFETY: raw and length provide correctly sized writable option storage.
