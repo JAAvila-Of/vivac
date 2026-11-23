@@ -2131,6 +2131,7 @@ inheriting
 inherits
 init
 initial
+initialised
 initialization
 initialize
 initialized
@@ -2160,6 +2161,7 @@ inside
 insists
 inspect
 inspectable
+inspected
 inspecting
 inspection
 inspects
@@ -4166,6 +4168,7 @@ stack
 stacked
 stacks
 stage
+staged
 staging
 stale
 staleness
@@ -4351,6 +4354,7 @@ swept
 switch
 switched
 switches
+symbolic
 symlink
 symlinks
 symmetric
@@ -4359,6 +4363,7 @@ sync
 synced
 synchronization
 synchronize
+synchronized
 synchronizes
 synchronizing
 synchronous
@@ -4945,6 +4950,7 @@ widens
 wider
 widest
 width
+widths
 wildcard
 will
 win

@@ -132,6 +132,9 @@ mod linux_reservation;
 )]
 mod linux_resident_reader;
 #[cfg(target_os = "linux")]
+#[path = "device_keys/linux_retained_removal.rs"]
+mod linux_retained_removal;
+#[cfg(target_os = "linux")]
 #[path = "device_keys/linux_session.rs"]
 #[allow(
     dead_code,
@@ -141,6 +144,9 @@ pub mod linux_session;
 #[cfg(target_os = "linux")]
 #[path = "device_keys/linux_session_cgroup.rs"]
 mod linux_session_cgroup;
+#[cfg(target_os = "linux")]
+#[path = "device_keys/linux_session_record.rs"]
+mod linux_session_record;
 #[cfg(target_os = "linux")]
 #[path = "device_keys/linux_spawn.rs"]
 #[allow(

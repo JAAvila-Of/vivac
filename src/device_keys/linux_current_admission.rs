@@ -1,5 +1,6 @@
 use super::linux_admission_storage::PublishError;
 use super::{linux_creation_record::Record, linux_resident_reader::CandidateResident};
+use sha2::{Digest, Sha256};
 use std::ffi::CStr;
 use std::io;
 use std::os::fd::{AsRawFd, OwnedFd};
@@ -191,6 +192,20 @@ impl CurrentAdmission {
         let result = self.candidate.with_endpoint_location(operation);
         self.validate()?;
         result
+    }
+
+    pub fn with_session_location<T>(
+        &self,
+        operation: impl FnOnce(&CStr, OwnedFd) -> io::Result<T>,
+    ) -> io::Result<T> {
+        self.validate()?;
+        let result = self.candidate.with_session_location(operation);
+        self.validate()?;
+        result
+    }
+
+    pub fn admission_digest(&self) -> io::Result<[u8; 32]> {
+        Ok(Sha256::digest(self.canonical_record()?).into())
     }
 
     /// Inspects the candidate permit without consuming it or granting authority.

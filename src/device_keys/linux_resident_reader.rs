@@ -593,6 +593,18 @@ impl CandidateResident {
         result
     }
 
+    pub fn with_session_location<T>(
+        &self,
+        operation: impl FnOnce(&CStr, OwnedFd) -> io::Result<T>,
+    ) -> io::Result<T> {
+        self.validate()?;
+        let result = self
+            .root
+            .with_session_directory(|directory| operation(&self.credential, directory));
+        self.validate()?;
+        result
+    }
+
     pub(super) fn observe_opening_permit(&self) -> io::Result<OpeningPermitKind> {
         self.with_opening_permit(|_, _, kind| Ok(kind))
     }
