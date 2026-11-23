@@ -130,8 +130,8 @@ pub(crate) fn remove_retained_entry(
 ) -> io::Result<()> {
     let aside = CString::new(format!(".removing-{}", random_hex()?)).map_err(|_| invalid())?;
     rename_no_replace(directory, name, &aside)?;
-    match entry_identity(directory, &aside)? {
-        Some(actual) if actual == *expected => {
+    let failure = match entry_identity(directory, &aside) {
+        Ok(Some(actual)) if actual == *expected => {
             let flags = if actual.is_directory() {
                 libc::AT_REMOVEDIR
             } else {
@@ -139,16 +139,16 @@ pub(crate) fn remove_retained_entry(
             };
             // SAFETY: the aside name is terminated and relative to this
             // directory, and it was just checked to be the expected object.
-            if unsafe { libc::unlinkat(directory.as_raw_fd(), aside.as_ptr(), flags) } < 0 {
-                return Err(io::Error::last_os_error());
+            if unsafe { libc::unlinkat(directory.as_raw_fd(), aside.as_ptr(), flags) } >= 0 {
+                return Ok(());
             }
-            Ok(())
+            io::Error::last_os_error()
         }
-        _ => {
-            rename_no_replace(directory, &aside, name)?;
-            Err(invalid())
-        }
-    }
+        Ok(_) => invalid(),
+        Err(error) => error,
+    };
+    rename_no_replace(directory, &aside, name)?;
+    Err(failure)
 }
 
 #[cfg(test)]
@@ -211,6 +211,18 @@ pub(crate) mod tests {
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         assert_eq!(std::fs::read(dir.0.join("entry")).unwrap(), b"second");
         assert_eq!(names(&dir.0), ["entry"]);
+    }
+
+    #[test]
+    fn retained_removal_restores_an_entry_it_cannot_unlink() {
+        let (dir, fd) = scratch();
+        std::fs::create_dir(dir.0.join("entry")).unwrap();
+        std::fs::write(dir.0.join("entry/inner"), b"kept").unwrap();
+        let identity = entry_identity(&fd, c"entry").unwrap().unwrap();
+        let error = remove_retained_entry(&fd, c"entry", &identity).unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(libc::ENOTEMPTY));
+        assert_eq!(names(&dir.0), ["entry"]);
+        assert_eq!(std::fs::read(dir.0.join("entry/inner")).unwrap(), b"kept");
     }
 
     #[test]

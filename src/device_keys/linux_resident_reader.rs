@@ -593,6 +593,13 @@ impl CandidateResident {
         result
     }
 
+    pub fn has_session_directory(&self) -> io::Result<bool> {
+        self.validate()?;
+        let present = self.root.session_directory()?.is_some();
+        self.validate()?;
+        Ok(present)
+    }
+
     pub fn with_session_location<T>(
         &self,
         operation: impl FnOnce(&CStr, OwnedFd) -> io::Result<T>,

@@ -1128,6 +1128,7 @@ enoent
 enoexec
 enomem
 enotconn
+enotempty
 enotsup
 enough
 enqueue

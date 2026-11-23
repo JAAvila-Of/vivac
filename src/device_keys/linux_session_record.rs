@@ -18,7 +18,7 @@ use super::linux_retained_removal::{
 use super::linux_session_cgroup::{self as cgroup, CgroupIdentity, CgroupObservation};
 use super::linux_user_manager::SessionUnit;
 use serde::{Deserialize, Serialize};
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::ffi::{CStr, CString};
 use std::io::{self, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
@@ -27,6 +27,13 @@ const MAX_RECORD: usize = 1024;
 
 fn invalid() -> io::Error {
     io::Error::from(io::ErrorKind::InvalidData)
+}
+
+fn missing_collection() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::NotFound,
+        "the session collection does not exist",
+    )
 }
 
 fn require(condition: bool) -> io::Result<()> {
@@ -258,20 +265,17 @@ impl<'a> SessionRecords<'a> {
         Self { admission }
     }
 
-    /// `None` when no record exists, including when `sessions-v1` itself has
-    /// not been created.
+    /// `None` means the collection exists and holds nothing under this name.
+    /// A missing collection is an error: it is not the absence of a record.
     pub(crate) fn read(&self) -> io::Result<Option<StoredSessionRecord>> {
         let digest = self.admission.admission_digest()?;
-        let entered = Cell::new(false);
-        let result = self.admission.with_session_location(|name, directory| {
-            entered.set(true);
+        if !self.admission.has_session_directory()? {
+            return Err(missing_collection());
+        }
+        self.admission.with_session_location(|name, directory| {
             let credential = name.to_str().map_err(|_| invalid())?;
             read_checked(&directory, name, process_ids(), credential, &digest)
-        });
-        match result {
-            Err(error) if !entered.get() && error.raw_os_error() == Some(libc::ENOENT) => Ok(None),
-            other => other,
-        }
+        })
     }
 
     pub(crate) fn publish(
@@ -568,6 +572,18 @@ mod tests {
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         assert_eq!(std::fs::read(&path).unwrap(), before);
         assert_eq!(entry_identity(&fd, &name).unwrap(), Some(identity));
+    }
+
+    #[test]
+    fn a_missing_collection_is_not_the_absence_of_a_record() {
+        let error = missing_collection();
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+        assert_ne!(error.raw_os_error(), Some(libc::ENOENT));
+        let (_dir, fd) = scratch();
+        let name = CString::new(CREDENTIAL).unwrap();
+        assert!(read_checked(&fd, &name, ids(), CREDENTIAL, &[0xab_u8; 32])
+            .unwrap()
+            .is_none());
     }
 
     #[test]
