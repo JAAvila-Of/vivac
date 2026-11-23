@@ -56,6 +56,7 @@ device identity or durable identity across account recreation.
 | `<uid>/state/admissions/` | selected UID:GID, 0700 | Producer-created admission records |
 | `<uid>/state/openings-v1/` | selected UID:GID, 0700 | Initial and successor opening permits |
 | `<uid>/state/endpoints-v1/` | selected UID:GID, 0700 | Optional endpoint socket directory |
+| `<uid>/state/sessions-v1/` | selected UID:GID, 0700 | Session records for open or lost sessions |
 
 The custody prefix and its `users` directory are root:root, 0755. All earlier
 ancestors are root:root directories without group/other write permission.

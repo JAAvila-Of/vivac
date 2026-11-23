@@ -202,6 +202,24 @@ package, admission and permit bytes and object identities across the extension.
 Exercise wrong owner, mode, ACL and mount, non-directory and symlink occupants,
 colliding publishers, and interruption on each side of the exclusive rename.
 
+## Session collection extension
+
+`state/sessions-v1` holds one session record per open or lost session, as the
+[Linux custody CLI](LINUX-CUSTODY-CLI.md#the-session-lives-in-a-user-service)
+describes. It is added exactly like `endpoints-v1`: new account provisioning
+prepares it empty in the account stage, and an existing account runs
+`vivac device-key provision-linux-sessions [--json]` as the provisioned user to
+preview the change, then reruns it with `--yes` to publish. The writer, its
+exit codes, its exclusive publication, its failure classification and its
+acceptance are those of the endpoint extension, applied to this name. It does
+not revise the installation identity, binding format or `profile_revision`.
+
+The same command reports whether lingering is enabled for the account. It never
+enables it: that changes the system's login configuration, so the command names
+`loginctl enable-linger <account>` for an administrator or for the account
+owner where the system's policy allows it. A preview with lingering disabled
+still succeeds; `open-linux` is what refuses without it.
+
 ## Native acceptance before adoption
 
 The fixture must independently verify actual owners, capability sets,
