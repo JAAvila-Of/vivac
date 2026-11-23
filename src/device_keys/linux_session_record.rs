@@ -141,6 +141,95 @@ fn unlink_stage(directory: &OwnedFd, name: &CStr) {
     unsafe { libc::unlinkat(directory.as_raw_fd(), name.as_ptr(), 0) };
 }
 
+fn stage_name() -> Result<CString, PublishError> {
+    CString::new(format!(
+        ".pending-session-{}",
+        random_hex().map_err(PublishError::Unpublished)?
+    ))
+    .map_err(|_| PublishError::Unpublished(invalid()))
+}
+
+/// Writes `bytes` to a new private stage, synchronized, with a single link.
+fn write_stage(directory: &OwnedFd, stage: &CStr, bytes: &[u8]) -> io::Result<EntryIdentity> {
+    let mut file = open_stage(directory, stage)?;
+    // SAFETY: fchmod only changes this descriptor's own file.
+    if unsafe { libc::fchmod(file.as_raw_fd(), 0o600) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    let file = OwnedFd::from(file);
+    let identity = EntryIdentity::from_descriptor(&file)?;
+    require(identity.links == 1)?;
+    Ok(identity)
+}
+
+fn rename_exchange(directory: &OwnedFd, from: &CStr, to: &CStr) -> io::Result<()> {
+    // SAFETY: both names are terminated single components of one live directory.
+    let status = unsafe {
+        libc::syscall(
+            libc::SYS_renameat2,
+            directory.as_raw_fd(),
+            from.as_ptr(),
+            directory.as_raw_fd(),
+            to.as_ptr(),
+            libc::RENAME_EXCHANGE,
+        )
+    };
+    if status < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Replaces the retained record under `name` with `bytes` in one exchange, so
+/// the name never stands empty. The stage then holds what was at `name`; it is
+/// removed only if it is exactly `old`; otherwise a second exchange puts it back.
+pub(crate) fn replace_in(
+    directory: &OwnedFd,
+    name: &CStr,
+    old: &EntryIdentity,
+    bytes: &[u8],
+) -> Result<EntryIdentity, PublishError> {
+    let stage = stage_name()?;
+    let identity = match write_stage(directory, &stage, bytes)
+        .and_then(|identity| rename_exchange(directory, &stage, name).map(|()| identity))
+    {
+        Ok(identity) => identity,
+        Err(error) => {
+            unlink_stage(directory, &stage);
+            return Err(PublishError::Unpublished(error));
+        }
+    };
+    match entry_identity(directory, &stage) {
+        Ok(Some(found)) if found == *old => {}
+        checked => {
+            let failure = match checked {
+                Err(error) => error,
+                Ok(_) => invalid(),
+            };
+            // The exchange back leaves the new record at the stage name again.
+            if let Err(error) = rename_exchange(directory, &stage, name) {
+                return Err(PublishError::PublishedDurabilityUnknown(error));
+            }
+            unlink_stage(directory, &stage);
+            return Err(PublishError::Unpublished(failure));
+        }
+    }
+    (|| -> io::Result<EntryIdentity> {
+        // SAFETY: the stage name is terminated and holds the retained old
+        // record, checked just above.
+        if unsafe { libc::unlinkat(directory.as_raw_fd(), stage.as_ptr(), 0) } < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        sync_directory(directory)?;
+        let (read, found) = read_in(directory, name, process_ids())?.ok_or_else(invalid)?;
+        require(read == bytes && found == identity)?;
+        Ok(identity)
+    })()
+    .map_err(PublishError::PublishedDurabilityUnknown)
+}
+
 /// Publishes `bytes` under `name` without replacing anything: the record is
 /// staged, synchronized and renamed with `RENAME_NOREPLACE`, then read back.
 pub(crate) fn publish_in(
@@ -148,25 +237,11 @@ pub(crate) fn publish_in(
     name: &CStr,
     bytes: &[u8],
 ) -> Result<EntryIdentity, PublishError> {
-    let stage = CString::new(format!(
-        ".pending-session-{}",
-        random_hex().map_err(PublishError::Unpublished)?
-    ))
-    .map_err(|_| PublishError::Unpublished(invalid()))?;
-    let staged = (|| -> io::Result<EntryIdentity> {
-        let mut file = open_stage(directory, &stage)?;
-        // SAFETY: fchmod only changes this descriptor's own file.
-        if unsafe { libc::fchmod(file.as_raw_fd(), 0o600) } < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        file.write_all(bytes)?;
-        file.sync_all()?;
-        let file = OwnedFd::from(file);
-        let identity = EntryIdentity::from_descriptor(&file)?;
-        require(identity.links == 1)?;
+    let stage = stage_name()?;
+    let staged = write_stage(directory, &stage, bytes).and_then(|identity| {
         rename_no_replace(directory, &stage, name)?;
         Ok(identity)
-    })();
+    });
     let identity = match staged {
         Ok(identity) => identity,
         Err(error) => {
@@ -282,6 +357,16 @@ impl<'a> SessionRecords<'a> {
         &self,
         record: &SessionRecord,
     ) -> Result<StoredSessionRecord, PublishError> {
+        self.write(record, publish_in)
+    }
+
+    /// Writes `record` under its own name with `operation`, after checking that
+    /// it belongs to this admission and this credential.
+    fn write(
+        &self,
+        record: &SessionRecord,
+        operation: impl FnOnce(&OwnedFd, &CStr, &[u8]) -> Result<EntryIdentity, PublishError>,
+    ) -> Result<StoredSessionRecord, PublishError> {
         let digest = self
             .admission
             .admission_digest()
@@ -297,7 +382,7 @@ impl<'a> SessionRecords<'a> {
             if name.to_bytes() != record.credential_id.as_bytes() {
                 return Err(invalid());
             }
-            *outcome.borrow_mut() = Some(publish_in(&directory, name, &bytes));
+            *outcome.borrow_mut() = Some(operation(&directory, name, &bytes));
             Ok(())
         });
         match (outcome.into_inner(), result) {
@@ -310,6 +395,18 @@ impl<'a> SessionRecords<'a> {
             (None, Err(error)) => Err(PublishError::Unpublished(error)),
             (None, Ok(())) => Err(PublishError::Unpublished(invalid())),
         }
+    }
+
+    /// Replaces the retained `old` record with `new` in one exchange; see
+    /// `replace_in`.
+    pub(crate) fn replace(
+        &self,
+        old: &StoredSessionRecord,
+        new: &SessionRecord,
+    ) -> Result<StoredSessionRecord, PublishError> {
+        self.write(new, |directory, name, bytes| {
+            replace_in(directory, name, &old.identity, bytes)
+        })
     }
 
     pub(crate) fn remove(&self, stored: &StoredSessionRecord) -> io::Result<()> {
@@ -598,5 +695,77 @@ mod tests {
         let name = CString::new(CREDENTIAL).unwrap();
         remove_stored(&fd, &name, &stored).unwrap();
         assert!(std::fs::read_dir(&dir.0).unwrap().next().is_none());
+    }
+
+    fn other_record() -> SessionRecord {
+        let mut other = record();
+        other.generation = "00000000000000000000000006".to_owned();
+        other.unit = format!("vivac-custody-{CREDENTIAL}-{}.service", other.generation);
+        other.unit_cgroup = format!("/user.slice/app.slice/{}", other.unit);
+        other
+    }
+
+    fn entries(path: &std::path::Path) -> Vec<std::ffi::OsString> {
+        let mut names: Vec<_> = std::fs::read_dir(path)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn replacement_moves_the_new_record_over_the_retained_one() {
+        let (dir, fd) = scratch();
+        let old = published(&fd, &record()).unwrap();
+        let name = CString::new(CREDENTIAL).unwrap();
+        let bytes = other_record().canonical_bytes().unwrap();
+        let identity = replace_in(&fd, &name, &old, &bytes).unwrap();
+        let (read, found) = read_in(&fd, &name, ids()).unwrap().unwrap();
+        assert_eq!(read, bytes);
+        assert_eq!(found, identity);
+        assert_ne!(identity.inode, old.inode);
+        assert_eq!(identity.mode & 0o7777, 0o600);
+        assert_eq!(entries(&dir.0), [std::ffi::OsString::from(CREDENTIAL)]);
+    }
+
+    #[test]
+    fn replacement_refuses_an_object_other_than_the_retained_record() {
+        let (dir, fd) = scratch();
+        let old = published(&fd, &record()).unwrap();
+        let name = CString::new(CREDENTIAL).unwrap();
+        let path = dir.0.join(CREDENTIAL);
+        // The name now holds another object than the one that was retained.
+        std::fs::rename(&path, dir.0.join("kept")).unwrap();
+        std::fs::write(&path, b"other").unwrap();
+        let other = entry_identity(&fd, &name).unwrap().unwrap();
+        let bytes = other_record().canonical_bytes().unwrap();
+        let error = replace_in(&fd, &name, &old, &bytes).unwrap_err();
+        assert!(matches!(error, PublishError::Unpublished(_)));
+        assert_eq!(std::fs::read(&path).unwrap(), b"other");
+        assert_eq!(entry_identity(&fd, &name).unwrap(), Some(other));
+        assert_eq!(
+            entry_identity(&fd, c"kept").unwrap().map(|kept| kept.inode),
+            Some(old.inode)
+        );
+        assert_eq!(
+            entries(&dir.0),
+            [
+                std::ffi::OsString::from(CREDENTIAL),
+                std::ffi::OsString::from("kept")
+            ]
+        );
+    }
+
+    #[test]
+    fn replacement_of_a_missing_record_publishes_nothing() {
+        let (dir, fd) = scratch();
+        let old = published(&fd, &record()).unwrap();
+        let name = CString::new(CREDENTIAL).unwrap();
+        std::fs::remove_file(dir.0.join(CREDENTIAL)).unwrap();
+        let bytes = other_record().canonical_bytes().unwrap();
+        let error = replace_in(&fd, &name, &old, &bytes).unwrap_err();
+        assert!(matches!(error, PublishError::Unpublished(_)));
+        assert!(entries(&dir.0).is_empty());
     }
 }

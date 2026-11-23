@@ -2,8 +2,8 @@
 //! service `vivac-custody-<credential>-<generation>.service`.
 //!
 //! Before it reports READY the keeper checks that it is the binary that
-//! started the unit, creates the session cgroup, retires an old session record
-//! on kernel evidence, publishes its own record and binds its control socket.
+//! started the unit, creates the session cgroup, replaces an old session record
+//! on kernel evidence or publishes a first one, and binds its control socket.
 //! After the client's `Begin` it runs the opening, serves the active session
 //! and, on every way out, kills the session cgroup, waits for the kernel to
 //! report it empty and only then publishes the opening permit again.
@@ -284,10 +284,10 @@ fn open_runtime_directory(
     Ok(directory)
 }
 
-/// Open from the permit when there is one. Without it, only a session record
-/// retired on kernel evidence allows a reopening.
-fn opening_authority(retired_record: bool, permit_absent: bool) -> io::Result<OpeningAuthority> {
-    match (retired_record, permit_absent) {
+/// Open from the permit when there is one. Without it, only the record of a
+/// session the kernel shows gone allows a reopening.
+fn opening_authority(lost_record: bool, permit_absent: bool) -> io::Result<OpeningAuthority> {
+    match (lost_record, permit_absent) {
         (_, false) => Ok(OpeningAuthority::Permit),
         (true, true) => Ok(OpeningAuthority::Reopened),
         (false, true) => Err(refused()),
@@ -329,18 +329,6 @@ fn remove_stale_endpoint(directory: &OwnedFd, name: &CStr) -> io::Result<()> {
     sync_directory(directory)
 }
 
-/// Retires the record of a lost session. The stale endpoint goes first, so a
-/// refusal on it leaves the record, and with it the evidence, in place.
-fn retire(
-    admission: &CurrentAdmission,
-    records: &SessionRecords<'_>,
-    old: &StoredSessionRecord,
-) -> io::Result<()> {
-    observe_evidence(&old.record)?.ok_or_else(refused)?;
-    admission.with_endpoint_location(|name, directory| remove_stale_endpoint(&directory, name))?;
-    records.remove(old)
-}
-
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
@@ -365,8 +353,6 @@ fn start(arguments: impl Iterator<Item = OsString>) -> io::Result<Keeper> {
     let admission = CurrentAdmission::open_fixed_namespace(unit.credential())?;
     // Activation binds the endpoint in `endpoints-v1`; that collection must exist.
     admission.with_endpoint_location(|_, _| Ok(()))?;
-    // Everything the new record needs is read before an old one is retired,
-    // so that little can fail between the retirement and the publication.
     let record = SessionRecord {
         version: 1,
         credential_id: unit.credential().to_owned(),
@@ -378,23 +364,32 @@ fn start(arguments: impl Iterator<Item = OsString>) -> io::Result<Keeper> {
         boot_id: boot_id()?,
         admission_sha256: hex(&admission.admission_digest()?),
     };
-    // Retiring the old record and publishing this one happen under the
+    // Replacing an old record, or publishing a first one, happens under the
     // credential reservation: inode numbers are reused, so an identity check
-    // alone cannot tell an old record from a new one.
+    // alone cannot tell an old record from a new one. Every check comes first.
     let reservation = admission.reserve_package_directory()?;
     let records = SessionRecords::new(&admission);
-    let retired = match records.read()? {
-        Some(old) => {
-            retire(&admission, &records, &old)?;
-            true
-        }
-        None => false,
-    };
-    let authority = opening_authority(retired, admission.opening_permit_absent()?)?;
+    let old = records.read()?;
+    if let Some(old) = &old {
+        // An old record is replaced only on evidence that its session is gone.
+        observe_evidence(&old.record)?.ok_or_else(refused)?;
+    }
+    let authority = opening_authority(old.is_some(), admission.opening_permit_absent()?)?;
     if authority == OpeningAuthority::Permit {
         admission.observe_opening_permit()?;
     }
-    let stored = records.publish(&record).map_err(|error| match error {
+    let published = match &old {
+        Some(old) => {
+            // The stale endpoint goes before the record, so a refusal on it
+            // leaves the old record, and with it the evidence, in place.
+            admission.with_endpoint_location(|name, directory| {
+                remove_stale_endpoint(&directory, name)
+            })?;
+            records.replace(old, &record)
+        }
+        None => records.publish(&record),
+    };
+    let stored = published.map_err(|error| match error {
         PublishError::Unpublished(error) | PublishError::PublishedDurabilityUnknown(error) => error,
     })?;
     let ready = ControlListener::bind(&runtime_directory).and_then(|listener| {
