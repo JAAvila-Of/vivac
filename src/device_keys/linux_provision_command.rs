@@ -2,7 +2,10 @@ use super::deliver_linux_reply;
 use crate::args::Args;
 use crate::failure::Failure;
 use crate::linux_custody_provision::{ProvisionError, Provisioner};
-use crate::linux_custody_root::{endpoint_directory::EndpointProvisionError, CandidateRoot};
+use crate::linux_custody_root::{
+    optional_collection::{CollectionProvisionError, ENDPOINTS},
+    CandidateRoot,
+};
 use serde::Serialize;
 use std::io;
 
@@ -64,6 +67,7 @@ fn plan(uid: u32, gid: u32) -> Vec<Entry> {
         ("/state/admissions", uid, gid, "0700"),
         ("/state/openings-v1", uid, gid, "0700"),
         ("/state/endpoints-v1", uid, gid, "0700"),
+        ("/state/sessions-v1", uid, gid, "0700"),
     ] {
         entries.push(Entry {
             path: format!("{account}{suffix}"),
@@ -132,15 +136,16 @@ pub(super) fn run_endpoints(args: &Args) -> Result<i32, Failure> {
             "Unexpected Linux endpoint provisioning arguments.",
         ));
     }
-    let root = CandidateRoot::open_fixed_namespace()
-        .map_err(|error| Failure::Model(EndpointProvisionError::Unpublished(error).to_string()))?;
+    let root = CandidateRoot::open_fixed_namespace().map_err(|error| {
+        Failure::Model(CollectionProvisionError::Unpublished(error).message(&ENDPOINTS))
+    })?;
     let binding = root.binding();
     let path = format!("{USERS}/{}/state/endpoints-v1", binding.owner_uid);
     if !args.has("yes") {
         let exists = root
             .endpoint_directory()
             .map_err(|error| {
-                Failure::Model(EndpointProvisionError::Unpublished(error).to_string())
+                Failure::Model(CollectionProvisionError::Unpublished(error).message(&ENDPOINTS))
             })?
             .is_some();
         let output = if args.has("json") {
@@ -165,9 +170,9 @@ pub(super) fn run_endpoints(args: &Args) -> Result<i32, Failure> {
     }
     root.provision_endpoint_directory()
         .map_err(|error| match error {
-            EndpointProvisionError::Unpublished(_) => Failure::Model(error.to_string()),
-            EndpointProvisionError::PublishedDurabilityUnknown(_) => {
-                Failure::Io(io::Error::other(error.to_string()))
+            CollectionProvisionError::Unpublished(_) => Failure::Model(error.message(&ENDPOINTS)),
+            CollectionProvisionError::PublishedDurabilityUnknown(_) => {
+                Failure::Io(io::Error::other(error.message(&ENDPOINTS)))
             }
         })?;
     let output = if args.has("json") {

@@ -106,11 +106,18 @@ fn linux_provision_preview_lists_the_complete_numeric_slot() {
     let plan: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(plan["status"], "plan");
     let entries = plan["entries"].as_array().unwrap();
-    assert_eq!(entries.len(), 10);
+    assert_eq!(entries.len(), 11);
     assert_eq!(
-        entries.last().unwrap(),
-        &serde_json::json!({
+        entries[9],
+        serde_json::json!({
             "path": "/var/lib/vivac/custody-v1/users/65534/state/endpoints-v1",
+            "uid": 65534, "gid": 65533, "mode": "0700", "action": "create",
+        })
+    );
+    assert_eq!(
+        entries[10],
+        serde_json::json!({
+            "path": "/var/lib/vivac/custody-v1/users/65534/state/sessions-v1",
             "uid": 65534, "gid": 65533, "mode": "0700", "action": "create",
         })
     );

@@ -6,6 +6,10 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 
 #[path = "linux_custody_root/endpoint_directory.rs"]
 pub(crate) mod endpoint_directory;
+#[path = "linux_custody_root/optional_collection.rs"]
+pub(crate) mod optional_collection;
+#[path = "linux_custody_root/session_directory.rs"]
+pub(crate) mod session_directory;
 
 const DIRECTORY_STAGES: [&str; 10] = [
     "directory-0",

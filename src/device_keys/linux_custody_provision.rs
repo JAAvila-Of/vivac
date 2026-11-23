@@ -536,7 +536,8 @@ impl Slot {
                 2 => (directory_fd(&self.directories[1]), c"packages"),
                 3 => (directory_fd(&self.directories[1]), c"admissions"),
                 4 => (directory_fd(&self.directories[1]), c"openings-v1"),
-                _ => (directory_fd(&self.directories[1]), c"endpoints-v1"),
+                5 => (directory_fd(&self.directories[1]), c"endpoints-v1"),
+                _ => (directory_fd(&self.directories[1]), c"sessions-v1"),
             };
             let named = open_at(parent, component, true, true)?;
             require(
@@ -546,7 +547,13 @@ impl Slot {
         shape(stage, &[b"binding.json", b"state"])?;
         shape(
             directory_fd(&self.directories[1]),
-            &[b"packages", b"admissions", b"openings-v1", b"endpoints-v1"],
+            &[
+                b"packages",
+                b"admissions",
+                b"openings-v1",
+                b"endpoints-v1",
+                b"sessions-v1",
+            ],
         )?;
         for directory in &self.directories[2..] {
             shape(directory_fd(directory), &[])?;
@@ -738,6 +745,7 @@ impl Provisioner {
             c"admissions",
             c"openings-v1",
             c"endpoints-v1",
+            c"sessions-v1",
         ]
         .into_iter()
         .enumerate()
