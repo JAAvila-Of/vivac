@@ -1,4 +1,6 @@
 use super::linux_admission_storage::PublishError;
+use super::linux_reservation::StoreReservation;
+use super::linux_session_cgroup::EmptySessionCgroup;
 use super::{linux_creation_record::Record, linux_resident_reader::CandidateResident};
 use sha2::{Digest, Sha256};
 use std::ffi::CStr;
@@ -148,6 +150,32 @@ impl CurrentAdmission {
         };
         retained.validate()?;
         Ok(retained)
+    }
+
+    /// Publishes the opening permit again after the session cgroup is proven empty,
+    /// when the supervisor never reached the keeper. A fresh, non-waiting
+    /// reservation of the package directory stands in for the dead keeper's.
+    #[allow(
+        dead_code,
+        reason = "The session close command consumes this in a later step."
+    )]
+    pub(crate) fn republish_after_empty_session(
+        &self,
+        _evidence: &EmptySessionCgroup,
+        authorize_rename: impl FnOnce() -> io::Result<()>,
+    ) -> Result<(), PublishError> {
+        self.validity.check_publication(|published| {
+            self.validate()?;
+            let (package, _cipher) = self.candidate.native_material()?;
+            let reservation = StoreReservation::acquire_directory(&package)?;
+            let result = self.candidate.publish_clean_opening_permit(
+                || reservation.validate_owned(),
+                authorize_rename,
+                published,
+            );
+            reservation.validate_owned()?;
+            result
+        })
     }
 
     pub fn open_fixed_namespace(credential_id: &str) -> io::Result<Self> {

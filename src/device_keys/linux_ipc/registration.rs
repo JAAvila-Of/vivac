@@ -24,6 +24,7 @@ use super::super::linux_current_admission::{
     OpeningAuthority, RetainedKeeperDirectory, KEEPER_BOOTSTRAP_SIZE,
 };
 use super::super::linux_session::NativeSession;
+use super::super::linux_session_cgroup::EmptySessionCgroup;
 use super::super::linux_spawn::{
     new_session_generation, retained_process_exited, running_executable, OwnedChildRegistration,
 };
@@ -125,6 +126,21 @@ fn decode_session_child_step(wire: &[u8]) -> io::Result<EndpointSessionStep> {
         }
     }
     Err(invalid())
+}
+
+#[allow(
+    dead_code,
+    reason = "The session close command consumes this in a later step."
+)]
+fn empty_session_authority(
+    confirmation: Option<OpeningAuthority>,
+    exits_observed: bool,
+    retirement_pending: bool,
+) -> io::Result<()> {
+    if confirmation.is_none() || !exits_observed || !retirement_pending {
+        return Err(denied());
+    }
+    Ok(())
 }
 
 fn decode_session_keeper_opening(wire: &[u8]) -> io::Result<OpeningAuthority> {
@@ -1903,6 +1919,42 @@ impl KeeperAdoptedOffer {
             .map_err(PublishError::PublishedDurabilityUnknown)
     }
 
+    /// Publishes the opening permit again once the session cgroup is proven empty.
+    /// The evidence is only available from the kernel's own report.
+    #[allow(
+        dead_code,
+        reason = "The session close command consumes this in a later step."
+    )]
+    pub(crate) fn publish_after_empty_session(
+        &mut self,
+        _evidence: &EmptySessionCgroup,
+        authorize_rename: impl FnOnce() -> io::Result<()>,
+    ) -> Result<(), PublishError> {
+        let exits_observed = self
+            .observe_registered_exits()
+            .map_err(PublishError::Unpublished)?;
+        empty_session_authority(
+            self.confirmed_opening_authority(),
+            exits_observed,
+            matches!(self.retirement, GenerationRetirement::Pending),
+        )
+        .map_err(PublishError::Unpublished)?;
+        self.retirement = GenerationRetirement::Consumed;
+        self.resources
+            .offer
+            .directory
+            .publish_clean_opening_permit(authorize_rename)?;
+        self.resources
+            .offer
+            .directory
+            .validate()
+            .map_err(PublishError::PublishedDurabilityUnknown)?;
+        self.transport
+            .origin
+            .validate()
+            .map_err(PublishError::PublishedDurabilityUnknown)
+    }
+
     pub fn probe_publish_clean_close(&mut self) -> io::Result<()> {
         self.publish_clean_close(|| Ok(()))
             .map_err(|error| match error {
@@ -2395,6 +2447,15 @@ mod tests {
     use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd};
     use std::os::unix::fs::MetadataExt;
     use std::time::Duration;
+
+    #[test]
+    fn empty_session_publication_requires_confirmed_authority_and_observed_exits() {
+        assert!(empty_session_authority(None, true, true).is_err());
+        assert!(empty_session_authority(Some(OpeningAuthority::Permit), false, true).is_err());
+        assert!(empty_session_authority(Some(OpeningAuthority::Permit), true, false).is_err());
+        assert!(empty_session_authority(Some(OpeningAuthority::Permit), true, true).is_ok());
+        assert!(empty_session_authority(Some(OpeningAuthority::Reopened), true, true).is_ok());
+    }
 
     #[test]
     fn endpoint_session_steps_require_the_exact_direction_and_frame() {

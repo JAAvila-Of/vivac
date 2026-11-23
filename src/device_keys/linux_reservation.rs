@@ -2,7 +2,7 @@ use super::linux_session::PackageLease;
 use std::fs::OpenOptions;
 use std::io::{self, Read};
 use std::marker::PhantomData;
-use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::fs::OpenOptionsExt;
 use std::rc::Rc;
 
@@ -11,8 +11,9 @@ use std::rc::Rc;
 /// Closing the descriptor releases the reservation, never acknowledges exit.
 pub struct StoreReservation {
     directory: OwnedFd,
-    snapshot: PackageLease,
+    snapshot: Option<PackageLease>,
     identity: [u64; 6],
+    directory_identity: Option<(u64, u64)>,
     origin: libc::pid_t,
     adopted_lock: bool,
     _retained_context: Option<Box<dyn std::any::Any>>,
@@ -41,14 +42,63 @@ impl StoreReservation {
         let origin = unsafe { libc::getpid() };
         let reservation = Self {
             directory,
-            snapshot,
+            snapshot: Some(snapshot),
             identity,
+            directory_identity: None,
             origin,
             adopted_lock: false,
             _retained_context: None,
             _thread_affine: PhantomData,
         };
         reservation.validate(lease)?;
+        Ok(reservation)
+    }
+
+    /// Reserves a package directory that is anchored by a bare descriptor: a
+    /// fresh open of `.` gives each caller its own open file description,
+    /// and one nonblocking exclusive flock never waits, retries or falls back.
+    #[allow(
+        dead_code,
+        reason = "The session close command consumes this in a later step."
+    )]
+    pub(crate) fn acquire_directory(package: &OwnedFd) -> io::Result<Self> {
+        let before = descriptor_identity(package.as_raw_fd())?;
+        if before.st_mode & libc::S_IFMT != libc::S_IFDIR {
+            return Err(invalid());
+        }
+        // SAFETY: the fixed relative name is NUL terminated. openat creates a
+        // new open file description rather than sharing one through dup.
+        let raw = unsafe {
+            libc::openat(
+                package.as_raw_fd(),
+                c".".as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+            )
+        };
+        if raw < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: successful openat returned a fresh owned descriptor.
+        let directory = unsafe { OwnedFd::from_raw_fd(raw) };
+        require_supported_filesystem(&directory)?;
+        // SAFETY: the descriptor is owned and refers to the validated directory.
+        // A single nonblocking call preserves EINTR and contention as failures.
+        if unsafe { libc::flock(directory.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: getpid only queries the current process identity.
+        let origin = unsafe { libc::getpid() };
+        let reservation = Self {
+            directory,
+            snapshot: None,
+            identity: [0; 6],
+            directory_identity: Some((before.st_dev as u64, before.st_ino as u64)),
+            origin,
+            adopted_lock: false,
+            _retained_context: None,
+            _thread_affine: PhantomData,
+        };
+        reservation.validate_owned()?;
         Ok(reservation)
     }
 
@@ -65,8 +115,9 @@ impl StoreReservation {
         let origin = unsafe { libc::getpid() };
         let reservation = Self {
             directory,
-            snapshot,
+            snapshot: Some(snapshot),
             identity,
+            directory_identity: None,
             origin,
             adopted_lock: true,
             _retained_context: Some(Box::new(context)),
@@ -77,7 +128,24 @@ impl StoreReservation {
     }
 
     pub(super) fn validate_owned(&self) -> io::Result<()> {
-        self.validate(&self.snapshot)
+        match &self.snapshot {
+            Some(snapshot) => self.validate(snapshot),
+            None => self.validate_directory_only(),
+        }
+    }
+
+    fn validate_directory_only(&self) -> io::Result<()> {
+        // SAFETY: getpid only queries the current process identity.
+        if unsafe { libc::getpid() } != self.origin {
+            return Err(io::Error::from_raw_os_error(libc::EPERM));
+        }
+        let identity = descriptor_identity(self.directory.as_raw_fd())?;
+        if identity.st_mode & libc::S_IFMT != libc::S_IFDIR
+            || Some((identity.st_dev as u64, identity.st_ino as u64)) != self.directory_identity
+        {
+            return Err(invalid());
+        }
+        require_supported_filesystem(&self.directory)
     }
 
     pub(super) fn duplicate_locked_directory(&self) -> io::Result<OwnedFd> {
@@ -93,13 +161,13 @@ impl StoreReservation {
         if unsafe { libc::getpid() } != self.origin {
             return Err(io::Error::from_raw_os_error(libc::EPERM));
         }
+        let snapshot = self.snapshot.as_ref().ok_or_else(invalid)?;
         if lease.ipc_identity().map_err(|_| invalid())? != self.identity
-            || self.snapshot.ipc_identity().map_err(|_| invalid())? != self.identity
+            || snapshot.ipc_identity().map_err(|_| invalid())? != self.identity
         {
             return Err(invalid());
         }
-        self.snapshot
-            .validate_reservation_directory(&self.directory)?;
+        snapshot.validate_reservation_directory(&self.directory)?;
         if self.adopted_lock {
             verify_retained_flock(&self.directory)?;
         }
@@ -353,6 +421,24 @@ mod tests {
         assert_eq!(first_drops.load(Ordering::SeqCst), 1);
         let released = StoreReservation::acquire(&lease).expect("released physical reservation");
         drop(released);
+    }
+
+    #[test]
+    fn directory_reservation_is_exclusive_and_never_waits() {
+        let (directory, _lease) = public_lease();
+        let package: OwnedFd = File::open(&directory.0)
+            .expect("package directory capability")
+            .into();
+        let first = StoreReservation::acquire_directory(&package)
+            .expect("ext filesystem directory reservation");
+        first.validate_owned().expect("held directory reservation");
+        let started = std::time::Instant::now();
+        let second = StoreReservation::acquire_directory(&package);
+        let error = second.err().expect("directory reservation must contend");
+        assert_eq!(error.raw_os_error(), Some(libc::EWOULDBLOCK));
+        assert!(started.elapsed() < std::time::Duration::from_millis(100));
+        drop(first);
+        StoreReservation::acquire_directory(&package).expect("released directory reservation");
     }
 
     #[test]
