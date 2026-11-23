@@ -153,3 +153,20 @@ fn endpoint_provision_refuses_caller_paths_and_ids() {
         assert!(output.stdout.is_empty());
     }
 }
+
+#[test]
+fn session_provision_refuses_caller_paths_and_ids() {
+    for arguments in [
+        &["/tmp/vivac-sessions", "--yes"][..],
+        &["--uid", "65534", "--yes"][..],
+        &["--gid", "65534", "--yes"][..],
+    ] {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_vivac"))
+            .args(["device-key", "provision-linux-sessions"])
+            .args(arguments)
+            .output()
+            .expect("run Linux session provisioning command");
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+    }
+}

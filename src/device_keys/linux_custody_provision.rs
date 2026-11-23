@@ -1,4 +1,4 @@
-use super::linux_custody_anchor::{namespace_root, Binding, MAX_BINDING};
+use super::linux_custody_anchor::{encode_identifier, namespace_root, Binding, MAX_BINDING};
 use std::ffi::{CStr, CString};
 use std::fmt;
 use std::io;
@@ -401,16 +401,6 @@ fn random() -> io::Result<[u8; 16]> {
     Ok(bytes)
 }
 
-fn installation_id(bytes: [u8; 16]) -> String {
-    let mut value = u128::from_be_bytes(bytes);
-    let mut encoded = [b'0'; 26];
-    for byte in encoded.iter_mut().rev() {
-        *byte = b"0123456789abcdefghjkmnpqrstvwxyz"[(value & 31) as usize];
-        value >>= 5;
-    }
-    String::from_utf8(encoded.to_vec()).expect("fixed identifier alphabet")
-}
-
 fn selectors(uid: u32, gid: u32) -> io::Result<()> {
     require(uid != 0 && gid != 0 && uid != u32::MAX && gid != u32::MAX)
 }
@@ -680,7 +670,7 @@ impl Provisioner {
         at("checkpoint", checkpoint(ProvisionStage::StageCreated))?;
         let binding = Binding {
             version: 1,
-            installation_id: installation_id(id),
+            installation_id: encode_identifier(id),
             owner_uid: uid,
             owner_gid: gid,
             profile_revision: 1,
@@ -882,7 +872,7 @@ mod tests {
             (1u128.to_be_bytes(), "00000000000000000000000001"),
             ((1u128 << 127).to_be_bytes(), "40000000000000000000000000"),
         ] {
-            let id = installation_id(bytes);
+            let id = encode_identifier(bytes);
             assert_eq!(id, expected);
             let binding = Binding {
                 version: 1,

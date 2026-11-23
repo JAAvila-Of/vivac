@@ -77,6 +77,8 @@ pub(crate) fn run(args: &Args) -> Result<i32, Failure> {
         #[cfg(target_os = "linux")]
         crate::output::outln!("{}", linux_provision_command::ENDPOINTS_USAGE);
         #[cfg(target_os = "linux")]
+        crate::output::outln!("{}", linux_provision_command::SESSIONS_USAGE);
+        #[cfg(target_os = "linux")]
         crate::output::outln!("{}", linux_create_command::USAGE);
         #[cfg(target_os = "linux")]
         crate::output::outln!("{}", linux_custody_command::USAGE);
@@ -90,6 +92,10 @@ pub(crate) fn run(args: &Args) -> Result<i32, Failure> {
     #[cfg(target_os = "linux")]
     if command == "provision-linux-endpoints" {
         return linux_provision_command::run_endpoints(args);
+    }
+    #[cfg(target_os = "linux")]
+    if command == "provision-linux-sessions" {
+        return linux_provision_command::run_sessions(args);
     }
     #[cfg(target_os = "linux")]
     if command == "create-linux" {

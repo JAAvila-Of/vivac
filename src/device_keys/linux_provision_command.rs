@@ -3,9 +3,11 @@ use crate::args::Args;
 use crate::failure::Failure;
 use crate::linux_custody_provision::{ProvisionError, Provisioner};
 use crate::linux_custody_root::{
-    optional_collection::{CollectionProvisionError, ENDPOINTS},
+    optional_collection::{CollectionProvisionError, ENDPOINTS, SESSIONS},
     CandidateRoot,
 };
+use crate::linux_user_manager::current_account;
+use crate::linux_user_manager::linger_enabled;
 use serde::Serialize;
 use std::io;
 
@@ -13,6 +15,12 @@ pub(super) const USAGE: &str =
     "vivac device-key provision-linux --uid <uid> --gid <gid> [--yes] [--json]\n\
 Preview the fixed Linux custody installation for a numeric account.\n\
 Pass --yes after reviewing the plan to provision the account as an administrator.";
+
+pub(super) const SESSIONS_USAGE: &str =
+    "vivac device-key provision-linux-sessions [--yes] [--json]\n\
+Preview the session directory for the current provisioned Linux account.\n\
+Pass --yes to add the directory without elevation. Closing and reopening a key\n\
+session also needs lingering enabled: loginctl enable-linger <account>.";
 
 const USERS: &str = "/var/lib/vivac/custody-v1/users";
 
@@ -183,6 +191,76 @@ pub(super) fn run_endpoints(args: &Args) -> Result<i32, Failure> {
     deliver_linux_reply(output).map_err(|error| {
         Failure::Io(io::Error::other(format!(
             "Endpoint directory was published but its confirmation could not be delivered: {error}"
+        )))
+    })?;
+    Ok(0)
+}
+
+pub(super) fn run_sessions(args: &Args) -> Result<i32, Failure> {
+    if !args.unknown(&["yes", "json"]).is_empty() || !args.extra(1).is_empty() {
+        return Err(Failure::usage(
+            "Unexpected Linux session provisioning arguments.",
+        ));
+    }
+    let unpublished =
+        |error| Failure::Model(CollectionProvisionError::Unpublished(error).message(&SESSIONS));
+    let root = CandidateRoot::open_fixed_namespace().map_err(unpublished)?;
+    let binding = root.binding();
+    let path = format!("{USERS}/{}/state/sessions-v1", binding.owner_uid);
+    let account = current_account().map_err(Failure::Io)?;
+    let name = account.name.to_string_lossy().into_owned();
+    let linger = linger_enabled(&account).map_err(Failure::Io)?;
+    if !args.has("yes") {
+        let exists = root.session_directory().map_err(unpublished)?.is_some();
+        let output = if args.has("json") {
+            serde_json::json!({"status": "plan", "exists": exists, "linger": linger,
+                "account": name, "entry": Entry {
+                path,
+                uid: binding.owner_uid,
+                gid: binding.owner_gid,
+                mode: "0700",
+                action: "create",
+            }})
+            .to_string()
+        } else {
+            let mut text = if exists {
+                format!("The Linux session directory already exists at {path}.")
+            } else {
+                format!(
+                    "Create {path} ({}:{}, mode 0700). Rerun with --yes to publish the directory.",
+                    binding.owner_uid, binding.owner_gid
+                )
+            };
+            if !linger {
+                text.push_str(&format!(
+                    "\nLingering is off for {name}. An administrator can enable it with: loginctl enable-linger {name}"
+                ));
+            }
+            text
+        };
+        deliver_linux_reply(output).map_err(Failure::Io)?;
+        return Ok(0);
+    }
+    root.provision_session_directory()
+        .map_err(|error| match error {
+            CollectionProvisionError::Unpublished(_) => Failure::Model(error.message(&SESSIONS)),
+            CollectionProvisionError::PublishedDurabilityUnknown(_) => {
+                Failure::Io(io::Error::other(error.message(&SESSIONS)))
+            }
+        })?;
+    let output = if args.has("json") {
+        serde_json::json!({"status": "durable", "path": path, "linger": linger, "account": name})
+            .to_string()
+    } else if linger {
+        format!("Provisioned the Linux session directory at {path}.")
+    } else {
+        format!(
+            "Provisioned the Linux session directory at {path}.\nLingering is off for {name}. An administrator can enable it with: loginctl enable-linger {name}"
+        )
+    };
+    deliver_linux_reply(output).map_err(|error| {
+        Failure::Io(io::Error::other(format!(
+            "Session directory was published but its confirmation could not be delivered: {error}"
         )))
     })?;
     Ok(0)

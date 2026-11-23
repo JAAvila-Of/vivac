@@ -57,6 +57,16 @@ impl Binding {
     }
 }
 
+pub(crate) fn encode_identifier(bytes: [u8; 16]) -> String {
+    let mut value = u128::from_be_bytes(bytes);
+    let mut encoded = [b'0'; 26];
+    for byte in encoded.iter_mut().rev() {
+        *byte = b"0123456789abcdefghjkmnpqrstvwxyz"[(value & 31) as usize];
+        value >>= 5;
+    }
+    String::from_utf8(encoded.to_vec()).expect("fixed identifier alphabet")
+}
+
 pub(super) fn duplicate(fd: i32) -> io::Result<OwnedFd> {
     // SAFETY: this atomically creates a fresh CLOEXEC descriptor at least 3.
     let raw = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 3) };

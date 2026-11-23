@@ -148,6 +148,9 @@ pub mod linux_spawn;
 #[cfg(target_os = "linux")]
 #[path = "device_keys/linux_supervisor_start.rs"]
 mod linux_supervisor_start;
+#[cfg(target_os = "linux")]
+#[path = "device_keys/linux_user_manager.rs"]
+mod linux_user_manager;
 mod mcp;
 mod model;
 #[cfg(target_os = "linux")]

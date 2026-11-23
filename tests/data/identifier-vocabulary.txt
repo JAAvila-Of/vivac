@@ -1166,6 +1166,7 @@ equiv
 equivalence
 equivalent
 era
+erange
 erase
 err
 errmsg
@@ -1452,6 +1453,7 @@ getpeername
 getpgrp
 getpid
 getppid
+getpwuid
 getrandom
 gets
 getsid
@@ -1627,6 +1629,7 @@ identifier
 identifiers
 identities
 identity
+idle
 ids
 idx
 iend
@@ -1849,6 +1852,7 @@ lanes
 language
 large
 larger
+largest
 last
 latches
 late
@@ -1905,6 +1909,7 @@ limits
 line
 lineage
 lines
+linger
 link
 linked
 links
@@ -2406,6 +2411,7 @@ passkey
 passkeys
 passki
 passphrase
+passwd
 password
 past
 path
@@ -2662,6 +2668,7 @@ pushed
 pushes
 pushing
 put
+pw
 px
 py
 python
@@ -3213,6 +3220,8 @@ shm
 shmlock
 shmmap
 short
+shorten
+shortened
 should
 show
 shown
@@ -3500,6 +3509,8 @@ synthetic
 sys
 syscall
 system
+systemctl
+systemd
 sz
 t2
 table

@@ -160,7 +160,13 @@ fn unsupported_platform_refuses_before_credential_access() {
 fn linux_custody_commands_are_refused_and_hidden_elsewhere() {
     let sandbox = fixture("device-key-linux-elsewhere");
     let credential = "0123456789abcdefghjkmnpqrs";
-    for command in ["open-linux", "verify-linux-possession"] {
+    for command in [
+        "open-linux",
+        "close-linux",
+        "verify-linux-possession",
+        "retire-linux",
+        "provision-linux-sessions",
+    ] {
         for args in [
             vec!["device-key", command, credential],
             vec!["device-key", command, credential, "--json"],
@@ -173,7 +179,15 @@ fn linux_custody_commands_are_refused_and_hidden_elsewhere() {
     assert!(output.status.success(), "{output:?}");
     let help = String::from_utf8(output.stdout).unwrap();
     assert!(help.contains("create <absolute-new-directory>"));
-    assert!(!help.contains("open-linux") && !help.contains("verify-linux-possession"));
+    for command in [
+        "open-linux",
+        "close-linux",
+        "verify-linux-possession",
+        "retire-linux",
+        "provision-linux-sessions",
+    ] {
+        assert!(!help.contains(command), "{command}");
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
