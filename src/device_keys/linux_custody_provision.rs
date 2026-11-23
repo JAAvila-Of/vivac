@@ -16,6 +16,7 @@ pub enum ProvisionStage {
     BeforeAdmissionsSync,
     BeforeOpeningsSync,
     BeforeEndpointsSync,
+    BeforeSessionsSync,
     BeforeStateSync,
     BeforeStageSync,
     BeforeRename,
@@ -805,6 +806,7 @@ impl Provisioner {
             (2, ProvisionStage::BeforeAdmissionsSync),
             (3, ProvisionStage::BeforeOpeningsSync),
             (4, ProvisionStage::BeforeEndpointsSync),
+            (5, ProvisionStage::BeforeSessionsSync),
             (0, ProvisionStage::BeforeStateSync),
         ] {
             at("checkpoint", checkpoint(seam))?;

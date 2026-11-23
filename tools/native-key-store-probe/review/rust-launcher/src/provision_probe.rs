@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 
-const CASES: [&str; 33] = [
+const CASES: [&str; 34] = [
     "new-slot",
     "existing-destination",
     "existing-malformed",
@@ -37,6 +37,7 @@ const CASES: [&str; 33] = [
     "error-admissions-sync",
     "error-openings-sync",
     "error-endpoints-sync",
+    "error-sessions-sync",
     "error-state-sync",
     "error-stage-sync",
     "error-before-rename",
@@ -277,6 +278,7 @@ fn failure_stage(case: &str) -> Option<ProvisionStage> {
         "error-admissions-sync" => ProvisionStage::BeforeAdmissionsSync,
         "error-openings-sync" => ProvisionStage::BeforeOpeningsSync,
         "error-endpoints-sync" => ProvisionStage::BeforeEndpointsSync,
+        "error-sessions-sync" => ProvisionStage::BeforeSessionsSync,
         "error-state-sync" => ProvisionStage::BeforeStateSync,
         "error-stage-sync" => ProvisionStage::BeforeStageSync,
         "error-before-rename" => ProvisionStage::BeforeRename,

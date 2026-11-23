@@ -69,8 +69,9 @@ def evidence(case, phase='writer', observation=False):
 class SchemaTests(unittest.TestCase):
     def test_all_boundaries_and_phases_reject_bool_counters_and_false_acknowledgements(self):
         import copy
-        self.assertEqual(len(probe.CASES),33)
+        self.assertEqual(len(probe.CASES),34)
         self.assertIn('error-endpoints-sync',probe.CASES)
+        self.assertIn('error-sessions-sync',probe.CASES)
         for phase in ('writer','reader'):
             for case in probe.CASES:
                 for observation in (False,True):

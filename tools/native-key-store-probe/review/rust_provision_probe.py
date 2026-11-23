@@ -21,7 +21,7 @@ require = abandon.require
 CASES = {'new-slot','existing-destination','existing-malformed','existing-symlink','concurrent-writers',
  'lost-capabilities','wrong-scaffold-owner','wrong-scaffold-mode','scaffold-symlink','scaffold-acl','missing-capabilities','invalid-selectors',
  'error-scaffold-2','error-scaffold-3','error-scaffold-4','error-scaffold-5','error-stage-created','error-before-handoff',
- 'error-after-handoff','error-binding-sync','error-packages-sync','error-admissions-sync','error-openings-sync','error-endpoints-sync','error-state-sync',
+ 'error-after-handoff','error-binding-sync','error-packages-sync','error-admissions-sync','error-openings-sync','error-endpoints-sync','error-sessions-sync','error-state-sync',
  'error-stage-sync','error-before-rename','error-after-rename','error-parent-sync','error-after-parent-sync',
  'crash-before-rename','crash-after-rename','lost-reply'}
 SCOPE_FIELDS = reader.SCOPE_FIELDS
