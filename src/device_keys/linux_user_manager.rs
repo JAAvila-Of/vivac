@@ -158,6 +158,7 @@ impl UserManager {
     }
 
     fn run(&self, program: &str, arguments: Vec<OsString>, deadline: Duration) -> io::Result<()> {
+        trusted_program(Path::new(program))?;
         let mut child = Command::new(program)
             .args(arguments)
             .env_clear()
@@ -183,6 +184,21 @@ impl UserManager {
             }
             std::thread::sleep(Duration::from_millis(10));
         }
+    }
+}
+
+/// Refuses a program that is not a root-owned regular file nobody else can write.
+fn trusted_program(path: &Path) -> io::Result<()> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    if metadata.file_type().is_file()
+        && metadata.uid() == 0
+        && metadata.permissions().mode() & 0o022 == 0
+    {
+        Ok(())
+    } else {
+        Err(io::Error::other(
+            "the service manager program is not a trusted file",
+        ))
     }
 }
 
@@ -542,5 +558,33 @@ mod tests {
         std::fs::remove_file(scratch.0.join("someone")).unwrap();
         std::fs::create_dir(scratch.0.join("someone")).unwrap();
         assert!(linger_enabled_in(&scratch.0, &account).is_err());
+    }
+
+    #[test]
+    fn service_manager_programs_must_be_root_owned_regular_files() {
+        let scratch = Scratch::new();
+        assert!(trusted_program(Path::new("/usr/bin/env")).is_ok());
+        assert!(trusted_program(&scratch.0.join("missing")).is_err());
+        assert!(trusted_program(&scratch.0).is_err());
+        let file = scratch.0.join("program");
+        std::fs::write(&file, b"").unwrap();
+        mode(&file, 0o755);
+        // Without root, the file already belongs to someone else. With root,
+        // the owner changes if the sandbox allows it.
+        if own_uid() != 0 || std::os::unix::fs::chown(&file, Some(65534), None).is_ok() {
+            assert!(trusted_program(&file).is_err());
+        }
+        let link = scratch.0.join("link");
+        std::os::unix::fs::symlink("/usr/bin/env", &link).unwrap();
+        assert!(trusted_program(&link).is_err());
+        if own_uid() == 0 {
+            let _ = std::os::unix::fs::chown(&file, Some(0), None);
+            mode(&file, 0o755);
+            assert!(trusted_program(&file).is_ok());
+            for bits in [0o777, 0o775, 0o757] {
+                mode(&file, bits);
+                assert!(trusted_program(&file).is_err(), "{bits:o}");
+            }
+        }
     }
 }
