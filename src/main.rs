@@ -148,6 +148,9 @@ mod linux_session_cgroup;
 #[path = "device_keys/linux_session_control.rs"]
 mod linux_session_control;
 #[cfg(target_os = "linux")]
+#[path = "device_keys/linux_session_keeper.rs"]
+mod linux_session_keeper;
+#[cfg(target_os = "linux")]
 #[path = "device_keys/linux_session_record.rs"]
 mod linux_session_record;
 #[cfg(target_os = "linux")]

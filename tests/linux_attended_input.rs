@@ -55,6 +55,65 @@ fn internal_linux_startup_refuses_uninherited_and_noncanonical_descriptors() {
 }
 
 #[test]
+fn session_keeper_refuses_noncanonical_arguments_before_startup() {
+    const ID: &str = "00000000000000000000000001";
+    const GENERATION: &str = "00000000000000000000000002";
+    for arguments in [
+        &["--internal-linux-session-keeper"][..],
+        &[
+            "--internal-linux-session-keeper",
+            ID,
+            "notanid",
+            "1:1",
+            "43200",
+            "604800",
+        ][..],
+        &[
+            "--internal-linux-session-keeper",
+            ID,
+            GENERATION,
+            "1:1",
+            "43201",
+            "604800",
+        ][..],
+        &[
+            "--internal-linux-session-keeper",
+            ID,
+            GENERATION,
+            "1:01",
+            "43200",
+            "604800",
+        ][..],
+        &[
+            "--internal-linux-session-keeper",
+            ID,
+            GENERATION,
+            "1:1",
+            "43200",
+            "604800",
+            "x",
+        ][..],
+        // Canonical, but not the identity of the running binary.
+        &[
+            "--internal-linux-session-keeper",
+            ID,
+            GENERATION,
+            "1:1",
+            "43200",
+            "604800",
+        ][..],
+    ] {
+        let result = std::process::Command::new(env!("CARGO_BIN_EXE_vivac"))
+            .args(arguments)
+            .output()
+            .expect("run the product binary");
+        assert_eq!(result.status.code(), Some(1), "{arguments:?}");
+        assert!(result.stdout.is_empty(), "{arguments:?}");
+        assert_eq!(result.stderr, b"Linux custody startup refused.\n");
+    }
+}
+
+#[test]
 fn generated_secret_encoding_protects_an_openssh_package_key() {
     use ssh_key::{Cipher, Kdf, PrivateKey};
 

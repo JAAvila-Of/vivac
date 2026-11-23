@@ -311,10 +311,7 @@ impl SpawnOwner {
 
     /// Every child spawned afterwards joins the cgroup behind `procs` before
     /// exec. Accepted once, before the first child; otherwise `EBUSY`.
-    #[allow(
-        dead_code,
-        reason = "The session start command consumes this in a later step."
-    )]
+    #[allow(dead_code, reason = "The native probes never run a session keeper.")]
     pub(crate) fn place_children_in(&mut self, procs: OwnedFd) -> io::Result<()> {
         self.check_thread()?;
         if self.cgroup_procs.is_some()

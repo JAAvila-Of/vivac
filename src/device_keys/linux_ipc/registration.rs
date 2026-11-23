@@ -1921,10 +1921,7 @@ impl KeeperAdoptedOffer {
 
     /// Publishes the opening permit again once the session cgroup is proven empty.
     /// The evidence is only available from the kernel's own report.
-    #[allow(
-        dead_code,
-        reason = "The session close command consumes this in a later step."
-    )]
+    #[allow(dead_code, reason = "The native probes never run a session keeper.")]
     pub(crate) fn publish_after_empty_session(
         &mut self,
         _evidence: &EmptySessionCgroup,

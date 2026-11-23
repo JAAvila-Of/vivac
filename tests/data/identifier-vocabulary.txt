@@ -11,6 +11,8 @@ abs
 absence
 absent
 absolute
+abstime
+abstract
 accent
 accented
 accents
@@ -358,6 +360,7 @@ bool
 boolean
 boot
 bootstrap
+boottime
 born
 borrow
 borrowed
@@ -971,6 +974,7 @@ disk
 dispatch
 dispatches
 display
+disposition
 dispositions
 distance
 distinct
@@ -1468,6 +1472,7 @@ gets
 getsid
 getsockopt
 gettid
+gettime
 getuid
 gid
 git
@@ -1760,6 +1765,7 @@ international
 interoperates
 interrupted
 interruption
+interval
 intervals
 into
 introduced
@@ -1804,6 +1810,7 @@ item
 items
 iter
 iterator
+itimerspec
 its
 itself
 itxt
@@ -2329,6 +2336,7 @@ out2
 out3
 outbound
 outcome
+outcomes
 outer
 outlive
 outlives
@@ -3215,6 +3223,7 @@ setmask
 sets
 setsid
 setsockopt
+settime
 setting
 settings
 setup
@@ -3378,6 +3387,7 @@ sqlite3
 src
 ss
 ssh
+ssi
 ssize
 st
 stable
@@ -3585,6 +3595,7 @@ test
 tests
 text
 texts
+tfd
 than
 that
 the
@@ -3615,6 +3626,8 @@ tilde
 time
 timed
 timeout
+timer
+timerfd
 times
 timescale
 timespec

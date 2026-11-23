@@ -271,7 +271,8 @@ impl SessionLimits {
         Self::from_values(idle.as_deref(), maximum.as_deref())
     }
 
-    fn from_values(idle: Option<&str>, maximum: Option<&str>) -> Result<Self, ()> {
+    /// Each limit may only shorten its default, to no less than 60 seconds.
+    pub(crate) fn from_values(idle: Option<&str>, maximum: Option<&str>) -> Result<Self, ()> {
         let shorten = |value: Option<&str>, ceiling: Duration| match value {
             None => Ok(ceiling),
             Some(text) => {

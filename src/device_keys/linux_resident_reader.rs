@@ -506,6 +506,31 @@ fn compare_package(
     )
 }
 
+/// Whether no entry of any kind, a dangling link included, holds `name`.
+/// Only `ENOENT` is absence; any other failure is an error.
+fn entry_absent(directory: libc::c_int, name: &CStr) -> io::Result<bool> {
+    let mut status = std::mem::MaybeUninit::<libc::stat>::uninit();
+    // SAFETY: the terminated name is one component below the directory,
+    // links are not followed and status is writable for one stat object.
+    let found = unsafe {
+        libc::fstatat(
+            directory,
+            name.as_ptr(),
+            status.as_mut_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    if found == 0 {
+        return Ok(false);
+    }
+    let error = io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ENOENT) {
+        Ok(true)
+    } else {
+        Err(error)
+    }
+}
+
 /// Read-only resident candidate; it supplies no producer evidence or admission.
 pub struct CandidateResident {
     root: CandidateRoot,
@@ -649,27 +674,7 @@ impl CandidateResident {
             self.admission
                 .identity
                 .same_filesystem(&directory.identity)?;
-            let mut status = std::mem::MaybeUninit::<libc::stat>::uninit();
-            // SAFETY: the terminated credential is one component below the
-            // retained collection, links are not followed and status is
-            // writable for one complete stat object.
-            let found = unsafe {
-                libc::fstatat(
-                    directory.fd.as_raw_fd(),
-                    self.credential.as_ptr(),
-                    status.as_mut_ptr(),
-                    libc::AT_SYMLINK_NOFOLLOW,
-                )
-            };
-            let absent = if found == 0 {
-                false
-            } else {
-                let error = io::Error::last_os_error();
-                if error.raw_os_error() != Some(libc::ENOENT) {
-                    return Err(error);
-                }
-                true
-            };
+            let absent = entry_absent(directory.fd.as_raw_fd(), &self.credential)?;
             directory.validate(directory.fd.as_raw_fd(), self.ids)?;
             Ok(absent)
         });
@@ -780,7 +785,9 @@ impl CandidateResident {
         result
     }
 
-    pub(super) fn native_material(&self) -> io::Result<(OwnedFd, OwnedFd)> {
+    /// A fresh descriptor for the retained package directory, which anchors
+    /// the credential reservation.
+    pub(super) fn package_directory(&self) -> io::Result<OwnedFd> {
         self.validate()?;
         // SAFETY: fcntl duplicates the retained package capability atomically.
         let raw = unsafe { libc::fcntl(self.package.fd.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 3) };
@@ -790,6 +797,12 @@ impl CandidateResident {
         // SAFETY: successful fcntl returned a fresh owned descriptor.
         let directory = unsafe { OwnedFd::from_raw_fd(raw) };
         descriptor(directory.as_raw_fd())?;
+        self.validate()?;
+        Ok(directory)
+    }
+
+    pub(super) fn native_material(&self) -> io::Result<(OwnedFd, OwnedFd)> {
+        let directory = self.package_directory()?;
         let cipher = super::linux_current_admission::seal_ciphertext(&self.key_file.bytes)?;
         self.validate()?;
         Ok((directory, cipher))
@@ -1101,5 +1114,31 @@ mod tests {
         ] {
             assert!(!identifier(value), "accepted unsafe selector {value:?}");
         }
+    }
+
+    #[test]
+    fn only_a_missing_name_is_an_absent_permit() {
+        use std::os::unix::fs::{symlink, DirBuilderExt};
+
+        let path = std::env::temp_dir().join(format!("vivac-permit-absent-{}", std::process::id()));
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&path)
+            .unwrap();
+        let result = (|| -> io::Result<()> {
+            let directory: OwnedFd = std::fs::File::open(&path)?.into();
+            assert!(entry_absent(directory.as_raw_fd(), c"missing")?);
+            std::fs::write(path.join("permit"), b"")?;
+            assert!(!entry_absent(directory.as_raw_fd(), c"permit")?);
+            std::fs::create_dir(path.join("directory"))?;
+            assert!(!entry_absent(directory.as_raw_fd(), c"directory")?);
+            symlink(path.join("nowhere"), path.join("dangling"))?;
+            assert!(!entry_absent(directory.as_raw_fd(), c"dangling")?);
+            let file: OwnedFd = std::fs::File::open(path.join("permit"))?.into();
+            assert!(entry_absent(file.as_raw_fd(), c"permit").is_err());
+            Ok(())
+        })();
+        let _ = std::fs::remove_dir_all(&path);
+        result.unwrap();
     }
 }

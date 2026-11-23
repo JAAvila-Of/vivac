@@ -35,10 +35,11 @@ mod foreground;
 use cancellation::{cancellation_pending, Cancellation};
 
 const KEEPER: &str = "--internal-linux-keeper";
-const SUPERVISOR: &str = "--internal-linux-supervisor";
-const VERIFIER: &str = "--internal-linux-verifier";
+const SESSION_KEEPER: &str = "--internal-linux-session-keeper";
+pub(crate) const SUPERVISOR: &str = "--internal-linux-supervisor";
+pub(crate) const VERIFIER: &str = "--internal-linux-verifier";
 const DISCOVER: &str = "--internal-linux-discover";
-const STARTUP_TIMEOUT: Duration = Duration::from_secs(6);
+pub(crate) const STARTUP_TIMEOUT: Duration = Duration::from_secs(6);
 const PROOF_TIMEOUT: Duration = Duration::from_secs(15);
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(20);
 const SECRET_TIMEOUT: Duration = Duration::from_secs(30);
@@ -122,7 +123,7 @@ fn null_stdio() -> io::Result<OwnedFd> {
     Ok(unsafe { OwnedFd::from_raw_fd(duplicate) })
 }
 
-fn launch(
+pub(crate) fn launch(
     owner: &mut SpawnOwner,
     command: &str,
     session: Option<(&str, &Path)>,
@@ -156,7 +157,11 @@ fn observed_exit(owner: &mut SpawnOwner, receipt: Receipt) -> io::Result<Option<
     Ok(exit)
 }
 
-fn wait_for_success(owner: &mut SpawnOwner, receipt: Receipt, deadline: Instant) -> io::Result<()> {
+pub(crate) fn wait_for_success(
+    owner: &mut SpawnOwner,
+    receipt: Receipt,
+    deadline: Instant,
+) -> io::Result<()> {
     loop {
         if Instant::now() >= deadline {
             return Err(io::Error::from(io::ErrorKind::TimedOut));
@@ -208,7 +213,7 @@ fn block_hangup() -> io::Result<()> {
     Ok(())
 }
 
-fn short_deadline() -> Instant {
+pub(crate) fn short_deadline() -> Instant {
     Instant::now() + Duration::from_secs(3)
 }
 
@@ -755,6 +760,9 @@ pub(crate) fn verify_discovered_endpoint(credential: &str) -> io::Result<()> {
 pub(crate) fn dispatch() -> Option<i32> {
     let mut arguments = std::env::args_os().skip(1);
     let command = arguments.next()?;
+    if command == SESSION_KEEPER {
+        return Some(crate::linux_session_keeper::run(arguments));
+    }
     let result = if command == KEEPER {
         let credential = credential(arguments.next());
         let mode = arguments.next();

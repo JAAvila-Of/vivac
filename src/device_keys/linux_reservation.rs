@@ -57,10 +57,6 @@ impl StoreReservation {
     /// Reserves a package directory that is anchored by a bare descriptor: a
     /// fresh open of `.` gives each caller its own open file description,
     /// and one nonblocking exclusive flock never waits, retries or falls back.
-    #[allow(
-        dead_code,
-        reason = "The session close command consumes this in a later step."
-    )]
     pub(crate) fn acquire_directory(package: &OwnedFd) -> io::Result<Self> {
         let before = descriptor_identity(package.as_raw_fd())?;
         if before.st_mode & libc::S_IFMT != libc::S_IFDIR {

@@ -155,19 +155,14 @@ impl CurrentAdmission {
     /// Publishes the opening permit again after the session cgroup is proven empty,
     /// when the supervisor never reached the keeper. A fresh, non-waiting
     /// reservation of the package directory stands in for the dead keeper's.
-    #[allow(
-        dead_code,
-        reason = "The session close command consumes this in a later step."
-    )]
+    #[allow(dead_code, reason = "The native probes never run a session keeper.")]
     pub(crate) fn republish_after_empty_session(
         &self,
         _evidence: &EmptySessionCgroup,
         authorize_rename: impl FnOnce() -> io::Result<()>,
     ) -> Result<(), PublishError> {
         self.validity.check_publication(|published| {
-            self.validate()?;
-            let (package, _cipher) = self.candidate.native_material()?;
-            let reservation = StoreReservation::acquire_directory(&package)?;
+            let reservation = self.reserve_package_directory()?;
             let result = self.candidate.publish_clean_opening_permit(
                 || reservation.validate_owned(),
                 authorize_rename,
@@ -176,6 +171,17 @@ impl CurrentAdmission {
             reservation.validate_owned()?;
             result
         })
+    }
+
+    /// Takes the credential reservation on the package directory alone, without
+    /// waiting, for work that needs no package lease, such as retiring a session
+    /// record. A held reservation is refused.
+    pub fn reserve_package_directory(&self) -> io::Result<StoreReservation> {
+        self.validate()?;
+        let package = self.candidate.package_directory()?;
+        let reservation = StoreReservation::acquire_directory(&package)?;
+        self.validate()?;
+        Ok(reservation)
     }
 
     pub fn open_fixed_namespace(credential_id: &str) -> io::Result<Self> {
