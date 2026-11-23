@@ -219,6 +219,19 @@ rights and review of the exact revision and audience. Restricted history,
 artifacts and derived context are not included merely because a visible node
 references them.
 
+A project's publication policy can supply that review for its own ongoing
+work. The policy is a project norm, ratified like any other, that names the
+lanes it publishes, their audience, and whether new members receive earlier
+history. A member accepts its exact text once when joining the project. From
+then on each new event in a covered lane is published under the policy's
+current revision, without a review per event. The write guards still run
+before any event exists. A lane outside the policy is never published, not
+even by reference, and a member may mark a lane of their own as private.
+Changing the policy is a new ratified norm and does not rewrite what was
+already published. Everything outside a policy keeps the per-revision review:
+artifacts with content, history adopted from a personal tree, and sharing
+between projects.
+
 New membership does not grant previously published history by default.
 Historical access is an explicit reviewed grant identifying its scope and
 revisions. Future publications use the current audience policy. A group or
@@ -289,9 +302,13 @@ no people, assigns no keys and selects no algorithm. Custodian powers,
 bootstrap, the procedure itself and the key lifecycle remain prerequisites for
 implementation.
 
-A device credential is never recovered. When its custody is lost, including a
-local opening that ends without a clean close, the holder creates a new
-credential and the team revokes the old one.
+A device credential is never recovered by copying or by an administrator.
+Losing a session is not losing the credential: a local opening that ends
+without a clean close is reopened by its holder with the unlock secret once
+the platform shows positive evidence that no process of the old session
+survives. When custody itself is lost, such as a forgotten unlock secret or a
+device that leaves the holder's control, the holder creates a new credential
+and the team revokes the old one.
 
 ## Deployment boundary
 
