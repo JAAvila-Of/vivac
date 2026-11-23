@@ -108,17 +108,18 @@ pub(crate) fn boot_id() -> io::Result<String> {
     parse_boot_id(&read_limited("/proc/sys/kernel/random/boot_id", 64)?)
 }
 
-/// Whether `pid` is in the cgroup at `path` or below it.
+fn peer_matches(bytes: &[u8], path: &str) -> io::Result<bool> {
+    Ok(parse_membership(bytes)? == path)
+}
+
+/// Whether `pid` is in exactly the cgroup at `path`, not below it: the keeper
+/// lives in the unit cgroup itself and the session's processes one level down.
 pub(crate) fn peer_in_cgroup(pid: libc::pid_t, path: &str) -> io::Result<bool> {
-    if pid <= 0 {
+    if pid <= 0 || !path.starts_with('/') {
         return Err(errno(libc::EINVAL));
     }
     let bytes = read_limited(&format!("/proc/{pid}/cgroup"), MEMBERSHIP_LIMIT)?;
-    let membership = parse_membership(&bytes)?;
-    Ok(membership == path
-        || membership
-            .strip_prefix(path)
-            .is_some_and(|rest| rest.starts_with('/')))
+    peer_matches(&bytes, path)
 }
 
 fn filesystem_is_cgroup2(fd: &OwnedFd) -> io::Result<()> {
@@ -165,10 +166,14 @@ fn open_at(parent: libc::c_int, name: &CStr, flags: libc::c_int) -> io::Result<O
 }
 
 fn open_root() -> io::Result<OwnedFd> {
+    open_root_at(CGROUP_ROOT)
+}
+
+fn open_root_at(root: &CStr) -> io::Result<OwnedFd> {
     // SAFETY: the path is terminated; a successful open returns a fresh descriptor.
     let raw = unsafe {
         libc::open(
-            CGROUP_ROOT.as_ptr(),
+            root.as_ptr(),
             libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
         )
     };
@@ -189,7 +194,11 @@ fn open_cgroup(path: &str) -> io::Result<OwnedFd> {
     }
     let name = CString::new(relative).map_err(|_| errno(libc::EINVAL))?;
     let root = open_root()?;
-    let directory = open_at(root.as_raw_fd(), &name, libc::O_RDONLY | libc::O_DIRECTORY)?;
+    open_below(&root, &name)
+}
+
+fn open_below(root: &OwnedFd, name: &CStr) -> io::Result<OwnedFd> {
+    let directory = open_at(root.as_raw_fd(), name, libc::O_RDONLY | libc::O_DIRECTORY)?;
     filesystem_is_cgroup2(&directory)?;
     Ok(directory)
 }
@@ -429,7 +438,31 @@ pub(crate) enum CgroupObservation {
 /// Looks at a recorded cgroup: gone, a different directory under the same
 /// name, or the same one with or without processes.
 pub(crate) fn observe(path: &str, expected: CgroupIdentity) -> io::Result<CgroupObservation> {
-    let directory = match open_cgroup(path) {
+    observe_below(CGROUP_ROOT, path, expected)
+}
+
+fn observe_below(
+    root: &CStr,
+    path: &str,
+    expected: CgroupIdentity,
+) -> io::Result<CgroupObservation> {
+    observe_in(open_root_at(root), path, expected)
+}
+
+/// Only a failed lookup beneath a root that opened and validated counts as
+/// absence; a root that cannot be opened is no evidence about the path.
+fn observe_in(
+    root: io::Result<OwnedFd>,
+    path: &str,
+    expected: CgroupIdentity,
+) -> io::Result<CgroupObservation> {
+    let root = root?;
+    let relative = path.strip_prefix('/').ok_or_else(|| errno(libc::EINVAL))?;
+    if relative.is_empty() {
+        return Err(errno(libc::EINVAL));
+    }
+    let name = CString::new(relative).map_err(|_| errno(libc::EINVAL))?;
+    let directory = match open_below(&root, &name) {
         Ok(directory) => directory,
         Err(error) if error.raw_os_error() == Some(libc::ENOENT) => {
             return Ok(CgroupObservation::Absent)
@@ -542,5 +575,47 @@ mod tests {
             EmptySessionCgroup::for_test(7).identity(),
             CgroupIdentity { inode: 7 }
         );
+    }
+
+    #[test]
+    fn peer_matches_only_the_exact_cgroup() {
+        let path = "/user.slice/user-1000.slice/user@1000.service/app.slice/u.service";
+        assert!(peer_matches(format!("0::{path}\n").as_bytes(), path).unwrap());
+        assert!(!peer_matches(format!("0::{path}/session\n").as_bytes(), path).unwrap());
+        assert!(!peer_matches(format!("0::{path}x\n").as_bytes(), path).unwrap());
+        assert!(!peer_matches(b"0::/other\n", path).unwrap());
+        assert!(peer_matches(b"1:name=x:/a\n", path).is_err());
+    }
+
+    #[test]
+    fn peer_path_must_be_absolute_and_non_empty() {
+        // SAFETY: getpid has no arguments.
+        let pid = unsafe { libc::getpid() };
+        for bad in ["", "relative/path"] {
+            let error = peer_in_cgroup(pid, bad).unwrap_err();
+            assert_eq!(error.raw_os_error(), Some(libc::EINVAL), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_missing_cgroup_root_is_not_evidence_of_absence() {
+        let expected = CgroupIdentity { inode: 1 };
+        let error = observe_below(c"/nonexistent-cgroup-root", "/a/b", expected).unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(libc::ENOENT));
+        let failed = Err(errno(libc::EACCES));
+        let error = observe_in(failed, "/a/b", expected).unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(libc::EACCES));
+    }
+
+    #[test]
+    fn a_missing_path_below_a_present_root_is_absent() {
+        let root = std::env::temp_dir();
+        let root = OwnedFd::from(std::fs::File::open(&root).expect("open temp directory"));
+        let seen = observe_in(
+            Ok(root),
+            "/vivac-no-such-cgroup/session",
+            CgroupIdentity { inode: 1 },
+        );
+        assert_eq!(seen.unwrap(), CgroupObservation::Absent);
     }
 }
