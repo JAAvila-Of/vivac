@@ -102,6 +102,17 @@ pub fn probe_with_admitted_openssh_registration<T>(
     preparation.probe_with_openssh_registration(home, operation)
 }
 
+/// Reads the attended unlock secret for a probe that opens from a permit.
+#[cfg(target_os = "linux")]
+pub fn read_attended_unlock_secret() -> std::io::Result<zeroize::Zeroizing<Vec<u8>>> {
+    let input = attended_terminal::AttendedUnlockTerminal::open()
+        .and_then(attended_terminal::AttendedUnlockTerminal::read)
+        .map_err(|_| {
+            std::io::Error::new(std::io::ErrorKind::PermissionDenied, "attended-input")
+        })?;
+    Ok(zeroize::Zeroizing::new(input.as_bytes().to_vec()))
+}
+
 #[cfg(target_os = "linux")]
 pub fn probe_send_keeper_terminal(
     socket: &std::os::fd::OwnedFd,

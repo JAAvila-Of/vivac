@@ -2,22 +2,25 @@ use crate::attended_terminal::AttendedUnlockTerminal;
 use crate::linux_admission_storage::PublishError;
 use crate::linux_creation_producer::CreationRuntime;
 use crate::linux_current_admission::CurrentAdmission;
+use crate::linux_current_admission::OpeningAuthority;
 use crate::linux_endpoint_runtime::{EndpointRuntime, RuntimeRoot};
 use crate::linux_ipc::packet_pair;
 use crate::linux_ipc::registration::{
     acknowledge_supervisor_ready, authorize_endpoint_start, await_endpoint_ready,
-    await_session_keeper_action, finish_endpoint_start, receive_endpoint_start,
-    receive_session_child_step, receive_session_keeper_step, send_session_child_step,
-    send_session_keeper_step, wait_session_keeper_finish, EndpointProofConnection,
-    EndpointSessionStep, EndpointStartupRole, KeeperAdoptedOffer, KeeperChallengeReceiver,
-    KeeperChallengeSender,
+    await_session_keeper_action, finish_endpoint_start, receive_any_session_child_step,
+    receive_endpoint_start, receive_session_child_step, receive_session_keeper_opening,
+    receive_session_keeper_step, receive_session_secret, send_session_child_step,
+    send_session_keeper_step, send_session_secret, wait_session_keeper_finish,
+    EndpointProofConnection, EndpointSessionStep, EndpointStartupRole, KeeperAdoptedOffer,
+    KeeperChallengeReceiver, KeeperChallengeSender,
 };
 use crate::linux_spawn::{current_executable, ExitReceipt, Receipt, SpawnOwner, SpawnSpec};
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fs::OpenOptions;
 use std::io::{self, Write};
 use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::fs::OpenOptionsExt;
+use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant};
 
 #[path = "linux_supervisor_start/active_io.rs"]
@@ -38,6 +41,7 @@ const DISCOVER: &str = "--internal-linux-discover";
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(6);
 const PROOF_TIMEOUT: Duration = Duration::from_secs(15);
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(20);
+const SECRET_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum OpeningOutcome {
@@ -121,12 +125,13 @@ fn null_stdio() -> io::Result<OwnedFd> {
 fn launch(
     owner: &mut SpawnOwner,
     command: &str,
-    credential: Option<&str>,
+    session: Option<(&str, &Path)>,
 ) -> io::Result<(Receipt, OwnedFd)> {
     let (socket, child_socket) = packet_pair()?;
     let mut arguments = vec![command.into(), child_socket.as_raw_fd().to_string().into()];
-    if let Some(credential) = credential {
+    if let Some((credential, runtime)) = session {
         arguments.push(credential.into());
+        arguments.push(runtime.as_os_str().to_owned());
     }
     let receipt = owner.spawn(SpawnSpec {
         executable: current_executable()?,
@@ -237,9 +242,16 @@ fn keeper(
     }
     let deadline = Instant::now() + STARTUP_TIMEOUT;
     let mut owner = SpawnOwner::new_dedicated()?;
-    let runtime = RuntimeRoot::create()?;
-    let (supervisor, supervisor_channel) = launch(&mut owner, SUPERVISOR, credential)?;
-    let (verifier, verifier_channel) = launch(&mut owner, VERIFIER, credential)?;
+    let parent = credential
+        .map(|_| foreground::create_runtime_parent())
+        .transpose()?;
+    let runtime = match &parent {
+        Some(parent) => RuntimeRoot::create_in(parent)?,
+        None => RuntimeRoot::create()?,
+    };
+    let session = credential.zip(parent.as_deref());
+    let (supervisor, supervisor_channel) = launch(&mut owner, SUPERVISOR, session)?;
+    let (verifier, verifier_channel) = launch(&mut owner, VERIFIER, session)?;
     for (child, channel, peer, role) in [
         (
             supervisor,
@@ -282,16 +294,23 @@ fn keeper(
             Err(error) => {
                 drop(supervisor_channel);
                 drop(verifier_channel);
-                // The supervisor blocks hangup and its terminal reader watches
-                // it. Wake that reader so it restores echo before teardown.
+                // The supervisor blocks hangup. Closing each channel above ends
+                // its waits, including the one for the unlock secret, before
+                // teardown.
                 let _ = owner.signal(supervisor.token, libc::SIGHUP);
                 if wait_for_cancelled_children(&mut owner, supervisor, verifier).is_ok() {
                     let _ = runtime.remove_empty();
+                    if let Some(parent) = &parent {
+                        let _ = std::fs::remove_dir(parent);
+                    }
                 }
                 return Err(error);
             }
         };
         runtime.remove_empty()?;
+        if let Some(parent) = &parent {
+            std::fs::remove_dir(parent)?;
+        }
         let authorize_rename = || {
             if let Some(terminal) = &foreground {
                 terminal.validate_foreground_hold()?;
@@ -372,10 +391,24 @@ fn keeper_session(
     .receive_offer()?
     .adopt()?;
     adopted.confirm()?;
-    if !adopted.confirmed_opening_consumption() {
+    if adopted.confirmed_opening_authority() != Some(OpeningAuthority::Permit) {
         return Err(refused());
     }
     *progress = OpeningOutcome::Interrupted;
+    // Temporary until open-linux hands the secret to the keeper over its
+    // control socket: the foreground keeper reads it and passes it on.
+    let input = AttendedUnlockTerminal::open()
+        .and_then(AttendedUnlockTerminal::read)
+        .map_err(|_| refused())?;
+    let secret = <&[u8; 64]>::try_from(input.as_bytes()).map_err(|_| refused())?;
+    send_session_secret(
+        supervisor_channel,
+        owner,
+        supervisor.token,
+        secret,
+        short_deadline(),
+    )?;
+    drop(input);
     receive_keeper_child_step(
         supervisor_channel,
         owner,
@@ -428,7 +461,21 @@ fn keeper_session(
                 short_deadline(),
             )?;
         }
-        terminal.wait_for_explicit_close(supervisor_channel.as_fd(), adopted.active_agent()?)?;
+        let supervisor_token = supervisor.token;
+        let owner = &*owner;
+        terminal.wait_for_explicit_close(
+            supervisor_channel.as_fd(),
+            adopted.active_agent()?,
+            || match receive_any_session_child_step(
+                supervisor_channel,
+                owner,
+                supervisor_token,
+                short_deadline(),
+            )? {
+                Served => Ok(()),
+                _ => Err(refused()),
+            },
+        )?;
     }
     send_session_keeper_step(
         supervisor_channel,
@@ -437,13 +484,20 @@ fn keeper_session(
         Close,
         short_deadline(),
     )?;
-    receive_keeper_child_step(
-        supervisor_channel,
-        owner,
-        supervisor.token,
-        Closed,
-        Instant::now() + Duration::from_secs(10),
-    )?;
+    // A proof served just before Close was sent is reported ahead of Closed.
+    let closed_deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        match receive_keeper_any_child_step(
+            supervisor_channel,
+            owner,
+            supervisor.token,
+            closed_deadline,
+        )? {
+            Served => continue,
+            Closed => break,
+            _ => return Err(refused()),
+        }
+    }
     adopted.probe_receive_active_closure(short_deadline())?;
     adopted.confirm_active_closure(short_deadline())?;
     wait_for_success(owner, supervisor, short_deadline())?;
@@ -460,6 +514,21 @@ fn receive_keeper_child_step(
     step: EndpointSessionStep,
     deadline: Instant,
 ) -> io::Result<()> {
+    await_keeper_child_frame(socket, deadline)?;
+    receive_session_child_step(socket, owner, token, step, deadline)
+}
+
+fn receive_keeper_any_child_step(
+    socket: &OwnedFd,
+    owner: &SpawnOwner,
+    token: u64,
+    deadline: Instant,
+) -> io::Result<EndpointSessionStep> {
+    await_keeper_child_frame(socket, deadline)?;
+    receive_any_session_child_step(socket, owner, token, deadline)
+}
+
+fn await_keeper_child_frame(socket: &OwnedFd, deadline: Instant) -> io::Result<()> {
     loop {
         if cancellation_pending()? {
             return Err(refused());
@@ -487,7 +556,7 @@ fn receive_keeper_child_step(
             if cancellation_pending()? {
                 return Err(refused());
             }
-            return receive_session_child_step(socket, owner, token, step, deadline);
+            return Ok(());
         }
     }
 }
@@ -497,7 +566,7 @@ fn session_child(
     connected: OwnedFd,
     expected: &OwnedFd,
     role: EndpointStartupRole,
-    credential: &str,
+    (credential, runtime): (&str, &Path),
     startup_deadline: Instant,
 ) -> io::Result<()> {
     use EndpointSessionStep::*;
@@ -523,25 +592,40 @@ fn session_child(
             Ok(())
         }
         EndpointStartupRole::Supervisor => {
-            receive_session_keeper_step(controller, Start, startup_deadline)?;
+            let authority = receive_session_keeper_opening(controller, startup_deadline)?;
             let admission = CurrentAdmission::open_fixed_namespace(credential)?;
             let reserved = admission.prepare_native_material()?.reserve()?;
-            let home = CreationRuntime::create_session().map_err(|_| refused())?;
-            let opening = match reserved.prepare_attended_opening() {
+            let home = CreationRuntime::create_session_in(runtime).map_err(|_| refused())?;
+            let opening = match authority {
+                OpeningAuthority::Permit => reserved.prepare_service_opening(),
+                OpeningAuthority::Reopened => reserved.prepare_service_reopening(),
+            };
+            let opening = match opening {
                 Ok(opening) => opening,
                 Err(error) => {
                     let _ = home.cleanup_after_native_teardown();
                     return Err(error);
                 }
             };
-            let outcome = opening.probe_unlock_registered_active(home.path(), |registration| {
-                send_session_child_step(controller, Register, short_deadline())?;
-                KeeperChallengeReceiver::for_parent(controller.try_clone()?, short_deadline())?
-                    .send_launch_context(registration)?
-                    .send_offer()?
-                    .receive_confirmation()?
-                    .into_active_closure_sender()
-            });
+            let outcome = opening.probe_unlock_registered_active(
+                home.path(),
+                |registration| {
+                    send_session_child_step(controller, Register, short_deadline())?;
+                    KeeperChallengeReceiver::for_parent(controller.try_clone()?, short_deadline())?
+                        .send_launch_context(registration)?
+                        .send_offer()?
+                        .receive_confirmation()?
+                        .into_active_closure_sender()
+                },
+                || {
+                    // While a terminal prompts for the secret, its cancellation
+                    // signals reach this process group too. Hold them so that a
+                    // prompt ended by cancellation ends this wait through the
+                    // closed channel and the cleanup below still runs.
+                    let _cancellation = Cancellation::block()?;
+                    receive_session_secret(controller, Instant::now() + SECRET_TIMEOUT)
+                },
+            );
             let (mut session, provider, closure) = match outcome {
                 Ok(active) => active,
                 Err(error) => {
@@ -594,9 +678,9 @@ fn session_child(
 fn endpoint_child(
     descriptor: RawFd,
     role: EndpointStartupRole,
-    credential: Option<&str>,
+    session: Option<(&str, &Path)>,
 ) -> io::Result<()> {
-    if credential.is_some() && role == EndpointStartupRole::Supervisor {
+    if session.is_some() && role == EndpointStartupRole::Supervisor {
         block_hangup()?;
     }
     let deadline = Instant::now() + STARTUP_TIMEOUT;
@@ -610,8 +694,8 @@ fn endpoint_child(
         }
         EndpointStartupRole::Verifier => (runtime.connect(deadline)?, None),
     };
-    let result = if let Some(credential) = credential {
-        session_child(&socket, connected, &peer, role, credential, deadline)
+    let result = if let Some(session) = session {
+        session_child(&socket, connected, &peer, role, session, deadline)
     } else {
         let connection = EndpointProofConnection::for_expected_peer(connected, &peer, deadline)?;
         acknowledge_supervisor_ready(&socket, deadline)?;
@@ -632,6 +716,23 @@ fn credential(argument: Option<std::ffi::OsString>) -> io::Result<Option<String>
             Ok(value)
         })
         .transpose()
+}
+
+/// Accepts only an absolute path written in its one canonical form.
+fn runtime_directory(argument: Option<OsString>) -> io::Result<Option<PathBuf>> {
+    let Some(argument) = argument else {
+        return Ok(None);
+    };
+    let path = PathBuf::from(argument);
+    let mut components = path.components();
+    if components.next() != Some(Component::RootDir)
+        || !components.all(|component| matches!(component, Component::Normal(_)))
+        || path.components().collect::<PathBuf>().as_os_str() != path.as_os_str()
+        || path.as_os_str().len() == 1
+    {
+        return Err(refused());
+    }
+    Ok(Some(path))
 }
 
 pub(crate) fn verify_discovered_endpoint(credential: &str) -> io::Result<()> {
@@ -700,11 +801,16 @@ pub(crate) fn dispatch() -> Option<i32> {
             .ok_or_else(refused)
             .and_then(|argument| descriptor(&argument));
         let credential = credential(arguments.next());
+        let runtime = runtime_directory(arguments.next());
         if arguments.next().is_some() {
             Err(refused())
         } else {
-            descriptor.and_then(|fd| {
-                credential.and_then(|credential| endpoint_child(fd, role, credential.as_deref()))
+            descriptor.and_then(|fd| match (credential?, runtime?) {
+                (None, None) => endpoint_child(fd, role, None),
+                (Some(credential), Some(runtime)) => {
+                    endpoint_child(fd, role, Some((&credential, &runtime)))
+                }
+                _ => Err(refused()),
             })
         }
     } else {

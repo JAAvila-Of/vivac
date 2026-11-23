@@ -107,6 +107,12 @@ pub(super) fn serve(
                             );
                             if result.is_ok() {
                                 responses.push(connection);
+                                // The keeper's idle limit counts from the last served proof.
+                                registration::send_session_child_step(
+                                    controller,
+                                    registration::EndpointSessionStep::Served,
+                                    short_deadline(),
+                                )?;
                             }
                         }
                         provider.revalidate()?;

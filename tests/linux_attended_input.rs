@@ -14,7 +14,25 @@ mod package_ciphertext;
 
 #[test]
 fn internal_linux_startup_refuses_uninherited_and_noncanonical_descriptors() {
+    const ID: &str = "00000000000000000000000001";
     for arguments in [
+        &["--internal-linux-supervisor", "3", ID][..],
+        &["--internal-linux-supervisor", "3", ID, "relative"][..],
+        &[
+            "--internal-linux-supervisor",
+            "3",
+            ID,
+            "/run/user/1000/a/../b",
+        ][..],
+        &[
+            "--internal-linux-supervisor",
+            "3",
+            ID,
+            "/run/user/1000/a/",
+            "x",
+        ][..],
+        &["--internal-linux-verifier", "3", ID][..],
+        &["--internal-linux-verifier", "3", ID, "relative"][..],
         &["--internal-linux-keeper", "unexpected"][..],
         &["--internal-linux-supervisor"][..],
         &["--internal-linux-supervisor", "0"][..],

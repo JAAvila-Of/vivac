@@ -640,6 +640,43 @@ impl CandidateResident {
         result
     }
 
+    /// Reports whether no entry of any kind holds the permit name. A present
+    /// entry, valid or not, is never absence.
+    pub(super) fn opening_permit_absent(&self) -> io::Result<bool> {
+        self.validate()?;
+        let result = self.root.with_opening_directory(|descriptor| {
+            let directory = Directory::capture(descriptor.try_clone()?, self.ids, false)?;
+            self.admission
+                .identity
+                .same_filesystem(&directory.identity)?;
+            let mut status = std::mem::MaybeUninit::<libc::stat>::uninit();
+            // SAFETY: the terminated credential is one component below the
+            // retained collection, links are not followed and status is
+            // writable for one complete stat object.
+            let found = unsafe {
+                libc::fstatat(
+                    directory.fd.as_raw_fd(),
+                    self.credential.as_ptr(),
+                    status.as_mut_ptr(),
+                    libc::AT_SYMLINK_NOFOLLOW,
+                )
+            };
+            let absent = if found == 0 {
+                false
+            } else {
+                let error = io::Error::last_os_error();
+                if error.raw_os_error() != Some(libc::ENOENT) {
+                    return Err(error);
+                }
+                true
+            };
+            directory.validate(directory.fd.as_raw_fd(), self.ids)?;
+            Ok(absent)
+        });
+        self.validate()?;
+        result
+    }
+
     pub(super) fn consume_opening_permit(&self) -> io::Result<()> {
         self.with_opening_permit(|directory, permit, _| {
             let absent = || match open_at(directory.fd.as_raw_fd(), &self.credential, false) {

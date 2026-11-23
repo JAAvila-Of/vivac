@@ -92,6 +92,33 @@ impl CreationRuntime {
         Ok(runtime)
     }
 
+    /// Creates the fixed private child `session` of a private directory the
+    /// account owns, such as the session unit's runtime directory.
+    pub(crate) fn create_session_in(parent: &Path) -> Result<Self> {
+        require(parent.is_absolute())?;
+        private_directory(parent)?;
+        let path = parent.join("session");
+        // An existing name, even a link, makes the exclusive creation fail.
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&path)
+            .map_err(refused)?;
+        let directory = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(&path)
+            .map_err(refused)?;
+        let metadata = directory.metadata().map_err(refused)?;
+        let runtime = Self {
+            path,
+            directory,
+            identity: (metadata.dev(), metadata.ino()),
+            cleanup_on_drop: false,
+        };
+        runtime.validate()?;
+        Ok(runtime)
+    }
+
     pub(crate) fn path(&self) -> &Path {
         &self.path
     }
@@ -1007,6 +1034,27 @@ mod tests {
     use super::*;
     use crate::linux_gate::RequestOutcome;
     use std::time::Instant;
+
+    #[test]
+    fn session_runtime_is_created_beneath_the_given_directory() {
+        let parent = CreationRuntime::create().expect("create private parent");
+        let runtime =
+            CreationRuntime::create_session_in(parent.path()).expect("create session runtime");
+        let session = parent.path().join("session");
+        assert_eq!(runtime.path(), session);
+        let metadata = std::fs::symlink_metadata(&session).expect("stat session runtime");
+        assert!(metadata.is_dir());
+        assert_eq!(metadata.mode() & 0o7777, 0o700);
+        assert_eq!(runtime.identity, (metadata.dev(), metadata.ino()));
+        assert!(CreationRuntime::create_session_in(parent.path()).is_err());
+        runtime
+            .cleanup_after_native_teardown()
+            .expect("remove empty session runtime");
+        assert!(!session.exists());
+        drop(runtime);
+        assert!(CreationRuntime::create_session_in(Path::new("relative")).is_err());
+        parent.cleanup().expect("remove private parent");
+    }
 
     #[test]
     fn runtime_cleanup_preserves_replaced_directory_and_unknown_members() {

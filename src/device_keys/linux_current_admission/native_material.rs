@@ -16,6 +16,7 @@ use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use zeroize::Zeroizing;
 
 const REQUIRED_SEALS: libc::c_int =
     libc::F_SEAL_WRITE | libc::F_SEAL_GROW | libc::F_SEAL_SHRINK | libc::F_SEAL_SEAL;
@@ -144,10 +145,15 @@ pub struct AdmittedLaunchPreparation {
     pair_attempted: bool,
 }
 
-/// A single consumed opening permit with its reserved launch preparation.
+/// A reserved launch preparation holding one opening authority: a consumed
+/// permit, or a checked absence of one for a reopening.
 pub struct OpeningPermitLaunch {
     preparation: AdmittedLaunchPreparation,
-    terminal: crate::attended_terminal::AttendedUnlockTerminal,
+    kind: KeeperLaunchKind,
+}
+
+fn secret_bytes(secret: &Zeroizing<Vec<u8>>) -> &[u8] {
+    secret
 }
 
 impl OpeningPermitLaunch {
@@ -155,25 +161,20 @@ impl OpeningPermitLaunch {
         self,
         home: &Path,
         register: impl FnOnce(&AdmittedChildRegistration<'_>) -> io::Result<KeeperActiveClosureSender>,
+        read_secret: impl FnOnce() -> io::Result<Zeroizing<Vec<u8>>>,
     ) -> io::Result<(
         NativeSession,
         crate::ubuntu_provider::UbuntuProvider,
         KeeperActiveClosureSender,
     )> {
-        let Self {
-            preparation,
-            terminal,
-        } = self;
+        let Self { preparation, kind } = self;
+        require(kind.opening_authority().is_some())?;
         let (session, provider, sender) = preparation.probe_unlock_openssh(
             home,
             || Ok(()),
-            || {
-                terminal
-                    .read()
-                    .map_err(|_| io::Error::new(io::ErrorKind::PermissionDenied, "attended-input"))
-            },
-            crate::attended_terminal::AttendedUnlockInput::as_bytes,
-            KeeperLaunchKind::PermitActiveRestricted,
+            read_secret,
+            secret_bytes,
+            kind,
             |registration| register(registration).map(Some),
         )?;
         Ok((session, provider, sender.ok_or_else(invalid)?))
@@ -183,18 +184,10 @@ impl OpeningPermitLaunch {
         self,
         home: &Path,
     ) -> io::Result<(NativeSession, crate::ubuntu_provider::UbuntuProvider)> {
-        let Self {
-            preparation,
-            terminal,
-        } = self;
-        let (session, provider, _) = preparation.probe_unlock_openssh(
+        let (session, provider, _) = self.preparation.probe_unlock_openssh(
             home,
             || Ok(()),
-            || {
-                terminal
-                    .read()
-                    .map_err(|_| io::Error::new(io::ErrorKind::PermissionDenied, "attended-input"))
-            },
+            read_attended_unlock,
             crate::attended_terminal::AttendedUnlockInput::as_bytes,
             KeeperLaunchKind::Generic,
             |_| Ok(None),
@@ -242,11 +235,31 @@ enum KeeperLaunchKind {
     PreUnlockRestricted = 1,
     ActiveRestricted = 2,
     PermitActiveRestricted = 3,
+    ReopenedActiveRestricted = 4,
+}
+
+/// What lets a supervisor open a session: a consumed permit, or a reopening
+/// on the keeper's evidence that no process of the previous session survives.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum OpeningAuthority {
+    Permit,
+    Reopened,
 }
 
 impl KeeperLaunchKind {
     fn is_active(self) -> bool {
-        matches!(self, Self::ActiveRestricted | Self::PermitActiveRestricted)
+        matches!(
+            self,
+            Self::ActiveRestricted | Self::PermitActiveRestricted | Self::ReopenedActiveRestricted
+        )
+    }
+
+    fn opening_authority(self) -> Option<OpeningAuthority> {
+        match self {
+            Self::PermitActiveRestricted => Some(OpeningAuthority::Permit),
+            Self::ReopenedActiveRestricted => Some(OpeningAuthority::Reopened),
+            Self::Generic | Self::PreUnlockRestricted | Self::ActiveRestricted => None,
+        }
     }
 }
 
@@ -285,6 +298,7 @@ impl LaunchBinding {
             1 => KeeperLaunchKind::PreUnlockRestricted,
             2 => KeeperLaunchKind::ActiveRestricted,
             3 => KeeperLaunchKind::PermitActiveRestricted,
+            4 => KeeperLaunchKind::ReopenedActiveRestricted,
             _ => return Err(invalid()),
         };
         let generation = wire[16..48].try_into().map_err(|_| invalid())?;
@@ -347,8 +361,8 @@ impl KeeperLaunchExpectation {
         self.kind.is_active().then_some(self.binding.generation)
     }
 
-    pub(crate) fn opening_permit_consumed(&self) -> bool {
-        self.kind == KeeperLaunchKind::PermitActiveRestricted
+    pub(crate) fn opening_authority(&self) -> Option<OpeningAuthority> {
+        self.kind.opening_authority()
     }
 
     pub(crate) fn retain_offer(
@@ -376,6 +390,9 @@ fn keeper_admission_commitment(
         KeeperLaunchKind::ActiveRestricted => b"vivac.linux.keeper-active-restricted.v1\0",
         KeeperLaunchKind::PermitActiveRestricted => {
             b"vivac.linux.keeper-permit-active-restricted.v1\0"
+        }
+        KeeperLaunchKind::ReopenedActiveRestricted => {
+            b"vivac.linux.keeper-reopened-active-restricted.v1\0"
         }
     };
     hash.update(domain);
@@ -544,15 +561,11 @@ impl AdmittedSessionMaterial {
 }
 
 impl ReservedAdmittedSessionMaterial {
-    pub fn prepare_attended_opening(self) -> io::Result<OpeningPermitLaunch> {
+    /// Consumes the opening permit under the reservation.
+    pub fn prepare_service_opening(self) -> io::Result<OpeningPermitLaunch> {
         self.validate()?;
-        let terminal = crate::attended_terminal::AttendedUnlockTerminal::open()
-            .map_err(|_| io::Error::new(io::ErrorKind::PermissionDenied, "attended-input"))?;
         let preparation = self.prepare_launch()?;
         preparation.validate()?;
-        terminal
-            .validate()
-            .map_err(|_| io::Error::new(io::ErrorKind::PermissionDenied, "attended-input"))?;
         preparation
             .material
             .validity
@@ -560,7 +573,25 @@ impl ReservedAdmittedSessionMaterial {
         preparation.validate()?;
         Ok(OpeningPermitLaunch {
             preparation,
-            terminal,
+            kind: KeeperLaunchKind::PermitActiveRestricted,
+        })
+    }
+
+    /// Opens again without a permit. The keeper decides on kernel evidence
+    /// that the previous session is gone; this only refuses, under the
+    /// reservation, when a permit is present, and consumes nothing.
+    pub fn prepare_service_reopening(self) -> io::Result<OpeningPermitLaunch> {
+        self.validate()?;
+        let preparation = self.prepare_launch()?;
+        preparation.validate()?;
+        preparation
+            .material
+            .validity
+            .check(|| require(preparation.material.admission.opening_permit_absent()?))?;
+        preparation.validate()?;
+        Ok(OpeningPermitLaunch {
+            preparation,
+            kind: KeeperLaunchKind::ReopenedActiveRestricted,
         })
     }
 
@@ -1241,7 +1272,7 @@ mod tests {
         }
         for index in 0..16 {
             let mut altered = wire;
-            altered[index] = if index == 9 { 4 } else { wire[index] ^ 1 };
+            altered[index] = if index == 9 { 5 } else { wire[index] ^ 1 };
             assert!(LaunchBinding::decode_bootstrap(&altered).is_err());
         }
         let mut altered = wire;
@@ -1301,6 +1332,75 @@ mod tests {
         assert_ne!(permitted, expected);
         assert_ne!(permitted, restricted);
         assert_ne!(permitted, active);
+    }
+
+    #[test]
+    fn keeper_bootstrap_accepts_the_reopened_kind() {
+        let binding = public_launch_binding();
+        let mut wire = binding.encode_bootstrap(KeeperLaunchKind::Generic);
+        wire[9] = 4;
+        let (decoded, kind) = LaunchBinding::decode_bootstrap(&wire).unwrap();
+        assert_eq!(kind, KeeperLaunchKind::ReopenedActiveRestricted);
+        assert_eq!(kind.opening_authority(), Some(OpeningAuthority::Reopened));
+        assert!(kind.is_active());
+        validate_launch_binding(&binding, &decoded).unwrap();
+        assert_eq!(
+            binding.encode_bootstrap(KeeperLaunchKind::ReopenedActiveRestricted),
+            wire
+        );
+        for (kind, authority) in [
+            (KeeperLaunchKind::Generic, None),
+            (KeeperLaunchKind::PreUnlockRestricted, None),
+            (KeeperLaunchKind::ActiveRestricted, None),
+            (
+                KeeperLaunchKind::PermitActiveRestricted,
+                Some(OpeningAuthority::Permit),
+            ),
+        ] {
+            assert_eq!(kind.opening_authority(), authority);
+        }
+    }
+
+    #[test]
+    fn keeper_admission_commitment_separates_reopened_from_permit_kind() {
+        let challenge = std::array::from_fn(|index| index as u8);
+        let binding = LaunchBinding {
+            generation: std::array::from_fn(|index| (index + 32) as u8),
+            identity: [
+                0x4041424344454647,
+                0x48494a4b4c4d4e4f,
+                0x5051525354555657,
+                0x58595a5b5c5d5e5f,
+                0x6061626364656667,
+                0x68696a6b6c6d6e6f,
+            ],
+            record_digest: std::array::from_fn(|index| (index + 112) as u8),
+        };
+        let reopened = keeper_admission_commitment(
+            &binding,
+            &challenge,
+            KeeperLaunchKind::ReopenedActiveRestricted,
+        );
+        // Computed independently from the reopened domain, NUL and bytes 0 through 143.
+        assert_eq!(
+            reopened,
+            [
+                0xd5, 0x0a, 0x63, 0xaa, 0x46, 0xb4, 0x7f, 0xf6, 0xfd, 0x03, 0x72, 0xde, 0x8b, 0x5b,
+                0xca, 0x0e, 0x69, 0xa0, 0xf7, 0xa6, 0xed, 0xea, 0xaf, 0x3f, 0x6a, 0x22, 0xee, 0x74,
+                0xa7, 0x6e, 0x9b, 0xec,
+            ]
+        );
+        for kind in [
+            KeeperLaunchKind::Generic,
+            KeeperLaunchKind::PreUnlockRestricted,
+            KeeperLaunchKind::ActiveRestricted,
+            KeeperLaunchKind::PermitActiveRestricted,
+        ] {
+            assert_ne!(
+                keeper_admission_commitment(&binding, &challenge, kind),
+                reopened
+            );
+        }
     }
 
     #[test]

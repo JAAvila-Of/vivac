@@ -11,7 +11,7 @@ use std::sync::Arc;
 mod native_material;
 pub(super) use native_material::seal_ciphertext;
 pub(crate) use native_material::{
-    ActiveClosureBinding, KeeperLaunchExpectation, KEEPER_BOOTSTRAP_SIZE,
+    ActiveClosureBinding, KeeperLaunchExpectation, OpeningAuthority, KEEPER_BOOTSTRAP_SIZE,
 };
 pub use native_material::{
     AdmittedChildRegistration, AdmittedLaunchPreparation, AdmittedSessionMaterial,
@@ -221,6 +221,12 @@ impl CurrentAdmission {
     ) -> io::Result<super::linux_resident_reader::OpeningPermitKind> {
         self.validity
             .check(|| self.candidate.observe_opening_permit())
+    }
+
+    /// Checks that the permit is gone, without consuming or granting anything.
+    pub fn opening_permit_absent(&self) -> io::Result<bool> {
+        self.validity
+            .check(|| self.candidate.opening_permit_absent())
     }
 
     fn consume_opening_permit(&self) -> io::Result<()> {

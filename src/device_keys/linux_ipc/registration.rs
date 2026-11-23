@@ -17,10 +17,11 @@ use std::path::Path;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
+use zeroize::Zeroizing;
 
 use super::super::linux_current_admission::{
     ActiveClosureBinding, AdmittedChildRegistration, CurrentAdmission, KeeperLaunchExpectation,
-    RetainedKeeperDirectory, KEEPER_BOOTSTRAP_SIZE,
+    OpeningAuthority, RetainedKeeperDirectory, KEEPER_BOOTSTRAP_SIZE,
 };
 use super::super::linux_session::NativeSession;
 use super::super::linux_spawn::{
@@ -64,17 +65,38 @@ pub enum EndpointSessionStep {
     Closed,
     Activate,
     Active,
+    /// The supervisor served one proof; the keeper's idle limit counts from it.
+    Served,
+    /// Opens the session again without a permit, on the keeper's evidence.
+    Reopen,
+}
+
+impl EndpointSessionStep {
+    const ALL: [Self; 12] = [
+        Self::Prepared,
+        Self::Start,
+        Self::Register,
+        Self::Unlocked,
+        Self::Prove,
+        Self::Proved,
+        Self::Close,
+        Self::Closed,
+        Self::Activate,
+        Self::Active,
+        Self::Served,
+        Self::Reopen,
+    ];
+
+    fn sent_by_keeper(self) -> bool {
+        matches!(
+            self,
+            Self::Start | Self::Prove | Self::Close | Self::Activate | Self::Reopen
+        )
+    }
 }
 
 fn endpoint_session_frame(step: EndpointSessionStep, keeper: bool) -> io::Result<[u8; 16]> {
-    if matches!(
-        step,
-        EndpointSessionStep::Start
-            | EndpointSessionStep::Prove
-            | EndpointSessionStep::Close
-            | EndpointSessionStep::Activate
-    ) != keeper
-    {
+    if step.sent_by_keeper() != keeper {
         return Err(denied());
     }
     let mut wire = *b"VVKEPSS\0\x01\0\0\0\0\0\0\0";
@@ -90,8 +112,53 @@ fn endpoint_session_frame(step: EndpointSessionStep, keeper: bool) -> io::Result
         EndpointSessionStep::Closed => 8,
         EndpointSessionStep::Activate => 9,
         EndpointSessionStep::Active => 10,
+        EndpointSessionStep::Served => 11,
+        EndpointSessionStep::Reopen => 12,
     };
     Ok(wire)
+}
+
+fn decode_session_child_step(wire: &[u8]) -> io::Result<EndpointSessionStep> {
+    for step in EndpointSessionStep::ALL {
+        if !step.sent_by_keeper() && wire == endpoint_session_frame(step, false)? {
+            return Ok(step);
+        }
+    }
+    Err(invalid())
+}
+
+fn decode_session_keeper_opening(wire: &[u8]) -> io::Result<OpeningAuthority> {
+    for (step, authority) in [
+        (EndpointSessionStep::Start, OpeningAuthority::Permit),
+        (EndpointSessionStep::Reopen, OpeningAuthority::Reopened),
+    ] {
+        if wire == endpoint_session_frame(step, true)? {
+            return Ok(authority);
+        }
+    }
+    Err(invalid())
+}
+
+const SESSION_SECRET_HEADER: &[u8; 16] = b"VVKEPSU\0\x01\0\0\0\0\0\0\0";
+const SESSION_SECRET_LENGTH: usize = 64;
+const SESSION_SECRET_FRAME: usize = SESSION_SECRET_HEADER.len() + SESSION_SECRET_LENGTH;
+
+fn encode_session_secret(
+    secret: &[u8; SESSION_SECRET_LENGTH],
+) -> Zeroizing<[u8; SESSION_SECRET_FRAME]> {
+    let mut wire = Zeroizing::new([0; SESSION_SECRET_FRAME]);
+    wire[..SESSION_SECRET_HEADER.len()].copy_from_slice(SESSION_SECRET_HEADER);
+    wire[SESSION_SECRET_HEADER.len()..].copy_from_slice(secret);
+    wire
+}
+
+fn decode_session_secret(wire: &[u8]) -> io::Result<Zeroizing<Vec<u8>>> {
+    if wire.len() != SESSION_SECRET_FRAME
+        || wire[..SESSION_SECRET_HEADER.len()] != *SESSION_SECRET_HEADER
+    {
+        return Err(invalid());
+    }
+    Ok(Zeroizing::new(wire[SESSION_SECRET_HEADER.len()..].to_vec()))
 }
 
 fn validate_endpoint_session_frame(
@@ -518,9 +585,22 @@ impl Transport {
         &self,
         expected: usize,
     ) -> io::Result<([u8; N], Vec<OwnedFd>)> {
+        let mut wire = [0u8; N];
+        let references = self.receive_into(&mut wire, expected)?;
+        Ok((wire, references))
+    }
+
+    /// Receives the secret into zeroizing storage only, never a plain copy.
+    fn receive_session_secret(&self) -> io::Result<Zeroizing<Vec<u8>>> {
+        let mut wire = Zeroizing::new([0u8; SESSION_SECRET_FRAME]);
+        self.receive_into(&mut wire[..], 0)?;
+        decode_session_secret(&wire[..])
+    }
+
+    /// Fills `wire` with exactly one packet of exactly its length.
+    fn receive_into(&self, wire: &mut [u8], expected: usize) -> io::Result<Vec<OwnedFd>> {
         loop {
             self.check()?;
-            let mut wire = [0u8; N];
             let mut control = [0usize; 32];
             let mut iov = libc::iovec {
                 iov_base: wire.as_mut_ptr().cast(),
@@ -555,10 +635,10 @@ impl Transport {
             let references = parse_control(&control, message.msg_controllen, &self.peer, expected);
             self.check()?;
             let references = references?;
-            if message.msg_flags & !libc::MSG_CMSG_CLOEXEC != 0 || count as usize != N {
+            if message.msg_flags & !libc::MSG_CMSG_CLOEXEC != 0 || count as usize != wire.len() {
                 return Err(invalid());
             }
-            return Ok((wire, references));
+            return Ok(references);
         }
     }
 }
@@ -834,7 +914,7 @@ struct KeeperOfferResources {
     references: [OwnedFd; 2],
     restricted_generation: Option<[u8; 32]>,
     active_generation: Option<[u8; 32]>,
-    opening_permit_consumed: bool,
+    opening_authority: Option<OpeningAuthority>,
 }
 
 struct KeeperAdoptedResources {
@@ -1178,6 +1258,60 @@ pub fn receive_session_child_step(
     validate_endpoint_session_frame(&wire, step, false)?;
     require_same_running_image(&transport.peer)?;
     transport.check()
+}
+
+/// Receives the next child step, whichever it is, for a keeper that accepts several.
+pub fn receive_any_session_child_step(
+    socket: &OwnedFd,
+    owner: &SpawnOwner,
+    token: u64,
+    deadline: Instant,
+) -> io::Result<EndpointSessionStep> {
+    let transport = session_owned_transport(socket, owner, token, deadline)?;
+    let (wire, _) = transport.receive_frame::<16>(0)?;
+    let step = decode_session_child_step(&wire)?;
+    require_same_running_image(&transport.peer)?;
+    transport.check()?;
+    Ok(step)
+}
+
+/// Passes the unlock secret to the supervisor for its loader.
+pub fn send_session_secret(
+    socket: &OwnedFd,
+    owner: &SpawnOwner,
+    token: u64,
+    secret: &[u8; SESSION_SECRET_LENGTH],
+    deadline: Instant,
+) -> io::Result<()> {
+    let wire = encode_session_secret(secret);
+    let transport = session_owned_transport(socket, owner, token, deadline)?;
+    transport.send_frame(&wire[..], &[])?;
+    require_same_running_image(&transport.peer)?;
+    transport.check()
+}
+
+pub fn receive_session_secret(
+    socket: &OwnedFd,
+    deadline: Instant,
+) -> io::Result<Zeroizing<Vec<u8>>> {
+    let transport = session_parent_transport(socket, deadline)?;
+    let secret = transport.receive_session_secret()?;
+    require_supervisor_parent(&transport.peer)?;
+    transport.check()?;
+    Ok(secret)
+}
+
+/// Receives `Start` or `Reopen`, which select the authority the supervisor opens with.
+#[allow(
+    dead_code,
+    reason = "The native probes never start a session supervisor."
+)]
+pub(crate) fn receive_session_keeper_opening(
+    socket: &OwnedFd,
+    deadline: Instant,
+) -> io::Result<OpeningAuthority> {
+    let wire = receive_session_keeper_frame(socket, deadline)?;
+    decode_session_keeper_opening(&wire)
 }
 
 pub fn send_session_keeper_step(
@@ -1529,7 +1663,7 @@ impl KeeperBootstrapReceiver {
         let references = [first, second];
         let restricted_generation = self.expectation.restricted_generation();
         let active_generation = self.expectation.active_generation();
-        let opening_permit_consumed = self.expectation.opening_permit_consumed();
+        let opening_authority = self.expectation.opening_authority();
         let directory = self.expectation.retain_offer(directory, &references)?;
         let validated = KeeperValidatedOffer {
             transport: self.transport,
@@ -1538,7 +1672,7 @@ impl KeeperBootstrapReceiver {
                 references,
                 restricted_generation,
                 active_generation,
-                opening_permit_consumed,
+                opening_authority,
             },
             offer,
         };
@@ -1593,13 +1727,17 @@ impl KeeperOfferResources {
 }
 
 impl KeeperAdoptedOffer {
-    /// Establishes permit consumption while the loader can still be reading the terminal.
-    pub(crate) fn confirmed_opening_consumption(&self) -> bool {
-        self.confirmation == ConfirmationState::Sent && self.resources.offer.opening_permit_consumed
+    /// The authority the supervisor opened with, once the keeper has confirmed
+    /// the offer and before it hands over the unlock secret.
+    pub(crate) fn confirmed_opening_authority(&self) -> Option<OpeningAuthority> {
+        if self.confirmation != ConfirmationState::Sent {
+            return None;
+        }
+        self.resources.offer.opening_authority
     }
 
     pub fn active_agent(&self) -> io::Result<BorrowedFd<'_>> {
-        if !self.confirmed_opening_consumption()
+        if self.confirmed_opening_authority().is_none()
             || self.active_closure != ActiveClosureState::Pending
             || self.active_closure_confirmation != ConfirmationState::Pending
             || self.provider_collection != ProviderCollection::Pending
@@ -1745,7 +1883,7 @@ impl KeeperAdoptedOffer {
         &mut self,
         authorize_rename: impl FnOnce() -> io::Result<()>,
     ) -> Result<(), PublishError> {
-        if !self.resources.offer.opening_permit_consumed {
+        if self.resources.offer.opening_authority.is_none() {
             return Err(PublishError::Unpublished(denied()));
         }
         self.consume_active_retirement()
@@ -2271,6 +2409,8 @@ mod tests {
             EndpointSessionStep::Closed,
             EndpointSessionStep::Activate,
             EndpointSessionStep::Active,
+            EndpointSessionStep::Served,
+            EndpointSessionStep::Reopen,
         ];
         for step in steps {
             let keeper = matches!(
@@ -2279,6 +2419,7 @@ mod tests {
                     | EndpointSessionStep::Prove
                     | EndpointSessionStep::Close
                     | EndpointSessionStep::Activate
+                    | EndpointSessionStep::Reopen
             );
             let wire = endpoint_session_frame(step, keeper).unwrap();
             assert!(endpoint_session_frame(step, !keeper).is_err());
@@ -2297,6 +2438,87 @@ mod tests {
                 assert!(validate_endpoint_session_frame(&changed, step, keeper).is_err());
             }
         }
+    }
+
+    #[test]
+    fn endpoint_session_frames_bind_direction_for_served_and_reopen() {
+        for (step, keeper, id) in [
+            (EndpointSessionStep::Served, false, 11),
+            (EndpointSessionStep::Reopen, true, 12),
+        ] {
+            let wire = endpoint_session_frame(step, keeper).unwrap();
+            assert_eq!(&wire[..9], b"VVKEPSS\0\x01");
+            assert_eq!(wire[9], if keeper { 1 } else { 2 });
+            assert_eq!(wire[10], id);
+            assert!(wire[11..].iter().all(|byte| *byte == 0));
+            assert!(endpoint_session_frame(step, !keeper).is_err());
+            assert!(validate_endpoint_session_frame(&wire, step, !keeper).is_err());
+            assert!(decode_session_keeper_action(&wire).is_err());
+        }
+        let served = endpoint_session_frame(EndpointSessionStep::Served, false).unwrap();
+        assert_eq!(
+            decode_session_child_step(&served).unwrap(),
+            EndpointSessionStep::Served
+        );
+        assert!(decode_session_child_step(&served[..15]).is_err());
+        assert!(decode_session_keeper_opening(&served).is_err());
+        for (step, authority) in [
+            (EndpointSessionStep::Start, OpeningAuthority::Permit),
+            (EndpointSessionStep::Reopen, OpeningAuthority::Reopened),
+        ] {
+            let wire = endpoint_session_frame(step, true).unwrap();
+            assert_eq!(decode_session_keeper_opening(&wire).unwrap(), authority);
+            assert!(decode_session_child_step(&wire).is_err());
+            for index in 0..wire.len() {
+                let mut changed = wire;
+                changed[index] ^= 0x80;
+                assert!(decode_session_keeper_opening(&changed).is_err());
+            }
+        }
+        for step in [EndpointSessionStep::Prove, EndpointSessionStep::Close] {
+            let wire = endpoint_session_frame(step, true).unwrap();
+            assert!(decode_session_keeper_opening(&wire).is_err());
+        }
+    }
+
+    fn session_secret_pair() -> (Transport, Transport) {
+        let (receiver, sender) = super::super::packet_pair().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        (
+            Transport::new(receiver, peer(), deadline).unwrap(),
+            Transport::new(sender, peer(), deadline).unwrap(),
+        )
+    }
+
+    #[test]
+    fn session_secret_frame_refuses_other_lengths() {
+        let secret = [b'a'; 64];
+        let wire = encode_session_secret(&secret);
+        assert_eq!(wire.len(), 80);
+        assert_eq!(&wire[..16], b"VVKEPSU\0\x01\0\0\0\0\0\0\0");
+        assert_eq!(&wire[16..], &secret);
+        assert_eq!(&decode_session_secret(&wire[..]).unwrap()[..], &secret);
+        for length in [16, 79, 81, 96] {
+            let mut other = vec![0; length];
+            let shared = length.min(wire.len());
+            other[..shared].copy_from_slice(&wire[..shared]);
+            assert!(decode_session_secret(&other).is_err(), "{length}");
+            let (receiver, sender) = session_secret_pair();
+            sender.send_frame(&other, &[]).unwrap();
+            assert_eq!(
+                receiver.receive_session_secret().unwrap_err().kind(),
+                io::ErrorKind::InvalidData,
+                "{length}"
+            );
+        }
+        for index in 0..16 {
+            let mut changed = *wire;
+            changed[index] ^= 0x80;
+            assert!(decode_session_secret(&changed).is_err());
+        }
+        let (receiver, sender) = session_secret_pair();
+        sender.send_frame(&wire[..], &[]).unwrap();
+        assert_eq!(&receiver.receive_session_secret().unwrap()[..], &secret);
     }
 
     #[test]

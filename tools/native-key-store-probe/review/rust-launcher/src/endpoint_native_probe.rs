@@ -236,7 +236,7 @@ fn permitted_custodian(credential: &str, home: &Path) -> io::Result<()> {
     let launch = CurrentAdmission::open_fixed_namespace(credential)?
         .prepare_native_material()?
         .reserve()?
-        .prepare_attended_opening()
+        .prepare_service_opening()
         .map_err(stage_error("opening-permit"))?;
     let (mut session, provider) = launch
         .probe_unlock_attended(home)

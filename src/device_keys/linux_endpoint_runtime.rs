@@ -6,10 +6,11 @@ use std::mem::{size_of, MaybeUninit};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 const SOCKET_NAME: &CStr = c"endpoint.sock";
+const STARTUP_NAME: &CStr = c"startup";
 
 fn invalid() -> io::Error {
     io::ErrorKind::InvalidData.into()
@@ -103,6 +104,46 @@ impl RuntimeRoot {
         let identity = directory_identity(&directory)?;
         let root = Self {
             path,
+            directory,
+            identity,
+        };
+        root.validate()?;
+        Ok(root)
+    }
+
+    /// Creates the fixed private child `startup` of a private directory the
+    /// account owns, such as the session unit's runtime directory.
+    pub(super) fn create_in(parent: &Path) -> io::Result<Self> {
+        require(parent.is_absolute())?;
+        let parent_directory: OwnedFd = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(parent)?
+            .into();
+        let parent_identity = directory_identity(&parent_directory)?;
+        // SAFETY: the name is one fixed component below the retained directory.
+        if unsafe { libc::mkdirat(parent_directory.as_raw_fd(), STARTUP_NAME.as_ptr(), 0o700) } < 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: the fixed component is opened below the retained directory
+        // without following a link, and success returns a fresh descriptor.
+        let raw = unsafe {
+            libc::openat(
+                parent_directory.as_raw_fd(),
+                STARTUP_NAME.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        if raw < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: successful openat transferred this descriptor exclusively.
+        let directory = unsafe { OwnedFd::from_raw_fd(raw) };
+        let identity = directory_identity(&directory)?;
+        require(directory_identity(&parent_directory)? == parent_identity)?;
+        let root = Self {
+            path: parent.join(std::ffi::OsStr::from_bytes(STARTUP_NAME.to_bytes())),
             directory,
             identity,
         };
@@ -514,6 +555,37 @@ mod tests {
     fn endpoint_runtime_rejects_an_ordinary_file() {
         let file = File::open("/dev/null").unwrap();
         assert!(EndpointRuntime::from_directory(file.into()).is_err());
+    }
+
+    fn private_parent() -> PathBuf {
+        let mut template = b"/tmp/vivac-runtime-parent-XXXXXX\0".to_vec();
+        // SAFETY: mkdtemp writes within this writable NUL-terminated template.
+        let created = unsafe { libc::mkdtemp(template.as_mut_ptr().cast()) };
+        assert!(!created.is_null());
+        // SAFETY: successful mkdtemp left a complete string in the template.
+        PathBuf::from(std::ffi::OsStr::from_bytes(unsafe {
+            CStr::from_ptr(created).to_bytes()
+        }))
+    }
+
+    #[test]
+    fn runtime_roots_are_created_beneath_the_given_directory() {
+        let parent = private_parent();
+        let root = RuntimeRoot::create_in(&parent).unwrap();
+        let startup = parent.join("startup");
+        assert_eq!(root.path, startup);
+        let metadata = std::fs::symlink_metadata(&startup).unwrap();
+        assert!(metadata.is_dir());
+        assert_eq!(metadata.mode() & 0o7777, 0o700);
+        assert_eq!(
+            directory_identity(root.directory()).unwrap(),
+            (metadata.dev(), metadata.ino())
+        );
+        assert!(RuntimeRoot::create_in(&parent).is_err());
+        root.remove_empty().unwrap();
+        assert!(!startup.exists());
+        assert!(RuntimeRoot::create_in(std::path::Path::new("relative")).is_err());
+        std::fs::remove_dir(parent).unwrap();
     }
 
     #[test]

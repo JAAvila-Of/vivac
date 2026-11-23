@@ -1049,8 +1049,12 @@ fn active_supervisor(
         CurrentAdmission::open_fixed_namespace(credential)?
             .prepare_native_material()?
             .reserve()?
-            .prepare_attended_opening()?
-            .probe_unlock_registered_active(home, register)?
+            .prepare_service_opening()?
+            .probe_unlock_registered_active(
+                home,
+                register,
+                rust_launcher_probe::read_attended_unlock_secret,
+            )?
     } else {
         rust_launcher_probe::probe_unlock_registered_active(
             launch_preparation(credential)?,
