@@ -528,14 +528,17 @@ mod tests {
         line.strip_prefix("0::").map(str::to_owned)
     }
 
-    /// Written straight to stderr so the libtest capture cannot hide it: a
-    /// test that cannot run on this kernel must say so, not pass in silence.
-    fn skipped(reason: String) {
+    /// The one decision for a test that needs a kernel feature this host may
+    /// lack. With `VIVAC_REQUIRE_LINUX_SESSION_KERNEL=1` (set in the Ubuntu
+    /// 24.04 VM) the test fails, so it cannot pass by skipping. Otherwise the
+    /// reason goes straight to stderr, which the libtest capture cannot hide.
+    fn skip_or_fail(test: &str, reason: &str) {
         use std::io::Write;
-        let _ = writeln!(
-            io::stderr(),
-            "SKIPPED keeper_authentication_requires_the_recorded_cgroup: {reason}"
-        );
+        if std::env::var_os("VIVAC_REQUIRE_LINUX_SESSION_KERNEL").is_some_and(|value| value == "1")
+        {
+            panic!("{test} needs a Linux session kernel: {reason}");
+        }
+        let _ = writeln!(io::stderr(), "SKIPPED {test}: {reason}");
     }
 
     #[test]
@@ -641,8 +644,9 @@ mod tests {
 
     #[test]
     fn keeper_authentication_requires_the_recorded_cgroup() {
+        const TEST: &str = "keeper_authentication_requires_the_recorded_cgroup";
         let Some(own) = own_cgroup() else {
-            skipped("this host has no unified cgroup hierarchy".to_owned());
+            skip_or_fail(TEST, "this host has no unified cgroup hierarchy");
             return;
         };
         let scratch = Scratch::new();
@@ -651,7 +655,10 @@ mod tests {
         let client = match ControlConnection::connect_keeper(&socket, &own, soon()) {
             Ok(client) => client,
             Err(error) if error.raw_os_error() == Some(libc::ENOPROTOOPT) => {
-                skipped(format!("SO_PEERPIDFD needs Linux 6.5 or newer ({error})"));
+                skip_or_fail(
+                    TEST,
+                    &format!("SO_PEERPIDFD needs Linux 6.5 or newer ({error})"),
+                );
                 return;
             }
             Err(error) => panic!("the keeper was not accepted: {error}"),
