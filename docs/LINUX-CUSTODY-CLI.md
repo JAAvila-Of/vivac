@@ -29,7 +29,8 @@ account's service manager stops it, or when the machine stops.
 
 Each opening runs as a transient unit of the account's systemd user manager,
 named `vivac-custody-<credential_id>-<generation>.service`, where the
-generation is a new random identifier for that opening. The keeper is the
+generation is a new random identifier for that opening, distinct from the
+endpoint protocol's session generation. The keeper is the
 unit's main process. The unit is created with delegation, and the keeper starts
 the supervisor, the native agent, the loader and the startup verifier in a
 child cgroup of its own, called the session cgroup. Processes cannot leave a
@@ -64,8 +65,9 @@ proceeds in this order:
    evidence for a reopening (below), without consuming anything.
 2. Start the session unit. The keeper writes a session record to
    `sessions-v1/<credential_id>` with an exclusive rename and synchronizes it.
-   The record holds the generation, the unit name, the session cgroup's
-   identity and the kernel's `boot_id`. It holds no secret.
+   The record holds the generation, the unit name, the identities of the
+   unit's cgroup and of the session cgroup, a digest of the admission it
+   belongs to and the kernel's `boot_id`. It holds no secret.
 3. The keeper starts the supervisor in the session cgroup. The supervisor
    acquires the exclusive credential reservation and consumes the permit
    under it, as before.
@@ -73,7 +75,8 @@ proceeds in this order:
    `open-linux` accepts the connection only from a peer with the account's UID
    whose process belongs to the session unit. It reads the secret from the
    terminal with echo disabled, under the existing single 15-second deadline,
-   and passes it to the keeper, which passes it to the loader.
+   and passes it to the keeper, which passes it to the supervisor for its
+   loader.
 5. After native unlock, startup possession verification and activation of the
    local proof listener, the keeper reports the session open. `open-linux`
    prints its receipt and returns the terminal.
@@ -109,6 +112,12 @@ A session closes itself the same way when it expires:
 | Idle | 12 hours | the last proof or signing request the session served |
 | Maximum | 7 days | activation |
 
+Both are measured on the boot-time clock, so time spent suspended counts. The
+environment variables `VIVAC_LINUX_SESSION_IDLE_SECONDS` and
+`VIVAC_LINUX_SESSION_MAXIMUM_SECONDS` can shorten either limit for an opening,
+to no less than 60 seconds; they cannot lengthen one, and any other value
+refuses the command with a usage error.
+
 A stop request from the service manager, including system shutdown, is a clean
 close request too. The unit allows the keeper 30 seconds to publish before the
 manager kills it.
@@ -116,7 +125,10 @@ manager kills it.
 If the keeper is gone, `close-linux` asks the service manager to stop the
 recorded unit, which ends every process in it, and confirms that the unit's
 cgroup no longer exists or is empty. It then reports `interrupted`: no permit
-was published, and the next `open-linux` reopens with that evidence.
+was published, and the next `open-linux` reopens with that evidence. When it
+can confirm neither a keeper's outcome nor an ended unit, it reports
+`close_uncertain`. Signals to `close-linux`, and the end of the 30-second stop
+budget, cancel a close before its permit rename is authorized.
 
 ## Reopening after a lost session
 
@@ -132,14 +144,20 @@ from the kernel that no process of the recorded session survives:
 - the recorded unit's cgroup no longer exists, or exists with a different
   identity, because the kernel cannot remove a cgroup that still has
   processes; or
-- the recorded cgroup exists with the same identity and its `cgroup.events`
-  reports `populated 0`.
+- the recorded unit's cgroup exists with the same identity and its
+  `cgroup.events` reports `populated 0`.
+
+The evidence is about the whole unit, keeper included, not only the session
+cgroup: an empty session cgroup under a live keeper is a session being started
+or closed, and is not evidence.
 
 With that evidence and the unlock secret, the new keeper retires the old
 session record, removes the old generation's endpoint socket after checking its
 identity, writes its own record, and continues from step 3 without a permit.
-The receipt says `reopened`. Without the evidence, `open-linux` refuses and
-names `close-linux`, which ends the recorded unit and produces it. A session
+The receipt says `reopened`. A session record left after a durable permit,
+because its removal failed, is retired the same way, and the opening then
+proceeds from the permit. Without the evidence, `open-linux` refuses and names
+`close-linux`, which ends the recorded unit and produces it. A session
 record without a matching admission, or one that fails validation, refuses and
 is left in place.
 
@@ -251,7 +269,9 @@ For a valid invocation, `--json` writes one final newline-terminated object
 with `credential_id` and `status` to stdout. Prompts go directly to the
 controlling terminal. Without `--json`, success goes to stdout and failure
 diagnostics go to stderr. Reports contain only the bounded status and the
-canonical ID. Device-key help advertises these commands on Linux.
+canonical ID. A refusal that has a remedy, such as enabling lingering or
+closing a recorded session first, names it in one line on stderr in both
+modes. Device-key help advertises these commands on Linux.
 
 | Command | Status | Exit | Meaning |
 | --- | --- | --- | --- |
@@ -265,6 +285,7 @@ canonical ID. Device-key help advertises these commands on Linux.
 | `close-linux` | `refused` | 1 | No session for this ID is open in this account. Nothing changed. |
 | `close-linux` | `interrupted` | 5 | The session ended without a published permit. The next `open-linux` reopens on the evidence above. |
 | `close-linux` | `publication_uncertain` | 5 | The exclusive rename happened, and durability or final identity validation could not be established. |
+| `close-linux` | `close_uncertain` | 5 | Neither the keeper's outcome nor the end of the recorded unit could be confirmed. |
 | `verify-linux-possession` | `possession_verified` | 0 | The verifier validated fresh possession for the live local peer. |
 | `verify-linux-possession` | `refused` | 1 | The exchange failed to establish fresh local possession. |
 | `retire-linux` | `retired` | 0 | The admission, package, permit, endpoint entry and session record are gone, and each directory change was synchronized. |
