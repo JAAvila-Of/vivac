@@ -134,6 +134,14 @@ impl StoreReservation {
         }
     }
 
+    /// Spawn gates need the retained package snapshot, not just the directory.
+    pub(super) fn validate_for_spawn(&self) -> io::Result<()> {
+        if self.snapshot.is_none() {
+            return Err(invalid());
+        }
+        self.validate_owned()
+    }
+
     fn validate_directory_only(&self) -> io::Result<()> {
         // SAFETY: getpid only queries the current process identity.
         if unsafe { libc::getpid() } != self.origin {

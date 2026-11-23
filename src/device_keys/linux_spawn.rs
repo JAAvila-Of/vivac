@@ -192,10 +192,10 @@ impl SpawnOwner {
     }
 
     pub fn new_reserved(reservation: StoreReservation) -> io::Result<Self> {
-        reservation.validate_owned()?;
+        reservation.validate_for_spawn()?;
         let mut owner = Self::new()?;
         let generation = new_session_generation()?;
-        reservation.validate_owned()?;
+        reservation.validate_for_spawn()?;
         owner.reservation = Some(reservation);
         owner.session_generation = Some(generation);
         Ok(owner)
@@ -216,9 +216,9 @@ impl SpawnOwner {
         if generation == [0; 32] {
             return Err(raw_error(libc::EINVAL));
         }
-        reservation.validate_owned()?;
+        reservation.validate_for_spawn()?;
         let mut owner = Self::new()?;
-        reservation.validate_owned()?;
+        reservation.validate_for_spawn()?;
         owner.reservation = Some(reservation);
         owner.session_generation = Some(generation);
         owner.into_dedicated()
@@ -390,7 +390,7 @@ impl SpawnOwner {
             return Err(raw_error(libc::EOWNERDEAD));
         }
         if let Some(reservation) = &self.reservation {
-            reservation.validate_owned()?;
+            reservation.validate_for_spawn()?;
         }
         self.check_thread()?;
         require_retained_child_status()?;
@@ -1292,6 +1292,20 @@ mod session_generation_tests {
             .into();
         let lease = PackageLease::capture(capability, &cipher).expect("public package snapshot");
         (directory, lease)
+    }
+
+    #[test]
+    fn spawn_gates_refuse_a_directory_only_reservation() {
+        let (directory, lease) = public_lease();
+        let package: std::os::fd::OwnedFd = std::fs::File::open(&directory.0).unwrap().into();
+        let reservation = StoreReservation::acquire_directory(&package).unwrap();
+        assert!(reservation.validate(&lease).is_err());
+        assert_eq!(
+            reservation.validate_for_spawn().unwrap_err().raw_os_error(),
+            Some(libc::EINVAL)
+        );
+        let error = SpawnOwner::new_reserved(reservation).err().unwrap();
+        assert_eq!(error.raw_os_error(), Some(libc::EINVAL));
     }
 
     fn reserved(lease: &PackageLease) -> SpawnOwner {
