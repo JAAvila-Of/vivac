@@ -17,6 +17,9 @@ pub mod linux_reservation;
 #[path = "../../../../../src/device_keys/linux_session.rs"]
 pub mod linux_session;
 #[cfg(target_os = "linux")]
+#[path = "../../../../../src/device_keys/linux_session_cgroup.rs"]
+pub mod linux_session_cgroup;
+#[cfg(target_os = "linux")]
 #[path = "../../../../../src/device_keys/linux_spawn.rs"]
 pub mod linux_spawn;
 

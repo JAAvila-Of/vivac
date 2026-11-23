@@ -479,6 +479,8 @@ cfdata
 cfg
 cflag
 cftype
+cgroup
+cgroup2
 ch
 chain
 chains
@@ -1121,6 +1123,7 @@ enforces
 engine
 english
 enodata
+enodev
 enoent
 enoexec
 enomem
@@ -1905,6 +1908,7 @@ light
 like
 limit
 limit64
+limited
 limits
 line
 lineage
@@ -2484,6 +2488,7 @@ pk
 place
 placed
 placeholder
+placement
 plain
 plan
 planned
@@ -2513,6 +2518,7 @@ pollhup
 pollin
 pollnval
 pollout
+pollpri
 pollrdhup
 pop
 popped
@@ -2598,6 +2604,7 @@ processed
 processes
 processing
 procfs
+procs
 produce
 produced
 producer
@@ -3280,6 +3287,7 @@ single
 singleton
 singular
 sink
+sit
 site
 sites
 sits
@@ -3747,6 +3755,7 @@ unfold
 ungoverned
 unhex
 unicode
+unified
 uninherited
 uninit
 union
@@ -3838,6 +3847,7 @@ usize
 utc
 utf16
 utf8
+uuid
 uv
 v1
 v1profile

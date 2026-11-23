@@ -161,6 +161,7 @@ pub struct SpawnOwner {
     reservation: Option<StoreReservation>,
     session_generation: Option<[u8; 32]>,
     dedicated_host_invalidated: Option<Cell<bool>>,
+    cgroup_procs: Option<OwnedFd>,
     _thread_affine: PhantomData<Rc<()>>,
 }
 
@@ -185,6 +186,7 @@ impl SpawnOwner {
             reservation: None,
             session_generation: None,
             dedicated_host_invalidated: None,
+            cgroup_procs: None,
             _thread_affine: PhantomData,
         })
     }
@@ -307,6 +309,31 @@ impl SpawnOwner {
         self.spawn_inner(spec, true, false)
     }
 
+    /// Every child spawned afterwards joins the cgroup behind `procs` before
+    /// exec. Accepted once, before the first child; otherwise `EBUSY`.
+    #[allow(
+        dead_code,
+        reason = "The session start command consumes this in a later step."
+    )]
+    pub(crate) fn place_children_in(&mut self, procs: OwnedFd) -> io::Result<()> {
+        self.check_thread()?;
+        if self.cgroup_procs.is_some()
+            || self.closing
+            || self.registration_frozen
+            || !self.entries.is_empty()
+            || self.next_token != 1
+        {
+            return Err(raw_error(libc::EBUSY));
+        }
+        // Descriptors 0..=2 are rewritten for the child's stdio before the
+        // pre-exec callback runs, so a placement file may not live there.
+        if procs.as_raw_fd() <= 2 {
+            return Err(raw_error(libc::EINVAL));
+        }
+        self.cgroup_procs = Some(procs);
+        Ok(())
+    }
+
     pub fn admission_uncertain() -> bool {
         ADMISSION.uncertain()
     }
@@ -348,6 +375,7 @@ impl SpawnOwner {
         command.stderr(Stdio::from(spec.stdio[2].try_clone()?));
         let mut setup = ChildSetup::prepare(self.parent, &spec)?;
         setup.tasks_restricted = tasks_restricted;
+        setup.cgroup_procs = self.cgroup_procs.as_ref().map_or(-1, AsRawFd::as_raw_fd);
         let pidfd_channel = if fail_pidfd {
             None
         } else {
@@ -865,6 +893,8 @@ fn last_error() -> io::Error {
 struct ChildSetup {
     parent: libc::pid_t,
     tasks_restricted: bool,
+    // Placement file for the session cgroup; -1 when unset.
+    cgroup_procs: RawFd,
     inherited: [RawFd; MAX_INHERITED],
     inherited_count: usize,
     new_session: bool,
@@ -974,6 +1004,7 @@ impl ChildSetup {
         Ok(Self {
             parent,
             tasks_restricted: false,
+            cgroup_procs: -1,
             inherited,
             inherited_count: spec.inherited.len(),
             new_session: spec.new_session,
@@ -1053,6 +1084,19 @@ impl ChildSetup {
     }
 
     fn apply(&self, child_socket: Option<RawFd>) -> io::Result<()> {
+        if self.cgroup_procs >= 0 {
+            // SAFETY: write is async-signal-safe; the descriptor is a retained,
+            // close-on-exec parent descriptor and the buffer is a static byte.
+            // Writing 0 moves the calling process into the cgroup.
+            let written = unsafe { libc::write(self.cgroup_procs, b"0".as_ptr().cast(), 1) };
+            if written != 1 {
+                return Err(if written < 0 {
+                    last_error()
+                } else {
+                    raw_error(libc::EIO)
+                });
+            }
+        }
         self.parent_unchanged()?;
         self.barrier(b'B')?;
         self.parent_unchanged()?;
@@ -1524,5 +1568,57 @@ mod tests {
             .expect("empty explicit environment should prepare");
         assert_eq!(empty.envp.len(), 1);
         assert!(empty.envp[0].is_null());
+    }
+
+    fn dev_null(write: bool) -> OwnedFd {
+        let file = OpenOptions::new()
+            .read(!write)
+            .write(write)
+            .open("/dev/null")
+            .expect("open /dev/null");
+        OwnedFd::from(file)
+    }
+
+    fn true_spec() -> SpawnSpec {
+        SpawnSpec {
+            executable: OwnedFd::from(File::open("/bin/true").expect("open /bin/true")),
+            arg0: OsString::from("true"),
+            arguments: Vec::new(),
+            environment: Vec::new(),
+            stdio: [dev_null(false), dev_null(true), dev_null(true)],
+            inherited: Vec::new(),
+            retained: Vec::new(),
+            new_session: false,
+            controlling_tty: None,
+            probe: None,
+        }
+    }
+
+    #[test]
+    fn cgroup_placement_failure_refuses_the_spawn() {
+        let mut owner = SpawnOwner::new().expect("owner");
+        owner
+            .place_children_in(dev_null(false))
+            .expect("a descriptor is accepted before the first child");
+        let error = owner
+            .spawn(true_spec())
+            .expect_err("an unwritable procs file refuses");
+        assert_eq!(error.raw_os_error(), Some(libc::EBADF));
+        assert!(owner.entries.is_empty(), "no child may be left owned");
+    }
+
+    #[test]
+    fn cgroup_placement_is_set_once_before_any_child() {
+        let mut owner = SpawnOwner::new().expect("owner");
+        owner
+            .place_children_in(dev_null(true))
+            .expect("first placement");
+        let again = owner.place_children_in(dev_null(true));
+        assert_eq!(again.unwrap_err().raw_os_error(), Some(libc::EBUSY));
+
+        let mut owner = SpawnOwner::new().expect("owner");
+        owner.spawn(true_spec()).expect("unplaced spawn");
+        let late = owner.place_children_in(dev_null(true));
+        assert_eq!(late.unwrap_err().raw_os_error(), Some(libc::EBUSY));
     }
 }

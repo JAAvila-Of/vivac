@@ -139,6 +139,9 @@ mod linux_resident_reader;
 )]
 pub mod linux_session;
 #[cfg(target_os = "linux")]
+#[path = "device_keys/linux_session_cgroup.rs"]
+mod linux_session_cgroup;
+#[cfg(target_os = "linux")]
 #[path = "device_keys/linux_spawn.rs"]
 #[allow(
     dead_code,

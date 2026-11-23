@@ -621,6 +621,8 @@ cf
 cfequal
 cfg
 cftype
+cgroup
+cgroups
 chain
 challenge
 chance
@@ -1097,6 +1099,7 @@ degrade
 degraded
 degrades
 degree
+delegated
 delegates
 delegating
 delete
@@ -2143,6 +2146,7 @@ ink
 inline
 inlined
 inlines
+inode
 input
 inputs
 insensitively
@@ -3085,6 +3089,7 @@ place
 placed
 placeholder
 placeholders
+placement
 places
 plain
 plainest
@@ -3114,6 +3119,7 @@ poison
 policy
 politeness
 poll
+polled
 pollfd
 pollfds
 pop
@@ -3915,6 +3921,7 @@ served
 server
 servers
 serves
+service
 services
 serving
 session
@@ -4364,6 +4371,7 @@ sys
 syscall
 syscalls
 system
+systemd
 systems
 t
 tab
@@ -4692,6 +4700,7 @@ unforced
 ungoverned
 unguarded
 unicode
+unified
 uninitialized
 uninteresting
 union

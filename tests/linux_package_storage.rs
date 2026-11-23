@@ -58,6 +58,8 @@ mod linux_resident_reader;
 #[allow(dead_code)]
 #[path = "../src/device_keys/linux_session.rs"]
 pub mod linux_session;
+#[path = "../src/device_keys/linux_session_cgroup.rs"]
+mod linux_session_cgroup;
 #[allow(dead_code)]
 #[path = "../src/device_keys/linux_spawn.rs"]
 pub mod linux_spawn;
