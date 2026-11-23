@@ -1,4 +1,4 @@
-# The four pillars
+# The five pillars
 
 **They govern by definition.** Every design decision is justified against them,
 and if it contradicts them it does not get in. They are not aspirations: they
@@ -11,15 +11,17 @@ They will collide. When they do:
 | Pillar | Power |
 |---|---|
 | **Security** | **veto**. It can kill an entire feature, with no negotiation |
+| **Correctness** | **floor**. A thing is done properly or not at all; what it costs to build is never the argument |
 | **Performance** | **budget**. It sets a ceiling the feature must respect in order to exist |
 | **UX** | **burden of proof**. A reading surface has to say what a person learns from it that they were not going to learn. No answer, no surface |
-| **DX** | **judge**. It decides between the options that cleared the other three |
+| **DX** | **judge**. It decides between the options that cleared the other four |
 
-Read in that order they ask four different questions: security asks whether this
-may exist at all, performance asks what it is allowed to cost, UX asks whether
-anybody learns anything from it, and DX decides what shape it takes. Only the
-first kills outright. The other two kill by going unanswered, which is slower and
-just as final.
+Read in that order they ask five different questions: security asks whether
+this may exist at all, correctness whether it is being done the right way
+whatever that takes, performance what it is allowed to cost while it runs, UX
+whether anybody learns anything from it, and DX what shape it takes. The first
+two kill outright. Performance and UX kill by going unanswered, which is slower
+and just as final.
 
 A real collision, and why the order matters: semantic search wants an embedding
 model. That is either a network call (slow, and it asks for a key) or a local
@@ -41,26 +43,6 @@ page that the command was not already telling them. **Both were cut, and not for
 budget.** The one that survived first answers it in a sentence: the drawn
 lineage is the only place in the product that shows the *shape* of the path
 rather than its text.
-
-## Correctness over cost
-
-**The right way to do a thing does not depend on what it costs.** Expense is not
-an argument for a bypass, a shortcut or a special case. If something is worth
-doing it is done properly; if it is not worth doing it is not done. Those are
-the only two answers, and "the cheap version, for now" is not a third.
-
-This does not soften the performance budget, it sharpens it. A budget kills a
-feature whole; it never licences a degraded one. What the rule forbids is the
-outcome where something half exists because doing it right looked expensive.
-
-It is not a licence to build more. Scope is decided elsewhere and ruthlessly:
-"do we need this at all?" stays wide open, and dropping a requirement is always
-available. What is not available is keeping the requirement and meeting it
-badly.
-
-Like the pillars, it is a rejection criterion. "That would take too long", "that
-is a lot of work" and "we can fix it later" are not reasons, and a design that
-rests on one of them does not get in.
 
 ---
 
@@ -419,8 +401,18 @@ tree is a map of where a system is weak and not yet fixed.**
   person asks for, is shown before it happens and confirms is not that.
   `vivac update` names the exact command or address first, waits for a yes
   typed at a terminal, and leaves the network to the system's own tools --
-  `cargo`, or `curl` and `tar` -- so the binary carries no network code of its
+  `cargo`, or `curl` and `tar` -- so updating carries no network code of its
   own. With no terminal there is no yes to give, and it installs nothing.
+
+  Team synchronization is not phoning home either, provided all of this holds.
+  The only destination is the server of an organization the person explicitly
+  joined. Joining shows what will travel, with a literal example, before
+  anything does. The person can see at any time exactly what was sent. Shared
+  content travels encrypted to keys the server does not hold; what the server
+  reads is the declared envelope of opaque identifiers, times and node kinds.
+  Activity counts travel only when the organization's policy enables them,
+  and carry no text, paths or queries. A machine that joined no organization
+  makes no network request at all.
 
 ### Sensitive-data incidents
 
@@ -557,3 +549,33 @@ is a finding like any other.
   not a reason to lock somebody out.
 - **It is not a licence to build more.** It is a burden of proof, which means the
   default answer is no.
+
+---
+
+## Pillar 5 — Correctness over cost
+
+Added on 2026-11-23. It had stood since September as a rejection criterion
+beside the pillars; the team platform made it one of them, because that is
+where the cheap version tempts most: a server that reads content because
+encrypting is work, a replaced credential because recovering one properly
+is work.
+
+**The right way to do a thing does not depend on what it costs.** Expense is not
+an argument for a bypass, a shortcut or a special case. If something is worth
+doing it is done properly; if it is not worth doing it is not done. Those are
+the only two answers, and "the cheap version, for now" is not a third.
+
+The cost it refuses as an argument is the cost of building it: effort, time,
+the size of the change. What a feature may cost while it runs is the
+performance budget's question, and the two do not compete. This pillar
+sharpens the budget instead of softening it. A budget kills a feature whole;
+it never licences a degraded one. What the pillar forbids is the outcome
+where something half exists because doing it right looked expensive.
+
+It is not a licence to build more. Scope is decided elsewhere and ruthlessly:
+"do we need this at all?" stays wide open, and dropping a requirement is always
+available. What is not available is keeping the requirement and meeting it
+badly.
+
+"That would take too long", "that is a lot of work" and "we can fix it later"
+are not reasons, and a design that rests on one of them does not get in.
