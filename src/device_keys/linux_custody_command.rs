@@ -1,5 +1,6 @@
 use super::deliver_linux_reply;
 use crate::linux_resident_reader;
+use crate::linux_session_closing::{self, CloseOutcome};
 use crate::linux_session_opening::{self, OpeningOutcome, RefusalHint};
 use crate::linux_supervisor_start;
 use crate::linux_user_manager::SessionLimits;
@@ -7,8 +8,9 @@ use std::ffi::OsString;
 use std::io::{self, Write};
 
 pub(super) const USAGE: &str = "vivac device-key open-linux <credential-id> [--json]\n\
+vivac device-key close-linux <credential-id> [--json]\n\
 vivac device-key verify-linux-possession <credential-id> [--json]\n\
-Open attended Linux custody or verify fresh local possession by credential ID.";
+Open or close attended Linux custody or verify fresh local possession by credential ID.";
 
 fn parse(arguments: impl Iterator<Item = OsString>) -> Option<(String, bool)> {
     let mut credential = None;
@@ -41,6 +43,16 @@ fn opening_result(
         OpeningOutcome::OpeningUncertain => ("opening_uncertain", 5, None),
         OpeningOutcome::Interrupted => ("interrupted", 5, None),
         OpeningOutcome::PublicationUncertain => ("publication_uncertain", 5, None),
+    }
+}
+
+fn closing_result(credential: &str) -> (&'static str, i32) {
+    match linux_session_closing::close(credential) {
+        CloseOutcome::Closed => ("closed", 0),
+        CloseOutcome::Refused => ("refused", 1),
+        CloseOutcome::Interrupted => ("interrupted", 5),
+        CloseOutcome::PublicationUncertain => ("publication_uncertain", 5),
+        CloseOutcome::CloseUncertain => ("close_uncertain", 5),
     }
 }
 
@@ -85,7 +97,7 @@ pub(crate) fn dispatch() -> Option<i32> {
     }
     let command = arguments.next()?;
     let operation = match command.to_str() {
-        Some(operation @ ("open-linux" | "verify-linux-possession")) => operation,
+        Some(operation @ ("open-linux" | "close-linux" | "verify-linux-possession")) => operation,
         Some(_) => return None,
         None => {
             let _ = io::stderr()
@@ -100,7 +112,10 @@ pub(crate) fn dispatch() -> Option<i32> {
             .write_all(b"Specify one canonical credential ID and at most one --json flag.\n");
         return Some(2);
     };
-    let (status, code, hint) = if operation == "open-linux" {
+    let (status, code, hint) = if operation == "close-linux" {
+        let (status, code) = closing_result(&credential);
+        (status, code, None)
+    } else if operation == "open-linux" {
         let Ok(limits) = SessionLimits::from_environment() else {
             let _ = io::stderr()
                 .lock()

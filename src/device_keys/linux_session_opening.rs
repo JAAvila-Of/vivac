@@ -28,7 +28,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
 const KEEPER_TIMEOUT: Duration = Duration::from_secs(60);
 /// After the secret, the keeper reports the session open within the sum of its
 /// own step budgets; this adds a margin so that a slow legitimate opening is
-/// not cancelled.
+/// not ended early.
 const OPENED_TIMEOUT: Duration = crate::linux_session_keeper::OPENING_AFTER_SECRET_BUDGET
     .saturating_add(Duration::from_secs(10));
 /// After `Cancel`, the keeper ends the session cgroup and publishes within
@@ -411,7 +411,7 @@ mod tests {
     }
 
     #[test]
-    fn the_wait_for_the_report_outlasts_the_keeper_s_worst_case() {
+    fn the_wait_for_the_report_exceeds_the_keeper_budget() {
         assert!(
             OPENED_TIMEOUT > crate::linux_session_keeper::OPENING_AFTER_SECRET_BUDGET,
             "a slow legitimate opening must not be cancelled"

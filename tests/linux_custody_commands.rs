@@ -40,7 +40,7 @@ fn custody_commands_reject_malformed_inputs_before_access() {
     assert!(output.stdout.is_empty());
     assert_eq!(output.stderr, b"Specify a valid device-key command.\n");
 
-    for operation in ["open-linux", "verify-linux-possession"] {
+    for operation in ["open-linux", "close-linux", "verify-linux-possession"] {
         for arguments in [
             vec![],
             vec![""],
@@ -114,5 +114,21 @@ fn device_key_help_advertises_linux_custody_commands() {
     assert!(output.status.success());
     let help = String::from_utf8(output.stdout).unwrap();
     assert!(help.contains("vivac device-key open-linux <credential-id> [--json]"));
+    assert!(help.contains("vivac device-key close-linux <credential-id> [--json]"));
     assert!(help.contains("vivac device-key verify-linux-possession <credential-id> [--json]"));
+}
+
+#[test]
+fn close_without_a_provisioned_store_is_refused() {
+    let output = command("close-linux")
+        .args([CREDENTIAL, "--json"])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stderr.is_empty());
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap(),
+        serde_json::json!({"credential_id": CREDENTIAL, "status": "refused"})
+    );
 }
