@@ -2994,6 +2994,7 @@ restriction
 restrictive
 result
 results
+resumes
 retain
 retained
 retaining
@@ -3749,6 +3750,7 @@ uk
 ulid
 ulids
 ulong
+umask
 un
 unaccounted
 unaligned

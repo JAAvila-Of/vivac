@@ -269,6 +269,13 @@ impl CurrentAdmission {
         result
     }
 
+    /// The retained admission and package objects, for retirement.
+    pub fn retirement_objects(
+        &self,
+    ) -> io::Result<super::linux_resident_reader::RetirementObjects> {
+        self.validity.check(|| self.candidate.retirement_objects())
+    }
+
     pub fn admission_digest(&self) -> io::Result<[u8; 32]> {
         Ok(Sha256::digest(self.canonical_record()?).into())
     }

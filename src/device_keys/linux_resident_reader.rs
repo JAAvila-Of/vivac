@@ -450,6 +450,20 @@ fn shape(directory: i32, expected: &[&CStr]) -> io::Result<()> {
 
 /// Which of `expected` the directory holds. Any other name is refused.
 fn members(directory: i32, expected: &[&CStr]) -> io::Result<Vec<bool>> {
+    let mut seen = vec![false; expected.len()];
+    for name in names(directory, expected.len())? {
+        let index = expected
+            .iter()
+            .position(|value| *value == name.as_c_str())
+            .ok_or_else(invalid)?;
+        require(!seen[index])?;
+        seen[index] = true;
+    }
+    Ok(seen)
+}
+
+/// Every name the directory holds, sorted. More than `limit` is refused.
+fn names(directory: i32, limit: usize) -> io::Result<Vec<CString>> {
     let fd = open_at(directory, c".", true)?;
     let raw = fd.into_raw_fd();
     // SAFETY: fdopendir takes ownership of this fresh directory descriptor on success.
@@ -470,8 +484,8 @@ fn members(directory: i32, expected: &[&CStr]) -> io::Result<Vec<bool>> {
         }
     }
     let stream = Stream(stream);
-    let mut seen = vec![false; expected.len()];
-    for _ in 0..expected.len() + 3 {
+    let mut found = Vec::new();
+    for _ in 0..limit + 3 {
         // SAFETY: this thread's errno is writable; stream remains exclusively live.
         unsafe {
             *libc::__errno_location() = 0;
@@ -483,19 +497,16 @@ fn members(directory: i32, expected: &[&CStr]) -> io::Result<Vec<bool>> {
             if error.raw_os_error() != Some(0) {
                 return Err(error);
             }
-            return Ok(seen);
+            found.sort();
+            return Ok(found);
         }
         // SAFETY: the successful readdir entry contains a terminated d_name.
         let name = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()) };
         if name == c"." || name == c".." {
             continue;
         }
-        let index = expected
-            .iter()
-            .position(|value| *value == name)
-            .ok_or_else(invalid)?;
-        require(!seen[index])?;
-        seen[index] = true;
+        require(found.len() < limit)?;
+        found.push(name.to_owned());
     }
     Err(invalid())
 }
@@ -567,8 +578,13 @@ fn capture_package(
 
 /// A fresh descriptor for a retained directory.
 fn duplicate_retained(directory: &Directory) -> io::Result<OwnedFd> {
+    duplicate(&directory.fd)
+}
+
+/// A fresh descriptor for a retained object, with the same checked flags.
+fn duplicate(fd: &OwnedFd) -> io::Result<OwnedFd> {
     // SAFETY: fcntl duplicates the retained capability atomically.
-    let raw = unsafe { libc::fcntl(directory.fd.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 3) };
+    let raw = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 3) };
     if raw < 0 {
         return Err(io::Error::last_os_error());
     }
@@ -576,6 +592,18 @@ fn duplicate_retained(directory: &Directory) -> io::Result<OwnedFd> {
     let duplicate = unsafe { OwnedFd::from_raw_fd(raw) };
     descriptor(duplicate.as_raw_fd())?;
     Ok(duplicate)
+}
+
+/// Descriptors for every stored object a retirement removes, each the
+/// retained object a reader validated: the admission collection and the
+/// admission (or tombstone) directory with its members, then the package
+/// collection and the package directory with its members, in removal order.
+pub struct RetirementObjects {
+    pub admissions: OwnedFd,
+    pub admission: OwnedFd,
+    pub admission_members: Vec<(CString, OwnedFd)>,
+    pub packages: OwnedFd,
+    pub package: Option<(OwnedFd, Vec<(CString, OwnedFd)>)>,
 }
 
 /// Read-only resident candidate; it supplies no producer evidence or admission.
@@ -873,6 +901,29 @@ impl CandidateResident {
 
     pub fn ipc_identity(&self) -> io::Result<[u64; 6]> {
         self.checked_ipc_identity(|_, identity| Ok(identity))
+    }
+
+    /// The retained admission and package objects, for retirement.
+    pub fn retirement_objects(&self) -> io::Result<RetirementObjects> {
+        self.validate()?;
+        let objects = RetirementObjects {
+            admissions: duplicate_retained(&self.admissions)?,
+            admission: duplicate_retained(&self.admission)?,
+            admission_members: vec![(c"record.json".to_owned(), duplicate(&self.record_file.fd)?)],
+            packages: duplicate_retained(&self.packages)?,
+            package: Some((
+                duplicate_retained(&self.package)?,
+                vec![
+                    (c"key.openssh".to_owned(), duplicate(&self.key_file.fd)?),
+                    (
+                        c"manifest.json".to_owned(),
+                        duplicate(&self.manifest_file.fd)?,
+                    ),
+                ],
+            )),
+        };
+        self.validate()?;
+        Ok(objects)
     }
 
     pub(super) fn checked_ipc_identity<T>(

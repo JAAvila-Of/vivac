@@ -198,6 +198,25 @@ impl AsRawFd for EndpointListener {
     }
 }
 
+/// Gives the bound socket mode 0600, whatever the file creation mask, before anything
+/// listens on it. The change goes through the retained descriptor of the
+/// bound object, so it cannot reach another object under the name, and the
+/// mode is read back from that descriptor.
+fn private(socket: &EndpointSocket) -> io::Result<()> {
+    let path = CString::new(format!("/proc/self/fd/{}", socket.descriptor.as_raw_fd()))
+        .map_err(|_| invalid())?;
+    // SAFETY: the path is terminated; the procfs link names the retained
+    // socket object itself.
+    if unsafe { libc::chmod(path.as_ptr(), 0o600) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let metadata = status(socket.descriptor.as_raw_fd())?;
+    require(
+        metadata.st_mode == libc::S_IFSOCK | 0o600
+            && (metadata.st_dev, metadata.st_ino) == socket.identity,
+    )
+}
+
 impl EndpointRuntime {
     pub(super) fn from_directory(directory: OwnedFd) -> io::Result<Self> {
         Self::from_named_directory(directory, SOCKET_NAME)
@@ -323,6 +342,7 @@ impl EndpointRuntime {
             return Err(io::Error::last_os_error());
         }
         let identity = self.named_socket()?;
+        private(&identity)?;
         // SAFETY: listen acts only on this owned nonblocking Unix socket.
         if unsafe { libc::listen(listener.as_raw_fd(), 1) } < 0 {
             return Err(io::Error::last_os_error());
@@ -628,6 +648,42 @@ mod tests {
         let retained = runtime.named_socket().unwrap();
         runtime.remove_socket(retained).unwrap();
         drop((original, replacement, runtime));
+        root.remove_empty().unwrap();
+    }
+
+    #[test]
+    fn a_bound_endpoint_is_private_whatever_the_creation_mask() {
+        const CHILD: &str = "VIVAC_TEST_ENDPOINT_UMASK";
+        if std::env::var_os(CHILD).is_none() {
+            let result = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "linux_endpoint_runtime::tests::a_bound_endpoint_is_private_whatever_the_creation_mask",
+                    "--test-threads=1",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "{}",
+                String::from_utf8_lossy(&result.stdout)
+            );
+            return;
+        }
+        // This child runs only this test, so the file creation mask is its own.
+        // SAFETY: the call only replaces this process's file creation mask.
+        unsafe { libc::umask(0o022) };
+        let root = RuntimeRoot::create().unwrap();
+        let runtime =
+            EndpointRuntime::from_directory(root.directory().try_clone().unwrap()).unwrap();
+        let listener = runtime
+            .bind_listener(Instant::now() + Duration::from_secs(3))
+            .unwrap();
+        let metadata = std::fs::symlink_metadata(root.path.join("endpoint.sock")).unwrap();
+        assert_eq!(metadata.mode(), libc::S_IFSOCK | 0o600);
+        drop(listener);
+        std::fs::remove_file(root.path.join("endpoint.sock")).unwrap();
         root.remove_empty().unwrap();
     }
 

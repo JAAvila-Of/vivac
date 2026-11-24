@@ -8,35 +8,40 @@
 use crate::attended_terminal::{AttendedUnlockTerminal, Terminal};
 use crate::linux_creation_record::Record;
 use crate::linux_current_admission::CurrentAdmission;
-use crate::linux_reservation::StoreReservation;
 use crate::linux_resident_reader::tombstone::CandidateTombstone;
+use crate::linux_resident_reader::RetirementObjects;
 use crate::linux_retained_removal::{entry_identity, EntryIdentity};
 use crate::linux_session_opening::RefusalHint;
 use crate::linux_session_record::{
-    observe_evidence, read_checked, ReopeningEvidence, SessionRecord, SessionRecords,
+    observe_evidence, read_checked, ReopeningEvidence, SessionRecords, StoredSessionRecord,
 };
-use crate::linux_supervisor_start::cancellation::Cancellation;
+use crate::linux_supervisor_start::cancellation::{cancellation_pending, Cancellation};
 use sha2::{Digest, Sha256};
 use std::ffi::CStr;
 use std::io;
-use std::os::fd::OwnedFd;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::time::{Duration, Instant};
+
+#[path = "linux_custody_retirement/steps.rs"]
+mod steps;
+
+use steps::{bare_tombstone_allows, hold, remaining_steps, skipped_steps, Entry, Failure, Plan};
 
 /// The operator types the credential ID within this budget of the prompt.
 const CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// The reminder is written once, and a terminal that cannot take it within
+/// this budget does not hold back the outcome.
+const REMINDER_TIMEOUT: Duration = Duration::from_secs(2);
+
 pub(super) const RETIREMENT_NOTICE: &str = "Credential {credential} on device {device} will be retired. Its encrypted key will be deleted and its unlock secret will open nothing afterwards. The team must revoke this credential separately.\nType the credential ID to confirm: ";
 
-#[allow(
-    dead_code,
-    reason = "The retirement steps print it once the last one succeeds."
-)]
+/// Shown when only an empty tombstone is left, and its record with the
+/// device ID is already gone.
+pub(super) const BARE_TOMBSTONE_NOTICE: &str = "The retirement of credential {credential} is finishing. Its encrypted key is already deleted. The team must revoke this credential separately.\nType the credential ID to confirm: ";
+
 pub(super) const RETIREMENT_REMINDER: &str = "Revoke credential {credential} in the team.\n";
 
-#[allow(
-    dead_code,
-    reason = "Only the retirement steps, which follow the confirmation, report these."
-)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum RetireOutcome {
     Retired,
@@ -75,8 +80,9 @@ pub(super) enum EntryName {
 }
 
 /// No entry, or the object retirement would remove: a private single-link
-/// regular file for the permit and the session record, a single-link socket
-/// for the endpoint, owned by `ids` either way.
+/// regular file for the permit and the session record, a private
+/// single-link socket for the endpoint, as the keeper binds it, owned by
+/// `ids` either way.
 pub(super) fn entry_allowed(
     name: EntryName,
     identity: Option<&EntryIdentity>,
@@ -85,15 +91,24 @@ pub(super) fn entry_allowed(
     let Some(identity) = identity else {
         return true;
     };
-    let kind = identity.mode & libc::S_IFMT;
+    let kind = match name {
+        EntryName::Permit | EntryName::Record => libc::S_IFREG,
+        EntryName::Endpoint => libc::S_IFSOCK,
+    };
     (identity.uid, identity.gid) == ids
         && identity.links == 1
-        && match name {
-            EntryName::Permit | EntryName::Record => {
-                kind == libc::S_IFREG && identity.mode & 0o7777 == 0o600
-            }
-            EntryName::Endpoint => kind == libc::S_IFSOCK,
-        }
+        && identity.mode & libc::S_IFMT == kind
+        && identity.mode & 0o7777 == 0o600
+}
+
+/// The session record whose session was found closed must be the object
+/// still under the record name once the reservation is held; it is the
+/// object step 4 removes.
+pub(super) fn session_bound(
+    checked: Option<&EntryIdentity>,
+    inspected: Option<&EntryIdentity>,
+) -> bool {
+    checked == inspected
 }
 
 /// Every collection a later step synchronizes must exist; a missing one is
@@ -137,10 +152,15 @@ pub(super) fn confirmation_matches(line: &[u8], credential: &str) -> bool {
     line.strip_suffix(b"\n") == Some(credential.as_bytes())
 }
 
-fn notice(credential: &str, device: &str) -> String {
-    RETIREMENT_NOTICE
-        .replace("{credential}", credential)
-        .replace("{device}", device)
+/// The confirmation notice: the device comes from the record, and a
+/// tombstone without one gets the notice of the last step.
+fn notice(credential: &str, device: Option<&str>) -> String {
+    match device {
+        Some(device) => RETIREMENT_NOTICE
+            .replace("{credential}", credential)
+            .replace("{device}", device),
+        None => BARE_TOMBSTONE_NOTICE.replace("{credential}", credential),
+    }
 }
 
 fn process_ids() -> (u32, u32) {
@@ -148,8 +168,14 @@ fn process_ids() -> (u32, u32) {
     unsafe { (libc::geteuid(), libc::getegid()) }
 }
 
-fn inspect(name: &CStr, directory: OwnedFd) -> io::Result<Option<EntryIdentity>> {
-    entry_identity(&directory, name)
+/// The collection and the object under the credential's name in it.
+fn inspect(name: &CStr, directory: OwnedFd) -> io::Result<Entry> {
+    let identity = entry_identity(&directory, name)?;
+    Ok(Entry {
+        directory,
+        name: name.to_owned(),
+        identity,
+    })
 }
 
 impl RetirementStart {
@@ -178,6 +204,13 @@ impl RetirementStart {
         }
     }
 
+    fn validate(&self) -> io::Result<()> {
+        match self {
+            Self::Admission(admission) => admission.validate(),
+            Self::Tombstone(tombstone) => tombstone.validate(),
+        }
+    }
+
     /// Whether the opening, endpoint and session collection each exist.
     fn collections(&self) -> io::Result<(bool, bool, bool)> {
         Ok(match self {
@@ -194,71 +227,66 @@ impl RetirementStart {
         })
     }
 
-    fn record(&self) -> io::Result<Record> {
+    /// The admission record, or `None` for a tombstone that no longer has it.
+    fn record(&self) -> io::Result<Option<Record>> {
         match self {
-            Self::Admission(admission) => Record::parse(&admission.canonical_record()?),
-            Self::Tombstone(tombstone) => Ok(tombstone.record().clone()),
+            Self::Admission(admission) => Record::parse(&admission.canonical_record()?).map(Some),
+            Self::Tombstone(tombstone) => Ok(tombstone.record().cloned()),
         }
     }
 
-    /// The session record, which must belong to this admission.
-    fn session_record(&self) -> io::Result<Option<SessionRecord>> {
-        let stored = match self {
-            Self::Admission(admission) => SessionRecords::new(admission).read()?,
+    /// The session record, which must belong to this admission. Without the
+    /// admission record nothing can be matched, so any entry is refused.
+    fn session_record(&self) -> io::Result<Option<StoredSessionRecord>> {
+        match self {
+            Self::Admission(admission) => SessionRecords::new(admission).read(),
             Self::Tombstone(tombstone) => {
-                let digest: [u8; 32] = Sha256::digest(tombstone.record().canonical_bytes()?).into();
+                let Some(record) = tombstone.record() else {
+                    let entry = tombstone.with_session_location(inspect)?;
+                    return match entry.identity {
+                        None => Ok(None),
+                        Some(_) => Err(io::ErrorKind::InvalidData.into()),
+                    };
+                };
+                let digest: [u8; 32] = Sha256::digest(record.canonical_bytes()?).into();
                 tombstone.with_session_location(|name, directory| {
                     let credential = name.to_str().map_err(|_| io::ErrorKind::InvalidData)?;
                     read_checked(&directory, name, process_ids(), credential, &digest)
-                })?
+                })
             }
-        };
-        Ok(stored.map(|stored| stored.record))
+        }
     }
 
-    /// The exclusive credential reservation on the package directory, which
-    /// the admission or tombstone already checked for owner, mode and
-    /// identity. A tombstone whose package is gone has nothing left to
-    /// reserve.
-    fn reserve(&self) -> io::Result<Option<StoreReservation>> {
+    /// The retained admission or tombstone and package objects.
+    fn objects(&self) -> io::Result<RetirementObjects> {
         match self {
-            Self::Admission(admission) => admission.reserve_package_directory().map(Some),
-            Self::Tombstone(tombstone) => {
-                let reservation = tombstone
-                    .package_directory()?
-                    .map(|package| StoreReservation::acquire_directory(&package))
-                    .transpose()?;
-                tombstone.validate()?;
-                Ok(reservation)
-            }
+            Self::Admission(admission) => admission.retirement_objects(),
+            Self::Tombstone(tombstone) => tombstone.retirement_objects(),
         }
     }
 
     /// The objects under the permit, endpoint and session record names.
-    fn entries(&self) -> io::Result<[(EntryName, Option<EntryIdentity>); 3]> {
-        let (permit, endpoint, record) = match self {
-            Self::Admission(admission) => (
+    fn entries(&self) -> io::Result<[Entry; 3]> {
+        Ok(match self {
+            Self::Admission(admission) => [
                 admission.with_opening_location(inspect)?,
                 admission.with_endpoint_location(inspect)?,
                 admission.with_session_location(inspect)?,
-            ),
-            Self::Tombstone(tombstone) => (
+            ],
+            Self::Tombstone(tombstone) => [
                 tombstone.with_opening_location(inspect)?,
                 tombstone.with_endpoint_location(inspect)?,
                 tombstone.with_session_location(inspect)?,
-            ),
-        };
-        Ok([
-            (EntryName::Permit, permit),
-            (EntryName::Endpoint, endpoint),
-            (EntryName::Record, record),
-        ])
+            ],
+        })
     }
 }
 
 /// Retires `credential`, already validated as a canonical ID.
 pub(crate) fn retire(credential: &str) -> RetireOutcome {
     let refused = RetireOutcome::Refused(None);
+    // Held until the command returns: before the commit a pending signal
+    // refuses, and after it signals stay blocked and are never checked.
     let Ok(_cancellation) = Cancellation::block() else {
         return refused;
     };
@@ -277,47 +305,149 @@ pub(crate) fn retire(credential: &str) -> RetireOutcome {
     if let Err(hint) = collections_allowed(openings, endpoints, sessions) {
         return RetireOutcome::Refused(hint);
     }
-    let Ok(record) = start.session_record() else {
+    let Ok(stored) = start.session_record() else {
         return refused;
     };
-    let evidence = match record.as_ref().map(observe_evidence).transpose() {
+    let evidence = match stored
+        .as_ref()
+        .map(|stored| observe_evidence(&stored.record))
+        .transpose()
+    {
         Ok(evidence) => evidence.flatten(),
         Err(_) => return refused,
     };
-    if let Err(hint) = session_allows(start.kind(), record.is_some(), evidence) {
+    if let Err(hint) = session_allows(start.kind(), stored.is_some(), evidence) {
         return RetireOutcome::Refused(hint);
     }
-    // Held from here through the confirmation, and released on every
-    // refusal by dropping it.
-    let Ok(_reservation) = start.reserve() else {
+    // The admission lock and the credential reservation are held from here
+    // through the last step, and released on every refusal by dropping them.
+    let Ok(objects) = start.objects() else {
         return refused;
     };
+    let package = objects.package.as_ref().map(|(directory, _)| directory);
+    let Ok(locks) = hold(&objects.admission, package) else {
+        return refused;
+    };
+    if start.validate().is_err() {
+        return refused;
+    }
     let ids = process_ids();
     let Ok(entries) = start.entries() else {
         return refused;
     };
-    if !entries
+    let allowed = [EntryName::Permit, EntryName::Endpoint, EntryName::Record]
         .iter()
-        .all(|(name, identity)| entry_allowed(*name, identity.as_ref(), ids))
+        .zip(&entries)
+        .all(|(name, entry)| entry_allowed(*name, entry.identity.as_ref(), ids));
+    if !allowed
+        || !session_bound(
+            stored.as_ref().map(|stored| &stored.identity),
+            entries[2].identity.as_ref(),
+        )
     {
         return refused;
     }
     let Ok(record) = start.record() else {
         return refused;
     };
-    if !confirm(terminal, credential, &record.device_id) {
+    let Ok(plan) = Plan::new(
+        credential,
+        start.kind() == StartKind::Admission,
+        objects,
+        entries,
+    ) else {
+        return refused;
+    };
+    let present = plan.presence();
+    if record.is_none() && !bare_tombstone_allows(present) {
         return refused;
     }
-    // The retirement steps are not part of this command yet, so a confirmed
-    // retirement still changes nothing.
-    refused
+    let steps = remaining_steps(present);
+    if steps.is_empty() {
+        return refused;
+    }
+    let Ok(reminder) = duplicate(&terminal) else {
+        return refused;
+    };
+    let device = record.as_ref().map(|record| record.device_id.as_str());
+    if !confirm(terminal, credential, device) {
+        return refused;
+    }
+    // Validate the snapshots and the retained objects, then commit unless
+    // cancellation arrived first.
+    if start.validate().is_err()
+        || locks.validate().is_err()
+        || plan.check_named().is_err()
+        || !matches!(cancellation_pending(), Ok(false))
+    {
+        return refused;
+    }
+    match plan.run(&steps, &skipped_steps(present)) {
+        Err(Failure::Unchanged) => refused,
+        Err(Failure::Incomplete) => RetireOutcome::RetirementIncomplete,
+        Ok(()) => {
+            drop(locks);
+            write_reminder(&reminder, credential);
+            RetireOutcome::Retired
+        }
+    }
+}
+
+fn duplicate(terminal: &AttendedUnlockTerminal) -> io::Result<OwnedFd> {
+    // SAFETY: fcntl duplicates the live terminal descriptor atomically.
+    let raw = unsafe { libc::fcntl(terminal.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 3) };
+    if raw < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: successful fcntl returned a fresh owned descriptor.
+    Ok(unsafe { OwnedFd::from_raw_fd(raw) })
+}
+
+/// Writes the team revocation reminder to the terminal once. The state is
+/// already gone, so a terminal that was lost or does not take it changes
+/// nothing about the outcome.
+fn write_reminder(terminal: &OwnedFd, credential: &str) {
+    let text = RETIREMENT_REMINDER.replace("{credential}", credential);
+    let bytes = text.as_bytes();
+    let deadline = Instant::now() + REMINDER_TIMEOUT;
+    let mut position = 0;
+    while position < bytes.len() {
+        let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+            return;
+        };
+        let mut descriptor = libc::pollfd {
+            fd: terminal.as_raw_fd(),
+            events: libc::POLLOUT,
+            revents: 0,
+        };
+        let timeout = remaining.as_millis().clamp(1, 2000) as i32;
+        // SAFETY: descriptor is one writable pollfd for this live terminal.
+        if unsafe { libc::poll(&mut descriptor, 1, timeout) } <= 0
+            || descriptor.revents & libc::POLLOUT == 0
+        {
+            return;
+        }
+        // SAFETY: the remaining slice stays live for the write.
+        let count = unsafe {
+            libc::write(
+                terminal.as_raw_fd(),
+                bytes[position..].as_ptr().cast(),
+                bytes.len() - position,
+            )
+        };
+        if count > 0 {
+            position += count as usize;
+        } else if count == 0 || io::Error::last_os_error().kind() != io::ErrorKind::WouldBlock {
+            return;
+        }
+    }
 }
 
 /// Shows the notice on the trusted terminal, still the foreground one, and
 /// reads the typed line within the confirmation budget, echoed: the ID is not
 /// a secret and the operator sees what they confirm. End of input, a signal,
 /// a lost terminal or the deadline refuse.
-fn confirm(terminal: AttendedUnlockTerminal, credential: &str, device: &str) -> bool {
+fn confirm(terminal: AttendedUnlockTerminal, credential: &str, device: Option<&str>) -> bool {
     if terminal.validate_foreground_hold().is_err() {
         return false;
     }
@@ -434,7 +564,7 @@ mod tests {
         use EntryName::{Endpoint, Permit, Record};
         let ids = (1000, 1000);
         let file = entry(libc::S_IFREG | 0o600, 1, ids);
-        let socket = entry(libc::S_IFSOCK | 0o755, 1, ids);
+        let socket = entry(libc::S_IFSOCK | 0o600, 1, ids);
         for name in [Permit, Endpoint, Record] {
             assert!(entry_allowed(name, None, ids), "{name:?} absent");
         }
@@ -463,9 +593,14 @@ mod tests {
         for unexpected in [
             entry(libc::S_IFDIR | 0o700, 1, ids),
             entry(libc::S_IFLNK | 0o777, 1, ids),
-            entry(libc::S_IFSOCK | 0o755, 2, ids),
-            entry(libc::S_IFSOCK | 0o755, 1, (1001, 1000)),
-            entry(libc::S_IFSOCK | 0o755, 1, (1000, 1001)),
+            entry(libc::S_IFSOCK | 0o600, 2, ids),
+            entry(libc::S_IFSOCK | 0o600, 1, (1001, 1000)),
+            entry(libc::S_IFSOCK | 0o600, 1, (1000, 1001)),
+            // Not the mode the keeper binds it with.
+            entry(libc::S_IFSOCK | 0o755, 1, ids),
+            entry(libc::S_IFSOCK | 0o700, 1, ids),
+            entry(libc::S_IFSOCK | 0o666, 1, ids),
+            entry(libc::S_IFSOCK | 0o4600, 1, ids),
         ] {
             assert!(
                 !entry_allowed(Endpoint, Some(&unexpected), ids),
@@ -475,12 +610,30 @@ mod tests {
     }
 
     #[test]
+    fn the_session_record_removed_is_the_one_found_closed() {
+        let ids = (1000, 1000);
+        let record = entry(libc::S_IFREG | 0o600, 1, ids);
+        let other = EntryIdentity { inode: 3, ..record };
+        assert!(session_bound(None, None));
+        assert!(session_bound(Some(&record), Some(&record)));
+        assert!(!session_bound(Some(&record), Some(&other)));
+        assert!(!session_bound(Some(&record), None));
+        assert!(!session_bound(None, Some(&record)));
+    }
+
+    #[test]
     fn retirement_notice_names_both_ids_and_team_revocation() {
         assert_eq!(
-            notice(CREDENTIAL, DEVICE),
+            notice(CREDENTIAL, Some(DEVICE)),
             "Credential 0123456789abcdefghjkmnpqrs on device 0123456789abcdefghjkmnpqrt will be \
              retired. Its encrypted key will be deleted and its unlock secret will open nothing \
              afterwards. The team must revoke this credential separately.\n\
+             Type the credential ID to confirm: "
+        );
+        assert_eq!(
+            notice(CREDENTIAL, None),
+            "The retirement of credential 0123456789abcdefghjkmnpqrs is finishing. Its encrypted \
+             key is already deleted. The team must revoke this credential separately.\n\
              Type the credential ID to confirm: "
         );
         assert_eq!(
