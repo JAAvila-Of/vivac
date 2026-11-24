@@ -172,13 +172,16 @@ supervisor waits for that confirmation and the keeper's write-side close
 before exiting. The keeper derives release from the retained process
 references after the exchange.
 
-The private foreground trial keeps the same reservation and native agent
-after the initial possession proof. The keeper displays a close prompt on
-the retained terminal. A `CLOSE` line requests the authenticated shutdown
-described above. Hangup, end of input, or observed exit of the supervisor or
-agent cancels the session without issuing a new opening permit. Terminal
-ownership and attributes are rechecked at prompt output and input. A change
-that wakes none of the watched descriptors may remain unnoticed while idle.
+The service keeper keeps the same reservation and native agent after the
+initial possession proof. It runs as the main process of a transient user
+service and holds no terminal; the
+[Linux custody CLI](LINUX-CUSTODY-CLI.md#closing-and-expiry) describes its
+limits. A `close-linux` request on the control socket, a stop request from
+the service manager, or expiry requests the authenticated shutdown described
+above. An observed exit of the supervisor or agent ends the session without
+that closure: the keeper empties the session cgroup and publishes the next
+permit on the kernel's evidence that it is empty. Hangup or end of input on
+the opening terminal cancels only the attended prompt, before activation.
 The initial proof grants no enrollment authority. Discovery and authorization
 for independent clients remain separate from this trial.
 
@@ -187,16 +190,18 @@ publication attempt consumes it before any storage change. The keeper
 retains the package lock until process exit.
 
 Publication synchronizes a private staging file first, renames it without
-replacement, and synchronizes the collection. The keeper rechecks foreground
-terminal validity and pending hangup after staging and before the rename.
-Cancellation at this check removes the validated staging file. Once the
-rename completes, a later hangup does not reverse it. The keeper uses the
-completed rename to distinguish unpublished failure from indeterminate
-durability. That distinction survives later reservation and origin checks.
-A fresh process still needs the exact admitted record and the package
-reservation before consuming it. Without the authenticated closure, or
-after the keeper dies while the previous session is still active, this path
-has no permit to consume.
+replacement, and synchronizes the collection. The keeper rechecks its stop
+budget and any cancellation from the requesting `close-linux` after staging
+and before the rename. Cancellation at this check removes the validated
+staging file. Once the rename completes, a later cancellation does not
+reverse it. The keeper uses the completed rename to distinguish unpublished
+failure from indeterminate durability. That distinction survives later
+reservation and origin checks. A fresh process still needs the exact
+admitted record and the package reservation before consuming it. If the
+keeper dies while the session is still active, this path has no permit to
+consume; the next opening reopens on the
+[evidence](LINUX-CUSTODY-CLI.md#reopening-after-a-lost-session) the session
+record supports.
 
 The earlier storage experiment uses public synthetic permits and a synthetic
 prompt boundary. It tests consumption, contention, synchronization errors and
