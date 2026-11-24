@@ -34,24 +34,38 @@ pub(crate) enum CloseOutcome {
     CloseUncertain,
 }
 
-/// What the keeper's reply makes of the close. `None` means no keeper
-/// answered and none reported Closing, so the unit is stopped instead.
-/// A keeper that reported Closing and then went silent may have published.
-pub(super) fn close_outcome(
-    reply: Option<KeeperFrame>,
-    closing_acknowledged: bool,
-) -> Option<CloseOutcome> {
+/// What the reply of an authenticated keeper makes of the close. Without an
+/// outcome, whether from a hang-up, a failed send or silence, the keeper may
+/// have published, so only a reported outcome is more than uncertain.
+pub(super) fn close_outcome(reply: Option<KeeperFrame>) -> CloseOutcome {
     match reply {
-        Some(KeeperFrame::Outcome(KeeperOutcome::Closed)) => Some(CloseOutcome::Closed),
-        Some(KeeperFrame::Outcome(KeeperOutcome::Refused)) => Some(CloseOutcome::Refused),
-        Some(KeeperFrame::Outcome(KeeperOutcome::Interrupted)) => Some(CloseOutcome::Interrupted),
+        Some(KeeperFrame::Outcome(KeeperOutcome::Closed)) => CloseOutcome::Closed,
+        Some(KeeperFrame::Outcome(KeeperOutcome::Refused)) => CloseOutcome::Refused,
+        Some(KeeperFrame::Outcome(KeeperOutcome::Interrupted)) => CloseOutcome::Interrupted,
         Some(KeeperFrame::Outcome(KeeperOutcome::PublicationUncertain)) => {
-            Some(CloseOutcome::PublicationUncertain)
+            CloseOutcome::PublicationUncertain
         }
         None
         | Some(KeeperFrame::SecretRequest | KeeperFrame::Opened { .. } | KeeperFrame::Closing) => {
-            closing_acknowledged.then_some(CloseOutcome::CloseUncertain)
+            CloseOutcome::CloseUncertain
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum FallbackStep {
+    Stop,
+    Refuse,
+}
+
+/// What to do when no keeper could be authenticated. The unit is stopped only
+/// then, and never once a signal asked to cancel: stopping it would be the
+/// opposite.
+pub(super) fn fallback_step(cancellation_pending: bool) -> FallbackStep {
+    if cancellation_pending {
+        FallbackStep::Refuse
+    } else {
+        FallbackStep::Stop
     }
 }
 
@@ -87,9 +101,12 @@ pub(crate) fn close(credential: &str) -> CloseOutcome {
     if let Some(outcome) = ask_keeper(&manager, &unit, &record) {
         return outcome;
     }
-    // The unit may be running even when its keeper does not answer. Stopping
-    // it ends every process in it; the record stays as the evidence the next
-    // opening needs.
+    // No keeper could be authenticated. The unit may still be running; stopping
+    // it ends every process in it, and the record stays as the evidence the
+    // next opening needs.
+    if fallback_step(cancellation_pending().unwrap_or(true)) == FallbackStep::Refuse {
+        return CloseOutcome::Refused;
+    }
     let _ = manager.stop_unit(&unit);
     let identity = CgroupIdentity {
         inode: record.unit_cgroup_inode,
@@ -109,8 +126,9 @@ fn control_socket(manager: &UserManager, unit: &SessionUnit) -> PathBuf {
 
 /// Sends `Close` and waits for the keeper's outcome. A signal sends `Cancel`
 /// once, and the wait goes on: the keeper's answer says whether the cancel
-/// arrived before its permit rename was authorized. `None` sends the caller
-/// to the fallback.
+/// arrived before its permit rename was authorized. Once the keeper is
+/// authenticated the result is always its outcome or `CloseUncertain`; `None`
+/// means no keeper was reached and sends the caller to the fallback.
 fn ask_keeper(
     manager: &UserManager,
     unit: &SessionUnit,
@@ -122,12 +140,13 @@ fn ask_keeper(
         Instant::now() + REQUEST_TIMEOUT,
     )
     .ok()?;
-    // A failed send queued nothing: the keeper never saw `Close`.
-    connection
+    if connection
         .send_client(&ClientFrame::Close, Instant::now() + REQUEST_TIMEOUT)
-        .ok()?;
+        .is_err()
+    {
+        return Some(close_outcome(None));
+    }
     let deadline = Instant::now() + OUTCOME_TIMEOUT;
-    let mut acknowledged = false;
     let mut cancelled = false;
     loop {
         if !cancelled && cancellation_pending().unwrap_or(true) {
@@ -136,14 +155,13 @@ fn ask_keeper(
         }
         let now = Instant::now();
         if now >= deadline {
-            return close_outcome(None, acknowledged);
+            return Some(close_outcome(None));
         }
         match connection.receive_keeper((now + CANCELLATION_INTERVAL).min(deadline)) {
-            Ok(KeeperFrame::Closing) => acknowledged = true,
-            Ok(frame @ KeeperFrame::Outcome(_)) => return close_outcome(Some(frame), acknowledged),
+            Ok(frame @ KeeperFrame::Outcome(_)) => return Some(close_outcome(Some(frame))),
             Ok(_) => {}
             Err(error) if error.kind() == io::ErrorKind::TimedOut => {}
-            Err(_) => return close_outcome(None, acknowledged),
+            Err(_) => return Some(close_outcome(None)),
         }
     }
 }
@@ -165,18 +183,27 @@ mod tests {
                 CloseOutcome::PublicationUncertain,
             ),
         ] {
-            for acknowledged in [false, true] {
-                assert_eq!(
-                    close_outcome(Some(KeeperFrame::Outcome(outcome)), acknowledged),
-                    Some(expected)
-                );
-            }
+            assert_eq!(close_outcome(Some(KeeperFrame::Outcome(outcome))), expected);
         }
-        assert_eq!(
-            close_outcome(None, true),
-            Some(CloseOutcome::CloseUncertain)
-        );
-        assert_eq!(close_outcome(None, false), None);
+    }
+
+    #[test]
+    fn an_authenticated_keeper_without_an_outcome_is_uncertain() {
+        // A hang-up, a failed send or silence, after or without `Closing`.
+        assert_eq!(close_outcome(None), CloseOutcome::CloseUncertain);
+        for frame in [
+            KeeperFrame::Closing,
+            KeeperFrame::SecretRequest,
+            KeeperFrame::Opened { reopened: false },
+        ] {
+            assert_eq!(close_outcome(Some(frame)), CloseOutcome::CloseUncertain);
+        }
+    }
+
+    #[test]
+    fn the_unit_is_stopped_only_when_no_keeper_was_reached_and_nothing_was_cancelled() {
+        assert_eq!(fallback_step(false), FallbackStep::Stop);
+        assert_eq!(fallback_step(true), FallbackStep::Refuse);
     }
 
     #[test]
