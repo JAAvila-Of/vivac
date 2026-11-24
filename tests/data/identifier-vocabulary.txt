@@ -1505,6 +1505,7 @@ grants
 graph
 grapheme
 graphemes
+graphic
 graviola
 greater
 green
@@ -1900,6 +1901,7 @@ legacy
 legend
 len
 length
+lengthening
 lengths
 let
 lets

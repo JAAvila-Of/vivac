@@ -4417,7 +4417,6 @@ tcgetattr
 teach
 teaches
 team
-teardown
 tearing
 technical
 technically

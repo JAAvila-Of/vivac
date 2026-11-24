@@ -25,10 +25,13 @@ opening permit and admission record. A durable result returns the local key
 receipt. A refused attempt returns exit 1. A partial or indeterminate publication
 returns exit 5 with the credential ID and publication outcome.
 
-`vivac device-key open-linux <credential-id> [--json]` reopens custody in a
-trusted foreground terminal. Enter `CLOSE` there to end the session. A
-successful exit confirms that the session ended and a new opening permit was
-published durably. `vivac device-key verify-linux-possession <credential-id>
+`vivac device-key open-linux <credential-id> [--json]` asks for the unlock
+secret in a trusted foreground terminal and starts the session in a user
+service, so a dropped SSH connection does not end it. `vivac device-key
+close-linux <credential-id> [--json]` ends it and publishes a new opening
+permit; a session also closes itself when idle or too old. A session lost to a
+crash or power cut is reopened with the secret once the kernel shows that its
+processes are gone. `vivac device-key verify-linux-possession <credential-id>
 [--json]` checks fresh local possession in a separate process without needing
 a terminal. See the [Linux custody CLI](LINUX-CUSTODY-CLI.md) for exit codes
 and the receipt statuses that distinguish interruption and uncertain storage.

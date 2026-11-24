@@ -1,6 +1,8 @@
 use super::deliver_linux_reply;
 use crate::linux_resident_reader;
-use crate::linux_supervisor_start::{self, OpeningOutcome};
+use crate::linux_session_opening::{self, OpeningOutcome, RefusalHint};
+use crate::linux_supervisor_start;
+use crate::linux_user_manager::SessionLimits;
 use std::ffi::OsString;
 use std::io::{self, Write};
 
@@ -28,17 +30,23 @@ fn parse(arguments: impl Iterator<Item = OsString>) -> Option<(String, bool)> {
     Some((credential?, json))
 }
 
-fn opening_result(credential: &str) -> (&'static str, i32) {
-    match linux_supervisor_start::open_public(credential) {
-        OpeningOutcome::Closed => ("closed", 0),
-        OpeningOutcome::Refused => ("refused", 1),
-        OpeningOutcome::OpeningUncertain => ("opening_uncertain", 5),
-        OpeningOutcome::Interrupted => ("interrupted", 5),
-        OpeningOutcome::PublicationUncertain => ("publication_uncertain", 5),
+fn opening_result(
+    credential: &str,
+    limits: SessionLimits,
+) -> (&'static str, i32, Option<RefusalHint>) {
+    match linux_session_opening::open(credential, limits) {
+        OpeningOutcome::Open => ("open", 0, None),
+        OpeningOutcome::Reopened => ("reopened", 0, None),
+        OpeningOutcome::Refused(hint) => ("refused", 1, hint),
+        OpeningOutcome::OpeningUncertain => ("opening_uncertain", 5, None),
+        OpeningOutcome::Interrupted => ("interrupted", 5, None),
+        OpeningOutcome::PublicationUncertain => ("publication_uncertain", 5, None),
     }
 }
 
-fn report(credential: &str, status: &str, code: i32, json: bool) -> i32 {
+/// Writes the bounded receipt, then the remedy of a refusal, if it has one,
+/// as one line on stderr whether or not the receipt is JSON.
+fn report(credential: &str, status: &str, code: i32, json: bool, hint: Option<RefusalHint>) -> i32 {
     let output = if json {
         serde_json::json!({"credential_id": credential, "status": status}).to_string()
     } else {
@@ -50,6 +58,10 @@ fn report(credential: &str, status: &str, code: i32, json: bool) -> i32 {
         let mut stderr = io::stderr().lock();
         writeln!(stderr, "{output}").and_then(|()| stderr.flush())
     };
+    if let Some(hint) = hint {
+        let mut stderr = io::stderr().lock();
+        let _ = writeln!(stderr, "{}", hint.remedy(credential)).and_then(|()| stderr.flush());
+    }
     if delivered.is_err() {
         let _ = io::stderr()
             .lock()
@@ -82,12 +94,18 @@ pub(crate) fn dispatch() -> Option<i32> {
             .write_all(b"Specify one canonical credential ID and at most one --json flag.\n");
         return Some(2);
     };
-    let (status, code) = if opening {
-        opening_result(&credential)
+    let (status, code, hint) = if opening {
+        let Ok(limits) = SessionLimits::from_environment() else {
+            let _ = io::stderr()
+                .lock()
+                .write_all(b"Session limits can only be shortened, to no less than 60 seconds.\n");
+            return Some(2);
+        };
+        opening_result(&credential, limits)
     } else if linux_supervisor_start::verify_discovered_endpoint(&credential).is_ok() {
-        ("possession_verified", 0)
+        ("possession_verified", 0, None)
     } else {
-        ("refused", 1)
+        ("refused", 1, None)
     };
-    Some(report(&credential, status, code, json))
+    Some(report(&credential, status, code, json, hint))
 }

@@ -30,7 +30,7 @@ pub(super) fn signal_set() -> io::Result<libc::sigset_t> {
     Ok(set)
 }
 
-pub(super) fn cancellation_pending() -> io::Result<bool> {
+pub(crate) fn cancellation_pending() -> io::Result<bool> {
     let mut pending = MaybeUninit::<libc::sigset_t>::uninit();
     // SAFETY: sigpending initializes the set before membership is queried.
     if unsafe { libc::sigpending(pending.as_mut_ptr()) } != 0 {
@@ -47,7 +47,7 @@ pub(super) fn cancellation_pending() -> io::Result<bool> {
     Ok(false)
 }
 
-pub(super) struct Cancellation {
+pub(crate) struct Cancellation {
     set: libc::sigset_t,
     original: libc::sigset_t,
     dispositions: Vec<(libc::c_int, libc::sigaction)>,
@@ -55,7 +55,7 @@ pub(super) struct Cancellation {
 }
 
 impl Cancellation {
-    pub(super) fn block() -> io::Result<Self> {
+    pub(crate) fn block() -> io::Result<Self> {
         let set = signal_set()?;
         let mut original = MaybeUninit::<libc::sigset_t>::uninit();
         // SAFETY: set is initialized and original can hold the previous mask.

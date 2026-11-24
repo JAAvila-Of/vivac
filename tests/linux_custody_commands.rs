@@ -94,6 +94,18 @@ fn failed_receipt_delivery_returns_io_failure() {
 }
 
 #[test]
+fn opening_limits_refuse_lengthening_values() {
+    let output = unattended_command()
+        .env("VIVAC_LINUX_SESSION_IDLE_SECONDS", "43201")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert!(!output.stderr.is_empty());
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("panicked"));
+}
+
+#[test]
 fn device_key_help_advertises_linux_custody_commands() {
     let output = Command::new(env!("CARGO_BIN_EXE_vivac"))
         .args(["device-key", "--help"])
