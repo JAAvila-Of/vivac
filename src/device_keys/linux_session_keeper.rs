@@ -42,6 +42,9 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+/// What a client waiting for `Opened` after the unlock secret must allow.
+pub(crate) const OPENING_AFTER_SECRET_BUDGET: Duration = opening::AFTER_SECRET_BUDGET;
+
 /// The client sends `Begin` within this budget after READY, or the keeper ends.
 const BEGIN_TIMEOUT: Duration = Duration::from_secs(10);
 /// A connected client sends its one request within this budget.

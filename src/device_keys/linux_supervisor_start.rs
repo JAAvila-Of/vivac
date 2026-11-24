@@ -158,8 +158,11 @@ fn block_hangup() -> io::Result<()> {
     Ok(())
 }
 
+/// The budget of one short step of a startup or an opening.
+pub(crate) const SHORT_STEP: Duration = Duration::from_secs(3);
+
 pub(crate) fn short_deadline() -> Instant {
-    Instant::now() + Duration::from_secs(3)
+    Instant::now() + SHORT_STEP
 }
 
 /// The endpoint startup without a credential: the supervisor and the

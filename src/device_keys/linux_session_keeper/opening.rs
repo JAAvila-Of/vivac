@@ -14,7 +14,7 @@ use crate::linux_ipc::registration::{
 use crate::linux_session_control::{ClientFrame, ControlConnection, KeeperFrame};
 use crate::linux_spawn::{Receipt, SpawnOwner};
 use crate::linux_supervisor_start::{
-    launch, short_deadline, wait_for_success, STARTUP_TIMEOUT, SUPERVISOR, VERIFIER,
+    launch, short_deadline, wait_for_success, SHORT_STEP, STARTUP_TIMEOUT, SUPERVISOR, VERIFIER,
 };
 use std::io;
 use std::os::fd::{AsRawFd, OwnedFd};
@@ -25,6 +25,15 @@ const REGISTER_TIMEOUT: Duration = Duration::from_secs(20);
 const SECRET_TIMEOUT: Duration = Duration::from_secs(20);
 const UNLOCK_TIMEOUT: Duration = Duration::from_secs(30);
 const PROOF_TIMEOUT: Duration = Duration::from_secs(22);
+/// The short steps between the unlock secret reaching the supervisor and
+/// `Opened`: the secret send, `Prove`, the endpoint start, its success, the
+/// activation, its report and `Opened` itself.
+const SHORT_STEPS_AFTER_SECRET: u32 = 7;
+/// The longest the keeper may take after the unlock secret before it reports
+/// the opening, the sum of its own per-step budgets.
+pub(super) const AFTER_SECRET_BUDGET: Duration = UNLOCK_TIMEOUT
+    .saturating_add(PROOF_TIMEOUT)
+    .saturating_add(SHORT_STEP.saturating_mul(SHORT_STEPS_AFTER_SECRET));
 
 pub(super) enum OpeningEvent {
     Frame(ClientFrame),

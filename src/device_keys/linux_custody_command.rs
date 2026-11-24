@@ -44,6 +44,13 @@ fn opening_result(
     }
 }
 
+/// The remedy of a refusal, only once its receipt reached the user: a remedy
+/// printed before "receipt delivery failed" reads as the answer.
+fn remedy_line(credential: &str, hint: Option<RefusalHint>, delivered: bool) -> Option<String> {
+    hint.filter(|_| delivered)
+        .map(|hint| hint.remedy(credential))
+}
+
 /// Writes the bounded receipt, then the remedy of a refusal, if it has one,
 /// as one line on stderr whether or not the receipt is JSON.
 fn report(credential: &str, status: &str, code: i32, json: bool, hint: Option<RefusalHint>) -> i32 {
@@ -58,9 +65,9 @@ fn report(credential: &str, status: &str, code: i32, json: bool, hint: Option<Re
         let mut stderr = io::stderr().lock();
         writeln!(stderr, "{output}").and_then(|()| stderr.flush())
     };
-    if let Some(hint) = hint {
+    if let Some(line) = remedy_line(credential, hint, delivered.is_ok()) {
         let mut stderr = io::stderr().lock();
-        let _ = writeln!(stderr, "{}", hint.remedy(credential)).and_then(|()| stderr.flush());
+        let _ = writeln!(stderr, "{line}").and_then(|()| stderr.flush());
     }
     if delivered.is_err() {
         let _ = io::stderr()
@@ -77,9 +84,8 @@ pub(crate) fn dispatch() -> Option<i32> {
         return None;
     }
     let command = arguments.next()?;
-    let opening = match command.to_str() {
-        Some("open-linux") => true,
-        Some("verify-linux-possession") => false,
+    let operation = match command.to_str() {
+        Some(operation @ ("open-linux" | "verify-linux-possession")) => operation,
         Some(_) => return None,
         None => {
             let _ = io::stderr()
@@ -94,7 +100,7 @@ pub(crate) fn dispatch() -> Option<i32> {
             .write_all(b"Specify one canonical credential ID and at most one --json flag.\n");
         return Some(2);
     };
-    let (status, code, hint) = if opening {
+    let (status, code, hint) = if operation == "open-linux" {
         let Ok(limits) = SessionLimits::from_environment() else {
             let _ = io::stderr()
                 .lock()
@@ -108,4 +114,23 @@ pub(crate) fn dispatch() -> Option<i32> {
         ("refused", 1, None)
     };
     Some(report(&credential, status, code, json, hint))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_remedy_follows_only_a_delivered_receipt() {
+        let credential = "0123456789abcdefghjkmnpqrs";
+        assert_eq!(
+            remedy_line(credential, Some(RefusalHint::CloseFirst), true),
+            Some("Run vivac device-key close-linux 0123456789abcdefghjkmnpqrs first.".to_owned())
+        );
+        assert_eq!(
+            remedy_line(credential, Some(RefusalHint::CloseFirst), false),
+            None
+        );
+        assert_eq!(remedy_line(credential, None, true), None);
+    }
 }

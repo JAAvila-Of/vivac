@@ -24,9 +24,13 @@ use zeroize::Zeroizing;
 
 /// The connection to the keeper, and each send, fit in this budget.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
-/// The keeper asks for the secret, or reports the session open, within this
-/// budget of the previous step.
+/// The keeper asks for the secret within this budget of `Begin`.
 const KEEPER_TIMEOUT: Duration = Duration::from_secs(60);
+/// After the secret, the keeper reports the session open within the sum of its
+/// own step budgets; this adds a margin so that a slow legitimate opening is
+/// not cancelled.
+const OPENED_TIMEOUT: Duration = crate::linux_session_keeper::OPENING_AFTER_SECRET_BUDGET
+    .saturating_add(Duration::from_secs(10));
 /// After `Cancel`, the keeper ends the session cgroup and publishes within
 /// its 25-second close budget; this leaves room for the report.
 const OUTCOME_TIMEOUT: Duration = Duration::from_secs(40);
@@ -262,7 +266,7 @@ fn after_begin(connection: &ControlConnection, terminal: AttendedUnlockTerminal)
                 if deliver_secret(connection, terminal).is_err() {
                     return cancel(connection);
                 }
-                deadline = Instant::now() + KEEPER_TIMEOUT;
+                deadline = Instant::now() + OPENED_TIMEOUT;
             }
             Wait::Frame(frame) => return outcome_after_begin(Some(frame)),
         }
@@ -404,5 +408,13 @@ mod tests {
         for name in [&b""[..], b"two words", b"bell\x07", b"\xff"] {
             assert_eq!(RefusalHint::enable_linger(&account(name)), None, "{name:?}");
         }
+    }
+
+    #[test]
+    fn the_wait_for_the_report_outlasts_the_keeper_s_worst_case() {
+        assert!(
+            OPENED_TIMEOUT > crate::linux_session_keeper::OPENING_AFTER_SECRET_BUDGET,
+            "a slow legitimate opening must not be cancelled"
+        );
     }
 }
