@@ -107,9 +107,7 @@ pub fn probe_with_admitted_openssh_registration<T>(
 pub fn read_attended_unlock_secret() -> std::io::Result<zeroize::Zeroizing<Vec<u8>>> {
     let input = attended_terminal::AttendedUnlockTerminal::open()
         .and_then(attended_terminal::AttendedUnlockTerminal::read)
-        .map_err(|_| {
-            std::io::Error::new(std::io::ErrorKind::PermissionDenied, "attended-input")
-        })?;
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::PermissionDenied, "attended-input"))?;
     Ok(zeroize::Zeroizing::new(input.as_bytes().to_vec()))
 }
 
