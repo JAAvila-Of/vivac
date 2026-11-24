@@ -12,7 +12,9 @@ use crate::linux_reservation::StoreReservation;
 use crate::linux_resident_reader::tombstone::CandidateTombstone;
 use crate::linux_retained_removal::{entry_identity, EntryIdentity};
 use crate::linux_session_opening::RefusalHint;
-use crate::linux_session_record::{observe_evidence, read_checked, SessionRecord, SessionRecords};
+use crate::linux_session_record::{
+    observe_evidence, read_checked, ReopeningEvidence, SessionRecord, SessionRecords,
+};
 use crate::linux_supervisor_start::cancellation::Cancellation;
 use sha2::{Digest, Sha256};
 use std::ffi::CStr;
@@ -94,6 +96,42 @@ pub(super) fn entry_allowed(
         }
 }
 
+/// Every collection a later step synchronizes must exist; a missing one is
+/// refused, not read as an absent entry. The endpoint collection and the
+/// session collection each have a provisioning command, named in the remedy. Without
+/// the opening collection the installation is broken and nothing names a fix.
+pub(super) fn collections_allowed(
+    openings: bool,
+    endpoints: bool,
+    sessions: bool,
+) -> Result<(), Option<RefusalHint>> {
+    if !openings {
+        Err(None)
+    } else if !endpoints {
+        Err(Some(RefusalHint::ProvisionEndpoints))
+    } else if !sessions {
+        Err(Some(RefusalHint::ProvisionSessions))
+    } else {
+        Ok(())
+    }
+}
+
+/// No session record, or the kernel's evidence that the recorded session is
+/// gone. Otherwise the session is open: from an admission, `close-linux`
+/// ends it; from a tombstone nothing can open or close it, so no remedy is
+/// named.
+pub(super) fn session_allows(
+    start: StartKind,
+    recorded: bool,
+    evidence: Option<ReopeningEvidence>,
+) -> Result<(), Option<RefusalHint>> {
+    match (recorded, evidence, start) {
+        (false, _, _) | (true, Some(_), _) => Ok(()),
+        (true, None, StartKind::Admission) => Err(Some(RefusalHint::CloseFirst)),
+        (true, None, StartKind::Tombstone) => Err(None),
+    }
+}
+
 /// The typed line is the credential ID and its newline, nothing else.
 pub(super) fn confirmation_matches(line: &[u8], credential: &str) -> bool {
     line.strip_suffix(b"\n") == Some(credential.as_bytes())
@@ -133,6 +171,29 @@ impl RetirementStart {
         }
     }
 
+    fn kind(&self) -> StartKind {
+        match self {
+            Self::Admission(_) => StartKind::Admission,
+            Self::Tombstone(_) => StartKind::Tombstone,
+        }
+    }
+
+    /// Whether the opening, endpoint and session collection each exist.
+    fn collections(&self) -> io::Result<(bool, bool, bool)> {
+        Ok(match self {
+            Self::Admission(admission) => (
+                admission.has_opening_directory()?,
+                admission.has_endpoint_directory()?,
+                admission.has_session_directory()?,
+            ),
+            Self::Tombstone(tombstone) => (
+                tombstone.has_opening_directory()?,
+                tombstone.has_endpoint_directory()?,
+                tombstone.has_session_directory()?,
+            ),
+        })
+    }
+
     fn record(&self) -> io::Result<Record> {
         match self {
             Self::Admission(admission) => Record::parse(&admission.canonical_record()?),
@@ -140,8 +201,7 @@ impl RetirementStart {
         }
     }
 
-    /// The session record, which must belong to this admission. A missing
-    /// session collection is an error, not the absence of a record.
+    /// The session record, which must belong to this admission.
     fn session_record(&self) -> io::Result<Option<SessionRecord>> {
         let stored = match self {
             Self::Admission(admission) => SessionRecords::new(admission).read()?,
@@ -211,15 +271,21 @@ pub(crate) fn retire(credential: &str) -> RetireOutcome {
     let Some(start) = RetirementStart::open(credential) else {
         return refused;
     };
+    let Ok((openings, endpoints, sessions)) = start.collections() else {
+        return refused;
+    };
+    if let Err(hint) = collections_allowed(openings, endpoints, sessions) {
+        return RetireOutcome::Refused(hint);
+    }
     let Ok(record) = start.session_record() else {
         return refused;
     };
-    if let Some(record) = record {
-        match observe_evidence(&record) {
-            Ok(Some(_)) => {}
-            Ok(None) => return RetireOutcome::Refused(Some(RefusalHint::CloseFirst)),
-            Err(_) => return refused,
-        }
+    let evidence = match record.as_ref().map(observe_evidence).transpose() {
+        Ok(evidence) => evidence.flatten(),
+        Err(_) => return refused,
+    };
+    if let Err(hint) = session_allows(start.kind(), record.is_some(), evidence) {
+        return RetireOutcome::Refused(hint);
     }
     // Held from here through the confirmation, and released on every
     // refusal by dropping it.
@@ -248,14 +314,15 @@ pub(crate) fn retire(credential: &str) -> RetireOutcome {
 }
 
 /// Shows the notice on the trusted terminal, still the foreground one, and
-/// reads the typed line within the confirmation budget. End of input, a
-/// signal, a lost terminal or the deadline refuse.
+/// reads the typed line within the confirmation budget, echoed: the ID is not
+/// a secret and the operator sees what they confirm. End of input, a signal,
+/// a lost terminal or the deadline refuse.
 fn confirm(terminal: AttendedUnlockTerminal, credential: &str, device: &str) -> bool {
     if terminal.validate_foreground_hold().is_err() {
         return false;
     }
     let deadline = Instant::now() + CONFIRMATION_TIMEOUT;
-    let Ok(mut terminal) = Terminal::from_retained(terminal) else {
+    let Ok(mut terminal) = Terminal::from_retained(terminal, true) else {
         return false;
     };
     let typed = terminal.read_line(notice(credential, device).as_bytes(), deadline);
@@ -296,6 +363,51 @@ mod tests {
                 "{line:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_missing_collection_refuses_and_names_the_command_to_provision_it() {
+        assert_eq!(collections_allowed(true, true, true), Ok(()));
+        // Without the opening collection the installation is broken: no remedy,
+        // whatever else is missing.
+        for (endpoints, sessions) in [(true, true), (false, true), (true, false), (false, false)] {
+            assert_eq!(collections_allowed(false, endpoints, sessions), Err(None));
+        }
+        for sessions in [true, false] {
+            assert_eq!(
+                collections_allowed(true, false, sessions),
+                Err(Some(RefusalHint::ProvisionEndpoints))
+            );
+        }
+        assert_eq!(
+            collections_allowed(true, true, false),
+            Err(Some(RefusalHint::ProvisionSessions))
+        );
+        assert_eq!(
+            RefusalHint::ProvisionEndpoints.remedy(CREDENTIAL),
+            "Run vivac device-key provision-linux-endpoints, then retry."
+        );
+        assert_eq!(
+            RefusalHint::ProvisionSessions.remedy(CREDENTIAL),
+            "Run vivac device-key provision-linux-sessions, then retry."
+        );
+    }
+
+    #[test]
+    fn an_open_session_names_close_linux_only_from_an_admission() {
+        use ReopeningEvidence::{CgroupEmpty, CgroupGone, NewBoot};
+        for start in [StartKind::Admission, StartKind::Tombstone] {
+            assert_eq!(session_allows(start, false, None), Ok(()));
+            for evidence in [NewBoot, CgroupGone, CgroupEmpty] {
+                assert_eq!(session_allows(start, true, Some(evidence)), Ok(()));
+            }
+        }
+        assert_eq!(
+            session_allows(StartKind::Admission, true, None),
+            Err(Some(RefusalHint::CloseFirst))
+        );
+        // A tombstone has no admission for `close-linux` to open.
+        assert_eq!(session_allows(StartKind::Tombstone, true, None), Err(None));
     }
 
     #[test]

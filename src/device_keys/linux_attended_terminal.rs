@@ -43,7 +43,7 @@ impl AttendedUnlockTerminal {
 
     pub(crate) fn read(self) -> Result<AttendedUnlockInput> {
         let deadline = Instant::now() + Duration::from_secs(15);
-        Terminal::from_retained(self)?.read_existing_unlock(deadline)
+        Terminal::from_retained(self, false)?.read_existing_unlock(deadline)
     }
 }
 
@@ -111,6 +111,34 @@ fn foreground(fd: RawFd) -> Result<()> {
     }
 }
 
+/// Canonical line input with fixed control characters and signals, from the
+/// `original` attributes. Every echo flag is cleared first, and only the
+/// plain echo of typed characters, erase and kill is turned back on for a
+/// visible line.
+fn configured(original: &libc::termios, echo: bool) -> libc::termios {
+    let mut configured = *original;
+    configured.c_lflag |= libc::ICANON | libc::ISIG;
+    configured.c_lflag &= !(ECHO_FLAGS | libc::IEXTEN);
+    if echo {
+        configured.c_lflag |= libc::ECHO | libc::ECHOE | libc::ECHOK;
+    }
+    configured.c_iflag &= !(libc::ISTRIP
+        | libc::INLCR
+        | libc::IGNCR
+        | libc::PARMRK
+        | libc::IUCLC
+        | libc::IXON
+        | libc::IXOFF);
+    configured.c_iflag |= libc::ICRNL;
+    configured.c_cc[libc::VEOF] = 4;
+    configured.c_cc[libc::VINTR] = 3;
+    configured.c_cc[libc::VQUIT] = 28;
+    configured.c_cc[libc::VSUSP] = 26;
+    configured.c_cc[libc::VEOL] = 0;
+    configured.c_cc[libc::VEOL2] = 0;
+    configured
+}
+
 fn native_line_discipline(fd: RawFd) -> Result<()> {
     let mut discipline: libc::c_int = -1;
     // SAFETY: TIOCGETD writes one c_int to the live output pointer.
@@ -151,33 +179,20 @@ pub(crate) struct Terminal {
 
 impl Terminal {
     pub(crate) fn open() -> Result<Self> {
-        Self::from_retained(AttendedUnlockTerminal::open()?)
+        Self::from_retained(AttendedUnlockTerminal::open()?, false)
     }
 
-    pub(crate) fn from_retained(terminal: AttendedUnlockTerminal) -> Result<Self> {
+    /// Takes over a validated terminal for one canonical line. Secrets are
+    /// read with `echo` off; a line the operator must see, such as a typed
+    /// confirmation, with it on. The original attributes are restored either way.
+    pub(crate) fn from_retained(terminal: AttendedUnlockTerminal, echo: bool) -> Result<Self> {
         terminal.validate()?;
         let AttendedUnlockTerminal { tty } = terminal;
         let original = attributes(tty.as_raw_fd())?;
         if original.c_line != 0 {
             return Err(());
         }
-        let mut configured = original;
-        configured.c_lflag |= libc::ICANON | libc::ISIG;
-        configured.c_lflag &= !(ECHO_FLAGS | libc::IEXTEN);
-        configured.c_iflag &= !(libc::ISTRIP
-            | libc::INLCR
-            | libc::IGNCR
-            | libc::PARMRK
-            | libc::IUCLC
-            | libc::IXON
-            | libc::IXOFF);
-        configured.c_iflag |= libc::ICRNL;
-        configured.c_cc[libc::VEOF] = 4;
-        configured.c_cc[libc::VINTR] = 3;
-        configured.c_cc[libc::VQUIT] = 28;
-        configured.c_cc[libc::VSUSP] = 26;
-        configured.c_cc[libc::VEOL] = 0;
-        configured.c_cc[libc::VEOL2] = 0;
+        let configured = configured(&original, echo);
 
         let blocked = signal_set()?;
         let mut old_mask = MaybeUninit::<libc::sigset_t>::uninit();
@@ -473,7 +488,42 @@ pub(crate) fn read_existing_unlock() -> Result<AttendedUnlockInput> {
 
 #[cfg(test)]
 mod tests {
-    use super::{validate_existing_unlock_encoding, validate_line, AttendedUnlockTerminal};
+    use super::{
+        configured, same_attributes, validate_existing_unlock_encoding, validate_line,
+        AttendedUnlockTerminal, ECHO_FLAGS,
+    };
+
+    #[test]
+    fn a_secret_line_is_read_without_echo_and_a_visible_line_with_it() {
+        // SAFETY: termios is plain data and all zero bytes is a valid value.
+        let mut original: libc::termios = unsafe { std::mem::zeroed() };
+        original.c_lflag = ECHO_FLAGS | libc::IEXTEN;
+        original.c_iflag = libc::IXON | libc::INLCR;
+        original.c_oflag = 0o5;
+        original.c_cflag = 0o1234;
+        let secret = configured(&original, false);
+        let visible = configured(&original, true);
+        for value in [&secret, &visible] {
+            let canonical = libc::ICANON | libc::ISIG;
+            assert_eq!(value.c_lflag & canonical, canonical);
+            assert_eq!(
+                value.c_lflag & (libc::IEXTEN | libc::ECHOCTL | libc::ECHOPRT),
+                0
+            );
+            assert_eq!(value.c_iflag, libc::ICRNL);
+            assert_eq!(value.c_oflag, original.c_oflag);
+            assert_eq!(value.c_cflag, original.c_cflag);
+            assert_eq!(value.c_cc[libc::VINTR], 3);
+            assert_eq!(value.c_cc[libc::VEOF], 4);
+        }
+        assert_eq!(secret.c_lflag & ECHO_FLAGS, 0);
+        let echo = libc::ECHO | libc::ECHOE | libc::ECHOK;
+        assert_eq!(visible.c_lflag & ECHO_FLAGS, echo);
+        // Secret and visible lines differ in echo alone.
+        let mut hidden = visible;
+        hidden.c_lflag &= !echo;
+        assert!(same_attributes(&hidden, &secret));
+    }
 
     #[test]
     fn attended_unlock_terminal_refuses_a_nonterminal_descriptor() {

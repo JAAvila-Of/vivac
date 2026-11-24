@@ -188,6 +188,27 @@ impl CandidateTombstone {
         Ok(directory)
     }
 
+    pub fn has_opening_directory(&self) -> io::Result<bool> {
+        self.validate()?;
+        let present = self.root.has_opening_directory()?;
+        self.validate()?;
+        Ok(present)
+    }
+
+    pub fn has_endpoint_directory(&self) -> io::Result<bool> {
+        self.validate()?;
+        let present = self.root.endpoint_directory()?.is_some();
+        self.validate()?;
+        Ok(present)
+    }
+
+    pub fn has_session_directory(&self) -> io::Result<bool> {
+        self.validate()?;
+        let present = self.root.session_directory()?.is_some();
+        self.validate()?;
+        Ok(present)
+    }
+
     pub fn with_opening_location<T>(
         &self,
         operation: impl FnOnce(&CStr, OwnedFd) -> io::Result<T>,

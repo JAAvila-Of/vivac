@@ -480,6 +480,25 @@ impl CandidateRoot {
         self.child_descriptor(8)
     }
 
+    /// Whether the opening collection name resolves. Only `ENOENT` is
+    /// absence; a present entry that is not the collection is refused when it
+    /// is opened for work.
+    pub fn has_opening_directory(&self) -> io::Result<bool> {
+        self.validate()?;
+        let present = match open_at(
+            self.directories[7].descriptor.as_raw_fd(),
+            c"openings-v1",
+            true,
+            true,
+        ) {
+            Ok(_) => true,
+            Err(error) if error.raw_os_error() == Some(libc::ENOENT) => false,
+            Err(error) => return Err(error),
+        };
+        self.validate()?;
+        Ok(present)
+    }
+
     /// Runs storage work beneath the checked account opening collection.
     pub fn with_opening_directory<T>(
         &self,

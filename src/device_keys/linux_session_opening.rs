@@ -42,6 +42,8 @@ const CANCELLATION_INTERVAL: Duration = Duration::from_millis(20);
 pub(crate) enum RefusalHint {
     EnableLinger { account: String },
     CloseFirst,
+    ProvisionEndpoints,
+    ProvisionSessions,
 }
 
 impl RefusalHint {
@@ -51,6 +53,12 @@ impl RefusalHint {
                 format!("Run loginctl enable-linger {account} as an administrator, then retry.")
             }
             Self::CloseFirst => format!("Run vivac device-key close-linux {credential} first."),
+            Self::ProvisionEndpoints => {
+                "Run vivac device-key provision-linux-endpoints, then retry.".to_owned()
+            }
+            Self::ProvisionSessions => {
+                "Run vivac device-key provision-linux-sessions, then retry.".to_owned()
+            }
         }
     }
 
