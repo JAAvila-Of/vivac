@@ -33,8 +33,13 @@ permit; a session also closes itself when idle or too old. A session lost to a
 crash or power cut is reopened with the secret once the kernel shows that its
 processes are gone. `vivac device-key verify-linux-possession <credential-id>
 [--json]` checks fresh local possession in a separate process without needing
-a terminal. See the [Linux custody CLI](LINUX-CUSTODY-CLI.md) for exit codes
-and the receipt statuses that distinguish interruption and uncertain storage.
+a terminal. `vivac device-key retire-linux <credential-id> [--json]` deletes
+the encrypted key and the credential's custody state from the account after
+the operator types the credential ID; a retirement interrupted after it starts
+leaves the credential unavailable and is finished by running it again. The
+team revokes the credential separately. See the
+[Linux custody CLI](LINUX-CUSTODY-CLI.md) for exit codes and the receipt
+statuses that distinguish interruption and uncertain storage.
 
 On macOS, creation requires an existing private parent directory and a
 controlling terminal. It asks for a new passphrase and confirmation, with

@@ -176,6 +176,8 @@ possession at the time of the exchange. The command grants no reusable
 capability. The proof exchange has no operation for changing custody or
 signing an enrollment challenge.
 
+The discoverable endpoint is set to mode 0600 as soon as it is bound, before
+it accepts a connection, so its mode does not depend on the account's umask.
 A listener that replaces the discoverable endpoint is refused. The supervisor
 ends the session once its endpoint location changes, and the keeper closes it
 and republishes the permit.
@@ -198,8 +200,11 @@ Before changing anything, the command requires, in this order:
   them is refused. Partial creation state needs its own procedure;
 - no open session: either no session record, or reopening evidence for the
   recorded one. An open session is refused and the command names `close-linux`;
-- the exclusive credential reservation. A held reservation, such as another
-  retirement, is refused without waiting or retrying;
+- the exclusive credential reservation, and an exclusive lock on the
+  admission directory, which the tombstone keeps after the commit rename
+  because it is the same directory. Either one held elsewhere, such as by
+  another retirement, is refused without waiting or retrying. Both last at
+  least until the step that removes their directory ends;
 - for the permit, the endpoint name and the session record, either no entry or
   an entry of the expected type, owner, mode and link count. Any other object
   under those names is refused.
@@ -224,7 +229,8 @@ removes recursively or removes an unexpected member. It proceeds in this order:
 3. Remove the endpoint socket if present, then synchronize `endpoints-v1`.
 4. Remove the session record if present, then synchronize `sessions-v1`.
 5. Remove `key.openssh` and `manifest.json`, then the package directory, then
-   synchronize `packages`. The reservation is held until this step ends.
+   synchronize `packages`. The reservation is held at least until this step
+   ends.
 6. Remove the tombstone's `record.json` and the tombstone, then synchronize the
    admissions directory.
 
@@ -239,9 +245,29 @@ stays unavailable. Running `retire-linux` again with the same ID finds the
 tombstone and no admission. It requires the terminal and the typed
 confirmation again, synchronizes the admissions directory, validates what
 remains against the tombstone's record, and continues from the first object
-still present. If both the admission and the tombstone exist, the command
-refuses and touches neither. An object that no longer matches the retained
-identity stops the retirement and remains in place.
+still present. It also synchronizes the collection of each step it skips,
+because the earlier run may have removed an entry without making the removal
+durable. If both the admission and the tombstone exist, the command refuses
+and touches neither. An object that no longer matches the retained identity
+stops the retirement and remains in place.
+
+A removal renames its object aside before unlinking it, so a crash can leave
+a `.removing-` name behind. Inside the package directory or the tombstone, a
+resumed retirement removes such an object only when it validates against the
+tombstone's record as one of its members, by type, owner, mode, link count,
+length and digest; anything else refuses and stays in place. In the shared
+collections the named entry is already gone, so its step counts as done and
+the collection is not scanned. An empty `.removing-` directory left in
+`packages` or `admissions` by a crash during the last removal of a step blocks
+no credential and is not removed.
+
+A crash during step 6 can leave the tombstone without its `record.json`, or
+with the record renamed aside. The command resumes such a tombstone only when
+it is empty, or holds only that aside and the aside parses as this
+credential's canonical record, with the expected owner and mode, and no
+permit, endpoint, session record or package remains. It then shows that the
+retirement is finishing and removes what is left of the tombstone. Any other
+tombstone without its record is refused.
 
 Retirement does not claim:
 
