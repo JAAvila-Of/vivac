@@ -81,6 +81,9 @@ mod linux_custody_anchor;
 #[path = "device_keys/linux_custody_provision.rs"]
 mod linux_custody_provision;
 #[cfg(target_os = "linux")]
+#[path = "device_keys/linux_custody_retirement.rs"]
+mod linux_custody_retirement;
+#[cfg(target_os = "linux")]
 #[path = "device_keys/linux_custody_root.rs"]
 mod linux_custody_root;
 #[cfg(target_os = "linux")]

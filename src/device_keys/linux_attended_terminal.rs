@@ -154,7 +154,7 @@ impl Terminal {
         Self::from_retained(AttendedUnlockTerminal::open()?)
     }
 
-    fn from_retained(terminal: AttendedUnlockTerminal) -> Result<Self> {
+    pub(crate) fn from_retained(terminal: AttendedUnlockTerminal) -> Result<Self> {
         terminal.validate()?;
         let AttendedUnlockTerminal { tty } = terminal;
         let original = attributes(tty.as_raw_fd())?;

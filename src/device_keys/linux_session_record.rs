@@ -310,7 +310,7 @@ fn hex(digest: &[u8; 32]) -> String {
 
 /// Reads the record for `credential` and refuses one that belongs to another
 /// credential or another admission; the file is left untouched either way.
-fn read_checked(
+pub(crate) fn read_checked(
     directory: &OwnedFd,
     name: &CStr,
     ids: (u32, u32),

@@ -1205,6 +1205,7 @@ differentiator
 differently
 differs
 diffing
+digest
 digests
 digit
 digits
@@ -2274,6 +2275,7 @@ joined
 joiner
 joining
 joins
+joint
 journal
 js
 json
@@ -2875,6 +2877,7 @@ operates
 operating
 operation
 operations
+operator
 opinion
 opposed
 opposite
@@ -3704,6 +3707,7 @@ retained
 retaining
 retains
 retirable
+retire
 retired
 retirement
 retires

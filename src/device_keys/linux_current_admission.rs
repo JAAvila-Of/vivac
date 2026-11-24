@@ -228,6 +228,16 @@ impl CurrentAdmission {
         result
     }
 
+    pub fn with_opening_location<T>(
+        &self,
+        operation: impl FnOnce(&CStr, OwnedFd) -> io::Result<T>,
+    ) -> io::Result<T> {
+        self.validate()?;
+        let result = self.candidate.with_opening_location(operation);
+        self.validate()?;
+        result
+    }
+
     pub fn has_session_directory(&self) -> io::Result<bool> {
         self.validate()?;
         let result = self.candidate.has_session_directory();

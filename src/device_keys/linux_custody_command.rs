@@ -1,4 +1,5 @@
 use super::deliver_linux_reply;
+use crate::linux_custody_retirement::{self, RetireOutcome};
 use crate::linux_resident_reader;
 use crate::linux_session_closing::{self, CloseOutcome};
 use crate::linux_session_opening::{self, OpeningOutcome, RefusalHint};
@@ -10,7 +11,8 @@ use std::io::{self, Write};
 pub(super) const USAGE: &str = "vivac device-key open-linux <credential-id> [--json]\n\
 vivac device-key close-linux <credential-id> [--json]\n\
 vivac device-key verify-linux-possession <credential-id> [--json]\n\
-Open or close attended Linux custody or verify fresh local possession by credential ID.";
+vivac device-key retire-linux <credential-id> [--json]\n\
+Open, close or retire attended Linux custody, or verify fresh local possession, by credential ID.";
 
 fn parse(arguments: impl Iterator<Item = OsString>) -> Option<(String, bool)> {
     let mut credential = None;
@@ -56,6 +58,14 @@ fn closing_result(credential: &str) -> (&'static str, i32) {
     }
 }
 
+fn retirement_result(credential: &str) -> (&'static str, i32, Option<RefusalHint>) {
+    match linux_custody_retirement::retire(credential) {
+        RetireOutcome::Retired => ("retired", 0, None),
+        RetireOutcome::Refused(hint) => ("refused", 1, hint),
+        RetireOutcome::RetirementIncomplete => ("retirement_incomplete", 5, None),
+    }
+}
+
 /// The remedy of a refusal, only once its receipt reached the user: a remedy
 /// printed before "receipt delivery failed" reads as the answer.
 fn remedy_line(credential: &str, hint: Option<RefusalHint>, delivered: bool) -> Option<String> {
@@ -97,7 +107,9 @@ pub(crate) fn dispatch() -> Option<i32> {
     }
     let command = arguments.next()?;
     let operation = match command.to_str() {
-        Some(operation @ ("open-linux" | "close-linux" | "verify-linux-possession")) => operation,
+        Some(
+            operation @ ("open-linux" | "close-linux" | "verify-linux-possession" | "retire-linux"),
+        ) => operation,
         Some(_) => return None,
         None => {
             let _ = io::stderr()
@@ -115,6 +127,8 @@ pub(crate) fn dispatch() -> Option<i32> {
     let (status, code, hint) = if operation == "close-linux" {
         let (status, code) = closing_result(&credential);
         (status, code, None)
+    } else if operation == "retire-linux" {
+        retirement_result(&credential)
     } else if operation == "open-linux" {
         let Ok(limits) = SessionLimits::from_environment() else {
             let _ = io::stderr()

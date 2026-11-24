@@ -13,9 +13,13 @@ fn command(operation: &str) -> Command {
 }
 
 fn unattended_command() -> Command {
+    unattended("open-linux")
+}
+
+fn unattended(operation: &str) -> Command {
     use std::os::unix::process::CommandExt;
 
-    let mut invocation = command("open-linux");
+    let mut invocation = command(operation);
     invocation.args([CREDENTIAL, "--json"]).stdin(Stdio::null());
     // SAFETY: setsid is async-signal-safe and the child owns its new session.
     unsafe {
@@ -40,7 +44,12 @@ fn custody_commands_reject_malformed_inputs_before_access() {
     assert!(output.stdout.is_empty());
     assert_eq!(output.stderr, b"Specify a valid device-key command.\n");
 
-    for operation in ["open-linux", "close-linux", "verify-linux-possession"] {
+    for operation in [
+        "open-linux",
+        "close-linux",
+        "verify-linux-possession",
+        "retire-linux",
+    ] {
         for arguments in [
             vec![],
             vec![""],
@@ -116,6 +125,7 @@ fn device_key_help_advertises_linux_custody_commands() {
     assert!(help.contains("vivac device-key open-linux <credential-id> [--json]"));
     assert!(help.contains("vivac device-key close-linux <credential-id> [--json]"));
     assert!(help.contains("vivac device-key verify-linux-possession <credential-id> [--json]"));
+    assert!(help.contains("vivac device-key retire-linux <credential-id> [--json]"));
 }
 
 #[test]
@@ -127,6 +137,18 @@ fn close_without_a_provisioned_store_is_refused() {
         .unwrap();
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stderr.is_empty());
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap(),
+        serde_json::json!({"credential_id": CREDENTIAL, "status": "refused"})
+    );
+}
+
+#[test]
+fn retirement_without_a_terminal_is_refused() {
+    let output = unattended("retire-linux").output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stderr.is_empty());
+    assert_eq!(output.stdout.last(), Some(&b'\n'));
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap(),
         serde_json::json!({"credential_id": CREDENTIAL, "status": "refused"})

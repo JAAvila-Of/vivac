@@ -2884,6 +2884,7 @@ remains
 remedy
 remembered
 remembers
+reminder
 remote
 removable
 removal

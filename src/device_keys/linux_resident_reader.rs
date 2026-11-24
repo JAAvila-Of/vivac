@@ -6,6 +6,9 @@ use std::ffi::{CStr, CString};
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
 
+#[path = "linux_resident_reader/tombstone.rs"]
+pub mod tombstone;
+
 const OPENING_PERMIT_SIZE: usize = 48;
 
 /// State observed by the disposable reader. This cannot permit an unlock.
@@ -228,19 +231,24 @@ fn stat_with_links(
     }
     // SAFETY: statx succeeded.
     let value = unsafe { value.assume_init() };
-    require(
-        value.stx_mask & mask == mask
-            && (value.stx_uid, value.stx_gid) == ids
-            && u32::from(value.stx_mode) & libc::S_IFMT
-                == if directory {
-                    libc::S_IFDIR
-                } else {
-                    libc::S_IFREG
-                }
-            && value.stx_mode & 0o7777 == if directory { 0o700 } else { 0o600 }
-            && (directory || value.stx_nlink == links),
-    )?;
+    require(expected_entry(&value, directory, ids, links))?;
     Ok(value)
+}
+
+/// The owner, type, mode and, for a file, link count every custody entry
+/// must have: a private directory or a private single-link regular file.
+fn expected_entry(value: &libc::statx, directory: bool, ids: (u32, u32), links: u32) -> bool {
+    let mask = libc::STATX_BASIC_STATS | libc::STATX_MNT_ID;
+    value.stx_mask & mask == mask
+        && (value.stx_uid, value.stx_gid) == ids
+        && u32::from(value.stx_mode) & libc::S_IFMT
+            == if directory {
+                libc::S_IFDIR
+            } else {
+                libc::S_IFREG
+            }
+        && value.stx_mode & 0o7777 == if directory { 0o700 } else { 0o600 }
+        && (directory || value.stx_nlink == links)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -433,6 +441,15 @@ impl FileSnapshot {
 }
 
 fn shape(directory: i32, expected: &[&CStr]) -> io::Result<()> {
+    require(
+        members(directory, expected)?
+            .into_iter()
+            .all(|present| present),
+    )
+}
+
+/// Which of `expected` the directory holds. Any other name is refused.
+fn members(directory: i32, expected: &[&CStr]) -> io::Result<Vec<bool>> {
     let fd = open_at(directory, c".", true)?;
     let raw = fd.into_raw_fd();
     // SAFETY: fdopendir takes ownership of this fresh directory descriptor on success.
@@ -466,7 +483,7 @@ fn shape(directory: i32, expected: &[&CStr]) -> io::Result<()> {
             if error.raw_os_error() != Some(0) {
                 return Err(error);
             }
-            return require(seen.into_iter().all(|value| value));
+            return Ok(seen);
         }
         // SAFETY: the successful readdir entry contains a terminated d_name.
         let name = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()) };
@@ -531,6 +548,36 @@ fn entry_absent(directory: libc::c_int, name: &CStr) -> io::Result<bool> {
     }
 }
 
+/// The package directory of `credential`, checked for owner, mode and
+/// filesystem before anything relies on it, the credential reservation
+/// included.
+fn capture_package(
+    packages: &Directory,
+    credential: &CStr,
+    ids: (u32, u32),
+) -> io::Result<Directory> {
+    let package = Directory::capture(
+        open_at(packages.fd.as_raw_fd(), credential, true)?,
+        ids,
+        true,
+    )?;
+    packages.identity.same_filesystem(&package.identity)?;
+    Ok(package)
+}
+
+/// A fresh descriptor for a retained directory.
+fn duplicate_retained(directory: &Directory) -> io::Result<OwnedFd> {
+    // SAFETY: fcntl duplicates the retained capability atomically.
+    let raw = unsafe { libc::fcntl(directory.fd.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 3) };
+    if raw < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: successful fcntl returned a fresh owned descriptor.
+    let duplicate = unsafe { OwnedFd::from_raw_fd(raw) };
+    descriptor(duplicate.as_raw_fd())?;
+    Ok(duplicate)
+}
+
 /// Read-only resident candidate; it supplies no producer evidence or admission.
 pub struct CandidateResident {
     root: CandidateRoot,
@@ -569,12 +616,7 @@ impl CandidateResident {
         )?;
         let packages = Directory::capture(root.packages_descriptor()?, ids, false)?;
         admissions.identity.same_filesystem(&packages.identity)?;
-        let package = Directory::capture(
-            open_at(packages.fd.as_raw_fd(), &credential, true)?,
-            ids,
-            true,
-        )?;
-        packages.identity.same_filesystem(&package.identity)?;
+        let package = capture_package(&packages, &credential, ids)?;
         shape(package.fd.as_raw_fd(), &[c"key.openssh", c"manifest.json"])?;
         let key_file = FileSnapshot::capture(&package, c"key.openssh", ids, 65536)?;
         let manifest_file = FileSnapshot::capture(&package, c"manifest.json", ids, 2048)?;
@@ -633,6 +675,20 @@ impl CandidateResident {
         let result = self
             .root
             .with_session_directory(|directory| operation(&self.credential, directory));
+        self.validate()?;
+        result
+    }
+
+    /// Runs `operation` on the opening collection and the permit name, which
+    /// it may hold or not; nothing here reads or validates a permit.
+    pub fn with_opening_location<T>(
+        &self,
+        operation: impl FnOnce(&CStr, OwnedFd) -> io::Result<T>,
+    ) -> io::Result<T> {
+        self.validate()?;
+        let result = self.root.with_opening_directory(|directory| {
+            operation(&self.credential, directory.try_clone()?)
+        });
         self.validate()?;
         result
     }
@@ -789,14 +845,7 @@ impl CandidateResident {
     /// the credential reservation.
     pub(super) fn package_directory(&self) -> io::Result<OwnedFd> {
         self.validate()?;
-        // SAFETY: fcntl duplicates the retained package capability atomically.
-        let raw = unsafe { libc::fcntl(self.package.fd.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 3) };
-        if raw < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        // SAFETY: successful fcntl returned a fresh owned descriptor.
-        let directory = unsafe { OwnedFd::from_raw_fd(raw) };
-        descriptor(directory.as_raw_fd())?;
+        let directory = duplicate_retained(&self.package)?;
         self.validate()?;
         Ok(directory)
     }
@@ -957,14 +1006,15 @@ mod opening_permit_tests {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
 
-    const KEY: &[u8] = include_bytes!("../../tests/data/linux-resident/key.openssh");
-    const MANIFEST: &[u8] = include_bytes!("../../tests/data/linux-resident/manifest.json");
-    const INSTALLATION: &str = "00000000000000000000000001";
+    pub(super) const KEY: &[u8] = include_bytes!("../../tests/data/linux-resident/key.openssh");
+    pub(super) const MANIFEST: &[u8] =
+        include_bytes!("../../tests/data/linux-resident/manifest.json");
+    pub(super) const INSTALLATION: &str = "00000000000000000000000001";
 
-    fn fixture_record() -> Record {
+    pub(super) fn fixture_record() -> Record {
         let manifest = package::validate_bytes(KEY, MANIFEST).unwrap();
         let record = Record {
             version: 2,
@@ -1114,6 +1164,49 @@ mod tests {
         ] {
             assert!(!identifier(value), "accepted unsafe selector {value:?}");
         }
+    }
+
+    fn statx(mode: u32, links: u32, owner: (u32, u32)) -> libc::statx {
+        // SAFETY: statx is plain data and all zero bytes is a valid value.
+        let mut value: libc::statx = unsafe { std::mem::zeroed() };
+        value.stx_mask = libc::STATX_BASIC_STATS | libc::STATX_MNT_ID;
+        value.stx_mode = mode as u16;
+        value.stx_nlink = links;
+        value.stx_uid = owner.0;
+        value.stx_gid = owner.1;
+        value
+    }
+
+    /// A package directory is captured through this policy before the
+    /// credential reservation is taken on it, so a package directory with
+    /// another owner or mode refuses before anything relies on it.
+    #[test]
+    fn a_package_directory_with_another_owner_or_mode_is_refused() {
+        let ids = (1000, 1000);
+        assert!(expected_entry(
+            &statx(libc::S_IFDIR | 0o700, 2, ids),
+            true,
+            ids,
+            1
+        ));
+        for refused in [
+            statx(libc::S_IFDIR | 0o755, 2, ids),
+            statx(libc::S_IFDIR | 0o711, 2, ids),
+            statx(libc::S_IFDIR | 0o1700, 2, ids),
+            statx(libc::S_IFDIR | 0o700, 2, (1001, 1000)),
+            statx(libc::S_IFDIR | 0o700, 2, (1000, 1001)),
+            statx(libc::S_IFLNK | 0o700, 1, ids),
+            statx(libc::S_IFREG | 0o700, 1, ids),
+        ] {
+            assert!(
+                !expected_entry(&refused, true, ids, 1),
+                "{:o}",
+                refused.stx_mode
+            );
+        }
+        let mut incomplete = statx(libc::S_IFDIR | 0o700, 2, ids);
+        incomplete.stx_mask = libc::STATX_BASIC_STATS;
+        assert!(!expected_entry(&incomplete, true, ids, 1));
     }
 
     #[test]
