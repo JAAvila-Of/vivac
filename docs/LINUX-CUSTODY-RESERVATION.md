@@ -9,8 +9,15 @@ discovery, requests and session replacement.
 
 ## Acquisition and scope
 
-StoreReservation first validates the PackageLease and captures an independent
-lease snapshot. It opens `.` relative to the anchored directory with
+StoreReservation has two forms. The lease form first validates the
+PackageLease and captures an independent lease snapshot. The directory form
+starts from an already anchored directory descriptor: it checks that the
+descriptor is a directory and records its identity, and captures no lease
+snapshot. Spawn gates require the snapshot, so they refuse a directory-form
+reservation. The session keeper's startup, republication of a permit without
+an adopted lease, and both retirement locks, on the package directory and on
+the admission directory, use the directory form. Both forms then follow the
+rest of this section. Each opens `.` relative to the anchored directory with
 O_DIRECTORY, O_NOFOLLOW and O_CLOEXEC. This fresh open creates a separate open
 file description: duplicating the caller's descriptor would share its lock
 and could let contenders appear to acquire the same reservation.
