@@ -79,12 +79,14 @@ const SIGNALS: [libc::c_int; 7] = [
 ];
 
 pub(crate) fn attributes(fd: RawFd) -> Result<libc::termios> {
-    let mut value = MaybeUninit::<libc::termios>::uninit();
+    // musl's tcgetattr writes only the part the kernel reports, which ends
+    // inside `c_cc`; the rest keeps what the buffer held, so it starts zeroed.
+    let mut value = MaybeUninit::<libc::termios>::zeroed();
     // SAFETY: fd remains owned and value is writable for one complete termios.
     if unsafe { libc::tcgetattr(fd, value.as_mut_ptr()) } != 0 {
         return Err(());
     }
-    // SAFETY: successful tcgetattr initialized the complete termios value.
+    // SAFETY: the value started zeroed, and tcgetattr succeeded.
     Ok(unsafe { value.assume_init() })
 }
 
@@ -505,9 +507,33 @@ pub(crate) fn read_existing_unlock() -> Result<AttendedUnlockInput> {
 #[cfg(test)]
 mod tests {
     use super::{
-        configured, same_attributes, validate_existing_unlock_encoding, validate_line,
+        attributes, configured, same_attributes, validate_existing_unlock_encoding, validate_line,
         AttendedUnlockTerminal, ECHO_FLAGS,
     };
+
+    /// Leaves `byte` in a stretch of stack that the next call reuses.
+    #[inline(never)]
+    fn fill_stack(byte: u8) {
+        let mut stack = [byte; 8192];
+        std::hint::black_box(&mut stack);
+    }
+
+    #[test]
+    fn reading_the_same_terminal_twice_gives_the_same_attributes() {
+        // A terminal master reports the attributes of its terminal.
+        // SAFETY: posix_openpt returns a fresh descriptor or fails.
+        let master = unsafe { libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC) };
+        assert!(master >= 0);
+        // The kernel's record is shorter than the C library's: musl writes only
+        // the kernel's part, so whatever was in the buffer before must not count.
+        fill_stack(0xaa);
+        let first = attributes(master).unwrap();
+        fill_stack(0x55);
+        let second = attributes(master).unwrap();
+        assert!(same_attributes(&first, &second));
+        // SAFETY: the test owns the descriptor.
+        unsafe { libc::close(master) };
+    }
 
     #[test]
     fn a_secret_line_is_read_without_echo_and_a_visible_line_with_it() {

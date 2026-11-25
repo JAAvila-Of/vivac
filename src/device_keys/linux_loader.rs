@@ -279,12 +279,13 @@ impl PtyLoader {
     }
 
     fn validate_terminal(&self) -> io::Result<()> {
-        let mut attributes = MaybeUninit::<libc::termios>::uninit();
+        // Zeroed: musl's tcgetattr writes only the part the kernel reports.
+        let mut attributes = MaybeUninit::<libc::termios>::zeroed();
         // SAFETY: the owned master is live and output fits one termios.
         if unsafe { libc::tcgetattr(self.master.as_raw_fd(), attributes.as_mut_ptr()) } != 0 {
             return Err(io::Error::last_os_error());
         }
-        // SAFETY: successful tcgetattr initialized the complete value.
+        // SAFETY: the value started zeroed, and tcgetattr succeeded.
         let attributes = unsafe { attributes.assume_init() };
         // SAFETY: these calls only query terminal/session identities.
         let session = unsafe { libc::tcgetsid(self.master.as_raw_fd()) };
