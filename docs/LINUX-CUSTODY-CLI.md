@@ -46,7 +46,7 @@ up once:
 
 - lingering, so the user manager keeps running without a login session. Without
   it, `open-linux` refuses and names the command an administrator runs:
-  `loginctl enable-linger <account>`;
+  `loginctl enable-linger <account>`. `close-linux` does not check it;
 - the `sessions-v1` collection, added by the
   [session collection extension](LINUX-CUSTODY-PROVISIONING.md#session-collection-extension)
   in the same way as `endpoints-v1`.
@@ -122,13 +122,35 @@ A stop request from the service manager, including system shutdown, is a clean
 close request too. The unit allows the keeper 30 seconds to publish before the
 manager kills it.
 
-If the keeper is gone, `close-linux` asks the service manager to stop the
-recorded unit, which ends every process in it, and confirms that the unit's
-cgroup no longer exists or is empty. It then reports `interrupted`: no permit
-was published, and the next `open-linux` reopens with that evidence. When it
-can confirm neither a keeper's outcome nor an ended unit, it reports
-`close_uncertain`. Signals to `close-linux`, and the end of the 30-second stop
-budget, cancel a close before its permit rename is authorized.
+A `close-linux` that connects while the keeper is already closing, for expiry,
+a stop request, another `close-linux` or a failed opening, receives the outcome
+of that close. After answering them the keeper accepts no further connection,
+and a later `close-linux` proceeds as below.
+
+If no keeper can be reached and authenticated on the control socket,
+`close-linux` asks the service manager to stop the recorded unit, which ends
+every process in it. A keeper that was alive but unreachable closes as on any
+stop request. `close-linux` then confirms that the unit's cgroup no longer
+exists or is empty, and reads what is stored:
+
+| Stored after the stop | Status |
+| --- | --- |
+| An opening permit that validates, and no session record | `closed` |
+| An opening permit that validates, and the session record | `publication_uncertain` |
+| No opening permit | `interrupted` |
+| A read that fails, or a permit that does not validate | `close_uncertain` |
+
+The keeper removes the record only after a durable, validated publication, so
+a valid permit without a record is a completed close. A record beside a valid
+permit is left by a keeper that published but could not remove the record, or
+by one lost before the opening consumed the permit. This attempt cannot tell
+which, nor show that the publication was durable; the record stays, and the
+next `open-linux` opens from the permit and retires the record on the kernel
+evidence. Without a permit, the next `open-linux` reopens with that evidence.
+When it can confirm neither a keeper's outcome nor an ended unit,
+`close-linux` reports `close_uncertain`. Signals to `close-linux`, and the end
+of the 30-second stop budget, cancel a close before its permit rename is
+authorized.
 
 ## Reopening after a lost session
 
@@ -311,7 +333,7 @@ modes. Device-key help advertises these commands on Linux.
 | `close-linux` | `closed` | 0 | The session's processes are gone and a new opening permit was published durably and validated. |
 | `close-linux` | `refused` | 1 | No session for this ID is open in this account. Nothing changed. |
 | `close-linux` | `interrupted` | 5 | The session ended without a published permit. The next `open-linux` reopens on the evidence above. |
-| `close-linux` | `publication_uncertain` | 5 | The exclusive rename happened, and durability or final identity validation could not be established. |
+| `close-linux` | `publication_uncertain` | 5 | An opening permit is in place, and this attempt could not establish that it was published durably and validated. |
 | `close-linux` | `close_uncertain` | 5 | Neither the keeper's outcome nor the end of the recorded unit could be confirmed. |
 | `verify-linux-possession` | `possession_verified` | 0 | The verifier validated fresh possession for the live local peer. |
 | `verify-linux-possession` | `refused` | 1 | The exchange failed to establish fresh local possession. |
@@ -346,7 +368,12 @@ opening automatically based on receipt absence.
 - Cancel during the prompt and during activation; expect `refused` and a
   republished permit. Close with `close-linux`, with a manager stop, and by idle
   and maximum expiry with shortened limits; expect a republished permit each
-  time.
+  time. Enter a wrong secret; expect `refused` within 5 seconds. Close with
+  lingering disabled, and close again while a close or an expiry close is
+  publishing; expect `closed` each time.
+- Close while the keeper's control socket cannot accept; expect `closed`.
+  Leave a session record beside a published permit; expect
+  `publication_uncertain` from `close-linux`, then `open`.
 - Kill the keeper, then the whole unit, then power the VM off with a session
   open. Expect `interrupted` or no receipt, then `reopened` after the secret.
   With the session cgroup still populated, expect `refused` until
