@@ -258,7 +258,7 @@ impl ChildPidfdChannel {
         }
         let references = parse_control_credentials(
             &control,
-            super::control_length(message.msg_controllen)?,
+            super::control_length(message.msg_controllen),
             &expected,
             1,
         )?;
@@ -543,7 +543,7 @@ impl Transport {
             let size = size_of::<libc::c_int>() * references.len();
             // SAFETY: size is bounded to three descriptor words.
             message.msg_controllen = unsafe { libc::CMSG_SPACE(size as _) } as _;
-            if super::control_length(message.msg_controllen)? > size_of_val(&control) {
+            if super::control_length(message.msg_controllen) > size_of_val(&control) {
                 return Err(invalid());
             }
             message.msg_control = control.as_mut_ptr().cast();
@@ -650,8 +650,12 @@ impl Transport {
                 }
             }
             // Adopt or close every visible descriptor before checking any other failure.
-            let references = super::control_length(message.msg_controllen)
-                .and_then(|length| parse_control(&control, length, &self.peer, expected));
+            let references = parse_control(
+                &control,
+                super::control_length(message.msg_controllen),
+                &self.peer,
+                expected,
+            );
             self.check()?;
             let references = references?;
             if message.msg_flags & !libc::MSG_CMSG_CLOEXEC != 0 || count as usize != wire.len() {
@@ -2379,10 +2383,7 @@ fn parse_control_credentials(
     while length.saturating_sub(offset) >= header_size {
         // SAFETY: a complete header lies within initialized control storage.
         let header = unsafe { base.add(offset).cast::<libc::cmsghdr>().read_unaligned() };
-        let Ok(size) = super::control_length(header.cmsg_len) else {
-            rejected = true;
-            break;
-        };
+        let size = super::control_length(header.cmsg_len);
         if size < data_offset {
             rejected = true;
             break;
@@ -3094,7 +3095,7 @@ mod tests {
             let mut header = libc::CMSG_FIRSTHDR(&message);
             while !header.is_null() {
                 if (*header).cmsg_type == libc::SCM_RIGHTS {
-                    let count = (super::super::control_length((*header).cmsg_len).unwrap()
+                    let count = (super::super::control_length((*header).cmsg_len)
                         - libc::CMSG_LEN(0) as usize)
                         / size_of::<i32>();
                     for index in 0..count {
@@ -3112,12 +3113,53 @@ mod tests {
         assert!(raw.len() > 2 && raw.len() < 80);
         assert!(parse_control(
             &received,
-            super::super::control_length(message.msg_controllen).unwrap(),
+            super::super::control_length(message.msg_controllen),
             &peer,
             2
         )
         .is_err());
         for descriptor in raw {
+            assert_closed(descriptor);
+        }
+    }
+
+    #[test]
+    fn adopted_rights_before_a_malformed_header_are_closed_on_rejection() {
+        use super::super::{as_control_length, packet_pair};
+        use std::mem::zeroed;
+
+        let (left, right) = packet_pair().unwrap();
+        let (first, second) = (left.into_raw_fd(), right.into_raw_fd());
+        let mut control = [0usize; 32];
+        // SAFETY: zero initializes optional fields; control is aligned ancillary storage.
+        let mut message: libc::msghdr = unsafe { zeroed() };
+        message.msg_control = control.as_mut_ptr().cast();
+        message.msg_controllen = as_control_length(size_of_val(&control)).unwrap();
+        // SAFETY: both headers and two descriptor words fit in aligned control storage.
+        unsafe {
+            let header = libc::CMSG_FIRSTHDR(&message);
+            (*header).cmsg_level = libc::SOL_SOCKET;
+            (*header).cmsg_type = libc::SCM_RIGHTS;
+            (*header).cmsg_len = libc::CMSG_LEN((2 * size_of::<i32>()) as _) as _;
+            let data = libc::CMSG_DATA(header).cast::<i32>();
+            data.write_unaligned(first);
+            data.add(1).write_unaligned(second);
+            let next = libc::CMSG_NXTHDR(&message, header);
+            (*next).cmsg_level = libc::SOL_SOCKET;
+            (*next).cmsg_type = libc::SCM_RIGHTS;
+            (*next).cmsg_len = 4;
+        }
+        // SAFETY: CMSG_SPACE only computes sizes.
+        let length = unsafe {
+            libc::CMSG_SPACE((2 * size_of::<i32>()) as _) as usize + libc::CMSG_SPACE(0) as usize
+        };
+        let peer = libc::ucred {
+            pid: 1,
+            uid: 0,
+            gid: 0,
+        };
+        assert!(parse_control_credentials(&control, length, &peer, 2).is_err());
+        for descriptor in [first, second] {
             assert_closed(descriptor);
         }
     }

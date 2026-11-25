@@ -28,10 +28,33 @@ pub(super) fn require_procfs(file: &File) -> io::Result<()> {
     }
     Ok(())
 }
-/// A control-message length as the C library stores it: `size_t` with
-/// glibc, `socklen_t` with musl. Both name the same kernel value.
-pub(crate) fn control_length<T: TryInto<usize>>(value: T) -> io::Result<usize> {
-    value.try_into().map_err(|_| invalid())
+/// The type in which the C library stores a control-message length:
+/// `size_t` with glibc, a 32-bit `socklen_t` with musl.
+pub(crate) trait ControlLength {
+    fn length(self) -> usize;
+}
+
+impl ControlLength for usize {
+    fn length(self) -> usize {
+        self
+    }
+}
+
+// Linux has no target with a `usize` narrower than 32 bits.
+const _: () = assert!(size_of::<usize>() >= size_of::<u32>());
+
+impl ControlLength for u32 {
+    fn length(self) -> usize {
+        // Nothing is lost: checked at compile time above.
+        self as usize
+    }
+}
+
+/// A control-message length as `usize`. The conversion cannot fail, so no
+/// received message is ever left without a parse, and no descriptor it carries is
+/// left open, for want of a length.
+pub(crate) fn control_length(value: impl ControlLength) -> usize {
+    value.length()
 }
 
 /// `value` in the C library's type for a control-message length.
@@ -808,8 +831,8 @@ impl Channel {
                 }
                 return Err(error);
             }
-            let ancillary = control_length(message.msg_controllen)
-                .and_then(|length| parse_control(&control, length, &self.peer));
+            let ancillary =
+                parse_control(&control, control_length(message.msg_controllen), &self.peer);
             self.check_live(deadline)?;
             ancillary?;
             if message.msg_flags & (libc::MSG_TRUNC | libc::MSG_CTRUNC) != 0
@@ -842,10 +865,7 @@ fn parse_control(control: &[usize; 32], length: usize, peer: &ExpectedPeer) -> i
     while length.saturating_sub(offset) >= header_size {
         // SAFETY: a complete header lies inside initialized aligned control storage.
         let header = unsafe { std::ptr::read_unaligned(base.add(offset).cast::<libc::cmsghdr>()) };
-        let Ok(size) = control_length(header.cmsg_len) else {
-            rejected = true;
-            break;
-        };
+        let size = control_length(header.cmsg_len);
         if size < data_offset {
             rejected = true;
             break;
@@ -1103,12 +1123,7 @@ mod tests {
             (*header).cmsg_len = libc::CMSG_LEN(size_of::<i32>() as _) as _;
             libc::CMSG_DATA(header).cast::<i32>().write(fd);
         }
-        assert!(parse_control(
-            &control,
-            control_length(message.msg_controllen).unwrap(),
-            &peer
-        )
-        .is_err());
+        assert!(parse_control(&control, control_length(message.msg_controllen), &peer).is_err());
         // SAFETY: F_GETFD queries whether the transferred descriptor remains open.
         assert_eq!(unsafe { libc::fcntl(fd, libc::F_GETFD) }, -1);
         assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::EBADF));
@@ -1130,7 +1145,7 @@ mod tests {
         message.msg_control = outbound.as_mut_ptr().cast();
         // SAFETY: CMSG_SPACE computes the buffer size for 80 descriptor words.
         message.msg_controllen = unsafe { libc::CMSG_SPACE((80 * size_of::<i32>()) as _) } as _;
-        assert!(control_length(message.msg_controllen).unwrap() <= size_of_val(&outbound));
+        assert!(control_length(message.msg_controllen) <= size_of_val(&outbound));
         // SAFETY: aligned outbound storage has sufficient room for the header and 80 words.
         unsafe {
             let header = libc::CMSG_FIRSTHDR(&message);
@@ -1164,8 +1179,7 @@ mod tests {
                 if (*header).cmsg_level == libc::SOL_SOCKET
                     && (*header).cmsg_type == libc::SCM_RIGHTS
                 {
-                    let words = (control_length((*header).cmsg_len).unwrap()
-                        - libc::CMSG_LEN(0) as usize)
+                    let words = (control_length((*header).cmsg_len) - libc::CMSG_LEN(0) as usize)
                         / size_of::<i32>();
                     for index in 0..words {
                         visible[count] = libc::CMSG_DATA(header).cast::<i32>().add(index).read();
@@ -1176,15 +1190,55 @@ mod tests {
             }
         }
         assert!(count > 0);
-        assert!(parse_control(
-            &inbound,
-            control_length(message.msg_controllen).unwrap(),
-            &peer
-        )
-        .is_err());
+        assert!(parse_control(&inbound, control_length(message.msg_controllen), &peer).is_err());
         for fd in &visible[..count] {
             // SAFETY: F_GETFD queries whether the received descriptor remains open.
             assert_eq!(unsafe { libc::fcntl(*fd, libc::F_GETFD) }, -1);
+            assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::EBADF));
+        }
+    }
+
+    #[test]
+    fn control_lengths_convert_without_loss() {
+        assert_eq!(control_length(u32::MAX), u32::MAX as usize);
+        assert_eq!(control_length(usize::MAX), usize::MAX);
+        assert_eq!(control_length(0_u32), 0);
+    }
+
+    #[test]
+    fn rights_before_a_malformed_header_are_closed_before_rejection() {
+        use std::os::fd::IntoRawFd;
+
+        let peer = self_peer();
+        let (left, right) = packet_pair().unwrap();
+        let (first, second) = (left.into_raw_fd(), right.into_raw_fd());
+        let mut control = [0usize; 32];
+        // SAFETY: zero initializes optional fields; control is aligned ancillary storage.
+        let mut message: libc::msghdr = unsafe { zeroed() };
+        message.msg_control = control.as_mut_ptr().cast();
+        message.msg_controllen = as_control_length(size_of_val(&control)).unwrap();
+        // SAFETY: both headers and two descriptor words fit in aligned control storage.
+        unsafe {
+            let header = libc::CMSG_FIRSTHDR(&message);
+            (*header).cmsg_level = libc::SOL_SOCKET;
+            (*header).cmsg_type = libc::SCM_RIGHTS;
+            (*header).cmsg_len = libc::CMSG_LEN((2 * size_of::<i32>()) as _) as _;
+            let data = libc::CMSG_DATA(header).cast::<i32>();
+            data.write_unaligned(first);
+            data.add(1).write_unaligned(second);
+            let next = libc::CMSG_NXTHDR(&message, header);
+            (*next).cmsg_level = libc::SOL_SOCKET;
+            (*next).cmsg_type = libc::SCM_RIGHTS;
+            (*next).cmsg_len = 4;
+        }
+        // SAFETY: CMSG_SPACE only computes sizes.
+        let length = unsafe {
+            libc::CMSG_SPACE((2 * size_of::<i32>()) as _) as usize + libc::CMSG_SPACE(0) as usize
+        };
+        assert!(parse_control(&control, length, &peer).is_err());
+        for fd in [first, second] {
+            // SAFETY: F_GETFD queries whether the transferred descriptor remains open.
+            assert_eq!(unsafe { libc::fcntl(fd, libc::F_GETFD) }, -1);
             assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::EBADF));
         }
     }
