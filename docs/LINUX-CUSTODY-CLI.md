@@ -124,8 +124,8 @@ manager kills it.
 
 A `close-linux` that connects while the keeper is already closing, for expiry,
 a stop request, another `close-linux` or a failed opening, receives the outcome
-of that close. After answering them the keeper accepts no further connection,
-and a later `close-linux` proceeds as below.
+of that close. Once its own close is decided the keeper accepts no new
+connection, and a later `close-linux` proceeds as below.
 
 If no keeper can be reached and authenticated on the control socket,
 `close-linux` asks the service manager to stop the recorded unit, which ends
@@ -140,15 +140,16 @@ exists or is empty, and reads what is stored:
 | No opening permit | `interrupted` |
 | A read that fails, or a permit that does not validate | `close_uncertain` |
 
-The keeper removes the record only after a durable, validated publication, so
-a valid permit without a record is a completed close. A record beside a valid
-permit is left by a keeper that published but could not remove the record, or
-by one lost before the opening consumed the permit. This attempt cannot tell
-which, nor show that the publication was durable; the record stays, and the
-next `open-linux` opens from the permit and retires the record on the kernel
-evidence. Without a permit, the next `open-linux` reopens with that evidence.
-When it can confirm neither a keeper's outcome nor an ended unit,
-`close-linux` reports `close_uncertain`. Signals to `close-linux`, and the end
+The keeper removes the record only after a durable, validated publication, or
+beside a permit that a failed opening never consumed, so a valid permit
+without a record leaves no session and an openable credential. A record beside
+a valid permit is left by a keeper that published but could not remove the
+record, or by one lost before the opening consumed the permit. This attempt
+cannot tell which, nor show that the publication was durable; the record
+stays, and the next `open-linux` opens from the permit and retires the record
+on the kernel evidence. Without a permit, the next `open-linux` reopens with
+that evidence. When it can confirm neither a keeper's outcome nor an ended
+unit, `close-linux` reports `close_uncertain`. Signals to `close-linux`, and the end
 of the 30-second stop budget, cancel a close before its permit rename is
 authorized.
 
@@ -330,7 +331,7 @@ modes. Device-key help advertises these commands on Linux.
 | `open-linux` | `opening_uncertain` | 5 | Contact with the session unit was lost after it could have consumed the permit, without confirmation of either outcome. |
 | `open-linux` | `interrupted` | 5 | No session is open and no permit was republished. The next `open-linux` reopens on the evidence above. |
 | `open-linux` | `publication_uncertain` | 5 | After a failed opening the permit rename happened, and durability or final identity validation could not be established. |
-| `close-linux` | `closed` | 0 | The session's processes are gone and a new opening permit was published durably and validated. |
+| `close-linux` | `closed` | 0 | The session's processes are gone, and a valid opening permit is in place: published durably by the close, or never consumed by a failed opening. |
 | `close-linux` | `refused` | 1 | No session for this ID is open in this account. Nothing changed. |
 | `close-linux` | `interrupted` | 5 | The session ended without a published permit. The next `open-linux` reopens on the evidence above. |
 | `close-linux` | `publication_uncertain` | 5 | An opening permit is in place, and this attempt could not establish that it was published durably and validated. |
