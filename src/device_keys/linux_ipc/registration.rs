@@ -26,7 +26,8 @@ use super::super::linux_current_admission::{
 use super::super::linux_session::NativeSession;
 use super::super::linux_session_cgroup::EmptySessionCgroup;
 use super::super::linux_spawn::{
-    new_session_generation, retained_process_exited, running_executable, OwnedChildRegistration,
+    new_session_generation, retained_process_exited, running_executable, wait_for_retained_exit,
+    OwnedChildRegistration,
 };
 
 #[path = "pidfd_identity.rs"]
@@ -1791,6 +1792,20 @@ impl KeeperAdoptedOffer {
         self.transport.check()?;
         self.confirmation = ConfirmationState::Sent;
         Ok(())
+    }
+
+    /// Waits, until `deadline`, for every retained reference to be reported
+    /// exited. After the session cgroup is reported empty this takes no longer
+    /// than the kernel needs to report each exit.
+    pub fn await_registered_exits(&self, deadline: Instant) -> io::Result<bool> {
+        for reference in
+            std::iter::once(&self.resources.supervisor).chain(&self.resources.offer.references)
+        {
+            if !wait_for_retained_exit(reference, deadline)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 
     /// Observes the retained references, independent of the confirmation channel.

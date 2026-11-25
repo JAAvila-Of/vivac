@@ -16,6 +16,9 @@ use std::os::fd::AsRawFd;
 use std::time::{Duration, Instant};
 
 const CLOSED_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long the exits of the session's processes may take to be reported
+/// once their cgroup is empty.
+const EXITS_REPORTED: Duration = Duration::from_secs(3);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum CloseReason {
@@ -169,6 +172,7 @@ pub(super) fn close_session(
         Ok(empty) => empty,
         Err(_) => return finish(keeper, children, client, EMPTY_UNKNOWN),
     };
+    await_reported_exits(children, deadline);
     let result = empty_session_matches(&empty, &keeper.record.record).and_then(|()| {
         let adopted = children
             .adopted
@@ -182,6 +186,15 @@ pub(super) fn close_session(
         }
     });
     finish(keeper, children, client, close_outcome(result))
+}
+
+/// The kernel reports the session cgroup empty as each process leaves it,
+/// before it reports that process exited. Publication requires the exits,
+/// so wait for their reports; the publication itself still checks them.
+fn await_reported_exits(children: &Children, deadline: Instant) {
+    if let Some(adopted) = &children.adopted {
+        let _ = adopted.await_registered_exits((Instant::now() + EXITS_REPORTED).min(deadline));
+    }
 }
 
 /// Ends an opening that failed after `Begin`, a cancellation included.
@@ -204,6 +217,7 @@ pub(super) fn fail_opening(
         Ok(empty) => empty,
         Err(_) => return finish(keeper, children, client, EMPTY_UNKNOWN),
     };
+    await_reported_exits(children, deadline);
     let authorize = || authorize_rename(deadline, None);
     let result = empty_session_matches(&empty, &keeper.record.record).and_then(|()| match children
         .adopted

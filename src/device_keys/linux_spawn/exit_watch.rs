@@ -4,6 +4,7 @@ use std::io;
 use std::marker::PhantomData;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::rc::Rc;
+use std::time::Instant;
 
 #[derive(Debug, Eq, PartialEq)]
 enum PollState {
@@ -47,6 +48,37 @@ fn poll_once(pidfd: &OwnedFd) -> io::Result<PollState> {
 // The caller supplies a process pidfd whose identity was validated while live.
 pub(crate) fn retained_process_exited(pidfd: &OwnedFd) -> io::Result<bool> {
     Ok(poll_once(pidfd)? == PollState::Exited)
+}
+
+/// Waits until the retained process is reported exited, or `deadline` passes.
+/// The kernel takes a process out of its cgroup before it reports the exit,
+/// so an empty cgroup alone does not yet make the pidfd readable.
+pub(crate) fn wait_for_retained_exit(pidfd: &OwnedFd, deadline: Instant) -> io::Result<bool> {
+    loop {
+        if poll_once(pidfd)? == PollState::Exited {
+            return Ok(true);
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok(false);
+        }
+        let mut descriptor = libc::pollfd {
+            fd: pidfd.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let milliseconds = remaining
+            .as_millis()
+            .saturating_add(1)
+            .min(i32::MAX as u128) as i32;
+        // SAFETY: the single initialized poll descriptor remains owned throughout.
+        if unsafe { libc::poll(&mut descriptor, 1, milliseconds) } < 0 {
+            let error = last_error();
+            if error.raw_os_error() != Some(libc::EINTR) {
+                return Err(error);
+            }
+        }
+    }
 }
 
 struct Origin {
@@ -258,6 +290,58 @@ mod tests {
             .unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         assert!(!called.get());
+    }
+
+    /// A child that exits after `milliseconds`, and its pidfd. The child only
+    /// waits and exits, so it is safe after a fork in a threaded test process.
+    fn child_that_exits_after(milliseconds: libc::c_int) -> (libc::pid_t, OwnedFd) {
+        // SAFETY: the child calls only async-signal-safe functions, then exits.
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0);
+        if pid == 0 {
+            // SAFETY: a poll of no descriptors only waits; _exit never returns.
+            unsafe {
+                libc::poll(std::ptr::null_mut(), 0, milliseconds);
+                libc::_exit(0)
+            }
+        }
+        // SAFETY: pidfd_open takes a live child's pid and no flags.
+        let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
+        assert!(fd >= 0);
+        // SAFETY: pidfd_open returned a new owned descriptor.
+        (pid, unsafe { OwnedFd::from_raw_fd(fd as libc::c_int) })
+    }
+
+    fn collect(pid: libc::pid_t) {
+        // SAFETY: the pid is this test's own child, collected once, and the
+        // record is writable for one waitid result.
+        unsafe {
+            libc::kill(pid, libc::SIGKILL);
+            let mut status: libc::siginfo_t = std::mem::zeroed();
+            libc::waitid(libc::P_PID, pid as libc::id_t, &mut status, libc::WEXITED);
+        }
+    }
+
+    #[test]
+    fn an_exit_reported_after_the_first_check_is_waited_for() {
+        use std::time::Duration;
+        // A process leaves its cgroup before its exit is reported, so the first
+        // check after an empty cgroup can still find it running.
+        let (pid, pidfd) = child_that_exits_after(300);
+        assert!(!retained_process_exited(&pidfd).unwrap());
+        let started = Instant::now();
+        assert!(wait_for_retained_exit(&pidfd, Instant::now() + Duration::from_secs(5)).unwrap());
+        assert!(started.elapsed() < Duration::from_secs(5));
+        collect(pid);
+        // A process that does not exit in time is reported as running.
+        let (pid, pidfd) = child_that_exits_after(10_000);
+        let started = Instant::now();
+        assert!(
+            !wait_for_retained_exit(&pidfd, Instant::now() + Duration::from_millis(300)).unwrap()
+        );
+        assert!(started.elapsed() >= Duration::from_millis(300));
+        assert!(started.elapsed() < Duration::from_secs(5));
+        collect(pid);
     }
 
     #[test]

@@ -21,7 +21,7 @@ use super::linux_session::PackageLease;
 
 #[path = "linux_spawn/exit_watch.rs"]
 mod exit_watch;
-pub(crate) use exit_watch::retained_process_exited;
+pub(crate) use exit_watch::{retained_process_exited, wait_for_retained_exit};
 pub use exit_watch::{ChildExitWatch, ObservedChildExit};
 
 #[path = "linux_spawn/child_registration.rs"]
