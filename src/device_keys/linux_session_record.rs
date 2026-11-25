@@ -4,10 +4,6 @@
 //!
 //! The record names what the kernel can later confirm gone: the boot, the unit
 //! cgroup and its inode. It holds no secret and no file content.
-#![allow(
-    dead_code,
-    reason = "The session start and close commands consume these pieces in later steps."
-)]
 
 use super::linux_admission_storage::PublishError;
 use super::linux_current_admission::CurrentAdmission;
@@ -82,31 +78,29 @@ fn plain_cgroup_path(value: &str) -> bool {
 }
 
 impl SessionRecord {
-    fn validate(&self) -> io::Result<()> {
+    /// `uid` is the account whose user manager runs the recorded unit.
+    fn validate(&self, uid: u32) -> io::Result<()> {
         require(self.version == 1)?;
         require(self.unit()?.name() == self.unit)?;
         require(plain_cgroup_path(&self.unit_cgroup))?;
-        require(self.unit_cgroup.ends_with(&format!("/{}", self.unit)))?;
+        // The rule the keeper applied to its own cgroup when it wrote this.
+        cgroup::validate_unit_path(&self.unit_cgroup, uid, &self.unit).map_err(|_| invalid())?;
         require(canonical_boot_id(&self.boot_id))?;
         require(lowercase_digest(&self.admission_sha256))
     }
 
-    pub(crate) fn canonical_bytes(&self) -> io::Result<Vec<u8>> {
-        self.validate()?;
+    pub(crate) fn canonical_bytes(&self, uid: u32) -> io::Result<Vec<u8>> {
+        self.validate(uid)?;
         let bytes = serde_json::to_vec(self).map_err(|_| invalid())?;
         require(bytes.len() <= MAX_RECORD)?;
         Ok(bytes)
     }
 
-    pub(crate) fn parse(bytes: &[u8]) -> io::Result<Self> {
+    pub(crate) fn parse(bytes: &[u8], uid: u32) -> io::Result<Self> {
         require(bytes.len() <= MAX_RECORD)?;
         let value: Self = serde_json::from_slice(bytes).map_err(|_| invalid())?;
-        require(value.canonical_bytes()? == bytes)?;
+        require(value.canonical_bytes(uid)? == bytes)?;
         Ok(value)
-    }
-
-    pub(crate) fn session_cgroup(&self) -> String {
-        format!("{}/session", self.unit_cgroup)
     }
 
     pub(crate) fn unit(&self) -> io::Result<SessionUnit> {
@@ -320,7 +314,7 @@ pub(crate) fn read_checked(
     let Some((bytes, identity)) = read_in(directory, name, ids)? else {
         return Ok(None);
     };
-    let record = SessionRecord::parse(&bytes)?;
+    let record = SessionRecord::parse(&bytes, ids.0)?;
     require(record.credential_id == credential && record.admission_sha256 == hex(digest))?;
     Ok(Some(StoredSessionRecord { record, identity }))
 }
@@ -372,7 +366,7 @@ impl<'a> SessionRecords<'a> {
             .admission_digest()
             .map_err(PublishError::Unpublished)?;
         let bytes = record
-            .canonical_bytes()
+            .canonical_bytes(process_ids().0)
             .map_err(PublishError::Unpublished)?;
         if record.admission_sha256 != hex(&digest) {
             return Err(PublishError::Unpublished(invalid()));
@@ -425,12 +419,11 @@ pub(crate) enum ReopeningEvidence {
 /// Whether the observations prove that no process of the recorded session
 /// survives. The decision is about the whole unit, keeper included: a session
 /// cgroup that is empty under a populated unit is a session being started or
-/// closed, so the session observation never counts on its own.
+/// closed, so the session cgroup is not observed at all.
 pub(crate) fn reopening_evidence(
     record: &SessionRecord,
     boot_id: &str,
     unit: CgroupObservation,
-    _session: CgroupObservation,
 ) -> Option<ReopeningEvidence> {
     if boot_id != record.boot_id {
         return Some(ReopeningEvidence::NewBoot);
@@ -445,23 +438,25 @@ pub(crate) fn reopening_evidence(
 }
 
 pub(crate) fn observe_evidence(record: &SessionRecord) -> io::Result<Option<ReopeningEvidence>> {
-    let boot_id = cgroup::boot_id()?;
+    evidence_from(record, &cgroup::boot_id()?, cgroup::observe)
+}
+
+/// The decision on the current `boot_id`, with `observe` reading a cgroup.
+fn evidence_from(
+    record: &SessionRecord,
+    boot_id: &str,
+    observe: impl Fn(&str, CgroupIdentity) -> io::Result<CgroupObservation>,
+) -> io::Result<Option<ReopeningEvidence>> {
     if boot_id != record.boot_id {
         return Ok(Some(ReopeningEvidence::NewBoot));
     }
-    let unit = cgroup::observe(
+    let unit = observe(
         &record.unit_cgroup,
         CgroupIdentity {
             inode: record.unit_cgroup_inode,
         },
     )?;
-    let session = cgroup::observe(
-        &record.session_cgroup(),
-        CgroupIdentity {
-            inode: record.session_cgroup_inode,
-        },
-    )?;
-    Ok(reopening_evidence(record, &boot_id, unit, session))
+    Ok(reopening_evidence(record, boot_id, unit))
 }
 
 #[cfg(test)]
@@ -475,12 +470,19 @@ mod tests {
     const BOOT: &str = "01234567-89ab-cdef-0123-456789abcdef";
 
     fn record() -> SessionRecord {
+        record_of(1000)
+    }
+
+    /// A record of a unit under the user manager of `uid`.
+    fn record_of(uid: u32) -> SessionRecord {
         let unit = format!("vivac-custody-{CREDENTIAL}-{GENERATION}.service");
         SessionRecord {
             version: 1,
             credential_id: CREDENTIAL.to_owned(),
             generation: GENERATION.to_owned(),
-            unit_cgroup: format!("/user.slice/user-1000.slice/user@1000.service/app.slice/{unit}"),
+            unit_cgroup: format!(
+                "/user.slice/user-{uid}.slice/user@{uid}.service/app.slice/{unit}"
+            ),
             unit,
             unit_cgroup_inode: 11,
             session_cgroup_inode: 12,
@@ -511,13 +513,9 @@ mod tests {
     #[test]
     fn session_record_round_trips_canonical_bytes() {
         let value = record();
-        let bytes = value.canonical_bytes().unwrap();
+        let bytes = value.canonical_bytes(1000).unwrap();
         assert_eq!(bytes, canonical().as_bytes());
-        assert_eq!(SessionRecord::parse(&bytes).unwrap(), value);
-        assert_eq!(
-            value.session_cgroup(),
-            format!("{}/session", value.unit_cgroup)
-        );
+        assert_eq!(SessionRecord::parse(&bytes, 1000).unwrap(), value);
         assert_eq!(value.unit().unwrap().name(), value.unit);
     }
 
@@ -526,7 +524,9 @@ mod tests {
         let good = canonical();
         let refused = |bytes: &str| {
             assert_eq!(
-                SessionRecord::parse(bytes.as_bytes()).unwrap_err().kind(),
+                SessionRecord::parse(bytes.as_bytes(), 1000)
+                    .unwrap_err()
+                    .kind(),
                 io::ErrorKind::InvalidData,
                 "{bytes}"
             );
@@ -558,31 +558,85 @@ mod tests {
     }
 
     #[test]
+    fn the_unit_cgroup_must_sit_under_the_account_user_manager() {
+        let value = record();
+        let unit = value.unit.clone();
+        let base = "/user.slice/user-1000.slice/user@1000.service";
+        let with = |path: String| SessionRecord {
+            unit_cgroup: path,
+            ..value.clone()
+        };
+        assert!(value.canonical_bytes(1000).is_ok());
+        assert!(with(format!("{base}/{unit}")).canonical_bytes(1000).is_ok());
+        // Another account's manager, even with the same path shape.
+        assert!(value.canonical_bytes(1001).is_err());
+        for foreign in [
+            format!("/user.slice/app.slice/{unit}"),
+            format!("/system.slice/{unit}"),
+            format!("/user.slice/user-1000.slice/session-3.scope/{unit}"),
+            format!("/user.slice/user-1001.slice/user@1001.service/app.slice/{unit}"),
+            format!("/user.slice/user-1000.slice/user@1001.service/app.slice/{unit}"),
+            format!("{base}/app.slice/other.service"),
+            format!("{base}/app.slice/{unit}/session"),
+        ] {
+            let bytes = serde_json::to_vec(&with(foreign.clone())).unwrap();
+            assert!(
+                with(foreign.clone()).canonical_bytes(1000).is_err(),
+                "{foreign}"
+            );
+            assert!(SessionRecord::parse(&bytes, 1000).is_err(), "{foreign}");
+        }
+    }
+
+    #[test]
     fn reopening_evidence_follows_the_kernel_observations() {
         let r = record();
         let other = "ffffffff-89ab-cdef-0123-456789abcdef";
-        let all = [Absent, Replaced, Populated, Empty];
-        for unit in all {
-            for session in all {
-                let same = reopening_evidence(&r, BOOT, unit, session);
-                let expected = match unit {
-                    Absent | Replaced => Some(ReopeningEvidence::CgroupGone),
-                    Empty => Some(ReopeningEvidence::CgroupEmpty),
-                    Populated => None,
-                };
-                assert_eq!(same, expected, "{unit:?} {session:?}");
-                assert_eq!(
-                    reopening_evidence(&r, other, unit, session),
-                    Some(ReopeningEvidence::NewBoot)
-                );
-            }
+        for unit in [Absent, Replaced, Populated, Empty] {
+            let expected = match unit {
+                Absent | Replaced => Some(ReopeningEvidence::CgroupGone),
+                Empty => Some(ReopeningEvidence::CgroupEmpty),
+                Populated => None,
+            };
+            assert_eq!(reopening_evidence(&r, BOOT, unit), expected, "{unit:?}");
+            assert_eq!(
+                reopening_evidence(&r, other, unit),
+                Some(ReopeningEvidence::NewBoot)
+            );
         }
+    }
+
+    #[test]
+    fn the_session_cgroup_is_never_read_for_the_evidence() {
+        let r = record();
+        let session = format!("{}/session", r.unit_cgroup);
+        // The session cgroup is gone, or cannot be read, under an empty unit.
+        for failure in [libc::ENOENT, libc::EIO] {
+            let observe = |path: &str, _: CgroupIdentity| {
+                if path == session {
+                    Err(io::Error::from_raw_os_error(failure))
+                } else {
+                    Ok(Empty)
+                }
+            };
+            assert_eq!(
+                evidence_from(&r, BOOT, observe).unwrap(),
+                Some(ReopeningEvidence::CgroupEmpty),
+                "{failure}"
+            );
+        }
+        // An error on the unit cgroup still refuses a reopening.
+        let unreadable = |_: &str, _: CgroupIdentity| Err(io::Error::from_raw_os_error(libc::EIO));
+        assert!(evidence_from(&r, BOOT, unreadable).is_err());
     }
 
     #[test]
     fn live_keeper_with_empty_session_cgroup_is_not_evidence() {
         let r = record();
-        assert_eq!(reopening_evidence(&r, &r.boot_id, Populated, Empty), None);
+        let session = format!("{}/session", r.unit_cgroup);
+        let observe =
+            |path: &str, _: CgroupIdentity| Ok(if path == session { Empty } else { Populated });
+        assert_eq!(evidence_from(&r, &r.boot_id, observe).unwrap(), None);
     }
 
     fn published(
@@ -590,7 +644,7 @@ mod tests {
         value: &SessionRecord,
     ) -> Result<EntryIdentity, PublishError> {
         let name = CString::new(value.credential_id.as_bytes()).unwrap();
-        publish_in(directory, &name, &value.canonical_bytes().unwrap())
+        publish_in(directory, &name, &value.canonical_bytes(1000).unwrap())
     }
 
     fn ids() -> (u32, u32) {
@@ -605,7 +659,7 @@ mod tests {
         let identity = published(&fd, &value).unwrap();
         let name = CString::new(CREDENTIAL).unwrap();
         let (bytes, read) = read_in(&fd, &name, ids()).unwrap().unwrap();
-        assert_eq!(bytes, value.canonical_bytes().unwrap());
+        assert_eq!(bytes, value.canonical_bytes(1000).unwrap());
         assert_eq!(read, identity);
         assert_eq!(identity.mode & 0o7777, 0o600);
         let before = std::fs::read(dir.0.join(CREDENTIAL)).unwrap();
@@ -613,7 +667,10 @@ mod tests {
         let mut other = record();
         other.generation = "00000000000000000000000006".to_owned();
         other.unit = format!("vivac-custody-{CREDENTIAL}-{}.service", other.generation);
-        other.unit_cgroup = format!("/user.slice/app.slice/{}", other.unit);
+        other.unit_cgroup = format!(
+            "/user.slice/user-1000.slice/user@1000.service/app.slice/{}",
+            other.unit
+        );
         let error = published(&fd, &other).unwrap_err();
         assert!(matches!(error, PublishError::Unpublished(error)
             if error.raw_os_error() == Some(libc::EEXIST)));
@@ -649,11 +706,12 @@ mod tests {
     #[test]
     fn record_for_another_admission_is_refused_and_left() {
         let (dir, fd) = scratch();
-        let value = record();
-        let identity = published(&fd, &value).unwrap();
+        // Reading checks the unit cgroup against the reading account.
+        let value = record_of(ids().0);
+        let name = CString::new(CREDENTIAL).unwrap();
+        let identity = publish_in(&fd, &name, &value.canonical_bytes(ids().0).unwrap()).unwrap();
         let path = dir.0.join(CREDENTIAL);
         let before = std::fs::read(&path).unwrap();
-        let name = CString::new(CREDENTIAL).unwrap();
 
         let digest = [0xab_u8; 32];
         let stored = read_checked(&fd, &name, ids(), CREDENTIAL, &digest)
@@ -701,7 +759,10 @@ mod tests {
         let mut other = record();
         other.generation = "00000000000000000000000006".to_owned();
         other.unit = format!("vivac-custody-{CREDENTIAL}-{}.service", other.generation);
-        other.unit_cgroup = format!("/user.slice/app.slice/{}", other.unit);
+        other.unit_cgroup = format!(
+            "/user.slice/user-1000.slice/user@1000.service/app.slice/{}",
+            other.unit
+        );
         other
     }
 
@@ -719,7 +780,7 @@ mod tests {
         let (dir, fd) = scratch();
         let old = published(&fd, &record()).unwrap();
         let name = CString::new(CREDENTIAL).unwrap();
-        let bytes = other_record().canonical_bytes().unwrap();
+        let bytes = other_record().canonical_bytes(1000).unwrap();
         let identity = replace_in(&fd, &name, &old, &bytes).unwrap();
         let (read, found) = read_in(&fd, &name, ids()).unwrap().unwrap();
         assert_eq!(read, bytes);
@@ -739,7 +800,7 @@ mod tests {
         std::fs::rename(&path, dir.0.join("kept")).unwrap();
         std::fs::write(&path, b"other").unwrap();
         let other = entry_identity(&fd, &name).unwrap().unwrap();
-        let bytes = other_record().canonical_bytes().unwrap();
+        let bytes = other_record().canonical_bytes(1000).unwrap();
         let error = replace_in(&fd, &name, &old, &bytes).unwrap_err();
         assert!(matches!(error, PublishError::Unpublished(_)));
         assert_eq!(std::fs::read(&path).unwrap(), b"other");
@@ -763,7 +824,7 @@ mod tests {
         let old = published(&fd, &record()).unwrap();
         let name = CString::new(CREDENTIAL).unwrap();
         std::fs::remove_file(dir.0.join(CREDENTIAL)).unwrap();
-        let bytes = other_record().canonical_bytes().unwrap();
+        let bytes = other_record().canonical_bytes(1000).unwrap();
         let error = replace_in(&fd, &name, &old, &bytes).unwrap_err();
         assert!(matches!(error, PublishError::Unpublished(_)));
         assert!(entries(&dir.0).is_empty());

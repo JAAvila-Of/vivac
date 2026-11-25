@@ -3,10 +3,6 @@
 //! writes `cgroup.subtree_control`; the session's processes run in
 //! `<unit cgroup>/session`, and only systemd removes cgroups. Identity is the
 //! inode of the cgroup directory.
-#![allow(
-    dead_code,
-    reason = "The session start and close commands consume these pieces in later steps."
-)]
 
 use std::ffi::{CStr, CString};
 use std::io::{self, Read};
@@ -73,7 +69,7 @@ fn parse_populated(bytes: &[u8]) -> io::Result<bool> {
     found.ok_or_else(invalid)
 }
 
-fn validate_unit_path(path: &str, uid: u32, unit: &str) -> io::Result<()> {
+pub(crate) fn validate_unit_path(path: &str, uid: u32, unit: &str) -> io::Result<()> {
     let prefix = format!("/user.slice/user-{uid}.slice/user@{uid}.service/");
     let rest = path.strip_prefix(prefix.as_str()).ok_or_else(invalid)?;
     let mut last = None;
@@ -332,7 +328,6 @@ impl UnitCgroup {
         };
         Ok(SessionCgroup {
             directory,
-            path: format!("{}/session", self.path),
             identity,
         })
     }
@@ -340,15 +335,10 @@ impl UnitCgroup {
 
 pub(crate) struct SessionCgroup {
     directory: OwnedFd,
-    path: String,
     identity: CgroupIdentity,
 }
 
 impl SessionCgroup {
-    pub(crate) fn path(&self) -> &str {
-        &self.path
-    }
-
     pub(crate) fn identity(&self) -> CgroupIdentity {
         self.identity
     }
@@ -367,10 +357,6 @@ impl SessionCgroup {
             n if n < 0 => Err(io::Error::last_os_error()),
             _ => Err(errno(libc::EIO)),
         }
-    }
-
-    pub(crate) fn populated(&self) -> io::Result<bool> {
-        read_events(&self.directory)
     }
 
     /// Kills every process in the session and waits for `populated 0`. The
