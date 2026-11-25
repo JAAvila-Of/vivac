@@ -49,6 +49,7 @@ pub(super) fn serve(
                         ready,
                         busy: busy_ref,
                         stopping: stopping_ref,
+                        location: &check_location,
                     })
                 })?;
                 let serving = (|| {

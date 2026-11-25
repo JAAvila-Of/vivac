@@ -11,6 +11,10 @@ use std::time::{Duration, Instant};
 
 const MAX_PENDING: usize = 4;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(3);
+/// The longest the coordinator sleeps before it checks the endpoint location
+/// again; a replaced name can be seen only this way, since nothing reaches
+/// the listener any more.
+const LOCATION_INTERVAL: Duration = Duration::from_secs(1);
 const FAILED_EVENTS: i16 = libc::POLLHUP | libc::POLLERR | libc::POLLNVAL | libc::POLLRDHUP;
 
 pub(super) struct Coordinator<'a> {
@@ -22,6 +26,8 @@ pub(super) struct Coordinator<'a> {
     pub ready: mpsc::SyncSender<(OwnedFd, Instant)>,
     pub busy: &'a AtomicBool,
     pub stopping: &'a AtomicBool,
+    /// Fails once the endpoint name no longer holds this listener.
+    pub location: &'a (dyn Fn() -> io::Result<()> + Sync),
 }
 
 struct Pending {
@@ -84,7 +90,8 @@ impl Coordinator<'_> {
                         .min(i32::MAX as u128) as i32
                 })
                 .min()
-                .unwrap_or(-1);
+                .unwrap_or(i32::MAX)
+                .min(LOCATION_INTERVAL.as_millis() as i32);
             // SAFETY: all descriptors are initialized and writable for the declared length.
             let count =
                 unsafe { libc::poll(descriptors.as_mut_ptr(), descriptors.len() as _, timeout) };
@@ -103,6 +110,8 @@ impl Coordinator<'_> {
             if descriptors[0].revents & libc::POLLIN != 0 {
                 return await_session_keeper_close(self.controller);
             }
+            // Every wake, a timeout included, looks at the location.
+            (self.location)()?;
             if descriptors[2].revents & FAILED_EVENTS != 0 {
                 return Err(refused());
             }
@@ -215,6 +224,7 @@ mod tests {
             ready,
             busy: &busy,
             stopping: &stopping,
+            location: &|| Ok(()),
         });
         assert!(result.is_err());
         assert!(stopping.load(Ordering::Acquire));
@@ -225,6 +235,73 @@ mod tests {
         assert!(!snapshot.close_acknowledged);
         gate.lock(Duration::from_secs(1)).unwrap();
         drop((client, listener, runtime));
+        std::fs::remove_file(path.join("endpoint.sock")).unwrap();
+        std::fs::remove_dir(path).unwrap();
+    }
+
+    #[test]
+    fn an_idle_coordinator_checks_the_endpoint_location_every_second() {
+        use std::sync::atomic::AtomicUsize;
+        let path = std::env::temp_dir().join(format!(
+            "vivac-active-io-idle-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&path).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let runtime = EndpointRuntime::from_directory(File::open(&path).unwrap().into()).unwrap();
+        let listener = runtime
+            .bind_listener(Instant::now() + Duration::from_secs(2))
+            .unwrap();
+        let (controller, _keeper) = packet_pair().unwrap();
+        let (stop, trigger) = packet_pair().unwrap();
+        let mut trigger = Some(trigger);
+        let gate = Gate::new(Arc::new(EmptyResource));
+        let (ready, _receiver) = mpsc::sync_channel(1);
+        let busy = AtomicBool::new(false);
+        let stopping = AtomicBool::new(false);
+        let checks = AtomicUsize::new(0);
+        // The name is replaced after the first check: nothing connects to
+        // the listener, so only the coordinator's own wakes can see it.
+        let location = || match checks.fetch_add(1, Ordering::AcqRel) {
+            0 => Ok(()),
+            _ => Err(io::Error::from(io::ErrorKind::NotFound)),
+        };
+        let (done, finished) = mpsc::channel();
+        let started = Instant::now();
+        let ended = std::thread::scope(|scope| {
+            scope.spawn(|| {
+                let result = coordinate(Coordinator {
+                    controller: &controller,
+                    stop: &stop,
+                    runtime: &runtime,
+                    listener: &listener,
+                    gate: &gate,
+                    ready,
+                    busy: &busy,
+                    stopping: &stopping,
+                    location: &location,
+                });
+                let _ = done.send(result.is_err());
+            });
+            let ended = finished.recv_timeout(Duration::from_secs(4));
+            // Without a check on each wake the coordinator would wait for ever;
+            // the stop channel ends it so that the test can report.
+            drop(trigger.take());
+            ended
+        });
+        assert_eq!(
+            ended,
+            Ok(true),
+            "an idle coordinator never checked its location"
+        );
+        assert!(started.elapsed() < Duration::from_secs(4));
+        assert!(checks.load(Ordering::Acquire) >= 2);
+        assert!(stopping.load(Ordering::Acquire));
+        drop((listener, runtime));
         std::fs::remove_file(path.join("endpoint.sock")).unwrap();
         std::fs::remove_dir(path).unwrap();
     }
