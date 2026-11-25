@@ -320,8 +320,9 @@ fn require_supported_filesystem(directory: &OwnedFd) -> io::Result<()> {
     }
 }
 
-fn supported_filesystem(magic: libc::c_long) -> bool {
-    magic == 0xEF53
+/// `magic` is `statfs.f_type`, signed with glibc and not with musl.
+fn supported_filesystem<T: TryInto<u64>>(magic: T) -> bool {
+    magic.try_into().is_ok_and(|magic| magic == 0xEF53)
 }
 
 #[cfg(test)]
@@ -447,12 +448,14 @@ mod tests {
 
     #[test]
     fn reservation_accepts_the_ext_family() {
-        assert!(supported_filesystem(0xEF53));
+        // `f_type` is signed with glibc and not with musl.
+        assert!(supported_filesystem(0xEF53_i64));
+        assert!(supported_filesystem(0xEF53_u64));
     }
 
     #[test]
     fn reservation_refuses_unapproved_filesystems() {
-        for magic in [0, 0x0102_1994, 0x6969, 0x794c_7630, 0x9123_683e] {
+        for magic in [0_i64, 0x0102_1994, 0x6969, 0x794c_7630, 0x9123_683e, -1] {
             assert!(!supported_filesystem(magic));
         }
     }

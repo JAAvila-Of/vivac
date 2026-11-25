@@ -14,7 +14,7 @@ const MAX_CIPHERTEXT: u64 = 65536;
 const REQUIRED_SEALS: libc::c_int =
     libc::F_SEAL_WRITE | libc::F_SEAL_GROW | libc::F_SEAL_SHRINK | libc::F_SEAL_SEAL;
 // Linux's atomic slave-open ioctl. The admitted fixture is Ubuntu 24.04 amd64.
-const TIOCGPTPEER: libc::c_ulong = 0x5441;
+const TIOCGPTPEER: libc::Ioctl = 0x5441;
 
 /// A private native loader. Provider/package admission remains the caller's
 /// responsibility. The owner retains a master and ciphertext duplicate even

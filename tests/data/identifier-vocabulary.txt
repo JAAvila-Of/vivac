@@ -481,6 +481,8 @@ ceremonies
 ceremony
 cfdata
 cfg
+cfgetispeed
+cfgetospeed
 cflag
 cftype
 cgroup

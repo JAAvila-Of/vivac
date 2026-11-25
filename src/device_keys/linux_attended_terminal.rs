@@ -95,8 +95,24 @@ pub(crate) fn same_attributes(left: &libc::termios, right: &libc::termios) -> bo
         && left.c_lflag == right.c_lflag
         && left.c_line == right.c_line
         && left.c_cc == right.c_cc
-        && left.c_ispeed == right.c_ispeed
-        && left.c_ospeed == right.c_ospeed
+        && same_ispeed_and_ospeed(left, right)
+}
+
+/// glibc and musl name the fields that hold the input and output rate
+/// differently: glibc's are compared as they are, and musl's are read
+/// through the functions glibc and musl both provide.
+#[cfg(target_env = "gnu")]
+fn same_ispeed_and_ospeed(left: &libc::termios, right: &libc::termios) -> bool {
+    left.c_ispeed == right.c_ispeed && left.c_ospeed == right.c_ospeed
+}
+
+#[cfg(not(target_env = "gnu"))]
+fn same_ispeed_and_ospeed(left: &libc::termios, right: &libc::termios) -> bool {
+    // SAFETY: these functions only read the referenced, initialized attributes.
+    unsafe {
+        libc::cfgetispeed(left) == libc::cfgetispeed(right)
+            && libc::cfgetospeed(left) == libc::cfgetospeed(right)
+    }
 }
 
 fn foreground(fd: RawFd) -> Result<()> {

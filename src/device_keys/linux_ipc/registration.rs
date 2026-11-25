@@ -244,7 +244,7 @@ impl ChildPidfdChannel {
         message.msg_iov = &mut iov;
         message.msg_iovlen = 1;
         message.msg_control = control.as_mut_ptr().cast();
-        message.msg_controllen = size_of_val(&control);
+        message.msg_controllen = super::as_control_length(size_of_val(&control))?;
         // SAFETY: the buffers are live and sized as specified by message.
         let count = unsafe {
             libc::recvmsg(
@@ -256,7 +256,12 @@ impl ChildPidfdChannel {
         if count < 0 {
             return Err(io::Error::last_os_error());
         }
-        let references = parse_control_credentials(&control, message.msg_controllen, &expected, 1)?;
+        let references = parse_control_credentials(
+            &control,
+            super::control_length(message.msg_controllen)?,
+            &expected,
+            1,
+        )?;
         if count != 1 || wire != [CHILD_PIDFD] || message.msg_flags & !libc::MSG_CMSG_CLOEXEC != 0 {
             return Err(invalid());
         }
@@ -301,11 +306,11 @@ pub(crate) fn send_own_pidfd(socket: libc::c_int) -> io::Result<()> {
     let size = size_of::<libc::c_int>() as libc::c_uint;
     // SAFETY: control is aligned and large enough for one descriptor word.
     let count = unsafe {
-        message.msg_controllen = libc::CMSG_SPACE(size) as usize;
+        message.msg_controllen = libc::CMSG_SPACE(size) as _;
         let header = libc::CMSG_FIRSTHDR(&message);
         (*header).cmsg_level = libc::SOL_SOCKET;
         (*header).cmsg_type = libc::SCM_RIGHTS;
-        (*header).cmsg_len = libc::CMSG_LEN(size) as usize;
+        (*header).cmsg_len = libc::CMSG_LEN(size) as _;
         libc::CMSG_DATA(header)
             .cast::<libc::c_int>()
             .write_unaligned(pidfd.as_raw_fd());
@@ -537,8 +542,8 @@ impl Transport {
             }
             let size = size_of::<libc::c_int>() * references.len();
             // SAFETY: size is bounded to three descriptor words.
-            message.msg_controllen = unsafe { libc::CMSG_SPACE(size as _) } as usize;
-            if message.msg_controllen > size_of_val(&control) {
+            message.msg_controllen = unsafe { libc::CMSG_SPACE(size as _) } as _;
+            if super::control_length(message.msg_controllen)? > size_of_val(&control) {
                 return Err(invalid());
             }
             message.msg_control = control.as_mut_ptr().cast();
@@ -547,7 +552,7 @@ impl Transport {
                 let header = libc::CMSG_FIRSTHDR(&message);
                 (*header).cmsg_level = libc::SOL_SOCKET;
                 (*header).cmsg_type = libc::SCM_RIGHTS;
-                (*header).cmsg_len = libc::CMSG_LEN(size as _) as usize;
+                (*header).cmsg_len = libc::CMSG_LEN(size as _) as _;
                 let data = libc::CMSG_DATA(header).cast::<libc::c_int>();
                 for (index, reference) in references.iter().enumerate() {
                     data.add(index).write_unaligned(reference.as_raw_fd());
@@ -624,7 +629,7 @@ impl Transport {
             message.msg_iov = &mut iov;
             message.msg_iovlen = 1;
             message.msg_control = control.as_mut_ptr().cast();
-            message.msg_controllen = size_of_val(&control);
+            message.msg_controllen = super::as_control_length(size_of_val(&control))?;
             // SAFETY: the message buffers are writable for their supplied bounded lengths.
             let count = unsafe {
                 libc::recvmsg(
@@ -645,7 +650,8 @@ impl Transport {
                 }
             }
             // Adopt or close every visible descriptor before checking any other failure.
-            let references = parse_control(&control, message.msg_controllen, &self.peer, expected);
+            let references = super::control_length(message.msg_controllen)
+                .and_then(|length| parse_control(&control, length, &self.peer, expected));
             self.check()?;
             let references = references?;
             if message.msg_flags & !libc::MSG_CMSG_CLOEXEC != 0 || count as usize != wire.len() {
@@ -2373,7 +2379,10 @@ fn parse_control_credentials(
     while length.saturating_sub(offset) >= header_size {
         // SAFETY: a complete header lies within initialized control storage.
         let header = unsafe { base.add(offset).cast::<libc::cmsghdr>().read_unaligned() };
-        let size = header.cmsg_len;
+        let Ok(size) = super::control_length(header.cmsg_len) else {
+            rejected = true;
+            break;
+        };
         if size < data_offset {
             rejected = true;
             break;
@@ -2917,7 +2926,7 @@ mod tests {
             let header = base.cast::<libc::cmsghdr>();
             (*header).cmsg_level = libc::SOL_SOCKET;
             (*header).cmsg_type = kind;
-            (*header).cmsg_len = libc::CMSG_LEN(data.len() as _) as usize;
+            (*header).cmsg_len = libc::CMSG_LEN(data.len() as _) as _;
             std::ptr::copy_nonoverlapping(data.as_ptr(), libc::CMSG_DATA(header), data.len());
             offset + libc::CMSG_SPACE(data.len() as _) as usize
         }
@@ -3054,11 +3063,11 @@ mod tests {
         message.msg_control = control.as_mut_ptr().cast();
         // SAFETY: the control storage fits eighty descriptor words plus the header.
         unsafe {
-            message.msg_controllen = libc::CMSG_SPACE(80 * size_of::<i32>() as u32) as usize;
+            message.msg_controllen = libc::CMSG_SPACE(80 * size_of::<i32>() as u32) as _;
             let header = libc::CMSG_FIRSTHDR(&message);
             (*header).cmsg_level = libc::SOL_SOCKET;
             (*header).cmsg_type = libc::SCM_RIGHTS;
-            (*header).cmsg_len = libc::CMSG_LEN(80 * size_of::<i32>() as u32) as usize;
+            (*header).cmsg_len = libc::CMSG_LEN(80 * size_of::<i32>() as u32) as _;
             for index in 0..80 {
                 libc::CMSG_DATA(header)
                     .cast::<i32>()
@@ -3072,7 +3081,7 @@ mod tests {
         }
         let mut received = [0usize; 32];
         message.msg_control = received.as_mut_ptr().cast();
-        message.msg_controllen = size_of_val(&received);
+        message.msg_controllen = super::super::as_control_length(size_of_val(&received)).unwrap();
         // SAFETY: the message points to the writable byte and bounded received ancillary storage.
         assert_eq!(
             unsafe { libc::recvmsg(receiver.as_raw_fd(), &mut message, libc::MSG_CMSG_CLOEXEC) },
@@ -3085,8 +3094,9 @@ mod tests {
             let mut header = libc::CMSG_FIRSTHDR(&message);
             while !header.is_null() {
                 if (*header).cmsg_type == libc::SCM_RIGHTS {
-                    let count =
-                        ((*header).cmsg_len - libc::CMSG_LEN(0) as usize) / size_of::<i32>();
+                    let count = (super::super::control_length((*header).cmsg_len).unwrap()
+                        - libc::CMSG_LEN(0) as usize)
+                        / size_of::<i32>();
                     for index in 0..count {
                         raw.push(
                             libc::CMSG_DATA(header)
@@ -3100,7 +3110,13 @@ mod tests {
             }
         }
         assert!(raw.len() > 2 && raw.len() < 80);
-        assert!(parse_control(&received, message.msg_controllen, &peer, 2).is_err());
+        assert!(parse_control(
+            &received,
+            super::super::control_length(message.msg_controllen).unwrap(),
+            &peer,
+            2
+        )
+        .is_err());
         for descriptor in raw {
             assert_closed(descriptor);
         }
