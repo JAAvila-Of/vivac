@@ -76,6 +76,21 @@ enum Ready {
     Client(OpeningEvent),
 }
 
+/// What a wake on a child means: its channel first, so that a step it sent
+/// just before it exited is still read. The keeper's spawn owner keeps the
+/// child's end of the channel for as long as it owns the child, so a child
+/// that exits never hangs the channel up; only its exit says it is gone.
+/// `None` means keep waiting.
+pub(super) fn child_event(channel: i16, exit: i16) -> Option<io::Result<()>> {
+    if channel != 0 {
+        Some(Ok(()))
+    } else if exit != 0 {
+        Some(Err(refused()))
+    } else {
+        None
+    }
+}
+
 /// Watches the client and the stop signals while the keeper waits on a child.
 struct Watch<'a> {
     client: &'a ControlConnection,
@@ -83,11 +98,20 @@ struct Watch<'a> {
 }
 
 impl Watch<'_> {
-    fn wait(&self, child: &OwnedFd, deadline: Instant) -> io::Result<Ready> {
+    /// Waits on the client, the stop signals, and `child`: its channel and its
+    /// exit.
+    fn wait(
+        &self,
+        (child, socket): &(Receipt, OwnedFd),
+        owner: &SpawnOwner,
+        deadline: Instant,
+    ) -> io::Result<Ready> {
+        let exit = owner.duplicate_pidfd(child.token)?;
         let mut descriptors = [
             watched(self.client.as_raw_fd()),
             watched(self.signals.as_raw_fd()),
-            watched(child.as_raw_fd()),
+            watched(socket.as_raw_fd()),
+            watched(exit.as_raw_fd()),
         ];
         loop {
             super::poll_until(&mut descriptors, deadline)?;
@@ -97,8 +121,10 @@ impl Watch<'_> {
             if descriptors[0].revents != 0 {
                 return Ok(Ready::Client(self.event(descriptors[0].revents)));
             }
-            if descriptors[2].revents != 0 {
-                return Ok(Ready::Child);
+            match child_event(descriptors[2].revents, descriptors[3].revents) {
+                Some(Ok(())) => return Ok(Ready::Child),
+                Some(Err(error)) => return Err(error),
+                None => {}
             }
         }
     }
@@ -126,21 +152,28 @@ impl Watch<'_> {
 
     fn receive_step(
         &self,
-        (child, socket): &(Receipt, OwnedFd),
+        child: &(Receipt, OwnedFd),
         owner: &SpawnOwner,
         step: EndpointSessionStep,
         deadline: Instant,
     ) -> io::Result<()> {
-        match self.wait(socket, deadline)? {
-            Ready::Child => receive_session_child_step(socket, owner, child.token, step, deadline),
+        match self.wait(child, owner, deadline)? {
+            Ready::Child => {
+                receive_session_child_step(&child.1, owner, child.0.token, step, deadline)
+            }
             Ready::Client(_) => Err(refused()),
         }
     }
 
     /// The client's `Secret`, while the supervisor stays silent. Anything
     /// else from either side ends the opening.
-    fn secret(&self, supervisor: &OwnedFd, deadline: Instant) -> io::Result<Zeroizing<[u8; 64]>> {
-        match self.wait(supervisor, deadline)? {
+    fn secret(
+        &self,
+        supervisor: &(Receipt, OwnedFd),
+        owner: &SpawnOwner,
+        deadline: Instant,
+    ) -> io::Result<Zeroizing<[u8; 64]>> {
+        match self.wait(supervisor, owner, deadline)? {
             Ready::Client(OpeningEvent::Frame(ClientFrame::Secret(secret))) => Ok(secret),
             _ => Err(refused()),
         }
@@ -220,7 +253,7 @@ pub(super) fn open(
     offer.confirm()?;
     require_reported_authority(keeper.authority, offer.confirmed_opening_authority())?;
     client.send_keeper(KeeperFrame::SecretRequest, short_deadline())?;
-    let secret = watch.secret(&supervisor.1, Instant::now() + SECRET_TIMEOUT)?;
+    let secret = watch.secret(supervisor, owner, Instant::now() + SECRET_TIMEOUT)?;
     send_session_secret(
         &supervisor.1,
         owner,
@@ -293,6 +326,17 @@ mod tests {
             ),
             OpeningEvent::Frame(ClientFrame::Secret(_))
         ));
+    }
+
+    #[test]
+    fn a_child_that_exits_without_its_step_ends_the_wait() {
+        for exit in [0, libc::POLLIN] {
+            for channel in [libc::POLLIN, libc::POLLHUP, libc::POLLIN | libc::POLLHUP] {
+                assert!(matches!(child_event(channel, exit), Some(Ok(()))));
+            }
+        }
+        assert!(matches!(child_event(0, libc::POLLIN), Some(Err(_))));
+        assert!(child_event(0, 0).is_none());
     }
 
     #[test]

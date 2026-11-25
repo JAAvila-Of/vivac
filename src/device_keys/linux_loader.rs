@@ -31,6 +31,8 @@ pub struct PtyLoader {
     prompt_seen: bool,
     handoff_started: bool,
     handed_off: bool,
+    /// The length of `output` when the secret was delivered.
+    handoff_output: usize,
 }
 
 impl PtyLoader {
@@ -124,6 +126,7 @@ impl PtyLoader {
             prompt_seen: false,
             handoff_started: false,
             handed_off: false,
+            handoff_output: 0,
         })
     }
 
@@ -219,6 +222,7 @@ impl PtyLoader {
         }
         self.require_live(owner)?;
         require_before(deadline)?;
+        self.handoff_output = self.output.len();
         self.handed_off = true;
         Ok(())
     }
@@ -239,6 +243,9 @@ impl PtyLoader {
         loop {
             require_before(deadline)?;
             self.drain_output(deadline)?;
+            if passphrase_refused(&self.output[self.handoff_output..]) {
+                return Err(refused());
+            }
             if let Some(exit) = owner.try_wait(self.token())? {
                 return if exit.code == Some(0) && exit.signal.is_none() {
                     Ok(exit)
@@ -353,6 +360,13 @@ fn prompt_complete(output: &[u8]) -> bool {
     let prompt = &output[start..];
     prompt.starts_with(b"Enter passphrase for ")
         && (prompt.ends_with(b":") || prompt.ends_with(b": "))
+}
+
+/// Whether the native loader, after the secret, asks for it again: it
+/// refused the secret and waits for another, which it never gets.
+fn passphrase_refused(after_handoff: &[u8]) -> bool {
+    const AGAIN: &[u8] = b"Bad passphrase, try again for ";
+    after_handoff.windows(AGAIN.len()).any(|part| part == AGAIN)
 }
 
 fn validate_cipher_shape(regular: bool, size: u64, seals: libc::c_int) -> io::Result<()> {
@@ -608,6 +622,22 @@ mod tests {
         assert!(!prompt_complete(
             b"Enter passphrase for /proc/self/fd/42: trailing"
         ));
+    }
+
+    #[test]
+    fn a_second_passphrase_prompt_is_a_refused_secret() {
+        assert!(passphrase_refused(
+            b"\r\nBad passphrase, try again for /proc/self/fd/42: "
+        ));
+        // Printed before the prompt text is complete, it is already a refusal.
+        assert!(passphrase_refused(b"\r\nBad passphrase, try again for "));
+        for accepted in [
+            &b""[..],
+            b"\r\n",
+            b"\r\nIdentity added: /proc/self/fd/42 (vivac)\r\n",
+        ] {
+            assert!(!passphrase_refused(accepted), "{accepted:?}");
+        }
     }
 
     #[test]
