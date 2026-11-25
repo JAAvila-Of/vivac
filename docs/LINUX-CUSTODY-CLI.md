@@ -179,8 +179,9 @@ signing an enrollment challenge.
 The discoverable endpoint is set to mode 0600 as soon as it is bound, before
 it accepts a connection, so its mode does not depend on the account's umask.
 A listener that replaces the discoverable endpoint is refused. The supervisor
-ends the session once its endpoint location changes, and the keeper closes it
-and republishes the permit.
+checks its endpoint location at least once a second, without waiting for a
+request, and ends the session once the location changes; the keeper then
+closes it and republishes the permit.
 
 ## Attended retirement
 
@@ -316,7 +317,7 @@ modes. Device-key help advertises these commands on Linux.
 | `verify-linux-possession` | `refused` | 1 | The exchange failed to establish fresh local possession. |
 | `retire-linux` | `retired` | 0 | The admission, package, permit, endpoint entry and session record are gone, and each directory change was synchronized. |
 | `retire-linux` | `refused` | 1 | This attempt changed nothing. |
-| `retire-linux` | `retirement_incomplete` | 5 | The credential can no longer be opened, and some of its stored state remains or its removal is not known to be durable. Running the command again finishes it. |
+| `retire-linux` | `retirement_incomplete` | 5 | The credential can no longer be opened, and some of its stored state remains or its removal is not known to be durable. Running the command again finishes whatever remains. If only the final synchronization of the admissions directory failed, nothing remains, and the command refuses; a tombstone that returns after a restart is finished by running it again. |
 
 Use positive evidence from this attempt for these statuses. A later filesystem
 lookup cannot settle `opening_uncertain`; the next `open-linux` resolves it on
@@ -370,5 +371,6 @@ opening automatically based on receipt absence.
   synchronization. After restart, the credential is either unchanged and
   retirable, or unavailable and finished by a second run. Inject an I/O error
   at each synchronization; expect `retirement_incomplete`, then completion on
-  the next run. Replace an object between its check and its unlink; expect the
-  retirement to stop and the object to remain.
+  the next run, except after the final synchronization, where the next run
+  refuses and changes nothing. Replace an object between its check and its
+  unlink; expect the retirement to stop and the object to remain.
