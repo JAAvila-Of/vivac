@@ -430,6 +430,14 @@ mod tests {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(bits)).unwrap();
     }
 
+    /// Binds `name` in `directory` through the directory's descriptor, so the
+    /// address does not grow with the temporary root.
+    fn bind_beneath(directory: &Path, name: &str) -> UnixListener {
+        use std::os::fd::AsRawFd;
+        let directory = std::fs::File::open(directory).unwrap();
+        UnixListener::bind(format!("/proc/self/fd/{}/{name}", directory.as_raw_fd())).unwrap()
+    }
+
     fn own_uid() -> u32 {
         // SAFETY: `geteuid` only reads this process's credentials.
         unsafe { libc::geteuid() }
@@ -560,7 +568,7 @@ mod tests {
         std::fs::write(runtime.join("systemd/private"), b"").unwrap();
         assert!(refused(own_uid()));
         std::fs::remove_file(runtime.join("systemd/private")).unwrap();
-        let _listener = UnixListener::bind(runtime.join("systemd/private")).unwrap();
+        let _listener = bind_beneath(&runtime.join("systemd"), "private");
         assert_eq!(
             runtime_directory_in(&runtime, own_uid()).ok(),
             Some(runtime.clone())
@@ -577,7 +585,7 @@ mod tests {
         let runtime = root.join(own_uid().to_string());
         std::fs::create_dir_all(runtime.join("systemd")).unwrap();
         mode(&runtime, 0o700);
-        let _listener = UnixListener::bind(runtime.join("systemd/private")).unwrap();
+        let _listener = bind_beneath(&runtime.join("systemd"), "private");
         assert!(matches!(
             UserManager::open_in(&linger, &root, Linger::Required),
             Err(ManagerRefusal::LingerDisabled(_))
@@ -610,7 +618,19 @@ mod tests {
     #[test]
     fn service_manager_programs_must_be_root_owned_regular_files() {
         let scratch = Scratch::new();
-        assert!(trusted_program(Path::new("/usr/bin/env")).is_ok());
+        // A package installs this program root-owned and not writable by others.
+        // Some releases install it as a link to a binary that serves many
+        // commands, and a link is refused, so the check is made on the file
+        // it resolves to.
+        let installed = std::fs::canonicalize("/usr/bin/env").unwrap();
+        assert!(trusted_program(&installed).is_ok(), "{installed:?}");
+        assert_eq!(
+            trusted_program(Path::new("/usr/bin/env")).is_ok(),
+            std::fs::symlink_metadata("/usr/bin/env")
+                .unwrap()
+                .file_type()
+                .is_file()
+        );
         assert!(trusted_program(&scratch.0.join("missing")).is_err());
         assert!(trusted_program(&scratch.0).is_err());
         let file = scratch.0.join("program");

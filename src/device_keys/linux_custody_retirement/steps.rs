@@ -391,6 +391,7 @@ mod tests {
     use super::RetirementStep::{Commit, Endpoint, Package, Permit, Record, Tombstone};
     use super::*;
     use crate::linux_retained_removal::tests::{scratch, Scratch};
+    use std::os::fd::AsRawFd;
     use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
 
@@ -571,9 +572,14 @@ mod tests {
         }
         std::fs::write(root.0.join("openings-v1").join(CREDENTIAL), b"o").unwrap();
         std::fs::write(root.0.join("sessions-v1").join(CREDENTIAL), b"s").unwrap();
-        let socket =
-            std::os::unix::net::UnixListener::bind(root.0.join("endpoints-v1").join(CREDENTIAL))
-                .unwrap();
+        // Bound through the directory's descriptor, as the supervisor binds
+        // its endpoint, so the address does not grow with the temporary root.
+        let endpoints = std::fs::File::open(root.0.join("endpoints-v1")).unwrap();
+        let socket = std::os::unix::net::UnixListener::bind(format!(
+            "/proc/self/fd/{}/{CREDENTIAL}",
+            endpoints.as_raw_fd()
+        ))
+        .unwrap();
         Tree {
             root,
             _socket: socket,

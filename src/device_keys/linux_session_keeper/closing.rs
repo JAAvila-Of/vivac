@@ -334,7 +334,12 @@ mod tests {
         let directory = std::path::PathBuf::from(std::ffi::OsStr::from_bytes(&template));
         let runtime: OwnedFd = std::fs::File::open(&directory).unwrap().into();
         let listener = ControlListener::bind(&runtime).unwrap();
-        let socket = directory.join("control.sock");
+        // Through the directory's descriptor, so the address does not grow
+        // with the temporary root.
+        let socket = std::path::PathBuf::from(format!(
+            "/proc/self/fd/{}/control.sock",
+            runtime.as_raw_fd()
+        ));
         let soon = || Instant::now() + Duration::from_secs(2);
         let connect = || ControlConnection::connect_unauthenticated(&socket, soon()).unwrap();
         let closer = connect();

@@ -614,7 +614,10 @@ mod tests {
     #[test]
     fn readiness_reaches_a_path_notification_socket() {
         let scratch = Scratch::new("notify");
-        let path = scratch.0.join("notify");
+        // Through the directory's descriptor, so the address does not grow
+        // with the temporary root.
+        let directory = std::fs::File::open(&scratch.0).unwrap();
+        let path = PathBuf::from(format!("/proc/self/fd/{}/notify", directory.as_raw_fd()));
         let receiver = UnixDatagram::bind(&path).unwrap();
         notify_ready(path.as_os_str()).unwrap();
         let mut buffer = [0u8; 32];
