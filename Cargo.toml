@@ -78,7 +78,7 @@ ssh-key = { version = "=0.6.7", default-features = false, features = ["std", "en
 md-5 = { version = "=0.11.0", default-features = false }
 
 [target.'cfg(unix)'.dependencies]
-libc = "0.2.189"
+libc = "0.2.191"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = { version = "=3.7.0", default-features = false }
