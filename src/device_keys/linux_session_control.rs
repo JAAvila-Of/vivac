@@ -6,10 +6,6 @@
 //! processes are inside the profile's trust boundary, so this separates peers
 //! outside the user manager (an SSH login session, say) and catches
 //! misdirection; it does not stop a hostile process of the same account.
-#![allow(
-    dead_code,
-    reason = "The session open and close commands consume these pieces in later steps."
-)]
 
 use super::linux_ipc::registration::live_pid;
 use super::linux_ipc::{connected_credentials, connected_pidfd};
@@ -277,6 +273,17 @@ impl ControlListener {
         Ok(Self { socket })
     }
 
+    /// Refuses every later connection while those already queued can still
+    /// be accepted: a connection is queued and the shutdown checked under the
+    /// same lock, so nobody can join the queue after this returns.
+    pub(crate) fn stop_accepting(&self) -> io::Result<()> {
+        // SAFETY: shutdown takes the owned socket and a scalar direction.
+        if unsafe { libc::shutdown(self.socket.as_raw_fd(), libc::SHUT_RD) } < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
     /// The next pending connection, or `None` when there is none. A peer of a
     /// different account is dropped and reported as `PermissionDenied`.
     pub(crate) fn accept(&self) -> io::Result<Option<ControlConnection>> {
@@ -346,7 +353,7 @@ impl ControlConnection {
 
     /// Transport only, for tests on kernels without `SO_PEERPIDFD`.
     #[cfg(test)]
-    fn connect_unauthenticated(socket: &Path, deadline: Instant) -> io::Result<Self> {
+    pub(crate) fn connect_unauthenticated(socket: &Path, deadline: Instant) -> io::Result<Self> {
         Ok(Self {
             socket: connect_socket(socket, deadline)?,
         })

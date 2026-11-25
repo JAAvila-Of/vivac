@@ -2,13 +2,18 @@
 //! the kernel to report it empty, and only then publish the opening permit
 //! again. The record is removed only after a durable publication.
 
-use super::{ready_now, refused, short_request, wait_readable, Children, Keeper, CLOSE_BUDGET};
+use super::{
+    next_connection, ready_now, refuse_request, refused, request_deadline, short_request,
+    wait_readable, Children, Keeper, CLOSE_BUDGET,
+};
 use crate::linux_admission_storage::PublishError;
 use crate::linux_ipc::registration::{
     receive_any_session_child_step, send_session_keeper_step, EndpointSessionStep,
 };
 use crate::linux_session_cgroup::EmptySessionCgroup;
-use crate::linux_session_control::{ClientFrame, ControlConnection, KeeperFrame, KeeperOutcome};
+use crate::linux_session_control::{
+    ClientFrame, ControlConnection, ControlListener, KeeperFrame, KeeperOutcome,
+};
 use crate::linux_session_record::SessionRecord;
 use crate::linux_supervisor_start::wait_for_success;
 use std::io;
@@ -105,10 +110,38 @@ fn authorize_rename(deadline: Instant, client: Option<&ControlConnection>) -> io
     Ok(())
 }
 
+/// Answers the `close-linux` commands that connected while this keeper was
+/// closing: each one that sends `Close` gets the outcome, any other request
+/// is refused. Nobody can connect once this starts, so the queue is all there
+/// is; the remaining close budget bounds the work.
+pub(super) fn answer_waiting(
+    listener: &ControlListener,
+    outcome: KeeperOutcome,
+    deadline: Instant,
+) {
+    // A later `close-linux` is refused at connect and takes its fallback,
+    // which reads what this keeper left.
+    let _ = listener.stop_accepting();
+    while Instant::now() < deadline {
+        let Some(connection) = next_connection(listener) else {
+            return;
+        };
+        match connection.receive_client(request_deadline(deadline)) {
+            Ok(ClientFrame::Close) => {
+                let _ = connection
+                    .send_keeper(KeeperFrame::Outcome(outcome), request_deadline(deadline));
+            }
+            Ok(_) => refuse_request(&connection, deadline),
+            Err(_) => {}
+        }
+    }
+}
+
 fn finish(
     keeper: &Keeper,
     children: &mut Children,
     client: Option<ControlConnection>,
+    deadline: Instant,
     (outcome, disposition): (KeeperOutcome, RecordDisposition),
 ) -> KeeperOutcome {
     if let Some(root) = children.runtime.take() {
@@ -122,6 +155,9 @@ fn finish(
     }
     if let Some(client) = client {
         let _ = client.send_keeper(KeeperFrame::Outcome(outcome), short_request());
+    }
+    if let Ok(listener) = keeper.listener() {
+        answer_waiting(listener, outcome, deadline);
     }
     outcome
 }
@@ -170,7 +206,7 @@ pub(super) fn close_session(
         reason != CloseReason::SessionEnded && close_supervisor(children, deadline).is_ok();
     let empty = match keeper.session.kill_and_wait_empty(deadline) {
         Ok(empty) => empty,
-        Err(_) => return finish(keeper, children, client, EMPTY_UNKNOWN),
+        Err(_) => return finish(keeper, children, client, deadline, EMPTY_UNKNOWN),
     };
     await_reported_exits(children, deadline);
     let result = empty_session_matches(&empty, &keeper.record.record).and_then(|()| {
@@ -185,7 +221,7 @@ pub(super) fn close_session(
             adopted.publish_after_empty_session(&empty, authorize)
         }
     });
-    finish(keeper, children, client, close_outcome(result))
+    finish(keeper, children, client, deadline, close_outcome(result))
 }
 
 /// The kernel reports the session cgroup empty as each process leaves it,
@@ -215,7 +251,7 @@ pub(super) fn fail_opening(
     }
     let empty = match keeper.session.kill_and_wait_empty(deadline) {
         Ok(empty) => empty,
-        Err(_) => return finish(keeper, children, client, EMPTY_UNKNOWN),
+        Err(_) => return finish(keeper, children, client, deadline, EMPTY_UNKNOWN),
     };
     await_reported_exits(children, deadline);
     let authorize = || authorize_rename(deadline, None);
@@ -228,7 +264,7 @@ pub(super) fn fail_opening(
             .admission
             .republish_after_empty_session(&empty, authorize),
     });
-    finish(keeper, children, client, failure_outcome(result))
+    finish(keeper, children, client, deadline, failure_outcome(result))
 }
 
 #[cfg(test)]
@@ -280,6 +316,50 @@ mod tests {
             close_outcome(Err(PublishError::PublishedDurabilityUnknown(os(libc::EIO)))),
             (PublicationUncertain, Keep)
         );
+    }
+
+    #[test]
+    fn closes_that_waited_get_the_outcome_and_later_ones_are_refused() {
+        use std::os::fd::OwnedFd;
+        use std::os::unix::ffi::{OsStrExt, OsStringExt};
+        let mut template = std::env::temp_dir()
+            .join("vivac-keeper-waiting-XXXXXX")
+            .into_os_string()
+            .into_vec();
+        template.push(0);
+        // SAFETY: mkdtemp writes within this writable NUL-terminated template
+        // and creates the directory with mode 0700.
+        assert!(!unsafe { libc::mkdtemp(template.as_mut_ptr().cast()) }.is_null());
+        template.pop();
+        let directory = std::path::PathBuf::from(std::ffi::OsStr::from_bytes(&template));
+        let runtime: OwnedFd = std::fs::File::open(&directory).unwrap().into();
+        let listener = ControlListener::bind(&runtime).unwrap();
+        let socket = directory.join("control.sock");
+        let soon = || Instant::now() + Duration::from_secs(2);
+        let connect = || ControlConnection::connect_unauthenticated(&socket, soon()).unwrap();
+        let closer = connect();
+        closer.send_client(&ClientFrame::Close, soon()).unwrap();
+        let other = connect();
+        other.send_client(&ClientFrame::Begin, soon()).unwrap();
+        let second = connect();
+        second.send_client(&ClientFrame::Close, soon()).unwrap();
+        answer_waiting(&listener, KeeperOutcome::Closed, soon());
+        for (connection, expected) in [
+            (&closer, KeeperOutcome::Closed),
+            (&other, KeeperOutcome::Refused),
+            (&second, KeeperOutcome::Closed),
+        ] {
+            assert_eq!(
+                connection.receive_keeper(soon()).unwrap(),
+                KeeperFrame::Outcome(expected)
+            );
+        }
+        // A close that arrives afterwards finds no keeper and takes the
+        // fallback, which reads the stored state.
+        let late = ControlConnection::connect_unauthenticated(&socket, soon()).unwrap_err();
+        assert_eq!(late.raw_os_error(), Some(libc::ECONNREFUSED));
+        drop(listener);
+        std::fs::remove_dir_all(&directory).unwrap();
     }
 
     #[test]
