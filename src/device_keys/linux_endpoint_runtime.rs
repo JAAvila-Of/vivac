@@ -680,8 +680,36 @@ mod tests {
         assert!(runtime.check_bound(&listener, c"endpoints-v1").is_err());
     }
 
+    /// Runs one test of this module alone in a child process, so that a
+    /// process-wide setting it changes reaches no other test. The parent
+    /// returns `true` once the child has run exactly that test and passed;
+    /// the child, marked by `variable`, gets `false` and runs the test body.
+    fn alone_in_child(variable: &str, test: &str) -> bool {
+        if std::env::var_os(variable).is_some() {
+            return false;
+        }
+        let result = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                &format!("linux_endpoint_runtime::tests::{test}"),
+                "--test-threads=1",
+            ])
+            .env(variable, "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&result.stdout);
+        assert!(result.status.success(), "{stdout}");
+        // A name that matched nothing would also succeed, having run nothing.
+        assert!(stdout.contains("test result: ok. 1 passed;"), "{stdout}");
+        true
+    }
+
     #[test]
     fn the_idle_check_opens_no_file() {
+        if alone_in_child("VIVAC_TEST_IDLE_NOFILE", "the_idle_check_opens_no_file") {
+            return;
+        }
+        // This child runs only this test, so the descriptor limit is its own.
         let (_state, runtime, listener) = bound_in_collection();
         // With the descriptor limit at the lowest free number, any open,
         // socket or duplicate fails; a check that opens nothing still passes.
@@ -796,22 +824,10 @@ mod tests {
 
     #[test]
     fn a_bound_endpoint_is_private_whatever_the_creation_mask() {
-        const CHILD: &str = "VIVAC_TEST_ENDPOINT_UMASK";
-        if std::env::var_os(CHILD).is_none() {
-            let result = std::process::Command::new(std::env::current_exe().unwrap())
-                .args([
-                    "--exact",
-                    "linux_endpoint_runtime::tests::a_bound_endpoint_is_private_whatever_the_creation_mask",
-                    "--test-threads=1",
-                ])
-                .env(CHILD, "1")
-                .output()
-                .unwrap();
-            assert!(
-                result.status.success(),
-                "{}",
-                String::from_utf8_lossy(&result.stdout)
-            );
+        if alone_in_child(
+            "VIVAC_TEST_ENDPOINT_UMASK",
+            "a_bound_endpoint_is_private_whatever_the_creation_mask",
+        ) {
             return;
         }
         // This child runs only this test, so the file creation mask is its own.
