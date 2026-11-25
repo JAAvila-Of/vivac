@@ -1,7 +1,8 @@
 //! `close-linux`: asks the session keeper for a clean close over its control
-//! socket. When the keeper is gone, it stops the recorded unit and confirms
-//! that the unit's cgroup is gone or empty. No terminal is needed, and the
-//! fallback never removes the session record.
+//! socket. When no keeper answers, it stops the recorded unit, confirms that
+//! the unit's cgroup is gone or empty, and reports what the stored permit and
+//! record then show. No terminal is needed, and the fallback never removes the
+//! session record.
 
 use crate::linux_current_admission::CurrentAdmission;
 use crate::linux_session_cgroup::{observe, CgroupIdentity, CgroupObservation};
@@ -69,11 +70,41 @@ pub(super) fn fallback_step(cancellation_pending: bool) -> FallbackStep {
     }
 }
 
-/// After the unit was stopped: no permit was published, and the next opening
-/// reopens on this evidence only when the unit's cgroup is gone or empty.
-pub(super) fn fallback_outcome(unit: CgroupObservation) -> CloseOutcome {
+/// What the stored state shows once the unit has ended.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct StoredAfterStop {
+    /// A permit that validates as this credential's opening permit.
+    pub(super) permit: bool,
+    /// A session record of this admission.
+    pub(super) record: bool,
+}
+
+/// After the unit was stopped. Only a unit whose cgroup is gone or empty has
+/// ended; the stored state then says what its keeper left. A keeper that was
+/// alive but could not be reached may have closed cleanly when the stop
+/// reached it, and a record can outlive a durable publication when its removal
+/// failed, so the permit is never assumed absent.
+pub(super) fn fallback_outcome(
+    unit: CgroupObservation,
+    stored: impl FnOnce() -> io::Result<StoredAfterStop>,
+) -> CloseOutcome {
     match unit {
-        CgroupObservation::Absent | CgroupObservation::Empty => CloseOutcome::Interrupted,
+        CgroupObservation::Absent | CgroupObservation::Empty => match stored() {
+            // The keeper removes its record only after a durable, validated
+            // publication.
+            Ok(StoredAfterStop {
+                permit: true,
+                record: false,
+            }) => CloseOutcome::Closed,
+            // The rename happened, and this attempt cannot show it durable;
+            // the next opening retires the record on the kernel evidence.
+            Ok(StoredAfterStop {
+                permit: true,
+                record: true,
+            }) => CloseOutcome::PublicationUncertain,
+            Ok(StoredAfterStop { permit: false, .. }) => CloseOutcome::Interrupted,
+            Err(_) => CloseOutcome::CloseUncertain,
+        },
         CgroupObservation::Populated | CgroupObservation::Replaced => CloseOutcome::CloseUncertain,
     }
 }
@@ -91,7 +122,7 @@ pub(crate) fn close(credential: &str) -> CloseOutcome {
         return CloseOutcome::Refused;
     };
     let record = stored.record;
-    let (Ok(manager), Ok(unit)) = (UserManager::open(), record.unit()) else {
+    let (Ok(manager), Ok(unit)) = (UserManager::open_running(), record.unit()) else {
         return CloseOutcome::Refused;
     };
     // Nothing was asked of the keeper yet, so a cancellation closes nothing.
@@ -112,9 +143,23 @@ pub(crate) fn close(credential: &str) -> CloseOutcome {
         inode: record.unit_cgroup_inode,
     };
     match observe(&record.unit_cgroup, identity) {
-        Ok(observation) => fallback_outcome(observation),
+        Ok(observation) => fallback_outcome(observation, || stored_after_stop(credential)),
         Err(_) => CloseOutcome::CloseUncertain,
     }
+}
+
+/// Reads the permit, then the record, through a fresh admission. The keeper
+/// removes its record only after a durable, validated publication, so the
+/// permit is read first: a record that goes after it was read cannot turn an
+/// unproven publication into `closed`.
+fn stored_after_stop(credential: &str) -> io::Result<StoredAfterStop> {
+    let admission = CurrentAdmission::open_fixed_namespace(credential)?;
+    let permit = !admission.opening_permit_absent()?;
+    if permit {
+        admission.observe_opening_permit()?;
+    }
+    let record = SessionRecords::new(&admission).read()?.is_some();
+    Ok(StoredAfterStop { permit, record })
 }
 
 fn control_socket(manager: &UserManager, unit: &SessionUnit) -> PathBuf {
@@ -207,14 +252,51 @@ mod tests {
     }
 
     #[test]
-    fn fallback_reports_interrupted_only_when_the_unit_is_gone_or_empty() {
-        for (observation, expected) in [
-            (CgroupObservation::Absent, CloseOutcome::Interrupted),
-            (CgroupObservation::Empty, CloseOutcome::Interrupted),
-            (CgroupObservation::Populated, CloseOutcome::CloseUncertain),
-            (CgroupObservation::Replaced, CloseOutcome::CloseUncertain),
-        ] {
-            assert_eq!(fallback_outcome(observation), expected, "{observation:?}");
+    fn fallback_reads_the_stored_state_once_the_unit_has_ended() {
+        use CloseOutcome::*;
+        let stored = |permit, record| move || Ok(StoredAfterStop { permit, record });
+        for unit in [CgroupObservation::Absent, CgroupObservation::Empty] {
+            // A keeper that closed cleanly removed its record after a durable,
+            // validated publication.
+            assert_eq!(
+                fallback_outcome(unit, stored(true, false)),
+                Closed,
+                "{unit:?}"
+            );
+            // The rename happened; this attempt cannot show it durable.
+            assert_eq!(
+                fallback_outcome(unit, stored(true, true)),
+                PublicationUncertain,
+                "{unit:?}"
+            );
+            for record in [false, true] {
+                assert_eq!(
+                    fallback_outcome(unit, stored(false, record)),
+                    Interrupted,
+                    "{unit:?}"
+                );
+            }
+            assert_eq!(
+                fallback_outcome(unit, || Err(io::Error::from(io::ErrorKind::InvalidData))),
+                CloseUncertain,
+                "{unit:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn fallback_reads_nothing_while_the_unit_may_still_run() {
+        for unit in [CgroupObservation::Populated, CgroupObservation::Replaced] {
+            let read = std::cell::Cell::new(false);
+            let outcome = fallback_outcome(unit, || {
+                read.set(true);
+                Ok(StoredAfterStop {
+                    permit: true,
+                    record: false,
+                })
+            });
+            assert_eq!(outcome, CloseOutcome::CloseUncertain, "{unit:?}");
+            assert!(!read.get(), "{unit:?}");
         }
     }
 }

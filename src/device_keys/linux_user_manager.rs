@@ -1,8 +1,3 @@
-#![allow(
-    dead_code,
-    reason = "The session start and close commands consume these pieces in later steps."
-)]
-
 use super::linux_resident_reader::identifier;
 use std::ffi::{CStr, CString, OsString};
 use std::io;
@@ -95,7 +90,6 @@ pub(crate) enum ManagerRefusal {
 }
 
 pub(crate) struct UserManager {
-    account: Account,
     runtime: PathBuf,
 }
 
@@ -118,23 +112,51 @@ fn runtime_directory_in(path: &Path, uid: u32) -> Result<PathBuf, ManagerRefusal
     Ok(path.to_path_buf())
 }
 
+/// Whether reaching the user manager requires lingering. A session starts
+/// only where lingering keeps its manager running; a session that is already
+/// open is closed through whatever manager runs it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Linger {
+    Required,
+    NotRequired,
+}
+
 impl UserManager {
+    /// The manager that starts a session: lingering must be enabled.
     pub(crate) fn open() -> Result<Self, ManagerRefusal> {
-        let account = current_account().map_err(|_| ManagerRefusal::Unsupported)?;
-        match linger_enabled(&account) {
-            Ok(true) => {}
-            Ok(false) => return Err(ManagerRefusal::LingerDisabled(account)),
-            Err(_) => return Err(ManagerRefusal::Unsupported),
-        }
-        let runtime = runtime_directory_in(
-            &Path::new("/run/user").join(account.uid.to_string()),
-            account.uid,
-        )?;
-        Ok(Self { account, runtime })
+        Self::open_in(
+            Path::new(LINGER_DIRECTORY),
+            Path::new("/run/user"),
+            Linger::Required,
+        )
     }
 
-    pub(crate) fn account(&self) -> &Account {
-        &self.account
+    /// The manager that runs an open session, for closing it. Every check
+    /// but lingering applies.
+    pub(crate) fn open_running() -> Result<Self, ManagerRefusal> {
+        Self::open_in(
+            Path::new(LINGER_DIRECTORY),
+            Path::new("/run/user"),
+            Linger::NotRequired,
+        )
+    }
+
+    fn open_in(
+        linger: &Path,
+        runtime_root: &Path,
+        linger_required: Linger,
+    ) -> Result<Self, ManagerRefusal> {
+        let account = current_account().map_err(|_| ManagerRefusal::Unsupported)?;
+        if linger_required == Linger::Required {
+            match linger_enabled_in(linger, &account) {
+                Ok(true) => {}
+                Ok(false) => return Err(ManagerRefusal::LingerDisabled(account)),
+                Err(_) => return Err(ManagerRefusal::Unsupported),
+            }
+        }
+        let runtime =
+            runtime_directory_in(&runtime_root.join(account.uid.to_string()), account.uid)?;
+        Ok(Self { runtime })
     }
 
     pub(crate) fn runtime_directory(&self) -> &Path {
@@ -544,6 +566,30 @@ mod tests {
             Some(runtime.clone())
         );
         assert!(refused(own_uid().wrapping_add(1)));
+    }
+
+    #[test]
+    fn only_a_start_requires_linger() {
+        let scratch = Scratch::new();
+        let linger = scratch.0.join("linger");
+        std::fs::create_dir(&linger).unwrap();
+        let root = scratch.0.join("user");
+        let runtime = root.join(own_uid().to_string());
+        std::fs::create_dir_all(runtime.join("systemd")).unwrap();
+        mode(&runtime, 0o700);
+        let _listener = UnixListener::bind(runtime.join("systemd/private")).unwrap();
+        assert!(matches!(
+            UserManager::open_in(&linger, &root, Linger::Required),
+            Err(ManagerRefusal::LingerDisabled(_))
+        ));
+        let running = UserManager::open_in(&linger, &root, Linger::NotRequired).unwrap();
+        assert_eq!(running.runtime_directory(), runtime);
+        // Every other check still applies without lingering.
+        mode(&runtime, 0o750);
+        assert!(matches!(
+            UserManager::open_in(&linger, &root, Linger::NotRequired),
+            Err(ManagerRefusal::Unsupported)
+        ));
     }
 
     #[test]
