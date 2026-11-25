@@ -1468,6 +1468,7 @@ getpid
 getppid
 getpwuid
 getrandom
+getrlimit
 gets
 getsid
 getsockopt
@@ -2192,6 +2193,7 @@ nocldwait
 noctty
 node
 nodes
+nofile
 nofollow
 nomutex
 non
@@ -3056,6 +3058,8 @@ rights
 ring
 risk
 rk
+rlim
+rlimit
 rns
 role
 roles
@@ -3225,6 +3229,7 @@ setfl
 setgid
 setlk
 setmask
+setrlimit
 sets
 setsid
 setsockopt

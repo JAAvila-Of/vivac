@@ -1,5 +1,6 @@
 use super::{active_io, refused, short_deadline};
 use crate::linux_current_admission::CurrentAdmission;
+use crate::linux_custody_root::optional_collection::ENDPOINTS;
 use crate::linux_endpoint_runtime::EndpointRuntime;
 use crate::linux_ipc::{packet_pair, registration};
 use crate::linux_session::NativeSession;
@@ -49,7 +50,9 @@ pub(super) fn serve(
                         ready,
                         busy: busy_ref,
                         stopping: stopping_ref,
-                        location: &check_location,
+                        // An idle wake reads metadata only; every connection
+                        // still runs the full location check below.
+                        location: &|| runtime_ref.check_bound(listener_ref, ENDPOINTS.name),
                     })
                 })?;
                 let serving = (|| {

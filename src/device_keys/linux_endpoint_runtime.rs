@@ -65,6 +65,31 @@ fn status(fd: RawFd) -> io::Result<libc::stat> {
     Ok(unsafe { value.assume_init() })
 }
 
+/// The metadata of `name` relative to `directory`, without following a link.
+fn entry_status(directory: &OwnedFd, name: &CStr) -> io::Result<libc::stat> {
+    loop {
+        let mut value = MaybeUninit::uninit();
+        // SAFETY: the name is terminated and fstatat initializes one complete
+        // stat object on success.
+        if unsafe {
+            libc::fstatat(
+                directory.as_raw_fd(),
+                name.as_ptr(),
+                value.as_mut_ptr(),
+                libc::AT_SYMLINK_NOFOLLOW,
+            )
+        } == 0
+        {
+            // SAFETY: successful fstatat initialized value.
+            return Ok(unsafe { value.assume_init() });
+        }
+        let error = io::Error::last_os_error();
+        if error.kind() != io::ErrorKind::Interrupted {
+            return Err(error);
+        }
+    }
+}
+
 fn directory_identity(directory: &OwnedFd) -> io::Result<(u64, u64)> {
     cloexec(directory.as_raw_fd())?;
     let metadata = status(directory.as_raw_fd())?;
@@ -493,6 +518,36 @@ impl EndpointRuntime {
         self.validate_socket(&listener.leaf)
     }
 
+    /// The cheap check an idle listener repeats: `collection`, beside this
+    /// runtime's directory, is still that directory, and the name in it is
+    /// still the socket this listener bound. Only metadata is read, through the
+    /// retained directory; no file is opened.
+    pub(super) fn check_bound(
+        &self,
+        listener: &EndpointListener,
+        collection: &CStr,
+    ) -> io::Result<()> {
+        require(!collection.to_bytes().is_empty() && !collection.to_bytes().contains(&b'/'))?;
+        require(directory_identity(&self.directory)? == self.identity)?;
+        let mut beside = b"../".to_vec();
+        beside.extend_from_slice(collection.to_bytes());
+        let beside = CString::new(beside).map_err(|_| invalid())?;
+        let named = entry_status(&self.directory, &beside)?;
+        require(
+            named.st_mode & libc::S_IFMT == libc::S_IFDIR
+                && (named.st_dev, named.st_ino) == self.identity,
+        )?;
+        let entry = entry_status(&self.directory, &self.name)?;
+        let (uid, gid) = stable_ids()?;
+        require(
+            entry.st_mode == libc::S_IFSOCK | 0o600
+                && entry.st_uid == uid
+                && entry.st_gid == gid
+                && entry.st_nlink == 1
+                && (entry.st_dev, entry.st_ino) == listener.leaf.identity,
+        )
+    }
+
     pub(super) fn close_listener(&self, listener: EndpointListener) -> io::Result<()> {
         let EndpointListener { socket, leaf } = listener;
         drop(socket);
@@ -570,6 +625,94 @@ fn wait_readable(socket: &OwnedFd, deadline: Instant) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    /// `state/endpoints-v1/<name>` in a private parent, with a bound listener.
+    fn bound_in_collection() -> (PathBuf, EndpointRuntime, EndpointListener) {
+        let state = private_parent();
+        let collection = state.join("endpoints-v1");
+        std::fs::create_dir(&collection).unwrap();
+        std::fs::set_permissions(&collection, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let runtime = EndpointRuntime::from_named_directory(
+            File::open(&collection).unwrap().into(),
+            c"credential",
+        )
+        .unwrap();
+        let listener = runtime
+            .bind_listener(Instant::now() + Duration::from_secs(2))
+            .unwrap();
+        (state, runtime, listener)
+    }
+
+    #[test]
+    fn the_idle_check_accepts_only_the_bound_socket_in_its_collection() {
+        let (state, runtime, listener) = bound_in_collection();
+        let collection = state.join("endpoints-v1");
+        runtime.check_bound(&listener, c"endpoints-v1").unwrap();
+        // Another socket under the endpoint name.
+        std::fs::remove_file(collection.join("credential")).unwrap();
+        let other = std::os::unix::net::UnixListener::bind(collection.join("credential")).unwrap();
+        std::fs::set_permissions(
+            collection.join("credential"),
+            std::fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        assert!(runtime.check_bound(&listener, c"endpoints-v1").is_err());
+        drop(other);
+        std::fs::remove_file(collection.join("credential")).unwrap();
+        // Nothing under the endpoint name.
+        assert!(runtime.check_bound(&listener, c"endpoints-v1").is_err());
+
+        // A replaced collection: the bound socket is intact in the directory
+        // the runtime retained, but another directory has the collection name.
+        let (state, runtime, listener) = bound_in_collection();
+        runtime.check_bound(&listener, c"endpoints-v1").unwrap();
+        std::fs::rename(state.join("endpoints-v1"), state.join("moved")).unwrap();
+        std::fs::create_dir(state.join("endpoints-v1")).unwrap();
+        std::fs::set_permissions(
+            state.join("endpoints-v1"),
+            std::fs::Permissions::from_mode(0o700),
+        )
+        .unwrap();
+        assert!(runtime.check_bound(&listener, c"endpoints-v1").is_err());
+        // The collection moved away with nothing under its name.
+        std::fs::remove_dir(state.join("endpoints-v1")).unwrap();
+        assert!(runtime.check_bound(&listener, c"endpoints-v1").is_err());
+    }
+
+    #[test]
+    fn the_idle_check_opens_no_file() {
+        let (_state, runtime, listener) = bound_in_collection();
+        // With the descriptor limit at the lowest free number, any open,
+        // socket or duplicate fails; a check that opens nothing still passes.
+        // SAFETY: F_DUPFD only creates a descriptor, closed at once.
+        let first_free = unsafe { libc::fcntl(0, libc::F_DUPFD_CLOEXEC, 0) };
+        assert!(first_free >= 0);
+        // SAFETY: the descriptor was just created by this test.
+        unsafe { libc::close(first_free) };
+        let mut original = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        // SAFETY: both calls read or write one initialized limit record.
+        assert_eq!(
+            unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut original) },
+            0
+        );
+        let limited = libc::rlimit {
+            rlim_cur: first_free as libc::rlim_t,
+            rlim_max: original.rlim_max,
+        };
+        assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limited) }, 0);
+        let opened = File::open("/proc/self/status").map(drop);
+        let checked = runtime.check_bound(&listener, c"endpoints-v1");
+        assert_eq!(
+            unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &original) },
+            0
+        );
+        assert_eq!(opened.unwrap_err().raw_os_error(), Some(libc::EMFILE));
+        checked.unwrap();
+    }
 
     #[test]
     fn endpoint_runtime_rejects_an_ordinary_file() {
