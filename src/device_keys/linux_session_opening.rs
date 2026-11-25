@@ -107,6 +107,20 @@ pub(super) fn preflight(
     }
 }
 
+/// Without the endpoint collection a session has nowhere to publish its
+/// endpoint, and without the session collection nowhere to record itself.
+/// An account set up before either existed adds it with its own command,
+/// which the refusal names. Both are checked before anything is consumed.
+pub(super) fn collections(endpoints: bool, sessions: bool) -> Result<(), Option<RefusalHint>> {
+    if !endpoints {
+        Err(Some(RefusalHint::ProvisionEndpoints))
+    } else if !sessions {
+        Err(Some(RefusalHint::ProvisionSessions))
+    } else {
+        Ok(())
+    }
+}
+
 /// The status once `Begin` was sent: only what the keeper reported. Without
 /// a report, the unit could have consumed the permit.
 pub(super) fn outcome_after_begin(frame: Option<KeeperFrame>) -> OpeningOutcome {
@@ -168,9 +182,10 @@ pub(crate) fn open(credential: &str, limits: SessionLimits) -> OpeningOutcome {
 /// the user manager, and the permit or the evidence for a reopening.
 fn check(credential: &str) -> Result<UserManager, Option<RefusalHint>> {
     let admission = CurrentAdmission::open_fixed_namespace(credential).map_err(|_| None)?;
-    if !admission.has_session_directory().map_err(|_| None)? {
-        return Err(None);
-    }
+    collections(
+        admission.has_endpoint_directory().map_err(|_| None)?,
+        admission.has_session_directory().map_err(|_| None)?,
+    )?;
     let manager = UserManager::open().map_err(|refusal| match refusal {
         ManagerRefusal::LingerDisabled(account) => RefusalHint::enable_linger(&account),
         ManagerRefusal::Unsupported => None,
@@ -354,6 +369,22 @@ mod tests {
             assert_eq!(
                 preflight(Some(&record), None, permit_present),
                 Refuse(Some(RefusalHint::CloseFirst))
+            );
+        }
+    }
+
+    #[test]
+    fn a_missing_collection_names_the_command_to_provision_it() {
+        assert_eq!(collections(true, true), Ok(()));
+        assert_eq!(
+            collections(true, false),
+            Err(Some(RefusalHint::ProvisionSessions))
+        );
+        // The endpoint collection is named first, as `retire-linux` does.
+        for sessions in [true, false] {
+            assert_eq!(
+                collections(false, sessions),
+                Err(Some(RefusalHint::ProvisionEndpoints))
             );
         }
     }
