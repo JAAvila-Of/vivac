@@ -11,7 +11,7 @@ pub(super) enum ProvisionCheckpoint {
 pub(crate) struct OptionalCollection {
     pub(crate) name: &'static CStr,
     pub(crate) stage_prefix: &'static str,
-    #[allow(dead_code)]
+    #[allow(dead_code, reason = "The native probes never provision a collection.")]
     pub(crate) label: &'static str,
 }
 
@@ -35,7 +35,7 @@ pub enum CollectionProvisionError {
 
 impl CollectionProvisionError {
     /// The message for `collection`.
-    #[allow(dead_code)]
+    #[allow(dead_code, reason = "The native probes never provision a collection.")]
     pub(crate) fn message(&self, collection: &OptionalCollection) -> String {
         self.describe(collection.label)
     }

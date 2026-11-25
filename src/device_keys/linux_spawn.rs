@@ -1082,9 +1082,11 @@ impl ChildSetup {
 
     fn apply(&self, child_socket: Option<RawFd>) -> io::Result<()> {
         if self.cgroup_procs >= 0 {
-            // SAFETY: write is async-signal-safe; the descriptor is a retained,
-            // close-on-exec parent descriptor and the buffer is a static byte.
-            // Writing 0 moves the calling process into the cgroup.
+            // SAFETY: write is async-signal-safe; the descriptor is one the
+            // owner retains, live in this child until close_range below marks
+            // every descriptor from 3 up close-on-exec, so the program never
+            // receives it. The buffer is a static byte. Writing 0 moves the
+            // calling process into the cgroup.
             let written = unsafe { libc::write(self.cgroup_procs, b"0".as_ptr().cast(), 1) };
             if written != 1 {
                 return Err(if written < 0 {

@@ -58,6 +58,10 @@ mod linux_resident_reader;
 #[allow(dead_code)]
 #[path = "../src/device_keys/linux_session.rs"]
 pub mod linux_session;
+#[allow(
+    dead_code,
+    reason = "The shared custody files name the cgroup evidence types; this graph runs no session."
+)]
 #[path = "../src/device_keys/linux_session_cgroup.rs"]
 mod linux_session_cgroup;
 #[allow(dead_code)]

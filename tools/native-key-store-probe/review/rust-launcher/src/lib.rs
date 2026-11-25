@@ -17,6 +17,10 @@ pub mod linux_reservation;
 #[path = "../../../../../src/device_keys/linux_session.rs"]
 pub mod linux_session;
 #[cfg(target_os = "linux")]
+#[allow(
+    dead_code,
+    reason = "The shared custody files name the cgroup evidence types; the native probes run no session."
+)]
 #[path = "../../../../../src/device_keys/linux_session_cgroup.rs"]
 pub mod linux_session_cgroup;
 #[cfg(target_os = "linux")]

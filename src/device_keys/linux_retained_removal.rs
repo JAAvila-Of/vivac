@@ -2,10 +2,6 @@
 //!
 //! The name is first moved aside, so the check and the removal act on the same
 //! object and a replacement racing the caller is never deleted.
-#![allow(
-    dead_code,
-    reason = "The session commands consume these pieces in later steps."
-)]
 
 use std::ffi::{CStr, CString};
 use std::io;

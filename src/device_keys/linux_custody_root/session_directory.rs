@@ -2,7 +2,6 @@ use super::optional_collection::{CollectionProvisionError, SESSIONS};
 use super::*;
 
 impl CandidateRoot {
-    #[allow(dead_code)]
     pub fn with_session_directory<T>(
         &self,
         operation: impl FnOnce(OwnedFd) -> io::Result<T>,

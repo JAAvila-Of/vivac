@@ -28,8 +28,6 @@ mod discoverable;
 #[path = "linux_supervisor_start/foreground.rs"]
 mod foreground;
 
-use cancellation::Cancellation;
-
 const KEEPER: &str = "--internal-linux-keeper";
 const SESSION_KEEPER: &str = "--internal-linux-session-keeper";
 pub(crate) const SUPERVISOR: &str = "--internal-linux-supervisor";
@@ -268,14 +266,7 @@ fn session_child(
                         .receive_confirmation()?
                         .into_active_closure_sender()
                 },
-                || {
-                    // While a terminal prompts for the secret, its cancellation
-                    // signals reach this process group too. Hold them so that a
-                    // prompt ended by cancellation ends this wait through the
-                    // closed channel and the cleanup below still runs.
-                    let _cancellation = Cancellation::block()?;
-                    receive_session_secret(controller, Instant::now() + SECRET_TIMEOUT)
-                },
+                || receive_session_secret(controller, Instant::now() + SECRET_TIMEOUT),
             );
             let (mut session, provider, closure) = match outcome {
                 Ok(active) => active,

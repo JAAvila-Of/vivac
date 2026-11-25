@@ -129,10 +129,6 @@ fn decode_session_child_step(wire: &[u8]) -> io::Result<EndpointSessionStep> {
     Err(invalid())
 }
 
-#[allow(
-    dead_code,
-    reason = "The session close command consumes this in a later step."
-)]
 fn empty_session_authority(
     confirmation: Option<OpeningAuthority>,
     exits_observed: bool,
