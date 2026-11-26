@@ -1,0 +1,46 @@
+name: coordinator-authority-probe
+
+on:
+  pull_request:
+    paths:
+      - src/team_authority/**
+      - tools/team-coordinator-probe/**
+      - .github/workflows/coordinator-authority-probe.yml
+      - deny.toml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: coordinator-authority-probe-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      CARGO_BUILD_JOBS: '1'
+    defaults:
+      run:
+        working-directory: tools/team-coordinator-probe
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@1.89.0
+        with:
+          components: rustfmt,clippy
+      # The runner context is not available to job-level env, so the private
+      # fixture directory is named inside the steps that use it.
+      - run: install -d -m 0700 "$RUNNER_TEMP/vivac-authority-fixtures"
+      - run: cargo fmt --check
+      - run: TMPDIR="$RUNNER_TEMP/vivac-authority-fixtures" cargo test --locked --all-targets -- --test-threads=1
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo clippy --locked --all-targets --release -- -D warnings
+      - run: cargo build --locked
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: tools/team-coordinator-probe/Cargo.toml
+          arguments: --locked --target x86_64-unknown-linux-gnu --config deny.toml

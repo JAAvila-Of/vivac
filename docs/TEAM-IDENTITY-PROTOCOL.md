@@ -9,6 +9,10 @@ admission, human confirmation or a network service.
 
 ## Trust input
 
+The separate [version-two enrollment-policy model](TEAM-ENROLLMENT-POLICY.md)
+adds explicit policy actions under a different signing domain. It neither
+extends this version's masks nor changes its accepted request bytes.
+
 A known device binds one organization, principal, device and credential to an
 Ed25519 public key. A request supplies the four identifiers, never the key
 used to trust it. The verifier compares all four identifiers with that
@@ -34,7 +38,8 @@ presence, approval or understanding, and it grants no permissions by itself.
 The message is a single byte sequence, signed directly with Ed25519. It uses
 `ed25519-dalek` 3.0.0 and `VerifyingKey::verify_strict`; batch, prehashed,
 legacy-compatibility and hazardous signing interfaces are not used.
-The library is a development dependency while this model is test-only.
+The product also uses the library for device-key operations. This authority
+model remains test-only; the isolated coordinator probe compiles it separately.
 
 There is no JSON serialization, display formatting or implicit enum ordinal
 in the signed message. Concatenate the following fields in this order:
@@ -72,10 +77,11 @@ changes the signed bytes. The largest message is 213 bytes; its detached
 signature is exactly 64 bytes.
 
 These are canonical signing bytes for typed requests, not a complete transport
-format. This increment has no untrusted wire decoder. A future decoder must
-bound input before allocation and refuse unknown versions, tags, mask bits,
-noncanonical identifiers, truncated fields and trailing data. It must not
-reinterpret unknown input as a different supported request.
+format. The isolated model's decoder bounds input and refuses unknown versions,
+tags, mask bits, noncanonical identifiers, truncated fields and trailing data.
+It checks exact re-encoding and does not reinterpret unknown input as a different
+supported request. This decoder does not establish a network transport or an
+authenticated session.
 
 ## Verification and policy remain separate
 
@@ -122,6 +128,10 @@ or stores no real credentials. The separate [Windows device-key
 store](DEVICE-KEYS.md) provides explicit local credential custody, not enrollment
 or shared authorization. Ordinary capture and model-facing instructions are
 unchanged.
+
+The separate [candidate storage experiment](TEAM-AUTHORITY-STORAGE.md) describes
+strict decoding, durable replay and externally retained checkpoints. Its fixture
+bindings cannot replace the enrollment requirements above.
 
 The verification choice follows the library's [strict-verification
 documentation](https://docs.rs/ed25519-dalek/3.0.0/ed25519_dalek/struct.VerifyingKey.html#method.verify_strict).

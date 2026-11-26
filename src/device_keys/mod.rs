@@ -1,5 +1,15 @@
 #[cfg(any(windows, target_os = "macos", test))]
 mod credential;
+#[cfg(target_os = "linux")]
+mod linux_create_command;
+#[cfg(target_os = "linux")]
+mod linux_custody_command;
+#[cfg(target_os = "linux")]
+mod linux_provision_command;
+// The Linux custody candidate is compiled and tested by rust-launcher-probe.
+#[cfg(all(target_os = "linux", test))]
+#[allow(dead_code)]
+mod linux_ssh_lifetime;
 #[cfg(any(target_os = "macos", test))]
 mod macos;
 #[cfg(any(target_os = "macos", test))]
@@ -8,13 +18,16 @@ mod proof;
 #[cfg(windows)]
 mod windows;
 
+#[cfg(target_os = "linux")]
+pub(crate) use linux_custody_command::dispatch as dispatch_linux_custody;
+
 use crate::args::Args;
 use crate::artifacts::files;
 use crate::failure::Failure;
 use cap_fs_ext::DirExt;
 use cap_std::fs::Dir;
 use serde::de::DeserializeOwned;
-#[cfg(any(windows, target_os = "macos", test))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux", test))]
 use serde::Serialize;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
@@ -25,16 +38,18 @@ pub(crate) const USAGE: &str = "vivac device-key create <absolute-new-directory>
 vivac device-key show <absolute-directory> [--json]\n\
 vivac device-key prove <absolute-key-directory> --challenge <absolute-file> [--json]\n\
 vivac device-key verify-proof <absolute-file> [--json]\n\
+vivac device-key inspect-proof <absolute-file> [--expected-candidate-sha256 <64-lowercase-hex-digits>] [--json]\n\
 vivac device-key lock <absolute-directory> [--json]\n\
 vivac device-key unlock <absolute-directory> [--json]\n\n\
 Create or read a protected device key on Windows or macOS.\n\
 Creation requires a new directory outside Git and .vivac.\n\
 macOS requires a private parent and a terminal passphrase for creation or unlock.\n\
 Lock and unlock require macOS; show and prove never prompt or unlock.\n\
-Proof verification works on every supported platform.\n\
+Proof verification and candidate inspection work on every supported platform.\n\
+Candidate reference matching does not establish trust or approval.\n\
 Public receipts grant no membership or access and do not check challenge use.\n";
 
-#[cfg(any(windows, target_os = "macos", test))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux", test))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub(crate) struct PublicDeviceKey {
     pub device_id: String,
@@ -57,15 +72,42 @@ pub(crate) fn run(args: &Args) -> Result<i32, Failure> {
             return Err(refused("unexpected arguments with --help."));
         }
         crate::output::outln!("{USAGE}");
+        #[cfg(target_os = "linux")]
+        crate::output::outln!("{}", linux_provision_command::USAGE);
+        #[cfg(target_os = "linux")]
+        crate::output::outln!("{}", linux_provision_command::ENDPOINTS_USAGE);
+        #[cfg(target_os = "linux")]
+        crate::output::outln!("{}", linux_provision_command::SESSIONS_USAGE);
+        #[cfg(target_os = "linux")]
+        crate::output::outln!("{}", linux_create_command::USAGE);
+        #[cfg(target_os = "linux")]
+        crate::output::outln!("{}", linux_custody_command::USAGE);
         return Ok(0);
     }
     let command = args.positional(0).unwrap_or_default();
+    #[cfg(target_os = "linux")]
+    if command == "provision-linux" {
+        return linux_provision_command::run(args);
+    }
+    #[cfg(target_os = "linux")]
+    if command == "provision-linux-endpoints" {
+        return linux_provision_command::run_endpoints(args);
+    }
+    #[cfg(target_os = "linux")]
+    if command == "provision-linux-sessions" {
+        return linux_provision_command::run_sessions(args);
+    }
+    #[cfg(target_os = "linux")]
+    if command == "create-linux" {
+        return linux_create_command::run(args);
+    }
     let allowed: &[&str] = match command {
         "create" | "show" | "verify-proof" | "lock" | "unlock" => &["json"],
         "prove" => &["json", "challenge"],
+        "inspect-proof" => &["json", "expected-candidate-sha256"],
         _ => {
             return Err(refused(
-                "expected create, show, prove, verify-proof, lock or unlock.",
+                "expected create, show, prove, verify-proof, inspect-proof, lock or unlock.",
             ))
         }
     };
@@ -73,6 +115,43 @@ pub(crate) fn run(args: &Args) -> Result<i32, Failure> {
         return Err(refused("unexpected arguments or options."));
     }
     let path = absolute_path(args.positional(1))?;
+    if command == "inspect-proof" {
+        let expected = if args.has("expected-candidate-sha256") {
+            let values = args.list("expected-candidate-sha256");
+            if values.len() != 1 || args.has_missing_value("expected-candidate-sha256") {
+                return Err(refused(
+                    "exactly one expected candidate reference is required.",
+                ));
+            }
+            proof::decode_hex::<32>(&values[0])?;
+            Some(values[0].clone())
+        } else {
+            None
+        };
+        let document: proof::Proof = read_public_json(path)?;
+        document.verify(proof::current_time()?)?;
+        let reference = document.challenge.candidate_reference()?;
+        if expected
+            .as_ref()
+            .is_some_and(|expected| *expected != reference)
+        {
+            return Err(refused(
+                "the candidate reference does not match the expected reference.",
+            ));
+        }
+        let expected_reference = if expected.is_some() {
+            "matched"
+        } else {
+            "not_supplied"
+        };
+        print_candidate(
+            &document.challenge,
+            &reference,
+            expected_reference,
+            args.has("json"),
+        );
+        return Ok(0);
+    }
     if command == "verify-proof" {
         let document: proof::Proof = read_public_json(path)?;
         document.verify(proof::current_time()?)?;
@@ -158,6 +237,15 @@ pub(crate) fn run(args: &Args) -> Result<i32, Failure> {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn deliver_linux_reply(mut output: String) -> std::io::Result<()> {
+    use std::io::Write;
+    output.push('\n');
+    let mut stdout = std::io::stdout().lock();
+    stdout.write_all(output.as_bytes())?;
+    stdout.flush()
+}
+
 fn absolute_path(value: Option<&str>) -> Result<&Path, Failure> {
     value
         .filter(|value| !value.is_empty())
@@ -175,6 +263,40 @@ fn print_proof(document: &proof::Proof, operation: &str, json: bool) {
         crate::output::outln!("Credential {}", document.challenge.credential_id);
         crate::output::outln!("Signature {}", document.signature);
         crate::output::outln!("Authority and challenge use were not checked.");
+    }
+}
+
+fn print_candidate(candidate: &proof::Challenge, reference: &str, expected: &str, json: bool) {
+    if json {
+        crate::output::outln!(
+            "{}",
+            serde_json::json!({
+                "version": 1,
+                "candidate": candidate,
+                "candidate_sha256": reference,
+                "expected_reference": expected,
+                "status": "possession_only",
+                "authority": "not_checked",
+                "approval": "not_checked",
+                "challenge_use": "not_checked",
+            })
+        );
+    } else {
+        crate::output::outln!("Device enrollment candidate possession proof verified.");
+        crate::output::outln!("Version {}", candidate.version);
+        crate::output::outln!("Intended organization {}", candidate.organization_id);
+        crate::output::outln!("Intended principal {}", candidate.principal_id);
+        crate::output::outln!("Device {}", candidate.device_id);
+        crate::output::outln!("Credential {}", candidate.credential_id);
+        crate::output::outln!("Public key {}", candidate.public_key);
+        crate::output::outln!("Operation {}", candidate.operation_id);
+        crate::output::outln!("Base revision {}", candidate.base_revision);
+        crate::output::outln!("Nonce {}", candidate.nonce);
+        crate::output::outln!("Issued at {}", candidate.issued_at);
+        crate::output::outln!("Expires at {}", candidate.expires_at);
+        crate::output::outln!("Candidate SHA-256 {reference}");
+        crate::output::outln!("Expected reference: {expected}");
+        crate::output::outln!("Authority, approval and challenge use were not checked.");
     }
 }
 

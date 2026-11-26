@@ -6,6 +6,15 @@ on:
       - tools/native-key-store-probe/**
       - .github/workflows/native-device-keys.yml
   workflow_dispatch:
+    inputs:
+      oo7_format_review:
+        description: Reproduce experimental oo7 format observations
+        type: boolean
+        default: false
+      openssh_profile_review:
+        description: Reproduce OpenSSH format, terminal, package and parent-lifetime checks
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -48,6 +57,145 @@ jobs:
       - name: Probe macOS on a disposable hosted runner
         if: runner.os == 'macOS'
         run: python3 run_macos.py --allow-hosted-keychain-probe target/release/native-key-store-probe
+
+  oo7-format-observations:
+    if: github.event_name == 'workflow_dispatch' && inputs.oo7_format_review
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          repository: linux-credentials/oo7
+          ref: 4251a43abce2a0633fa35cdf3cd360af1fa88bc0
+          path: oo7-source
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Reproduce format observations without a native provider
+        run: >-
+          python3 tools/native-key-store-probe/review/run_oo7_format_review.py
+          --source oo7-source
+          --target-dir "$RUNNER_TEMP/oo7-format-observations"
+
+  openssh-profile-observations:
+    if: github.event_name == 'workflow_dispatch' && inputs.openssh_profile_review
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      RUSTUP_TOOLCHAIN: "1.89.0"
+      VIVAC_OPENSSH_DISPOSABLE: "1"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@1.89.0
+        with:
+          components: rustfmt,clippy
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install the disposable client tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y openssh-client
+      - name: Build the shared proof verifier probe
+        run: >-
+          cargo build --locked
+          --manifest-path tools/native-key-store-probe/review/openssh-verifier/Cargo.toml
+          --target-dir "$RUNNER_TEMP/openssh-proof-target"
+      - name: Check and build the isolated native-format writer
+        run: |
+          cargo fmt --check --manifest-path tools/native-key-store-probe/review/openssh-writer/Cargo.toml
+          cargo test --locked --manifest-path tools/native-key-store-probe/review/openssh-writer/Cargo.toml --target-dir "$RUNNER_TEMP/openssh-writer-target"
+          cargo test --locked --features heap-probe --manifest-path tools/native-key-store-probe/review/openssh-writer/Cargo.toml --target-dir "$RUNNER_TEMP/openssh-writer-target" -- --test-threads=1
+          cargo build --locked --manifest-path tools/native-key-store-probe/review/openssh-writer/Cargo.toml --target-dir "$RUNNER_TEMP/openssh-writer-target"
+          cargo clippy --locked --all-targets --manifest-path tools/native-key-store-probe/review/openssh-writer/Cargo.toml --target-dir "$RUNNER_TEMP/openssh-writer-target" -- -D warnings
+          cargo clippy --locked --release --manifest-path tools/native-key-store-probe/review/openssh-writer/Cargo.toml --target-dir "$RUNNER_TEMP/openssh-writer-target" -- -D warnings
+          cargo clippy --locked --all-targets --features heap-probe --manifest-path tools/native-key-store-probe/review/openssh-writer/Cargo.toml --target-dir "$RUNNER_TEMP/openssh-writer-target" -- -D warnings
+          cargo clippy --locked --release --features heap-probe --manifest-path tools/native-key-store-probe/review/openssh-writer/Cargo.toml --target-dir "$RUNNER_TEMP/openssh-writer-target" -- -D warnings
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: tools/native-key-store-probe/review/openssh-writer/Cargo.toml
+          arguments: --locked --config deny.toml --target x86_64-unknown-linux-gnu
+      - name: Observe interoperability without accrediting custody
+        run: >-
+          python3 tools/native-key-store-probe/review/openssh_probe.py
+          --verifier "$RUNNER_TEMP/openssh-proof-target/debug/openssh-proof-verifier-probe"
+          --report "$RUNNER_TEMP/openssh-profile-observations.json"
+      - name: Observe native loading of the library-encoded fixture
+        run: >-
+          python3 tools/native-key-store-probe/review/openssh_probe.py
+          --verifier "$RUNNER_TEMP/openssh-proof-target/debug/openssh-proof-verifier-probe"
+          --writer "$RUNNER_TEMP/openssh-writer-target/debug/ssh-writer-graph-audit"
+          --report "$RUNNER_TEMP/openssh-writer-observations.json"
+      - name: Build the disposable SSH terminal fixture
+        run: >-
+          docker build --tag vivac-terminal-review
+          --file tools/native-key-store-probe/review/Dockerfile.terminal
+          tools/native-key-store-probe/review
+      - name: Check terminal input locally and over loopback SSH
+        run: |
+          mkdir "$RUNNER_TEMP/terminal-reports"
+          docker run --rm --read-only --network none \
+            --cap-drop ALL --cap-add SETUID --cap-add SETGID --cap-add SYS_CHROOT \
+            --cap-add KILL --cap-add AUDIT_WRITE \
+            --security-opt no-new-privileges --ulimit core=0 \
+            --cpus=2 --memory=512m --pids-limit=128 \
+            --tmpfs /tmp:rw,nosuid,nodev,mode=0700,size=128m \
+            --mount "type=bind,source=$GITHUB_WORKSPACE/tools/native-key-store-probe/review,target=/probe,readonly" \
+            --mount "type=bind,source=$RUNNER_TEMP/openssh-writer-target,target=/writer,readonly" \
+            --mount "type=bind,source=$RUNNER_TEMP/terminal-reports,target=/reports" \
+            vivac-terminal-review python3 /probe/terminal_probe.py \
+            --writer /writer/debug/ssh-writer-graph-audit \
+            --report /reports/terminal-observations.json
+      - name: Build the persistent-package fixture
+        run: >-
+          docker build --tag vivac-package-review
+          --file tools/native-key-store-probe/review/Dockerfile.package
+          tools/native-key-store-probe/review
+      - name: Check persistent package publication and native identity binding
+        run: |
+          package_volume="vivac-package-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          if docker volume inspect "$package_volume" >/dev/null 2>&1; then exit 1; fi
+          docker volume create --label vivac.probe=openssh-package "$package_volume"
+          trap 'docker volume rm "$package_volume"' EXIT
+          mkdir "$RUNNER_TEMP/package-reports"
+          docker run --rm --read-only --network none --cap-drop ALL --cap-add CHOWN --cap-add FOWNER \
+            --security-opt no-new-privileges --ulimit core=0 \
+            --cpus=2 --memory=512m --pids-limit=128 \
+            --tmpfs /tmp:rw,nosuid,nodev,mode=0700,size=128m \
+            --mount "type=bind,source=$GITHUB_WORKSPACE/tools/native-key-store-probe/review,target=/probe,readonly" \
+            --mount "type=bind,source=$RUNNER_TEMP/openssh-writer-target,target=/writer,readonly" \
+            --mount "type=bind,source=$RUNNER_TEMP/openssh-proof-target,target=/proof,readonly" \
+            --mount "type=volume,source=$package_volume,target=/store" \
+            --mount "type=bind,source=$RUNNER_TEMP/package-reports,target=/reports" \
+            vivac-package-review python3 /probe/package_probe.py \
+            --writer /writer/debug/ssh-writer-graph-audit \
+            --verifier /proof/debug/openssh-proof-verifier-probe \
+            --store-root /store --report /reports/package-observations.json
+      - name: Check native agent exit after supervisor death without privileges
+        run: |
+          probe_uid="$(id -u)"
+          probe_gid="$(id -g)"
+          test "$probe_uid" -ne 0
+          mkdir -m 0700 "$RUNNER_TEMP/lifecycle-reports"
+          docker run --rm --read-only --network none --cap-drop ALL \
+            --user "$probe_uid:$probe_gid" --security-opt no-new-privileges \
+            --ulimit core=0 --cpus=2 --memory=512m --pids-limit=128 \
+            --tmpfs "/tmp:rw,nosuid,nodev,mode=0700,uid=$probe_uid,gid=$probe_gid,size=128m" \
+            --mount "type=bind,source=$GITHUB_WORKSPACE/tools/native-key-store-probe/review,target=/probe,readonly" \
+            --mount "type=bind,source=$RUNNER_TEMP/openssh-writer-target,target=/writer,readonly" \
+            --mount "type=bind,source=$RUNNER_TEMP/openssh-proof-target,target=/proof,readonly" \
+            --mount "type=bind,source=$RUNNER_TEMP/lifecycle-reports,target=/reports" \
+            vivac-package-review python3 /probe/lifecycle_probe.py \
+            --writer /writer/debug/ssh-writer-graph-audit \
+            --verifier /proof/debug/openssh-proof-verifier-probe \
+            --report /reports/lifecycle-observations.json
 
   msrv:
     strategy:

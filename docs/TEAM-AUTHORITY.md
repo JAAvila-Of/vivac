@@ -5,6 +5,12 @@ work history from shared permissions and governance so that recording work
 never waits for the network. It defines acceptance requirements, not an
 implemented server, transport, authentication system or command.
 
+The [server platform contract](SERVER-PLATFORMS.md) targets native Linux,
+Windows and macOS servers independently of client platforms. Ubuntu 24.04 is
+the first pilot deployment, not an exclusive server platform. Platform support
+requires native persistence and lifecycle evidence as well as shared protocol
+conformance; the isolated Linux coordinator does not establish that support.
+
 ## Identities and resources
 
 A person, automation agent, device, session, project and lane have distinct
@@ -61,7 +67,10 @@ A lower or conflicting revision is not silently accepted. A fresh device or
 restored installation needs an authenticated bootstrap and a current trusted
 checkpoint; a backup is not evidence that its old permissions still apply.
 The organization establishes its initial trust checkpoint during reviewed
-bootstrap. Subsequent device enrollment requires an existing trusted client
+bootstrap. The [initial-trust contract](TEAM-BOOTSTRAP.md) separates organizational
+acceptance, first-device possession and passkey verification; it does not provide
+an implemented bootstrap ceremony. Subsequent device enrollment requires an
+existing trusted client
 with explicit enrollment authority, bound to the new device and a current
 coordinator checkpoint. A restored backup or a successful login alone cannot
 establish that trust or release content keys. Loss of all trusted clients is
@@ -72,6 +81,49 @@ fork presented to a new client. This design does not promise Byzantine
 consensus or availability against a malicious coordinator. Detected rollback,
 conflicts or unverifiable authority prevent new shared admission, while local
 capture remains usable.
+
+## Additional devices and owner consent
+
+Adding a device to an existing identity requires that identity's own consent
+from an already trusted client, fresh user verification and explicit permission
+for the `OwnAdditionalDevice` scope. The approver and target principal must be
+the same active principal in the same organization. Membership, a successful
+login, `ManageMembers` or governance capabilities do not imply this permission.
+
+A member administrator cannot substitute for the owner, including when the
+owner has more privileged capabilities. Linking a key can enable impersonation
+without changing a role; treating it as ordinary membership administration
+would bypass the separation of privileged delegation. The permission adds only
+a new credential for the same identity and cannot grant roles or act for another
+principal. Organizational control belongs in the explicit enrollment policy,
+not in an administrative override of the owner's confirmation.
+
+A registered client record alone is insufficient. A previously known signing
+credential of that owner must endorse the exact candidate, current checkpoint
+and applicable policy. The verification key comes from the trusted registry,
+not from the candidate or an accompanying key assertion. This endorsement is
+separate from fresh human verification; it proves control of a registered key,
+not physical presence or that a restored installation is trustworthy.
+
+The additional device must use new device and credential identifiers and a new
+signing key. It cannot silently replace or reuse a known signing binding.
+Replacement and individual credential revocation need their own admitted
+transitions.
+
+This flow cannot establish a first trusted client. First-device admission needs
+a reviewed bootstrap or invitation procedure; loss of all trusted clients uses
+the separately authorized recovery procedure. A login, copied backup, candidate
+possession proof or recovery hint cannot select a shortcut through this flow.
+
+`OwnAdditionalDevice` describes an authorization scope, not an implemented CLI
+permission or a new bit in the version-one authority protocol. Its production
+grant must come from admitted authority and currently trusted credentials. The
+isolated probe's fixture policy does not establish either.
+
+The separate [signed enrollment-policy model](TEAM-ENROLLMENT-POLICY.md)
+evaluates explicit grants and revocations under a version-two signing domain.
+It does not replace the coordinator's current fixture catalogue or establish
+an admitted credential registry or production permission.
 
 ## Local and shared states
 
@@ -99,6 +151,23 @@ scope, delegation, reviewed revision and audience again. A stale review is
 not refreshed and applied under the old confirmation. Work produced under an
 older rule keeps that historical fact; whether it may now be shared needs a
 new assessment against the current applicable authority.
+
+## Shared artifact retention
+
+Server mode retains complete, verified encrypted copies of authorized shared
+artifact revisions. A shared revision must remain available independently of
+the creating workstation being online. Clients retain local custody for creation
+and disconnected work; synchronization is a separate operation and never blocks
+ordinary capture.
+
+Local retention does not authorize publication. Sharing still binds the exact
+revision and its reviewed audience. The client distinguishes a locally retained
+revision, one pending synchronization, and one whose complete durable retention
+has been verified by the server. Uploading bytes or admitting an authority change
+alone cannot establish the last state. Content keys remain with authorized
+trusted clients or explicitly designated recovery custodians, not with the
+synchronization operator. These are integration requirements, not an implemented
+artifact synchronization service.
 
 ## Governance and delegation
 
@@ -149,6 +218,19 @@ source reading rights, source redistribution authority, destination publishing
 rights and review of the exact revision and audience. Restricted history,
 artifacts and derived context are not included merely because a visible node
 references them.
+
+A project's publication policy can supply that review for its own ongoing
+work. The policy is a project norm, ratified like any other, that names the
+lanes it publishes, their audience, and whether new members receive earlier
+history. A member accepts its exact text once when joining the project. From
+then on each new event in a covered lane is published under the policy's
+current revision, without a review per event. The write guards still run
+before any event exists. A lane outside the policy is never published, not
+even by reference, and a member may mark a lane of their own as private.
+Changing the policy is a new ratified norm and does not rewrite what was
+already published. Everything outside a policy keeps the per-revision review:
+artifacts with content, history adopted from a personal tree, and sharing
+between projects.
 
 New membership does not grant previously published history by default.
 Historical access is an explicit reviewed grant identifying its scope and
@@ -206,14 +288,27 @@ place to handle keys. The local loopback reading surface may use the installed
 client; remote administration only receives explicitly authorized information.
 
 An operator that also controls endpoints or trusted client updates is inside
-that trust boundary. Recovery custodians, if enabled, are also trusted for
-their granted scope. The product must not claim privacy from such an authority.
+that trust boundary. Recovery custodians are also trusted for their granted
+scope. The product must not claim privacy from such an authority.
 
 Account recovery and content-key recovery are different operations. Neither
 a password reset nor a future corporate identity-provider login grants
-decryption keys by itself. The recovery policy, custodian powers, bootstrap,
-lost-device procedure and key lifecycle remain prerequisites for implementation.
-No default recovery authority is inferred by this contract.
+decryption keys by itself. The first team release adopts organizational
+recovery by custodians that the organization designates. Recovering is a
+permission of its own, separate from administering the server. It runs through
+an explicit procedure that states its scope and leaves an audit record, and an
+operator cannot grant it to themselves in the database. This policy designates
+no people, assigns no keys and selects no algorithm. Custodian powers,
+bootstrap, the procedure itself and the key lifecycle remain prerequisites for
+implementation.
+
+A device credential is never recovered by copying or by an administrator.
+Losing a session is not losing the credential: a local opening that ends
+without a clean close is reopened by its holder with the unlock secret once
+the platform shows positive evidence that no process of the old session
+survives. When custody itself is lost, such as a forgotten unlock secret or a
+device that leaves the holder's control, the holder creates a new credential
+and the team revokes the old one.
 
 ## Deployment boundary
 
@@ -261,6 +356,10 @@ signing bytes and verifies possession of a known device key before policy
 admission. It also remains test-only: its trusted bindings are fixtures, not
 an implemented account or device-enrollment system. Human verification,
 credential lifecycle and durable admission remain separate prerequisites.
+
+The separate [candidate storage experiment](TEAM-AUTHORITY-STORAGE.md) defines
+durable replay and checkpoint requirements using public fixture trust. It runs
+outside the product and does not establish real enrollment or shared admission.
 
 ## Acceptance cases
 

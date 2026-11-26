@@ -329,7 +329,8 @@ mod platform {
     pub(super) struct Raw(libc::termios);
     impl Raw {
         pub(super) fn enter() -> Option<Self> {
-            let mut original = std::mem::MaybeUninit::<libc::termios>::uninit();
+            // Zeroed: musl's tcgetattr writes only the part the kernel reports.
+            let mut original = std::mem::MaybeUninit::<libc::termios>::zeroed();
             if unsafe { libc::tcgetattr(libc::STDIN_FILENO, original.as_mut_ptr()) } != 0 {
                 return None;
             }

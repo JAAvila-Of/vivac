@@ -349,10 +349,13 @@ forces a few things that are not negotiable:
 - **No file contents in the provenance log.** Only paths, references and prose about what was
   decided — so a leak bounds to *what was being worked on*, never to *what the
   code is*.
-- **No telemetry.** The binary does not phone home. Ever.
+- **No telemetry.** The binary does not phone home. Ever. Team mode, when it
+  arrives, talks only to the server of an organization the person joined, and
+  sends only what joining showed them.
 
-These come from the [pillars](docs/PILLARS.md): **security vetoes, performance
-budgets, UX proves a surface is worth reading, DX judges.**
+These come from the [pillars](docs/PILLARS.md): **security vetoes, correctness
+refuses cost as an argument, performance budgets, UX proves a surface is worth
+reading, DX judges.**
 
 ---
 
@@ -361,7 +364,9 @@ budgets, UX proves a surface is worth reading, DX judges.**
 Every [release](https://github.com/JAAvila-Of/vivac/releases) carries a
 precompiled binary — Linux and macOS on `x86_64` and `aarch64`, Windows on
 `x86_64` — listed in `SHA256SUMS` and carrying signed build provenance.
-Unpack one and put `vivac` on your `PATH`.
+Use the [client provenance verification contract](docs/CLIENT-RELEASE-PROVENANCE.md)
+to check its signed publisher identity and independently approved source commit
+before unpacking it and putting `vivac` on your `PATH`.
 
 With a Rust toolchain, 1.89 or newer, and a C compiler for bundled SQLite:
 
@@ -546,7 +551,7 @@ Not there yet: team mode. The project is in `0.x` and
 | [**What it costs**](docs/PERFORMANCE.md) | the full measurements, and how they were taken |
 | [**Versioning**](docs/VERSIONING.md) | what breaks when, and what keeps `1.0` away |
 | [**Where it sits**](docs/POSITION.md) | what each category of tool stores, and where each is better than this |
-| [**Pillars**](docs/PILLARS.md) | the four arbiters every decision here is judged against |
+| [**Pillars**](docs/PILLARS.md) | the five arbiters every decision here is judged against |
 | [**Artifact custody**](docs/ARTIFACTS.md) | retain selected files and complete frontend bundles, including supported SQLite applications; reference and recover exact revisions |
 
 ## Licence

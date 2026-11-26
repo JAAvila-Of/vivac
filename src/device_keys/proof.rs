@@ -4,6 +4,7 @@ use ed25519_dalek::{Signature, VerifyingKey};
 #[cfg(any(windows, target_os = "macos", test))]
 use ed25519_dalek::{Signer, SigningKey};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const DOMAIN: &[u8] = b"vivac.device.enrollment-proof.v1\0";
@@ -42,6 +43,13 @@ pub(super) fn current_time() -> Result<u64, Failure> {
 }
 
 impl Challenge {
+    pub(super) fn candidate_reference(&self) -> Result<String, Failure> {
+        let mut digest = Sha256::new();
+        digest.update(b"vivac.device.candidate-reference.v1\0");
+        digest.update(self.canonical_bytes()?);
+        Ok(encode_hex(&digest.finalize()))
+    }
+
     pub(super) fn validate(&self, now: u64) -> Result<(), Failure> {
         self.canonical_bytes()?;
         self.expires_at
@@ -160,7 +168,6 @@ pub(super) fn decode_hex<const N: usize>(value: &str) -> Result<[u8; N], Failure
     Ok(decoded)
 }
 
-#[cfg(any(windows, target_os = "macos", test))]
 fn encode_hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
@@ -187,6 +194,27 @@ mod tests {
             issued_at: 1000,
             expires_at: 1300,
         }
+    }
+
+    #[test]
+    fn candidate_reference_has_an_independent_golden_digest() {
+        let candidate = Challenge {
+            version: 1,
+            organization_id: "00000000000000000000000001".into(),
+            principal_id: "00000000000000000000000003".into(),
+            device_id: "00000000000000000000000004".into(),
+            credential_id: "00000000000000000000000005".into(),
+            public_key: "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a".into(),
+            operation_id: "00000000000000000000000006".into(),
+            base_revision: 7,
+            nonce: "23".repeat(32),
+            issued_at: 1000,
+            expires_at: 1300,
+        };
+        assert_eq!(
+            candidate.candidate_reference().unwrap(),
+            "ffeca62c338e57c3d776a2c40226b0bd05f996543d322bf6b224ec25b553ff4a"
+        );
     }
 
     #[test]

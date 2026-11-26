@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+pub(crate) mod v2;
+
 use ed25519_dalek::{Signature, VerifyingKey};
 
 use super::{
@@ -24,6 +26,24 @@ pub(crate) struct KnownDevice {
 }
 
 impl KnownDevice {
+    pub(crate) fn binding_fields(
+        &self,
+    ) -> (
+        &OrganizationId,
+        &PrincipalId,
+        &DeviceId,
+        &CredentialId,
+        [u8; 32],
+    ) {
+        (
+            &self.organization,
+            &self.principal,
+            &self.device,
+            &self.credential,
+            self.key.to_bytes(),
+        )
+    }
+
     pub(crate) fn new(
         organization: OrganizationId,
         principal: PrincipalId,
@@ -53,15 +73,112 @@ pub(crate) struct DeviceRequest {
 }
 
 impl DeviceRequest {
+    pub(crate) fn parse_canonical(bytes: &[u8]) -> Result<Self> {
+        fn take<'a>(remaining: &mut &'a [u8], length: usize) -> Result<&'a [u8]> {
+            let value = remaining.get(..length).ok_or(Refused)?;
+            *remaining = &remaining[length..];
+            Ok(value)
+        }
+
+        fn identifier<'a>(remaining: &mut &'a [u8]) -> Result<&'a str> {
+            std::str::from_utf8(take(remaining, 26)?).map_err(|_| Refused)
+        }
+
+        if bytes.len() > MAX_ENVELOPE_BYTES {
+            return Err(Refused);
+        }
+        let mut remaining = bytes.strip_prefix(DOMAIN).ok_or(Refused)?;
+        let organization = OrganizationId::parse(identifier(&mut remaining)?)?;
+        let actor = PrincipalId::parse(identifier(&mut remaining)?)?;
+        let device = DeviceId::parse(identifier(&mut remaining)?)?;
+        let credential = CredentialId::parse(identifier(&mut remaining)?)?;
+        let operation = OperationId::parse(identifier(&mut remaining)?)?;
+        let base_revision =
+            u64::from_be_bytes(take(&mut remaining, 8)?.try_into().map_err(|_| Refused)?);
+        let tag = take(&mut remaining, 1)?[0];
+        let action = match tag {
+            1 => Action::AddPrincipal {
+                principal: PrincipalId::parse(identifier(&mut remaining)?)?,
+            },
+            2 => {
+                let principal = PrincipalId::parse(identifier(&mut remaining)?)?;
+                let mask = take(&mut remaining, 1)?[0];
+                if mask & !0x0f != 0 {
+                    return Err(Refused);
+                }
+                let capabilities = [
+                    (1, OrganizationCapability::ManageMembers),
+                    (2, OrganizationCapability::ManageProjects),
+                    (4, OrganizationCapability::GrantProjectAccess),
+                    (8, OrganizationCapability::ManageOrganizationCapabilities),
+                ]
+                .into_iter()
+                .filter(|(bit, _)| mask & bit != 0)
+                .map(|(_, capability)| capability)
+                .collect();
+                Action::SetOrganizationCapabilities {
+                    principal,
+                    capabilities,
+                }
+            }
+            3 => Action::CreateProject {
+                project: ProjectId::parse(identifier(&mut remaining)?)?,
+            },
+            4 => {
+                let principal = PrincipalId::parse(identifier(&mut remaining)?)?;
+                let project = ProjectId::parse(identifier(&mut remaining)?)?;
+                let mask = take(&mut remaining, 1)?[0];
+                if mask & !0x1f != 0 {
+                    return Err(Refused);
+                }
+                let permissions = [
+                    (1, ProjectPermission::ReadContent),
+                    (2, ProjectPermission::WriteWork),
+                    (4, ProjectPermission::ProposeNorm),
+                    (8, ProjectPermission::ReadReports),
+                    (16, ProjectPermission::ReadAudit),
+                ]
+                .into_iter()
+                .filter(|(bit, _)| mask & bit != 0)
+                .map(|(_, permission)| permission)
+                .collect();
+                Action::SetProjectPermissions {
+                    principal,
+                    project,
+                    permissions,
+                }
+            }
+            5 => Action::RevokePrincipal {
+                principal: PrincipalId::parse(identifier(&mut remaining)?)?,
+            },
+            _ => return Err(Refused),
+        };
+        let request = Self {
+            change: Change {
+                organization,
+                actor,
+                operation,
+                base_revision,
+                action,
+            },
+            device,
+            credential,
+        };
+        if !remaining.is_empty() || request.canonical_bytes() != bytes {
+            return Err(Refused);
+        }
+        Ok(request)
+    }
+
     pub(crate) fn canonical_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(MAX_ENVELOPE_BYTES);
         bytes.extend_from_slice(DOMAIN);
         for value in [
-            &self.change.organization.0,
-            &self.change.actor.0,
-            &self.device.0,
-            &self.credential.0,
-            &self.change.operation.0,
+            self.change.organization.as_str(),
+            self.change.actor.as_str(),
+            self.device.as_str(),
+            self.credential.as_str(),
+            self.change.operation.as_str(),
         ] {
             bytes.extend_from_slice(value.as_bytes());
         }
@@ -69,14 +186,14 @@ impl DeviceRequest {
         match &self.change.action {
             Action::AddPrincipal { principal } => {
                 bytes.push(1);
-                bytes.extend_from_slice(principal.0.as_bytes());
+                bytes.extend_from_slice(principal.as_str().as_bytes());
             }
             Action::SetOrganizationCapabilities {
                 principal,
                 capabilities,
             } => {
                 bytes.push(2);
-                bytes.extend_from_slice(principal.0.as_bytes());
+                bytes.extend_from_slice(principal.as_str().as_bytes());
                 bytes.push(capabilities.iter().fold(0, |mask, capability| {
                     mask | match capability {
                         OrganizationCapability::ManageMembers => 1,
@@ -88,7 +205,7 @@ impl DeviceRequest {
             }
             Action::CreateProject { project } => {
                 bytes.push(3);
-                bytes.extend_from_slice(project.0.as_bytes());
+                bytes.extend_from_slice(project.as_str().as_bytes());
             }
             Action::SetProjectPermissions {
                 principal,
@@ -96,8 +213,8 @@ impl DeviceRequest {
                 permissions,
             } => {
                 bytes.push(4);
-                bytes.extend_from_slice(principal.0.as_bytes());
-                bytes.extend_from_slice(project.0.as_bytes());
+                bytes.extend_from_slice(principal.as_str().as_bytes());
+                bytes.extend_from_slice(project.as_str().as_bytes());
                 bytes.push(permissions.iter().fold(0, |mask, permission| {
                     mask | match permission {
                         ProjectPermission::ReadContent => 1,
@@ -110,7 +227,7 @@ impl DeviceRequest {
             }
             Action::RevokePrincipal { principal } => {
                 bytes.push(5);
-                bytes.extend_from_slice(principal.0.as_bytes());
+                bytes.extend_from_slice(principal.as_str().as_bytes());
             }
         }
         bytes
@@ -125,10 +242,11 @@ pub(crate) struct SignedRequest {
 
 impl SignedRequest {
     pub(crate) fn verify(&self, device: &KnownDevice) -> Result<Change> {
-        if self.request.change.organization != device.organization
-            || self.request.change.actor != device.principal
-            || self.request.device != device.device
-            || self.request.credential != device.credential
+        let (organization, principal, device_id, credential, _) = device.binding_fields();
+        if &self.request.change.organization != organization
+            || &self.request.change.actor != principal
+            || &self.request.device != device_id
+            || &self.request.credential != credential
         {
             return Err(Refused);
         }
@@ -158,13 +276,45 @@ pub(crate) struct SignedAuthority {
 impl SignedAuthority {
     pub(crate) fn bootstrap(organization: OrganizationId, initial: PrincipalId) -> Self {
         Self {
-            authority: Authority::bootstrap(organization, initial),
+            authority: Authority::bootstrap(
+                organization,
+                initial,
+                [
+                    OrganizationCapability::ManageMembers,
+                    OrganizationCapability::ManageProjects,
+                    OrganizationCapability::GrantProjectAccess,
+                    OrganizationCapability::ManageOrganizationCapabilities,
+                ]
+                .into_iter()
+                .collect(),
+            ),
             receipts: BTreeMap::new(),
         }
     }
 
     pub(crate) fn revision(&self) -> u64 {
         self.authority.revision()
+    }
+
+    pub(crate) fn can_manage_members(
+        &self,
+        organization: &OrganizationId,
+        principal: &PrincipalId,
+    ) -> bool {
+        organization == &self.authority.organization
+            && self.authority.active(principal).is_ok_and(|member| {
+                member
+                    .capabilities
+                    .contains(&OrganizationCapability::ManageMembers)
+            })
+    }
+
+    pub(crate) fn is_active_principal(
+        &self,
+        organization: &OrganizationId,
+        principal: &PrincipalId,
+    ) -> bool {
+        organization == &self.authority.organization && self.authority.active(principal).is_ok()
     }
 
     pub(crate) fn allows(

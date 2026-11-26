@@ -1,3 +1,4 @@
 /target
 .vivac/
 __pycache__/
+/tools/**/target/

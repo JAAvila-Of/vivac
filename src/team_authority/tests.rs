@@ -9,7 +9,11 @@ fn explicit_manager_can_add_a_principal() {
     let organization = OrganizationId::parse(&synthetic(1)).unwrap();
     let initial = PrincipalId::parse(&synthetic(10)).unwrap();
     let target = PrincipalId::parse(&synthetic(11)).unwrap();
-    let mut authority = Authority::bootstrap(organization.clone(), initial.clone());
+    let mut authority = Authority::bootstrap(
+        organization.clone(),
+        initial.clone(),
+        CAPABILITIES.into_iter().collect(),
+    );
     let outcome = authority
         .apply(Change {
             organization,
@@ -42,6 +46,110 @@ const PERMISSIONS: [ProjectPermission; 5] = [
     ProjectPermission::ReadAudit,
 ];
 
+#[test]
+fn bootstrap_capability_subsets_authorize_only_the_selected_actions() {
+    let organization = OrganizationId::parse(&synthetic(1)).unwrap();
+    let initial = PrincipalId::parse(&synthetic(10)).unwrap();
+    let target = PrincipalId::parse(&synthetic(11)).unwrap();
+    let added = PrincipalId::parse(&synthetic(12)).unwrap();
+    let project = ProjectId::parse(&synthetic(20)).unwrap();
+    let created = ProjectId::parse(&synthetic(21)).unwrap();
+    for mask in 0_u8..16 {
+        let selected: BTreeSet<_> = CAPABILITIES
+            .into_iter()
+            .enumerate()
+            .filter(|(index, _)| mask & (1 << index) != 0)
+            .map(|(_, capability)| capability)
+            .collect();
+        let initial_authority =
+            Authority::bootstrap(organization.clone(), initial.clone(), selected.clone());
+        let member = initial_authority.principals.get(&initial).unwrap();
+        assert!(member.active);
+        assert_eq!(
+            member.capabilities, selected,
+            "initial capability mask {mask}"
+        );
+        assert!(member.grants.is_empty());
+        assert_eq!(initial_authority.principals.len(), 1);
+        assert!(initial_authority.projects.is_empty());
+        assert!(initial_authority.receipts.is_empty());
+        assert_eq!(initial_authority.revision(), 0);
+        for permission in PERMISSIONS {
+            assert!(!initial_authority.allows(&organization, &initial, &project, permission));
+        }
+
+        let actions = [
+            (
+                OrganizationCapability::ManageMembers,
+                Action::AddPrincipal {
+                    principal: added.clone(),
+                },
+            ),
+            (
+                OrganizationCapability::ManageProjects,
+                Action::CreateProject {
+                    project: created.clone(),
+                },
+            ),
+            (
+                OrganizationCapability::GrantProjectAccess,
+                Action::SetProjectPermissions {
+                    principal: target.clone(),
+                    project: project.clone(),
+                    permissions: [ProjectPermission::ReadContent].into_iter().collect(),
+                },
+            ),
+            (
+                OrganizationCapability::ManageOrganizationCapabilities,
+                Action::SetOrganizationCapabilities {
+                    principal: target.clone(),
+                    capabilities: selected.clone(),
+                },
+            ),
+        ];
+        for (required, action) in actions {
+            let mut authority = initial_authority.clone();
+            authority.projects.insert(project.clone());
+            authority.principals.insert(
+                target.clone(),
+                Principal {
+                    active: true,
+                    capabilities: BTreeSet::new(),
+                    grants: BTreeMap::new(),
+                },
+            );
+            let change = Change {
+                organization: organization.clone(),
+                operation: OperationId::parse(&synthetic(100)).unwrap(),
+                base_revision: 0,
+                actor: initial.clone(),
+                action,
+            };
+            if selected.contains(&required) {
+                assert_eq!(
+                    authority.apply(change.clone()),
+                    Ok(Outcome {
+                        admission: Admission::NewlyAdmitted,
+                        revision: 1,
+                    }),
+                    "capability mask {mask}, required {required:?}"
+                );
+                let admitted = authority.clone();
+                assert_eq!(
+                    authority.apply(change),
+                    Ok(Outcome {
+                        admission: Admission::Historical,
+                        revision: 1,
+                    })
+                );
+                assert_eq!(authority, admitted);
+            } else {
+                refused_without_changes(&mut authority, change);
+            }
+        }
+    }
+}
+
 struct Fixture {
     authority: Authority,
     organization: OrganizationId,
@@ -57,7 +165,11 @@ impl Fixture {
         let principals =
             [10, 11, 12, 13].map(|value| PrincipalId::parse(&synthetic(value)).unwrap());
         let mut fixture = Self {
-            authority: Authority::bootstrap(organization.clone(), principals[0].clone()),
+            authority: Authority::bootstrap(
+                organization.clone(),
+                principals[0].clone(),
+                CAPABILITIES.into_iter().collect(),
+            ),
             organization,
             other_organization: OrganizationId::parse(&synthetic(2)).unwrap(),
             principals,

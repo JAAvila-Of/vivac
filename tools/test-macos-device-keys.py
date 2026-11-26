@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise the production backend on explicitly authorized hosted macOS runners."""
+"""Exercise the production backend in an explicitly authorized macOS context."""
 
 import argparse
 import errno
@@ -7,8 +7,10 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import plistlib
 import re
 import secrets
+import selectors
 import shutil
 import signal
 import stat
@@ -35,15 +37,153 @@ def require(condition):
         raise Refused("native assertion failed")
 
 
-def inventory():
+def metadata_command(arguments):
+    """Read bounded account metadata without inheriting the caller's environment."""
+    process = None
+    try:
+        require(arguments and arguments[0] in {
+            "/bin/ls", "/usr/bin/dscl", "/usr/bin/dsmemberutil",
+        })
+        deadline = time.monotonic() + 5
+        process = subprocess.Popen(
+            arguments, stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env={"LC_ALL": "C", "PATH": "/usr/bin:/bin", "HOME": "/Users/vivac-test"},
+        )
+        output = bytearray()
+        error = bytearray()
+        with selectors.DefaultSelector() as selector:
+            selector.register(process.stdout, selectors.EVENT_READ, output)
+            selector.register(process.stderr, selectors.EVENT_READ, error)
+            while selector.get_map():
+                remaining = deadline - time.monotonic()
+                require(remaining > 0)
+                for key, _ in selector.select(remaining):
+                    chunk = os.read(key.fileobj.fileno(), 4096)
+                    if not chunk:
+                        selector.unregister(key.fileobj)
+                    else:
+                        require(len(output) + len(error) + len(chunk) <= 16384)
+                        key.data.extend(chunk)
+        remaining = deadline - time.monotonic()
+        require(remaining > 0)
+        require(process.wait(timeout=remaining) == 0 and not error)
+        return bytes(output)
+    except Exception:
+        raise Refused("account metadata verification failed") from None
+    finally:
+        if process is not None:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+            process.stdout.close()
+            process.stderr.close()
+
+
+def authorize_disposable_user(arguments):
+    """Verify the independently pinned disposable account before native operations."""
+    require(sys.platform == "darwin")
+    require("GITHUB_ACTIONS" not in os.environ and "RUNNER_ENVIRONMENT" not in os.environ)
+    require(type(arguments.test_uid) is int and 600 <= arguments.test_uid <= 999)
+    require(type(arguments.operator_uid) is int and arguments.operator_uid >= 501)
+    require(arguments.operator_uid != arguments.test_uid)
+    require(isinstance(arguments.test_guid, str) and re.fullmatch(
+        r"[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}",
+        arguments.test_guid,
+    ) is not None)
+    require(isinstance(arguments.account_marker, str) and re.fullmatch(
+        r"vivac-disposable-macos-account-v1:[0-9a-f]{32}", arguments.account_marker,
+    ) is not None)
+    require(os.getuid() == os.geteuid() == arguments.test_uid)
+    # Import only after authorize_context has established `sys.platform == "darwin"`.
+    import pwd
+
+    for account in (pwd.getpwuid(arguments.test_uid), pwd.getpwnam("vivac-test")):
+        require((account.pw_name, account.pw_uid, account.pw_dir) ==
+                ("vivac-test", arguments.test_uid, "/Users/vivac-test"))
+    require(os.environ.get("HOME") == "/Users/vivac-test")
+    home = Path("/Users/vivac-test")
+    for path, owner in ((Path("/"), 0), (Path("/Users"), 0), (home, arguments.test_uid)):
+        metadata = path.lstat()
+        require(stat.S_ISDIR(metadata.st_mode) and not path.is_symlink())
+        require(path.resolve(strict=True) == path and metadata.st_uid == owner)
+        if path == home:
+            require(stat.S_IMODE(metadata.st_mode) == 0o700)
+        else:
+            require(metadata.st_mode & 0o022 == 0)
+            parent_listing = metadata_command([
+                "/bin/ls", "-lde", str(path),
+            ]).decode("ascii").splitlines()
+            require(len(parent_listing) == 1)
+            require(re.fullmatch(
+                r"d[rwxstST-]{9}[@ ]?\s+[1-9][0-9]*\s+root\s+\S+\s+[0-9]+\s+"
+                r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+"
+                r"(?:[1-9]|[12][0-9]|3[01])\s+(?:[0-2][0-9]:[0-5][0-9]|[0-9]{4})\s+"
+                + re.escape(str(path)), parent_listing[0],
+            ) is not None)
+    listing = metadata_command(["/bin/ls", "-lde", str(home)]).decode("ascii").splitlines()
+    require(bool(listing))
+    header = re.fullmatch(
+        r"drwx------(?P<indicator>[+@ ])?\s+[1-9][0-9]*\s+vivac-test\s+\S+\s+[0-9]+\s+"
+        r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+"
+        r"(?:[1-9]|[12][0-9]|3[01])\s+(?:(?:[01][0-9]|2[0-3]):[0-5][0-9]|[0-9]{4})\s+"
+        r"/Users/vivac-test", listing[0],
+    )
+    require(header is not None)
+    require((len(listing) == 1 and header["indicator"] != "+") or
+            (len(listing) == 2 and header["indicator"] in ("+", "@") and re.fullmatch(
+                r"\s*0: group:everyone deny delete", listing[1],
+            ) is not None))
+    record = plistlib.loads(metadata_command([
+        "/usr/bin/dscl", "-plist", ".", "-read", "/Users/vivac-test",
+        "UniqueID", "GeneratedUID", "NFSHomeDirectory", "Comment",
+    ]))
+    require(isinstance(record, dict) and record == {
+        "dsAttrTypeStandard:UniqueID": [str(arguments.test_uid)],
+        "dsAttrTypeStandard:GeneratedUID": [arguments.test_guid],
+        "dsAttrTypeStandard:NFSHomeDirectory": [str(home)],
+        "dsAttrTypeStandard:Comment": [arguments.account_marker],
+    })
+    require(metadata_command([
+        "/usr/bin/dsmemberutil", "checkmembership", "-U", "vivac-test", "-G", "admin",
+    ]) == b"user is not a member of the group\n")
+    return "disposable-user"
+
+
+def authorize_context(arguments):
+    try:
+        require(sys.platform == "darwin")
+        local_pins = (arguments.test_uid, arguments.test_guid,
+                      arguments.account_marker, arguments.operator_uid)
+        if arguments.allow_hosted_keychain_test:
+            require(not arguments.allow_disposable_user_keychain_test)
+            require(all(value is None for value in local_pins))
+            require(os.environ.get("GITHUB_ACTIONS") == "true")
+            require(os.environ.get("RUNNER_ENVIRONMENT") == "github-hosted")
+            return "github-hosted"
+        require(arguments.allow_disposable_user_keychain_test)
+        return authorize_disposable_user(arguments)
+    except Exception:
+        raise Refused("explicitly authorized macOS context required") from None
+
+
+def inventory(allow_missing_default=False):
     result = []
+    empty_search_list = False
+    environment = os.environ.copy()
+    environment['LC_ALL'] = 'C'
     for verb in ("list-keychains", "default-keychain"):
         process = subprocess.run(
             ["/usr/bin/security", verb, "-d", "user"],
-            capture_output=True, timeout=20, check=False,
+            capture_output=True, timeout=20, check=False, env=environment,
         )
-        require(process.returncode == 0)
-        result.append(hashlib.sha256(process.stdout + process.stderr).digest())
+        missing_default = (allow_missing_default and empty_search_list and verb == 'default-keychain'
+            and process.returncode == 1 and process.stdout == b''
+            and process.stderr == b'security: SecKeychainCopyDomainDefault user: A default keychain could not be found.\n')
+        require(process.returncode == 0 or missing_default)
+        if verb == 'list-keychains':
+            empty_search_list = process.stdout == b'' and process.stderr == b''
+        result.append((process.returncode, hashlib.sha256(process.stdout + process.stderr).digest()))
     return result
 
 
@@ -441,17 +581,29 @@ class Runner:
         self.reject(["show", directory_mode])
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("executable", type=Path)
-    parser.add_argument("--allow-hosted-keychain-test", action="store_true")
-    arguments = parser.parse_args()
+    parser.add_argument("executable", type=Path, nargs="?")
+    authorization = parser.add_mutually_exclusive_group()
+    authorization.add_argument("--allow-hosted-keychain-test", action="store_true")
+    authorization.add_argument("--allow-disposable-user-keychain-test", action="store_true")
+    parser.add_argument("--test-uid", type=int)
+    parser.add_argument("--test-guid")
+    parser.add_argument("--account-marker")
+    parser.add_argument("--operator-uid", type=int)
+    parser.add_argument("--check-context", action="store_true")
+    arguments = parser.parse_args(argv)
     # This gate precedes temporary paths and all native operations.
-    if (sys.platform != "darwin" or os.environ.get("GITHUB_ACTIONS") != "true"
-            or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted"
-            or not arguments.allow_hosted_keychain_test):
-        print("refused: explicitly authorized hosted macOS runner required", file=sys.stderr)
+    try:
+        profile = authorize_context(arguments)
+    except Refused:
+        print("refused: explicitly authorized macOS context required", file=sys.stderr)
         return 2
+    if arguments.check_context:
+        print(json.dumps({"status": "authorized", "profile": profile}))
+        return 0
+    if arguments.executable is None:
+        parser.error("executable is required unless --check-context is used")
     root = None
     identity = None
     marker = secrets.token_bytes(32)
@@ -460,7 +612,7 @@ def main():
     try:
         executable = arguments.executable.resolve(strict=True)
         require(executable.is_file() and os.access(executable, os.X_OK))
-        before = inventory()
+        before = inventory(allow_missing_default=profile == 'disposable-user')
         root = Path(tempfile.mkdtemp(prefix="vivac-device-key-ci-")).resolve(strict=True)
         root.chmod(0o700)
         metadata = root.lstat()
@@ -474,7 +626,7 @@ def main():
     finally:
         if before is not None:
             try:
-                require(inventory() == before)
+                require(inventory(allow_missing_default=profile == 'disposable-user') == before)
             except BaseException:
                 failed = True
                 print("failed: keychain inventory preservation", file=sys.stderr)
