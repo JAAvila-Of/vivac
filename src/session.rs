@@ -19,9 +19,31 @@ use crate::event::{Body, VivacKind};
 use crate::failure::{Failure, R};
 use crate::output::outln;
 
+mod folder;
 mod opening;
 #[cfg(test)]
 mod tests;
+
+/// The folder a `session ... --hook` answers for: the one its session
+/// started in, not wherever the agent's shell is standing now (`d4146`).
+/// See [`folder`].
+pub fn hook_folder(cwd: std::path::PathBuf) -> std::path::PathBuf {
+    let input: serde_json::Value =
+        serde_json::from_str(hook_stdin()).unwrap_or(serde_json::Value::Null);
+    let field = |key: &str| input.get(key).and_then(serde_json::Value::as_str);
+    let hook = folder::Hook {
+        event: field("hook_event_name"),
+        source: field("source"),
+        session: field("session_id"),
+    };
+    folder::resolve(
+        cwd,
+        &hook,
+        std::env::var_os("CLAUDE_PROJECT_DIR").as_deref(),
+        crate::store::store_dir().as_deref(),
+        |folder| crate::store::find_root(folder).is_ok_and(|root| root.is_some()),
+    )
+}
 
 /// What the hook is handed on stdin.
 ///

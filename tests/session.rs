@@ -133,6 +133,7 @@ fn closed_stdin_preserves_the_child_error_and_output() {
     let before = directory_snapshot(&c.0);
     let home_before = directory_snapshot(c.global_home());
     let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_vivac"))
+        .env_remove("CLAUDE_PROJECT_DIR")
         .current_dir(&c.0)
         .env("VIVAC_HOME", c.global_home())
         .env("TZ", "UTC")
@@ -1173,6 +1174,7 @@ fn how_many(vivacs: &str, kind: &str) -> usize {
 /// `run_split` exists.
 fn run_stdin_split(c: &Sandbox, args: &[&str], stdin: &str) -> (String, String, i32) {
     let child = std::process::Command::new(env!("CARGO_BIN_EXE_vivac"))
+        .env_remove("CLAUDE_PROJECT_DIR")
         .current_dir(&c.0)
         .env("VIVAC_HOME", c.global_home())
         .env("TZ", "UTC")
@@ -2317,6 +2319,7 @@ fn every_hook_drains_its_input_even_outside_a_tree() {
     );
     for sub in ["start", "prompt", "end"] {
         let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_vivac"))
+            .env_remove("CLAUDE_PROJECT_DIR")
             .current_dir(&c.0)
             .args(["session", sub, "--hook"])
             .stdin(std::process::Stdio::piped())

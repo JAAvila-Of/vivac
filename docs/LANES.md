@@ -56,6 +56,17 @@ So two people in two folders build one shared history and keep two separate
 places in it. And two sessions in the *same* folder share a lane, deliberately:
 the folder is the unit, not the process.
 
+A session stays in the folder it started in. An agent's shell can `cd` into
+another worktree halfway through, and Claude Code then runs the session's hooks
+from there: the opening after a compaction, every prompt, every stop. Each hook
+still answers for the session's own folder. vivac remembers that folder from the
+session's first hook: the project folder Claude Code names, or the folder the
+session started or resumed in. It keeps the record under its own store
+directory, in a file named by a digest of the session id. Compacting a
+conversation therefore never moves the session to another lane, nor makes a lane
+of the worktree the shell wandered into. Commands the agent runs itself still
+answer for the folder they run in, as everything else on this page does.
+
 ### A lane is not a git branch
 
 This is the sentence to keep.

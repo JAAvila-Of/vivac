@@ -26,6 +26,7 @@ fn run(dir: &Path, home: &Path, args: &[&str]) -> (String, i32) {
         .current_dir(dir)
         .env("VIVAC_HOME", home)
         .env("TZ", "UTC")
+        .env_remove("CLAUDE_PROJECT_DIR")
         .args(args)
         .output()
         .unwrap();
@@ -39,11 +40,29 @@ fn run(dir: &Path, home: &Path, args: &[&str]) -> (String, i32) {
 /// `common::Sandbox::run_stdin` does the same over a `Sandbox`; this file
 /// builds its worktree roots by hand instead.
 fn run_stdin(dir: &Path, home: &Path, args: &[&str], stdin: &str) -> (String, i32) {
+    run_stdin_env(dir, home, args, stdin, &[])
+}
+
+/// [`run_stdin`] with extra variables in the hook's environment, the way
+/// Claude Code hands its command hooks `CLAUDE_PROJECT_DIR`.
+fn run_stdin_env(
+    dir: &Path,
+    home: &Path,
+    args: &[&str],
+    stdin: &str,
+    vars: &[(&str, &Path)],
+) -> (String, i32) {
     use std::io::Write;
-    let mut child = std::process::Command::new(BIN)
+    let mut command = std::process::Command::new(BIN);
+    command
         .current_dir(dir)
         .env("VIVAC_HOME", home)
         .env("TZ", "UTC")
+        .env_remove("CLAUDE_PROJECT_DIR");
+    for (key, value) in vars {
+        command.env(key, value);
+    }
+    let mut child = command
         .args(args)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -1719,6 +1738,256 @@ fn a_hook_inside_a_worktree_still_joins_once_the_tree_has_lanes() {
     assert!(
         feature.join(".vivac").join("lane").exists(),
         "the hook stopped joining once the tree already had lanes"
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// The lane a folder's own `.vivac/lane` names, or `main` for the tree's
+/// own folder when it carries none.
+fn lane_of(dir: &Path) -> String {
+    if dir.join(".vivac").join("lane").is_file() {
+        lane_id_of(dir)
+    } else {
+        "main".to_string()
+    }
+}
+
+/// The lane every `session.started` in `root`'s log was signed with, in
+/// order.
+fn session_lanes(root: &Path) -> Vec<String> {
+    std::fs::read_to_string(root.join(".vivac").join("events"))
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .filter(|e| e["payload"]["type"] == "session.started")
+        .map(|e| e["lane"].as_str().unwrap_or("").to_string())
+        .collect()
+}
+
+/// How many stops `root`'s log holds.
+fn stops(root: &Path) -> usize {
+    std::fs::read_to_string(root.join(".vivac").join("events"))
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| l.contains(r#""type":"vivac.created""#))
+        .count()
+}
+
+/// A hook payload for session `id`.
+fn hook(event: &str, id: &str, source: Option<&str>) -> String {
+    match source {
+        Some(s) => format!(r#"{{"hook_event_name":"{event}","session_id":"{id}","source":"{s}"}}"#),
+        None => format!(r#"{{"hook_event_name":"{event}","session_id":"{id}"}}"#),
+    }
+}
+
+/// `f4143`: a session opens in the lane's own folder, its shell moves into
+/// a linked worktree nested inside it, and the conversation goes through a compact.
+/// Claude Code runs the compact `SessionStart` from where the shell is now.
+/// The session is still the one that opened in `root`: its brief keeps
+/// `root`'s focus and the worktree does not become a lane.
+#[test]
+fn a_compact_after_the_shell_moved_into_a_worktree_keeps_the_sessions_lane() {
+    let (root, feature, home) = worktree_inside_fixture("compact-drift");
+    init_ok(&root, &home);
+    let (out, code) = run(&root, &home, &["push", "Work in root", "--why", "w"]);
+    assert_eq!(code, 0, "{out}");
+    let start = ["session", "start", "--hook"];
+
+    let (out, code) = run_stdin(
+        &root,
+        &home,
+        &start,
+        &hook("SessionStart", "s1", Some("startup")),
+    );
+    assert_eq!(code, 0, "{out}");
+    let (out, code) = run_stdin(
+        &feature,
+        &home,
+        &start,
+        &hook("SessionStart", "s1", Some("compact")),
+    );
+    assert_eq!(code, 0, "{out}");
+
+    assert!(
+        out.contains("Work in root") && out.contains("<== HERE"),
+        "the session after the compact lost root's focus:\n{out}"
+    );
+    assert!(
+        !says(&out, "not joined yet"),
+        "the session after the compact moved to the worktree:\n{out}"
+    );
+    assert!(
+        !feature.join(".vivac").exists(),
+        "the compact hook joined the worktree the shell had moved into"
+    );
+    let lane = lane_of(&root);
+    assert_eq!(session_lanes(&root), vec![lane.clone(), lane]);
+
+    std::fs::remove_dir_all(&root).ok();
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// The close hook runs from the shell's folder too, and it writes: it must
+/// close the turn in the session's lane, not join the worktree.
+#[test]
+fn the_close_hook_after_the_shell_moved_into_a_worktree_writes_to_the_sessions_lane() {
+    let (root, feature, home) = worktree_inside_fixture("stop-drift");
+    init_ok(&root, &home);
+    let (out, code) = run(&root, &home, &["push", "Work in root", "--why", "w"]);
+    assert_eq!(code, 0, "{out}");
+    let (out, code) = run_stdin(
+        &root,
+        &home,
+        &["session", "start", "--hook"],
+        &hook("SessionStart", "s1", Some("startup")),
+    );
+    assert_eq!(code, 0, "{out}");
+    let stops_before = stops(&root);
+
+    let (out, code) = run_stdin(
+        &feature,
+        &home,
+        &["session", "end", "--hook"],
+        &hook("Stop", "s1", None),
+    );
+    assert_eq!(code, 0, "{out}");
+
+    assert!(
+        !feature.join(".vivac").exists(),
+        "the close hook joined the worktree the shell had moved into"
+    );
+    let lane = lane_of(&root);
+    assert_eq!(
+        stops(&root),
+        stops_before + 1,
+        "the close hook did not stop the session's own work:\n{out}"
+    );
+    assert_eq!(
+        last_vivac_created(&root)["lane"],
+        lane.as_str(),
+        "the close hook stopped another lane"
+    );
+    let log = std::fs::read_to_string(root.join(".vivac").join("events")).unwrap();
+    assert!(
+        log.lines()
+            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+            .all(|e| e["lane"] == lane.as_str()),
+        "an event was signed with another lane:\n{log}"
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// A session that opens in the worktree is that worktree's, as before: the
+/// folder kept for another session does not decide this one.
+#[test]
+fn a_session_that_opens_in_a_worktree_still_joins_it() {
+    let (root, feature, home) = worktree_inside_fixture("open-in-worktree");
+    init_ok(&root, &home);
+    let start = ["session", "start", "--hook"];
+    let (out, code) = run_stdin(
+        &root,
+        &home,
+        &start,
+        &hook("SessionStart", "s1", Some("startup")),
+    );
+    assert_eq!(code, 0, "{out}");
+
+    let (out, code) = run_stdin(
+        &feature,
+        &home,
+        &start,
+        &hook("SessionStart", "s2", Some("startup")),
+    );
+    assert_eq!(code, 0, "{out}");
+
+    assert!(
+        feature.join(".vivac").join("lane").is_file(),
+        "a session that opened in the worktree did not join it"
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// A session vivac has not heard from yet, already in a worktree when its
+/// first hook arrives: one opened before this vivac was installed. Claude
+/// Code's command hooks name the folder the session started in, and that
+/// folder answers.
+#[test]
+fn a_hook_with_no_kept_folder_answers_for_the_project_folder_claude_names() {
+    let (root, feature, home) = worktree_inside_fixture("project-dir");
+    init_ok(&root, &home);
+    let (out, code) = run(&root, &home, &["push", "Work in root", "--why", "w"]);
+    assert_eq!(code, 0, "{out}");
+
+    let (out, code) = run_stdin_env(
+        &feature,
+        &home,
+        &["session", "start", "--hook"],
+        &hook("SessionStart", "s1", Some("compact")),
+        &[("CLAUDE_PROJECT_DIR", &root)],
+    );
+    assert_eq!(code, 0, "{out}");
+
+    assert!(
+        out.contains("<== HERE"),
+        "the hook did not answer for the project folder:\n{out}"
+    );
+    assert!(
+        !feature.join(".vivac").exists(),
+        "the hook joined the worktree"
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+    std::fs::remove_dir_all(&home).ok();
+}
+
+/// Without `CLAUDE_PROJECT_DIR`, a hook from a session vivac has not heard
+/// from yet does not fix the session's folder unless it is a fresh start:
+/// the shell may already have moved, and keeping that folder would pin
+/// the rest of the session there. The next fresh start fixes it instead.
+#[test]
+fn only_a_fresh_start_fixes_the_folder_when_claude_names_none() {
+    let (root, feature, home) = worktree_inside_fixture("no-pin-from-compact");
+    init_ok(&root, &home);
+    let (out, code) = run(&root, &home, &["push", "Work in root", "--why", "w"]);
+    assert_eq!(code, 0, "{out}");
+
+    let (out, code) = run_stdin(
+        &feature,
+        &home,
+        &["session", "prompt", "--hook"],
+        &hook("UserPromptSubmit", "s1", None),
+    );
+    assert_eq!(code, 0, "{out}");
+    let start = ["session", "start", "--hook"];
+    let (out, code) = run_stdin(
+        &root,
+        &home,
+        &start,
+        &hook("SessionStart", "s1", Some("resume")),
+    );
+    assert_eq!(code, 0, "{out}");
+    let (out, code) = run_stdin(
+        &feature,
+        &home,
+        &start,
+        &hook("SessionStart", "s1", Some("compact")),
+    );
+    assert_eq!(code, 0, "{out}");
+
+    assert!(
+        out.contains("<== HERE"),
+        "the compact after a resume in root did not keep root:\n{out}"
+    );
+    assert!(
+        !feature.join(".vivac").exists(),
+        "the hook joined the worktree"
     );
 
     std::fs::remove_dir_all(&root).ok();
