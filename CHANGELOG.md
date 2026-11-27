@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.4](https://github.com/JAAvila-Of/vivac/compare/v0.22.3...v0.22.4) - 2026-11-27
+
+### Added
+
+- *(device-keys)* keep Linux custody sessions in a user service ([#336](https://github.com/JAAvila-Of/vivac/pull/336))
+
+### Fixed
+
+- *(session)* keep a session's hooks in the folder it started in ([#338](https://github.com/JAAvila-Of/vivac/pull/338))
+
 ## [0.22.3](https://github.com/JAAvila-Of/vivac/compare/v0.22.2...v0.22.3) - 2026-11-22
 
 ### Added
