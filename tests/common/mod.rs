@@ -195,6 +195,7 @@ impl Sandbox {
             .env("VIVAC_HOME", &self.1)
             .env("CODEX_HOME", self.0.join(".codex"))
             .env("TZ", "UTC")
+            .env_remove("CLAUDE_PROJECT_DIR")
             .args(args)
             .output()
             .unwrap();
@@ -219,6 +220,7 @@ impl Sandbox {
             .env("VIVAC_HOME", &self.1)
             .env("CODEX_HOME", self.0.join(".codex"))
             .env("TZ", "UTC")
+            .env_remove("CLAUDE_PROJECT_DIR")
             .args(args)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())

@@ -1176,10 +1176,6 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
             "--dry-run goes with session end, without --hook: it shows what closing would do.",
         ));
     }
-    if cmd == "session" && a.positional(0) == Some("prompt") {
-        session::prompt(&cwd, a);
-        return Ok(0);
-    }
     if cmd == "session" && a.positional(0) == Some("guard") {
         if !a.has("hook") {
             return Err(Failure::usage("session guard requires --hook."));
@@ -1192,6 +1188,19 @@ fn dispatch(cmd: &str, a: &Args) -> Result<i32, Failure> {
         && a.has("hook")
         && a.opt("context").is_some_and(session::fallback_covered)
     {
+        return Ok(0);
+    }
+    // `d4146`: a session's hooks run from wherever its shell is standing,
+    // and the session is the folder it started in. Resolved only here, past
+    // the hooks that read no tree -- `guard`, and a fallback the module
+    // already covered -- because keeping that folder writes to the store.
+    let cwd = if cmd == "session" && a.has("hook") {
+        session::hook_folder(cwd)
+    } else {
+        cwd
+    };
+    if cmd == "session" && a.positional(0) == Some("prompt") {
+        session::prompt(&cwd, a);
         return Ok(0);
     }
 
